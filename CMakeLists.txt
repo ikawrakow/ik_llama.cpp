@@ -154,11 +154,12 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-info.cmake)
 # Compile flags
 #
 
-if (LLAMA_SYCL)
-    set(CMAKE_CXX_STANDARD 17)
-else()
-    set(CMAKE_CXX_STANDARD 11)
-endif()
+set(CMAKE_CXX_STANDARD 17)
+#if (LLAMA_SYCL)
+#    set(CMAKE_CXX_STANDARD 17)
+#else()
+#    set(CMAKE_CXX_STANDARD 11)
+#endif()
 
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 set(CMAKE_C_STANDARD 11)
@@ -402,7 +403,7 @@ if (LLAMA_LLAMAFILE)
     add_compile_definitions(GGML_USE_LLAMAFILE)
 
     set(GGML_HEADERS_LLAMAFILE sgemm.h)
-    set(GGML_SOURCES_LLAMAFILE sgemm.cpp)
+    set(GGML_SOURCES_LLAMAFILE sgemm.cpp iqk_mul_mat.cpp)
 endif()
 
 if (LLAMA_CUBLAS)
