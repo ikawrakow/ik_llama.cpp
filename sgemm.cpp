@@ -849,6 +849,11 @@ class tinyBLAS_Q0_AVX {
  * @param Ctype is GGML data type of `C`
  * @return true if this function was able to service the matmul request
  */
+
+bool iqk_mul_mat(long Nx, long Ny, long ne00, int typeA, const void * A, const void * B,
+        float * C, long stride_C, int ith, int nth);
+
+
 bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda, const void *B, int64_t ldb, void *C,
                      int64_t ldc, int ith, int nth, int task, int Atype, int Btype, int Ctype) {
 
@@ -860,6 +865,18 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
     assert(ldc >= m);
     assert(nth > 0);
     assert(ith < nth);
+
+    if (Btype == GGML_TYPE_Q8_K && Ctype == GGML_TYPE_F32) {
+        if (iqk_mul_mat(m, n, k * QK_K, Atype, A, B, (float *)C, ldc, ith, nth)) {
+            return true;
+        }
+    }
+    if ((Btype == GGML_TYPE_Q8_0 || Btype == GGML_TYPE_Q8_1) && Ctype == GGML_TYPE_F32) {
+        assert(QK8_0 == QK8_1 == QK4_0 == QK4_1 == QK5_0 == QK5_1 == 32);
+        if (iqk_mul_mat(m, n, k * QK8_0, Atype, A, B, (float *)C, ldc, ith, nth)) {
+            return true;
+        }
+    }
 
     if (Ctype != GGML_TYPE_F32)
         return false;
