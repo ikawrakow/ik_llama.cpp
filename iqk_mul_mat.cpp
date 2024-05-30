@@ -1524,15 +1524,19 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
 
     constexpr static int num_blocks = 8;
 
+    union Data {
+        __m256i vec;
+        uint32_t val[8];
+    };
+
     inline __m128i load_scales(int i) {
         d = 0.125f * GGML_FP16_TO_FP32(x[i].d);
-        auto scales = _mm_set_epi16(x[i].qs[31] >> 12, x[i].qs[27] >> 12, x[i].qs[23] >> 12, x[i].qs[19] >> 12,
-                                    x[i].qs[15] >> 12, x[i].qs[11] >> 12, x[i].qs[ 7] >> 12, x[i].qs[ 3] >> 12);
+        data[0].vec = _mm256_loadu_si256((const __m256i *)x[i].qs+0);
+        data[1].vec = _mm256_loadu_si256((const __m256i *)x[i].qs+1);
+        auto part1 = _mm256_srli_epi32(_mm256_permutevar8x32_epi32(data[0].vec, shuffle), 28);
+        auto part2 = _mm256_srli_epi32(_mm256_permutevar8x32_epi32(data[1].vec, shuffle), 28);
+        auto scales = _mm_packs_epi32(_mm256_castsi256_si128(part1), _mm256_castsi256_si128(part2));
         return _mm_or_si128(_mm_slli_epi16(scales, 1), _mm_set1_epi16(1));
-        //auto tmp1 = _mm256_loadu_si256((const __m256i *)x[i].qs);
-        //auto tmp2 = _mm256_loadu_si256((const __m256i *)(x[i].qs+16));
-        //auto idx = _mm256_unpacklo_epi32(tmp1, tmp2);
-        //auto sas = _mm256_unpackhi_epi32(tmp1, tmp2);
     }
 
     inline void new_block(int i, __m256i * scales) {
@@ -1565,31 +1569,22 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
         sign_value(aux32[7], values[3]);
     }
 
-    union Data {
-        __m256i vec;
-        uint32_t val[8];
-    };
-    inline static void make4_signed(const uint16_t * qs, const __m256i& min_value, __m256i * values) {
-        Data data;
-        data.vec = _mm256_loadu_si256((const __m256i *)qs);
-        make4(data.val, values);
-        sign_values(data.val, values);
+    inline void make4_signed(int j, const __m256i& min_value, __m256i * values) const {
+        make4(data[j].val, values);
+        sign_values(data[j].val, values);
         for (int k = 0; k < 4; ++k) values[k] = _mm256_add_epi8(values[k], min_value);
     }
-    inline static void make4(const uint16_t * qs, __m256i * values, __m256i * q8) {
-        Data data;
-        data.vec = _mm256_loadu_si256((const __m256i *)qs);
-        make4(data.val, values);
-        sign_values(data.val, q8);
+    inline void make4(int j, __m256i * values, __m256i * q8) const {
+        make4(data[j].val, values);
+        sign_values(data[j].val, q8);
     }
-
-    inline void prepare(int i, int j) {
-        make4_signed(x[i].qs + 16*j, min_value, bits.values);
+    inline void prepare(int, int j) {
+        make4_signed(j, min_value, bits.values);
     }
     template <typename Q8>
     inline void prepare(int i, int j, const Q8& q8, __m256i * q8_quants) {
         for (int k = 0; k < 4; ++k) q8_quants[k] = q8.load_quants(0, i, 4*j+k);
-        make4(x[i].qs + 16*j, bits.values, q8_quants);
+        make4(j, bits.values, q8_quants);
     }
 
     constexpr static int minv = 43;
@@ -1597,6 +1592,8 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
     SimpleBits bits;
     Scales8KBase scb;
     const __m256i min_value = _mm256_set1_epi8(minv);
+    const __m256i shuffle = _mm256_set_epi32(7, 5, 3, 1, 7, 5, 3, 1);
+    Data data[2];
 
 };
 
