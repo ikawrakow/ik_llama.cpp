@@ -45,6 +45,14 @@
 
 #endif
 
+#ifdef _MSC_VER
+#define IQK_NOINLINE __declspec(noinline)
+#define IQK_ALWAYS_INLINE inline
+#else
+#define IQK_NOINLINE __attribute__((__noinline__))
+#define IQK_ALWAYS_INLINE __attribute__((__always_inline__))
+#endif
+
 namespace {
 
 typedef struct {
@@ -1531,11 +1539,8 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
 
     inline __m128i load_scales(int i) {
         d = 0.125f * GGML_FP16_TO_FP32(x[i].d);
-        data[0].vec = _mm256_loadu_si256((const __m256i *)x[i].qs+0);
-        data[1].vec = _mm256_loadu_si256((const __m256i *)x[i].qs+1);
-        auto part1 = _mm256_srli_epi32(_mm256_permutevar8x32_epi32(data[0].vec, shuffle), 28);
-        auto part2 = _mm256_srli_epi32(_mm256_permutevar8x32_epi32(data[1].vec, shuffle), 28);
-        auto scales = _mm_packs_epi32(_mm256_castsi256_si128(part1), _mm256_castsi256_si128(part2));
+        const uint16_t * a16 = (const uint16_t *)x[i].qs;
+        auto scales = _mm_srli_epi16(_mm_set_epi16(a16[31], a16[27], a16[23], a16[19], a16[15], a16[11], a16[7], a16[3]), 12);
         return _mm_or_si128(_mm_slli_epi16(scales, 1), _mm_set1_epi16(1));
     }
 
@@ -1550,51 +1555,50 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
         scales[0] = MM256_SET_M128I(sc16, sc16);
     }
 
-    inline static void make4(const uint32_t * aux32, __m256i * values) {
+    IQK_ALWAYS_INLINE static void make4(const uint32_t * aux32, __m256i * values) {
         const uint8_t * aux8 = (const uint8_t *)aux32;
         values[0] = _mm256_set_epi64x(iq2xxs_grid[aux8[ 3]], iq2xxs_grid[aux8[ 2]], iq2xxs_grid[aux8[ 1]], iq2xxs_grid[aux8[ 0]]);
         values[1] = _mm256_set_epi64x(iq2xxs_grid[aux8[11]], iq2xxs_grid[aux8[10]], iq2xxs_grid[aux8[ 9]], iq2xxs_grid[aux8[ 8]]);
         values[2] = _mm256_set_epi64x(iq2xxs_grid[aux8[19]], iq2xxs_grid[aux8[18]], iq2xxs_grid[aux8[17]], iq2xxs_grid[aux8[16]]);
         values[3] = _mm256_set_epi64x(iq2xxs_grid[aux8[27]], iq2xxs_grid[aux8[26]], iq2xxs_grid[aux8[25]], iq2xxs_grid[aux8[24]]);
     }
-    inline static void sign_value(uint32_t aux32, __m256i& value) {
+    IQK_ALWAYS_INLINE static void sign_value(uint32_t aux32, __m256i& value) {
         auto signs = _mm256_set_epi64x(keven_signs[(aux32 >> 21) & 127], keven_signs[(aux32 >> 14) & 127],
                                        keven_signs[(aux32 >>  7) & 127], keven_signs[(aux32 >>  0) & 127]);
         value = _mm256_sign_epi8(value, signs);
     }
-    inline static void sign_values(const uint32_t * aux32, __m256i * values) {
+    IQK_ALWAYS_INLINE static void sign_values(const uint32_t * aux32, __m256i * values) {
         sign_value(aux32[1], values[0]);
         sign_value(aux32[3], values[1]);
         sign_value(aux32[5], values[2]);
         sign_value(aux32[7], values[3]);
     }
 
-    inline void make4_signed(int j, const __m256i& min_value, __m256i * values) const {
-        make4(data[j].val, values);
-        sign_values(data[j].val, values);
+    inline void make4_signed(const uint32_t * aux32, const __m256i& min_value, __m256i * values) const {
+        make4(aux32, values);
+        sign_values(aux32, values);
         for (int k = 0; k < 4; ++k) values[k] = _mm256_add_epi8(values[k], min_value);
     }
-    inline void make4(int j, __m256i * values, __m256i * q8) const {
-        make4(data[j].val, values);
-        sign_values(data[j].val, q8);
+    inline void make4(const uint32_t * aux32, __m256i * values, __m256i * q8) const {
+        make4(aux32, values);
+        sign_values(aux32, q8);
     }
-    inline void prepare(int, int j) {
-        make4_signed(j, min_value, bits.values);
+    inline void prepare(int i, int j) {
+        Data data; data.vec = _mm256_loadu_si256((const __m256i *)x[i].qs + j);
+        make4_signed(data.val, min_value, bits.values);
     }
     template <typename Q8>
     inline void prepare(int i, int j, const Q8& q8, __m256i * q8_quants) {
         for (int k = 0; k < 4; ++k) q8_quants[k] = q8.load_quants(0, i, 4*j+k);
-        make4(j, bits.values, q8_quants);
+        Data data; data.vec = _mm256_loadu_si256((const __m256i *)x[i].qs + j);
+        make4(data.val, bits.values, q8_quants);
     }
 
     constexpr static int minv = 43;
-
     SimpleBits bits;
     Scales8KBase scb;
     const __m256i min_value = _mm256_set1_epi8(minv);
     const __m256i shuffle = _mm256_set_epi32(7, 5, 3, 1, 7, 5, 3, 1);
-    Data data[2];
-
 };
 
 //
