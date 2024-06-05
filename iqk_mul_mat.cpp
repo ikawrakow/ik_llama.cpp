@@ -1628,7 +1628,18 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
         signs = _mm256_cmpeq_epi8(_mm256_and_si256(signs, mask), mask);
         value = _mm256_sign_epi8(value, _mm256_or_si256(signs, mone));
     }
-    inline static void sign_values(const __m256i& data, const Helper& helper, __m256i * values) {
+    inline void sign_values(const __m256i& data, __m256i * values) const {
+#ifdef HAVE_FANCY_SIMD
+        auto partial_bits = _mm256_cvtepi16_epi8(_mm256_srli_epi16(data,  9));
+        auto pcnt = _mm_popcnt_epi8(partial_bits);
+        auto full_bits = _mm_or_si128(partial_bits, _mm_slli_epi16(_mm_and_si128(pcnt, _mm_set1_epi8(1)), 7));
+        const __mmask32 * m32 = (const __mmask32 *)&full_bits;
+        auto zero = _mm256_setzero_si256();
+        values[0] = _mm256_mask_sub_epi8(values[0], m32[0], zero, values[0]);
+        values[1] = _mm256_mask_sub_epi8(values[1], m32[1], zero, values[1]);
+        values[2] = _mm256_mask_sub_epi8(values[2], m32[2], zero, values[2]);
+        values[3] = _mm256_mask_sub_epi8(values[3], m32[3], zero, values[3]);
+#else
         auto psb1 = _mm256_srli_epi16(data,  9);
         auto psb2 = _mm256_srli_epi16(data, 13);
         auto psbc = _mm256_xor_si256(psb1, psb2);
@@ -1642,33 +1653,36 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
         sign_value(full_1, helper.shuff2, helper.mask, helper.mone, values[1]);
         sign_value(full_2, helper.shuff1, helper.mask, helper.mone, values[2]);
         sign_value(full_2, helper.shuff2, helper.mask, helper.mone, values[3]);
+#endif
     }
-    inline static void make4_signed(const Helper& helper, const uint16_t * qs, const __m256i& m511,
-            const __m256i& min_value, __m256i * values) {
+    inline void make4_signed(const uint16_t * qs, const __m256i& m511,
+            const __m256i& min_value, __m256i * values) const {
         auto q2 = _mm256_loadu_si256((const __m256i *)qs);
         make4(q2, m511, values);
-        sign_values(q2, helper, values);
+        sign_values(q2, values);
         for (int k = 0; k < 4; ++k) values[k] = _mm256_add_epi8(values[k], min_value);
     }
-    inline static void make4(const Helper& helper, const uint16_t * qs, const __m256i& m511, __m256i * values, __m256i * q8) {
+    inline void make4(const uint16_t * qs, const __m256i& m511, __m256i * values, __m256i * q8) const {
         auto q2 = _mm256_loadu_si256((const __m256i *)qs);
         make4(q2, m511, values);
-        sign_values(q2, helper, q8);
+        sign_values(q2, q8);
     }
 
     inline void prepare(int i, int j) {
-        make4_signed(helper, x[i].qs + 16*j, idx_mask, min_value, bits.values);
+        make4_signed(x[i].qs + 16*j, idx_mask, min_value, bits.values);
     }
     template <typename Q8>
     inline void prepare(int i, int j, const Q8& q8, __m256i * q8_quants) {
         for (int k = 0; k < 4; ++k) q8_quants[k] = q8.load_quants(0, i, 4*j+k);
-        make4(helper, x[i].qs + 16*j, idx_mask, bits.values, q8_quants);
+        make4(x[i].qs + 16*j, idx_mask, bits.values, q8_quants);
     }
 
     constexpr static int minv = 43;
 
     SimpleBits bits;
+#ifndef HAVE_FANCY_SIMD
     Helper helper;
+#endif
     const __m256i idx_mask  = _mm256_set1_epi16(511);
     const __m256i min_value = _mm256_set1_epi8(minv);
 
