@@ -1716,23 +1716,40 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
         scales[0] = MM256_SET_M128I(sc16, sc16);
     }
 
-    IQK_ALWAYS_INLINE static void make4(const uint32_t * aux32, __m256i * values) {
+    inline static void make4(const uint32_t * aux32, __m256i * values) {
         const uint8_t * aux8 = (const uint8_t *)aux32;
         values[0] = _mm256_set_epi64x(iq2xxs_grid[aux8[ 3]], iq2xxs_grid[aux8[ 2]], iq2xxs_grid[aux8[ 1]], iq2xxs_grid[aux8[ 0]]);
         values[1] = _mm256_set_epi64x(iq2xxs_grid[aux8[11]], iq2xxs_grid[aux8[10]], iq2xxs_grid[aux8[ 9]], iq2xxs_grid[aux8[ 8]]);
         values[2] = _mm256_set_epi64x(iq2xxs_grid[aux8[19]], iq2xxs_grid[aux8[18]], iq2xxs_grid[aux8[17]], iq2xxs_grid[aux8[16]]);
         values[3] = _mm256_set_epi64x(iq2xxs_grid[aux8[27]], iq2xxs_grid[aux8[26]], iq2xxs_grid[aux8[25]], iq2xxs_grid[aux8[24]]);
     }
-    IQK_ALWAYS_INLINE static void sign_value(uint32_t aux32, __m256i& value) {
+#ifdef HAVE_FANCY_SIMD
+    inline void sign_2_values(const uint32_t * aux32, __m256i * values) const {
+        auto aux = MM256_SET_M128I(_mm_set1_epi32(aux32[2]), _mm_set1_epi32(aux32[0]));
+        aux = _mm256_and_si256(_mm256_srlv_epi32(aux, shifts), mask);
+        auto pcnt = _mm256_popcnt_epi32(aux);
+        auto sign_bits = _mm256_cvtepi32_epi8(_mm256_or_si256(aux, _mm256_slli_epi32(_mm256_and_si256(pcnt, mone), 7)));
+        const __mmask32 * m32 = (const __mmask32 *)&sign_bits;
+        values[0] = _mm256_mask_sub_epi8(values[0], m32[0], _mm256_setzero_si256(), values[0]);
+        values[1] = _mm256_mask_sub_epi8(values[1], m32[1], _mm256_setzero_si256(), values[1]);
+    }
+#else
+    inline void sign_value(uint32_t aux32, __m256i& value) const {
         auto signs = _mm256_set_epi64x(keven_signs[(aux32 >> 21) & 127], keven_signs[(aux32 >> 14) & 127],
                                        keven_signs[(aux32 >>  7) & 127], keven_signs[(aux32 >>  0) & 127]);
         value = _mm256_sign_epi8(value, signs);
     }
-    IQK_ALWAYS_INLINE static void sign_values(const uint32_t * aux32, __m256i * values) {
-        sign_value(aux32[1], values[0]);
-        sign_value(aux32[3], values[1]);
-        sign_value(aux32[5], values[2]);
-        sign_value(aux32[7], values[3]);
+#endif
+    inline void sign_values(const uint32_t * aux32, __m256i * values) const {
+#ifdef HAVE_FANCY_SIMD
+        sign_2_values(aux32+1, values+0);
+        sign_2_values(aux32+5, values+2);
+#else
+        sign_value(data.val[1], values[0]);
+        sign_value(data.val[3], values[1]);
+        sign_value(data.val[5], values[2]);
+        sign_value(data.val[7], values[3]);
+#endif
     }
 
     inline void make4_signed(const uint32_t * aux32, const __m256i& min_value, __m256i * values) const {
@@ -1760,6 +1777,11 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
     Scales8KBase scb;
     const __m256i min_value = _mm256_set1_epi8(minv);
     const __m256i shuffle = _mm256_set_epi32(7, 5, 3, 1, 7, 5, 3, 1);
+#ifdef HAVE_FANCY_SIMD
+    const __m256i shifts = _mm256_set_epi32(21, 14, 7, 0, 21, 14, 7, 0);
+    const __m256i mask   = _mm256_set1_epi32(127);
+    const __m256i mone   = _mm256_set1_epi32(1);
+#endif
 };
 
 //
