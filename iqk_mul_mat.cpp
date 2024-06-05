@@ -1376,8 +1376,7 @@ struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
         sh.sign_4_values((const uint16_t *)x[i].signs + 8*j, bits.values);
         for (int k = 0; k < 4; ++k) bits.values[k] = _mm256_add_epi8(bits.values[k], min_value);
     }
-    template <typename Q8>
-    inline void prepare(int i, int j, const Q8& q8, __m256i * q8_quants) {
+    inline void prepare(int i, int j, const Q8<1>& q8, __m256i * q8_quants) {
         prepare_unsigned(i, j);
         for (int k = 0; k < 4; ++k) q8_quants[k] = q8.load_quants(0, i, 4*j+k);
         sh.sign_4_values((const uint16_t *)x[i].signs + 8*j, q8_quants);
@@ -1512,8 +1511,7 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
         esh.sign_2_values(signs+4, bits.values+2);
         for (int k = 0; k < 4; ++k) bits.values[k] = _mm256_add_epi32(bits.values[k], min_value);
     }
-    template <typename Q8>
-    inline void prepare(int i, int j, const Q8& q8, __m256i * q8_quants) {
+    inline void prepare(int i, int j, const Q8<1>& q8, __m256i * q8_quants) {
         for (int k = 0; k < 4; ++k) q8_quants[k] = q8.load_quants(0, i, 4*j+k);
         auto qs = x[i].qs + 32*j;
         const uint16_t * signs = (const uint16_t *)(x[i].qs + QK_K/4) + 8*j;
@@ -1599,8 +1597,7 @@ struct DequantizerIQ2S final : public BaseDequantizer<block_iq2_s> {
         make2_signed(sh, qs+0, qh+0, signs+0, idx_shift, idx_mask, min_value, bits.values+0);
         make2_signed(sh, qs+8, qh+2, signs+4, idx_shift, idx_mask, min_value, bits.values+2);
     }
-    template <typename Q8>
-    inline void prepare(int i, int j, const Q8& q8, __m256i * q8_quants) {
+    inline void prepare(int i, int j, const Q8<1>& q8, __m256i * q8_quants) {
         auto qs = x[i].qs + 16*j;
         auto qh = x[i].qh +  4*j;
         const uint16_t * signs = (const uint16_t *)(x[i].qs + QK_K/8) + 8*j;
@@ -1733,8 +1730,7 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
     inline void prepare(int i, int j) {
         make4_signed(x[i].qs + 16*j, idx_mask, min_value, bits.values);
     }
-    template <typename Q8>
-    inline void prepare(int i, int j, const Q8& q8, __m256i * q8_quants) {
+    inline void prepare(int i, int j, const Q8<1>& q8, __m256i * q8_quants) {
         for (int k = 0; k < 4; ++k) q8_quants[k] = q8.load_quants(0, i, 4*j+k);
         make4(x[i].qs + 16*j, idx_mask, bits.values, q8_quants);
     }
@@ -1799,8 +1795,7 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
         Data data; data.vec = _mm256_loadu_si256((const __m256i *)x[i].qs + j);
         make4_signed(data.val, min_value, bits.values);
     }
-    template <typename Q8>
-    inline void prepare(int i, int j, const Q8& q8, __m256i * q8_quants) {
+    inline void prepare(int i, int j, const Q8<1>& q8, __m256i * q8_quants) {
         for (int k = 0; k < 4; ++k) q8_quants[k] = q8.load_quants(0, i, 4*j+k);
         Data data; data.vec = _mm256_loadu_si256((const __m256i *)x[i].qs + j);
         make4(data.val, bits.values, q8_quants);
