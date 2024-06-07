@@ -21,7 +21,7 @@
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
-#include "sgemm.h"
+#include "iqk_mul_mat.h"
 
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
