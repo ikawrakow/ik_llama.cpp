@@ -101,18 +101,20 @@ struct MulMat {
 #else
         constexpr int k_x_step = 64; // This works best on my Ryzen-7950X (but differences to other tile size are small)
 #endif
-        int n_step = (nrc_y - info.cur_y)/funcs.size();
+        int ny = funcs.size();
+        while (!funcs[ny-1] && ny > 0) --ny;
+        int n_step = (nrc_y - info.cur_y)/ny;
         if (n_step > 0) {
             for (int ix = 0; ix < nrc_x; ix += k_x_step) {
                 auto this_info = info;
                 this_info.s += ix;
                 int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
                 for (int iy = 0; iy < n_step; ++iy) {
-                    funcs.back()(n, (const void *)((const char *)vx + ix*bx), bx, this_info, this_nrc_x);
-                    this_info.cur_y += funcs.size();
+                    funcs[ny-1](n, (const void *)((const char *)vx + ix*bx), bx, this_info, this_nrc_x);
+                    this_info.cur_y += ny;
                 }
             }
-            info.cur_y += funcs.size() * n_step;
+            info.cur_y += ny * n_step;
         }
         int n_left = nrc_y - info.cur_y;
         if (n_left > 0) {
@@ -2187,6 +2189,213 @@ void mul_mat_q8_0_q8_0_T(int n, const void * vx, size_t bx, const DataInfo& info
     }
 }
 
+template <int nrc> struct QF32 {
+    constexpr static int nrc_y = nrc;
+    QF32(const DataInfo& info) {
+        for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const float *)info.src1_row(iy);
+    }
+#ifdef __AVX512F__
+    IQK_ALWAYS_INLINE __m512 loa64(int iy, int i, int j) const { return _mm512_loadu_ps(y[iy] + 64*i + 16*j); }
+    IQK_ALWAYS_INLINE void load64x4(int iy, int i, __m512 * yv) const {
+        auto yy = y[iy] + 64*i;
+        yv[0] = _mm512_loadu_ps(yy+ 0);
+        yv[1] = _mm512_loadu_ps(yy+16);
+        yv[2] = _mm512_loadu_ps(yy+32);
+        yv[3] = _mm512_loadu_ps(yy+48);
+    }
+    IQK_ALWAYS_INLINE void load64x2(int iy, int i, __m512 * yv) const {
+        auto yy = y[iy] + 32*i;
+        yv[0] = _mm512_loadu_ps(yy+ 0);
+        yv[1] = _mm512_loadu_ps(yy+16);
+    }
+#endif
+    IQK_ALWAYS_INLINE __m256 load(int iy, int i, int j) const { return _mm256_loadu_ps(y[iy] + 32*i + 8*j); }
+    IQK_ALWAYS_INLINE __m256 load1(int iy, int i) const { return _mm256_loadu_ps(y[iy] + 8*i); }
+    IQK_ALWAYS_INLINE void load4(int iy, int i, __m256 * yv) const {
+        auto yy = y[iy] + 32*i;
+        yv[0] = _mm256_loadu_ps(yy+ 0);
+        yv[1] = _mm256_loadu_ps(yy+ 8);
+        yv[2] = _mm256_loadu_ps(yy+16);
+        yv[3] = _mm256_loadu_ps(yy+24);
+    }
+    IQK_ALWAYS_INLINE void load2(int iy, int i, __m256 * yv) const {
+        auto yy = y[iy] + 16*i;
+        yv[0] = _mm256_loadu_ps(yy+ 0);
+        yv[1] = _mm256_loadu_ps(yy+ 8);
+    }
+
+   const float * y[nrc_y];
+};
+
+//#ifdef __AVX512F__
+//template <typename Q>
+//void mul_mat_f16_f32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+//    assert(n%32 == 0);
+//    int nb = n/32;
+//    Q qf16(info);
+//    __m512 acc[2*Q::nrc_y];
+//    __m512 xv[2];
+//    __m512 yv[2];
+//    for (int ix = 0; ix < nrc_x; ++ix) {
+//        const __m256i * x = (const __m256i *)((const char *)vx + ix*bx);
+//        for (int k = 0; k < 2; ++k) xv[k] = _mm512_cvtph_ps(_mm256_loadu_si256(x + k));
+//        for (int iy = 0; iy < Q::nrc_y; ++iy) {
+//            qf16.load64x2(iy, 0, yv);
+//            acc[2*iy+0] = _mm512_mul_ps(yv[0], xv[0]);
+//            acc[2*iy+1] = _mm512_mul_ps(yv[1], xv[1]);
+//        }
+//        x += 2;
+//        for (int i = 1; i < nb; ++i) {
+//            for (int k = 0; k < 2; ++k) xv[k] = _mm512_cvtph_ps(_mm256_loadu_si256(x + k));
+//            for (int iy = 0; iy < Q::nrc_y; ++iy) {
+//                qf16.load64x2(iy, i, yv);
+//                acc[2*iy+0] = _mm512_fmadd_ps(yv[0], xv[0], acc[2*iy+0]);
+//                acc[2*iy+1] = _mm512_fmadd_ps(yv[1], xv[1], acc[2*iy+1]);
+//            }
+//            x += 2;
+//        }
+//        for (int iy = 0; iy < Q::nrc_y; ++iy) {
+//            info.store(ix, iy, _mm512_reduce_add_ps(_mm512_add_ps(acc[2*iy+0], acc[2*iy+1])));
+//        }
+//    }
+//}
+//#else
+//template <typename Q>
+//void mul_mat_f16_f32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+//    assert(n%32 == 0);
+//    int nb = n/32;
+//    //printf("%s: n=%d nb=%d, nrc_x=%d, nrc_y=%d\n", __func__, n, nb, nrc_x, Q::nrc_y);
+//    Q qf16(info);
+//    __m256 acc[2*Q::nrc_y];
+//    __m256 xv[4];
+//    __m256 yv[4];
+//    for (int ix = 0; ix < nrc_x; ++ix) {
+//        const __m128i * x = (const __m128i *)((const char *)vx + ix*bx);
+//        for (int k = 0; k < 4; ++k) xv[k] = _mm256_cvtph_ps(_mm_loadu_si128(x + k));
+//        for (int iy = 0; iy < Q::nrc_y; ++iy) {
+//            qf16.load4(iy, 0, yv);
+//            acc[2*iy+0] = _mm256_mul_ps(yv[0], xv[0]);
+//            acc[2*iy+1] = _mm256_mul_ps(yv[1], xv[1]);
+//            acc[2*iy+0] = _mm256_fmadd_ps(yv[2], xv[2], acc[2*iy+0]);
+//            acc[2*iy+1] = _mm256_fmadd_ps(yv[3], xv[3], acc[2*iy+1]);
+//        }
+//        x += 4;
+//        for (int i = 1; i < nb; ++i) {
+//            for (int k = 0; k < 4; ++k) xv[k] = _mm256_cvtph_ps(_mm_loadu_si128(x + k));
+//            for (int iy = 0; iy < Q::nrc_y; ++iy) {
+//                qf16.load4(iy, i, yv);
+//                acc[2*iy+0] = _mm256_fmadd_ps(yv[0], xv[0], acc[2*iy+0]);
+//                acc[2*iy+1] = _mm256_fmadd_ps(yv[1], xv[1], acc[2*iy+1]);
+//                acc[2*iy+0] = _mm256_fmadd_ps(yv[2], xv[2], acc[2*iy+0]);
+//                acc[2*iy+1] = _mm256_fmadd_ps(yv[3], xv[3], acc[2*iy+1]);
+//            }
+//            x += 4;
+//        }
+//        for (int iy = 0; iy < Q::nrc_y; ++iy) {
+//            info.store(ix, iy, hsum_float_8(_mm256_add_ps(acc[2*iy+0], acc[2*iy+1])));
+//        }
+//    }
+//}
+//#endif
+template <typename Q>
+void mul_mat_f16_f32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%8 == 0);
+    constexpr int k_nx = 4;
+    int nb = n/8;
+    Q qf16(info);
+    __m256 acc[k_nx*Q::nrc_y];
+    const __m128i * x[k_nx];
+    __m256 xv[k_nx];
+    for (int ix = 0; ix < nrc_x/k_nx; ++ix) {
+        int ix0 = k_nx*ix;
+        for (int kx = 0; kx < k_nx; ++kx) {
+            x[kx] = (const __m128i *)((const char *)vx + (ix0 + kx)*bx);
+            xv[kx] = _mm256_cvtph_ps(_mm_loadu_si128(x[kx]));
+            ++x[kx];
+        }
+        for (int iy = 0; iy < Q::nrc_y; ++iy) {
+            auto yv = qf16.load1(iy, 0);
+            for (int kx = 0; kx < k_nx; ++kx) acc[k_nx*iy + kx] = _mm256_mul_ps(yv, xv[kx]);
+        }
+        for (int i = 1; i < nb; ++i) {
+            for (int kx = 0; kx < k_nx; ++kx) {
+                xv[kx] = _mm256_cvtph_ps(_mm_loadu_si128(x[kx]));
+                ++x[kx];
+            }
+            for (int iy = 0; iy < Q::nrc_y; ++iy) {
+                auto yv = qf16.load1(iy, i);
+                for (int kx = 0; kx < k_nx; ++kx) acc[k_nx*iy + kx] = _mm256_fmadd_ps(yv, xv[kx], acc[k_nx*iy + kx]);
+            }
+        }
+        for (int iy = 0; iy < Q::nrc_y; ++iy) {
+            for (int kx = 0; kx < k_nx; ++kx) {
+                info.store(ix0+kx, iy, hsum_float_8(acc[k_nx*iy+kx]));
+            }
+        }
+    }
+    int last_x = k_nx*(nrc_x/k_nx);
+    if (last_x == nrc_x) return;
+
+    // handle remaining rows
+    int ix0 = last_x; int nx = nrc_x - last_x;
+    for (int kx = 0; kx < nx; ++kx) {
+        x[kx] = (const __m128i *)((const char *)vx + (ix0 + kx)*bx);
+        xv[kx] = _mm256_cvtph_ps(_mm_loadu_si128(x[kx]));
+        ++x[kx];
+    }
+    for (int iy = 0; iy < Q::nrc_y; ++iy) {
+        auto yv = qf16.load1(iy, 0);
+        for (int kx = 0; kx < nx; ++kx) acc[nx*iy + kx] = _mm256_mul_ps(yv, xv[kx]);
+    }
+    for (int i = 1; i < nb; ++i) {
+        for (int kx = 0; kx < nx; ++kx) {
+            xv[kx] = _mm256_cvtph_ps(_mm_loadu_si128(x[kx]));
+            ++x[kx];
+        }
+        for (int iy = 0; iy < Q::nrc_y; ++iy) {
+            auto yv = qf16.load1(iy, i);
+            for (int kx = 0; kx < nx; ++kx) acc[nx*iy + kx] = _mm256_fmadd_ps(yv, xv[kx], acc[nx*iy + kx]);
+        }
+    }
+    for (int iy = 0; iy < Q::nrc_y; ++iy) {
+        for (int kx = 0; kx < nx; ++kx) {
+            info.store(ix0+kx, iy, hsum_float_8(acc[nx*iy+kx]));
+        }
+    }
+}
+void mul_mat_f16_f32_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%32 == 0);
+    GGML_ASSERT(nrc_x%4 == 0);
+    int nb = n/32;
+    QF32<1> qf32(info);
+    const __m128i * x[4];
+    __m256 y[4];
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        x[0] = (const __m128i *)((const char *)vx + (ix+0)*bx);
+        x[1] = (const __m128i *)((const char *)vx + (ix+1)*bx);
+        x[2] = (const __m128i *)((const char *)vx + (ix+2)*bx);
+        x[3] = (const __m128i *)((const char *)vx + (ix+3)*bx);
+        __m256 acc[16] = { _mm256_setzero_ps() };
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 4; ++k) y[k] = qf32.load(0, i, k);
+            auto a = acc;
+            for (int kx = 0; kx < 4; ++kx) {
+                a[0] = _mm256_fmadd_ps(y[0], _mm256_cvtph_ps(_mm_load_si128(x[kx] + 0)), a[0]);
+                a[1] = _mm256_fmadd_ps(y[1], _mm256_cvtph_ps(_mm_load_si128(x[kx] + 1)), a[1]);
+                a[2] = _mm256_fmadd_ps(y[2], _mm256_cvtph_ps(_mm_load_si128(x[kx] + 2)), a[2]);
+                a[3] = _mm256_fmadd_ps(y[3], _mm256_cvtph_ps(_mm_load_si128(x[kx] + 3)), a[3]);
+                a += 4;
+            }
+            x[0] += 4; x[1] += 4; x[2] += 4; x[3] += 4;
+        }
+        auto a = acc;
+        for (int kx = 0; kx < 4; ++kx) {
+            info.store(ix+kx, 0, hsum_float_8(_mm256_add_ps(_mm256_add_ps(a[0], a[1]), _mm256_add_ps(a[2], a[3]))));
+            a += 4;
+        }
+    }
+}
+
 template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
         if constexpr (std::is_same_v<Dequantizer, Q4_0_Unpacker> || std::is_same_v<Dequantizer, Q5_0_Unpacker>) {
             m.funcs[0] = mul_mat_qX_0_q8_0_T<Dequantizer, 1>;
@@ -2282,6 +2491,21 @@ bool MulMat::set_mul_mat(int typeA, int ne00, MulMat& mm, int& row_size_q8, int 
     //if (Ny == 1 && (typeA == GGML_TYPE_IQ3_S || typeA == GGML_TYPE_IQ3_XXS)) {
     if (Ny == 999 && typeA == GGML_TYPE_IQ3_S) {
         return false;
+    }
+
+    if (typeA == GGML_TYPE_F16) {
+        //mm.funcs[0] = mul_mat_f16_f32_1;
+        mm.funcs[0] = mul_mat_f16_f32_T<QF32<1>>;
+        mm.funcs[1] = mul_mat_f16_f32_T<QF32<2>>;
+        mm.funcs[2] = mul_mat_f16_f32_T<QF32<3>>;
+        mm.funcs[3] = mul_mat_f16_f32_T<QF32<4>>;
+        mm.funcs[4] = mm.funcs[5] = mm.funcs[6] = mm.funcs[7] = nullptr;
+        //mm.funcs[4] = mul_mat_f16_f32_T<QF32<5>>;
+        //mm.funcs[5] = mul_mat_f16_f32_T<QF32<6>>;
+        //mm.funcs[6] = mul_mat_f16_f32_T<QF32<7>>;
+        //mm.funcs[7] = mul_mat_f16_f32_T<QF32<8>>;
+        row_size_q8 = ggml_row_size(GGML_TYPE_F32, ne00);
+        return true;
     }
 
     row_size_q8 = ggml_row_size(GGML_TYPE_Q8_K, ne00);
