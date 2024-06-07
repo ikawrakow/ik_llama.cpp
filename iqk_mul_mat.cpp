@@ -1759,25 +1759,6 @@ template <typename Q8, typename Dot> struct Sum4 {
     }
 };
 
-struct Sum4_Q8 {
-    SignedDot dot;
-    static inline __m256i add1(__m256i a, __m256i b) {
-        return _mm256_add_epi32(_mm256_unpacklo_epi32(a, b), _mm256_unpackhi_epi32(a, b));
-    }
-    static inline __m256i add2(__m256i a, __m256i b) {
-        return _mm256_add_epi32(_mm256_unpacklo_epi64(a, b), _mm256_unpackhi_epi64(a, b));
-    }
-    inline __m256i compute(const __m256i * qx, const block_q8_0 * y) const {
-        const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y[0].qs));
-        const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y[1].qs));
-        const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y[2].qs));
-        const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y[3].qs));
-        const __m256i p01 = add1(p0, p1);  // 0,1, 0,1, 0,1, 0,1
-        const __m256i p23 = add1(p2, p3);  // 2,3, 2,3, 2,3, 2,3
-        return add2(p01, p23); // returns 0,1,2,3, 0,1,2,3
-    }
-};
-
 struct ScaleHelperQ_0 {
     ggml_half scales8[4];
     template <typename Q>
@@ -2067,80 +2048,6 @@ template <int nrc> struct QF32 {
    const float * y[nrc_y];
 };
 
-//
-// On my Ryzen-7950X CPU using AVX512 is slower
-// I guess, it is implemented as 2 x AVX2, so there is no reason to be faster, and
-// it seems loading more data at once actually hurts performance.
-// Leaving it in commented out for now.
-//
-//#ifdef __AVX512F__
-//template <typename Q>
-//void mul_mat_f16_f32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-//    assert(n%16 == 0);
-//    constexpr int k_nx = 4;
-//    int nb = n/16;
-//    Q qf16(info);
-//    __m512 acc[k_nx*Q::nrc_y];
-//    const __m256i * x[k_nx];
-//    __m512 xv[k_nx];
-//    for (int ix = 0; ix < nrc_x/k_nx; ++ix) {
-//        int ix0 = k_nx*ix;
-//        for (int kx = 0; kx < k_nx; ++kx) {
-//            x[kx] = (const __m256i *)((const char *)vx + (ix0 + kx)*bx);
-//            xv[kx] = _mm512_cvtph_ps(_mm256_loadu_si256(x[kx]));
-//            ++x[kx];
-//        }
-//        for (int iy = 0; iy < Q::nrc_y; ++iy) {
-//            auto yv = qf16.load64(iy, 0);
-//            for (int kx = 0; kx < k_nx; ++kx) acc[k_nx*iy + kx] = _mm512_mul_ps(yv, xv[kx]);
-//        }
-//        for (int i = 1; i < nb; ++i) {
-//            for (int kx = 0; kx < k_nx; ++kx) {
-//                xv[kx] = _mm512_cvtph_ps(_mm256_loadu_si256(x[kx]));
-//                ++x[kx];
-//            }
-//            for (int iy = 0; iy < Q::nrc_y; ++iy) {
-//                auto yv = qf16.load64(iy, i);
-//                for (int kx = 0; kx < k_nx; ++kx) acc[k_nx*iy + kx] = _mm512_fmadd_ps(yv, xv[kx], acc[k_nx*iy + kx]);
-//            }
-//        }
-//        for (int iy = 0; iy < Q::nrc_y; ++iy) {
-//            for (int kx = 0; kx < k_nx; ++kx) {
-//                info.store(ix0+kx, iy, _mm512_reduce_add_ps(acc[k_nx*iy+kx]));
-//            }
-//        }
-//    }
-//    int last_x = k_nx*(nrc_x/k_nx);
-//    if (last_x == nrc_x) return;
-//
-//    //// handle remaining rows
-//    //int ix0 = last_x; int nx = nrc_x - last_x;
-//    //for (int kx = 0; kx < nx; ++kx) {
-//    //    x[kx] = (const __m128i *)((const char *)vx + (ix0 + kx)*bx);
-//    //    xv[kx] = _mm256_cvtph_ps(_mm_loadu_si128(x[kx]));
-//    //    ++x[kx];
-//    //}
-//    //for (int iy = 0; iy < Q::nrc_y; ++iy) {
-//    //    auto yv = qf16.load1(iy, 0);
-//    //    for (int kx = 0; kx < nx; ++kx) acc[nx*iy + kx] = _mm256_mul_ps(yv, xv[kx]);
-//    //}
-//    //for (int i = 1; i < nb; ++i) {
-//    //    for (int kx = 0; kx < nx; ++kx) {
-//    //        xv[kx] = _mm256_cvtph_ps(_mm_loadu_si128(x[kx]));
-//    //        ++x[kx];
-//    //    }
-//    //    for (int iy = 0; iy < Q::nrc_y; ++iy) {
-//    //        auto yv = qf16.load1(iy, i);
-//    //        for (int kx = 0; kx < nx; ++kx) acc[nx*iy + kx] = _mm256_fmadd_ps(yv, xv[kx], acc[nx*iy + kx]);
-//    //    }
-//    //}
-//    //for (int iy = 0; iy < Q::nrc_y; ++iy) {
-//    //    for (int kx = 0; kx < nx; ++kx) {
-//    //        info.store(ix0+kx, iy, hsum_float_8(acc[nx*iy+kx]));
-//    //    }
-//    //}
-//}
-//#else
 template <int nrc_y>
 void mul_mat_f16_f32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n%8 == 0);
@@ -2195,7 +2102,6 @@ void mul_mat_f16_f32_T(int n, const void * vx, size_t bx, const DataInfo& info, 
         for (int kx = 0; kx < nx; ++kx) info.store(ix0+kx, iy, hsum_float_8(acc[nx*iy+kx]));
     }
 }
-//#endif
 
 template <int nrc> struct Q80 {
     constexpr static int nrc_y = nrc;
