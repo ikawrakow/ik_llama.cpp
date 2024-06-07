@@ -2434,7 +2434,9 @@ bool MulMat::set_mul_mat(int typeA, int ne00, MulMat& mm, int& row_size_q8, int 
         mm.funcs[0] = mul_mat_f16_f32_T<1>;
         mm.funcs[1] = mul_mat_f16_f32_T<2>;
         mm.funcs[2] = mul_mat_f16_f32_T<3>;
+#ifdef __AVX512F__
         mm.funcs[3] = mul_mat_f16_f32_T<4>;
+#endif
         row_size_q8 = ggml_row_size(GGML_TYPE_F32, ne00);
         return true;
     }
