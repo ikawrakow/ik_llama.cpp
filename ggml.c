@@ -4,7 +4,7 @@
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "ggml.h"
-
+#include "iqk_mul_mat.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -12362,31 +12362,29 @@ UseGgmlGemm1:;
             atomic_store(&state->shared->current_chunk, nth);
         }
 
-        //// Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
-        //atomic_store(&state->shared->current_chunk, nth);
-        //if (src1->type != vec_dot_type) {
-        //    char * wdata = params->wdata;
-        //    const size_t row_size = ggml_row_size(vec_dot_type, ne10);
-
-        //    assert(params->wsize >= ne11*ne12*ne13*row_size);
-        //    GGML_ASSERT(src1->type == GGML_TYPE_F32);
-
-        //    for (int64_t i13 = 0; i13 < ne13; ++i13) {
-        //        for (int64_t i12 = 0; i12 < ne12; ++i12) {
-        //            for (int64_t i11 = 0; i11 < ne11; ++i11) {
-        //                from_float_to_vec_dot((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11), (void *) wdata, ne10);
-        //                wdata += row_size;
-        //            }
-        //        }
-        //    }
-        //}
-
         return;
     }
 
     if (params->type == GGML_TASK_TYPE_FINALIZE) {
         return;
     }
+
+    const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+
+    if ((vec_dot_type == GGML_TYPE_Q8_K || vec_dot_type == GGML_TYPE_Q8_0 ||
+         vec_dot_type == GGML_TYPE_Q8_1) && dst->type == GGML_TYPE_F32) {
+        for (int64_t i13 = 0; i13 < ne13; i13++)
+            for (int64_t i12 = 0; i12 < ne12; i12++)
+                if (!iqk_mul_mat(ne01, ne11, ne00, src0->type,
+                            (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03,
+                            (const char *)wdata + ggml_row_size(vec_dot_type, ne10)*(i13*ne12 + i12),
+                            (float *)((char *)dst->data + i12*nb2 + i13*nb3),
+                            nb1/ggml_type_size(dst->type),
+                            ith, nth)) goto IQK_MulMat_Not_Available;
+        return;
+    }
+IQK_MulMat_Not_Available:;
+
 
 #if GGML_USE_LLAMAFILE
     if (src1->type != vec_dot_type) {
@@ -12605,7 +12603,18 @@ static void ggml_compute_forward_mul_mat_id(
 
         const int64_t nr0 = ne01; // src0 rows
         const int64_t nr1 = cne1; // src1 rows
-
+                                  //
+        if (ne13 == 1 && dst->type == GGML_TYPE_F32 &&
+           (vec_dot_type == GGML_TYPE_Q8_K || vec_dot_type == GGML_TYPE_Q8_0 || vec_dot_type == GGML_TYPE_Q8_1)) {
+           if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11, src0->type,
+                               (const char *)src0_cur,
+                               (const char *)wdata,
+                               (float *)dst->data, nb1, nb2,
+                               matrix_rows + cur_a*ne12,
+                               ith, nth)) goto IQK_MulMat_Not_Available;
+                continue;
+        }
+IQK_MulMat_Not_Available:;
         // distribute the thread work across the inner or outer loop based on which one is larger
 
         const int64_t nth0 = nr0 > nr1 ? nth : 1; // parallelize by src0 rows
