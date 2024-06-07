@@ -51,6 +51,7 @@
 #include "sgemm.h"
 #include "ggml-impl.h"
 #include "ggml-quants.h"
+#include "iqk_mul_mat.h"
 
 #ifdef _MSC_VER
 #define NOINLINE __declspec(noinline)
@@ -864,6 +865,12 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
 
     if (Ctype != GGML_TYPE_F32)
         return false;
+
+    if (task == GGML_TASK_TYPE_COMPUTE && k >= 256 && Atype == GGML_TYPE_F16 && Btype == GGML_TYPE_F32) {
+        if (iqk_mul_mat(m, n, k, Atype, A, B, (float *)C, ldc, ith, nth)) {
+            return true;
+        }
+    }
 
     switch (Atype) {
 
