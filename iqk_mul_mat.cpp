@@ -1746,27 +1746,17 @@ struct UnsignedDot {
         return helper.dot(x, y);
     }
 };
-template <typename Q8, typename Dot> struct Sum4 {
+template <typename Q8, typename Q8x4, typename Dot> struct Sum4 {
     Dot dot;
     inline __m256i compute(const __m256i * qx, const Q8 * y) const {
-        if constexpr (std::is_same_v<Q8, block_q8_0>) {
-            const block_q8_0_x4 * y4 = (const block_q8_0_x4 *)y;
-            const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0));
-            const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1));
-            const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2));
-            const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3));
-            const __m256i p01 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p0, p1));    // 0,0, 1,1, 0,0, 1,1
-            const __m256i p23 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p2, p3));    // 2,2, 3,3, 2,2, 3,3
-            return _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p01, p23)); // 0,1,2,3, 0,1,2,3
-        } else {
-            const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y[0].qs));
-            const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y[1].qs));
-            const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y[2].qs));
-            const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y[3].qs));
-            const __m256i p01 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p0, p1));    // 0,0, 1,1, 0,0, 1,1
-            const __m256i p23 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p2, p3));    // 2,2, 3,3, 2,2, 3,3
-            return _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p01, p23)); // 0,1,2,3, 0,1,2,3
-        }
+        const Q8x4 * y4 = (const Q8x4 *)y;
+        const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0));
+        const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1));
+        const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2));
+        const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3));
+        const __m256i p01 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p0, p1));    // 0,0, 1,1, 0,0, 1,1
+        const __m256i p23 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p2, p3));    // 2,2, 3,3, 2,2, 3,3
+        return _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p01, p23)); // 0,1,2,3, 0,1,2,3
     }
 };
 
@@ -1795,6 +1785,27 @@ struct ScaleHelperQ_0 {
     }
     template <typename Q> inline float prepare1(const Q * y) const { return GGML_FP16_TO_FP32(y->d); }
     template <typename Q> inline float prepare1(float d, const Q * y) const { return d*prepare1(y); }
+};
+
+struct ScaleHelperQ8_1 {
+    template <typename Q>
+    inline __m256 prepare4(const Q * y) {
+        const block_q8_1_x4 * y4 = (const block_q8_1_x4 *)y;
+        return _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)y4->d));
+    }
+    template <typename Q>
+    inline __m256 prepare4(__m256 other_scales, const Q * y) {
+        return _mm256_mul_ps(other_scales, prepare4<Q>(y));
+    }
+    template <typename Q> inline std::pair<float, float> prepare1(const Q * y) const {
+        return std::make_pair(GGML_FP16_TO_FP32(y->d), GGML_FP16_TO_FP32(y->m));
+    }
+    template <typename Q> inline std::pair<float, float> prepare1(const std::pair<float, float>& dm, const Q * y) const {
+        return std::make_pair(dm.first*GGML_FP16_TO_FP32(y->d), dm.second*GGML_FP16_TO_FP32(y->m));
+    }
+    std::pair<float, float> inline prepare1(const std::pair<float, float>& dm, const block_q8_1 * y) const {
+        return std::make_pair(dm.first*GGML_FP16_TO_FP32(y->d), dm.second*GGML_FP16_TO_FP32(y->s));
+    }
 };
 
 struct ScaleHelperQ_1 {
@@ -1895,8 +1906,8 @@ using AccumType0 = AccumT<MinusType0, nrc_y, is_multiple_of_4>;
 template <int nrc_y, bool is_multiple_of_4>
 using AccumType1 = AccumT<MinusType1<nrc_y>, nrc_y, is_multiple_of_4>;
 
-using Sum4Type0 = Sum4<block_q8_0, SignedDot>;
-using Sum4Type1 = Sum4<block_q8_1, UnsignedDot>;
+using Sum4Type0 = Sum4<block_q8_0, block_q8_0_x4, SignedDot>;
+using Sum4Type1 = Sum4<block_q8_1, block_q8_1_x4, UnsignedDot>;
 
 template <typename Unpacker, typename Sum4Type, typename AccumType, typename Scales, typename Q8, int nrc_y>
 void mul_mat_qX_q8_Helper(int nb, const void * vx, size_t bx, const DataInfo& info, const Q8 ** y, int nrc_x) {
@@ -1932,11 +1943,11 @@ void mul_mat_qX_1_q8_1_T(int n, const void * vx, size_t bx, const DataInfo& info
     Q8<nrc_y, block_q8_1> q8(info);
     int nb = n/Unpacker::block_size();
     if (nb%4 == 0) {
-        mul_mat_qX_q8_Helper<Unpacker, Sum4Type1, AccumType1<nrc_y, true>, ScaleHelperQ_1, block_q8_1, nrc_y>(
+        mul_mat_qX_q8_Helper<Unpacker, Sum4Type1, AccumType1<nrc_y, true>, ScaleHelperQ8_1, block_q8_1, nrc_y>(
                 nb, vx, bx, info, q8.y, nrc_x
         );
     } else {
-        mul_mat_qX_q8_Helper<Unpacker, Sum4Type1, AccumType1<nrc_y, false>, ScaleHelperQ_1, block_q8_1, nrc_y>(
+        mul_mat_qX_q8_Helper<Unpacker, Sum4Type1, AccumType1<nrc_y, false>, ScaleHelperQ8_1, block_q8_1, nrc_y>(
                 nb, vx, bx, info, q8.y, nrc_x
         );
     }
