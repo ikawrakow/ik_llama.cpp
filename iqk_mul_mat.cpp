@@ -1746,19 +1746,41 @@ struct UnsignedDot {
         return helper.dot(x, y);
     }
 };
-template <typename Q8, typename Q8x4, typename Dot> struct Sum4 {
+
+template <typename Q8, typename Q8x4, typename Dot, bool can_pack = true> struct Sum4 {
     Dot dot;
     inline __m256i compute(const __m256i * qx, const Q8 * y) const {
         const Q8x4 * y4 = (const Q8x4 *)y;
-        const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0));
-        const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1));
-        const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2));
-        const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3));
-        const __m256i p01 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p0, p1));    // 0,0, 1,1, 0,0, 1,1
-        const __m256i p23 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p2, p3));    // 2,2, 3,3, 2,2, 3,3
-        return _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p01, p23)); // 0,1,2,3, 0,1,2,3
+        const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0)); // 8x block 0
+        const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1)); // 8x block 1
+        const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2)); // 8x block 2
+        const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3)); // 8x block 3
+        if constexpr (can_pack) {
+            const __m256i p01 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p0, p1));    // 0,0, 1,1, 0,0, 1,1
+            const __m256i p23 = _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p2, p3));    // 2,2, 3,3, 2,2, 3,3
+            return _mm256_madd_epi16(dot.helper.m1, _mm256_packs_epi32(p01, p23)); // 0,1,2,3, 0,1,2,3
+        } else {
+            // Note to myself: this is much faster than using _mm256_hadd_epi32()
+            auto p01 = _mm256_add_epi32(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1)); // 0,1, 0,1, 0,1, 0,1
+            auto p23 = _mm256_add_epi32(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3)); // 2,3, 2,3, 2,3, 2,3
+            return _mm256_add_epi32(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23)); // 0,1,2,3, 0,1,2,3
+        }
     }
 };
+// If I use this, it negatively impacts q4_1/q5_1 performance.
+//template <typename Q8, typename Q8x4, typename Dot> struct Sum4 {
+//    Dot dot;
+//    inline __m256i compute(const __m256i * qx, const Q8 * y) const {
+//        const Q8x4 * y4 = (const Q8x4 *)y;
+//        const __m256i p0 = dot.compute(qx[0], _mm256_loadu_si256((const __m256i *)y4->qs+0)); // 8x block 0
+//        const __m256i p1 = dot.compute(qx[1], _mm256_loadu_si256((const __m256i *)y4->qs+1)); // 8x block 1
+//        const __m256i p2 = dot.compute(qx[2], _mm256_loadu_si256((const __m256i *)y4->qs+2)); // 8x block 2
+//        const __m256i p3 = dot.compute(qx[3], _mm256_loadu_si256((const __m256i *)y4->qs+3)); // 8x block 3
+//        auto p01 = _mm256_add_epi32(_mm256_unpacklo_epi32(p0, p1), _mm256_unpackhi_epi32(p0, p1)); // 0,1, 0,1, 0,1, 0,1
+//        auto p23 = _mm256_add_epi32(_mm256_unpacklo_epi32(p2, p3), _mm256_unpackhi_epi32(p2, p3)); // 2,3, 2,3, 2,3, 2,3
+//        return _mm256_add_epi32(_mm256_unpacklo_epi64(p01, p23), _mm256_unpackhi_epi64(p01, p23)); // 0,1,2,3, 0,1,2,3
+//    }
+//};
 
 struct ScaleHelperQ8_0 {
     inline __m128 prepare4(const block_q8_0 * y) {
@@ -1908,11 +1930,12 @@ using AccumType1 = AccumT<MinusType1<nrc_y>, nrc_y, is_multiple_of_4>;
 
 using Sum4Type0 = Sum4<block_q8_0, block_q8_0_x4, SignedDot>;
 using Sum4Type1 = Sum4<block_q8_1, block_q8_1_x4, UnsignedDot>;
+using Sum4TypeQ80 = Sum4<block_q8_0, block_q8_0_x4, SignedDot, false>;
 
-template <typename Unpacker, typename Sum4Type, typename AccumType, typename Scales, typename Q8, int nrc_y>
+template <typename Unpacker, typename AccumType, typename Scales, typename Q8, int nrc_y>
 void mul_mat_qX_q8_Helper(int nb, const void * vx, size_t bx, const DataInfo& info, const Q8 ** y, int nrc_x) {
     Unpacker unp(vx, bx);
-    Sum4Type sum4;
+    typename Unpacker::Sum4T sum4;
     Scales scales;
     for (int ix = 0; ix < nrc_x; ++ix) {
         unp.set_row(ix);
@@ -1927,11 +1950,11 @@ void mul_mat_qX_0_q8_0_T(int n, const void * vx, size_t bx, const DataInfo& info
     Q8<nrc_y, block_q8_0> q8(info);
     int nb = n/Unpacker::block_size();
     if (nb%4 == 0) {
-        mul_mat_qX_q8_Helper<Unpacker, Sum4Type0, AccumType0<nrc_y, true>, ScaleHelperQ8_0, block_q8_0, nrc_y>(
+        mul_mat_qX_q8_Helper<Unpacker, AccumType0<nrc_y, true>, ScaleHelperQ8_0, block_q8_0, nrc_y>(
                 nb, vx, bx, info, q8.y, nrc_x
         );
     } else {
-        mul_mat_qX_q8_Helper<Unpacker, Sum4Type0, AccumType0<nrc_y, false>, ScaleHelperQ8_0, block_q8_0, nrc_y>(
+        mul_mat_qX_q8_Helper<Unpacker, AccumType0<nrc_y, false>, ScaleHelperQ8_0, block_q8_0, nrc_y>(
                 nb, vx, bx, info, q8.y, nrc_x
         );
     }
@@ -1943,11 +1966,11 @@ void mul_mat_qX_1_q8_1_T(int n, const void * vx, size_t bx, const DataInfo& info
     Q8<nrc_y, block_q8_1> q8(info);
     int nb = n/Unpacker::block_size();
     if (nb%4 == 0) {
-        mul_mat_qX_q8_Helper<Unpacker, Sum4Type1, AccumType1<nrc_y, true>, ScaleHelperQ8_1, block_q8_1, nrc_y>(
+        mul_mat_qX_q8_Helper<Unpacker, AccumType1<nrc_y, true>, ScaleHelperQ8_1, block_q8_1, nrc_y>(
                 nb, vx, bx, info, q8.y, nrc_x
         );
     } else {
-        mul_mat_qX_q8_Helper<Unpacker, Sum4Type1, AccumType1<nrc_y, false>, ScaleHelperQ8_1, block_q8_1, nrc_y>(
+        mul_mat_qX_q8_Helper<Unpacker, AccumType1<nrc_y, false>, ScaleHelperQ8_1, block_q8_1, nrc_y>(
                 nb, vx, bx, info, q8.y, nrc_x
         );
     }
@@ -2050,22 +2073,27 @@ struct Q_Unpacker {
 
 struct Q8_0_Unpacker final : public Q_Unpacker<block_q8_0, ScaleHelperQ_0, Q8_0_Dequantizer> {
     Q8_0_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ80;
     inline static int block_size() { return QK8_0; }
 };
 struct Q4_0_Unpacker final : public Q_Unpacker<block_q4_0, ScaleHelperQ_0, Q4_0_Dequantizer> {
     Q4_0_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ80;
     inline static int block_size() { return QK4_0; }
 };
 struct Q5_0_Unpacker final : public Q_Unpacker<block_q5_0, ScaleHelperQ_0, Q5_0_Dequantizer> {
     Q5_0_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ80;
     inline static int block_size() { return QK5_0; }
 };
 struct Q4_1_Unpacker final : public Q_Unpacker<block_q4_1, ScaleHelperQ_1, Q4_1_Dequantizer> {
     Q4_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4Type1;
     inline static int block_size() { return QK4_1; }
 };
 struct Q5_1_Unpacker final : public Q_Unpacker<block_q5_1, ScaleHelperQ_1, Q5_1_Dequantizer> {
     Q5_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4Type1;
     inline static int block_size() { return QK4_1; }
 };
 
