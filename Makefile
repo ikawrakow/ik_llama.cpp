@@ -170,8 +170,8 @@ endif
 
 # keep standard at C11 and C++11
 MK_CPPFLAGS  = -I. -Icommon
-MK_CFLAGS    = -std=c11   -fPIC -v
-MK_CXXFLAGS  = -std=c++11 -fPIC -v
+MK_CFLAGS    = -std=c11   -fPIC
+MK_CXXFLAGS  = -std=c++17 -fPIC
 MK_NVCCFLAGS = -std=c++11
 
 # -Ofast tends to produce faster code, but may not be available for some compilers.
@@ -475,6 +475,8 @@ ifdef LLAMA_BLIS
 	OBJS        += ggml-blas.o
 endif # LLAMA_BLIS
 
+OBJS += iqk_mul_mat.o
+
 ifndef LLAMA_NO_LLAMAFILE
 	MK_CPPFLAGS += -DGGML_USE_LLAMAFILE
 	OBJS        += sgemm.o
@@ -701,6 +703,9 @@ endif # LLAMA_METAL
 OBJS += ggml-alloc.o ggml-backend.o ggml-quants.o unicode.o unicode-data.o
 COMMON_H_DEPS = common/common.h common/sampling.h common/log.h llama.h
 COMMON_DEPS   = common.o sampling.o grammar-parser.o build-info.o json-schema-to-grammar.o
+
+iqk_mul_mat.o: iqk_mul_mat.cpp ggml-impl.h ggml.h ggml-quants.h ggml-common.h iqk_mul_mat.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 ifndef LLAMA_NO_LLAMAFILE
 sgemm.o: sgemm.cpp sgemm.h ggml.h
