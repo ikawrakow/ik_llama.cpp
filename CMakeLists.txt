@@ -399,11 +399,14 @@ if (LLAMA_BLAS)
     endif()
 endif()
 
+set(GGML_SOURCES_IQK_MM iqk_mul_mat.cpp)
+set(GGML_HEADERS_IQK_MM iqk_mul_mat.h)
+
 if (LLAMA_LLAMAFILE)
     add_compile_definitions(GGML_USE_LLAMAFILE)
 
     set(GGML_HEADERS_LLAMAFILE sgemm.h)
-    set(GGML_SOURCES_LLAMAFILE sgemm.cpp iqk_mul_mat.cpp)
+    set(GGML_SOURCES_LLAMAFILE sgemm.cpp)
 endif()
 
 if (LLAMA_CUBLAS)
@@ -1276,6 +1279,7 @@ add_library(ggml OBJECT
             ${GGML_SOURCES_ROCM}      ${GGML_HEADERS_ROCM}
             ${GGML_SOURCES_BLAS}      ${GGML_HEADERS_BLAS}
             ${GGML_SOURCES_LLAMAFILE} ${GGML_HEADERS_LLAMAFILE}
+            ${GGML_SOURCES_IQK_MM}    ${GGML_HEADERS_IQK_MM}
             )
 
 target_include_directories(ggml PUBLIC . ${LLAMA_EXTRA_INCLUDES})
