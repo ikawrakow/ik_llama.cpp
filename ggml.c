@@ -4,7 +4,9 @@
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "ggml.h"
+#if GGML_USE_IQK_MULMAT
 #include "iqk_mul_mat.h"
+#endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -12371,6 +12373,7 @@ UseGgmlGemm1:;
 
     const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
 
+#if GGML_USE_IQK_MULMAT
     if ((vec_dot_type == GGML_TYPE_Q8_K || vec_dot_type == GGML_TYPE_Q8_0 ||
          vec_dot_type == GGML_TYPE_Q8_1) && dst->type == GGML_TYPE_F32) {
         for (int64_t i13 = 0; i13 < ne13; i13++)
@@ -12384,6 +12387,7 @@ UseGgmlGemm1:;
         return;
     }
 IQK_MulMat_Not_Available:;
+#endif
 
 
 #if GGML_USE_LLAMAFILE
@@ -12607,6 +12611,7 @@ static void ggml_compute_forward_mul_mat_id(
         const int64_t nr0 = ne01; // src0 rows
         const int64_t nr1 = cne1; // src1 rows
                                   //
+#if GGML_USE_IQK_MULMAT
         if (ne13 == 1 && dst->type == GGML_TYPE_F32 &&
            (vec_dot_type == GGML_TYPE_Q8_K || vec_dot_type == GGML_TYPE_Q8_0 || vec_dot_type == GGML_TYPE_Q8_1)) {
            if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11, src0->type,
@@ -12618,6 +12623,8 @@ static void ggml_compute_forward_mul_mat_id(
                 continue;
         }
 IQK_MulMat_Not_Available:;
+#endif
+
         // distribute the thread work across the inner or outer loop based on which one is larger
 
         const int64_t nth0 = nr0 > nr1 ? nth : 1; // parallelize by src0 rows

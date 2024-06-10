@@ -99,6 +99,8 @@ option(LLAMA_BLAS                            "llama: use BLAS"                  
 set(LLAMA_BLAS_VENDOR ${LLAMA_BLAS_VENDOR_DEFAULT} CACHE STRING
                                              "llama: BLAS library vendor")
 option(LLAMA_LLAMAFILE                       "llama: use llamafile SGEMM"                       ${LLAMA_LLAMAFILE_DEFAULT})
+option(LLAMA_IQK_MULMAT                      "llama: use optimized iqk matrix multiplications"  ON)
+set(LLAMA_BLAS_VENDOR "Generic" CACHE STRING "llama: BLAS library vendor")
 option(LLAMA_CUDA                            "llama: use CUDA"                                  OFF)
 option(LLAMA_CUBLAS                          "llama: use CUDA (deprecated, use LLAMA_CUDA)"     OFF)
 option(LLAMA_CUDA_FORCE_DMMV                 "llama: use dmmv instead of mmvq CUDA kernels"     OFF)
@@ -399,8 +401,11 @@ if (LLAMA_BLAS)
     endif()
 endif()
 
-set(GGML_SOURCES_IQK_MM iqk_mul_mat.cpp)
-set(GGML_HEADERS_IQK_MM iqk_mul_mat.h)
+if (LLAMA_IQK_MULMAT)
+    add_compile_definitions(GGML_USE_IQK_MULMAT)
+    set(GGML_SOURCES_IQK_MM iqk_mul_mat.cpp)
+    set(GGML_HEADERS_IQK_MM iqk_mul_mat.h)
+endif()
 
 if (LLAMA_LLAMAFILE)
     add_compile_definitions(GGML_USE_LLAMAFILE)
