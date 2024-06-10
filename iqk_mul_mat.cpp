@@ -2224,7 +2224,7 @@ void mul_mat_f16_f32_T(int n, const void * vx, size_t bx, const DataInfo& info, 
 #ifdef __AVX512F__
     constexpr int k_nx = 5;
 #else
-    constexpr int k_nx = 3;
+    constexpr int k_nx = 2;
 #endif
     const char * cx = (const char *)vx;
     for (int ix = 0; ix < nrc_x/k_nx; ++ix) {
@@ -2236,9 +2236,10 @@ void mul_mat_f16_f32_T(int n, const void * vx, size_t bx, const DataInfo& info, 
     switch (nx) {
         case 1: mul_mat_f16_f32_NxN<nrc_y, 1>(n, cx, bx, last_x, info); break;
         case 2: mul_mat_f16_f32_NxN<nrc_y, 2>(n, cx, bx, last_x, info); break;
-#ifdef __AVX512F__
         case 3: mul_mat_f16_f32_NxN<nrc_y, 3>(n, cx, bx, last_x, info); break;
         case 4: mul_mat_f16_f32_NxN<nrc_y, 4>(n, cx, bx, last_x, info); break;
+#ifndef __AVX512F__
+        case 5: mul_mat_f16_f32_NxN<nrc_y, 5>(n, cx, bx, last_x, info); break;
 #endif
     }
 }
@@ -2392,8 +2393,10 @@ bool MulMat::set_mul_mat(int typeA, int ne00, MulMat& mm, int& row_size_q8, int 
         mm.funcs[1] = mul_mat_f16_f32_T<2>;
         mm.funcs[2] = mul_mat_f16_f32_T<3>;
         mm.funcs[3] = mul_mat_f16_f32_T<4>;
-#ifdef __AVX512F__
         mm.funcs[4] = mul_mat_f16_f32_T<5>;
+        mm.funcs[4] = mul_mat_f16_f32_T<5>;
+#ifndef __AVX512F__
+        mm.funcs[5] = mul_mat_f16_f32_T<6>;
 #endif
         row_size_q8 = ggml_row_size(GGML_TYPE_F32, ne00);
         return true;
