@@ -870,13 +870,13 @@ void quantize_row_q8_0(const float * restrict x, void * restrict vy, int64_t k) 
 
     block_q8_0 * restrict y = vy;
 
-#if defined(__ARM_NEON)
-    block_q8_0_x4 * y4 = (block_q8_0_x4 *)vy;
 #if GGML_USE_IQK_MULMAT
     const int nb4 = 4*(nb/4);
 #else
     const int nb4 = -1;
 #endif
+#if defined(__ARM_NEON)
+    block_q8_0_x4 * y4 = (block_q8_0_x4 *)vy;
     for (int i = 0; i < nb; i++) {
         int i4 = i/4, ir = i%4;
         float32x4_t srcv [8];
@@ -953,7 +953,6 @@ void quantize_row_q8_0(const float * restrict x, void * restrict vy, int64_t k) 
     }
 #elif defined(__AVX2__) || defined(__AVX__)
     block_q8_0_x4 * y4 = (block_q8_0_x4 *)vy;
-    int nb4 = 4*(nb/4);
 #ifdef __AVX2__
     const bool pack = true;
 #else
