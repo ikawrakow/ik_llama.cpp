@@ -15,9 +15,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#if defined IQK_IMPLEMENT
+#undef IQK_IMPLEMENT
+#endif
+
+#if defined __AVX2__ || defined __ARM_FEATURE_DOTPROD
+#define IQK_IMPLEMENT
+#endif
+
 #include <cstring>
 #include <type_traits>
-#if defined __x86_64__ || defined __aarch64__
+
+#if defined IQK_IMPLEMENT
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
@@ -29,21 +38,24 @@
 // clang-format off
 
 // This matrix - vector and matrix - matrix multiplication implementation
-// for k-quants and IQ4_XS makes prompt processing 150-200% faster
-// compared to mainline llama.cpp (and llamafile).
-// It is AVX2 only for now.
+// for k-quants, i-quants, and legacy quants, makes prompt processing
+// 150-350% faster (depending on quantization type) compared to mainline llama.cpp.
+// It is AVX2 and ARM_NEON only for now.
+// There are also implementations for fp16/32 x fp16/32 matrix multiplications
+// on AVX2 and fp16 x fp16 on ARM_NEON.
 //
 // Main idea is that unpacking the quants and the block scales to
-// be ready for dot products with the corresponding Q8_K quants
-// takes time. Hence, if we are performing a QX x Q8_K matrix matrix
+// be ready for dot products with the corresponding Q8_X quants
+// takes time. Hence, if we are performing a QX x Q8_X matrix matrix
 // multiplication (as needed for prompt processing), we can get
 // a significant speedup by reusing the unpacked QX quants and scales
-// for multiplication with several Q8_K columns.
+// for multiplication with several Q8_X columns.
+//
+// For fp16/fp32 matri multiplications tiling is used to improve
+// performance.
 
 #include <utility>
 #include <array>
-
-#endif
 
 #ifdef _MSC_VER
 #define IQK_NOINLINE __declspec(noinline)
@@ -79,7 +91,6 @@ struct DataInfo {
 
     inline void store(int ix, int iy, float result) const {
         *(dst_row(iy) + ix) = result;
-        //dst_row(iy)[ix] = result;
     }
     inline float * dst_row(int iy) const {
         if (!row_mapping) return s + (cur_y + iy)*bs;
@@ -120,10 +131,62 @@ struct MulMat {
             funcs[n_left-1](n, vx, bx, info, nrc_x);
         }
     }
-    static bool set_mul_mat(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
+    static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
 private:
     template <typename Dequantizer> static void set_functions(MulMat& m);
 };
+
+}
+
+bool iqk_mul_mat(int task_type, long Nx, long Ny, long ne00,
+        int typeA, const void * A, long strideA,
+        int typeB, const void * B, long strideB,
+        float * C, long stride_C, int ith, int nth) {
+
+    MulMat mm;
+    if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
+        return false;
+    }
+
+    if (ggml_task_type(task_type) != GGML_TASK_TYPE_COMPUTE) return ggml_task_type(task_type) == GGML_TASK_TYPE_INIT;
+
+    auto row_size_qx = strideA*ggml_type_size(ggml_type(typeA));
+    auto row_size_qy = strideB*ggml_type_size(ggml_type(typeB));
+
+    auto nrc_x = (Nx + nth - 1)/nth;
+    auto first_x = ith*nrc_x;
+    if (first_x + nrc_x > Nx) nrc_x = Nx - first_x;
+
+    DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+
+    mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny);
+
+    return true;
+}
+
+bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
+        int typeA, const void * A, long strideA,
+        int typeB, const void * B, long strideB,
+        float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth) {
+    const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
+    assert(row_mapping != nullptr);
+
+    MulMat mm;
+    if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
+        return false;
+    }
+    auto row_size_qx = strideA*ggml_type_size(ggml_type(typeA));
+    auto row_size_qy = strideB*ggml_type_size(ggml_type(typeB));
+    int nrc_x = (Nx + nth - 1)/nth;
+    int first_x = ith*nrc_x;
+    if (first_x + nrc_x > Nx) nrc_x = Nx - first_x;
+    DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float),
+        row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
+    mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny);
+    return true;
+}
+
+namespace {
 
 inline void make_q4_scales(const uint8_t * scales8, uint32_t * aux32) {
     const uint16_t * scales = (const uint16_t *)scales8;
@@ -171,54 +234,6 @@ const uint64_t keven_signs[128] = {
     0xffffffffffff0101, 0x01ffffffffff01ff, 0x01ffffffffffff01, 0xffffffffffffffff,
 };
 
-}
-
-bool iqk_mul_mat(int task_type, long Nx, long Ny, long ne00,
-        int typeA, const void * A, long strideA,
-        int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth) {
-
-    MulMat mm;
-    if (!MulMat::set_mul_mat(typeA, typeB, ne00, mm, Ny)) {
-        return false;
-    }
-
-    if (ggml_task_type(task_type) != GGML_TASK_TYPE_COMPUTE) return ggml_task_type(task_type) == GGML_TASK_TYPE_INIT;
-
-    auto row_size_qx = strideA*ggml_type_size(ggml_type(typeA));
-    auto row_size_qy = strideB*ggml_type_size(ggml_type(typeB));
-
-    auto nrc_x = (Nx + nth - 1)/nth;
-    auto first_x = ith*nrc_x;
-    if (first_x + nrc_x > Nx) nrc_x = Nx - first_x;
-
-    DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
-
-    mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny);
-
-    return true;
-}
-
-bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
-        int typeA, const void * A, long strideA,
-        int typeB, const void * B, long strideB,
-        float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth) {
-    const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
-    assert(row_mapping != nullptr);
-
-    MulMat mm;
-    if (!MulMat::set_mul_mat(typeA, typeB, ne00, mm, Ny)) {
-        return false;
-    }
-    auto row_size_qx = strideA*ggml_type_size(ggml_type(typeA));
-    auto row_size_qy = strideB*ggml_type_size(ggml_type(typeB));
-    int nrc_x = (Nx + nth - 1)/nth;
-    int first_x = ith*nrc_x;
-    if (first_x + nrc_x > Nx) nrc_x = Nx - first_x;
-    DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float),
-        row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
-    mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny);
-    return true;
 }
 
 #if defined __x86_64__
@@ -2159,6 +2174,8 @@ struct Q5_1_Unpacker final : public Q_Unpacker<block_q5_1, ScaleHelperQ_1, Q5_1_
     inline static int block_size() { return QK4_1; }
 };
 
+// float matrices - we handle f16 and f32, but only to f32 result
+
 struct QFBase {
 #ifdef __AVX512F__
     constexpr static int k_step = 16;
@@ -2203,8 +2220,6 @@ template <typename Float, int nrc_in> struct QFT final : public QFBase {
     IQK_ALWAYS_INLINE Data load1(int iy, int i) const { return load(y[iy] + k_step*i); }
     const Float * y[nrc];
 };
-//template <int nrc_y> using QF32 = QFT<float, nrc_y>;
-//template <int nrc_y> using QF16 = QFT<ggml_half, nrc_y>;
 
 template <typename Qy, typename Qx>
 IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
@@ -2236,6 +2251,7 @@ IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, 
     }
     for (int iy = 0; iy < Qy::nrc; ++iy) for (int ix = 0; ix < Qx::nrc; ++ix) info.store(ix0+ix, iy, QFBase::hsum(acc[Qx::nrc*iy+ix]));
 }
+
 // This will handle any of f16 x f32, f32 x f16, f16 x f16, f32 x f32, with computations done
 // in f32 (i.e., f16 is first converted to f32). It is easy to extend to computations done in
 // f16, but I don't have a CPU capable of f16 vector arithmetic, so not doing it for now.
@@ -2264,6 +2280,10 @@ void mul_mat_fX_fY_T(int n, const void * vx, size_t bx, const DataInfo& info, in
     }
 }
 
+//
+// Tiled Q8_0 x Q8_0 implementation. Not used as the templated legacy quant implementation
+// above is faster. Left behind so we remember we tried.
+//
 template <int nrc> struct Q80 {
     constexpr static int nrc_y = nrc;
     Q80(const DataInfo& info) {
@@ -2413,7 +2433,7 @@ void set_mul_mat_f(MulMat& mm) {
 #endif
 }
 
-bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
+bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
 
     (void)Ny;
 
@@ -3929,7 +3949,7 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
     }
 }
 
-bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
+bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
 
     if (typeA == GGML_TYPE_F16 && typeB == GGML_TYPE_F16) {
         if (ne00%8) return false;
@@ -3939,8 +3959,6 @@ bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) 
         m.funcs[2] = mul_mat_f16_f16_T<3>;
         m.funcs[3] = mul_mat_f16_f16_T<4>;
         m.funcs[4] = mul_mat_f16_f16_T<5>;
-        //m.funcs[5] = mul_mat_f16_f16_T<6>;
-        //m.funcs[6] = mul_mat_f16_f16_T<7>;
         return true;
     }
 
@@ -4009,4 +4027,17 @@ bool MulMat::set_mul_mat(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) 
 
 }
 
-#endif // __x86_64__ or __aarch64__
+#endif // __aarch64__
+
+#else  // IQK_IMPLEMENT
+
+bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
+    return false;
+}
+
+bool iqk_mul_mat_moe(long, long, long, int, int, const void *, long, int, const void *, long, float *, long, long,
+        const void *, int, int) {
+    return false;
+}
+
+#endif
