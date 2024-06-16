@@ -1074,6 +1074,52 @@ static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
     return d * ((sumi[0] + sumf[0]) * (2*((sc[ib32/2] >> 6*(ib32%2)) & 0x7) + 1) + (sumi[1] + sumf[1]) * (2*((sc[ib32/2] >> (6*(ib32%2)+3)) & 0x7) + 1));
 }
 
+static __device__ __forceinline__ float vec_dot_iq1_bn_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+    const block_iq1_bn * bq1 = (const block_iq1_bn *) vbq + kbx;
+
+    typedef union { float f; uint32_t i; } scale_t;
+    scale_t s;
+    uint8_t u = bq1->extra & 0xff;
+    s.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
+    uint8_t extra = bq1->extra >> (8 + 4*iqs);
+    int sumi = 0;
+#if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
+    const int * q8 = (const int *)bq8_1[iqs].qs;
+    //const int minus = 0xffffffff;
+    for (int l = 0; l < 4; ++l) {
+        int sign = extra & (1 << l) ? -1 : 1;
+        uint16_t val = iq1bn_grid_xxx[bq1->ql[4*iqs + l] | ((bq1->qh[2*iqs + l/2] << (8 - 4*(l%2))) & 0x0f00)];
+        uint8_t vp = val & 0xff, vm = val >> 8;
+        int32_t vp1 = __vcmpeq4(((vp & 0xf) * 0x01010101) & 0x08040201, 0x08040201);
+        int32_t vp2 = __vcmpeq4(((vp >>  4) * 0x01010101) & 0x08040201, 0x08040201);
+        int32_t vm1 = __vcmpeq4(((vm & 0xf) * 0x01010101) & 0x08040201, 0x08040201);
+        int32_t vm2 = __vcmpeq4(((vm >>  4) * 0x01010101) & 0x08040201, 0x08040201);
+        sumi += (__dp4a(q8[2*l+0], vm1, __dp4a(q8[2*l+1], vm2, 0)) - __dp4a(q8[2*l+0], vp1, __dp4a(q8[2*l+1], vp2, 0)))*sign;
+        //int32_t vp1 = __vcmpeq4(((vp & 0xf) * 0x01010101) & 0x08040201, 0x08040201) & q8[2*l+0];
+        //int32_t vp2 = __vcmpeq4(((vp >>  4) * 0x01010101) & 0x08040201, 0x08040201) & q8[2*l+1];
+        //int32_t vm1 = __vcmpeq4(((vm & 0xf) * 0x01010101) & 0x08040201, 0x08040201) & q8[2*l+0];
+        //int32_t vm2 = __vcmpeq4(((vm >>  4) * 0x01010101) & 0x08040201, 0x08040201) & q8[2*l+1];
+        //int32_t v1 = __vsubss4(vp1, vm1);
+        //int32_t v2 = __vsubss4(vp2, vm2);
+        //sumi += __dp4a(v1, 0x01010101, __dp4a(v2, 0x01010101, 0))*sign;
+    }
+#else
+    const int8_t * q8 = bq8_1[iqs].qs;
+    for (int l = 0; l < 4; ++l) {
+        uint16_t val = iq1bn_grid_u16[bq1->ql[4*iqs + l] | ((bq1->qh[2*iqs + l/2] << (8 - 4*(l%2))) & 0x0f00)];
+        int s1 = 0, s2 = 0;
+        for (int j = 0; j < 8; ++j) {
+            s1 += q8[j] * ((val >> 2*j) & 3);
+            s2 += q8[j];
+        }
+        sumi += extra & (1 << l) ? s2 - s1 : s1 - s2;
+        q8 += 8;
+    }
+#endif
+    return s.f * __low2float(bq8_1[iqs].ds) * sumi;
+}
+
 #if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
 static __device__ __forceinline__ void get_int_from_table_16(const uint32_t & q4, const uint8_t * values,
         int & val1, int & val2) {
