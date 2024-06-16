@@ -401,33 +401,31 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
 #else
 
+    uint16_t u = x[0].extra & 0xff;
+    scale.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
     for (int i = 0; i < nblock; ++i) {
-        uint16_t u = x[i].extra & 0xff;
-        scale.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
         uint8_t extra = x[i].extra >> 8;
         auto qh = x[i].qh;
         auto ql = x[i].ql;
-        auto q8 = y[2*i+0].qs;
-        int16_t sumi1 = 0;
+        auto q8 = y[i].qs;
+        int sumi = 0;
         for (int k = 0; k < 4; ++k) {
             uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
             uint16_t val = iq1bn_grid_u16[idx];
             int16_t sl = 0;
             for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi1 += extra & (1 << k) ? -sl : sl;
+            sumi += extra & (1 << k) ? -sl : sl;
             q8 += 8;
         }
-        q8 = y[2*i+1].qs;
-        int16_t sumi2 = 0;
         for (int k = 4; k < 8; ++k) {
             uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
             uint16_t val = iq1bn_grid_u16[idx];
             int16_t sl = 0;
             for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi2 += extra & (1 << k) ? -sl : sl;
+            sumi += extra & (1 << k) ? -sl : sl;
             q8 += 8;
         }
-        sumf += scale.f * (GGML_FP16_TO_FP32(y[2*i+0].d) * sumi1 + GGML_FP16_TO_FP32(y[2*i+1].d) * sumi2);
+        sumf += scale.f * (y[i].d) * sumi;
     }
 
 #endif
