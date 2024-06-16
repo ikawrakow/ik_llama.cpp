@@ -1400,6 +1400,35 @@ class LlamaModel(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@Model.register("BitnetForCausalLM")
+class BitnetModel(Model):
+    model_arch = gguf.MODEL_ARCH.BITNET
+
+    def set_vocab(self):
+        self._set_vocab_sentencepiece()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+        self.gguf_writer.add_rope_scaling_factor(1.0)
+
+    def weight_quant(self, weight):
+        dtype = weight.dtype
+        weight = weight.float()
+        s = 1 / weight.abs().mean().clamp(min=1e-5)
+        result = (weight * s).round().clamp(-1, 1) / s
+        return result.type(dtype)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # transform weight into 1/0/-1 (in fp32)
+        if name.endswith(("q_proj.weight", "k_proj.weight", "v_proj.weight",
+                          "down_proj.weight", "up_proj.weight", "gate_proj.weight",
+                          "o_proj.weight")):
+            data_torch = self.weight_quant(data_torch)
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+
 @Model.register("GrokForCausalLM")
 class GrokModel(Model):
     model_arch = gguf.MODEL_ARCH.GROK
