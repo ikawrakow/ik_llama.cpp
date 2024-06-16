@@ -1347,12 +1347,12 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
     typedef union { float f; uint32_t i; } scale_t;
 
     scale_t scale;
-    uint16_t u = x[0].extra & 0xff;
-    scale.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         x = (const block_iq1_bn *)((const char *)vx + ix*bx);
+        uint16_t u = x[0].extra & 0xff;
+        scale.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
 
         for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = _mm256_setzero_ps();
 

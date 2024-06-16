@@ -3731,7 +3731,7 @@ void quantize_row_q8_K64_reference(const float * restrict x, block_q8_K64 * rest
         for (int j = 0; j < 64; ++j) {
             float ax = fabsf(x[j]);
             if (ax > amax) {
-                amax = ax; max = x[j]; 
+                amax = ax; max = x[j];
             }
         }
         if (!amax) {
