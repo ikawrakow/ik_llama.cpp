@@ -401,6 +401,7 @@ if (LLAMA_BLAS)
     endif()
 endif()
 
+set (GGML_SOURCES_IQK iqk-quantize.cpp)
 if (LLAMA_IQK_MULMAT)
     add_compile_definitions(GGML_USE_IQK_MULMAT)
     set(GGML_SOURCES_IQK_MM iqk_mul_mat.cpp)
@@ -1285,6 +1286,7 @@ add_library(ggml OBJECT
             ${GGML_SOURCES_BLAS}      ${GGML_HEADERS_BLAS}
             ${GGML_SOURCES_LLAMAFILE} ${GGML_HEADERS_LLAMAFILE}
             ${GGML_SOURCES_IQK_MM}    ${GGML_HEADERS_IQK_MM}
+            ${GGML_SOURCES_IQK}
             )
 
 target_include_directories(ggml PUBLIC . ${LLAMA_EXTRA_INCLUDES})

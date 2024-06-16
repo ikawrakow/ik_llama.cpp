@@ -3718,6 +3718,44 @@ void quantize_row_q8_K(const float * restrict x, void * restrict y, int64_t k) {
     quantize_row_q8_K_reference(x, y, k);
 }
 
+//===================================== Q8_K64 ==============================================
+
+void quantize_row_q8_K64_reference(const float * restrict x, block_q8_K64 * restrict y, int64_t k) {
+    assert(k % 64 == 0);
+    const int64_t nb = k / 64;
+
+    for (int i = 0; i < nb; i++) {
+
+        float max = 0;
+        float amax = 0;
+        for (int j = 0; j < 64; ++j) {
+            float ax = fabsf(x[j]);
+            if (ax > amax) {
+                amax = ax; max = x[j]; 
+            }
+        }
+        if (!amax) {
+            y[i].d = 0;
+            memset(y[i].qs, 0, 64);
+            x += 64;
+            continue;
+        }
+        //const float iscale = -128.f/max;
+        // We need this change for IQ2_XXS, else the AVX implementation becomes very awkward
+        const float iscale = -127.f/max;
+        for (int j = 0; j < 64; ++j) {
+            int v = nearest_int(iscale*x[j]);
+            y[i].qs[j] = MIN(127, v);
+        }
+        y[i].d = 1/iscale;
+        x += 64;
+    }
+}
+
+void quantize_row_q8_K64(const float * restrict x, void * restrict y, int64_t k) {
+    quantize_row_q8_K64_reference(x, y, k);
+}
+
 //===================================== Dot ptoducts =================================
 
 //
@@ -15055,6 +15093,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_I16:
         case GGML_TYPE_I32:
         case GGML_TYPE_I64:
+        case GGML_TYPE_IQ1_BN:
             // nothing to validate
             break;
         default:
