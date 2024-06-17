@@ -4088,7 +4088,7 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
                 int32x4_t sumi = vdupq_n_s32(0);
                 for (int j = 0; j < 4; ++j) {
                     auto tmp = vmulq_s8(q.val[j], vreinterpretq_s8_u8(signs.val[j]));
-                    tmp = vmulq_s8(q.val[j], v.val[j]);
+                    tmp = vmulq_s8(tmp, v.val[j]);
                     sumi = ggml_vdotq_s32(sumi, m1, tmp);
                 }
                 accd[iy] = vfmaq_f32(accd[iy], vdupq_n_f32(q8.scale(iy, i)), vcvtq_f32_s32(sumi));
