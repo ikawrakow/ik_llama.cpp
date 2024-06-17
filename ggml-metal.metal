@@ -5046,8 +5046,6 @@ void kernel_mul_mv_iq1_bn_f32_impl(
         d1bn[row] = scale.f;
     }
 
-    //uint32_t aux32;
-    //thread const uint8_t * aux8 = (thread const uint8_t *)&aux32;
     uint32_t aux32[2];
     thread const uint8_t * aux8 = (thread const uint8_t *)aux32;
 
@@ -5073,10 +5071,6 @@ void kernel_mul_mv_iq1_bn_f32_impl(
 
             uint32_t v = iq1bn_grid_u16[ql[0] | ((qh[0] << (8 - 4*(ir%2))) & 0x0f00)];
             uint32_t v32 = v | (v << 12);
-            //aux32 = v32 & 0x03030303;
-            //acc += yl[0] * aux8[0] + yl[4] * aux8[1] + yl[2]*aux8[2] + yl[6]*aux8[3];
-            //aux32 = v32 & 0x0c0c0c0c;
-            //acc += (yl[1] * aux8[0] + yl[5] * aux8[1] + yl[3]*aux8[2] + yl[7]*aux8[3]) * 0.25f;
             aux32[0] = v32 & 0x03030303; aux32[1] = v32 & 0x0c0c0c0c;
             acc  =  yl[0] * aux8[0] + yl[4] * aux8[1] + yl[2]*aux8[2] + yl[6]*aux8[3];
             acc += (yl[1] * aux8[4] + yl[5] * aux8[5] + yl[3]*aux8[6] + yl[7]*aux8[7]) * 0.25f;
@@ -5091,10 +5085,11 @@ void kernel_mul_mv_iq1_bn_f32_impl(
         y4 += 32 * 8;
     }
 
-    for (int row = 0; row < N_DST; ++row) {
-        all_sum = simd_sum(sumf[row]);
-        if (tiisg == 0) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + row] = all_sum * d1bn[row];
+    for (int row = 0; row < N_DST; row += 2) {
+        half2 r = {(half)sumf[row], (half)sumf[row+1]};
+        r = simd_sum(r);
+        if (tiisg < 2) {
+            dst[r1*ne0 + im*ne0*ne1 + first_row + row + tiisg] = r[tiisg] * d1bn[row + tiisg];
         }
     }
 }
