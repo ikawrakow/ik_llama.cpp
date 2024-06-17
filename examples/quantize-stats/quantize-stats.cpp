@@ -341,6 +341,10 @@ int main(int argc, char ** argv) {
         if (!layer_included(params, kv_tensor.first)) {
             continue;
         }
+        if (kv_tensor.second->ne[0] == 1 || kv_tensor.second->ne[1] == 1) {
+            // we never quantize those
+            continue;
+        }
         if (params.verbose) {
             printf("%s: type %s, size %" PRId64 "\n", kv_tensor.first.c_str(), ggml_type_name(kv_tensor.second->type), ggml_nelements(kv_tensor.second));
         }
@@ -384,6 +388,10 @@ int main(int argc, char ** argv) {
 
             for (const auto& kv_tensor : tensors) {
                 if (!layer_included(params, kv_tensor.first)) {
+                    continue;
+                }
+                if (kv_tensor.second->ne[0] == 1 || kv_tensor.second->ne[1] == 1) {
+                    // we never quantize those
                     continue;
                 }
                 if (params.verbose) {

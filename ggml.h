@@ -384,7 +384,8 @@ extern "C" {
         GGML_TYPE_IQ1_M   = 29,
         GGML_TYPE_BF16    = 30,
         GGML_TYPE_IQ1_BN  = 31,
-        GGML_TYPE_Q8_K64  = 32,
+        GGML_TYPE_IQ2_BN  = 32,
+        GGML_TYPE_Q8_K64  = 33,
         GGML_TYPE_COUNT,
     };
 
@@ -427,6 +428,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ1_M   = 23, // except 1d tensors
         GGML_FTYPE_MOSTLY_BF16    = 24, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_BN  = 25, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ2_BN  = 26, // except 1d tensors
     };
 
     // available tensor operations:

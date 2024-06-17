@@ -380,6 +380,14 @@ typedef struct {
     uint8_t qh[QK_IQ1BN/16];
 } block_iq1_bn;
 static_assert(sizeof(block_iq1_bn) == sizeof(uint16_t) + QK_IQ1BN/8 + QK_IQ1BN/16, "wrong iq1_bn block size/padding");
+//
+// Bitnet - implemented as 2.0 bpw
+//
+#define QK_IQ2BN 64
+typedef struct {
+    uint8_t qs[QK_IQ2BN/4];
+} block_iq2_bn;
+static_assert(sizeof(block_iq2_bn) == QK_IQ2BN/4, "wrong iq2_bn block size/padding");
 
 // Used by IQ1_M quants
 typedef union {
