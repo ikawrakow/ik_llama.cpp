@@ -3724,6 +3724,22 @@ void quantize_row_q8_K64_reference(const float * restrict x, block_q8_K64 * rest
     assert(k % 64 == 0);
     const int64_t nb = k / 64;
 
+    // Check if a row-wise scale works. It almost does, PPL is only ~0.02 higher
+    //float amax = 0;
+    //for (int j = 0; j < k; ++j) {
+    //    float ax = fabsf(x[j]);
+    //    amax = MAX(ax, amax);
+    //}
+
+    //float d = amax/127;
+    //float id = d ? 1/d : 0.f;
+
+    //for (int i = 0; i < nb; i++) {
+    //    for (int j = 0; j < 64; ++j) y[i].qs[j] = nearest_int(id*x[j]);
+    //    y[i].d = d;
+    //    x += 64;
+    //}
+
     for (int i = 0; i < nb; i++) {
 
         float max = 0;
