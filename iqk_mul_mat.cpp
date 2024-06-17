@@ -874,7 +874,7 @@ struct Q4Bits {
         const __m128i aux128 = _mm_loadu_si128((const __m128i *)qs);
         const __m256i aux256 = MM256_SET_M128I(_mm_srli_epi16(aux128, 4), aux128);
         return _mm256_and_si256(ml, aux256);
-    };
+    }
     __m256i values[4];
     const __m256i ml = _mm256_set1_epi8(0xf);
 };
