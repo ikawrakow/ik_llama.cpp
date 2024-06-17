@@ -1,3 +1,18 @@
+//
+// Copyright 2024 Iwan Kawrakow
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 #include "ggml-quants.h"
 #include "ggml-impl.h"
 #define GGML_COMMON_IMPL_C
@@ -433,3 +448,54 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
     *s = sumf;
 
 }
+
+void quantize_row_q8_K64_reference(const float * x, block_q8_K64 * y, int64_t k) {
+    assert(k % 64 == 0);
+    const int64_t nb = k / 64;
+
+    // Check if a row-wise scale works. It almost does, PPL is only ~0.02 higher
+    //float amax = 0;
+    //for (int j = 0; j < k; ++j) {
+    //    float ax = fabsf(x[j]);
+    //    amax = MAX(ax, amax);
+    //}
+
+    //float d = amax/127;
+    //float id = d ? 1/d : 0.f;
+
+    //for (int i = 0; i < nb; i++) {
+    //    for (int j = 0; j < 64; ++j) y[i].qs[j] = nearest_int(id*x[j]);
+    //    y[i].d = d;
+    //    x += 64;
+    //}
+
+    for (int i = 0; i < nb; i++) {
+
+        float max = 0;
+        float amax = 0;
+        for (int j = 0; j < 64; ++j) {
+            float ax = fabsf(x[j]);
+            if (ax > amax) {
+                amax = ax; max = x[j];
+            }
+        }
+        if (!amax) {
+            y[i].d = 0;
+            memset(y[i].qs, 0, 64);
+            x += 64;
+            continue;
+        }
+        const float iscale = -127.f/max;
+        for (int j = 0; j < 64; ++j) {
+            int v = nearest_int(iscale*x[j]);
+            y[i].qs[j] = MIN(127, v);
+        }
+        y[i].d = 1/iscale;
+        x += 64;
+    }
+}
+
+void quantize_row_q8_K64(const float * x, void * y, int64_t k) {
+    quantize_row_q8_K64_reference(x, (block_q8_K64 *)y, k);
+}
+
