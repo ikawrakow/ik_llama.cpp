@@ -5046,8 +5046,10 @@ void kernel_mul_mv_iq1_bn_f32_impl(
         d1bn[row] = scale.f;
     }
 
-    uint16_t aux16;
-    thread const uint8_t * aux8 = (thread const uint8_t *)&aux16;
+    //uint32_t aux32;
+    //thread const uint8_t * aux8 = (thread const uint8_t *)&aux32;
+    uint32_t aux32[2];
+    thread const uint8_t * aux8 = (thread const uint8_t *)aux32;
 
     for (int ib32 = ix; ib32 < nb32; ib32 += 8) {
 
@@ -5069,15 +5071,15 @@ void kernel_mul_mv_iq1_bn_f32_impl(
             uint8_t signs = extra[0] >> (8 + 4*ib + ir);
             float acc = 0.f;
 
-            uint16_t v = iq1bn_grid_u16[ql[0] | ((qh[0] << (8 - 4*(ir%2))) & 0x0f00)];
-            aux16 = v & 0x0303;
-            acc += yl[0] * aux8[0] + yl[4] * aux8[1];
-            aux16 = (v >> 2) & 0x0303;
-            acc += yl[1] * aux8[0] + yl[5] * aux8[1];
-            aux16 = (v >> 4) & 0x0303;
-            acc += yl[2] * aux8[0] + yl[6] * aux8[1];
-            aux16 = (v >> 6) & 0x0303;
-            acc += yl[3] * aux8[0] + yl[7] * aux8[1];
+            uint32_t v = iq1bn_grid_u16[ql[0] | ((qh[0] << (8 - 4*(ir%2))) & 0x0f00)];
+            uint32_t v32 = v | (v << 12);
+            //aux32 = v32 & 0x03030303;
+            //acc += yl[0] * aux8[0] + yl[4] * aux8[1] + yl[2]*aux8[2] + yl[6]*aux8[3];
+            //aux32 = v32 & 0x0c0c0c0c;
+            //acc += (yl[1] * aux8[0] + yl[5] * aux8[1] + yl[3]*aux8[2] + yl[7]*aux8[3]) * 0.25f;
+            aux32[0] = v32 & 0x03030303; aux32[1] = v32 & 0x0c0c0c0c;
+            acc  =  yl[0] * aux8[0] + yl[4] * aux8[1] + yl[2]*aux8[2] + yl[6]*aux8[3];
+            acc += (yl[1] * aux8[4] + yl[5] * aux8[5] + yl[3]*aux8[6] + yl[7]*aux8[7]) * 0.25f;
 
             sumf[row] += (signs & 1 ? sumy-acc : acc-sumy);
 
