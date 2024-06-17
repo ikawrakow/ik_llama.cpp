@@ -5068,8 +5068,6 @@ void kernel_mul_mv_iq1_bn_f32_impl(
 
         for (int row = 0; row < N_DST; row++) {
 
-            //uint8_t u = extra[0] & 0xff;
-            //scale.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
             uint8_t signs = extra[0] >> (8 + 4*ib);
             float4 acc = {0.f};
             for (int j = 0; j < 2; ++j) {
@@ -5090,10 +5088,12 @@ void kernel_mul_mv_iq1_bn_f32_impl(
                 acc[2*j+1] += yl[16*j +12] * aux8[2] + yl[16*j +15] * aux8[3];
             }
 
-            float sum = (signs & 1 ? sumy[0] - acc[0] : acc[0] - sumy[0])
-                      + (signs & 2 ? sumy[1] - acc[1] : acc[1] - sumy[1])
-                      + (signs & 4 ? sumy[2] - acc[2] : acc[2] - sumy[2])
-                      + (signs & 8 ? sumy[3] - acc[3] : acc[3] - sumy[3]);
+            acc -= sumy;
+            float sum = (signs & 1 ? -acc[0] : acc[0])
+                      + (signs & 2 ? -acc[1] : acc[1])
+                      + (signs & 4 ? -acc[2] : acc[2])
+                      + (signs & 8 ? -acc[3] : acc[3]);
+
             sumf[row] += sum;
 
             extra += nb*sizeof(block_iq1_bn)/2;
