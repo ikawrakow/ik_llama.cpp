@@ -1078,10 +1078,7 @@ static __device__ __forceinline__ float vec_dot_iq1_bn_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
     const block_iq1_bn * bq1 = (const block_iq1_bn *) vbq + kbx;
 
-    typedef union { float f; uint32_t i; } scale_t;
-    scale_t s;
-    uint8_t u = bq1->extra & 0xff;
-    s.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
+    float d = iq1bn_fp8_to_float(bq1->extra & 0xff);
     uint8_t extra = bq1->extra >> (8 + 4*iqs);
     int sumi = 0;
 #if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
@@ -1110,7 +1107,7 @@ static __device__ __forceinline__ float vec_dot_iq1_bn_q8_1(
         q8 += 8;
     }
 #endif
-    return s.f * __low2float(bq8_1[iqs].ds) * sumi;
+    return d * __low2float(bq8_1[iqs].ds) * sumi;
 }
 
 // TODO

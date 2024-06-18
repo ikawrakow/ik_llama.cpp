@@ -31,6 +31,7 @@
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "iqk_mul_mat.h"
+#include "iqk-quantize.h"
 
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
@@ -1344,15 +1345,11 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
 
     //auto step = bx / sizeof(block_iq1_bn);
     const block_iq1_bn * x = (const block_iq1_bn *)((const char *)vx);
-    typedef union { float f; uint32_t i; } scale_t;
-
-    scale_t scale;
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         x = (const block_iq1_bn *)((const char *)vx + ix*bx);
-        uint16_t u = x[0].extra & 0xff;
-        scale.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
+        float d1 = iq1bn_fp8_to_float(x[0].extra & 0xff);
 
         for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = _mm256_setzero_ps();
 
@@ -1401,7 +1398,7 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, scale.f * hsum_float_8(accd[iy]));
+            info.store(ix, iy, d1 * hsum_float_8(accd[iy]));
         }
 
     }
@@ -4128,15 +4125,11 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
     const auto mask1  = vreinterpretq_u8_u64(vdupq_n_u64(0x8040201008040201));
 
     const block_iq1_bn * x = (const block_iq1_bn *)((const char *)vx);
-    typedef union { float f; uint32_t i; } scale_t;
-
-    scale_t scale;
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         x = (const block_iq1_bn *)((const char *)vx + ix*bx);
-        uint16_t u = x[0].extra & 0xff;
-        scale.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
+        float d1 = iq1bn_fp8_to_float(x[0].extra & 0xff);
 
         for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = vdupq_n_f32(0.f);
 
@@ -4186,7 +4179,7 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, scale.f * vaddvq_f32(accd[iy]));
+            info.store(ix, iy, d1 * vaddvq_f32(accd[iy]));
         }
 
     }

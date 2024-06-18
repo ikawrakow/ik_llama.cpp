@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "iqk-quantize.h"
 #include "ggml-quants.h"
 #include "ggml-impl.h"
 #define GGML_COMMON_IMPL_C
@@ -81,10 +82,6 @@ IQ1BNData::IQ1BNData() {
 }
 
 struct IQ1BNQuantizer {
-    typedef union {
-        float f;
-        uint32_t i;
-    } scale_t;
     constexpr static int block_size = QK_IQ1BN;
     int8_t L[QK_IQ1BN];
     void quantize_one_row_1bn(const float * src, block_iq1_bn * y, int n_per_row, const float * imatrix);
@@ -128,22 +125,11 @@ void IQ1BNQuantizer::quantize_one_row_1bn(const float * src, block_iq1_bn * y, i
 
     auto max_in_row = row_max(n_per_row, src);
 
-    max_in_row *= 1.03125f; // i.e., round to nearest in our fp8 representation
-    scale_t s;
-    uint8_t u = 0;
-    if (max_in_row > 1.9074e-06f && max_in_row < 0.12109f) {
-        s.f = max_in_row;
-        u = ((((s.i >> 23) + 132) & 0xf) << 4) | ((s.i >> 19) & 0xf);
-        s.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
-    } else {
-        // outside the allowed range. Small values we can habdle via quants set to zero, so we only warn about too large values
-        if (max_in_row >= 0.12109f) {
-            u = 255;
-            fprintf(stderr, "%s: found scale %g, which is outside the range of out fp8 representation\n", __func__, max_in_row);
-        } else{
-            u = 0;
-        }
+    max_in_row *= 1.015625f; // i.e., round to nearest in our fp8 representation
+    if (max_in_row > iq1bn_max_value()) {
+        fprintf(stderr, "%s: found scale %g, which is outside the range of out fp8 representation\n", __func__, max_in_row);
     }
+    auto u = iq1bn_float_to_fp8(max_in_row);
 
     for (int ib = 0; ib < nblock; ++ib) {
         std::memset(&y[ib], 0, sizeof(block_iq1_bn));
@@ -205,12 +191,8 @@ void dequantize_row_iq1_bn(const block_iq1_bn * x, float * y, int64_t k) {
     assert(k%QK_IQ1BN == 0);
     int nblock = k / QK_IQ1BN;
 
-    IQ1BNQuantizer::scale_t s;
-
     for (int i = 0; i < nblock; ++i) {
-        uint16_t u = x[i].extra & 0xff;
-        s.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
-        float d = s.f;
+        float d = iq1bn_fp8_to_float(x[i].extra & 0xff);
         uint8_t extra = x[i].extra >> 8;
         auto qh = x[i].qh;
         auto ql = x[i].ql;
@@ -276,11 +258,9 @@ void ggml_vec_dot_iq1_bn_q8_0 (int n, float * s, size_t bs, const void * vx, siz
     int nblock = n / QK_IQ1BN;
 
     float sumf = 0;
-    IQ1BNQuantizer::scale_t scale;
 
     for (int i = 0; i < nblock; ++i) {
-        uint16_t u = x[i].extra & 0xff;
-        scale.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
+        float d = iq1bn_fp8_to_float(x[i].extra & 0xff);
         uint8_t extra = x[i].extra >> 8;
         auto qh = x[i].qh;
         auto ql = x[i].ql;
@@ -304,7 +284,7 @@ void ggml_vec_dot_iq1_bn_q8_0 (int n, float * s, size_t bs, const void * vx, siz
             sumi2 += extra & (1 << k) ? -sl : sl;
             q8 += 8;
         }
-        sumf += scale.f * (GGML_FP16_TO_FP32(y[2*i+0].d) * sumi1 + GGML_FP16_TO_FP32(y[2*i+1].d) * sumi2);
+        sumf += d * (GGML_FP16_TO_FP32(y[2*i+0].d) * sumi1 + GGML_FP16_TO_FP32(y[2*i+1].d) * sumi2);
     }
 
     *s = sumf;
@@ -325,10 +305,8 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
     int nblock = n / QK_IQ1BN;
 
     float sumf = 0;
-    IQ1BNQuantizer::scale_t scale;
 
-    uint16_t u = x[0].extra & 0xff;
-    scale.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
+    float d = iq1bn_fp8_to_float(x[0].extra & 0xff);
     for (int i = 0; i < nblock; ++i) {
         uint8_t extra = x[i].extra >> 8;
         auto qh = x[i].qh;
@@ -351,7 +329,7 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
             sumi += extra & (1 << k) ? -sl : sl;
             q8 += 8;
         }
-        sumf += scale.f * (y[i].d) * sumi;
+        sumf += d * (y[i].d) * sumi;
     }
 
     *s = sumf;

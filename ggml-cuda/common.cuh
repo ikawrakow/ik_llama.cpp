@@ -501,6 +501,12 @@ static __device__ __forceinline__ float get_alibi_slope(
     return powf(base, exph);
 }
 
+static __device__ __forceinline__ float iq1bn_fp8_to_float(uint8_t fp8) {
+    typedef union { float f; uint32_t i; } scale_t;
+    scale_t s; s.i = (((fp8 >> 5) + 116) << 23) | ((fp8 & 0x1f) << 18);
+    return s.f;
+}
+
 template <ggml_type type>
 struct ggml_cuda_type_traits;
 
