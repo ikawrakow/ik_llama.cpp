@@ -432,11 +432,8 @@ static __global__ void dequantize_block_iq1_bn(const void * __restrict__ vx, dst
     int64_t i = QK_K/QK_IQ1BN * ii + ib/(QK_IQ1BN/32);
     if (i >= nb64) return;
     ib = ib%(QK_IQ1BN/32);
-    typedef union { float f; uint32_t i; } scale_t;
-    scale_t s;
-    uint8_t u = x[i].extra & 0xff;
-    s.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
-    const float dl = x[i].extra & (1 << (4*ib + il + 8)) ? -s.f : s.f;
+    float d = iq1bn_fp8_to_float(x[i].extra & 0xff);
+    const float dl = x[i].extra & (1 << (4*ib + il + 8)) ? -d : d;
     const float ml = -dl;
     uint16_t idx = x[i].ql[4*ib + il] | ((x[i].qh[2*ib + il/2] << (8 - 4*(il%2))) & 0x0f00);
     const uint16_t gp = iq1bn_grid_u16[idx];
