@@ -159,25 +159,14 @@ void IQ1BNQuantizer::quantize_one_row_2bn(const float * src, block_iq2_bn * y, i
 
     const int nblock = n_per_row/QK_IQ1BN;
 
-    const auto& iq1bn = get_iq1bn_data();
-
     auto max_in_row = row_max(n_per_row, src);
-
-    ggml_half * d = (ggml_half *)y;
-    *d = GGML_FP32_TO_FP16(max_in_row);
-
-    auto ql = (uint8_t *)(d + 2);
-    auto qh = ql + QK_IQ1BN/8;
-    std::memset(ql, 0, QK_IQ1BN/8);
-    std::memset(qh, 0, QK_IQ1BN/16);
-    auto xb = src;
-    auto extra = quantize_one_block_1bn(iq1bn, xb, L, ql, qh);
-    *(uint16_t *)(d + 1) = extra;
+    ggml_half dh = GGML_FP32_TO_FP16(max_in_row);
 
     constexpr int Nj = QK_IQ1BN/4;
 
-    for (int ib = 1; ib < nblock; ++ib) {
-        xb = src + QK_IQ1BN*ib;
+    for (int ib = 0; ib < nblock; ++ib) {
+        y[ib].d = dh;
+        auto xb = src + QK_IQ1BN*ib;
         for (int j = 0; j < QK_IQ1BN; ++j) {
             L[j] = fabsf(xb[j]) < 1e-6f ? 1 : xb[j] < 0 ? 0 : 2;
         }
@@ -258,22 +247,11 @@ void dequantize_row_iq2_bn(const block_iq2_bn * x, float * y, int64_t k) {
     assert(k%QK_IQ1BN == 0);
     int nblock = k / QK_IQ1BN;
 
-    float d = GGML_FP16_TO_FP32(*(const ggml_half *)x);
-    auto * extra_ptr = (const uint16_t *)x;
-    auto extra = extra_ptr[1];
-    auto ql = (const uint8_t *)(extra_ptr + 2);
-    auto qh = ql + QK_IQ1BN/8;
-    for (int l = 0; l < QK_IQ1BN/8; ++l) {
-        uint16_t idx = ql[l] | ((qh[l/2] << (8 - 4*(l%2))) & 0x0f00);
-        uint16_t val = iq1bn_grid_u16[idx];
-        float dls = extra & (1 << l) ? -d : d;
-        for (int j = 0; j < 8; ++j) y[j] = dls * (((val >> 2*j) & 3) - 1);
-        y += 8;
-    }
+    float d = GGML_FP16_TO_FP32(x[0].d);
     auto m = -d;
     auto d1 = d, d2 = d*0.25f, d3 = d2*0.25f, d4 = d3*0.25f;
     constexpr int Nj = QK_IQ1BN/4;
-    for (int i = 1; i < nblock; ++i) {
+    for (int i = 0; i < nblock; ++i) {
         for (int j = 0; j < Nj; ++j) {
             y[j+   0] = d1*(x[i].qs[j] & 0x03) + m;
             y[j+1*Nj] = d2*(x[i].qs[j] & 0x0c) + m;
@@ -396,25 +374,10 @@ void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
     float sumf = 0;
 
-    float d = GGML_FP16_TO_FP32(*(const ggml_half *)x);
-    auto * extra_ptr = (const uint16_t *)x;
-    auto extra = extra_ptr[1];
-    auto ql = (const uint8_t *)(extra_ptr + 2);
-    auto qh = ql + QK_IQ1BN/8;
-    auto q8 = y[0].qs;
-    int sumi = 0;
-    for (int k = 0; k < QK_IQ1BN/8; ++k) {
-        uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
-        uint16_t val = iq1bn_grid_u16[idx];
-        int s = 0;
-        for (int j = 0; j < 8; ++j) s += q8[j] * (((val >> 2*j) & 3) - 1);
-        sumi += extra & (1 << k) ? -s : s;
-        q8 += 8;
-    }
-    sumf += y[0].d * sumi;
+    float d = GGML_FP16_TO_FP32(x[0].d);
 
-    for (int i = 1; i < nblock; ++i) {
-        q8 = y[i].qs;
+    for (int i = 0; i < nblock; ++i) {
+        auto q8 = y[i].qs;
         int s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
         for (int j = 0; j < Nj; ++j) {
             s1 += q8[j+   0] * (x[i].qs[j] & 0x03);
