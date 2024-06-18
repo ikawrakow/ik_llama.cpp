@@ -437,10 +437,11 @@ static __global__ void dequantize_block_iq1_bn(const void * __restrict__ vx, dst
     uint8_t u = x[i].extra & 0xff;
     s.i = ((((u >> 4) | 0xf0) - 132) << 23) | ((u & 0x0f) << 19);
     const float dl = x[i].extra & (1 << (4*ib + il + 8)) ? -s.f : s.f;
+    const float ml = -dl;
     uint16_t idx = x[i].ql[4*ib + il] | ((x[i].qh[2*ib + il/2] << (8 - 4*(il%2))) & 0x0f00);
     const uint16_t gp = iq1bn_grid_u16[idx];
     for (int j = 0; j < 8; ++j) {
-        y[j] = dl * (((gp >> 2*j) & 3) - 1);
+        y[j] = dl * ((gp >> 2*j) & 3) + ml;
     }
 }
 
