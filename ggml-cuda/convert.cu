@@ -432,8 +432,7 @@ static __global__ void dequantize_block_iq1_bn(const void * __restrict__ vx, dst
     int64_t i = QK_K/QK_IQ1BN * ii + ib/(QK_IQ1BN/32);
     if (i >= nb64) return;
     ib = ib%(QK_IQ1BN/32);
-    float d = iq1bn_fp8_to_float(x[i].extra & 0xff);
-    const float dl = x[i].extra & (1 << (4*ib + il + 8)) ? -d : d;
+    const float dl = x[i].extra & (1 << (4*ib + il)) ? -1 : 1;
     const float ml = -dl;
     uint16_t idx = x[i].ql[4*ib + il] | ((x[i].qh[2*ib + il/2] << (8 - 4*(il%2))) & 0x0f00);
     const uint16_t gp = iq1bn_grid_u16[idx];
@@ -454,14 +453,13 @@ static __global__ void dequantize_block_iq2_bn(const void * __restrict__ vx, dst
     dst_t * y = yy + 256*ii + 64*ib64 + 2*il;
     int64_t i = 256/QK_IQ1BN * ii + ib64;
     if (i >= nb64) return;
-    const float d = x[i].d;
-    const float m = -d;
+    const float m = -1;
     auto qs = x[i].qs + 2*il;
     for (int j = 0; j < 2; ++j) {
-        y[j+ 0] = d * ((qs[j] >> 0) & 3) + m;
-        y[j+16] = d * ((qs[j] >> 2) & 3) + m;
-        y[j+32] = d * ((qs[j] >> 4) & 3) + m;
-        y[j+48] = d * ((qs[j] >> 6) & 3) + m;
+        y[j+ 0] = ((qs[j] >> 0) & 3) + m;
+        y[j+16] = ((qs[j] >> 2) & 3) + m;
+        y[j+32] = ((qs[j] >> 4) & 3) + m;
+        y[j+48] = ((qs[j] >> 6) & 3) + m;
     }
 }
 
