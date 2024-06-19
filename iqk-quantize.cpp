@@ -123,19 +123,10 @@ void IQ1BNQuantizer::quantize_one_row_1bn(const float * src, block_iq1_bn * y, i
 
     const auto& iq1bn = get_iq1bn_data();
 
-    auto max_in_row = row_max(n_per_row, src);
-
-    max_in_row *= 1.015625f; // i.e., round to nearest in our fp8 representation
-    if (max_in_row > iq1bn_max_value()) {
-        fprintf(stderr, "%s: found scale %g, which is outside the range of out fp8 representation\n", __func__, max_in_row);
-    }
-    auto u = iq1bn_float_to_fp8(max_in_row);
-
     for (int ib = 0; ib < nblock; ++ib) {
         std::memset(&y[ib], 0, sizeof(block_iq1_bn));
         auto xb = src + QK_IQ1BN*ib;
-        auto extra = quantize_one_block_1bn(iq1bn, xb, L, y[ib].ql, y[ib].qh);
-        y[ib].extra = u | (extra << 8);
+        y[ib].extra = quantize_one_block_1bn(iq1bn, xb, L, y[ib].ql, y[ib].qh);
     }
 }
 
@@ -145,13 +136,12 @@ void IQ1BNQuantizer::quantize_one_row_2bn(const float * src, block_iq2_bn * y, i
 
     const int nblock = n_per_row/QK_IQ1BN;
 
-    auto max_in_row = row_max(n_per_row, src);
-    ggml_half dh = GGML_FP32_TO_FP16(max_in_row);
+    //auto max_in_row = row_max(n_per_row, src);
+    //printf("%s: max = %g\n", __func__, max_in_row);
 
     constexpr int Nj = QK_IQ1BN/4;
 
     for (int ib = 0; ib < nblock; ++ib) {
-        y[ib].d = dh;
         auto xb = src + QK_IQ1BN*ib;
         for (int j = 0; j < QK_IQ1BN; ++j) {
             L[j] = fabsf(xb[j]) < 1e-6f ? 1 : xb[j] < 0 ? 0 : 2;
@@ -229,9 +219,8 @@ void dequantize_row_iq2_bn(const block_iq2_bn * x, float * y, int64_t k) {
     assert(k%QK_IQ1BN == 0);
     int nblock = k / QK_IQ1BN;
 
-    float d = GGML_FP16_TO_FP32(x[0].d);
-    auto m = -d;
-    auto d1 = d, d2 = d*0.25f, d3 = d2*0.25f, d4 = d3*0.25f;
+    auto d1 = 1.f, d2 = 0.25f, d3 = d2*0.25f, d4 = d3*0.25f;
+    auto m = -1.f;
     constexpr int Nj = QK_IQ1BN/4;
     for (int i = 0; i < nblock; ++i) {
         for (int j = 0; j < Nj; ++j) {
@@ -260,8 +249,6 @@ void ggml_vec_dot_iq1_bn_q8_0 (int n, float * s, size_t bs, const void * vx, siz
     float sumf = 0;
 
     for (int i = 0; i < nblock; ++i) {
-        float d = iq1bn_fp8_to_float(x[i].extra & 0xff);
-        uint8_t extra = x[i].extra >> 8;
         auto qh = x[i].qh;
         auto ql = x[i].ql;
         auto q8 = y[2*i+0].qs;
@@ -271,7 +258,7 @@ void ggml_vec_dot_iq1_bn_q8_0 (int n, float * s, size_t bs, const void * vx, siz
             uint16_t val = iq1bn_grid_u16[idx];
             int16_t sl = 0;
             for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi1 += extra & (1 << k) ? -sl : sl;
+            sumi1 += x[i].extra & (1 << k) ? -sl : sl;
             q8 += 8;
         }
         q8 = y[2*i+1].qs;
@@ -281,10 +268,10 @@ void ggml_vec_dot_iq1_bn_q8_0 (int n, float * s, size_t bs, const void * vx, siz
             uint16_t val = iq1bn_grid_u16[idx];
             int16_t sl = 0;
             for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi2 += extra & (1 << k) ? -sl : sl;
+            sumi2 += x[i].extra & (1 << k) ? -sl : sl;
             q8 += 8;
         }
-        sumf += d * (GGML_FP16_TO_FP32(y[2*i+0].d) * sumi1 + GGML_FP16_TO_FP32(y[2*i+1].d) * sumi2);
+        sumf += GGML_FP16_TO_FP32(y[2*i+0].d) * sumi1 + GGML_FP16_TO_FP32(y[2*i+1].d) * sumi2;
     }
 
     *s = sumf;
@@ -306,9 +293,7 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
     float sumf = 0;
 
-    float d = iq1bn_fp8_to_float(x[0].extra & 0xff);
     for (int i = 0; i < nblock; ++i) {
-        uint8_t extra = x[i].extra >> 8;
         auto qh = x[i].qh;
         auto ql = x[i].ql;
         auto q8 = y[i].qs;
@@ -318,7 +303,7 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
             uint16_t val = iq1bn_grid_u16[idx];
             int16_t sl = 0;
             for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi += extra & (1 << k) ? -sl : sl;
+            sumi += x[i].extra & (1 << k) ? -sl : sl;
             q8 += 8;
         }
         for (int k = 4; k < 8; ++k) {
@@ -326,10 +311,10 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
             uint16_t val = iq1bn_grid_u16[idx];
             int16_t sl = 0;
             for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi += extra & (1 << k) ? -sl : sl;
+            sumi += x[i].extra & (1 << k) ? -sl : sl;
             q8 += 8;
         }
-        sumf += d * (y[i].d) * sumi;
+        sumf += y[i].d * sumi;
     }
 
     *s = sumf;
@@ -352,8 +337,6 @@ void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
     float sumf = 0;
 
-    float d = GGML_FP16_TO_FP32(x[0].d);
-
     for (int i = 0; i < nblock; ++i) {
         auto q8 = y[i].qs;
         int s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
@@ -367,7 +350,7 @@ void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
         sumf += y[i].d * (s1 + 0.25f*s2 + 0.0625*s3 + 0.015625*s4 - s0);
     }
 
-    *s = sumf * d;
+    *s = sumf;
 
 }
 
