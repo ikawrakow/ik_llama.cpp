@@ -1343,19 +1343,17 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
     const auto m1_16  = _mm256_set1_epi16(1);
 #endif
 
-    //auto step = bx / sizeof(block_iq1_bn);
     const block_iq1_bn * x = (const block_iq1_bn *)((const char *)vx);
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         x = (const block_iq1_bn *)((const char *)vx + ix*bx);
-        float d1 = iq1bn_fp8_to_float(x[0].extra & 0xff);
 
         for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = _mm256_setzero_ps();
 
         for (int i = 0; i < nb; ++i) {
 
-            auto all_signs = _mm256_set1_epi8(x[i].extra >> 8);
+            auto all_signs = _mm256_set1_epi8(x[i].extra);
             all_signs = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(all_signs, mask1), mask1), m1_8);
             signs[0] =  _mm256_shuffle_epi8(all_signs, shuff3);
             signs[1] =  _mm256_shuffle_epi8(all_signs, shuff4);
@@ -1398,7 +1396,7 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, d1 * hsum_float_8(accd[iy]));
+            info.store(ix, iy, hsum_float_8(accd[iy]));
         }
 
     }
@@ -1419,7 +1417,6 @@ IQK_NOINLINE void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         const block_iq2_bn * x = (const block_iq2_bn *)((const char *)vx + ix*bx);
-        float d = GGML_FP16_TO_FP32(x[0].d);
 
         {
             auto q2bits = _mm_loadu_si128((const __m128i *)x[0].qs);
@@ -1456,7 +1453,7 @@ IQK_NOINLINE void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const 
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, d * hsum_float_8(accd[iy]));
+            info.store(ix, iy, hsum_float_8(accd[iy]));
         }
 
     }
@@ -4129,13 +4126,12 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         x = (const block_iq1_bn *)((const char *)vx + ix*bx);
-        float d1 = iq1bn_fp8_to_float(x[0].extra & 0xff);
 
         for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = vdupq_n_f32(0.f);
 
         for (int i = 0; i < nb; ++i) {
 
-            auto all_signs = vdupq_n_u8(x[i].extra >> 8);
+            auto all_signs = vdupq_n_u8(x[i].extra);
             all_signs = vorrq_u8(vceqq_u8(vandq_u8(all_signs, mask1), mask1), m1);
             signs.val[0] = vqtbl1q_u8(all_signs, sign_shuffles.val[0]);
             signs.val[1] = vqtbl1q_u8(all_signs, sign_shuffles.val[1]);
@@ -4179,7 +4175,7 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, d1 * vaddvq_f32(accd[iy]));
+            info.store(ix, iy, vaddvq_f32(accd[iy]));
         }
 
     }
@@ -4200,7 +4196,6 @@ static void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         const block_iq2_bn * x = (const block_iq2_bn *)((const char *)vx + ix*bx);
-        const float d = GGML_FP16_TO_FP32(x[0].d);
 
         {
             auto q2bits = vld1q_u8(x[0].qs);
@@ -4236,7 +4231,7 @@ static void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, d * vaddvq_f32(accd[iy]));
+            info.store(ix, iy, vaddvq_f32(accd[iy]));
         }
 
     }
