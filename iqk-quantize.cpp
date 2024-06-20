@@ -374,8 +374,32 @@ void quantize_row_q8_K64_reference(const float * x, block_q8_K64 * y, int64_t k)
     //    x += 64;
     //}
 
-    for (int i = 0; i < nb; i++) {
-
+    block_q8_K128 * yp = (block_q8_K128 *)y;
+    for (int i = 0; i < nb/2; i++) {
+        float max = 0;
+        float amax = 0;
+        for (int j = 0; j < 128; ++j) {
+            float ax = fabsf(x[j]);
+            if (ax > amax) {
+                amax = ax; max = x[j];
+            }
+        }
+        if (!amax) {
+            yp[i].d = 0;
+            memset(yp[i].qs, 0, 128);
+            x += 128;
+            continue;
+        }
+        const float iscale = -127.f/max;
+        for (int j = 0; j < 128; ++j) {
+            int v = nearest_int(iscale*x[j]);
+            yp[i].qs[j] = MIN(127, v);
+        }
+        yp[i].d = 1/iscale;
+        x += 128;
+    }
+    int i = 2*(nb/2);
+    if (i < nb) {
         float max = 0;
         float amax = 0;
         for (int j = 0; j < 64; ++j) {
@@ -385,18 +409,16 @@ void quantize_row_q8_K64_reference(const float * x, block_q8_K64 * y, int64_t k)
             }
         }
         if (!amax) {
-            y[i].d = 0;
-            memset(y[i].qs, 0, 64);
-            x += 64;
-            continue;
+            yp[i/2].d = 0;
+            memset(yp[i/2].qs, 0, 64);
+        } else {
+            const float iscale = -127.f/max;
+            for (int j = 0; j < 64; ++j) {
+                int v = nearest_int(iscale*x[j]);
+                yp[i/2].qs[j] = MIN(127, v);
+            }
+            yp[i/2].d = 1/iscale;
         }
-        const float iscale = -127.f/max;
-        for (int j = 0; j < 64; ++j) {
-            int v = nearest_int(iscale*x[j]);
-            y[i].qs[j] = MIN(127, v);
-        }
-        y[i].d = 1/iscale;
-        x += 64;
     }
 }
 
