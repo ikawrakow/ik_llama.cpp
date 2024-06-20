@@ -306,6 +306,11 @@ typedef struct {
     int8_t  qs[64];       // quants
 } block_q8_K64;
 static_assert(sizeof(block_q8_K64) == sizeof(float) + 64, "wrong q8_K64 block size/padding");
+typedef struct {
+    float   d;              // delta
+    int8_t  qs[128];        // quants
+} block_q8_K128;
+static_assert(sizeof(block_q8_K128) == sizeof(float) + 128, "wrong q8_K128 block size/padding");
 
 // (Almost) "true" 2-bit quantization.
 // Due to the need to use blocks as per ggml design, it ends up using
