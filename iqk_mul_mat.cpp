@@ -3894,6 +3894,35 @@ struct DequantizerQ40 final : public BaseLegacyDequantizer<block_q4_0> {
     //ggml_half aux[4];
 };
 
+struct DequantizerIQ4NL final : public BaseLegacyDequantizer<block_iq4_nl> {
+
+    DequantizerIQ4NL(const void * vx, size_t bx) : BaseLegacyDequantizer(vx, bx) {}
+
+    inline void prepare1(int i, int8x16_t * q) const {
+        bits.prepare1(x[i].qs, q);
+        q[0] = vqtbl1q_s8(values, q[0]);
+        q[1] = vqtbl1q_s8(values, q[1]);
+    }
+    inline void prepare1(int i) {
+        prepare1(i, bits.b);
+    }
+
+    inline float16x4_t new_block(int i) {
+        ggml_half aux[4];
+        for (int k = 0; k < 4; ++k) {
+            aux[k] = x[4*i+k].d;
+            prepare1(4*i+k, bits.b + 2*k);
+        }
+        return vld1_f16((const float16_t *)aux);
+    }
+    static int8x16_t load_values() {
+        static const int8_t iq4nl_values[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
+        return vld1q_s8(iq4nl_values);
+    }
+
+    const int8x16_t values = load_values();
+};
+
 struct DequantizerQ41 : public BaseLegacyDequantizer<block_q4_1> {
 
     DequantizerQ41(const void * vx, size_t bx) : BaseLegacyDequantizer(vx, bx) {}
@@ -4434,7 +4463,7 @@ static void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
 
 template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
     if constexpr (std::is_same_v<Dequantizer, DequantizerQ40> || std::is_same_v<Dequantizer, DequantizerQ50> ||
-                  std::is_same_v<Dequantizer, DequantizerQ80>) {
+                  std::is_same_v<Dequantizer, DequantizerQ80> || std::is_same_v<Dequantizer, DequantizerIQ4NL>) {
         m.funcs[0] = mul_mat_qX_0_q8_0<Dequantizer, 1>;
         m.funcs[1] = mul_mat_qX_0_q8_0<Dequantizer, 2>;
         m.funcs[2] = mul_mat_qX_0_q8_0<Dequantizer, 3>;
@@ -4555,6 +4584,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_Q8_0:
             MulMat::set_functions<DequantizerQ80>(m);
+            expected_Btype = GGML_TYPE_Q8_0;
+            break;
+        case GGML_TYPE_IQ4_NL:
+            MulMat::set_functions<DequantizerIQ4NL>(m);
             expected_Btype = GGML_TYPE_Q8_0;
             break;
         default:
