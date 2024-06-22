@@ -18939,7 +18939,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads, int n_cur_
                 //n_tasks = MIN(n_threads, ggml_nelements(node->src[1]));
                 n_tasks = MIN(n_cur_threads, ggml_nelements(node->src[1]));
             } break;
-        case GGML_OP_SCALE:
         case GGML_OP_SET:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
@@ -18963,6 +18962,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads, int n_cur_
             {
                 n_tasks = 1; //TODO
             } break;
+        case GGML_OP_SCALE:
         case GGML_OP_SOFT_MAX:
             {
                 n_tasks = MIN(n_threads, ggml_nrows(node->src[0]));
