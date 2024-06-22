@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include "iqk-quantize.h"
+#include "iqk_mul_mat.h"
 #include "ggml-quants.h"
 #include "ggml-impl.h"
 #define GGML_COMMON_IMPL_C
@@ -182,14 +183,13 @@ void dequantize_row_iq1_bn(const block_iq1_bn * x, float * y, int64_t k) {
     int nblock = k / QK_IQ1BN;
 
     for (int i = 0; i < nblock; ++i) {
-        float d = iq1bn_fp8_to_float(x[i].extra & 0xff);
-        uint8_t extra = x[i].extra >> 8;
+        uint8_t extra = x[i].extra;
         auto qh = x[i].qh;
         auto ql = x[i].ql;
         for (int k = 0; k < QK_IQ1BN/8; ++k) {
             uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
             uint16_t val = iq1bn_grid_u16[idx];
-            float dls = extra & (1 << k) ? -d : d;
+            float dls = extra & (1 << k) ? -1 : 1;
             for (int j = 0; j < 8; ++j) y[j] = dls * (((val >> 2*j) & 3) - 1);
             y += 8;
         }
@@ -287,6 +287,10 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
     static_assert(QK_IQ1BN == 64, "This dot product implementation for iq1_bn requires a block size of 64");
 
+    if (iqk_mul_mat(GGML_TASK_TYPE_COMPUTE, 1, 1, n, GGML_TYPE_IQ1_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+
     const block_iq1_bn * x = (const block_iq1_bn *)vx;
     const block_q8_K64 * y = (const block_q8_K64 *)vy;
     int nblock = n / QK_IQ1BN;
@@ -322,6 +326,7 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
 void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 
+    GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs);
     GGML_UNUSED(bx);
     GGML_UNUSED(by);
@@ -329,28 +334,57 @@ void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
     static_assert(QK_IQ1BN == 64, "This dot product implementation for iq2_bn requires a block size of 64");
 
+    if (iqk_mul_mat(GGML_TASK_TYPE_COMPUTE, 1, 1, n, GGML_TYPE_IQ2_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+
     constexpr int Nj = QK_IQ1BN/4;
 
     const block_iq2_bn * x = (const block_iq2_bn *)vx;
-    const block_q8_K64 * y = (const block_q8_K64 *)vy;
     int nblock = n / QK_IQ1BN;
 
-    float sumf = 0;
+    const float * d = (const float *)vy;
+    const int8_t * q8 = (const int8_t *)(d + 4);
+
+    int sum[16] = { };
+    int sum0[4] = { };
 
     for (int i = 0; i < nblock; ++i) {
-        auto q8 = y[i].qs;
-        int s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
-        for (int j = 0; j < Nj; ++j) {
-            s1 += q8[j+   0] * (x[i].qs[j] & 0x03);
-            s2 += q8[j+1*Nj] * (x[i].qs[j] & 0x0c);
-            s3 += q8[j+2*Nj] * (x[i].qs[j] & 0x30);
-            s4 += q8[j+3*Nj] * (x[i].qs[j] & 0xc0);
-            s0 += q8[j] + q8[j+1*Nj] + q8[j+2*Nj] + q8[j+3*Nj];
+        for (int j = 0; j < Nj/4; ++j) {
+            for (int l = 0; l < 4; ++l) {
+                sum[4*j + 0] += q8[4*j + l +    0] * (x[i].qs[4*j+l] & 0x03);
+                sum[4*j + 1] += q8[4*j + l + 1*Nj] * (x[i].qs[4*j+l] & 0x0c);
+                sum[4*j + 2] += q8[4*j + l + 2*Nj] * (x[i].qs[4*j+l] & 0x30);
+                sum[4*j + 3] += q8[4*j + l + 3*Nj] * (x[i].qs[4*j+l] & 0xc0);
+                sum0[j] += q8[4*j + l] + q8[4*j + l + 1*Nj] + q8[4*j + l + 2*Nj] + q8[4*j + l + 3*Nj];
+            }
         }
-        sumf += y[i].d * (s1 + 0.25f*s2 + 0.0625*s3 + 0.015625*s4 - s0);
+        q8 += QK_IQ1BN;
     }
 
+    float sumf = 0;
+    for (int j = 0; j < 4; ++j) {
+        sumf += d[j] * (sum[4*j + 0] + 0.25f*sum[4*j + 1] + 0.0625*sum[4*j + 2] + 0.015625*sum[4*j + 3] - sum0[j]);
+    }
     *s = sumf;
+
+    //const block_q8_K64 * y = (const block_q8_K64 *)vy;
+    //float sumf = 0;
+
+    //for (int i = 0; i < nblock; ++i) {
+    //    auto q8 = y[i].qs;
+    //    int s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+    //    for (int j = 0; j < Nj; ++j) {
+    //        s1 += q8[j+   0] * (x[i].qs[j] & 0x03);
+    //        s2 += q8[j+1*Nj] * (x[i].qs[j] & 0x0c);
+    //        s3 += q8[j+2*Nj] * (x[i].qs[j] & 0x30);
+    //        s4 += q8[j+3*Nj] * (x[i].qs[j] & 0xc0);
+    //        s0 += q8[j] + q8[j+1*Nj] + q8[j+2*Nj] + q8[j+3*Nj];
+    //    }
+    //    sumf += y[i].d * (s1 + 0.25f*s2 + 0.0625*s3 + 0.015625*s4 - s0);
+    //}
+
+    //*s = sumf;
 
 }
 

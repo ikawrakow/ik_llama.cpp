@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string>
 #include <vector>
+#include <random>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -30,6 +31,14 @@ static void generate_data(float offset, size_t n, float * dst) {
         dst[i] = 0.1 + 2*cosf(i + offset);
     }
 }
+static void generate_bitnet_data(size_t n, float * dst) {
+    std::mt19937 rndm(1234);
+    for (size_t i = 0; i < n; i++) {
+        auto r = rndm();
+        dst[i] = r > std::mt19937::max()/2 ? 0.f : r < std::mt19937::max()/4 ? -1.f : 1.f;
+    }
+}
+
 
 // Calculate RMSE between two float arrays
 static float array_rmse(const float * a1, const float * a2, size_t n) {
@@ -83,7 +92,7 @@ static float dot_product_error(
 
     auto vdot = ggml_internal_get_type_traits(qfns.vec_dot_type);
 
-    qfns.from_float(test_data1, tmp_q1.data(), test_size);
+    qfns.from_float_reference(test_data1, tmp_q1.data(), test_size);
     vdot.from_float(test_data2, tmp_q2.data(), test_size);
 
     float result = INFINITY;
@@ -112,9 +121,11 @@ int main(int argc, char * argv[]) {
 
     std::vector<float> test_data(test_size);
     std::vector<float> test_data2(test_size);
+    std::vector<float> test_data_bitnet(test_size);
 
     generate_data(0.0, test_data.size(), test_data.data());
     generate_data(1.0, test_data2.size(), test_data2.data());
+    generate_bitnet_data(test_data_bitnet.size(), test_data_bitnet.data());
 
     // Initialize GGML, ensures float conversion tables are initialized
     struct ggml_init_params ggml_params = {
@@ -136,13 +147,21 @@ int main(int argc, char * argv[]) {
             continue;
         }
 
+        auto test_data_quantize = test_data.data();
+        auto test_data_vecdot   = test_data2.data();
         const ggml_type ei = (ggml_type)i;
+        if (ei == GGML_TYPE_IQ1_BN || ei == GGML_TYPE_IQ2_BN) {
+            test_data_quantize = test_data_bitnet.data();
+            test_data_vecdot   = test_data_bitnet.data();
+            //printf("Skipping %s because test data does not satisfy Bitnet requirements\n", ggml_type_name(ei));
+            //continue;
+        }
 
         printf("Testing %s\n", ggml_type_name((ggml_type) i));
         ggml_quantize_init(ei);
 
         if (qfns.from_float && qfns.to_float) {
-            const float total_error = total_quantization_error(qfns, test_size, test_data.data());
+            const float total_error = total_quantization_error(qfns, test_size, test_data_quantize);
             const float max_quantization_error =
                 type == GGML_TYPE_Q2_K    ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
                 type == GGML_TYPE_IQ2_S   ? MAX_QUANTIZATION_TOTAL_ERROR_2BITS :
@@ -155,14 +174,14 @@ int main(int argc, char * argv[]) {
                 printf("%5s absolute quantization error:    %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], total_error);
             }
 
-            const float reference_error = reference_quantization_error(qfns, test_size, test_data.data());
+            const float reference_error = reference_quantization_error(qfns, test_size, test_data_quantize);
             failed = !(reference_error < MAX_QUANTIZATION_REFERENCE_ERROR);
             num_failed += failed;
             if (failed || verbose) {
                 printf("%5s reference implementation error: %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], reference_error);
             }
 
-            const float vec_dot_error = dot_product_error(qfns, test_size, test_data.data(), test_data2.data());
+            const float vec_dot_error = dot_product_error(qfns, test_size, test_data.data(), test_data_vecdot);
             const float max_allowed_error = type == GGML_TYPE_Q2_K || type == GGML_TYPE_IQ2_XS || type == GGML_TYPE_IQ2_XXS ||
                                             type == GGML_TYPE_IQ3_XXS || type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ2_S
                                           ? MAX_DOT_PRODUCT_ERROR_LOWBIT
