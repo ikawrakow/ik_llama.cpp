@@ -225,6 +225,13 @@ kernel void kernel_add_row(
         uint tpig[[thread_position_in_grid]]) {
     dst[tpig] = src0[tpig] + src1[tpig % nb];
 }
+kernel void kernel_add_4(
+        device const float4 * src0,
+        device const float4 * src1,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = src0[tpig] + src1[tpig];
+}
 
 kernel void kernel_mul_row(
         device const float4 * src0,
@@ -235,6 +242,14 @@ kernel void kernel_mul_row(
     dst[tpig] = src0[tpig] * src1[tpig % nb];
 }
 
+kernel void kernel_mul_4(
+        device const float4 * src0,
+        device const float4 * src1,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = src0[tpig] * src1[tpig];
+}
+
 kernel void kernel_div_row(
         device const float4 * src0,
         device const float4 * src1,
@@ -242,6 +257,13 @@ kernel void kernel_div_row(
         constant   uint64_t & nb  [[buffer(28)]],
         uint tpig[[thread_position_in_grid]]) {
     dst[tpig] = src0[tpig] / src1[tpig % nb];
+}
+kernel void kernel_div_4(
+        device const float4 * src0,
+        device const float4 * src1,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = src0[tpig] / src1[tpig];
 }
 
 kernel void kernel_scale(
