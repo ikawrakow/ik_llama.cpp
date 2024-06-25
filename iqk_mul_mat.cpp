@@ -1344,8 +1344,12 @@ struct DequantizerIQ1BN {
     const __m256i m1_8   = _mm256_set1_epi8(1);
     const __m256i shuff1 = _mm256_set_epi64x(0x0808080808080808, 0x0000000000000000, 0x0808080808080808, 0x0000000000000000);
     const __m256i shuff2 = _mm256_add_epi8(shuff1, m1_8);
+#if defined __AVX512F__ && defined __AVX512VL__
+    const __m256i minus1 = _mm256_set1_epi64x(0xffff);
+#else
     const __m256i shuff3 = _mm256_set_epi64x(0x0303030303030303, 0x0202020202020202, 0x0101010101010101, 0x0000000000000000);
     const __m256i shuff4 = _mm256_set_epi64x(0x0707070707070707, 0x0606060606060606, 0x0505050505050505, 0x0404040404040404);
+#endif
     const __m256i mask1  = _mm256_set1_epi64x(0x8040201008040201);
 
     IQK_ALWAYS_INLINE void prepare_iq1bn_quants(uint8_t extra, const uint8_t * ql, const uint8_t * qh, __m256i& v1, __m256i& v2) {
@@ -1354,16 +1358,22 @@ struct DequantizerIQ1BN {
                                       iq1bn_grid_xxx[ql[1] | ((qh[0] << 4) & 0x0f00)], iq1bn_grid_xxx[ql[0] | ((qh[0] << 8) & 0x0f00)]);
         auto aux2 = _mm256_set_epi64x(iq1bn_grid_xxx[ql[7] | ((qh[3] << 4) & 0x0f00)], iq1bn_grid_xxx[ql[6] | ((qh[3] << 8) & 0x0f00)],
                                       iq1bn_grid_xxx[ql[5] | ((qh[2] << 4) & 0x0f00)], iq1bn_grid_xxx[ql[4] | ((qh[2] << 8) & 0x0f00)]);
+#if defined __AVX512F__ && defined __AVX512VL__
+        aux1 = _mm256_mask_sub_epi64(aux1, extra & 0xf, minus1, aux1);
+        aux2 = _mm256_mask_sub_epi64(aux2, extra >>  4, minus1, aux2);
+#endif
 
         v1 = _mm256_sub_epi8(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(aux1, shuff2), mask1), mask1),
-                                               _mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(aux1, shuff1), mask1), mask1));
+                             _mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(aux1, shuff1), mask1), mask1));
         v2 = _mm256_sub_epi8(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(aux2, shuff2), mask1), mask1),
-                                               _mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(aux2, shuff1), mask1), mask1));
+                             _mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(aux2, shuff1), mask1), mask1));
 
+#if !(defined __AVX512F__ && defined __AVX512VL__)
         auto all_signs = _mm256_set1_epi8(extra);
         all_signs = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(all_signs, mask1), mask1), m1_8);
         v1 = _mm256_sign_epi8(v1, _mm256_shuffle_epi8(all_signs, shuff3));
         v2 = _mm256_sign_epi8(v2, _mm256_shuffle_epi8(all_signs, shuff4));
+#endif
     }
 };
 
@@ -1465,17 +1475,17 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
 struct DequantizeIQ2BN final : public BaseDequantizer<block_iq2_bn> {
     DequantizeIQ2BN(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
 
-    inline void prepare4(int i, __m256i * val) const {
+    IQK_ALWAYS_INLINE void prepare4(int i, __m256i * val) const {
         auto q2bits_1 = _mm256_loadu_si256((const __m256i *)x[2*i].qs);
         auto q2bits_2 = _mm256_srli_epi16(q2bits_1, 2);
         make2(_mm256_permute2x128_si256(q2bits_1, q2bits_2, 0x20), val+0);
         make2(_mm256_permute2x128_si256(q2bits_1, q2bits_2, 0x31), val+2);
     }
-    inline void make2(__m256i q2_1, __m256i * val) const {
+    IQK_ALWAYS_INLINE void make2(__m256i q2_1, __m256i * val) const {
         val[0] = _mm256_sub_epi8(_mm256_and_si256(q2_1, mask2), m1_8);
         val[1] = _mm256_sub_epi8(_mm256_and_si256(q2_1, mask3), mf_8);
     }
-    inline void prepare2(int i, __m256i * val) const {
+    IQK_ALWAYS_INLINE void prepare2(int i, __m256i * val) const {
         auto q2bits_1 = _mm_loadu_si128((const __m128i *)x[i].qs);
         make2(MM256_SET_M128I(_mm_srli_epi16(q2bits_1, 2), q2bits_1), val);
     }
