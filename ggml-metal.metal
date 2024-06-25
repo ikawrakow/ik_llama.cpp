@@ -5084,7 +5084,7 @@ void kernel_mul_mv_iq1_bn_f32_impl(
 
             uint8_t signs = extra[0] >> (4*ib + ir);
 
-            uint32_t v = iq1bn_grid_zzz[ql[0] | ((qh[0] << (8 - 4*(ir%2))) & 0x0f00)];
+            uint32_t v = iq1bn_grid_u16[ql[0] | ((qh[0] << (8 - 4*(ir%2))) & 0x0f00)];
             uint32_t v32 = v | (v << 14);
             aux32[0] = v32 & 0x03030303; aux32[1] = (v32 >> 4) & 0x03030303;
             float4 acc4 = yl[0] * float4{values[aux8[0]], values[aux8[1]], values[aux8[2]], values[aux8[3]]}
@@ -5958,8 +5958,8 @@ void dequantize_iq1_bn(device const block_iq1_bn * xb, short il, thread type4x4 
 
     uint16_t idx1 = xb->ql[2*il+0] | ((xb->qh[il] << 8) & 0x0f00);
     uint16_t idx2 = xb->ql[2*il+1] | ((xb->qh[il] << 4) & 0x0f00);
-    uint16_t val1 = gs & 1 ? 0xaaaa - iq1bn_grid_zzz[idx1] : iq1bn_grid_zzz[idx1];
-    uint16_t val2 = gs & 2 ? 0xaaaa - iq1bn_grid_zzz[idx2] : iq1bn_grid_zzz[idx2];
+    uint16_t val1 = gs & 1 ? 0xaaaa - iq1bn_grid_u16[idx1] : iq1bn_grid_u16[idx1];
+    uint16_t val2 = gs & 2 ? 0xaaaa - iq1bn_grid_u16[idx2] : iq1bn_grid_u16[idx2];
 
     uint32_t v = val1 | (val1 << 14);
     uint32_t aux32;

@@ -190,7 +190,7 @@ void dequantize_row_iq1_bn(const block_iq1_bn * x, float * y, int64_t k) {
         auto ql = x[i].ql;
         for (int k = 0; k < QK_IQ1BN/8; ++k) {
             uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
-            uint16_t val = extra & 1 ? 0xaaaa - iq1bn_grid_zzz[idx] : iq1bn_grid_zzz[idx];
+            uint16_t val = extra & 1 ? 0xaaaa - iq1bn_grid_u16[idx] : iq1bn_grid_u16[idx];
             aux32[0] = val | (val << 14);
             aux32[1] = (aux32[0] >> 4) & 0x03030303;
             aux32[0] &= 0x03030303;
@@ -270,8 +270,8 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
         for (int j = 0; j < QK_IQ1BN/16; ++j) {
             uint16_t idx1 = ql[2*j+0] | ((qh[j] << 8) & 0x0f00);
             uint16_t idx2 = ql[2*j+1] | ((qh[j] << 4) & 0x0f00);
-            uint16_t val1 = extra & 1 ? k_magic - iq1bn_grid_zzz[idx1] : iq1bn_grid_zzz[idx1];
-            uint16_t val2 = extra & 2 ? k_magic - iq1bn_grid_zzz[idx2] : iq1bn_grid_zzz[idx2];
+            uint16_t val1 = extra & 1 ? k_magic - iq1bn_grid_u16[idx1] : iq1bn_grid_u16[idx1];
+            uint16_t val2 = extra & 2 ? k_magic - iq1bn_grid_u16[idx2] : iq1bn_grid_u16[idx2];
             extra >>= 2;
             aux32[0] = val1 | (val1 << 14);
             aux32[1] = (aux32[0] >> 4) & 0x03030303;
