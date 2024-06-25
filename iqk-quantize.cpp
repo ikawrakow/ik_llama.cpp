@@ -385,6 +385,38 @@ void quantize_row_q8_K64_reference(const float * x, block_q8_K64 * y, int64_t k)
         vst1q_s8(qs, qi);
         qs += 16;
     }
+#elif defined __AVX__
+    __m128 max[4] = {};
+    __m128 sign_bit = _mm_set1_ps(-0.f);
+    for (int j = 0; j < k; j += 16) {
+        for (int i = 0; i < 4; ++i) {
+            auto val = _mm_loadu_ps(x + j + 4*i);
+            val = _mm_andnot_ps(sign_bit, val);
+            max[i] = _mm_max_ps(max[i], val);
+        }
+    }
+    __m128 vid[4];
+    for (int i = 0; i < 4; ++i) {
+        max[i] = _mm_max_ps(max[i], _mm_movehl_ps(max[i], max[i]));
+        max[i] = _mm_max_ss(max[i], _mm_movehdup_ps(max[i]));
+        float maxi = _mm_cvtss_f32(max[i]);
+        dptr[i] = maxi/127;
+        float id = dptr[i] > 0 ? 1/dptr[i] : 0.f;
+        vid[i] = _mm_set1_ps(id);
+    }
+    __m128i q[4];
+    for (int j = 0; j < k; j += 16) {
+        for (int i = 0; i < 4; ++i) {
+            auto val = _mm_loadu_ps(x + j + 4*i);
+            val = _mm_round_ps(_mm_mul_ps(vid[i], val), _MM_ROUND_NEAREST);
+            q[i] = _mm_cvtps_epi32(val);
+        }
+        auto q1 = _mm_packs_epi32(q[0], q[1]);
+        auto q2 = _mm_packs_epi32(q[2], q[3]);
+        auto qi = _mm_packs_epi16(q1, q2);
+        _mm_storeu_si128((__m128i *)qs, qi);
+        qs += 16;
+    }
 #else
     float aux[4] = {0.f, 0.f, 0.f, 0.f};
     for (int j = 0; j < k; j += 16) {
