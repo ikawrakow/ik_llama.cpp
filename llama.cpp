@@ -11848,8 +11848,8 @@ struct llm_build_context {
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
                 float q_scale; std::memcpy(&q_scale, model.layers[il].wq->op_params, sizeof(float));
-                // Note: we could save this scale operation by applying the Q scale K * Q further down
-                // (which laso uses a scale). This works on the CPU and Metal backends, but produces NaNs on CUDA.
+                // Note: we could save this scale operation by applying the Q scale on the K * Q product further down
+                // (which also uses a scale). This works on the CPU and Metal backends, but produces NaNs on CUDA.
                 Qcur = ggml_scale(ctx0, Qcur, q_scale);
                 cb(Qcur, "Qcur", il);
                 if (model.layers[il].bq) {
@@ -11960,7 +11960,7 @@ struct llm_build_context {
 
                 cur_attn = llm_build_norm(ctx0, cur_attn, hparams,
                         model.layers[il].attn_sub_norm, NULL,
-                        LLM_NORM_RMS, cb, il);
+                        LLM_NORM_RMS, cb, il); //, 1/(v_scale*v_scale));
                 cb(cur_attn, "attn_sub_norm", il);
 
                 ggml_build_forward_expand(gf, cur_attn);
