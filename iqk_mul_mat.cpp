@@ -2788,7 +2788,6 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             MulMat::set_functions<DequantizerIQ2XXS>(mm);
             break;
         case GGML_TYPE_IQ1_BN:
-            return false;
             assert (ne00 % QK_IQ1BN == 0);
             mm.funcs[0] = mul_mat_iq1bn_q8_K64<1>;
             mm.funcs[1] = mul_mat_iq1bn_q8_K64<2>;
