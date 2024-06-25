@@ -1086,8 +1086,8 @@ static __device__ __forceinline__ float vec_dot_iq1_bn_q8_1(
     for (int l = 0; l < 2; ++l) {
         uint16_t idx1 = bq1->ql[4*iqs + 2*l+0] | ((bq1->qh[2*iqs + l] << 8) & 0x0f00);
         uint16_t idx2 = bq1->ql[4*iqs + 2*l+1] | ((bq1->qh[2*iqs + l] << 4) & 0x0f00);
-        uint16_t val1 = extra & 1 ? 0xaaaa - iq1bn_grid_zzz[idx1] : iq1bn_grid_zzz[idx1];
-        uint16_t val2 = extra & 2 ? 0xaaaa - iq1bn_grid_zzz[idx2] : iq1bn_grid_zzz[idx2];
+        uint16_t val1 = extra & 1 ? 0xaaaa - iq1bn_grid_u16[idx1] : iq1bn_grid_u16[idx1];
+        uint16_t val2 = extra & 2 ? 0xaaaa - iq1bn_grid_u16[idx2] : iq1bn_grid_u16[idx2];
         val32 = val1 | (val1 << 14);
         v1 = __vsub4(val32 & 0x03030303, 0x01010101);
         v2 = __vsub4((val32 >> 4) & 0x03030303, 0x01010101);
@@ -1104,7 +1104,7 @@ static __device__ __forceinline__ float vec_dot_iq1_bn_q8_1(
     const int8_t * q8 = bq8_1[iqs].qs;
     for (int l = 0; l < 4; ++l) {
         uint16_t idx = bq1->ql[4*iqs + l] | ((bq1->qh[2*iqs + l/2] << (8 - 4*(l%2))) & 0x0f00);
-        uint16_t val = extra & 1 ? 0xaaaa - iq1bn_grid_zzz[idx] : iq1bn_grid_zzz[idx];
+        uint16_t val = extra & 1 ? 0xaaaa - iq1bn_grid_u16[idx] : iq1bn_grid_u16[idx];
         aux32[0] = val | (val << 14);
         aux32[1] = (aux32[0] >> 4) & 0x03030303;
         aux32[0] &= 0x03030303;

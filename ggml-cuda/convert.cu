@@ -433,7 +433,7 @@ static __global__ void dequantize_block_iq1_bn(const void * __restrict__ vx, dst
     if (i >= nb64) return;
     ib = ib%(QK_IQ1BN/32);
     uint16_t idx = x[i].ql[4*ib + il] | ((x[i].qh[2*ib + il/2] << (8 - 4*(il%2))) & 0x0f00);
-    uint16_t val = x[i].extra & (1 << (4*ib + il)) ? 0xaaaa - iq1bn_grid_zzz[idx] : iq1bn_grid_zzz[idx];
+    uint16_t val = x[i].extra & (1 << (4*ib + il)) ? 0xaaaa - iq1bn_grid_u16[idx] : iq1bn_grid_u16[idx];
     uint32_t aux32[2];
     const int8_t * aux8 = (const int8_t *)aux32;
     aux32[0] = val | (val << 14);
