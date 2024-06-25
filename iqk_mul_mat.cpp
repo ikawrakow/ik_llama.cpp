@@ -4285,9 +4285,9 @@ struct DequantizerIQ1BN {
         vreinterpretq_u8_u64(uint64x2_t{0x0404040404040404, 0x0505050505050505}),
         vreinterpretq_u8_u64(uint64x2_t{0x0606060606060606, 0x0707070707070707}),
     };
-    const int8x16_t shift  = vreinterpretq_s8_u32(vdupq_n_u32(0xfafcfe00));
+    const int8x16_t shift  = vreinterpretq_s16_u64(vdupq_n_u64(0xfffafffcfffe0000));
     const uint8x16_t qmask  = vdupq_n_u8(3);
-    const uint8x16_t shuff1 = vreinterpretq_u8_u64(uint64x2_t{0x0101010100000000, 0x0909090908080808});
+    const uint8x16_t shuff1 = vreinterpretq_u8_u64(uint64x2_t{0x0100010001000100, 0x0908090809080908});
     const uint8x16_t mask1  = vreinterpretq_u8_u64(vdupq_n_u64(0x8040201008040201));
     int8x16x4_t  signs;
     uint64x2x4_t a;
@@ -4299,15 +4299,15 @@ struct DequantizerIQ1BN {
         signs.val[2] = vqtbl1q_u8(all_signs, sign_shuffles.val[2]);
         signs.val[3] = vqtbl1q_u8(all_signs, sign_shuffles.val[3]);
 
-        a.val[0] = uint64x2_t{iq1bn_grid_u16[ql[0] | ((qh[0] << 8) & 0x0f00)], iq1bn_grid_u16[ql[1] | ((qh[0] << 4) & 0x0f00)]};
-        a.val[1] = uint64x2_t{iq1bn_grid_u16[ql[2] | ((qh[1] << 8) & 0x0f00)], iq1bn_grid_u16[ql[3] | ((qh[1] << 4) & 0x0f00)]};
-        a.val[2] = uint64x2_t{iq1bn_grid_u16[ql[4] | ((qh[2] << 8) & 0x0f00)], iq1bn_grid_u16[ql[5] | ((qh[2] << 4) & 0x0f00)]};
-        a.val[3] = uint64x2_t{iq1bn_grid_u16[ql[6] | ((qh[3] << 8) & 0x0f00)], iq1bn_grid_u16[ql[7] | ((qh[3] << 4) & 0x0f00)]};
+        a.val[0] = uint64x2_t{iq1bn_grid_zzz[ql[0] | ((qh[0] << 8) & 0x0f00)], iq1bn_grid_zzz[ql[1] | ((qh[0] << 4) & 0x0f00)]};
+        a.val[1] = uint64x2_t{iq1bn_grid_zzz[ql[2] | ((qh[1] << 8) & 0x0f00)], iq1bn_grid_zzz[ql[3] | ((qh[1] << 4) & 0x0f00)]};
+        a.val[2] = uint64x2_t{iq1bn_grid_zzz[ql[4] | ((qh[2] << 8) & 0x0f00)], iq1bn_grid_zzz[ql[5] | ((qh[2] << 4) & 0x0f00)]};
+        a.val[3] = uint64x2_t{iq1bn_grid_zzz[ql[6] | ((qh[3] << 8) & 0x0f00)], iq1bn_grid_zzz[ql[7] | ((qh[3] << 4) & 0x0f00)]};
 
-        v.val[0] = vsubq_s8(vandq_u8(vshlq_u8(vqtbl1q_u8(vreinterpretq_u8_u64(a.val[0]), shuff1), shift), qmask), m1);
-        v.val[1] = vsubq_s8(vandq_u8(vshlq_u8(vqtbl1q_u8(vreinterpretq_u8_u64(a.val[1]), shuff1), shift), qmask), m1);
-        v.val[2] = vsubq_s8(vandq_u8(vshlq_u8(vqtbl1q_u8(vreinterpretq_u8_u64(a.val[2]), shuff1), shift), qmask), m1);
-        v.val[3] = vsubq_s8(vandq_u8(vshlq_u8(vqtbl1q_u8(vreinterpretq_u8_u64(a.val[3]), shuff1), shift), qmask), m1);
+        v.val[0] = vsubq_s8(vandq_u8(vshlq_u16(vqtbl1q_u8(vreinterpretq_u8_u64(a.val[0]), shuff1), shift), qmask), m1);
+        v.val[1] = vsubq_s8(vandq_u8(vshlq_u16(vqtbl1q_u8(vreinterpretq_u8_u64(a.val[1]), shuff1), shift), qmask), m1);
+        v.val[2] = vsubq_s8(vandq_u8(vshlq_u16(vqtbl1q_u8(vreinterpretq_u8_u64(a.val[2]), shuff1), shift), qmask), m1);
+        v.val[3] = vsubq_s8(vandq_u8(vshlq_u16(vqtbl1q_u8(vreinterpretq_u8_u64(a.val[3]), shuff1), shift), qmask), m1);
 
         v.val[0] = vmulq_s8(v.val[0], signs.val[0]);
         v.val[1] = vmulq_s8(v.val[1], signs.val[1]);
