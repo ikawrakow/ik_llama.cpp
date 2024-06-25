@@ -1082,27 +1082,35 @@ static __device__ __forceinline__ float vec_dot_iq1_bn_q8_1(
     int sumi = 0;
 #if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
     const int * q8 = (const int *)bq8_1[iqs].qs;
-    for (int l = 0; l < 4; ++l) {
-        uint16_t val = iq1bn_grid_xxx[bq1->ql[4*iqs + l] | ((bq1->qh[2*iqs + l/2] << (8 - 4*(l%2))) & 0x0f00)];
-        uint8_t vp = val & 0xff, vm = val >> 8;
-        int32_t vp1 = __vcmpeq4(((vp & 0xf) * 0x01010101) & 0x08040201, 0x08040201);
-        int32_t vp2 = __vcmpeq4(((vp >>  4) * 0x01010101) & 0x08040201, 0x08040201);
-        int32_t vm1 = __vcmpeq4(((vm & 0xf) * 0x01010101) & 0x08040201, 0x08040201);
-        int32_t vm2 = __vcmpeq4(((vm >>  4) * 0x01010101) & 0x08040201, 0x08040201);
-        int32_t pm  = __dp4a(q8[2*l+0], vm1, __dp4a(q8[2*l+1], vm2, 0));
-        int32_t pp  = __dp4a(q8[2*l+0], vp1, __dp4a(q8[2*l+1], vp2, 0));
-        sumi += extra & (1 << l) ? pp - pm : pm - pp;
+    int val32, v1, v2;
+    for (int l = 0; l < 2; ++l) {
+        uint16_t idx1 = bq1->ql[4*iqs + 2*l+0] | ((bq1->qh[2*iqs + l] << 8) & 0x0f00);
+        uint16_t idx2 = bq1->ql[4*iqs + 2*l+1] | ((bq1->qh[2*iqs + l] << 4) & 0x0f00);
+        uint16_t val1 = extra & 1 ? 0xaaaa - iq1bn_grid_zzz[idx1] : iq1bn_grid_zzz[idx1];
+        uint16_t val2 = extra & 2 ? 0xaaaa - iq1bn_grid_zzz[idx2] : iq1bn_grid_zzz[idx2];
+        val32 = val1 | (val1 << 14);
+        v1 = __vsub4(val32 & 0x03030303, 0x01010101);
+        v2 = __vsub4((val32 >> 4) & 0x03030303, 0x01010101);
+        sumi = __dp4a(v1, q8[4*l+0], __dp4a(v2, q8[4*l+1], sumi));
+        val32 = val2 | (val2 << 14);
+        v1 = __vsub4(val32 & 0x03030303, 0x01010101);
+        v2 = __vsub4((val32 >> 4) & 0x03030303, 0x01010101);
+        sumi = __dp4a(v1, q8[4*l+2], __dp4a(v2, q8[4*l+3], sumi));
+        extra >>= 2;
     }
 #else
+    uint32_t aux32[2];
+    const int8_t * aux8 = (const int8_t *)aux32;
     const int8_t * q8 = bq8_1[iqs].qs;
     for (int l = 0; l < 4; ++l) {
-        uint16_t val = iq1bn_grid_u16[bq1->ql[4*iqs + l] | ((bq1->qh[2*iqs + l/2] << (8 - 4*(l%2))) & 0x0f00)];
-        int s1 = 0, s2 = 0;
+        uint16_t idx = bq1->ql[4*iqs + l] | ((bq1->qh[2*iqs + l/2] << (8 - 4*(l%2))) & 0x0f00);
+        uint16_t val = extra & 1 ? 0xaaaa - iq1bn_grid_zzz[idx] : iq1bn_grid_zzz[idx];
+        aux32[0] = val | (val << 14);
+        aux32[1] = (aux32[0] >> 4) & 0x03030303;
+        aux32[0] &= 0x03030303;
         for (int j = 0; j < 8; ++j) {
-            s1 += q8[j] * ((val >> 2*j) & 3);
-            s2 += q8[j];
+            sumi += q8[j] * (aux8[j] - 1);
         }
-        sumi += extra & (1 << l) ? s2 - s1 : s1 - s2;
         q8 += 8;
     }
 #endif

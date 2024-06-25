@@ -432,13 +432,20 @@ static __global__ void dequantize_block_iq1_bn(const void * __restrict__ vx, dst
     int64_t i = QK_K/QK_IQ1BN * ii + ib/(QK_IQ1BN/32);
     if (i >= nb64) return;
     ib = ib%(QK_IQ1BN/32);
-    const float dl = x[i].extra & (1 << (4*ib + il)) ? -1 : 1;
-    const float ml = -dl;
     uint16_t idx = x[i].ql[4*ib + il] | ((x[i].qh[2*ib + il/2] << (8 - 4*(il%2))) & 0x0f00);
-    const uint16_t gp = iq1bn_grid_u16[idx];
-    for (int j = 0; j < 8; ++j) {
-        y[j] = dl * ((gp >> 2*j) & 3) + ml;
-    }
+    uint16_t val = x[i].extra & (1 << (4*ib + il)) ? 0xaaaa - iq1bn_grid_zzz[idx] : iq1bn_grid_zzz[idx];
+    uint32_t aux32[2];
+    const int8_t * aux8 = (const int8_t *)aux32;
+    aux32[0] = val | (val << 14);
+//#if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
+//    aux32[1] = __vsub4((aux32[0] >> 4) & 0x03030303, 0x01010101);
+//    aux32[0] = __vsub4(aux32[0] & 0x03030303, 0x01010101);
+//    for (int j = 0; j < 8; ++j) y[j] = aux8[j];
+//#else
+    aux32[1] = (aux32[0] >> 4) & 0x03030303;
+    aux32[0] &= 0x03030303;
+    for (int j = 0; j < 8; ++j) y[j] = aux8[j] - 1;
+//#endif
 }
 
 template<typename dst_t>

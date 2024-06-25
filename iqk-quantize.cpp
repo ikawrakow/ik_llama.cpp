@@ -182,16 +182,21 @@ void dequantize_row_iq1_bn(const block_iq1_bn * x, float * y, int64_t k) {
     assert(k%QK_IQ1BN == 0);
     int nblock = k / QK_IQ1BN;
 
+    uint32_t aux32[2];
+    const int8_t * aux8 = (const int8_t *)aux32;
     for (int i = 0; i < nblock; ++i) {
         uint8_t extra = x[i].extra;
         auto qh = x[i].qh;
         auto ql = x[i].ql;
         for (int k = 0; k < QK_IQ1BN/8; ++k) {
             uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
-            uint16_t val = iq1bn_grid_u16[idx];
-            float dls = extra & (1 << k) ? -1 : 1;
-            for (int j = 0; j < 8; ++j) y[j] = dls * (((val >> 2*j) & 3) - 1);
+            uint16_t val = extra & 1 ? 0xaaaa - iq1bn_grid_zzz[idx] : iq1bn_grid_zzz[idx];
+            aux32[0] = val | (val << 14);
+            aux32[1] = (aux32[0] >> 4) & 0x03030303;
+            aux32[0] &= 0x03030303;
+            for (int j = 0; j < 8; ++j) y[j] = aux8[j] - 1;
             y += 8;
+            extra >>= 1;
         }
     }
 }
@@ -233,51 +238,6 @@ void dequantize_row_iq2_bn(const block_iq2_bn * x, float * y, int64_t k) {
     }
 }
 
-void ggml_vec_dot_iq1_bn_q8_0 (int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
-
-    GGML_UNUSED(bs);
-    GGML_UNUSED(bx);
-    GGML_UNUSED(by);
-    GGML_UNUSED(nrc);
-
-    static_assert(QK_IQ1BN == 64, "This dot product implementation for iq1_bn requires a block size of 64");
-
-    const block_iq1_bn * x = (const block_iq1_bn *)vx;
-    const block_q8_0   * y = (const block_q8_0 *)vy;
-    int nblock = n / QK_IQ1BN;
-
-    float sumf = 0;
-
-    for (int i = 0; i < nblock; ++i) {
-        auto qh = x[i].qh;
-        auto ql = x[i].ql;
-        auto q8 = y[2*i+0].qs;
-        int16_t sumi1 = 0;
-        for (int k = 0; k < 4; ++k) {
-            uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
-            uint16_t val = iq1bn_grid_u16[idx];
-            int16_t sl = 0;
-            for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi1 += x[i].extra & (1 << k) ? -sl : sl;
-            q8 += 8;
-        }
-        q8 = y[2*i+1].qs;
-        int16_t sumi2 = 0;
-        for (int k = 4; k < 8; ++k) {
-            uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
-            uint16_t val = iq1bn_grid_u16[idx];
-            int16_t sl = 0;
-            for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi2 += x[i].extra & (1 << k) ? -sl : sl;
-            q8 += 8;
-        }
-        sumf += GGML_FP16_TO_FP32(y[2*i+0].d) * sumi1 + GGML_FP16_TO_FP32(y[2*i+1].d) * sumi2;
-    }
-
-    *s = sumf;
-
-}
-
 void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 
     GGML_UNUSED(bs);
@@ -300,6 +260,8 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
     int nblock = n / QK_IQ1BN;
 
     int sumi[8] = {};
+    uint32_t aux32[2];
+    const int8_t * aux8 = (const int8_t *)aux32;
 
     for (int i = 0; i < nblock; ++i) {
         auto qh = x[i].qh;
@@ -308,14 +270,19 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
         for (int j = 0; j < QK_IQ1BN/16; ++j) {
             uint16_t idx1 = ql[2*j+0] | ((qh[j] << 8) & 0x0f00);
             uint16_t idx2 = ql[2*j+1] | ((qh[j] << 4) & 0x0f00);
-            uint16_t val1 = extra & 1 ? k_magic - iq1bn_grid_u16[idx1] : iq1bn_grid_u16[idx1];
-            uint16_t val2 = extra & 2 ? k_magic - iq1bn_grid_u16[idx2] : iq1bn_grid_u16[idx2];
+            uint16_t val1 = extra & 1 ? k_magic - iq1bn_grid_zzz[idx1] : iq1bn_grid_zzz[idx1];
+            uint16_t val2 = extra & 2 ? k_magic - iq1bn_grid_zzz[idx2] : iq1bn_grid_zzz[idx2];
             extra >>= 2;
-            for (int k = 0; k < 8; ++k) {
-                sumi[k] += q8[k+0] * (((val1 >> 2*k) & 3) - 1);
-                sumi[k] += q8[k+8] * (((val2 >> 2*k) & 3) - 1);
-            }
-            q8 += 16;
+            aux32[0] = val1 | (val1 << 14);
+            aux32[1] = (aux32[0] >> 4) & 0x03030303;
+            aux32[0] &= 0x03030303;
+            for (int k = 0; k < 8; ++k) sumi[k] += q8[k] * (aux8[k] - 1);
+            q8 += 8;
+            aux32[0] = val2 | (val2 << 14);
+            aux32[1] = (aux32[0] >> 4) & 0x03030303;
+            aux32[0] &= 0x03030303;
+            for (int k = 0; k < 8; ++k) sumi[k] += q8[k] * (aux8[k] - 1);
+            q8 += 8;
         }
     }
 
