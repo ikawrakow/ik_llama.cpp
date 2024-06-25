@@ -291,37 +291,35 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
         return;
     }
 
+    constexpr uint16_t k_magic = 0xaaaa;
+
     const block_iq1_bn * x = (const block_iq1_bn *)vx;
-    const block_q8_K64 * y = (const block_q8_K64 *)vy;
+
+    const float * d8 = (const float *)vy;
+    const int8_t * q8 = (const int8_t *)(d8 + 4);
     int nblock = n / QK_IQ1BN;
 
-    float sumf = 0;
+    int sumi[8] = {};
 
     for (int i = 0; i < nblock; ++i) {
         auto qh = x[i].qh;
         auto ql = x[i].ql;
-        auto q8 = y[i].qs;
-        int sumi = 0;
-        for (int k = 0; k < 4; ++k) {
-            uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
-            uint16_t val = iq1bn_grid_u16[idx];
-            int16_t sl = 0;
-            for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi += x[i].extra & (1 << k) ? -sl : sl;
-            q8 += 8;
+        auto extra = x[i].extra;
+        for (int j = 0; j < QK_IQ1BN/16; ++j) {
+            uint16_t idx1 = ql[2*j+0] | ((qh[j] << 8) & 0x0f00);
+            uint16_t idx2 = ql[2*j+1] | ((qh[j] << 4) & 0x0f00);
+            uint16_t val1 = extra & 1 ? k_magic - iq1bn_grid_u16[idx1] : iq1bn_grid_u16[idx1];
+            uint16_t val2 = extra & 2 ? k_magic - iq1bn_grid_u16[idx2] : iq1bn_grid_u16[idx2];
+            extra >>= 2;
+            for (int k = 0; k < 8; ++k) {
+                sumi[k] += q8[k+0] * (((val1 >> 2*k) & 3) - 1);
+                sumi[k] += q8[k+8] * (((val2 >> 2*k) & 3) - 1);
+            }
+            q8 += 16;
         }
-        for (int k = 4; k < 8; ++k) {
-            uint16_t idx = ql[k] | ((qh[k/2] << (8 - 4*(k%2))) & 0x0f00);
-            uint16_t val = iq1bn_grid_u16[idx];
-            int16_t sl = 0;
-            for (int j = 0; j < 8; ++j) sl += q8[j] * (((val >> 2*j) & 3) - 1);
-            sumi += x[i].extra & (1 << k) ? -sl : sl;
-            q8 += 8;
-        }
-        sumf += y[i].d * sumi;
     }
 
-    *s = sumf;
+    *s = d8[0] * (sumi[0] + sumi[4]) + d8[1] * (sumi[1] + sumi[5]) + d8[2] * (sumi[2] + sumi[6]) + d8[3] * (sumi[3] + sumi[7]);
 }
 
 void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
@@ -367,24 +365,6 @@ void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
         sumf += d[j] * (sum[4*j + 0] + 0.25f*sum[4*j + 1] + 0.0625*sum[4*j + 2] + 0.015625*sum[4*j + 3] - sum0[j]);
     }
     *s = sumf;
-
-    //const block_q8_K64 * y = (const block_q8_K64 *)vy;
-    //float sumf = 0;
-
-    //for (int i = 0; i < nblock; ++i) {
-    //    auto q8 = y[i].qs;
-    //    int s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
-    //    for (int j = 0; j < Nj; ++j) {
-    //        s1 += q8[j+   0] * (x[i].qs[j] & 0x03);
-    //        s2 += q8[j+1*Nj] * (x[i].qs[j] & 0x0c);
-    //        s3 += q8[j+2*Nj] * (x[i].qs[j] & 0x30);
-    //        s4 += q8[j+3*Nj] * (x[i].qs[j] & 0xc0);
-    //        s0 += q8[j] + q8[j+1*Nj] + q8[j+2*Nj] + q8[j+3*Nj];
-    //    }
-    //    sumf += y[i].d * (s1 + 0.25f*s2 + 0.0625*s3 + 0.015625*s4 - s0);
-    //}
-
-    //*s = sumf;
 
 }
 
