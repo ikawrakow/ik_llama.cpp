@@ -355,6 +355,37 @@ void quantize_row_q8_K64_reference(const float * x, block_q8_K64 * y, int64_t k)
     //    x += 64;
     //}
 
+    float * dptr = (float *)y;
+    auto qs = (int8_t *)(dptr + 4);
+#ifdef __ARM_NEON
+    static const uint8_t k_shuffle[16] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60};
+    auto shuffle = vld1q_u8(k_shuffle);
+    float32x4_t max[4] = { };
+    for (int j = 0; j < k; j += 16) {
+        for (int i = 0; i < 4; ++i) {
+            auto val = vld1q_f32(x + j + 4*i);
+            val = vabsq_f32(val);
+            max[i] = vmaxq_f32(max[i], val);
+        }
+    }
+    float32x4_t vid[4];
+    for (int i = 0; i < 4; ++i) {
+        dptr[i] = vmaxvq_f32(max[i])/127;
+        float id = dptr[i] > 0 ? 1/dptr[i] : 0.f;
+        vid[i] = vdupq_n_f32(id);
+    }
+    int8x16x4_t q;
+    for (int j = 0; j < k; j += 16) {
+        for (int i = 0; i < 4; ++i) {
+            auto val = vld1q_f32(x + j + 4*i);
+            val = vmulq_f32(vid[i], val);
+            q.val[i] = vreinterpretq_s8_s32(vcvtnq_s32_f32(val));
+        }
+        auto qi = vqtbl4q_s8(q, shuffle);
+        vst1q_s8(qs, qi);
+        qs += 16;
+    }
+#else
     float aux[4] = {0.f, 0.f, 0.f, 0.f};
     for (int j = 0; j < k; j += 16) {
         for (int i = 0; i < 4; ++i) {
@@ -364,17 +395,16 @@ void quantize_row_q8_K64_reference(const float * x, block_q8_K64 * y, int64_t k)
             }
         }
     }
-    float * dptr = (float *)y;
     for (int i = 0; i < 4; ++i) {
         dptr[i] = aux[i]/127;
         aux[i] = dptr[i] > 0 ? 1/dptr[i] : 0.f;
     }
-    auto qs = (int8_t *)(dptr + 4);
     for (int j = 0; j < k; j += 16) {
         for (int i = 0; i < 4; ++i) {
             for (int l = 0; l < 4; ++l) qs[j+4*i+l] = nearest_int(aux[i]*x[j+4*i+l]);
         }
     }
+#endif
 }
 
 void quantize_row_q8_K64(const float * x, void * y, int64_t k) {
