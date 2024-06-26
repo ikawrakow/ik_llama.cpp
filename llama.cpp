@@ -11870,11 +11870,12 @@ struct llm_build_context {
                 // B1.V
                 struct ggml_tensor * Vcur = ggml_mul_mat(ctx0, model.layers[il].wv, cur);
                 float v_scale; std::memcpy(&v_scale, model.layers[il].wv->op_params, sizeof(float));
-                Vcur = ggml_scale(ctx0, Vcur, v_scale);
                 cb(Vcur, "Vcur", il);
                 if (model.layers[il].bv) {
+                    Vcur = ggml_scale(ctx0, Vcur, v_scale);
                     Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                     cb(Vcur, "Vcur", il);
+                    v_scale = 1;
                 }
 
                 Qcur = ggml_rope_ext(
@@ -11960,7 +11961,7 @@ struct llm_build_context {
 
                 cur_attn = llm_build_norm(ctx0, cur_attn, hparams,
                         model.layers[il].attn_sub_norm, NULL,
-                        LLM_NORM_RMS, cb, il); //, 1/(v_scale*v_scale));
+                        LLM_NORM_RMS, cb, il, 1/(v_scale*v_scale));
                 cb(cur_attn, "attn_sub_norm", il);
 
                 ggml_build_forward_expand(gf, cur_attn);
