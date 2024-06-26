@@ -224,6 +224,7 @@ struct gpt_params {
 
     // imatrix params
     std::string out_file = "imatrix.dat"; // save the resulting imatrix to this file
+    std::string output_tensor_name = "output.weight"; // name of the output tensor
 
     int32_t n_out_freq  = 10; // output the imatrix every n_out_freq iterations
     int32_t n_save_freq =  0; // save the imatrix every n_save_freq iterations

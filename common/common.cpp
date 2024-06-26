@@ -1599,6 +1599,14 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.process_output = true;
         return true;
     }
+    if (arg == "--output-tensor-name") {
+        if (++i >= argc) {
+            invalid_param = true;
+            return true;
+        }
+        params.output_tensor_name = argv[i];
+        return true;
+    }
     if (arg == "--no-ppl") {
         params.compute_ppl = false;
         return true;
