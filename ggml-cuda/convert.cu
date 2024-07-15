@@ -425,27 +425,19 @@ static __global__ void dequantize_block_iq1_bn(const void * __restrict__ vx, dst
     const int64_t ii  = blockIdx.x;
     const block_iq1_bn * x = (const block_iq1_bn *) vx;
 
-    const int64_t tid = threadIdx.x;
-    const int64_t il = tid/8; // 0...3
-    int64_t ib = tid%8; // 0...7
-    dst_t * y = yy + ii*QK_K + 32*ib + 8*il;
-    int64_t i = QK_K/QK_IQ1BN * ii + ib/(QK_IQ1BN/32);
+    static const uint16_t k_mult[8] = {2187, 729, 243, 81, 27, 9, 3, 1};
+
+    const int tid = threadIdx.x;
+    const int il = tid/4; // 0...7
+    const int ib = tid%4; // 0...3
+    dst_t * y = yy + ii*QK_K + 64*ib + 8*il;
+    int64_t i = QK_K/QK_IQ1BN * ii + ib;
     if (i >= nb64) return;
-    ib = ib%(QK_IQ1BN/32);
-    uint16_t idx = x[i].ql[4*ib + il] | ((x[i].qh[2*ib + il/2] << (8 - 4*(il%2))) & 0x0f00);
-    uint16_t val = x[i].extra & (1 << (4*ib + il)) ? 0xaaaa - iq1bn_grid_u16[idx] : iq1bn_grid_u16[idx];
-    uint32_t aux32[2];
-    const int8_t * aux8 = (const int8_t *)aux32;
-    aux32[0] = val | (val << 14);
-//#if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
-//    aux32[1] = __vsub4((aux32[0] >> 4) & 0x03030303, 0x01010101);
-//    aux32[0] = __vsub4(aux32[0] & 0x03030303, 0x01010101);
-//    for (int j = 0; j < 8; ++j) y[j] = aux8[j];
-//#else
-    aux32[1] = (aux32[0] >> 4) & 0x03030303;
-    aux32[0] &= 0x03030303;
-    for (int j = 0; j < 8; ++j) y[j] = aux8[j] - 1;
-//#endif
+    uint16_t val = x[i].ql[il] | ((x[i].qh[il%4] << (8 - 4*(il/4))) & 0x0f00) | ((x[i].extra << (12 - il)) & 4096);
+    for (int j = 0; j < 8; ++j) {
+        uint16_t v = (val*k_mult[j] & 0x1fff)*3 >> 13;
+        y[j] = v - 1;
+    }
 }
 
 template<typename dst_t>
