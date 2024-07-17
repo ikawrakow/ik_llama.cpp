@@ -380,11 +380,10 @@ static_assert(sizeof(block_iq1_m) == QK_K/8 + QK_K/16 + QK_K/32, "wrong iq1_m bl
 //
 #define QK_IQ1BN 64
 typedef struct {
+    uint8_t ql[12];
     uint8_t extra;
-    uint8_t ql[QK_IQ1BN/8];
-    uint8_t qh[QK_IQ1BN/16];
 } block_iq1_bn;
-static_assert(sizeof(block_iq1_bn) == sizeof(uint8_t) + QK_IQ1BN/8 + QK_IQ1BN/16, "wrong iq1_bn block size/padding");
+static_assert(sizeof(block_iq1_bn) == 13, "wrong iq1_bn block size/padding");
 //
 // Bitnet - implemented as 2.25 bpw
 //
