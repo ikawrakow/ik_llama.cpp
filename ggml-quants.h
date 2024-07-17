@@ -138,7 +138,6 @@ void iq2xs_init_impl(enum ggml_type type);
 void iq2xs_free_impl(enum ggml_type type);
 void iq3xs_init_impl(int grid_size);
 void iq3xs_free_impl(int grid_size);
-void iq1bn_init_impl(void);
 
 #ifdef __cplusplus
 }
