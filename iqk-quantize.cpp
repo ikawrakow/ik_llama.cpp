@@ -14,7 +14,9 @@
 // limitations under the License.
 
 #include "iqk-quantize.h"
+#if GGML_USE_IQK_MULMAT
 #include "iqk_mul_mat.h"
+#endif
 #include "ggml-quants.h"
 #include "ggml-impl.h"
 #define GGML_COMMON_IMPL_C
@@ -243,9 +245,11 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
     static_assert(QK_IQ1BN == 64, "This dot product implementation for iq1_bn requires a block size of 64");
 
+#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(GGML_TASK_TYPE_COMPUTE, 1, 1, n, GGML_TYPE_IQ1_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
         return;
     }
+#endif
 
     const block_iq1_bn * x = (const block_iq1_bn *)vx;
 
