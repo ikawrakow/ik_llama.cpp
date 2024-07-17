@@ -118,7 +118,7 @@ uint16_t IQ1BNQuantizer::quantize_one_block_1bn(const IQ1BNData& iq1bn, const fl
 
 void IQ1BNQuantizer::quantize_one_row_1bn(const float * src, block_iq1_bn * y, int n_per_row, const float * imatrix) {
 
-    static const int k_nb[8] = {1, 3, 9, 27, 81, 243, 729, 2187};
+    static const int k_nb[6] = {1, 3, 9, 27, 81, 243};
     (void)imatrix;
 
     const int nblock = n_per_row/QK_IQ1BN;
@@ -126,21 +126,24 @@ void IQ1BNQuantizer::quantize_one_row_1bn(const float * src, block_iq1_bn * y, i
     for (int ib = 0; ib < nblock; ++ib) {
         std::memset(&y[ib], 0, sizeof(block_iq1_bn));
         auto xb = src + ib*QK_IQ1BN;
-        for (int i = 0; i < QK_IQ1BN/8; ++i) {
-            int idx = 0;
-            for (int j = 0; j < 8; ++j) {
-                float v = xb[8*i + j];
-                int q = fabsf(v) < 1e-6f ? 1 : v < 0 ? 0 : 2;
-                idx += k_nb[j]*q;
+        int v13 = 0;
+        for (int i16 = 0; i16 < QK_IQ1BN/16; ++i16) {
+            for (int k = 0; k < 3; ++k) {
+                int idx = 0;
+                for (int j = 0; j < 5; ++j) {
+                    float v = xb[16*i16 + 5*k + j];
+                    int q = fabsf(v) < 1e-6f ? 1 : v < 0 ? 0 : 2;
+                    idx += k_nb[j]*q;
+                }
+                idx = (256*idx + k_nb[5] - 1)/k_nb[5];
+                y[ib].ql[3*i16 + k] = idx;
             }
-            idx = (8192*idx + 6560)/6561;
-            y[ib].ql[i] = idx & 255;
-            y[ib].qh[i%4] |= ((idx >> 8) & 0xf) << 4*(i/4);
-            y[ib].extra |= (idx >> 12) << i;
-
+            float v = xb[16*i16 + 15];
+            int q = fabsf(v) < 1e-6f ? 1 : v < 0 ? 0 : 2;
+            v13 += k_nb[i16]*q;
         }
+        y[ib].extra = (256*v13 + k_nb[5] - 1)/k_nb[5];
     }
-
 }
 
 void IQ1BNQuantizer::quantize_one_row_2bn(const float * src, block_iq2_bn * y, int n_per_row, const float * imatrix) {
@@ -194,18 +197,23 @@ void dequantize_row_iq1_bn(const block_iq1_bn * x, float * y, int64_t k) {
     assert(k%QK_IQ1BN == 0);
     int nblock = k / QK_IQ1BN;
 
-    static const int k_mult[8] = {17496, 5832, 1944, 648, 216, 72, 24, 8};
+    static const uint8_t k_mult[5] = {81, 27, 9, 3, 1};
 
     for (int i = 0; i < nblock; ++i) {
         uint8_t extra = x[i].extra;
-        auto qh = x[i].qh;
         auto ql = x[i].ql;
-        for (int k = 0; k < QK_IQ1BN/8; ++k) {
-            uint16_t idx = ql[k] | ((qh[k%4] << (8 - 4*(k/4))) & 0x0f00) | ((extra << (12 - k)) & 4096);
-            for (int j = 0; j < 8; ++j) {
-                int v = (idx*k_mult[j] & 0xffff)*3 >> 16;
-                *y++ = v - 1;
+        for (int i16 = 0; i16 < QK_IQ1BN/16; ++i16) {
+            for (int k = 0; k < 3; ++k) {
+                for (int j = 0; j < 5; ++j) {
+                    uint8_t v = ql[k]*k_mult[j];
+                    int8_t vs = ((v + (v >> 1)) >> 7);
+                    *y++ = vs - 1;
+                }
             }
+            ql += 3;
+            uint8_t v = extra*k_mult[i16];
+            int8_t vs = ((v + (v >> 1)) >> 7);
+            *y++ = vs - 1;
         }
     }
 }
@@ -260,42 +268,44 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
         return;
     }
 
-    constexpr uint16_t k_magic = 0xaaaa;
+    // TODO
 
-    const block_iq1_bn * x = (const block_iq1_bn *)vx;
+    //constexpr uint16_t k_magic = 0xaaaa;
 
-    const float * d8 = (const float *)vy;
-    const int8_t * q8 = (const int8_t *)(d8 + 4);
-    int nblock = n / QK_IQ1BN;
+    //const block_iq1_bn * x = (const block_iq1_bn *)vx;
 
-    int sumi[8] = {};
-    uint32_t aux32[2];
-    const int8_t * aux8 = (const int8_t *)aux32;
+    //const float * d8 = (const float *)vy;
+    //const int8_t * q8 = (const int8_t *)(d8 + 4);
+    //int nblock = n / QK_IQ1BN;
 
-    for (int i = 0; i < nblock; ++i) {
-        auto qh = x[i].qh;
-        auto ql = x[i].ql;
-        auto extra = x[i].extra;
-        for (int j = 0; j < QK_IQ1BN/16; ++j) {
-            uint16_t idx1 = ql[2*j+0] | ((qh[j] << 8) & 0x0f00);
-            uint16_t idx2 = ql[2*j+1] | ((qh[j] << 4) & 0x0f00);
-            uint16_t val1 = extra & 1 ? k_magic - iq1bn_grid_u16[idx1] : iq1bn_grid_u16[idx1];
-            uint16_t val2 = extra & 2 ? k_magic - iq1bn_grid_u16[idx2] : iq1bn_grid_u16[idx2];
-            extra >>= 2;
-            aux32[0] = val1 | (val1 << 14);
-            aux32[1] = (aux32[0] >> 4) & 0x03030303;
-            aux32[0] &= 0x03030303;
-            for (int k = 0; k < 8; ++k) sumi[k] += q8[k] * (aux8[k] - 1);
-            q8 += 8;
-            aux32[0] = val2 | (val2 << 14);
-            aux32[1] = (aux32[0] >> 4) & 0x03030303;
-            aux32[0] &= 0x03030303;
-            for (int k = 0; k < 8; ++k) sumi[k] += q8[k] * (aux8[k] - 1);
-            q8 += 8;
-        }
-    }
+    //int sumi[8] = {};
+    //uint32_t aux32[2];
+    //const int8_t * aux8 = (const int8_t *)aux32;
 
-    *s = d8[0] * (sumi[0] + sumi[4]) + d8[1] * (sumi[1] + sumi[5]) + d8[2] * (sumi[2] + sumi[6]) + d8[3] * (sumi[3] + sumi[7]);
+    //for (int i = 0; i < nblock; ++i) {
+    //    auto qh = x[i].qh;
+    //    auto ql = x[i].ql;
+    //    auto extra = x[i].extra;
+    //    for (int j = 0; j < QK_IQ1BN/16; ++j) {
+    //        uint16_t idx1 = ql[2*j+0] | ((qh[j] << 8) & 0x0f00);
+    //        uint16_t idx2 = ql[2*j+1] | ((qh[j] << 4) & 0x0f00);
+    //        uint16_t val1 = extra & 1 ? k_magic - iq1bn_grid_u16[idx1] : iq1bn_grid_u16[idx1];
+    //        uint16_t val2 = extra & 2 ? k_magic - iq1bn_grid_u16[idx2] : iq1bn_grid_u16[idx2];
+    //        extra >>= 2;
+    //        aux32[0] = val1 | (val1 << 14);
+    //        aux32[1] = (aux32[0] >> 4) & 0x03030303;
+    //        aux32[0] &= 0x03030303;
+    //        for (int k = 0; k < 8; ++k) sumi[k] += q8[k] * (aux8[k] - 1);
+    //        q8 += 8;
+    //        aux32[0] = val2 | (val2 << 14);
+    //        aux32[1] = (aux32[0] >> 4) & 0x03030303;
+    //        aux32[0] &= 0x03030303;
+    //        for (int k = 0; k < 8; ++k) sumi[k] += q8[k] * (aux8[k] - 1);
+    //        q8 += 8;
+    //    }
+    //}
+
+    //*s = d8[0] * (sumi[0] + sumi[4]) + d8[1] * (sumi[1] + sumi[5]) + d8[2] * (sumi[2] + sumi[6]) + d8[3] * (sumi[3] + sumi[7]);
 }
 
 void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
