@@ -4201,6 +4201,7 @@ struct QF16Base {
     using Data = float16x8_t;
     using Acc  = float16x8_t;
     static inline Data load(const __fp16 * x) { return vld1q_f16(x); }
+    static inline Data load4(const __fp16 * x) { return vcombine_f16(vld1_f16(x), vdup_n_f16(0)); }
     static inline Acc acc(Acc prev, const Data& y, const Data& x) {
         return vfmaq_f16(prev, y, x);
     }
@@ -4230,6 +4231,7 @@ template <int nrc> struct QF16 final : public QF16Base {
         for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const __fp16 *)(cx + iy*bx);
     }
     IQK_ALWAYS_INLINE Data load1(int iy, int i) const { return load(y[iy] + k_step*i); }
+    IQK_ALWAYS_INLINE Data load_tail(int iy, int i) const { return load4(y[iy] + k_step*i); }
     const __fp16 * y[nrc_y];
 };
 
@@ -4237,6 +4239,7 @@ template <int nrc_y, int nrc_x>
 IQK_NOINLINE void mul_mat_f16_f16_NxN(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
     assert(n%QF16Base::k_step == 0);
     int nb = n/QF16Base::k_step;
+    int nb4 = n/4;
     QF16<nrc_y> y(info);
     QF16<nrc_x> x(cx + ix0*bx, bx);
     QF16Base::Data xv[nrc_x];
@@ -4261,12 +4264,23 @@ IQK_NOINLINE void mul_mat_f16_f16_NxN(int n, const char * cx, size_t bx, int ix0
             for (int ix = 0; ix < nrc_x; ++ix) acc[nrc_x*iy + ix] = QF16Base::acc(acc[nrc_x*iy + ix], yv, xv[ix]);
         }
     }
+    for (int i = (QF16Base::k_step/4)*nb; i < nb4; ++i) {
+        yv = y.load_tail(0, i);
+        for (int ix = 0; ix < nrc_x; ++ix) {
+            xv[ix] = x.load_tail(ix, i);
+            acc[ix] = QF16Base::acc(acc[ix], yv, xv[ix]);
+        }
+        for (int iy = 1; iy < nrc_y; ++iy) {
+            yv = y.load_tail(iy, i);
+            for (int ix = 0; ix < nrc_x; ++ix) acc[nrc_x*iy + ix] = QF16Base::acc(acc[nrc_x*iy + ix], yv, xv[ix]);
+        }
+    }
     for (int iy = 0; iy < nrc_y; ++iy) for (int ix = 0; ix < nrc_x; ++ix) info.store(ix0+ix, iy, QF16Base::hsum(acc[nrc_x*iy+ix]));
 }
 
 template <int nrc_y>
 void mul_mat_f16_f16_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    GGML_ASSERT(n%QF16Base::k_step == 0);
+    GGML_ASSERT(n%4 == 0);
     constexpr int k_nx = 5;
     const char * cx = (const char *)vx;
     for (int ix = 0; ix < nrc_x/k_nx; ++ix) {
@@ -4525,7 +4539,7 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
 bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
 
     if (typeA == GGML_TYPE_F16 && typeB == GGML_TYPE_F16) {
-        if (ne00%8) return false;
+        if (ne00%4) return false;
         for (auto& f : m.funcs) f = nullptr;
         m.funcs[0] = mul_mat_f16_f16_T<1>;
         m.funcs[1] = mul_mat_f16_f16_T<2>;
