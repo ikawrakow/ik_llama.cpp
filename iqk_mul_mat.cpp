@@ -2479,6 +2479,10 @@ struct QFBase {
     static inline float hsum(Acc acc) {
         return _mm512_reduce_add_ps(acc);
     }
+    template <typename Float>
+    static inline Data load4Floats(const Float * x) {
+        return _mm512_insertf32x4(_mm512_setzero_ps(), load128(x), 0);
+    }
 #else
     constexpr static int k_step = 8;
     using Data = __m256;
@@ -2494,7 +2498,13 @@ struct QFBase {
     static inline float hsum(Acc acc) {
         return hsum_float_8(acc);
     }
+    template <typename Float>
+    static inline Data load4Floats(const Float * x) {
+        return _mm256_insertf128_ps(_mm256_setzero_ps(), load128(x), 0);
+    }
 #endif
+    static inline __m128 load128(const ggml_half * x) { return _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)x)); }
+    static inline __m128 load128(const float * x) { return _mm_loadu_ps(x); }
 };
 template <typename Float, int nrc_in> struct QFT final : public QFBase {
     constexpr static int nrc = nrc_in;
@@ -2505,6 +2515,7 @@ template <typename Float, int nrc_in> struct QFT final : public QFBase {
         for (int iy = 0; iy < nrc; ++iy) y[iy] = (const Float *)(cx + iy*bx);
     }
     IQK_ALWAYS_INLINE Data load1(int iy, int i) const { return load(y[iy] + k_step*i); }
+    IQK_ALWAYS_INLINE Data load_tail(int iy, int i) const { return load4Floats(y[iy] + 4*i); }
     const Float * y[nrc];
 };
 
@@ -2512,6 +2523,7 @@ template <typename Qy, typename Qx>
 IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
     assert(n%QFBase::k_step == 0);
     int nb = n/QFBase::k_step;
+    int nb4 = n/4;
     Qy y(info);
     Qx x(cx + ix0*bx, bx);
     QFBase::Data xv[Qx::nrc];
@@ -2533,6 +2545,17 @@ IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, 
         }
         for (int iy = 1; iy < Qy::nrc; ++iy) {
             yv = y.load1(iy, i);
+            for (int ix = 0; ix < Qx::nrc; ++ix) acc[Qx::nrc*iy + ix] = QFBase::acc(acc[Qx::nrc*iy + ix], yv, xv[ix]);
+        }
+    }
+    for (int i = (QFBase::k_step/4)*nb; i < nb4; ++i) {
+        yv = y.load_tail(0, i);
+        for (int ix = 0; ix < Qx::nrc; ++ix) {
+            xv[ix] = x.load_tail(ix, i);
+            acc[ix] = QFBase::acc(acc[ix], yv, xv[ix]);
+        }
+        for (int iy = 1; iy < Qy::nrc; ++iy) {
+            yv = y.load_tail(iy, i);
             for (int ix = 0; ix < Qx::nrc; ++ix) acc[Qx::nrc*iy + ix] = QFBase::acc(acc[Qx::nrc*iy + ix], yv, xv[ix]);
         }
     }
@@ -2725,7 +2748,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
     (void)Ny;
 
     if (typeA == GGML_TYPE_F16 || typeA == GGML_TYPE_F32) {
-        if (ne00 % QFBase::k_step) return false;
+        if (ne00 % 4) return false;
     }
     if (typeA == GGML_TYPE_F16) {
         switch (typeB) {
