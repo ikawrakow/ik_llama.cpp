@@ -13920,6 +13920,8 @@ static void ggml_compute_forward_soft_max_f32(
 
     const bool use_f16 = (src1 && src1->type == GGML_TYPE_F16);
 
+    const size_t data_size = use_f16 ? sizeof(ggml_fp16_t) : sizeof(float);
+
     for (int i1 = ir0; i1 < ir1; i1++) {
         // ALiBi
         const uint32_t h = (i1/ne01)%ne02; // head
@@ -13929,6 +13931,10 @@ static void ggml_compute_forward_soft_max_f32(
         float * dp = (float *)((char *)  dst->data +  i1*dst->nb[1]);
 
         // broadcast the mask across rows
+        const char * mask = src1 ? (const char *) src1->data + (i1%ne01)*ne00*data_size : NULL;
+        if (iqk_soft_max(nc, sp, dp, wp, mask, scale, slope, use_f16)) {
+            continue;
+        }
         ggml_fp16_t * mp_f16 = src1 ? (ggml_fp16_t *)((char *) src1->data) + (i1%ne01)*ne00 : NULL;
         float       * mp_f32 = src1 ? (float       *)((char *) src1->data) + (i1%ne01)*ne00 : NULL;
 

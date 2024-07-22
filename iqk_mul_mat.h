@@ -22,6 +22,7 @@ bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         int typeB, const void * B, long strideB,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
 
+bool iqk_soft_max(int nc, const float * sp, float * dp, float * wp, const char * bias, float scale, float slope, bool bias_is_f16);
 
 #ifdef __cplusplus
 }
