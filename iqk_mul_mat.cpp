@@ -4231,7 +4231,7 @@ template <int nrc> struct QF16 final : public QF16Base {
         for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const __fp16 *)(cx + iy*bx);
     }
     IQK_ALWAYS_INLINE Data load1(int iy, int i) const { return load(y[iy] + k_step*i); }
-    IQK_ALWAYS_INLINE Data load_tail(int iy, int i) const { return load4(y[iy] + k_step*i); }
+    IQK_ALWAYS_INLINE Data load_tail(int iy, int i) const { return load4(y[iy] + 4*i); }
     const __fp16 * y[nrc_y];
 };
 
