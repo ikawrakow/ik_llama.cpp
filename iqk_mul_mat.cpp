@@ -82,6 +82,8 @@ struct DataInfo {
     int           ne11;
     const mmid_row_mapping * row_mapping = nullptr;
     size_t        bs2 = 0;
+    float         alpha; // = 1.f;
+    float         beta; //  = 0.f;
 
     inline const char * src1_row(int iy) const {
         if (!row_mapping) return cy + (cur_y + iy)*by;
@@ -91,7 +93,7 @@ struct DataInfo {
     }
 
     inline void store(int ix, int iy, float result) const {
-        *(dst_row(iy) + ix) = result;
+        *(dst_row(iy) + ix) = alpha*result + beta;
     }
     inline float * dst_row(int iy) const {
         if (!row_mapping) return s + (cur_y + iy)*bs;
@@ -139,10 +141,10 @@ private:
 
 }
 
-bool iqk_mul_mat(int task_type, long Nx, long Ny, long ne00,
+bool iqk_mul_mat_ext(int task_type, long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth) {
+        float * C, long stride_C, float alpha, float beta, int ith, int nth) {
 
     MulMat mm;
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
@@ -158,7 +160,7 @@ bool iqk_mul_mat(int task_type, long Nx, long Ny, long ne00,
     auto first_x = ith*nrc_x;
     if (first_x + nrc_x > Nx) nrc_x = Nx - first_x;
 
-    DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+    DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0, alpha, beta};
 
     mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny);
 
@@ -182,7 +184,7 @@ bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
     int first_x = ith*nrc_x;
     if (first_x + nrc_x > Nx) nrc_x = Nx - first_x;
     DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float),
-        row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
+        row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float), 1.f, 0.f};
     mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny);
     return true;
 }
@@ -4644,7 +4646,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
 
 #else  // IQK_IMPLEMENT
 
-bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
+bool iqk_mul_mat_ext(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
     return false;
 }
 

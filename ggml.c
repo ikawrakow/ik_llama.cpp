@@ -5310,10 +5310,11 @@ struct ggml_tensor * ggml_group_norm_inplace(
 
 // ggml_mul_mat
 
-struct ggml_tensor * ggml_mul_mat(
+static struct ggml_tensor * ggml_mul_mat_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        struct ggml_tensor  * b) {
+        struct ggml_tensor  * b,
+        float alpha, float beta) {
     GGML_ASSERT(ggml_can_mul_mat(a, b));
     GGML_ASSERT(!ggml_is_transposed(a));
 
@@ -5331,7 +5332,26 @@ struct ggml_tensor * ggml_mul_mat(
     result->src[0] = a;
     result->src[1] = b;
 
+    // op_params[0] is already used for precision
+    memcpy(result->op_params + 1, &alpha, sizeof(alpha));
+    memcpy(result->op_params + 2, &beta,  sizeof(beta));
+
     return result;
+}
+
+struct ggml_tensor * ggml_mul_mat(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    return ggml_mul_mat_impl(ctx, a, b, 1, 0);
+}
+
+struct ggml_tensor * ggml_mul_mat_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        float alpha, float beta) {
+    return ggml_mul_mat_impl(ctx, a, b, alpha, beta);
 }
 
 void ggml_mul_mat_set_prec(
@@ -12364,6 +12384,10 @@ static void ggml_compute_forward_mul_mat(
     UNUSED(r2);
     UNUSED(r3);
 
+    float alpha, beta;
+    memcpy(&alpha, dst->op_params + 1, sizeof(float));
+    memcpy(&beta , dst->op_params + 2, sizeof(float));
+
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
@@ -12373,11 +12397,11 @@ static void ggml_compute_forward_mul_mat(
         for (int64_t i13 = 0; i13 < ne13; i13++) {
             for (int64_t i12 = 0; i12 < ne12; i12++) {
                 if (counter++ % nth == ith) {
-                    if (!iqk_mul_mat(params->type, ne01, ne11, ne00,
+                    if (!iqk_mul_mat_ext(params->type, ne01, ne11, ne00,
                                 src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                                 src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
                                 (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                                0, 1)) goto IQK_MulMat_Not_Available1;
+                                alpha, beta, 0, 1)) goto IQK_MulMat_Not_Available1;
                 }
             }
         }
@@ -12386,11 +12410,11 @@ static void ggml_compute_forward_mul_mat(
     if (dst->type == GGML_TYPE_F32) {
         for (int64_t i13 = 0; i13 < ne13; i13++)
             for (int64_t i12 = 0; i12 < ne12; i12++)
-                if (!iqk_mul_mat(params->type, ne01, ne11, ne00,
+                if (!iqk_mul_mat_ext(params->type, ne01, ne11, ne00,
                             src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                             src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
                             (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                            ith, nth)) goto IQK_MulMat_Not_Available1;
+                            alpha, beta, ith, nth)) goto IQK_MulMat_Not_Available1;
         return;
     }
 IQK_MulMat_Not_Available1:;
@@ -12463,11 +12487,11 @@ UseGgmlGemm1:;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
         for (int64_t i13 = 0; i13 < ne13; i13++)
             for (int64_t i12 = 0; i12 < ne12; i12++)
-                if (!iqk_mul_mat(params->type, ne01, ne11, ne00,
+                if (!iqk_mul_mat_ext(params->type, ne01, ne11, ne00,
                             src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                             vec_dot_type, (const char *)wdata + (i12*ne11 + i13*ne12*ne11)*row_size, row_size/ggml_type_size(vec_dot_type),
                             (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                            ith, nth)) goto IQK_MulMat_Not_Available2;
+                            alpha, beta, ith, nth)) goto IQK_MulMat_Not_Available2;
         return;
     }
 IQK_MulMat_Not_Available2:;

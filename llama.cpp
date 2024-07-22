@@ -11853,11 +11853,10 @@ struct llm_build_context {
             // self-attention
             {
                 // compute Q and K and RoPE them
-                struct ggml_tensor * Qcur = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
                 float q_scale; std::memcpy(&q_scale, model.layers[il].wq->op_params, sizeof(float));
+                struct ggml_tensor * Qcur = ggml_mul_mat_ext(ctx0, model.layers[il].wq, cur, q_scale, 0.f);
                 // Note: we could save this scale operation by applying the Q scale on the K * Q product further down
                 // (which also uses a scale). This works on the CPU and Metal backends, but produces NaNs on CUDA.
-                Qcur = ggml_scale(ctx0, Qcur, q_scale);
                 cb(Qcur, "Qcur", il);
                 if (model.layers[il].bq) {
                     Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
@@ -11865,9 +11864,8 @@ struct llm_build_context {
                 }
 
                 // B1.K
-                struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, model.layers[il].wk, cur);
                 float k_scale; std::memcpy(&k_scale, model.layers[il].wk->op_params, sizeof(float));
-                Kcur = ggml_scale(ctx0, Kcur, k_scale);
+                struct ggml_tensor * Kcur = ggml_mul_mat_ext(ctx0, model.layers[il].wk, cur, k_scale, 0.f);
                 cb(Kcur, "Kcur", il);
                 if (model.layers[il].bk) {
                     Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
@@ -11875,14 +11873,12 @@ struct llm_build_context {
                 }
 
                 // B1.V
-                struct ggml_tensor * Vcur = ggml_mul_mat(ctx0, model.layers[il].wv, cur);
                 float v_scale; std::memcpy(&v_scale, model.layers[il].wv->op_params, sizeof(float));
+                struct ggml_tensor * Vcur = ggml_mul_mat_ext(ctx0, model.layers[il].wv, cur, v_scale, 0.f);
                 cb(Vcur, "Vcur", il);
                 if (model.layers[il].bv) {
-                    Vcur = ggml_scale(ctx0, Vcur, v_scale);
                     Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                     cb(Vcur, "Vcur", il);
-                    v_scale = 1;
                 }
 
                 Qcur = ggml_rope_ext(
@@ -11968,14 +11964,13 @@ struct llm_build_context {
 
                 cur_attn = llm_build_norm(ctx0, cur_attn, hparams,
                         model.layers[il].attn_sub_norm, NULL,
-                        LLM_NORM_RMS, cb, il, 1/(v_scale*v_scale));
+                        LLM_NORM_RMS, cb, il);
                 cb(cur_attn, "attn_sub_norm", il);
 
                 ggml_build_forward_expand(gf, cur_attn);
 
-                cur = ggml_mul_mat(ctx0, model.layers[il].wo, cur_attn);
                 float wo_scale; std::memcpy(&wo_scale, model.layers[il].wo->op_params, sizeof(float));
-                cur = ggml_scale(ctx0, cur, wo_scale);
+                cur = ggml_mul_mat_ext(ctx0, model.layers[il].wo, cur_attn, wo_scale, 0.f);
 
                 cb(cur, "kqv_out", il);
             }
@@ -11997,14 +11992,13 @@ struct llm_build_context {
                         LLM_NORM_RMS, cb, il);
                 cb(cur, "ffn_norm", il);
 
-                struct ggml_tensor *tmp = ggml_mul_mat(ctx0, model.layers[il].ffn_up, cur);
                 float ffn_up_scale; std::memcpy(&ffn_up_scale, model.layers[il].ffn_up->op_params, sizeof(float));
+                struct ggml_tensor *tmp = ggml_mul_mat_ext(ctx0, model.layers[il].ffn_up, cur, ffn_up_scale, 0.f);
 
                 cb(tmp, "ffn_up", il);
 
-                cur = ggml_mul_mat(ctx0, model.layers[il].ffn_gate, cur);
                 float ffn_gate_scale; std::memcpy(&ffn_gate_scale, model.layers[il].ffn_gate->op_params, sizeof(float));
-                cur = ggml_scale(ctx0, cur, ffn_gate_scale);
+                cur = ggml_mul_mat_ext(ctx0, model.layers[il].ffn_gate, cur, ffn_gate_scale, 0.f);
 
                 cb(cur, "ffn_gate", il);
 
@@ -12018,12 +12012,11 @@ struct llm_build_context {
 
                 cur = llm_build_norm(ctx0, cur, hparams,
                                 model.layers[il].ffn_sub_norm, NULL,
-                                LLM_NORM_RMS, cb, il, 1/(ffn_up_scale*ffn_up_scale));
+                                LLM_NORM_RMS, cb, il);
                 cb(cur, "ffn_sub_norm", il);
 
-                cur = ggml_mul_mat(ctx0, model.layers[il].ffn_down, cur);
                 float ffn_down_scale; std::memcpy(&ffn_down_scale, model.layers[il].ffn_down->op_params, sizeof(float));
-                cur = ggml_scale(ctx0, cur, ffn_down_scale);
+                cur = ggml_mul_mat_ext(ctx0, model.layers[il].ffn_down, cur, ffn_down_scale, 0.f);
                 cb(cur, "ffn_down", il);
             }
             cur = ggml_add(ctx0, cur, ffn_inp);
