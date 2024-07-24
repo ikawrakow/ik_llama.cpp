@@ -1,3 +1,9 @@
+//
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
