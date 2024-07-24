@@ -13,7 +13,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "iqk-quantize.h"
 #if GGML_USE_IQK_MULMAT
 #include "iqk_mul_mat.h"
 #endif
