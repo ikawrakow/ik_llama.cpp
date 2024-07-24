@@ -31,7 +31,6 @@
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "iqk_mul_mat.h"
-#include "iqk-quantize.h"
 
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"

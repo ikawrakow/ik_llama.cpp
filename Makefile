@@ -708,7 +708,7 @@ OBJS += ggml-alloc.o ggml-backend.o ggml-quants.o unicode.o unicode-data.o
 COMMON_H_DEPS = common/common.h common/sampling.h common/log.h llama.h
 COMMON_DEPS   = common.o sampling.o grammar-parser.o build-info.o json-schema-to-grammar.o
 
-iqk-quantize.o: iqk-quantize.cpp iqk-quantize.h iqk_mul_mat.h ggml-quants.h ggml-common.h ggml.h ggml-impl.h
+iqk-quantize.o: iqk-quantize.cpp iqk_mul_mat.h ggml-quants.h ggml-common.h ggml.h ggml-impl.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 ifndef LLAMA_NO_IQK_MULMAT
 iqk_mul_mat.o: iqk_mul_mat.cpp ggml-impl.h ggml.h ggml-quants.h ggml-common.h iqk_mul_mat.h
