@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2024 The ggml authors
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "common.cuh"
 
 static __device__ __forceinline__ int get_int_from_int8(const int8_t * x8, const int & i32) {
