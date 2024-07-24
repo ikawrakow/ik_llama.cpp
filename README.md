@@ -218,7 +218,7 @@ Two implementations are provided
 
 `IQ2_BN` is faster for PP (CPU and GPU, although the PP performance difference on CUDA is very minor). `IQ1_BN` can arrive at a higher TG performance on the Ryzen-7950X (given enough threads) because of the smaller model size, but it is always slower on the GPU and on the M2-Max CPU.
 
-There is the unmerged [PR 8151](https://github.com/ggerganov/llama.cpp/pull/8151) in `llama.cpp` that implements Bitnet-1.58B for the CPU (`AVX` and `ARM_NEON`, no GPU implementation). The following table compares performance between this repo and `PR-8151` in `llama.cpp`.
+There is the unmerged [PR 8151](https://github.com/ggerganov/llama.cpp/pull/8151) in `llama.cpp` that implements Bitnet-1.58B for the CPU (`AVX` and `ARM_NEON`, no GPU implementation). The following table compares performance between this repo and `PR-8151` in `llama.cpp`. The CUDA results were obtained on an RTX-4080, the Metal results on a 30-core M2-Max GPU.
 
 | model                 |       size | backend    | threads |   test | t/s (llama.cpp)  | t/s (this repo)| Speedup |
 | --------------------- | ---------: | ---------- | ------: | -----: | ---------------: | -------------: | ------: |
@@ -249,6 +249,19 @@ There is the unmerged [PR 8151](https://github.com/ggerganov/llama.cpp/pull/8151
 |                       |            | CUDA       |       8 |  tg128 |           -      | 241.34 ± 0.27  |    -    |
 |                       |            | Metal      |       8 |  tg128 |           -      |  95.22 ± 0.55  |    -    |
 
+We can make the following observations:
+* For prompt processing this Bitnet-1.58b implementation is massively better than PR-8151 in `llama.cpp`, with gains between 3.4X and 5.2X!
+* We get `PP-512 = 520 t/s` for the 2.0 bpw variant on the Ryzen-7950X, which costs less than $500. Hey, who needs a GPU?  
+* For low number of threads (2), this implementation is also much faster than PR-8151 for TG, where speed gains are between 1.4X and 2.8X. As we become memory bound on the Ryzen-7950X, the speed advantage goes away there for sufficiently high number of threads. But on the M2-Max this implementation is 1.4X (1.625 bpw) or 2.4X faster even at 8 threads
+* Looking at TG on the M2-Max, the GPU looks a bit like wasted silicon (90 vs 95 t/s for TG-128 and the 2.0 bpw variant). If the GPU transistors had been spent to double the M2 number of CPU cores (and all memory bandwidth is given to the CPU), the CPU would be wiping the floor with the GPU.
+* I'm of course kidding with the above. Still, it seems there are massive inefficiencies in the `llama.cpp` Metal implementation that start showing up when matrix multiplications become very fast as is the case here. The difference between CPU and GPU prompt processing speed is typically at least a factor of 7 in favor of the GPU on the M2-Max, but it is only around a factor of 3 here.
+* The CUDA performance looks respectable, but there are likely inefficiencies showing up there as well. CUDA performance drops significantly if using only one CPU thread (as one usually does when the model fits fully in VRAM). Have not taken the time to investigate this strange behavior.
+
+To reproduce rhese results:
+* Clone https://huggingface.co/1bitLLM/bitnet_b1_58-3B
+* Run `python3 --outtype f16 path_to_bitnet` to convert to GGUF
+* Run `./bin/llama-quantize path_to_bitnet/ggml-model-f16.gguf quantized.gguf [iq1_bn | iq2_bn]`. Note: no imatrix is required (and, if you provide one, it is ignored)
+* Caveat: only the 3B Bitnet variant works. The smaller Butnet models contain tensors with number of columns that are not even a multiple of 32, so basically no `llama.cpp` quant will work for these.  
 
 ## To tile or not to tile
 
