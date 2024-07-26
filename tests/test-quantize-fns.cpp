@@ -92,7 +92,7 @@ static float dot_product_error(
 
     auto vdot = ggml_internal_get_type_traits(qfns.vec_dot_type);
 
-    qfns.from_float_reference(test_data1, tmp_q1.data(), test_size);
+    qfns.from_float_ref(test_data1, tmp_q1.data(), test_size);
     vdot.from_float(test_data2, tmp_q2.data(), test_size);
 
     float result = INFINITY;

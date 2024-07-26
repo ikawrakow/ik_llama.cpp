@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-bool iqk_mul_mat(int task_type, long Nx, long Ny, long ne00,
+bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long stride_C, int ith, int nth);

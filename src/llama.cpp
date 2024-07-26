@@ -7320,7 +7320,7 @@ static bool llm_load_tensors(
                         model.output      = ml.create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED); // same as tok_embd, duplicated to allow offloading
                     }
 
-                    const uint32_t n_ff = hparams.n_ff;
+                    const uint32_t n_ff = hparams.n_ff();
                     model.layers.resize(n_layer);
                     for (int i = 0; i < n_layer; ++i) {
                         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -13075,8 +13075,8 @@ struct llm_build_context {
                 llm_build_kv_store(ctx0, hparams, cparams, kv_self, gf, Kcur, Vcur, n_tokens, kv_head, cb, il);
 
                 const int64_t n_ctx                 = cparams.n_ctx;
-                const int64_t n_head                = hparams.n_head;
-                const int64_t n_head_kv             = hparams.n_head_kv;
+                const int64_t n_head                = hparams.n_head();
+                const int64_t n_head_kv             = hparams.n_head_kv();
                 const int64_t n_embd_head_k         = hparams.n_embd_head_k;
                 const int64_t n_embd_k_gqa          = hparams.n_embd_k_gqa();
                 const int64_t n_embd_head_v         = hparams.n_embd_head_v;

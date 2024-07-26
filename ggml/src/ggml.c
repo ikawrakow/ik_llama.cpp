@@ -12286,13 +12286,19 @@ static void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
+#if GGML_USE_IQK_MULMAT || GGML_USE_LLAMAFILE
+    // broadcast factors
+    const int64_t r2 = ne12 / ne02;
+    const int64_t r3 = ne13 / ne03;
+#endif
+
 #if GGML_USE_IQK_MULMAT
-    if (dst->type == GGML_TYPE_F32 && params->type == GGML_TASK_TYPE_COMPUTE && (ne12*ne13)%nth == 0) {
+    if (dst->type == GGML_TYPE_F32 && (ne12*ne13)%nth == 0) {
         int counter = 0;
         for (int64_t i13 = 0; i13 < ne13; i13++) {
             for (int64_t i12 = 0; i12 < ne12; i12++) {
                 if (counter++ % nth == ith) {
-                    if (!iqk_mul_mat(params->type, ne01, ne11, ne00,
+                    if (!iqk_mul_mat(ne01, ne11, ne00,
                                 src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                                 src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
                                 (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
@@ -12305,7 +12311,7 @@ static void ggml_compute_forward_mul_mat(
     if (dst->type == GGML_TYPE_F32) {
         for (int64_t i13 = 0; i13 < ne13; i13++)
             for (int64_t i12 = 0; i12 < ne12; i12++)
-                if (!iqk_mul_mat(params->type, ne01, ne11, ne00,
+                if (!iqk_mul_mat(ne01, ne11, ne00,
                             src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                             src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
                             (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
@@ -12316,9 +12322,6 @@ IQK_MulMat_Not_Available1:;
 #endif
 
 #if GGML_USE_LLAMAFILE
-    // broadcast factors
-    const int64_t r2 = ne12 / ne02;
-    const int64_t r3 = ne13 / ne03;
 
     const bool src1_cont = ggml_is_contiguous(src1);
 
@@ -12386,7 +12389,7 @@ UseGgmlGemm1:;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
         for (int64_t i13 = 0; i13 < ne13; i13++)
             for (int64_t i12 = 0; i12 < ne12; i12++)
-                if (!iqk_mul_mat(params->type, ne01, ne11, ne00,
+                if (!iqk_mul_mat(ne01, ne11, ne00,
                             src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                             vec_dot_type, (const char *)wdata + (i12*ne11 + i13*ne12*ne11)*row_size, row_size/ggml_type_size(vec_dot_type),
                             (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),

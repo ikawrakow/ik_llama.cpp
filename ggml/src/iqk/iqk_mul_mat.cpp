@@ -130,7 +130,7 @@ private:
 
 }
 
-bool iqk_mul_mat(int task_type, long Nx, long Ny, long ne00,
+bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long stride_C, int ith, int nth) {
@@ -139,8 +139,6 @@ bool iqk_mul_mat(int task_type, long Nx, long Ny, long ne00,
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
     }
-
-    if (ggml_task_type(task_type) != GGML_TASK_TYPE_COMPUTE) return ggml_task_type(task_type) == GGML_TASK_TYPE_INIT;
 
     auto row_size_qx = strideA*ggml_type_size(ggml_type(typeA));
     auto row_size_qy = strideB*ggml_type_size(ggml_type(typeB));

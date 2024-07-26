@@ -106,7 +106,7 @@ size_t quantize_iq1_bn(const float * src, void * dst, int64_t nrows, int64_t n_p
     return sizeof(block_iq1_bn)*nblock*nrows;
 }
 
-void quantize_row_iq1_bn_reference(const float * x, block_iq1_bn * y, int64_t k) {
+void quantize_row_iq1_bn_ref(const float * x, block_iq1_bn * y, int64_t k) {
     quantize_iq1_bn(x, y, 1, k, nullptr);
 }
 
@@ -148,7 +148,7 @@ size_t quantize_iq2_bn(const float * src, void * dst, int64_t nrows, int64_t n_p
     return sizeof(block_iq2_bn)*nblock*nrows;
 }
 
-void quantize_row_iq2_bn_reference(const float * x, block_iq2_bn * y, int64_t k) {
+void quantize_row_iq2_bn_ref(const float * x, block_iq2_bn * y, int64_t k) {
     quantize_iq2_bn(x, y, 1, k, nullptr);
 }
 
@@ -236,7 +236,7 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
     static_assert(QK_IQ1BN == 64, "This dot product implementation for iq1_bn requires a block size of 64");
 
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(GGML_TASK_TYPE_COMPUTE, 1, 1, n, GGML_TYPE_IQ1_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
         return;
     }
 #endif
@@ -286,7 +286,7 @@ void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
     static_assert(QK_IQ1BN == 64, "This dot product implementation for iq2_bn requires a block size of 64");
 
-    if (iqk_mul_mat(GGML_TASK_TYPE_COMPUTE, 1, 1, n, GGML_TYPE_IQ2_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
         return;
     }
 
@@ -322,7 +322,7 @@ void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
 }
 
-void quantize_row_q8_K64_reference(const float * x, block_q8_K64 * y, int64_t k) {
+void quantize_row_q8_K64_ref(const float * x, block_q8_K64 * y, int64_t k) {
 
     float * dptr = (float *)y;
     auto qs = (int8_t *)(dptr + 4);
@@ -409,6 +409,6 @@ void quantize_row_q8_K64_reference(const float * x, block_q8_K64 * y, int64_t k)
 }
 
 void quantize_row_q8_K64(const float * x, void * y, int64_t k) {
-    quantize_row_q8_K64_reference(x, (block_q8_K64 *)y, k);
+    quantize_row_q8_K64_ref(x, (block_q8_K64 *)y, k);
 }
 
