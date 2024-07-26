@@ -220,42 +220,42 @@ Two implementations are provided
 
 There is the unmerged [PR 8151](https://github.com/ggerganov/llama.cpp/pull/8151) in `llama.cpp` that implements Bitnet-1.58B for the CPU (`AVX` and `ARM_NEON`, no GPU implementation). The following table compares performance between this repo and `PR-8151` in `llama.cpp`. The CUDA results were obtained on an RTX-4080, the Metal results on a 30-core M2-Max GPU.
 
-| model                 |       size | backend    | threads |   test | t/s (llama.cpp)  | t/s (this repo)| Speedup |
-| --------------------- | ---------: | ---------- | ------: | -----: | ---------------: | -------------: | ------: |
-| bitnet 3B - 1.625 bpw | 729.64 MiB | AVX2       |      16 |  pp512 |    120.61 ± 0.48 | 407.06 ± 0.80  |  3.380  |
-|                       |            | NEON       |       8 |  pp512 |     46.64 ± 0.02 | 205.90 ± 0.88  |  4.415  |
-|                       |            | CUDA       |       8 |  pp512 |           -      | 9655.14 ± 21.01|    -    |
-|                       |            | Metal      |       8 |  pp512 |           -      | 697.59 ± 2.12  |    -    |
-|                       |            | AVX2       |       2 |  tg128 |     15.79 ± 0.01 |  22.13 ± 0.02  |  1.402  |
-|                       |            | AVX2       |       4 |  tg128 |     28.64 ± 1.72 |  40.14 ± 0.04  |  1.402  |
-|                       |            | AVX2       |       8 |  tg128 |     48.91 ± 0.08 |  57.76 ± 2.86  |  1.181  |
-|                       |            | AVX2       |      16 |  tg128 |     57.73 ± 0.05 |  60.14 ± 0.04  |  1.042  |
-|                       |            | NEON       |       2 |  tg128 |     11.43 ± 0.04 |  16.87 ± 0.02  |  1.476  |
-|                       |            | NEON       |       4 |  tg128 |     21.11 ± 0.05 |  30.66 ± 0.11  |  1.452  |
-|                       |            | NEON       |       8 |  tg128 |     37.36 ± 0.07 |  55.21 ± 0.16  |  1.478  |
-|                       |            | CUDA       |       8 |  tg128 |           -      | 229.21 ± 0.89  |    -    |
-|                       |            | Metal      |       8 |  tg128 |           -      |  69.33 ± 0.07  |    -    |
-| bitnet 3B - 2.000 bpw | 873.65 MiB | AVX2       |      16 |  pp512 |    151.39 ± 0.35 | 512.79 ± 2.58  |  3.387  |
-|                       |            | NEON       |       8 |  pp512 |     46.54 ± 0.03 | 242.05 ± 0.34  |  5.201  |
-|                       |            | CUDA       |       8 |  pp512 |           -      | 9810.91 ± 25.00|    -    |
-|                       |            | Metal      |       8 |  pp512 |           -      | 722.66 ± 0.47  |    -    |
-|                       |            | AVX2       |       2 |  tg128 |     18.93 ± 0.02 |  37.42 ± 0.07  |  1.978  |
-|                       |            | AVX2       |       4 |  tg128 |     34.54 ± 0.06 |  53.25 ± 0.02  |  1.542  |
-|                       |            | AVX2       |       8 |  tg128 |     52.97 ± 0.07 |  52.06 ± 0.08  |  0.983  |
-|                       |            | AVX2       |      16 |  tg128 |     51.84 ± 0.25 |  52.98 ± 0.03  |  1.022  |
-|                       |            | NEON       |       2 |  tg128 |     11.40 ± 0.02 |  32.01 ± 0.27  |  2.808  |
-|                       |            | NEON       |       4 |  tg128 |     20.99 ± 0.00 |  56.45 ± 0.11  |  2.689  |
-|                       |            | NEON       |       8 |  tg128 |     37.28 ± 0.08 |  89.77 ± 0.70  |  2.408  |
-|                       |            | CUDA       |       8 |  tg128 |           -      | 241.34 ± 0.27  |    -    |
-|                       |            | Metal      |       8 |  tg128 |           -      |  95.22 ± 0.55  |    -    |
+| model       |       size | backend    | threads |   test | t/s (llama.cpp)  | t/s (this repo)| Speedup |
+| ----------- | ---------: | ---------- | ------: | -----: | ---------------: | -------------: | ------: |
+| 3B - IQ1_BN | 729.64 MiB | AVX2       |      16 |  pp512 |    120.61 ± 0.48 | 407.06 ± 0.80  |  3.380  |
+|             |            | NEON       |       8 |  pp512 |     46.64 ± 0.02 | 205.90 ± 0.88  |  4.415  |
+|             |            | CUDA       |       8 |  pp512 |           -      | 10660 ± 170    |    -    |
+|             |            | Metal      |       8 |  pp512 |           -      | 698.25 ± 1.91  |    -    |
+|             |            | AVX2       |       2 |  tg128 |     15.79 ± 0.01 |  22.13 ± 0.02  |  1.402  |
+|             |            | AVX2       |       4 |  tg128 |     28.64 ± 1.72 |  40.14 ± 0.04  |  1.402  |
+|             |            | AVX2       |       8 |  tg128 |     48.91 ± 0.08 |  57.76 ± 2.86  |  1.181  |
+|             |            | AVX2       |      16 |  tg128 |     57.73 ± 0.05 |  60.14 ± 0.04  |  1.042  |
+|             |            | NEON       |       2 |  tg128 |     11.43 ± 0.04 |  16.87 ± 0.02  |  1.476  |
+|             |            | NEON       |       4 |  tg128 |     21.11 ± 0.05 |  30.66 ± 0.11  |  1.452  |
+|             |            | NEON       |       8 |  tg128 |     37.36 ± 0.07 |  55.21 ± 0.16  |  1.478  |
+|             |            | CUDA       |       8 |  tg128 |           -      | 301.44 ± 0.12  |    -    |
+|             |            | Metal      |       8 |  tg128 |           -      |  76.70 ± 0.07  |    -    |
+| 3B - IQ2_BN | 873.65 MiB | AVX2       |      16 |  pp512 |    151.39 ± 0.35 | 512.79 ± 2.58  |  3.387  |
+|             |            | NEON       |       8 |  pp512 |     46.54 ± 0.03 | 242.05 ± 0.34  |  5.201  |
+|             |            | CUDA       |       8 |  pp512 |           -      | 10800 ± 160    |    -    |
+|             |            | Metal      |       8 |  pp512 |           -      | 723.19 ± 0.53  |    -    |
+|             |            | AVX2       |       2 |  tg128 |     18.93 ± 0.02 |  37.42 ± 0.07  |  1.978  |
+|             |            | AVX2       |       4 |  tg128 |     34.54 ± 0.06 |  53.25 ± 0.02  |  1.542  |
+|             |            | AVX2       |       8 |  tg128 |     52.97 ± 0.07 |  52.06 ± 0.08  |  0.983  |
+|             |            | AVX2       |      16 |  tg128 |     51.84 ± 0.25 |  52.98 ± 0.03  |  1.022  |
+|             |            | NEON       |       2 |  tg128 |     11.40 ± 0.02 |  32.01 ± 0.27  |  2.808  |
+|             |            | NEON       |       4 |  tg128 |     20.99 ± 0.00 |  56.45 ± 0.11  |  2.689  |
+|             |            | NEON       |       8 |  tg128 |     37.28 ± 0.08 |  89.77 ± 0.70  |  2.408  |
+|             |            | CUDA       |       8 |  tg128 |           -      | 322.10 ± 0.07  |    -    |
+|             |            | Metal      |       8 |  tg128 |           -      | 110.39 ± 0.13  |    -    |
 
 We can make the following observations:
 * For prompt processing this Bitnet-1.58b implementation is massively better than PR-8151 in `llama.cpp`, with gains between 3.4X and 5.2X!
 * We get `PP-512 = 520 t/s` for the 2.0 bpw variant on the Ryzen-7950X, which costs less than $500. Hey, who needs a GPU?  
 * For low number of threads (2), this implementation is also much faster than PR-8151 for TG, where speed gains are between 1.4X and 2.8X. As we become memory bound on the Ryzen-7950X, the speed advantage goes away there for sufficiently high number of threads. But on the M2-Max this implementation is 1.4X (1.625 bpw) or 2.4X faster even at 8 threads
-* Looking at TG on the M2-Max, the GPU looks a bit like wasted silicon (90 vs 95 t/s for TG-128 and the 2.0 bpw variant). If the GPU transistors had been spent to double the M2 number of CPU cores (and all memory bandwidth is given to the CPU), the CPU would be wiping the floor with the GPU.
+* Looking at TG on the M2-Max, the GPU looks a bit like wasted silicon (90 vs 110 t/s for TG-128 and the 2.0 bpw variant). If the GPU transistors had been spent to double the M2 number of CPU cores (and all memory bandwidth is given to the CPU), the CPU would be wiping the floor with the GPU.
 * I'm of course kidding with the above. Still, it seems there are massive inefficiencies in the `llama.cpp` Metal implementation that start showing up when matrix multiplications become very fast as is the case here. The difference between CPU and GPU prompt processing speed is typically at least a factor of 7 in favor of the GPU on the M2-Max, but it is only around a factor of 3 here.
-* The CUDA performance looks respectable, but there are likely inefficiencies showing up there as well. CUDA performance drops significantly if using only one CPU thread (as one usually does when the model fits fully in VRAM). Have not taken the time to investigate this strange behavior.
+* It is worth noting that one needs to offload the token embeddings tensor to the GPU, else performance on CUDA/Metal is significantly lower. Bitnet uses the same tensor for token embeddings and for output. Mainline `llama.cpp` currently puts the token embeddings tensor on the CPU, and this results in running the matrix multiplication with the output tensor on the CPU. This most likely affects other models as well (e.g., Gemma), but I haven't yet looked into this.
 
 To reproduce these results:
 * Clone https://huggingface.co/1bitLLM/bitnet_b1_58-3B

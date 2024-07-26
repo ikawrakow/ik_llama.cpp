@@ -5355,8 +5355,22 @@ static bool llm_load_tensors(
     bool use_mmap_buffer = true;
 
     // there is very little benefit to offloading the input layer, so always keep it on the CPU
-    model.buft_input = llama_default_buffer_type_cpu(true);
-    //model.buft_input = llama_default_buffer_type_offload(main_gpu);
+    //model.buft_input = llama_default_buffer_type_cpu(true);
+    //
+    // Well, this is not really true when the model uses the same tensor for token embeddings and for output
+    // (e.g., Bitnet, Gemma). If we use the above, then the matrix multiplication with the output tensor runs
+    // on the CPU, which can have quite a significant impact on performance. For instance, for 3B-Bitnet, I get
+    // TG-128 = ~240 t/s on an RTX-4080 with the above, and TG-128 = 320 t/s with the version below.
+    // The issue with just generically putting token embeddings on the GPU is that CUDA supports the GET_ROWS
+    // operation only for F16 and legacy quants, and this leads to a massive drop in performance when token embeddings
+    // are quantized with a k- or i-quant (which is almost always true). The back-end related stuff and offloading
+    // to the GPU has become quite opaque and hard to understand, so for now we fix this just for Bitnet
+    // (where token_embeddings is quantized with Q8_0).
+    if (model.arch == LLM_ARCH_BITNET) {
+        model.buft_input = llama_default_buffer_type_offload(model, main_gpu);
+    } else {
+        model.buft_input = llama_default_buffer_type_cpu(true);
+    }
 
     model.buft_layer.resize(n_layer);
 
