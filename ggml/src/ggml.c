@@ -12295,7 +12295,8 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
 static void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
-              struct ggml_tensor * dst) {
+              struct ggml_tensor * dst,
+              float scale) {
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -12350,7 +12351,7 @@ static void ggml_compute_forward_mul_mat(
                                 src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                                 src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
                                 (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                                0, 1)) goto IQK_MulMat_Not_Available1;
+                                0, 1, scale)) goto IQK_MulMat_Not_Available1;
                 }
             }
         }
@@ -12363,7 +12364,7 @@ static void ggml_compute_forward_mul_mat(
                             src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                             src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
                             (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                            ith, nth)) goto IQK_MulMat_Not_Available1;
+                            ith, nth, scale)) goto IQK_MulMat_Not_Available1;
         return;
     }
 IQK_MulMat_Not_Available1:;
@@ -12388,6 +12389,11 @@ IQK_MulMat_Not_Available1:;
                                      src1->type,
                                      dst->type))
                     goto UseGgmlGemm1;
+        //TODO: apply scale if different from 1
+        //if (fabsf(scale-1.f) > 1e-4f) {
+        //    ggml_barrier(params->shared);
+        //    ggml_compute_forward_scale_f32(params, scale);
+        //}
         return;
     }
 UseGgmlGemm1:;
@@ -12441,7 +12447,7 @@ UseGgmlGemm1:;
                             src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                             vec_dot_type, (const char *)wdata + (i12*ne11 + i13*ne12*ne11)*row_size, row_size/ggml_type_size(vec_dot_type),
                             (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                            ith, nth)) goto IQK_MulMat_Not_Available2;
+                            ith, nth, scale)) goto IQK_MulMat_Not_Available2;
         return;
     }
 IQK_MulMat_Not_Available2:;
@@ -12554,6 +12560,7 @@ UseGgmlGemm2:;
 
         current_chunk = atomic_fetch_add(&params->shared->current_chunk, 1);
     }
+    //TODO: apply scale if different from 1
 }
 
 // ggml_compute_forward_mul_mat_id
@@ -16811,11 +16818,11 @@ static void ggml_compute_forward_cross_entropy_loss_back(
 
 /////////////////////////////////
 
-static void ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor) {
+static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor, struct ggml_tensor * next) {
     GGML_ASSERT(params);
 
     if (tensor->op == GGML_OP_NONE || ggml_is_empty(tensor)) {
-        return;
+        return false;
     }
 
     switch (tensor->op) {
@@ -16909,7 +16916,13 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_MUL_MAT:
             {
-                ggml_compute_forward_mul_mat(params, tensor);
+                if (next && next->op == GGML_OP_SCALE) {
+                    float scale;
+                    memcpy(&scale, next->op_params, sizeof(float));
+                    ggml_compute_forward_mul_mat(params, tensor, scale);
+                    return true;
+                }
+                ggml_compute_forward_mul_mat(params, tensor, 1.f);
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
@@ -17143,6 +17156,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
                 GGML_ASSERT(false);
             } break;
     }
+    return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -18991,7 +19005,9 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
-        ggml_compute_forward(&params, node);
+        if (ggml_compute_forward(&params, node, node_n < cgraph->n_nodes - 1 ? cgraph->nodes[node_n+1] : NULL)) {
+            ++node_n;
+        }
 
         if (state->ith == 0 && cplan->abort_callback && cplan->abort_callback(cplan->abort_callback_data)) {
             state->shared->ec = GGML_STATUS_ABORTED;
