@@ -454,6 +454,14 @@ typedef struct {
 } block_iq4_k;
 static_assert(sizeof(block_iq4_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + 3*QK_K/64, "wrong iq4_k block size/padding");
 
+typedef struct {
+    ggml_half d;
+    uint16_t extra;
+    uint8_t scales[QK_K/32];
+    uint8_t qs[QK_K/4];
+} block_iq2_k;
+static_assert(sizeof(block_iq2_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/32 + QK_K/4, "wrong iq2_k block size/padding");
+
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL
 
@@ -1889,6 +1897,11 @@ GGML_TABLE_BEGIN(int8_t, iq4k_values, 32)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
     -123, -100, -79, -61, -45, -31, -18,  -6, 5, 17, 29, 42, 57, 73, 93, 117
 GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(int8_t, iq2nl_values, 8)
+    -31, -13, 1, 17,   -26, -8, 6, 22
+GGML_TABLE_END()
+
 
 #endif // GGML_COMMON_IMPL
 #endif // GGML_COMMON_IMPL
