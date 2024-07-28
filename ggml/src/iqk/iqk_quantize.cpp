@@ -452,6 +452,44 @@ void vec_dot_iq4_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     GGML_UNUSED(bx);
     GGML_UNUSED(by);
     GGML_UNUSED(bs);
+
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+
+    const int nb = n / QK_K;
+
+    const block_iq4_k * x = (const block_iq4_k *)vx;
+    const block_q8_K  * y = (const block_q8_K *)vy;
+
+    float sumf = 0;
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const float d4d8 = GGML_FP16_TO_FP32(x[ibl].d) * y[ibl].d;
+        uint16_t extra = x[ibl].extra;
+        uint32_t h = *((const uint32_t *)x[ibl].scales_h);
+        const uint8_t * qs = x[ibl].qs;
+        const int8_t  * q8 = y[ibl].qs;
+        int32_t sum = 0;
+        for (int ib = 0; ib < QK_K/32; ++ib) {
+            const int ls1 = (x[ibl].scales_l[ib] & 0xf) | ((h << 4) & 0x30) - 32;
+            const int ls2 = (x[ibl].scales_l[ib] >>  4) | ((h << 2) & 0x30) - 32;
+            h >>= 4;
+            const int8_t * values1 = iq4k_values + 16*(extra & 1);
+            const int8_t * values2 = iq4k_values +  8*(extra & 2);
+            extra >>= 2;
+            int sumi1 = 0, sumi2 = 0;
+            for (int j = 0; j < 16; ++j) {
+                sumi1 += q8[j+ 0] * values1[qs[j] & 0xf];
+                sumi2 += q8[j+16] * values2[qs[j] >>  4];
+            }
+            sum += ls1*sumi1 + ls2*sumi2;
+            qs += 16;
+            q8 += 32;
+        }
+        sumf += d4d8 * sum;
+    }
+    *s = sumf;
+
 }
 
 namespace {
