@@ -3720,6 +3720,56 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
     float d;
 };
 
+struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
+    DequantizerIQ5K(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc), values(vld1q_s8_x2(iq5nl_values)) {}
+
+    constexpr static int num_blocks() { return 16; }
+    constexpr static bool should_scale_quants() { return false; }
+
+    template <typename Q8>
+    inline int32x4x4_t new_block(int i, const Q8& q8, float32x4_t * acc) {
+        d = GGML_FP16_TO_FP32(x[i].d);
+        hbits = vld1q_u8_x2(x[i].qh); // hbits.val[0] holds 0....15, 32...47, 64...79, 96...111, 128...143, 160...175, 192...207, 224...239
+                                      // hbits.val[1] holds 16...31, 48...63, 80...95, 112..127, 144...159, 176...191, 208...223, 240...255
+        return Scale16Extra::new_block(i, d, x[i].extra, 2, make_scales(x[i].scales_l, x[i].scales_h), q8, acc);
+    }
+    inline void prepare(int i, int j) {
+        bits.prepare(x[i].qs+64*j);
+        if (j == 1) {
+            for (int k = 0; k < 2; ++k) hbits.val[k] = vshrq_n_u8(hbits.val[k], 4);
+        }
+        bits.b1.val[0] = vorrq_u8(bits.b1.val[0], vandq_u8(vshlq_n_u8(hbits.val[0], 4), hm));
+        bits.b1.val[1] = vorrq_u8(bits.b1.val[1], vandq_u8(vshlq_n_u8(hbits.val[1], 4), hm));
+        bits.b1.val[2] = vorrq_u8(bits.b1.val[2], vandq_u8(vshlq_n_u8(hbits.val[0], 3), hm));
+        bits.b1.val[3] = vorrq_u8(bits.b1.val[3], vandq_u8(vshlq_n_u8(hbits.val[1], 3), hm));
+        bits.b2.val[0] = vorrq_u8(bits.b2.val[0], vandq_u8(vshlq_n_u8(hbits.val[0], 2), hm));
+        bits.b2.val[1] = vorrq_u8(bits.b2.val[1], vandq_u8(vshlq_n_u8(hbits.val[1], 2), hm));
+        bits.b2.val[2] = vorrq_u8(bits.b2.val[2], vandq_u8(vshlq_n_u8(hbits.val[0], 1), hm));
+        bits.b2.val[3] = vorrq_u8(bits.b2.val[3], vandq_u8(vshlq_n_u8(hbits.val[1], 1), hm));
+        for (int k = 0; k < 4; ++k) {
+            bits.b1.val[k] = vqtbl2q_s8(values, bits.b1.val[k]);
+            bits.b2.val[k] = vqtbl2q_s8(values, bits.b2.val[k]);
+        }
+    }
+    inline int8x16_t make_scales(const uint8_t * scales_l, const uint8_t * scales_h) const {
+        uint8x8_t aux = vld1_u8(scales_l);
+        uint8x16_t scl8 = vandq_u8(vcombine_u8(aux, vshr_n_u8(aux, 4)), vdupq_n_u8(0xf));
+        const uint32_t * aux32 = (const uint32_t *)scales_h;
+        uint32x4_t sch_32 = {aux32[0] << 4, aux32[0] << 2, aux32[0], aux32[0] >> 2};
+        uint8x16_t sch8 = vandq_u8(vreinterpretq_u8_u32(sch_32), vdupq_n_u8(0x30));
+        int8x16_t scales8 = vorrq_u8(scl8, vqtbl1q_u8(sch8, hshuff));
+        return vaddq_s8(vqtbl1q_s8(scales8, hshuff), vdupq_n_s8(-32));
+    }
+
+    Q4bits bits;
+    const int8x16x2_t values;
+    const uint8x16_t hshuff = vreinterpretq_u8_u32(uint32x4_t{0x09010800, 0x0b030a02, 0x0d050c04, 0x0f070e06});
+    const uint8x16_t hm = vdupq_n_u8(0x10);
+    uint8x16x2_t hbits;
+
+    float d;
+};
+
 struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
     DequantizerIQ2K(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc) {}
 
@@ -5080,6 +5130,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_IQ4_K:
             MulMat::set_functions<DequantizerIQ4K>(m);
+            break;
+        case GGML_TYPE_IQ5_K:
+            MulMat::set_functions<DequantizerIQ5K>(m);
             break;
         case GGML_TYPE_IQ2_K:
             MulMat::set_functions<DequantizerIQ2K>(m);
