@@ -838,6 +838,71 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
     const __m128i m32      = _mm_set1_epi8(-32);
 };
 
+struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
+    DequantizerIQ5K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), iqxk(2, -128) { load_values(values); }
+    template <typename Q8>
+    inline void new_block(int i, const Q8& q8, __m256 * accm, __m512i * scales) {
+        d = GGML_FP16_TO_FP32(x[i].d);
+        prepare(x[i].qs, x[i].qh);
+        iqxk.process(i, d, x[i].extra, make_scales(x[i].scales_l, (const uint16_t *)x[i].scales_h), q8, accm, scales);
+    }
+    inline void prepare(const uint8_t * q4, const uint8_t * qh) {
+        bits.prepare64(q4);
+        auto h256 = _mm256_loadu_si256((const __m256i *)qh);
+        auto hbits = _mm512_inserti32x8(_mm512_castsi256_si512(h256), _mm256_srli_epi16(h256, 2), 1);
+        auto m1 = _mm512_cmpeq_epi8_mask(_mm512_and_si512(hbits, hmask1), hmask1);
+        auto m2 = _mm512_cmpeq_epi8_mask(_mm512_and_si512(hbits, hmask2), hmask2);
+        bits.values[0] = _mm512_mask_shuffle_epi8(_mm512_maskz_shuffle_epi8(_knot_mask64(m1), values[0], bits.values[0]), m1, values[1], bits.values[0]);
+        bits.values[1] = _mm512_mask_shuffle_epi8(_mm512_maskz_shuffle_epi8(_knot_mask64(m2), values[0], bits.values[1]), m2, values[1], bits.values[1]);
+        hbits = _mm512_srli_epi16(hbits, 4);
+        m1 = _mm512_cmpeq_epi8_mask(_mm512_and_si512(hbits, hmask1), hmask1);
+        m2 = _mm512_cmpeq_epi8_mask(_mm512_and_si512(hbits, hmask2), hmask2);
+        bits.values[2] = _mm512_mask_shuffle_epi8(_mm512_maskz_shuffle_epi8(_knot_mask64(m1), values[0], bits.values[2]), m1, values[1], bits.values[2]);
+        bits.values[3] = _mm512_mask_shuffle_epi8(_mm512_maskz_shuffle_epi8(_knot_mask64(m2), values[0], bits.values[3]), m2, values[1], bits.values[3]);
+        // We now have in bits.valuse[0]: 0...31, 64...95
+        //                bits.valuse[1]: 32..63, 96..127
+        //                etc.
+        auto tmp = _mm512_permutex2var_epi64(bits.values[0], permute1, bits.values[1]);
+        bits.values[1] = _mm512_permutex2var_epi64(bits.values[0], permute2, bits.values[1]);
+        bits.values[0] = tmp;
+        tmp = _mm512_permutex2var_epi64(bits.values[2], permute1, bits.values[3]);
+        bits.values[3] = _mm512_permutex2var_epi64(bits.values[2], permute2, bits.values[3]);
+        bits.values[2] = tmp;
+    }
+    __m128i make_scales(const uint8_t * scales_l, const uint16_t * scales_h) const {
+        uint64_t aux64;
+        memcpy(&aux64, scales_l, 8);
+        auto scl = _mm_and_si128(_mm_set_epi64x(aux64 >> 4, aux64), maskl);
+        const uint32_t aux32 = scales_h[0] | (scales_h[1] << 16);
+        auto aux = _mm_and_si128(_mm_set_epi32(aux32 >> 2, aux32, aux32 << 2, aux32 << 4), maskh);
+        auto sch = _mm_shuffle_epi8(aux, iqxk.scale_shuffle);
+        return _mm_add_epi8(_mm_or_si128(scl, sch), m32);
+    }
+    static void load_values(__m512i * values) {
+        static const uint8_t kvalues_iq5nl[32] = {
+            2,  14,  25,  36,  45,  54,  63,  71,  78,  85,  92,  98, 104, 110, 116, 122, 127,
+            133, 139, 145, 151, 157, 164, 171, 179, 187, 196, 205, 215, 225, 237, 249,
+        };
+        auto values128_1 = _mm_loadu_si128((const __m128i *)kvalues_iq5nl + 0);
+        auto values128_2 = _mm_loadu_si128((const __m128i *)kvalues_iq5nl + 1);
+        auto values256_1 = MM256_SET_M128I(values128_1, values128_1);
+        auto values256_2 = MM256_SET_M128I(values128_2, values128_2);
+        values[0] = _mm512_inserti32x8(_mm512_castsi256_si512(values256_1), values256_1, 1);
+        values[1] = _mm512_inserti32x8(_mm512_castsi256_si512(values256_2), values256_2, 1);
+    }
+
+    Q4Bits bits;
+    const IQXKScales iqxk;
+    __m512i values[2];
+    const __m512i hmask1   = _mm512_set1_epi8(1);
+    const __m512i hmask2   = _mm512_set1_epi8(2);
+    const __m512i permute1 = _mm512_set_epi64(11, 10,  9,  8, 3, 2, 1, 0);
+    const __m512i permute2 = _mm512_set_epi64(15, 14, 13, 12, 7, 6, 5, 4);
+    const __m128i maskl    = _mm_set1_epi8(0xf);
+    const __m128i maskh    = _mm_set1_epi8(0x30);
+    const __m128i m32      = _mm_set1_epi8(-32);
+};
+
 template <typename Q8>
 inline void compute_block(int iy, int i, float d, const Q8& q8, const __m512i * values, const __m512i * scales, __m512 * accd) {
     const __m512i p1 = _mm512_dpbusd_epi32(_mm512_setzero_si512(), values[0], q8.load_quants64(iy, i, 0));
