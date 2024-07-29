@@ -3548,23 +3548,6 @@ inline int32x4x4_t make_wider_8(const int8x16_t& scales8) {
 struct Scale16Extra {
     template <typename Q8>
     static inline int32x4x4_t new_block(int i, float d, uint16_t extra, uint8_t val,
-            const uint8_t * scales_l, const uint8_t * scales_h, const Q8& q8, float32x4_t * acc) {
-        uint8x8_t aux = vld1_u8(scales_l);
-        uint8x16_t scl8 = vandq_u8(vcombine_u8(aux, vshr_n_u8(aux, 4)), vdupq_n_u8(0xf));
-        const uint32_t * aux32 = (const uint32_t *)scales_h;
-        uint32x4_t sch_32 = {aux32[0] << 4, aux32[0] << 2, aux32[0], aux32[0] >> 2};
-        uint8x16_t sch8 = vandq_u8(vreinterpretq_u8_u32(sch_32), vdupq_n_u8(0x30));
-        int8x16_t scales8 = vorrq_u8(scl8, vqtbl1q_u8(sch8, vreinterpretq_u8_u32(hshuff)));
-        scales8 = vaddq_s8(vqtbl1q_s8(scales8, vreinterpretq_u8_u32(hshuff)), vdupq_n_s8(-32));
-        return new_block(i, d, extra, val, scales8, q8, acc);
-    }
-    inline static uint8x16_t get_extra(uint16_t extra) {
-        uint8x16_t e8 = vreinterpretq_u8_u16(vdupq_n_u16(extra));
-        e8 = vceqq_u8(vandq_u8(e8, emask), emask);
-        return vqtbl1q_u8(e8, eshuff);
-    }
-    template <typename Q8>
-    static inline int32x4x4_t new_block(int i, float d, uint16_t extra, uint8_t val,
             const int8x16_t& scales8, const Q8& q8, float32x4_t * acc) {
         uint8x16_t e8 = vreinterpretq_u8_u16(vdupq_n_u16(extra));
         e8 = vceqq_u8(vandq_u8(e8, emask), emask);
@@ -3575,7 +3558,6 @@ struct Scale16Extra {
         return make_wider_8(scales8);
     }
 
-    constexpr static uint32x4_t hshuff = {0x09010800, 0x0b030a02, 0x0d050c04, 0x0f070e06};
     constexpr static uint32x4_t emask  = {0x02020101, 0x08080404, 0x20201010, 0x80804040};
     constexpr static uint32x4_t eshuff = {0x06040200, 0x0e0c0a08, 0x07050301, 0x0f0d0b09};
 };
@@ -3591,12 +3573,10 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
     constexpr static int num_blocks() { return 16; }
     constexpr static bool should_scale_quants() { return false; }
 
-    inline void new_row(int ix) { x = (const block_iq4_k *)((const char *)vx + bx*ix); }
-
     template <typename Q8>
     inline int32x4x4_t new_block(int i, const Q8& q8, float32x4_t * acc) {
         d = GGML_FP16_TO_FP32(x[i].d);
-        return Scale16Extra::new_block(i, d, x[i].extra, 4, x[i].scales_l, x[i].scales_h, q8, acc);
+        return Scale16Extra::new_block(i, d, x[i].extra, 4, make_scales(x[i].scales_l, x[i].scales_h), q8, acc);
     }
     inline void prepare(int i, int j) {
         bits.prepare16(x[i].qs+64*j);
@@ -3605,9 +3585,51 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
             bits.b2.val[k] = vqtbl1q_s8(values, bits.b2.val[k]);
         }
     }
+    inline int8x16_t make_scales(const uint8_t * scales_l, const uint8_t * scales_h) const {
+        uint8x8_t aux = vld1_u8(scales_l);
+        uint8x16_t scl8 = vandq_u8(vcombine_u8(aux, vshr_n_u8(aux, 4)), vdupq_n_u8(0xf));
+        const uint32_t * aux32 = (const uint32_t *)scales_h;
+        uint32x4_t sch_32 = {aux32[0] << 4, aux32[0] << 2, aux32[0], aux32[0] >> 2};
+        uint8x16_t sch8 = vandq_u8(vreinterpretq_u8_u32(sch_32), vdupq_n_u8(0x30));
+        int8x16_t scales8 = vorrq_u8(scl8, vqtbl1q_u8(sch8, hshuff));
+        return vaddq_s8(vqtbl1q_s8(scales8, hshuff), vdupq_n_s8(-32));
+    }
 
     Q4bits bits;
-    const int16x8_t values;
+    const int8x16_t values;
+    const uint8x16_t hshuff = vreinterpretq_u8_u32(uint32x4_t{0x09010800, 0x0b030a02, 0x0d050c04, 0x0f070e06});
+
+    float d;
+};
+
+struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
+    DequantizerIQ2K(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc) {}
+
+    constexpr static int num_blocks() { return 16; }
+    constexpr static bool should_scale_quants() { return false; }
+
+    template <typename Q8>
+    inline int32x4x4_t new_block(int i, const Q8& q8, float32x4_t * acc) {
+        d = GGML_FP16_TO_FP32(x[i].d);
+        return Scale16Extra::new_block(i, d, x[i].extra, 5, make_scales(x[i].scales), q8, acc);
+    }
+    inline void prepare(int i, int j) {
+        bits.prepare(x[i].qs+32*j);
+        for (int k = 0; k < 4; ++k) {
+            bits.b1.val[k] = vqtbl1q_s8(values, bits.b1.val[k]);
+            bits.b2.val[k] = vqtbl1q_s8(values, bits.b2.val[k]);
+        }
+    }
+    inline int8x16_t make_scales(const uint8_t * scales_l) const {
+        uint8x8_t aux = vld1_u8(scales_l);
+        uint8x16_t scl8 = vandq_u8(vcombine_u8(aux, vshr_n_u8(aux, 4)), vdupq_n_u8(0xf));
+        int8x16_t scales = vaddq_s8(vreinterpretq_s8_u8(vshlq_n_u8(scl8, 1)), vdupq_n_s8(-15));
+        return vqtbl1q_s8(scales, hshuff);
+    }
+
+    Q2bits bits;
+    const int8x16_t values = vreinterpretq_s8_u64(vdupq_n_u64(0x000000001101f3e1));
+    const uint8x16_t hshuff = vreinterpretq_u8_u32(uint32x4_t{0x09010800, 0x0b030a02, 0x0d050c04, 0x0f070e06});
 
     float d;
 };
@@ -4940,6 +4962,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_IQ4_K:
             MulMat::set_functions<DequantizerIQ4K>(m);
+            break;
+        case GGML_TYPE_IQ2_K:
+            MulMat::set_functions<DequantizerIQ2K>(m);
             break;
         case GGML_TYPE_IQ2_XXS:
             MulMat::set_functions<DequantizerIQ2XXS>(m);
