@@ -448,6 +448,14 @@ static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_
 typedef struct {
     ggml_half d;
     uint16_t extra;
+    uint8_t  scales[QK_K/32];
+    uint8_t  qs[QK_K/4];
+} block_iq2_k;
+static_assert(sizeof(block_iq2_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/32 + QK_K/4, "wrong iq2_k block size/padding");
+
+typedef struct {
+    ggml_half d;
+    uint16_t extra;
     uint8_t  scales_h[QK_K/64];
     uint8_t  scales_l[QK_K/32];
     uint8_t  qs[QK_K/2];
@@ -457,10 +465,13 @@ static_assert(sizeof(block_iq4_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K
 typedef struct {
     ggml_half d;
     uint16_t extra;
-    uint8_t scales[QK_K/32];
-    uint8_t qs[QK_K/4];
-} block_iq2_k;
-static_assert(sizeof(block_iq2_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/32 + QK_K/4, "wrong iq2_k block size/padding");
+    uint8_t  scales_h[QK_K/64];
+    uint8_t  scales_l[QK_K/32];
+    uint8_t  qs[QK_K/2];
+    uint8_t  qh[QK_K/8];
+} block_iq5_k;
+static_assert(sizeof(block_iq5_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + QK_K/8 + 3*QK_K/64, "wrong iq5_k block size/padding");
+
 
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL
@@ -1893,13 +1904,18 @@ GGML_TABLE_BEGIN(uint32_t, iq1s_grid_gpu, NGRID_IQ1S)
 GGML_TABLE_END()
 #endif
 
+GGML_TABLE_BEGIN(int8_t, iq2nl_values, 8)
+    -31, -13, 1, 17,   -26, -8, 6, 22
+GGML_TABLE_END()
+
 GGML_TABLE_BEGIN(int8_t, iq4k_values, 32)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
     -123, -100, -79, -61, -45, -31, -18,  -6, 5, 17, 29, 42, 57, 73, 93, 117
 GGML_TABLE_END()
 
-GGML_TABLE_BEGIN(int8_t, iq2nl_values, 8)
-    -31, -13, 1, 17,   -26, -8, 6, 22
+GGML_TABLE_BEGIN(int8_t, iq5nl_values, 64)
+    -126, -114, -103, -92, -83, -74, -65, -57, -50, -43, -36, -30, -24, -18, -12, -6, -1, 5, 11, 17, 23, 29, 36, 43, 51, 59, 68, 77, 87, 97, 109, 121,
+    -124, -112, -101, -90, -81, -72, -63, -55, -48, -41, -34, -28, -22, -16, -10, -4,  1, 7, 13, 19, 25, 31, 38, 45, 53, 61, 70, 79, 89, 99, 111, 123,
 GGML_TABLE_END()
 
 
