@@ -14948,6 +14948,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_iq4_nl, data, nb);
             } break;
         case GGML_TYPE_IQ2_K: break;
+        case GGML_TYPE_IQ3_K: break;
         case GGML_TYPE_IQ4_K: break;
         case GGML_TYPE_IQ5_K: break;
         case GGML_TYPE_Q4_0_4_4:
