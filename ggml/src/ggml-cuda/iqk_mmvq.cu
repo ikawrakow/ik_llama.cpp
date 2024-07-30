@@ -383,8 +383,73 @@ __device__ __forceinline__ float vec_dot_iq2_k_q8_1(
 
 // TODO
 __device__ __forceinline__ float vec_dot_iq3_k_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-    return 0;
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iiqs) {
+    const block_iq3_k * bq3 = (const block_iq3_k *) vbq + kbx;
+
+    int iqs = iiqs/4;
+    const int ib128 = iqs/4;  // 0 or 1. 0 works on quants 0...127, 1 on quants 128...255
+                              // Each thread processes 8 quants in each of the 4 32-blocks
+    const int il8   = iqs%4;  // 0...3. 0 works on quants 0...7, 1 on quants 8...15, 2 on 16...23, 3 on 24...31
+    const int shift = 4*(il8/2);
+
+    const uint16_t * ql = (const uint16_t *)bq3->qs + 16*ib128 + 4*il8;
+    const uint16_t * qh = (const uint16_t *)bq3->qh + 4*il8;
+
+    uint32_t aux32;
+    const uint8_t * aux8 = (const uint8_t *)&aux32;
+
+    const int hshift = 4*(1-ib128);
+    const uint16_t sh = bq3->scales_h >> (8*ib128 + il8/2);
+
+    const uint8_t extra = bq3->extra >> (8*ib128 + il8/2);
+
+    uint32_t indx[4];
+    indx[0] = ((extra << 3) & 8) * 0x01010101;
+    indx[1] = ((extra << 2) & 8) * 0x01010101;
+    indx[2] = ((extra << 1) & 8) * 0x01010101;
+    indx[3] = ((extra << 0) & 8) * 0x01010101;
+
+    const uint8_t * values = (const uint8_t *)iq3nl_values;
+
+    const int * q8;
+    int sumi[4] = {0, 0, 0, 0};
+    uint16_t v1, v2;
+    int v;
+    for (int i = 0; i < 2; ++i) {
+        uint32_t vl = ql[2*i+0] | (ql[2*i+1] << 16);
+        uint32_t vh = ((qh[2*i+0] | (qh[2*i+1] << 16)) << hshift) >> 2;
+
+        q8 = (const int *)bq8_1[4*ib128+0].qs + 2*il8;
+        aux32 = (vl & 0x03030303) | (vh & 0x04040404) | indx[0];
+        v1 = values[aux8[0]] | (values[aux8[1]] << 8); v2 = values[aux8[2]] | values[aux8[3]] << 8; v = v1 | (v2 << 16);
+        sumi[0] = ggml_cuda_dp4a(v, q8[i], sumi[0]);
+        vl >>= 2; vh >>= 1;
+
+        q8 += sizeof(block_q8_1)/4;
+        aux32 = (vl & 0x03030303) | (vh & 0x04040404) | indx[1];
+        v1 = values[aux8[0]] | (values[aux8[1]] << 8); v2 = values[aux8[2]] | values[aux8[3]] << 8; v = v1 | (v2 << 16);
+        sumi[1] = ggml_cuda_dp4a(v, q8[i], sumi[1]);
+        vl >>= 2; vh >>= 1;
+
+        q8 += sizeof(block_q8_1)/4;
+        aux32 = (vl & 0x03030303) | (vh & 0x04040404) | indx[2];
+        v1 = values[aux8[0]] | (values[aux8[1]] << 8); v2 = values[aux8[2]] | values[aux8[3]] << 8; v = v1 | (v2 << 16);
+        sumi[2] = ggml_cuda_dp4a(v, q8[i], sumi[2]);
+        vl >>= 2; vh >>= 1;
+
+        q8 += sizeof(block_q8_1)/4;
+        aux32 = (vl & 0x03030303) | (vh & 0x04040404) | indx[3];
+        v1 = values[aux8[0]] | (values[aux8[1]] << 8); v2 = values[aux8[2]] | values[aux8[3]] << 8; v = v1 | (v2 << 16);
+        sumi[3] = ggml_cuda_dp4a(v, q8[i], sumi[3]);
+
+    }
+    const float d = (float)bq3->d;
+    const uint16_t * sl16 = (const uint16_t *)bq3->scales_l + 2*ib128;
+    aux32 = ((((sl16[0] | (sl16[1] << 16)) >> shift) & 0x0f0f0f0f) << 1) | 0x01010101;
+    return d * (__low2float(bq8_1[4*ib128+0].ds) * aux8[0] * (sh & 0x01 ? -1 : 1) * sumi[0] +
+                __low2float(bq8_1[4*ib128+1].ds) * aux8[1] * (sh & 0x04 ? -1 : 1) * sumi[1] +
+                __low2float(bq8_1[4*ib128+2].ds) * aux8[2] * (sh & 0x10 ? -1 : 1) * sumi[2] +
+                __low2float(bq8_1[4*ib128+3].ds) * aux8[3] * (sh & 0x40 ? -1 : 1) * sumi[3]);
 
 }
 
