@@ -342,34 +342,34 @@ __device__ __forceinline__ float vec_dot_iq2_k_q8_1(
 
     uint32_t aux32[2];
     const uint8_t * a8 = (const uint8_t *)&aux32;
-    int v1, v2, ls;
+    int v1, v2;
 
     // Block of 16: (32*(4*(i4/4)+k)+8*(i4%4))/16 = 8*(i4/4) + 2*k + (i4%4)/2
     // -> scales_l[4*(i4/4) + k] >> 4*(((i4%4)/2)%2)
 
-    ls = (bq2->scales[4*(i4/4) + 0] >> 4*(((i4%4)/2)%2)) & 0xf;
+    const uint32_t * scales = (const uint32_t *)bq2->scales;
+    uint32_t s32 = __vsub4(((scales[i4/4] >> 4*(((i4%4)/2)%2)) & 0x0f0f0f0f) << 1, 0x0f0f0f0f);
+    const int8_t * s8 = (const int8_t *)&s32;
+
     aux32[0] = ((val1 >> 0) & 0x03030303); aux32[1] = ((val2 >> 0) & 0x03030303); values = all_values + ((extra & 0x01) << 8);
     v1 = int_from_table_4(a8 + 0, values);
     v2 = int_from_table_4(a8 + 4, values);
-    int sumi1 = ggml_cuda_dp4a(v2, q8_1[1], ggml_cuda_dp4a(v1, q8_1[0], 0)) * (2*ls - 15);
+    int sumi1 = ggml_cuda_dp4a(v2, q8_1[1], ggml_cuda_dp4a(v1, q8_1[0], 0)) * s8[0];
 
-    ls = (bq2->scales[4*(i4/4) + 1] >> 4*(((i4%4)/2)%2)) & 0xf;
     aux32[0] = ((val1 >> 2) & 0x03030303); aux32[1] = ((val2 >> 2) & 0x03030303); values = all_values + ((extra & 0x04) << 6);
     v1 = int_from_table_4(a8 + 0, values);
     v2 = int_from_table_4(a8 + 4, values);
-    int sumi2 = ggml_cuda_dp4a(v2, q8_2[1], ggml_cuda_dp4a(v1, q8_2[0], 0)) * (2*ls - 15);
+    int sumi2 = ggml_cuda_dp4a(v2, q8_2[1], ggml_cuda_dp4a(v1, q8_2[0], 0)) * s8[1];
 
-    ls = (bq2->scales[4*(i4/4) + 2] >> 4*(((i4%4)/2)%2)) & 0xf;
     aux32[0] = ((val1 >> 4) & 0x03030303); aux32[1] = ((val2 >> 4) & 0x03030303); values = all_values + ((extra & 0x10) << 4);
     v1 = int_from_table_4(a8 + 0, values);
     v2 = int_from_table_4(a8 + 4, values);
-    int sumi3 = ggml_cuda_dp4a(v2, q8_3[1], ggml_cuda_dp4a(v1, q8_3[0], 0)) * (2*ls - 15);
+    int sumi3 = ggml_cuda_dp4a(v2, q8_3[1], ggml_cuda_dp4a(v1, q8_3[0], 0)) * s8[2];
 
-    ls = (bq2->scales[4*(i4/4) + 3] >> 4*(((i4%4)/2)%2)) & 0xf;
     aux32[0] = ((val1 >> 6) & 0x03030303); aux32[1] = ((val2 >> 6) & 0x03030303); values = all_values + ((extra & 0x40) << 2);
     v1 = int_from_table_4(a8 + 0, values);
     v2 = int_from_table_4(a8 + 4, values);
-    int sumi4 = ggml_cuda_dp4a(v2, q8_4[1], ggml_cuda_dp4a(v1, q8_4[0], 0)) * (2*ls - 15);
+    int sumi4 = ggml_cuda_dp4a(v2, q8_4[1], ggml_cuda_dp4a(v1, q8_4[0], 0)) * s8[3];
 
     return __half2float(bq2->d) * (__low2float(bq8_1[4*(i4/4)+0].ds) * sumi1
                                 +  __low2float(bq8_1[4*(i4/4)+1].ds) * sumi2
