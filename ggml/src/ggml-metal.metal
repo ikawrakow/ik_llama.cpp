@@ -3070,6 +3070,7 @@ constexpr constant static float kvalues_iq5k_f[64] = {
 constexpr constant static float kvalues_iq2k_f[8] = { -31.f, -13.f, 1.f, 17.f, -26.f, -8.f, 6.f, 22.f };
 
 constexpr constant static float kvalues_iq3k_f[16] = { -63.f, -40.f, -23.f, -10.f, 1.f, 13.f, 28.f,  47.f, -59.f, -36.f, -19.f,  -6.f, 5.f, 17.f, 32.f,  51.f };
+constexpr constant static half  kvalues_iq3k_h[16] = { -63.h, -40.h, -23.h, -10.h, 1.h, 13.h, 28.h,  47.h, -59.h, -36.h, -19.h,  -6.h, 5.h, 17.h, 32.h,  51.h };
 
 kernel void kernel_cpy_f32_iq4_nl(
         device const float * src0,
@@ -6377,7 +6378,7 @@ void dequantize_iq3_k(device const block_iq3_k * xb, short il, thread type4x4 & 
     device const uint16_t * q16h = (device const uint16_t *)xb->qh + 8*(il&1);
     half d = xb->d * (2*((xb->scales_l[il/2] >> 4*(il&1)) & 0xf) + 1) * (xb->scales_h & (1 << il) ? -1 : 1);
 
-    constant int8_t * values = iq3nl_values + 8*((xb->extra >> il) & 1);
+    constant half * values = kvalues_iq3k_h + 8*((xb->extra >> il) & 1);
 
     const int shift = 2*((il%8)/2);
     uint32_t aux32;
