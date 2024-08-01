@@ -8317,14 +8317,17 @@ static struct ggml_tensor * llm_build_kqv(
             //try from phi2
             //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
 
-            kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
-            kq = ggml_scale(ctx, kq, 30);
+            //kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
+            //kq = ggml_scale(ctx, kq, 30);
+
+            kq = ggml_softcap(ctx, kq, 0.08838834764831845f/30.0f, 30.f);
         }
 
         if (hparams.attn_soft_cap) {
-            kq = ggml_scale(ctx, kq, 1.0f / hparams.f_attn_logit_softcapping);
-            kq = ggml_tanh(ctx, kq);
-            kq = ggml_scale(ctx, kq, hparams.f_attn_logit_softcapping);
+            kq = ggml_softcap(ctx, kq, 1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
+            //kq = ggml_scale(ctx, kq, 1.0f / hparams.f_attn_logit_softcapping);
+            //kq = ggml_tanh(ctx, kq);
+            //kq = ggml_scale(ctx, kq, hparams.f_attn_logit_softcapping);
         }
 
         kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
@@ -11935,9 +11938,10 @@ struct llm_build_context {
         cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
 
         // final logit soft-capping
-        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
-        cur = ggml_tanh(ctx0, cur);
-        cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
+        cur = ggml_softcap(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping, hparams.f_final_logit_softcapping);
+        //cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
+        //cur = ggml_tanh(ctx0, cur);
+        //cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
 
         cb(cur, "result_output", -1);
 
