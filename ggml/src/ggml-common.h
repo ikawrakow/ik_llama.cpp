@@ -142,6 +142,9 @@ typedef sycl::half2 ggml_half2;
 #define QI5_XS (QK_K / (4*QR5_XS))
 #define QR5_XS 2
 
+#define QI6_XS (QK_K / (4*QR6_XS))
+#define QR6_XS 2
+
 #define QI3_S (QK_K / (4*QR3_S))
 #define QR3_S 4
 
@@ -492,6 +495,15 @@ typedef struct {
     uint8_t  qh[QK_K/8];
 } block_iq5_k;
 static_assert(sizeof(block_iq5_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + QK_K/8 + 3*QK_K/64, "wrong iq5_k block size/padding");
+
+typedef struct {
+    ggml_half d;
+    uint16_t extra;
+    int8_t   scales[QK_K/16];
+    uint8_t  qs[QK_K/2];
+    uint8_t  qh[QK_K/4];
+} block_iq6_k;
+static_assert(sizeof(block_iq6_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + QK_K/4 + QK_K/16, "wrong iq6_k block size/padding");
 
 
 #endif // GGML_COMMON_DECL
