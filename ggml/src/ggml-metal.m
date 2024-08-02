@@ -51,6 +51,8 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_REPEAT_I16,
     GGML_METAL_KERNEL_TYPE_SCALE,
     GGML_METAL_KERNEL_TYPE_SCALE_4,
+    GGML_METAL_KERNEL_TYPE_SOFTCAP,
+    GGML_METAL_KERNEL_TYPE_SOFTCAP_4,
     GGML_METAL_KERNEL_TYPE_CLAMP,
     GGML_METAL_KERNEL_TYPE_TANH,
     GGML_METAL_KERNEL_TYPE_RELU,
@@ -554,6 +556,8 @@ static struct ggml_backend_metal_context * ggml_metal_init(int n_cb) {
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_REPEAT_I16,                    repeat_i16,                     true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SCALE,                         scale,                          true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SCALE_4,                       scale_4,                        true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFTCAP,                       softcap,                        true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFTCAP_4,                     softcap_4,                      true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_CLAMP,                         clamp,                          true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_TANH,                          tanh,                           true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_RELU,                          relu,                           true);
@@ -867,6 +871,8 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
         case GGML_OP_SQR:
         case GGML_OP_SUM_ROWS:
             return true;
+        case GGML_OP_SOFTCAP:
+            return true; //ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op);
         case GGML_OP_SOFT_MAX:
         case GGML_OP_RMS_NORM:
         case GGML_OP_GROUP_NORM:
@@ -1410,6 +1416,32 @@ static enum ggml_status ggml_metal_graph_compute(
                         [encoder setBuffer:id_src0   offset:offs_src0 atIndex:0];
                         [encoder setBuffer:id_dst    offset:offs_dst  atIndex:1];
                         [encoder setBytes:&scale length:sizeof(scale) atIndex:2];
+
+                        [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+                    } break;
+                case GGML_OP_SOFTCAP:
+                    {
+                        GGML_ASSERT(ggml_is_contiguous(src0));
+
+                        float scales[2];
+                        memcpy(scales, dst->op_params, sizeof(scales));
+
+                        int64_t n = ggml_nelements(dst);
+
+                        id<MTLComputePipelineState> pipeline = nil;
+
+                        if (n % 4 == 0) {
+                            n /= 4;
+                            pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SOFTCAP_4].pipeline;
+                        } else {
+                            pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SOFTCAP].pipeline;
+                        }
+
+                        [encoder setComputePipelineState:pipeline];
+                        [encoder setBuffer:id_src0   offset:offs_src0 atIndex:0];
+                        [encoder setBuffer:id_dst    offset:offs_dst  atIndex:1];
+                        [encoder setBytes:&scales[0] length:sizeof(float) atIndex:2];
+                        [encoder setBytes:&scales[1] length:sizeof(float) atIndex:3];
 
                         [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
                     } break;
