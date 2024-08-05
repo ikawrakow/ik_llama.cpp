@@ -692,6 +692,18 @@ struct DequantizerQ2K final : public BaseDequantizer<block_q2_K> {
 
 };
 
+struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
+    DequantizerIQ2TN(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
+    template <typename Q8>
+    inline void new_block(int i, const Q8& q8, __m256 * accm, __m512i * scales) {
+        d = GGML_FP16_TO_FP32(x[i].d);
+        bits.prepare(x[i].qs);
+        process_mins_16(_mm256_set1_epi16(1), q8, i, -d, accm);
+        scales[0] = scales[1] = _mm512_set1_epi16(1);
+    }
+    Q2Bits bits;
+};
+
 struct DequantizerQ3K final : public BaseDequantizer<block_q3_K> {
     DequantizerQ3K(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
     template <typename Q8>
@@ -3155,6 +3167,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q2_K:
             assert (ne00 % QK_K == 0);
             MulMat::set_functions<DequantizerQ2K>(mm);
+            break;
+        case GGML_TYPE_IQ2_TN:
+            assert (ne00 % QK_K == 0);
+            MulMat::set_functions<DequantizerIQ2TN>(mm);
             break;
         case GGML_TYPE_Q3_K:
             assert (ne00 % QK_K == 0);
