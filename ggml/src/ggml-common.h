@@ -407,7 +407,7 @@ typedef struct {
 static_assert(sizeof(block_iq1_m) == QK_K/8 + QK_K/16 + QK_K/32, "wrong iq1_m block size/padding");
 
 //
-// Bitnet - implemented as 1.75 bpw
+// Bitnet - implemented as 1.625 bpw
 // The block scale is a waste, but it allows us to plug it in without any additional
 // changes to ggml.
 //
@@ -418,13 +418,21 @@ typedef struct {
 } block_iq1_bn;
 static_assert(sizeof(block_iq1_bn) == 13, "wrong iq1_bn block size/padding");
 //
-// Bitnet - implemented as 2.25 bpw
+// Bitnet - implemented as 2.0 bpw
 //
 #define QK_IQ2BN 64
 typedef struct {
     uint8_t qs[QK_IQ2BN/4];
 } block_iq2_bn;
 static_assert(sizeof(block_iq2_bn) == QK_IQ2BN/4, "wrong iq2_bn block size/padding");
+//
+// TriLM - implemented as 2.0625 bpw
+//
+typedef struct {
+    ggml_half d;
+    uint8_t qs[QK_K/4];
+} block_iq2_tn;
+static_assert(sizeof(block_iq2_tn) == sizeof(ggml_half) + QK_K/4, "wrong iqt_bn block size/padding");
 
 // Used by IQ1_M quants
 typedef union {
