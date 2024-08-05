@@ -255,6 +255,8 @@ int main(int argc, char ** argv) {
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
             params.quantize_output_tensor = false;
+        } else if (strcmp(argv[arg_idx], "--ignore-imatrix-rules") == 0) {
+            params.ignore_imatrix_rules = true;
         } else if (strcmp(argv[arg_idx], "--output-tensor-type") == 0) {
             if (arg_idx < argc-1) {
                 params.output_tensor_type = parse_ggml_type(argv[++arg_idx]);
@@ -409,11 +411,12 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if ((params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
+    if (!params.ignore_imatrix_rules && imatrix_data.empty() &&
+        (params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S  ||
          params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S  ||
-         params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) && imatrix_data.empty()) {
+         params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M)) {
         fprintf(stderr, "\n==========================================================================================================\n");
         fprintf(stderr, "Please do not use IQ1_S, IQ1_M, IQ2_S, IQ2_XXS, IQ2_XS or Q2_K_S quantization without an importance matrix\n");
         fprintf(stderr, "==========================================================================================================\n\n\n");
