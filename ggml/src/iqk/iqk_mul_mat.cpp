@@ -1481,6 +1481,80 @@ struct DequantizerQ6K final : public BaseDequantizer<block_q6_K> {
     const __m256i mh = _mm256_set1_epi8(0x30);
 };
 
+struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
+    DequantizerIQ2TN(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
+
+    //template <typename Q8>
+    //inline void new_block(int i, const Q8& q8, __m256i * sumi) {
+    //    d = GGML_FP16_TO_FP32(x[i].d);
+    //    for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+    //        sumi[iy] = q8.load_bsums(iy, i);
+    //    }
+    //}
+    inline void new_block(int i) {
+        d = GGML_FP16_TO_FP32(x[i].d);
+    }
+    inline void prepare(int i, int j) {
+        bits.prepare(x[i].qs, j);
+    }
+
+    Q2Bits  bits;
+};
+
+
+template <int nrc_y>
+IQK_NOINLINE void mul_mat_iq2tn_q8_K(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%QK_K == 0);
+    const int nb = n/QK_K;
+
+    Q8<nrc_y> q8(info);
+    DequantizerIQ2TN deq(vx, bx);
+
+    __m256  accd[nrc_y];
+    const auto m1 = _mm256_set1_epi16(1);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+
+        deq.new_row(ix);
+
+        for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = _mm256_setzero_ps();
+
+        for (int i = 0; i < nb; ++i) {
+
+            __m256i sumi[nrc_y];
+            //deq.new_block(i, q8, sumi);
+            deq.new_block(i);
+
+            deq.prepare(i, 0);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                //sumi[iy] = _mm256_sub_epi16(_mm256_add_epi16(_mm256_maddubs_epi16(deq.bits.values[0], q8.load_quants(iy, i, 0)),
+                //                                             _mm256_maddubs_epi16(deq.bits.values[1], q8.load_quants(iy, i, 1))), sumi[iy]);
+                sumi[iy] = _mm256_add_epi16(_mm256_maddubs_epi16(deq.bits.values[0], q8.load_quants(iy, i, 0)),
+                                            _mm256_maddubs_epi16(deq.bits.values[1], q8.load_quants(iy, i, 1)));
+                sumi[iy] = _mm256_add_epi16(_mm256_add_epi16(_mm256_maddubs_epi16(deq.bits.values[2], q8.load_quants(iy, i, 2)),
+                                                             _mm256_maddubs_epi16(deq.bits.values[3], q8.load_quants(iy, i, 3))), sumi[iy]);
+            }
+            deq.prepare(i, 1);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                sumi[iy] = _mm256_add_epi16(_mm256_add_epi16(_mm256_maddubs_epi16(deq.bits.values[0], q8.load_quants(iy, i, 4)),
+                                                             _mm256_maddubs_epi16(deq.bits.values[1], q8.load_quants(iy, i, 5))), sumi[iy]);
+                sumi[iy] = _mm256_add_epi16(_mm256_add_epi16(_mm256_maddubs_epi16(deq.bits.values[2], q8.load_quants(iy, i, 6)),
+                                                             _mm256_maddubs_epi16(deq.bits.values[3], q8.load_quants(iy, i, 7))), sumi[iy]);
+                sumi[iy] = _mm256_sub_epi16(sumi[iy], q8.load_bsums(iy, i));
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                accd[iy] = _mm256_fmadd_ps(_mm256_set1_ps(deq.d*q8.scale(iy, i)), _mm256_cvtepi32_ps(_mm256_madd_epi16(m1, sumi[iy])), accd[iy]);
+            }
+
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, hsum_float_8(accd[iy]));
+        }
+
+    }
+}
+
 template <typename Dequantizer, int nrc_y>
 static void mul_mat_qY_K_q8_K_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n%QK_K == 0);
@@ -3200,7 +3274,18 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_IQ2_TN:
             assert (ne00 % QK_K == 0);
+#ifdef HAVE_FANCY_SIMD
             MulMat::set_functions<DequantizerIQ2TN>(mm);
+#else
+            mm.funcs[0] = mul_mat_iq2tn_q8_K<1>;
+            mm.funcs[1] = mul_mat_iq2tn_q8_K<2>;
+            mm.funcs[2] = mul_mat_iq2tn_q8_K<3>;
+            mm.funcs[3] = mul_mat_iq2tn_q8_K<4>;
+            mm.funcs[4] = mul_mat_iq2tn_q8_K<5>;
+            mm.funcs[5] = mul_mat_iq2tn_q8_K<6>;
+            //mm.funcs[6] = mul_mat_iq2tn_q8_K<7>;
+            //mm.funcs[7] = mul_mat_iq2tn_q8_K<8>;
+#endif
             break;
         case GGML_TYPE_Q3_K:
             assert (ne00 % QK_K == 0);
