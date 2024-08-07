@@ -469,6 +469,41 @@ __device__ __forceinline__ float vec_dot_iq3_k_q8_1(
 
 }
 
+#define VDR_IQ2_TN_Q8_1_MMVQ 1
+#define VDR_IQ2_TN_Q8_1_MMQ  4
+
+static __device__ __forceinline__ float vec_dot_iq2_tn_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_iq2_tn * bq2 = (const block_iq2_tn *) vbq + kbx;
+
+    const int bq8_offset = QR2_K * (iqs / QI8_1);
+
+    const uint16_t * q16 = (const uint16_t *)bq2->qs + 2*iqs;
+    int v = q16[0] | (q16[1] << 16);
+
+    float sumf = 0;
+    for (int i = 0; i < QR2_K; ++ i) {
+        int u = *((const int *)bq8_1[bq8_offset + i].qs + iqs % QI8_1);
+        float d8 = __low2float(bq8_1[bq8_offset + i].ds);
+        sumf += d8 * (ggml_cuda_dp4a(v & 0x03030303, u, 0) - ggml_cuda_dp4a(0x01010101, u, 0));
+        v >>= 2;
+    }
+    return __half2float(bq2->d) * sumf;
+
+    //float sumf_d = 0;
+    //float sumf_m = 0;
+    //for (int i = 0; i < QR2_K; ++ i) {
+    //    int u = *((const int *)bq8_1[bq8_offset + i].qs + iqs % QI8_1);
+    //    float2 d8 = __half22float2(bq8_1[bq8_offset + i].ds);
+    //    sumf_d += d8.x * ggml_cuda_dp4a(v & 0x03030303, u, 0);
+    //    sumf_m += d8.y;
+    //    v >>= 2;
+    //}
+    //return __half2float(bq2->d) * (sumf_d - 0.125f * sumf_m);
+
+}
+
 } // namespace
 
 void mul_mat_vec_iq2_k_q8_1_cuda(
@@ -497,5 +532,12 @@ void mul_mat_vec_iq5_k_q8_1_cuda(
     const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
 
     iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ5_K, VDR_IQ5_K_Q8_1_MMVQ, vec_dot_iq5_k_q8_1>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+}
+
+void mul_mat_vec_iq2_tn_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+
+    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ2_TN, VDR_IQ2_TN_Q8_1_MMVQ, vec_dot_iq2_tn_q8_1>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
 }
 
