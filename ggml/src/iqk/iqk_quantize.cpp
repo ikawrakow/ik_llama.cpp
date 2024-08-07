@@ -1522,6 +1522,7 @@ size_t quantize_iq5_k(const float * src, void * dst, int64_t nrows, int64_t n_pe
 #define B_IQ6K 6.2568f
 #define C_IQ6K 0.11218f
 #define D_IQ6K 0.0011972f
+#define S_IQ6K 1.f
 
 void dequantize_row_iq6_k(const block_iq6_k * x, float * y, int64_t k) {
     assert(k % QK_K == 0);
@@ -1543,10 +1544,10 @@ void dequantize_row_iq6_k(const block_iq6_k * x, float * y, int64_t k) {
             float dl2 = d * sl[4*ib64 + 1];
             float dl3 = d * sl[4*ib64 + 2];
             float dl4 = d * sl[4*ib64 + 3];
-            float m1 = extra & 1 ? 1 : 0;
-            float m2 = extra & 2 ? 1 : 0;
-            float m3 = extra & 4 ? 1 : 0;
-            float m4 = extra & 8 ? 1 : 0;
+            float m1 = extra & 1 ? S_IQ6K : 0;
+            float m2 = extra & 2 ? S_IQ6K : 0;
+            float m3 = extra & 4 ? S_IQ6K : 0;
+            float m4 = extra & 8 ? S_IQ6K : 0;
             for (int j = 0; j < 16; ++j) {
                 float q1 = ((qs[j+ 0] & 0xf) | (((qh[j+ 0] >> shift) & 0x03) << 4));
                 float q2 = ((qs[j+16] & 0xf) | (((qh[j+16] >> shift) & 0x03) << 4));
@@ -1868,7 +1869,7 @@ size_t quantize_iq6_k(const float * src, void * dst, int64_t nrows, int64_t n_pe
     float values[128];
     for (int i = 0; i < 64; ++i) {
         values[i] = A_IQ6K + B_IQ6K*i - C_IQ6K*i*i + D_IQ6K*i*i*i;
-        values[i+64] = values[i] + 1.f;
+        values[i+64] = values[i] + S_IQ6K;
     }
     for (int64_t row = 0; row < nrows; ++row) {
         quantize_row_iq6_k_impl(src, (void *)qrow, n_per_row, imatrix, values, values + 64);
