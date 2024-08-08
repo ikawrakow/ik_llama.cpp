@@ -4132,6 +4132,41 @@ struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
     float d;
 };
 
+struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
+    DequantizerIQ6K(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc), values(vld1q_s8_x4(iq6nl_values)) {}
+
+    constexpr static int num_blocks() { return 16; }
+    constexpr static bool should_scale_quants() { return false; }
+
+    template <typename Q8>
+    inline int32x4x4_t new_block(int i, const Q8& q8, float32x4_t * acc) {
+        d = GGML_FP16_TO_FP32(x[i].d);
+        return Scale16Extra::new_block(i, d, x[i].extra, 1, vld1q_s8(x[i].scales), q8, acc);
+    }
+    inline void prepare(int i, int j) {
+        bits.prepare(x[i].qs+64*j);
+        auto hbits = vld1q_u8_x2(x[i].qh + 32*j);
+        bits.b1.val[0] = vorrq_u8(bits.b1.val[0], vandq_u8(vshlq_n_u8(hbits.val[0], 4), hm));
+        bits.b1.val[1] = vorrq_u8(bits.b1.val[1], vandq_u8(vshlq_n_u8(hbits.val[1], 4), hm));
+        bits.b1.val[2] = vorrq_u8(bits.b1.val[2], vandq_u8(vshlq_n_u8(hbits.val[0], 2), hm));
+        bits.b1.val[3] = vorrq_u8(bits.b1.val[3], vandq_u8(vshlq_n_u8(hbits.val[1], 2), hm));
+        bits.b2.val[0] = vorrq_u8(bits.b2.val[0], vandq_u8(hbits.val[0], hm));
+        bits.b2.val[1] = vorrq_u8(bits.b2.val[1], vandq_u8(hbits.val[1], hm));
+        bits.b2.val[2] = vorrq_u8(bits.b2.val[2], vandq_u8(vshrq_n_u8(hbits.val[0], 2), hm));
+        bits.b2.val[3] = vorrq_u8(bits.b2.val[3], vandq_u8(vshrq_n_u8(hbits.val[1], 2), hm));
+        for (int k = 0; k < 4; ++k) {
+            bits.b1.val[k] = vqtbl4q_s8(values, bits.b1.val[k]);
+            bits.b2.val[k] = vqtbl4q_s8(values, bits.b2.val[k]);
+        }
+    }
+
+    Q4bits bits;
+    const int8x16x4_t values;
+    const uint8x16_t hm = vdupq_n_u8(0x30);
+
+    float d;
+};
+
 struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
     DequantizerIQ2K(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc) {}
 
@@ -5719,6 +5754,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_IQ5_K:
             MulMat::set_functions<DequantizerIQ5K>(m);
+            break;
+        case GGML_TYPE_IQ6_K:
+            MulMat::set_functions<DequantizerIQ6K>(m);
             break;
         case GGML_TYPE_IQ2_K:
             MulMat::set_functions<DequantizerIQ2K>(m);
