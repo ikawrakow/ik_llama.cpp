@@ -289,6 +289,24 @@ kernel void kernel_scale_4(
     dst[tpig] = src0[tpig] * scale;
 }
 
+kernel void kernel_softcap(
+        device const float * src0,
+        device       float * dst,
+        constant     float & s_before,
+        constant     float & s_after,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = s_after * precise::tanh(src0[tpig] * s_before);
+}
+
+kernel void kernel_softcap_4(
+        device const float4 * src0,
+        device       float4 * dst,
+        constant     float  & s_before,
+        constant     float  & s_after,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = s_after * precise::tanh(src0[tpig] * s_before);
+}
+
 kernel void kernel_clamp(
         device const float * src0,
         device       float * dst,

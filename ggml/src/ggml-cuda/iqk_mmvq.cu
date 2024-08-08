@@ -429,7 +429,6 @@ __device__ __forceinline__ float vec_dot_iq3_k_q8_1(
 
     const int * q8;
     int sumi[4] = {0, 0, 0, 0};
-    uint16_t v1, v2;
     int v;
     for (int i = 0; i < 2; ++i) {
         uint32_t vl = ql[2*i+0] | (ql[2*i+1] << 16);
