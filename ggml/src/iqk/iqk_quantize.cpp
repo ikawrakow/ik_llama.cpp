@@ -42,8 +42,12 @@ struct IQ1BNQuantizer {
         }
         return max_in_row;
     }
-    static constexpr uint8_t k_mult[5] = {81, 27, 9, 3, 1};
+    // The Makefile has issues dwaling with this?
+    //static constexpr uint8_t k_mult[5] = {81, 27, 9, 3, 1};
+    static const uint8_t k_mult[5];
 };
+
+const uint8_t IQ1BNQuantizer::k_mult[5] = {81, 27, 9, 3, 1};
 
 void IQ1BNQuantizer::quantize_one_row_1bn(const float * src, block_iq1_bn * y, int n_per_row, const float * imatrix) {
 
