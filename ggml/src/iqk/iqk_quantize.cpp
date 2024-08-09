@@ -1868,7 +1868,7 @@ size_t quantize_iq6_k(const float * src, void * dst, int64_t nrows, int64_t n_pe
     char * qrow = (char *)dst;
     float values[128];
     for (int i = 0; i < 64; ++i) {
-        values[i] = A_IQ6K + B_IQ6K*i - C_IQ6K*i*i + D_IQ6K*i*i*i;
+        values[i] = iq6nl_values[i];
         values[i+64] = values[i] + S_IQ6K;
     }
     for (int64_t row = 0; row < nrows; ++row) {
