@@ -162,7 +162,6 @@ static __global__ void dequantize_block_iq2_tn(const void * __restrict__ vx, dst
     const int64_t tid = threadIdx.x;
     const int64_t n   = tid/32;
     const int64_t l   = tid - 32*n;
-    const int64_t is  = 8*n + l/16;
 
     const uint8_t q = x[i].qs[32*n + l];
     dst_t * y = yy + i*QK_K + 128*n;

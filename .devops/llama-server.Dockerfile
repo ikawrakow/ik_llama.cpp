@@ -16,7 +16,7 @@ RUN make -j$(nproc) llama-server
 FROM ubuntu:$UBUNTU_VERSION AS runtime
 
 RUN apt-get update && \
-    apt-get install -y libcurl4-openssl-dev libgomp1
+    apt-get install -y libcurl4-openssl-dev libgomp1 curl
 
 COPY --from=build /app/llama-server /llama-server
 
