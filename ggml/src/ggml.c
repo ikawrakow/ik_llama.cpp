@@ -21549,7 +21549,12 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
                 ctx->infos[i].ne[3],
             };
 
-            struct ggml_tensor * cur = ggml_new_tensor(ctx_data, ctx->infos[i].type, ctx->infos[i].n_dims, ne);
+            int n_dims = ctx->infos[i].n_dims;
+            if (n_dims == 0 || n_dims > 4) {
+                n_dims = 4;
+                for (; n_dims > 1; --n_dims) if (ne[n_dims-1] > 1) break;
+            }
+            struct ggml_tensor * cur = ggml_new_tensor(ctx_data, ctx->infos[i].type, n_dims, ne);
 
             ok = ok && cur != NULL;
 
