@@ -12,6 +12,7 @@
 #include "ggml-impl.h"
 #if GGML_USE_IQK_MULMAT
 #include "iqk/iqk_mul_mat.h"
+#include "iqk/iqk_quantize.h"
 #endif
 
 
@@ -3770,7 +3771,11 @@ void dequantize_row_q8_K(const block_q8_K * restrict x, float * restrict y, int6
 }
 
 void quantize_row_q8_K(const float * restrict x, void * restrict y, int64_t k) {
+#ifdef GGML_USE_IQK_MULMAT
+    iqk_quantize_row_q8_K(x, y, k);
+#else
     quantize_row_q8_K_ref(x, y, k);
+#endif
 }
 
 //===================================== Dot ptoducts =================================
