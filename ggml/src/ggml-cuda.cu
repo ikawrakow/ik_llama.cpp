@@ -24,6 +24,7 @@
 #include "ggml-cuda/quantize.cuh"
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/scale.cuh"
+#include "ggml-cuda/softcap.cuh"
 #include "ggml-cuda/softmax.cuh"
 #include "ggml-cuda/sumrows.cuh"
 #include "ggml-cuda/tsembd.cuh"
@@ -2261,6 +2262,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SCALE:
             ggml_cuda_op_scale(ctx, dst);
             break;
+        case GGML_OP_SOFTCAP:
+            ggml_cuda_op_softcap(ctx, dst);
+            break;
         case GGML_OP_SQR:
             ggml_cuda_op_sqr(ctx, dst);
             break;
@@ -2865,6 +2869,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_DIV:
         case GGML_OP_RMS_NORM:
         case GGML_OP_SCALE:
+        case GGML_OP_SOFTCAP:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_CLAMP:
