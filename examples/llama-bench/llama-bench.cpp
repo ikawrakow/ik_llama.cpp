@@ -237,6 +237,7 @@ struct cmd_params {
     ggml_numa_strategy numa;
     int reps;
     bool verbose;
+    bool warmup;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -263,6 +264,7 @@ static const cmd_params cmd_params_defaults = {
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* verbose              */ false,
+    /* warmup               */ true,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -295,6 +297,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -o, --output <csv|json|md|sql>      (default: %s)\n", output_format_str(cmd_params_defaults.output_format));
     printf("  -oe, --output-err <csv|json|md|sql> (default: %s)\n", output_format_str(cmd_params_defaults.output_format_stderr));
     printf("  -v, --verbose                       (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
+    printf("  -w, --warmup <0|1>                  (default: %s)\n", cmd_params_defaults.warmup ? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
 }
@@ -338,6 +341,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.output_format_stderr = cmd_params_defaults.output_format_stderr;
     params.reps = cmd_params_defaults.reps;
     params.numa = cmd_params_defaults.numa;
+    params.warmup = cmd_params_defaults.warmup;
 
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -555,6 +559,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             invalid_param = !output_format_from_str(argv[i], params.output_format_stderr);
         } else if (arg == "-v" || arg == "--verbose") {
             params.verbose = true;
+        } else if (arg == "-w" || arg == "--warmup") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.warmup = std::stoi(argv[i]);
         } else {
             invalid_param = true;
             break;
@@ -1429,12 +1439,14 @@ int main(int argc, char ** argv) {
         llama_kv_cache_clear(ctx);
 
         // warmup run
-        if (t.n_prompt > 0) {
-            //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-            test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
-        }
-        if (t.n_gen > 0) {
-            test_gen(ctx, 1, 0, t.n_threads);
+        if (params.warmup) {
+            if (t.n_prompt > 0) {
+                //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
+                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+            }
+            if (t.n_gen > 0) {
+                test_gen(ctx, 1, 0, t.n_threads);
+            }
         }
 
         for (int i = 0; i < params.reps; i++) {
