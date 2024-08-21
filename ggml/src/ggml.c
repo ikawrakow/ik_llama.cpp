@@ -39,6 +39,8 @@
 #include <syscall.h>
 #endif
 
+#define IK_PRINT_TIMING 0
+
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
 #endif
@@ -2818,6 +2820,34 @@ static void ggml_vec_tanh_f32(const int n, float * y, const float * x) {
 #endif
     for (; i < n; ++i) {
         y[i] = tanhf(x[i]);
+    }
+}
+
+static void ggml_vec_cpy_softcap_f32(const int n, const float * x, float * y, float s_before, float s_after) {
+    int i = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+    __m512 vs_before = _mm512_set1_ps(2.f*s_before);
+    __m512 vs_after  = _mm512_set1_ps(s_after);
+    for (; i + 15 < n; i += 16) {
+        _mm512_storeu_ps(y + i, ggml_v_softcap(_mm512_loadu_ps(x + i), vs_before, vs_after));
+    }
+#elif defined(__AVX2__) && defined(__FMA__)
+    for (; i + 7 < n; i += 8) {
+        _mm256_storeu_ps(y + i, ggml_v_softcap(_mm256_loadu_ps(x + i), s_before, s_after));
+    }
+#elif defined(__SSE2__)
+    for (; i + 3 < n; i += 4) {
+        _mm_storeu_ps(y + i, ggml_v_softcap(_mm_loadu_ps(x + i), s_before, s_after));
+    }
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    float32x4_t vs_before = vdupq_n_f32(s_before);
+    float32x4_t vs_after  = vdupq_n_f32(s_after);
+    for (; i + 3 < n; i += 4) {
+        vst1q_f32(y + i, ggml_v_softcap(vld1q_f32(x + i), vs_before, vs_after));
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = s_after*tanhf(x[i]*s_before);
     }
 }
 
@@ -12785,6 +12815,10 @@ UseGgmlGemm1:;
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
 
+#if IK_PRINT_TIMING
+        int64_t t1 = ggml_time_us();
+#endif
+
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1*ne11;
         const size_t nbw3 = nbw2*ne12;
@@ -12810,6 +12844,11 @@ UseGgmlGemm1:;
                 }
             }
         }
+
+#if IK_PRINT_TIMING
+        int64_t t2 = ggml_time_us();
+        if (ith == 0) printf("quantize(%s): %d us\n", dst->name, (int)(t2 - t1));
+#endif
     }
 
     if (ith == 0) {
@@ -13548,17 +13587,16 @@ static void ggml_compute_forward_softcap_f32(
 
     const size_t nb1 = dst->nb[1];
 
+    //if (ith == 0) printf("%s: nc = %d, nr = %d, nth = %d, params = %g, %g,  %d\n", __func__, nc, nr, nth, val[0], val[1], dst->data == src0->data ? 1 : 0);
+
     for (int i1 = ir0; i1 < ir1; i1++) {
-        if (dst->data != src0->data) {
-            // src0 is same shape as dst => same indices
-            memcpy((char *)dst->data + i1*nb1, (char *)src0->data + i1*nb01, nc * sizeof(float));
+        float * dst_row = (float *) ((char *) dst->data + i1*nb1);
+        if (dst->data == src0->data) {
+            ggml_vec_softcap_f32(nc, dst_row, val[0], val[1]);
+        } else {
+            const float * src_row = (const float *)((const char *)src0->data + i1*nb01);
+            ggml_vec_cpy_softcap_f32(nc, src_row, dst_row, val[0], val[1]);
         }
-        // TODO: better implementation
-        float * row = (float *) ((char *) dst->data + i1*nb1);
-        ggml_vec_softcap_f32(nc, row, val[0], val[1]);
-        //ggml_vec_scale_f32(nc, row, val[0]);
-        //ggml_vec_tanh_f32(nc, row, row);
-        //ggml_vec_scale_f32(nc, row, val[1]);
     }
 }
 
@@ -17326,6 +17364,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         return;
     }
 
+#if IK_PRINT_TIMING
+    int64_t t1 = ggml_time_us();
+#endif
+
     switch (tensor->op) {
         case GGML_OP_DUP:
             {
@@ -17655,6 +17697,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
                 GGML_ABORT("fatal error");
             }
     }
+#if IK_PRINT_TIMING
+    int64_t t2 = ggml_time_us();
+    if (params->ith == 0) printf("%s(%s): %d us\n", ggml_op_name(tensor->op), tensor->name, (int)(t2 - t1));
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////
