@@ -515,6 +515,7 @@ extern "C" {
         GGML_OP_ARGSORT,
         GGML_OP_LEAKY_RELU,
         GGML_OP_SOFTCAP,
+        GGML_OP_SOFT_CAP_MAX,
 
         GGML_OP_FLASH_ATTN_EXT,
         GGML_OP_FLASH_ATTN_BACK,
@@ -1234,6 +1235,25 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_softcap_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+            float                 s_before,
+            float                 s_after);
+
+    GGML_API struct ggml_tensor * ggml_softcap_max(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * mask,
+            float                 scale,
+            float                 max_bias,
+            float                 s_before,
+            float                 s_after);
+
+    // in-place, returns view(a)
+    GGML_API struct ggml_tensor * ggml_softcap_max_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * mask,
+            float                 scale,
+            float                 max_bias,
             float                 s_before,
             float                 s_after);
 
