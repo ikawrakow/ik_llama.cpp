@@ -8325,9 +8325,6 @@ static struct ggml_tensor * llm_build_kqv(
 
         if (hparams.attn_soft_cap) {
             kq = ggml_softcap(ctx, kq, 1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
-            //kq = ggml_scale(ctx, kq, 1.0f / hparams.f_attn_logit_softcapping);
-            //kq = ggml_tanh(ctx, kq);
-            //kq = ggml_scale(ctx, kq, hparams.f_attn_logit_softcapping);
         }
 
         kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
