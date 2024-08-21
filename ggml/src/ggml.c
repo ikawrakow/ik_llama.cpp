@@ -2889,6 +2889,41 @@ static void ggml_vec_softcap_f32(const int n, float * x, float s_before, float s
     }
 }
 
+static float ggml_vec_softcap_max_f32(const int n, float * x, float s_before, float s_after) {
+    int i = 0;
+    float max = -INFINITY;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+    __m512 vs_before = _mm512_set1_ps(2.f*s_before);
+    __m512 vs_after  = _mm512_set1_ps(s_after);
+    __m512 vmax = _mm512_set1_ps(-INFINITY);
+    for (; i + 15 < n; i += 16) {
+        __m512 y = ggml_v_softcap(_mm512_loadu_ps(x + i), vs_before, vs_after);
+        _mm512_storeu_ps(x + i, y);
+        vmax = _mm512_max_ps(vmax, y);
+    }
+    max = _mm512_reduce_max_ps(vmax);
+#elif defined(__AVX2__) && defined(__FMA__)
+    for (; i + 7 < n; i += 8) {
+        _mm256_storeu_ps(x + i, ggml_v_softcap(_mm256_loadu_ps(x + i), s_before, s_after));
+    }
+#elif defined(__SSE2__)
+    for (; i + 3 < n; i += 4) {
+        _mm_storeu_ps(x + i, ggml_v_softcap(_mm_loadu_ps(x + i), s_before, s_after));
+    }
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    float32x4_t vs_before = vdupq_n_f32(s_before);
+    float32x4_t vs_after  = vdupq_n_f32(s_after);
+    for (; i + 3 < n; i += 4) {
+        vst1q_f32(x + i, ggml_v_softcap(vld1q_f32(x + i), vs_before, vs_after));
+    }
+#endif
+    for (; i < n; ++i) {
+        x[i] = s_after*tanhf(x[i]*s_before);
+        max = MAX(max, x[i]);
+    }
+    return max;
+}
+
 inline static void ggml_vec_gelu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     const uint16_t * i16 = (const uint16_t *) x;
     for (int i = 0; i < n; ++i) {
@@ -6016,7 +6051,7 @@ struct ggml_tensor * ggml_softcap_max(
             float                 max_bias,
             float                 s_before,
             float                 s_after) {
-    ggml_softcap_max_impl(ctx, a, mask, scale, max_bias, s_before, s_after, false);
+    return ggml_softcap_max_impl(ctx, a, mask, scale, max_bias, s_before, s_after, false);
 }
 
 struct ggml_tensor * ggml_softcap_max_inplace(
@@ -6027,7 +6062,7 @@ struct ggml_tensor * ggml_softcap_max_inplace(
             float                 max_bias,
             float                 s_before,
             float                 s_after) {
-    ggml_softcap_max_impl(ctx, a, mask, scale, max_bias, s_before, s_after, true);
+    return ggml_softcap_max_impl(ctx, a, mask, scale, max_bias, s_before, s_after, true);
 }
 
 
@@ -13759,7 +13794,8 @@ static void ggml_compute_forward_softcap_max_f32(
             }
         }
 
-        ggml_vec_softcap_f32(nc, wp, values[2], values[3]);
+        //ggml_vec_softcap_f32(nc, wp, values[2], values[3]);
+        float max = ggml_vec_softcap_max_f32(nc, wp, values[2], values[3]);
 
 #ifndef NDEBUG
         for (int i = 0; i < nc; ++i) {
@@ -13768,8 +13804,8 @@ static void ggml_compute_forward_softcap_max_f32(
         }
 #endif
 
-        float max = -INFINITY;
-        ggml_vec_max_f32(nc, &max, wp);
+        //float max = -INFINITY;
+        //ggml_vec_max_f32(nc, &max, wp);
 
         ggml_float sum = ggml_vec_soft_max_f32(nc, dp, wp, max);
         assert(sum > 0.0);
@@ -18415,6 +18451,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 }
             } break;
         case GGML_OP_SOFTCAP:
+            {
+                GGML_ASSERT(false); // TODO: not implemented
+            } break;
+        case GGML_OP_SOFT_CAP_MAX:
             {
                 GGML_ASSERT(false); // TODO: not implemented
             } break;
