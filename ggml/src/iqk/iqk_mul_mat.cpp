@@ -6215,6 +6215,35 @@ bool iqk_fused_mul_mat_softmax(long Nx, long Ny, long ne00,
     return true;
 }
 
+//struct DataInfo {
+//    float       * s;
+//    const char  * cy;
+//    size_t        bs;
+//    size_t        by;
+//    int           cur_y = 0;
+//    int           ne11;
+//    const mmid_row_mapping * row_mapping = nullptr;
+//    size_t        bs2 = 0;
+
+
+void iqk_flash_helper(int nq,                 // number of elements in q
+                      int nk,                 // number of rows in k
+                      int stride_k,           // distance between rows in k (in bytes)
+                      const float * q,        // q vector
+                      const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
+                      const void  * mask,     // mask. If not null, assumed to be fp16. nk elements
+                      float         scale,
+                      float         slope,
+                      float       * qk) {
+    GGML_ASSERT(nq % 4 == 0);
+    //GGML_ASSERT(nq / 16 <= 16);
+
+    DataInfo info{qk, (const char*)q, 0, size_t(stride_k), 0, 1, nullptr, 0};
+
+    mul_mat_fX_fY_T<1, ggml_half, float>(nq, k, stride_k, info, nk);
+    softmax_extended(nk, qk, qk, scale, slope, (const char *)mask, true);
+}
+
 #else  // IQK_IMPLEMENT
 
 bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {

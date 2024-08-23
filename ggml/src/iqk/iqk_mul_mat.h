@@ -29,6 +29,16 @@ bool iqk_fused_mul_mat_softmax(long Nx, long Ny, long ne00,
         const char * mask, float scale, float slope,
         int ith, int nth);
 
+void iqk_flash_helper(int nq,                 // number of elements in q
+                      int nk,                 // number of rows in k
+                      int stride_k,           // distance between rows in k (in bytes)
+                      const float * q,        // q vector
+                      const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
+                      const void  * mask,     // mask. If not null, assumed to be fp16. nk elements
+                      float         scale,
+                      float         slope,
+                      float       * qk);      // softmax(k*q) - k elements
+
 #ifdef __cplusplus
 }
 #endif
