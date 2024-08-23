@@ -17,6 +17,7 @@
 
 #include <cstring>
 #include <type_traits>
+#include <new> // for hardware_destructive_interference_size
 
 #if defined IQK_IMPLEMENT
 
@@ -5915,6 +5916,305 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
 
 #endif // __aarch64__
 
+namespace {
+
+#if defined(__ARM_NEON) && defined(__aarch64__)
+// copy-pasted from Justine Tunney's contribution to llama.cpp
+// adapted from arm limited optimized routine
+// the maximum error is 1.45358 plus 0.5 ulps
+// numbers above 88.38 will flush to infinity
+// numbers beneath -103.97 will flush to zero
+inline float32x4_t v_expf(float32x4_t x) {
+    const float32x4_t r = vdupq_n_f32(0x1.8p23f);
+    const float32x4_t z = vfmaq_f32(r, x, vdupq_n_f32(0x1.715476p+0f));
+    const float32x4_t n = vsubq_f32(z, r);
+    const float32x4_t b = vfmsq_f32(vfmsq_f32(x, n, vdupq_n_f32(0x1.62e4p-1f)), n,
+                                    vdupq_n_f32(0x1.7f7d1cp-20f));
+    const uint32x4_t e = vshlq_n_u32(vreinterpretq_u32_f32(z), 23);
+    const float32x4_t k = vreinterpretq_f32_u32(vaddq_u32(e, vreinterpretq_u32_f32(vdupq_n_f32(1))));
+    const uint32x4_t c = vcagtq_f32(n, vdupq_n_f32(126));
+    const float32x4_t u = vmulq_f32(b, b);
+    const float32x4_t j = vfmaq_f32(
+        vmulq_f32(vdupq_n_f32(0x1.ffffecp-1f), b),
+        vfmaq_f32(vfmaq_f32(vdupq_n_f32(0x1.fffdb6p-2f), vdupq_n_f32(0x1.555e66p-3f), b),
+                  vfmaq_f32(vdupq_n_f32(0x1.573e2ep-5f), vdupq_n_f32(0x1.0e4020p-7f), b), u), u);
+    if (!vpaddd_u64(vreinterpretq_u64_u32(c)))
+        return vfmaq_f32(k, j, k);
+    const uint32x4_t d = vandq_u32(vclezq_f32(n), vdupq_n_u32(0x82000000));
+    const float32x4_t s1 = vreinterpretq_f32_u32(vaddq_u32(d, vdupq_n_u32(0x7f000000)));
+    const float32x4_t s2 = vreinterpretq_f32_u32(vsubq_u32(e, d));
+    return vbslq_f32(vcagtq_f32(n, vdupq_n_f32(192)), vmulq_f32(s1, s1),
+                     vbslq_f32(c, vmulq_f32(vfmaq_f32(s2, s2, j), s1), vfmaq_f32(k, k, j)));
+}
+#endif
+
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+
+// copy-pasted from Justine Tunney's contribution to llama.cpp
+// adapted from arm limited optimized routine
+// the maximum error is 1.45358 plus 0.5 ulps
+// numbers above 88.38 will flush to infinity
+// numbers beneath -103.97 will flush to zero
+inline __m512 v_expf(__m512 x) {
+  const __m512 r = _mm512_set1_ps(0x1.8p23f);
+  const __m512 z = _mm512_fmadd_ps(x, _mm512_set1_ps(0x1.715476p+0f), r);
+  const __m512 n = _mm512_sub_ps(z, r);
+  const __m512 b =
+      _mm512_fnmadd_ps(n, _mm512_set1_ps(0x1.7f7d1cp-20f),
+                       _mm512_fnmadd_ps(n, _mm512_set1_ps(0x1.62e4p-1f), x));
+  const __mmask16 d =
+      _mm512_cmp_ps_mask(_mm512_abs_ps(n), _mm512_set1_ps(192), _CMP_GT_OQ);
+  const __m512 u = _mm512_mul_ps(b, b);
+  const __m512 j = _mm512_fmadd_ps(
+      _mm512_fmadd_ps(_mm512_fmadd_ps(_mm512_set1_ps(0x1.0e4020p-7f), b,
+                                      _mm512_set1_ps(0x1.573e2ep-5f)),
+                      u,
+                      _mm512_fmadd_ps(_mm512_set1_ps(0x1.555e66p-3f), b,
+                                      _mm512_set1_ps(0x1.fffdb6p-2f))),
+      u,
+      _mm512_fmadd_ps(_mm512_set1_ps(0x1.ffffecp-1f), b, _mm512_set1_ps(1.0F)));
+  const __m512 res = _mm512_scalef_ps(j, n);
+  if (_mm512_kortestz(d, d))
+    return res;
+  const __m512 zero = _mm512_setzero_ps();
+  const __m512 alt = _mm512_mask_blend_ps(
+      _mm512_cmp_ps_mask(n, zero, _CMP_LE_OQ), _mm512_set1_ps(INFINITY), zero);
+  return _mm512_mask_blend_ps(d, res, alt);
+}
+#endif
+
+#if defined(__AVX2__) && defined(__FMA__)
+
+// adapted from arm limited optimized routine
+// the maximum error is 1.45358 plus 0.5 ulps
+// numbers above 88.38 will flush to infinity
+// numbers beneath -103.97 will flush to zero
+inline __m256 v_expf(__m256 x) {
+  const __m256 r = _mm256_set1_ps(0x1.8p23f);
+  const __m256 z = _mm256_fmadd_ps(x, _mm256_set1_ps(0x1.715476p+0f), r);
+  const __m256 n = _mm256_sub_ps(z, r);
+  const __m256 b = _mm256_fnmadd_ps(n, _mm256_set1_ps(0x1.7f7d1cp-20f),
+                                    _mm256_fnmadd_ps(n, _mm256_set1_ps(0x1.62e4p-1f), x));
+  const __m256i e = _mm256_slli_epi32(_mm256_castps_si256(z), 23);
+  const __m256 k = _mm256_castsi256_ps(
+      _mm256_add_epi32(e, _mm256_castps_si256(_mm256_set1_ps(1))));
+  const __m256i c = _mm256_castps_si256(
+      _mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.f), n),
+                    _mm256_set1_ps(126), _CMP_GT_OQ));
+  const __m256 u = _mm256_mul_ps(b, b);
+  const __m256 j = _mm256_fmadd_ps(_mm256_fmadd_ps(_mm256_fmadd_ps(_mm256_set1_ps(0x1.0e4020p-7f), b,
+                                                                   _mm256_set1_ps(0x1.573e2ep-5f)), u,
+                                                   _mm256_fmadd_ps(_mm256_set1_ps(0x1.555e66p-3f), b,
+                                                                   _mm256_set1_ps(0x1.fffdb6p-2f))),
+                                   u, _mm256_mul_ps(_mm256_set1_ps(0x1.ffffecp-1f), b));
+  if (!_mm256_movemask_ps(_mm256_castsi256_ps(c)))
+    return _mm256_fmadd_ps(j, k, k);
+  const __m256i g = _mm256_and_si256(
+      _mm256_castps_si256(_mm256_cmp_ps(n, _mm256_setzero_ps(), _CMP_LE_OQ)),
+      _mm256_set1_epi32(0x82000000u));
+  const __m256 s1 =
+      _mm256_castsi256_ps(_mm256_add_epi32(g, _mm256_set1_epi32(0x7f000000u)));
+  const __m256 s2 = _mm256_castsi256_ps(_mm256_sub_epi32(e, g));
+  const __m256i d = _mm256_castps_si256(
+      _mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.f), n),
+                    _mm256_set1_ps(192), _CMP_GT_OQ));
+  return _mm256_or_ps(
+      _mm256_and_ps(_mm256_castsi256_ps(d), _mm256_mul_ps(s1, s1)),
+      _mm256_andnot_ps(
+          _mm256_castsi256_ps(d),
+          _mm256_or_ps(
+              _mm256_and_ps(_mm256_castsi256_ps(c),
+                            _mm256_mul_ps(_mm256_fmadd_ps(s2, j, s2), s1)),
+              _mm256_andnot_ps(_mm256_castsi256_ps(c), _mm256_fmadd_ps(k, j, k)))));
+}
+#endif
+
+inline float prepare_softmax(int nc, float * sp, float scale, float slope, const char * mp, bool use_fp16) {
+    __m512 vscale = _mm512_set1_ps(scale);
+    __m512 vmax   = _mm512_set1_ps(-INFINITY);
+    float scalar_max = -INFINITY;
+    if (mp) {
+        __m512 vslope = _mm512_set1_ps(slope);
+        if (use_fp16) {
+            const ggml_fp16_t * mp_f16 = (const ggml_fp16_t *)mp;
+            __m512 vmax1 = _mm512_set1_ps(-INFINITY);
+            for (int i = 0; i < nc/32; ++i) {
+                const __m512 m1 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)mp_f16 + 2*i+0));
+                const __m512 m2 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)mp_f16 + 2*i+1));
+                const __m512 x1 = _mm512_loadu_ps(sp + 32*i +  0);
+                const __m512 x2 = _mm512_loadu_ps(sp + 32*i + 16);
+                const __m512 y1 = _mm512_fmadd_ps(vslope, m1, _mm512_mul_ps(vscale, x1));
+                const __m512 y2 = _mm512_fmadd_ps(vslope, m2, _mm512_mul_ps(vscale, x2));
+                vmax  = _mm512_max_ps(vmax , y1);
+                vmax1 = _mm512_max_ps(vmax1, y2);
+                _mm512_storeu_ps(sp + 32*i +  0, y1);
+                _mm512_storeu_ps(sp + 32*i + 16, y2);
+            }
+            vmax = _mm512_max_ps(vmax, vmax1);
+            for (int i = 32*(nc/32); i < nc; ++i) {
+                sp[i] = scale*sp[i] + slope*GGML_FP16_TO_FP32(mp_f16[i]);
+                scalar_max = std::max(scalar_max, sp[i]);
+            }
+        } else {
+            const float * mp_f32 = (const float *)mp;
+            for (int i = 0; i < nc/16; ++i) {
+                const __m512 m = _mm512_loadu_ps(mp_f32 + 16*i);
+                const __m512 x = _mm512_loadu_ps(sp + 16*i);
+                const __m512 y = _mm512_fmadd_ps(vslope, m, _mm512_mul_ps(vscale, x));
+                vmax = _mm512_max_ps(vmax, y);
+                _mm512_storeu_ps(sp + 16*i, y);
+            }
+            for (int i = 16*(nc/16); i < nc; ++i) {
+                sp[i] = scale*sp[i] + slope*mp_f32[i];
+                scalar_max = std::max(scalar_max, sp[i]);
+            }
+        }
+    } else {
+        for (int i = 0; i < nc/16; ++i) {
+            const __m512 x = _mm512_loadu_ps(sp + 16*i);
+            const __m512 y = _mm512_mul_ps(vscale, x);
+            vmax = _mm512_max_ps(vmax, y);
+            _mm512_storeu_ps(sp + 16*i, y);
+        }
+        for (int i = 16*(nc/16); i < nc; ++i) {
+            sp[i] = scale*sp[i];
+            scalar_max = std::max(scalar_max, sp[i]);
+        }
+    }
+    float vector_max = _mm512_reduce_max_ps(vmax);
+    return std::max(scalar_max, vector_max);
+}
+
+inline float do_soft_max(int nc, float * sp, float max) {
+    __m512 vmax = _mm512_set1_ps(-max);
+    __m512 vsum = _mm512_setzero_ps();
+    for (int i = 0; i < nc/16; ++i) {
+        auto x = _mm512_loadu_ps(sp + 16*i);
+        auto y = v_expf(_mm512_add_ps(x, vmax));
+        vsum = _mm512_add_ps(vsum, y);
+        _mm512_storeu_ps(sp + 16*i, y);
+    }
+    float sum = _mm512_reduce_add_ps(vsum);
+    for (int i = 16*(nc/16); i < nc; ++i) {
+        float y = expf(sp[i] - max);
+        sum += y;
+        sp[i] = y;
+    }
+    return sum;
+}
+
+inline void do_scale(int nc, const float * sp, float * dp, float scale) {
+    auto vscale = _mm512_set1_ps(scale);
+    for (int i = 0; i < nc/16; ++i) {
+        auto x = _mm512_loadu_ps(sp + 16*i);
+        auto y = _mm512_mul_ps(x, vscale);
+        _mm512_storeu_ps(dp + 16*i, y);
+    }
+    for (int i = 16*(nc/16); i < nc; ++i) {
+        dp[i] = sp[i]*scale;
+    }
+}
+
+void softmax_extended(int nc, float * sp, float * dp, float scale, float slope, const char * mp, bool mask_is_fp16) {
+    auto max = prepare_softmax(nc, sp, scale, slope, mp, mask_is_fp16);
+    auto sum = do_soft_max(nc, sp, max);
+    do_scale(nc, sp, dp, 1.f/sum);
+}
+
+}
+
+bool iqk_fused_mul_mat_softmax(long Nx, long Ny, long ne00,
+        int int_typeA, const void * A, long strideA,
+        int int_typeB, const void * B, long strideB,
+        float * C, long stride_C,
+        char * work_buffer, long work_size,
+        const char * mask, float scale, float slope,
+        int ith, int nth) {
+
+    constexpr int k_y_step = 5; // TODO: make this CPU dependent
+
+#if defined(__cpp_lib_hardware_interference_size)
+    constexpr int k_cache_line = std::hardware_destructive_interference_size;
+#else
+    constexpr int k_cache_line = 64;
+#endif
+
+    auto typeA = ggml_type(int_typeA);
+    auto typeB = ggml_type(int_typeB);
+
+    if (!(typeA == GGML_TYPE_F16 || typeA == GGML_TYPE_F32) || !(typeB == GGML_TYPE_F16 || typeB == GGML_TYPE_F32)) {
+        return false;
+    }
+
+    int ny_per_thread = (Ny + nth - 1)/nth;
+    int first_y = ny_per_thread*ith;
+    if (first_y >= Ny) {
+        return true;
+    }
+    int n_cols_per_iter = std::min(ny_per_thread, k_y_step);
+    int needed_work_size_per_thread = k_cache_line*((n_cols_per_iter*Nx*sizeof(float) + k_cache_line - 1)/k_cache_line);
+    int needed_work_size = needed_work_size_per_thread*nth;
+    if (needed_work_size > work_size) {
+        return false;
+    }
+
+    std::array<mul_mat_t, k_y_step> funcs;
+    if (typeA == GGML_TYPE_F16) {
+        if (typeB == GGML_TYPE_F16) {
+            funcs[0] = mul_mat_fX_fY_T<1, ggml_half, ggml_half>;
+            funcs[1] = mul_mat_fX_fY_T<2, ggml_half, ggml_half>;
+            funcs[2] = mul_mat_fX_fY_T<3, ggml_half, ggml_half>;
+            funcs[3] = mul_mat_fX_fY_T<4, ggml_half, ggml_half>;
+            funcs[4] = mul_mat_fX_fY_T<5, ggml_half, ggml_half>;
+        } else {
+            funcs[0] = mul_mat_fX_fY_T<1, ggml_half, float>;
+            funcs[1] = mul_mat_fX_fY_T<2, ggml_half, float>;
+            funcs[2] = mul_mat_fX_fY_T<3, ggml_half, float>;
+            funcs[3] = mul_mat_fX_fY_T<4, ggml_half, float>;
+            funcs[4] = mul_mat_fX_fY_T<5, ggml_half, float>;
+        }
+    } else {
+        if (typeB == GGML_TYPE_F16) {
+            funcs[0] = mul_mat_fX_fY_T<1, float, ggml_half>;
+            funcs[1] = mul_mat_fX_fY_T<2, float, ggml_half>;
+            funcs[2] = mul_mat_fX_fY_T<3, float, ggml_half>;
+            funcs[3] = mul_mat_fX_fY_T<4, float, ggml_half>;
+            funcs[4] = mul_mat_fX_fY_T<5, float, ggml_half>;
+        } else {
+            funcs[0] = mul_mat_fX_fY_T<1, float, float>;
+            funcs[1] = mul_mat_fX_fY_T<2, float, float>;
+            funcs[2] = mul_mat_fX_fY_T<3, float, float>;
+            funcs[3] = mul_mat_fX_fY_T<4, float, float>;
+            funcs[4] = mul_mat_fX_fY_T<5, float, float>;
+        }
+    }
+
+    auto row_size_qx = strideA*ggml_type_size(typeA);
+    auto row_size_qy = strideB*ggml_type_size(typeB);
+
+    DataInfo info{(float *)(work_buffer + needed_work_size_per_thread*ith), (const char *)B + first_y*row_size_qy,
+                  Nx*sizeof(float), row_size_qy, 0, 1, nullptr, 0};
+
+    C += first_y*stride_C;
+
+    const char * mp = mask ? mask + first_y*Nx*sizeof(ggml_half) : nullptr;
+
+    int n_step = (ny_per_thread + k_y_step - 1)/k_y_step;
+    for (int i_step = 1; i_step <= n_step; ++i_step) {
+        int this_ny = i_step*k_y_step <= ny_per_thread ? k_y_step : ny_per_thread - (i_step - 1)*k_y_step;
+        funcs[this_ny-1](ne00, A, row_size_qx, info, Nx);
+        // Now we need to compute the softmax and store the result in C
+        for (int iy = 0; iy < this_ny; ++iy) {
+            softmax_extended(Nx, info.s + iy*Nx, C, scale, slope, mp, true);
+            C += stride_C;
+            if (mp) mp += Nx*sizeof(ggml_half);
+        }
+        info.cy += row_size_qy*this_ny;
+    }
+
+    return true;
+}
+
 #else  // IQK_IMPLEMENT
 
 bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
@@ -5923,6 +6223,16 @@ bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void
 
 bool iqk_mul_mat_moe(long, long, long, int, int, const void *, long, int, const void *, long, float *, long, long,
         const void *, int, int) {
+    return false;
+}
+
+bool iqk_fused_mul_mat_softmax(long, long, long,
+        int, const void *, long,
+        int, const void *, long,
+        float *, long,
+        char *, long,
+        const char *, float, float, uint32_t,
+        int, int) {
     return false;
 }
 

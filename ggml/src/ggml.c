@@ -12761,6 +12761,8 @@ static void ggml_compute_forward_mul_mat(
 
 #if GGML_USE_IQK_MULMAT
     if (dst->type == GGML_TYPE_F32 && (ne12*ne13)%nth == 0) {
+        //if (ith == 0) printf("%s(%-10s): %d multiplies with Nx = %d, Ny = %d ne00 = %d\n", __func__, dst->name,
+        //        (int)(ne12*ne13), (int)ne01, (int)ne11, (int)ne00);
         int counter = 0;
         for (int64_t i13 = 0; i13 < ne13; i13++) {
             for (int64_t i12 = 0; i12 < ne12; i12++) {
@@ -12773,6 +12775,10 @@ static void ggml_compute_forward_mul_mat(
                 }
             }
         }
+#if IK_PRINT_TIMING
+        if (ith == 0) printf("%s(%s, 0): %g GFLOP, %g MiB\n", __func__, dst->name, 2e-9*ggml_nelements(dst)*ne00,
+                4.*ggml_nelements(dst)/(1024*1024));
+#endif
         return;
     }
     if (dst->type == GGML_TYPE_F32) {
@@ -12783,6 +12789,10 @@ static void ggml_compute_forward_mul_mat(
                             src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
                             (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
                             ith, nth)) goto IQK_MulMat_Not_Available1;
+#if IK_PRINT_TIMING
+        if (ith == 0) printf("%s(%s, 1): %g GFLOP, %g MiB\n", __func__, dst->name, 2e-9*ggml_nelements(dst)*ne00,
+                4.*ggml_nelements(dst)/(1024*1024));
+#endif
         return;
     }
 IQK_MulMat_Not_Available1:;
@@ -14302,6 +14312,93 @@ static void ggml_compute_forward_diag_mask_zero(
     }
 }
 
+static bool ggml_fused_mul_mat_softmax(const struct ggml_compute_params * params,
+        struct ggml_tensor * mul_mat,
+        struct ggml_tensor * soft_max) {
+
+    if (!(mul_mat->src[0]->type == GGML_TYPE_F16 || mul_mat->src[0]->type == GGML_TYPE_F32) ||
+        !(mul_mat->src[1]->type == GGML_TYPE_F16 || mul_mat->src[1]->type == GGML_TYPE_F32) ||
+        !(soft_max->type == GGML_TYPE_F16 ||soft_max->type == GGML_TYPE_F32) ||
+        !ggml_is_contiguous(soft_max) || !ggml_are_same_shape(mul_mat, soft_max)) {
+        return false;
+    }
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    //if (ith == 0) printf("%s: %s = softmax(%s = %s x %s)\n", __func__, soft_max->name, mul_mat->name, mul_mat->src[0]->name, mul_mat->src[1]->name);
+
+    const struct ggml_tensor * dst  = mul_mat;
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+    const enum ggml_type type = src0->type;
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT(ne0 == ne01);
+    GGML_ASSERT(ne1 == ne11);
+    GGML_ASSERT(ne2 == ne12);
+    GGML_ASSERT(ne3 == ne13);
+
+    // we don't support permuted src0 or src1
+    GGML_ASSERT(nb00 == ggml_type_size(type));
+    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+
+    // dst cannot be transposed or permuted
+    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(nb0 <= nb1);
+    GGML_ASSERT(nb1 <= nb2);
+    GGML_ASSERT(nb2 <= nb3);
+
+    const int64_t r2 = ne12 / ne02;
+    const int64_t r3 = ne13 / ne03;
+
+    float op_params[2];
+    memcpy(op_params, soft_max->op_params, sizeof(op_params));
+
+    const uint32_t n_head      = ne02;
+    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
+    const float m0 = powf(2.0f, -(op_params[0]       ) / n_head_log2);
+    const float m1 = powf(2.0f, -(op_params[0] / 2.0f) / n_head_log2);
+
+    //if ((ne12*ne13)%nth == 0) {
+    //    int counter = 0;
+    //    for (int64_t i13 = 0; i13 < ne13; i13++) {
+    //        for (int64_t i12 = 0; i12 < ne12; i12++) {
+    //            if (counter++ % nth == ith) {
+    //                const uint32_t h = i12;
+    //                const float slope = (op_params[1] > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+    //                if (!iqk_fused_mul_mat_softmax(ne01, ne11, ne00,
+    //                            src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
+    //                            src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
+    //                            (float *)((char *)soft_max->data + i12*nb2 + i13*nb3), nb1/sizeof(float),
+    //                            params->wdata, params->wsize,
+    //                            soft_max->src[1]->data, op_params[0], slope, 0, 1)) return false;
+    //            }
+    //        }
+    //    }
+    //} else {
+        for (int64_t i13 = 0; i13 < ne13; i13++) {
+            for (int64_t i12 = 0; i12 < ne12; i12++) {
+                const uint32_t h = i12;
+                const float slope = (op_params[1] > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+                if (!iqk_fused_mul_mat_softmax(ne01, ne11, ne00,
+                            src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
+                            src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
+                            (float *)((char *)soft_max->data + i12*nb2 + i13*nb3), nb1/sizeof(float),
+                            params->wdata, params->wsize,
+                            soft_max->src[1]->data, op_params[0], slope, ith, nth)) {
+                    if (ith == 0) printf("iqk_fused_mul_mat_softmax returned false!\n");
+                    return false;
+                }
+            }
+        }
+    //}
+
+        //if (ith == 0) printf("    success!\n");
+    return true;
+}
+
 // ggml_compute_forward_soft_max
 
 static void ggml_compute_forward_soft_max_f32(
@@ -14339,6 +14436,10 @@ static void ggml_compute_forward_soft_max_f32(
 
     const int nc = src0->ne[0];
     const int nr = ggml_nrows(src0);
+
+#if IK_PRINT_TIMING
+    if (ith == 0) printf("%s: %d x %d, %g MiB\n", __func__, nc, nr, 4.*nc*nr/(1024*1024));
+#endif
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -17357,11 +17458,12 @@ static void ggml_compute_forward_cross_entropy_loss_back(
 
 /////////////////////////////////
 
-static void ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor) {
+static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor, struct ggml_tensor * next) {
     GGML_ASSERT(params);
 
+    bool result = false;
     if (tensor->op == GGML_OP_NONE || ggml_is_empty(tensor)) {
-        return;
+        return result;
     }
 
 #if IK_PRINT_TIMING
@@ -17459,7 +17561,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_MUL_MAT:
             {
-                ggml_compute_forward_mul_mat(params, tensor);
+                if (next && next->op == GGML_OP_SOFT_MAX) {
+                    result = ggml_fused_mul_mat_softmax(params, tensor, next);
+                } else {
+                    ggml_compute_forward_mul_mat(params, tensor);
+                }
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
@@ -17701,6 +17807,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
     int64_t t2 = ggml_time_us();
     if (params->ith == 0) printf("%s(%s): %d us\n", ggml_op_name(tensor->op), tensor->name, (int)(t2 - t1));
 #endif
+    return result;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -19526,7 +19633,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         if (ggml_is_noop(node)) continue;
 
-        ggml_compute_forward(&params, node);
+        bool skip_next = ggml_compute_forward(&params, node, node_n < cgraph->n_nodes - 1 ? cgraph->nodes[node_n + 1] : NULL);
 
         if (state->ith == 0 && cplan->abort_callback && cplan->abort_callback(cplan->abort_callback_data)) {
             state->shared->ec = GGML_STATUS_ABORTED;
@@ -19537,6 +19644,8 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         if (state->shared->ec != GGML_STATUS_SUCCESS) {
             break;
         }
+
+        if (skip_next) ++node_n;
     }
 
     return 0;
