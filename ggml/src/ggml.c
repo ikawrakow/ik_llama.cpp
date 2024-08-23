@@ -16069,11 +16069,12 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*D); // (temporary) FP16 VKQ accumulator
         ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*D); // (temporary) buffer for Q converted to quantized/FP16
 
-        if (v->type == GGML_TYPE_F16) {
-            memset(VKQ16, 0, D*sizeof(ggml_fp16_t));
-        } else {
-            memset(VKQ32, 0, D*sizeof(float));
-        }
+        //memset(VKQ32, 0, D*sizeof(float));
+        //if (v->type == GGML_TYPE_F16) {
+        //    memset(VKQ16, 0, D*sizeof(ggml_fp16_t));
+        //} else {
+        //    memset(VKQ32, 0, D*sizeof(float));
+        //}
 
         const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1]) : NULL;
 
@@ -16085,22 +16086,31 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         const int iv3 = iq3 / rv3;
         const int iv2 = iq2 / rv2;
 
-        iqk_flash_helper(D, nek1, nbk1,
-                (const float *)((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3)),
+        //iqk_flash_helper(D, nek1, nbk1,
+        //        (const float *)((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3)),
+        //        (const void  *)((char *) k->data + ik2*nbk2 + ik3*nbk3),
+        //        (const void  *)mp,
+        //        scale, slope,
+        //        aux_kq);
+
+        //for (int64_t ic = 0; ic < nek1; ++ic) {
+        //    const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
+        //    if (v->type == GGML_TYPE_F16) {
+        //        ggml_vec_mad_f16(D, VKQ16, (const ggml_fp16_t *) v_data, aux_kq[ic]);
+        //    } else {
+        //        v_to_float(v_data, V32, D);
+        //        ggml_vec_mad_f32(D, VKQ32, V32, aux_kq[ic]);
+        //    }
+        //}
+
+        iqk_flash_helper_2(D, nek1, nbk1, nbv1,
+                (const float *)((char *) q->data + iq1*nbq1 + iq2*nbq2 + iq3*nbq3),
                 (const void  *)((char *) k->data + ik2*nbk2 + ik3*nbk3),
+                (const void  *)((char *) v->data + iv2*nbv2 + iv3*nbv3),
                 (const void  *)mp,
                 scale, slope,
-                aux_kq);
-
-        for (int64_t ic = 0; ic < nek1; ++ic) {
-            const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
-            if (v->type == GGML_TYPE_F16) {
-                ggml_vec_mad_f16(D, VKQ16, (const ggml_fp16_t *) v_data, aux_kq[ic]);
-            } else {
-                v_to_float(v_data, V32, D);
-                ggml_vec_mad_f32(D, VKQ32, V32, aux_kq[ic]);
-            }
-        }
+                aux_kq, (float *)((char *) dst->data + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1));
+                //aux_kq, VKQ32);
 
         ////const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
         ////q_to_vec_dot(pq, Q_q, D);
@@ -16166,26 +16176,26 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         //    S = S*ms + vs; // scale and increment sum with partial sum
         //}
 
-        if (v->type == GGML_TYPE_F16) {
-            for (int64_t d = 0; d < D; ++d) {
-                VKQ32[d] = GGML_FP16_TO_FP32(VKQ16[d]);
-            }
-        }
+        //if (v->type == GGML_TYPE_F16) {
+        //    for (int64_t d = 0; d < D; ++d) {
+        //        VKQ32[d] = GGML_FP16_TO_FP32(VKQ16[d]);
+        //    }
+        //}
 
         //// V /= S
         //const float S_inv = 1.0f/S;
         //ggml_vec_scale_f32(D, VKQ32, S_inv);
 
-        // dst indices
-        const int i1 = iq1;
-        const int i2 = iq2;
-        const int i3 = iq3;
+        //// dst indices
+        //const int i1 = iq1;
+        //const int i2 = iq2;
+        //const int i3 = iq3;
 
-        // original
-        //memcpy((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3), V, nev0*sizeof(float));
+        //// original
+        ////memcpy((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3), V, nev0*sizeof(float));
 
-        // permute(0, 2, 1, 3)
-        memcpy((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1, VKQ32, nb1);
+        //// permute(0, 2, 1, 3)
+        //memcpy((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1, VKQ32, nb1);
     }
 }
 

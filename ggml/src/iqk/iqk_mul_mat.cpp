@@ -6244,6 +6244,60 @@ void iqk_flash_helper(int nq,                 // number of elements in q
     softmax_extended(nk, qk, qk, scale, slope, (const char *)mask, true);
 }
 
+void iqk_flash_helper_2(int nq,                 // number of elements in q
+                        int nk,                 // number of rows in k
+                        int stride_k,           // distance between rows in k (in bytes)
+                        int stride_v,
+                        const float * q,        // q vector
+                        const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
+                        const void  * v,        // k matrix. Assumed to be fp16, nq x nk elements
+                        const void  * mask,     // mask. If not null, assumed to be fp16. nk elements
+                        float         scale,
+                        float         slope,
+                        float       * qk,
+                        float       * qkv) {
+    GGML_ASSERT(nq % 4 == 0);
+    //GGML_ASSERT(nq / 16 <= 16);
+
+    DataInfo info{qk, (const char*)q, 0, size_t(stride_k), 0, 1, nullptr, 0};
+
+    mul_mat_fX_fY_T<1, ggml_half, float>(nq, k, stride_k, info, nk);
+    softmax_extended(nk, qk, qk, scale, slope, (const char *)mask, true);
+
+    GGML_ASSERT(nq%16 == 0);
+    if (nq/16 <= 16) {
+        __m512 v_qkv[16];
+        auto v_qk = _mm512_set1_ps(qk[0]);
+        for (int j = 0; j < nq/16; ++j) {
+            auto v_v = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i*)v + j));
+            v_qkv[j] = _mm512_mul_ps(v_qk, v_v);
+        }
+        for (int ic = 1; ic < nk; ++ic) {
+            const ggml_half * vr = (const ggml_half *)((const char *)v + ic*stride_v);
+            v_qk = _mm512_set1_ps(qk[ic]);
+            for (int j = 0; j < nq/16; ++j) {
+                auto v_v = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i*)vr + j));
+                v_qkv[j] = _mm512_fmadd_ps(v_qk, v_v, v_qkv[j]);
+            }
+        }
+        for (int j = 0; j < nq/16; ++j) {
+            _mm512_storeu_ps(qkv + 16*j, v_qkv[j]);
+        }
+        return;
+    }
+
+    for (int ic = 0; ic < nk; ++ic) {
+        auto v_qk = _mm512_set1_ps(qk[ic]);
+        const ggml_half * vr = (const ggml_half *)((const char *)v + ic*stride_v);
+        for (int j = 0; j < nq/16; ++j) {
+            auto v_v = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i*)vr + j));
+            auto v_qkv = _mm512_loadu_ps(qkv + 16*j);
+            v_qkv = _mm512_fmadd_ps(v_qk, v_v, v_qkv);
+            _mm512_storeu_ps(qkv + 16*j, v_qkv);
+        }
+    }
+}
+
 #else  // IQK_IMPLEMENT
 
 bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
