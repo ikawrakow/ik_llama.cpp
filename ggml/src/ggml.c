@@ -13733,11 +13733,10 @@ static void ggml_compute_forward_softcap_max_f32(
 
     float values[4];
     memcpy(values, dst->op_params, sizeof(values));
-
-    //memcpy(&scale,    (float *) dst->op_params + 0, sizeof(float));
-    //memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
-
-    // TODO: handle transposed/permuted matrices
+    // values[0] -> scale
+    // values[1] -> max_bias
+    // values[2] -> s_before
+    // values[3] -> s_after
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -13780,8 +13779,8 @@ static void ggml_compute_forward_softcap_max_f32(
         ggml_fp16_t * mp_f16 = src1 ? (ggml_fp16_t *)((char *) src1->data) + (i1%ne01)*ne00 : NULL;
         float       * mp_f32 = src1 ? (float       *)((char *) src1->data) + (i1%ne01)*ne00 : NULL;
 
-        ggml_vec_cpy_f32  (nc, wp, sp);
-        ggml_vec_scale_f32(nc, wp, values[0]);
+        ggml_vec_cpy_softcap_f32(nc, sp, wp, values[2], values[0]*values[3]);
+
         if (mp_f32) {
             if (use_f16) {
                 for (int i = 0; i < nc; ++i) {
@@ -13794,9 +13793,6 @@ static void ggml_compute_forward_softcap_max_f32(
             }
         }
 
-        //ggml_vec_softcap_f32(nc, wp, values[2], values[3]);
-        float max = ggml_vec_softcap_max_f32(nc, wp, values[2], values[3]);
-
 #ifndef NDEBUG
         for (int i = 0; i < nc; ++i) {
             //printf("p[%d] = %f\n", i, p[i]);
@@ -13804,8 +13800,8 @@ static void ggml_compute_forward_softcap_max_f32(
         }
 #endif
 
-        //float max = -INFINITY;
-        //ggml_vec_max_f32(nc, &max, wp);
+        float max = -INFINITY;
+        ggml_vec_max_f32(nc, &max, wp);
 
         ggml_float sum = ggml_vec_soft_max_f32(nc, dp, wp, max);
         assert(sum > 0.0);
