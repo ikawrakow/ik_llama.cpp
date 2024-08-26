@@ -910,9 +910,6 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
             if (op->src[0]->ne[0] == 256) {
                 return false;
             }
-            float softcap;
-            memcpy(&softcap, ((const float *) op->op_params) + 2, sizeof(softcap));
-            if (softcap != 0.0f) return false;
             return ctx->support_simdgroup_mm; // TODO: over-restricted for vec-kernels
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
@@ -3004,9 +3001,14 @@ static enum ggml_status ggml_metal_graph_compute(
 
                         float scale;
                         float max_bias;
+                        float softcap;
 
                         memcpy(&scale,    ((int32_t *) dst->op_params) + 0, sizeof(scale));
                         memcpy(&max_bias, ((int32_t *) dst->op_params) + 1, sizeof(max_bias));
+                        memcpy(&softcap,  ((int32_t *) dst->op_params) + 2, sizeof(softcap));
+                        if (softcap != 0.0f) {
+                            scale /= softcap;
+                        }
 
                         const uint32_t n_head      = src0->ne[2];
                         const uint32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
@@ -3080,7 +3082,8 @@ static enum ggml_status ggml_metal_graph_compute(
                         [encoder setBytes:&max_bias    length:sizeof(   float)    atIndex:24];
                         [encoder setBytes:&m0          length:sizeof(m0)          atIndex:25];
                         [encoder setBytes:&m1          length:sizeof(m1)          atIndex:26];
-                        [encoder setBytes:&n_head_log2 length:sizeof(n_head_log2) atIndex:27];
+                        [encoder setBytes:&softcap     length:sizeof(softcap)     atIndex:27];
+                        [encoder setBytes:&n_head_log2 length:sizeof(n_head_log2) atIndex:28];
 
                         if (!use_vec_kernel) {
                             // half8x8 kernel

@@ -2279,6 +2279,7 @@ typedef void (flash_attn_ext_f16_t)(
         constant     float & max_bias,
         constant     float & m0,
         constant     float & m1,
+        constant     float & softcap,
         constant  uint32_t & n_head_log2,
         threadgroup   half * shared,
         uint3  tgpig[[threadgroup_position_in_grid]],
@@ -2317,6 +2318,7 @@ kernel void kernel_flash_attn_ext_f16(
         constant     float & max_bias,
         constant     float & m0,
         constant     float & m1,
+        constant     float & softcap,
         constant  uint32_t & n_head_log2,
         threadgroup   half * shared [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
@@ -2446,14 +2448,19 @@ kernel void kernel_flash_attn_ext_f16(
                     const short tx = tiisg%4;
                     const short ty = tiisg/4;
 
+                    // mqk = mqk*scale
+                    ss[8*cc + ty*TF + 2*tx + 0] *= scale;
+                    ss[8*cc + ty*TF + 2*tx + 1] *= scale;
+
+                    if (softcap != 0.0f) {
+                        ss[8*cc + ty*TF + 2*tx + 0] = softcap*precise::tanh(ss[8*cc + ty*TF + 2*tx + 0]);
+                        ss[8*cc + ty*TF + 2*tx + 1] = softcap*precise::tanh(ss[8*cc + ty*TF + 2*tx + 1]);
+                    }
+
                     if (mask != q) {
                         // mqk = mqk*scale + mask*slope
-                        ss[8*cc + ty*TF + 2*tx + 0] = scale*ss[8*cc + ty*TF + 2*tx + 0] + slope*mp[ic + 8*cc + ty*nb31/sizeof(half) + 2*tx + 0];
-                        ss[8*cc + ty*TF + 2*tx + 1] = scale*ss[8*cc + ty*TF + 2*tx + 1] + slope*mp[ic + 8*cc + ty*nb31/sizeof(half) + 2*tx + 1];
-                    } else {
-                        // mqk = mqk*scale
-                        ss[8*cc + ty*TF + 2*tx + 0] *= scale;
-                        ss[8*cc + ty*TF + 2*tx + 1] *= scale;
+                        ss[8*cc + ty*TF + 2*tx + 0] += slope*mp[ic + 8*cc + ty*nb31/sizeof(half) + 2*tx + 0];
+                        ss[8*cc + ty*TF + 2*tx + 1] += slope*mp[ic + 8*cc + ty*nb31/sizeof(half) + 2*tx + 1];
                     }
                 }
             }
@@ -2648,6 +2655,7 @@ kernel void kernel_flash_attn_ext_vec_f16(
         constant     float & max_bias,
         constant     float & m0,
         constant     float & m1,
+        constant     float & softcap,
         constant  uint32_t & n_head_log2,
         threadgroup   half * shared [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
@@ -2783,7 +2791,11 @@ kernel void kernel_flash_attn_ext_vec_f16(
 
                     // mqk = mqk*scale + mask*slope
                     if (tiisg == 0) {
-                        mqk = mqk*scale + ((mask != q) ? ((float4) mp4[ic/4 + cc])*slope : (float4) 0.0f);
+                        mqk *= scale;
+                        if (softcap != 0.0f) {
+                            mqk = softcap*precise::tanh(mqk);
+                        }
+                        mqk += (mask != q) ? ((float4) mp4[ic/4 + cc])*slope : (float4) 0.0f;
 
                         ss4[cc] = mqk;
                     }
