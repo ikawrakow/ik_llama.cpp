@@ -7596,7 +7596,8 @@ struct ggml_tensor * ggml_flash_attn_ext(
         struct ggml_tensor  * v,
         struct ggml_tensor  * mask,
         float                 scale,
-        float                 max_bias) {
+        float                 max_bias,
+        float                 softcap) {
     GGML_ASSERT(ggml_can_mul_mat(k, q));
     // TODO: check if vT can be multiplied by (k*qT)
 
@@ -7623,7 +7624,7 @@ struct ggml_tensor * ggml_flash_attn_ext(
     int64_t ne[4] = { q->ne[0], q->ne[2], q->ne[1], q->ne[3] };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
-    float params[] = { scale, max_bias };
+    float params[] = { scale, max_bias, softcap };
     ggml_set_op_params(result, params, sizeof(params));
 
     result->op   = GGML_OP_FLASH_ATTN_EXT;
@@ -7643,7 +7644,7 @@ void ggml_flash_attn_ext_set_prec(
 
     const int32_t prec_i32 = (int32_t) prec;
 
-    ggml_set_op_params_i32(a, 2, prec_i32); // scale is on first pos, max_bias on second
+    ggml_set_op_params_i32(a, 3, prec_i32); // scale is on first pos, max_bias on second
 }
 
 // ggml_flash_attn_back
@@ -16138,9 +16139,15 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
     float scale    = 1.0f;
     float max_bias = 0.0f;
+    float softcap  = 0.0f;
 
     memcpy(&scale,    (float *) dst->op_params + 0, sizeof(float));
     memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
+    memcpy(&softcap,  (float *) dst->op_params + 2, sizeof(float));
+
+    if (softcap != 0.0f) {
+        scale /= softcap;
+    }
 
     const uint32_t n_head      = neq2;
     const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
@@ -16204,7 +16211,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
             kq_vec_dot(D, &s, 0, k_data, 0, Q_q, 0, 1);
 
-            s = s*scale + mv; // scale KQ value and apply mask
+            s = softcap == 0.0f ? s*scale + mv : softcap*tanhf(s*scale) + mv; // scale KQ value and apply mask
 
             const float Mold = M;
 
@@ -16213,7 +16220,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
             const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
 
-            if (v->type== GGML_TYPE_F16) {
+            if (v->type == GGML_TYPE_F16) {
                 if (s > M) {
                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
                     M = s;
@@ -16280,7 +16287,7 @@ static void ggml_compute_forward_flash_attn_ext(
         const struct ggml_tensor * v,
         const struct ggml_tensor * mask,
         struct ggml_tensor * dst) {
-    switch (dst->op_params[2]) {
+    switch (dst->op_params[3]) {
         case GGML_PREC_DEFAULT:
         case GGML_PREC_F32:
             {

@@ -21,6 +21,7 @@ typedef void (* fattn_kernel_t)(
         const float max_bias,
         const float m0,
         const float m1,
+        const float softcap,
         const uint32_t n_head_log2,
         const int ne00,
         const int ne01,
@@ -659,9 +660,15 @@ void launch_fattn(
 
     float scale    = 1.0f;
     float max_bias = 0.0f;
+    float softcap  = 0.0f;
 
     memcpy(&scale,    (float *) KQV->op_params + 0, sizeof(float));
     memcpy(&max_bias, (float *) KQV->op_params + 1, sizeof(float));
+    memcpy(&softcap,  (float *) KQV->op_params + 2, sizeof(float));
+
+    if (softcap != 0.0f) {
+        scale /= softcap;
+    }
 
     const uint32_t n_head      = Q->ne[2];
     const uint32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
@@ -675,7 +682,7 @@ void launch_fattn(
         V_data,
         mask ? ((const char *) mask->data) : nullptr,
         (parallel_blocks) == 1 ? (float *) KQV->data : dst_tmp.ptr, dst_tmp_meta.ptr,
-        scale, max_bias, m0, m1, n_head_log2,
+        scale, max_bias, m0, m1, softcap, n_head_log2,
         Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3],
         K->ne[0], K->ne[1], K->ne[2], K->ne[3],
         mask ? mask->ne[1] : 0, mask ?  mask->nb[1] : 0,
