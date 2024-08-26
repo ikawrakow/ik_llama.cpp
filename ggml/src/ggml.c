@@ -14368,9 +14368,13 @@ static bool ggml_fused_mul_mat_softmax(const struct ggml_compute_params * params
         struct ggml_tensor * mul_mat,
         struct ggml_tensor * soft_max) {
 
+    float op_params[2];
+    memcpy(op_params, soft_max->op_params, sizeof(op_params));
+    if (soft_max->type != GGML_TYPE_F32 || soft_max->src[1]->type != GGML_TYPE_F32 || op_params[1] > 0) return false;
+
     if (!(mul_mat->src[0]->type == GGML_TYPE_F16 || mul_mat->src[0]->type == GGML_TYPE_F32) ||
         !(mul_mat->src[1]->type == GGML_TYPE_F16 || mul_mat->src[1]->type == GGML_TYPE_F32) ||
-        !(soft_max->type == GGML_TYPE_F16 ||soft_max->type == GGML_TYPE_F32) ||
+        !(soft_max->type == GGML_TYPE_F16 || soft_max->type == GGML_TYPE_F32) ||
         !ggml_is_contiguous(soft_max) || !ggml_are_same_shape(mul_mat, soft_max)) {
         return false;
     }
@@ -14386,6 +14390,8 @@ static bool ggml_fused_mul_mat_softmax(const struct ggml_compute_params * params
     const enum ggml_type type = src0->type;
 
     GGML_TENSOR_BINARY_OP_LOCALS
+
+    if ((ne12*ne13)%nth != 0) return false;
 
     GGML_ASSERT(ne0 == ne01);
     GGML_ASSERT(ne1 == ne11);
@@ -14405,49 +14411,33 @@ static bool ggml_fused_mul_mat_softmax(const struct ggml_compute_params * params
     const int64_t r2 = ne12 / ne02;
     const int64_t r3 = ne13 / ne03;
 
-    float op_params[2];
-    memcpy(op_params, soft_max->op_params, sizeof(op_params));
-
-    const uint32_t n_head      = ne02;
-    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
-    const float m0 = powf(2.0f, -(op_params[0]       ) / n_head_log2);
-    const float m1 = powf(2.0f, -(op_params[0] / 2.0f) / n_head_log2);
-
-    //if ((ne12*ne13)%nth == 0) {
-    //    int counter = 0;
-    //    for (int64_t i13 = 0; i13 < ne13; i13++) {
-    //        for (int64_t i12 = 0; i12 < ne12; i12++) {
-    //            if (counter++ % nth == ith) {
-    //                const uint32_t h = i12;
-    //                const float slope = (op_params[1] > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
-    //                if (!iqk_fused_mul_mat_softmax(ne01, ne11, ne00,
-    //                            src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
-    //                            src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
-    //                            (float *)((char *)soft_max->data + i12*nb2 + i13*nb3), nb1/sizeof(float),
-    //                            params->wdata, params->wsize,
-    //                            soft_max->src[1]->data, op_params[0], slope, 0, 1)) return false;
-    //            }
-    //        }
-    //    }
-    //} else {
-        for (int64_t i13 = 0; i13 < ne13; i13++) {
-            for (int64_t i12 = 0; i12 < ne12; i12++) {
-                const uint32_t h = i12;
-                const float slope = (op_params[1] > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
-                if (!iqk_fused_mul_mat_softmax(ne01, ne11, ne00,
+    int counter = 0;
+    for (int64_t i13 = 0; i13 < ne13; i13++) {
+        for (int64_t i12 = 0; i12 < ne12; i12++) {
+            if (counter++ % nth == ith) {
+                if (!iqk_mul_mat(ne01, ne11, ne00,
                             src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
                             src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
-                            (float *)((char *)soft_max->data + i12*nb2 + i13*nb3), nb1/sizeof(float),
-                            params->wdata, params->wsize,
-                            soft_max->src[1]->data, op_params[0], slope, ith, nth)) {
-                    if (ith == 0) printf("iqk_fused_mul_mat_softmax returned false!\n");
-                    return false;
-                }
+                            //(float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
+                            (float *)((char *)soft_max->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
+                            0, 1)) return false;
+                if (!iqk_soft_max_noalibi(dst->ne[0], 0, dst->ne[1], dst->ne[0], dst->ne[1],
+                            //(float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
+                            (float *)((char *)soft_max->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
+                            (float *)((char *)soft_max->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
+                            soft_max->src[1] ? (float *)soft_max->src[1]->data : NULL, op_params[0], NULL)) return false;
+                //const float slope = 1.0f;
+                //if (!iqk_fused_mul_mat_softmax(ne01, ne11, ne00,
+                //            src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01/ggml_type_size(src0->type),
+                //            src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11/ggml_type_size(src1->type),
+                //            (float *)((char *)soft_max->data + i12*nb2 + i13*nb3), nb1/sizeof(float),
+                //            params->wdata, params->wsize,
+                //            soft_max->src[1]->data, op_params[0], slope, 0, 1)) return false;
             }
         }
-    //}
+    }
 
-        //if (ith == 0) printf("    success!\n");
+    //if (ith == 0) printf("    success!\n");
     return true;
 }
 
@@ -14506,25 +14496,42 @@ static void ggml_compute_forward_soft_max_f32(
 
     //if (ith == 0) printf("%s: nc = %d, nr = %d, use_f16 = %d, max_bias = %g, src1 = %d\n", __func__, nc, nr, use_f16, max_bias, src1 ? 1 : 0);
 
-    //if (!use_f16 && max_bias <= 0) {
+    if (!use_f16 && max_bias <= 0) {
+        if (iqk_soft_max_noalibi(nc, ir0, ir1, ne00, ne01,
+                    (const float *)src0->data, src0->nb[1]/sizeof(float),
+                          (float *)dst->data,  dst->nb[1]/sizeof(float),
+                    src1 ? (const float *)src1->data : NULL, scale, wp)) return;
+    }
+
     //    for (int i1 = ir0; i1 < ir1; i1++) {
+
     //        float * sp = (float *)((char *) src0->data + i1*src0->nb[1]);
     //        float * dp = (float *)((char *)  dst->data +  i1*dst->nb[1]);
-    //        if (src1) {
-    //            const float * mp_f32 = (const float *)src1->data + (i1%ne01)*ne00;
-    //            ggml_vec_mad_set_f32(nc, wp, mp_f32, sp, scale);
-    //        } else {
-    //            ggml_vec_cpy_f32  (nc, wp, sp);
-    //            ggml_vec_scale_f32(nc, wp, scale);
+
+    //        const float * mp_32 = (const float *)src1->data + (i1%ne01)*ne00;
+    //        __m512 vscale = _mm512_set1_ps(scale);
+    //        __m512 vmax = _mm512_fmadd_ps(vscale, _mm512_loadu_ps(sp), _mm512_loadu_ps(mp_32));
+    //        _mm512_storeu_ps(dp, vmax);
+    //        for (int j = 1; j < nc/16; ++j) {
+    //            __m512 v = _mm512_fmadd_ps(vscale, _mm512_loadu_ps(sp + 16*j), _mm512_loadu_ps(mp_32 + 16*j));
+    //            _mm512_storeu_ps(dp + 16*j, v);
+    //            vmax = _mm512_max_ps(vmax, v);
     //        }
-    //        float max = -INFINITY;
-    //        ggml_vec_max_f32(nc, &max, wp);
-
-    //        ggml_float sum = ggml_vec_soft_max_f32(nc, dp, wp, max);
-    //        assert(sum > 0.0);
-
-    //        sum = 1.0/sum;
-    //        ggml_vec_scale_f32(nc, dp, sum);
+    //        float max = _mm512_reduce_max_ps(vmax);
+    //        vmax = _mm512_set1_ps(-max);
+    //        __m512 vsum = ggml_v_expf(_mm512_add_ps(_mm512_loadu_ps(dp), vmax));
+    //        _mm512_storeu_ps(dp, vsum);
+    //        for (int j = 1; j < nc/16; ++j) {
+    //            __m512 v = ggml_v_expf_fast(_mm512_add_ps(_mm512_loadu_ps(dp + 16*j), vmax));
+    //            _mm512_storeu_ps(dp + 16*j, v);
+    //            vsum = _mm512_add_ps(vsum, v);
+    //        }
+    //        float sum = _mm512_reduce_add_ps(vsum);
+    //        __m512 norm = _mm512_set1_ps(1/sum);
+    //        for (int j = 0; j < nc/16; ++j) {
+    //            __m512 v = _mm512_mul_ps(norm, _mm512_loadu_ps(dp + 16*j));
+    //            _mm512_storeu_ps(dp + 16*j, v);
+    //        }
     //    }
     //    return;
     //}
@@ -14537,6 +14544,7 @@ static void ggml_compute_forward_soft_max_f32(
         float * sp = (float *)((char *) src0->data + i1*src0->nb[1]);
         float * dp = (float *)((char *)  dst->data +  i1*dst->nb[1]);
 
+        /*
         if (src1 && !use_f16 && nc%16 == 0 && max_bias <= 0) {
             const float * mp_32 = (const float *)src1->data + (i1%ne01)*ne00;
             __m512 vscale = _mm512_set1_ps(scale);
@@ -14643,6 +14651,7 @@ static void ggml_compute_forward_soft_max_f32(
             //}
             continue;
         }
+        */
 
         // broadcast the mask across rows
         ggml_fp16_t * mp_f16 = src1 ? (ggml_fp16_t *)((char *) src1->data) + (i1%ne01)*ne00 : NULL;
@@ -17789,11 +17798,11 @@ static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_MUL_MAT:
             {
-                //if (next && next->op == GGML_OP_SOFT_MAX) {
-                //    result = ggml_fused_mul_mat_softmax(params, tensor, next);
-                //} else {
+                if (next && next->op == GGML_OP_SOFT_MAX) {
+                    result = ggml_fused_mul_mat_softmax(params, tensor, next);
+                } else {
                     ggml_compute_forward_mul_mat(params, tensor);
-                //}
+                }
             } break;
         case GGML_OP_MUL_MAT_ID:
             {

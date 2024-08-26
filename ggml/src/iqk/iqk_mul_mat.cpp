@@ -6329,7 +6329,7 @@ bool iqk_fused_mul_mat_softmax(long Nx, long Ny, long ne00,
 
     C += first_y*stride_C;
 
-    const char * mp = mask ? mask + first_y*Nx*sizeof(ggml_half) : nullptr;
+    const char * mp = mask ? mask + first_y*Nx*sizeof(float) : nullptr;
 
     int n_step = (ny_per_thread + k_y_step - 1)/k_y_step;
     for (int i_step = 1; i_step <= n_step; ++i_step) {
@@ -6337,7 +6337,7 @@ bool iqk_fused_mul_mat_softmax(long Nx, long Ny, long ne00,
         funcs[this_ny-1](ne00, A, row_size_qx, info, Nx);
         // Now we need to compute the softmax and store the result in C
         for (int iy = 0; iy < this_ny; ++iy) {
-            softmax_extended(Nx, info.s + iy*Nx, C, scale, slope, mp, true);
+            softmax_extended(Nx, info.s + iy*Nx, C, scale, slope, mp, false);
             C += stride_C;
             if (mp) mp += Nx*sizeof(ggml_half);
         }
@@ -6534,6 +6534,104 @@ void iqk_flash_helper_2(int nq,                 // number of elements in q
     }
 }
 
+namespace {
+IQK_ALWAYS_INLINE __m512 v_expf_fast(__m512 x) {
+    const __m512 r = _mm512_set1_ps(0x1.8p23f);
+    const __m512 z = _mm512_fmadd_ps(x, _mm512_set1_ps(0x1.715476p+0f), r);
+    const __m512 n = _mm512_sub_ps(z, r);
+    const __mmask16 d = _mm512_cmp_ps_mask(n, _mm512_set1_ps(-192), _CMP_LT_OQ);
+    //if (_mm512_kortestc(d, d)) return _mm512_setzero_ps();
+    const __m512 b = _mm512_fnmadd_ps(n, _mm512_set1_ps(0x1.7f7d1cp-20f), _mm512_fnmadd_ps(n, _mm512_set1_ps(0x1.62e4p-1f), x));
+    const __m512 u = _mm512_mul_ps(b, b);
+    const __m512 j = _mm512_fmadd_ps(
+        _mm512_fmadd_ps(_mm512_fmadd_ps(_mm512_set1_ps(0x1.0e4020p-7f), b,
+                                        _mm512_set1_ps(0x1.573e2ep-5f)),
+                        u,
+                        _mm512_fmadd_ps(_mm512_set1_ps(0x1.555e66p-3f), b,
+                                        _mm512_set1_ps(0x1.fffdb6p-2f))),
+        u,
+        _mm512_fmadd_ps(_mm512_set1_ps(0x1.ffffecp-1f), b, _mm512_set1_ps(1.0F)));
+    const __m512 res = _mm512_scalef_ps(j, n);
+    return _mm512_mask_blend_ps(d, res, _mm512_setzero_ps());
+}
+}
+
+bool iqk_soft_max_noalibi(int nc, int ir0, int ir1, int ne00, int ne01,
+        const float * src, long stride_src,
+              float * dst, long stride_dst,
+        const float * mask, float scale, [[maybe_unused]] float * wp_in) {
+    if (nc%16 || !mask) return false;
+
+    const float * sp = src + stride_src*ir0;
+    float * dp = dst + stride_dst*ir0;
+    __m512 vscale = _mm512_set1_ps(scale);
+    int nb = nc/16;
+    //int nbb = nc/16;
+    //if (nb <= 16) {
+    //    __m512 val[16];
+    //    for (int i1 = ir0; i1 < ir1; ++i1) {
+    //        const float * mp_32 = mask + (i1%ne01)*ne00;
+    //        for (int j = 0; j < nb; ++j) {
+    //            val[j] = _mm512_fmadd_ps(vscale, _mm512_loadu_ps(sp + 16*j), _mm512_loadu_ps(mp_32 + 16*j));
+    //        }
+    //        auto vmax = val[0];
+    //        for (int j = 1; j < nb; ++j) vmax = _mm512_max_ps(vmax, val[j]);
+    //        vmax = _mm512_set1_ps(-_mm512_reduce_max_ps(vmax));
+    //        for (int j = 0; j < nb; ++j) val[j] = v_expf(_mm512_add_ps(val[j], vmax));
+    //        auto vsum = val[0];
+    //        for (int j = 1; j < nb; ++j) vsum = _mm512_add_ps(vsum, val[j]);
+    //        float sum = _mm512_reduce_add_ps(vsum);
+    //        __m512 norm = _mm512_set1_ps(1/sum);
+    //        for (int j = 0; j < nb; ++j) {
+    //            __m512 v = _mm512_mul_ps(norm, val[j]);
+    //            _mm512_storeu_ps(dp + 16*j, v);
+    //        }
+    //        sp += stride_src;
+    //        dp += stride_dst;
+    //    }
+    //    return true;
+    //}
+    for (int i1 = ir0; i1 < ir1; ++i1) {
+        //int nb = nbb;
+        //const ggml_half * mp_16 = (const ggml_half *)mask + (i1%ne01)*ne00;
+        const float * mp_32 = mask + (i1%ne01)*ne00;
+        auto wp = dp;
+        __m512 vmax = _mm512_fmadd_ps(vscale, _mm512_loadu_ps(sp), _mm512_loadu_ps(mp_32));
+        //__m512 vmax = _mm512_fmadd_ps(vscale, _mm512_loadu_ps(sp), _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)mp_16)));
+        _mm512_storeu_ps(wp, vmax);
+        for (int j = 1; j < nb; ++j) {
+            //if (mp_32[16*j] == -INFINITY) { nb = j; break; }
+            __m512 v = _mm512_fmadd_ps(vscale, _mm512_loadu_ps(sp + 16*j), _mm512_loadu_ps(mp_32 + 16*j));
+            //__m512 v = _mm512_fmadd_ps(vscale, _mm512_loadu_ps(sp + 16*j), _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)mp_16+j)));
+            _mm512_storeu_ps(wp + 16*j, v);
+            vmax = _mm512_max_ps(vmax, v);
+        }
+        float max = _mm512_reduce_max_ps(vmax);
+        vmax = _mm512_set1_ps(-max);
+        //__m512 vsum = v_expf_fast(_mm512_add_ps(_mm512_loadu_ps(dp), vmax));
+        __m512 vsum = v_expf(_mm512_add_ps(_mm512_loadu_ps(wp), vmax));
+        _mm512_storeu_ps(wp, vsum);
+        for (int j = 1; j < nb; ++j) {
+            //__m512 v = v_expf_fast(_mm512_add_ps(_mm512_loadu_ps(dp + 16*j), vmax));
+            __m512 v = v_expf(_mm512_add_ps(_mm512_loadu_ps(wp + 16*j), vmax));
+            _mm512_storeu_ps(wp + 16*j, v);
+            vsum = _mm512_add_ps(vsum, v);
+        }
+        float sum = _mm512_reduce_add_ps(vsum);
+        __m512 norm = _mm512_set1_ps(1/sum);
+        for (int j = 0; j < nb; ++j) {
+            __m512 v = _mm512_mul_ps(norm, _mm512_loadu_ps(wp + 16*j));
+            _mm512_storeu_ps(dp + 16*j, v);
+        }
+        //if (nb < nc/16) {
+        //    std::memset(dp + 16*nb, 0, (nc - 16*nb)*sizeof(float));
+        //}
+        sp += stride_src;
+        dp += stride_dst;
+    }
+    return true;
+}
+
 #else  // IQK_IMPLEMENT
 
 bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
@@ -6552,6 +6650,13 @@ bool iqk_fused_mul_mat_softmax(long, long, long,
         char *, long,
         const char *, float, float, uint32_t,
         int, int) {
+    return false;
+}
+
+bool iqk_soft_max_noalibi(int, int, int, int, int,
+        const float *, long,
+              float *, long,
+        const float *, float, float *) {
     return false;
 }
 

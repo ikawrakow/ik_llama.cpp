@@ -21,6 +21,11 @@ bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         int typeB, const void * B, long strideB,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
 
+bool iqk_soft_max_noalibi(int nc, int ir0, int ir1, int ne00, int ne01,
+        const float * src, long stride_src,
+              float * dst, long stride_dst,
+        const float * mask, float scale, float * wp);
+
 bool iqk_fused_mul_mat_softmax(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
