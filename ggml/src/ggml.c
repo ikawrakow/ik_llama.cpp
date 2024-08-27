@@ -2043,6 +2043,38 @@ inline static void ggml_vec_neg_f32 (const int n, float * y, const float * x)   
 inline static void ggml_vec_mul_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i]*y[i];   }
 inline static void ggml_vec_div_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i]/y[i];   }
 
+static inline float ggml_vec_add_f32_f16(const int n, const ggml_half * x, float * y, float slope) {
+    __m512 vslope = _mm512_set1_ps(slope);
+    __m512 vmax = _mm512_set1_ps(-INFINITY);
+    for (int j = 0; j < n/16; ++j) {
+        __m512 v = _mm512_fmadd_ps(vslope, _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)x + j)), _mm512_loadu_ps(y + 16*j));
+        _mm512_storeu_ps(y + 16*j, v);
+        vmax = _mm512_max_ps(vmax, v);
+    }
+    float max = _mm512_reduce_max_ps(vmax);
+    for (int i = 16*(n/16); i < n; ++i) {
+        y[i] += slope*GGML_FP16_TO_FP32(x[i]);
+        max = MAX(max, y[i]);
+    }
+    return max;
+}
+
+static inline float ggml_vec_add_f32_f32(const int n, const float * x, float * y, float slope) {
+    __m512 vslope = _mm512_set1_ps(slope);
+    __m512 vmax = _mm512_set1_ps(-INFINITY);
+    for (int j = 0; j < n/16; ++j) {
+        __m512 v = _mm512_fmadd_ps(vslope, _mm512_loadu_ps(x + 16*j), _mm512_loadu_ps(y + 16*j));
+        _mm512_storeu_ps(y + 16*j, v);
+        vmax = _mm512_max_ps(vmax, v);
+    }
+    float max = _mm512_reduce_max_ps(vmax);
+    for (int i = 16*(n/16); i < n; ++i) {
+        y[i] += slope*x[i];
+        max = MAX(max, y[i]);
+    }
+    return max;
+}
+
 static void ggml_vec_dot_f32(int n, float * restrict s, size_t bs, const float * restrict x, size_t bx, const float * restrict y, size_t by, int nrc) {
    assert(nrc == 1);
    UNUSED(nrc);
@@ -13782,16 +13814,22 @@ static void ggml_compute_forward_softcap_max_f32(
 
         ggml_vec_cpy_softcap_f32(nc, sp, wp, values[2], values[0]*values[3]);
 
+        float max = -INFINITY;
         if (mp_f32) {
             if (use_f16) {
-                for (int i = 0; i < nc; ++i) {
-                    wp[i] += slope*GGML_FP16_TO_FP32(mp_f16[i]);
-                }
+                max = ggml_vec_add_f32_f16(nc, mp_f16, wp, slope);
+                //for (int i = 0; i < nc; ++i) {
+                //    wp[i] += slope*GGML_FP16_TO_FP32(mp_f16[i]);
+                //}
             } else {
-                for (int i = 0; i < nc; ++i) {
-                    wp[i] += slope*mp_f32[i];
-                }
+                max = ggml_vec_add_f32_f32(nc, mp_f32, wp, slope);
+                //for (int i = 0; i < nc; ++i) {
+                //    wp[i] += slope*mp_f32[i];
+                //}
             }
+        }
+        else {
+            ggml_vec_max_f32(nc, &max, wp);
         }
 
 #ifndef NDEBUG
@@ -13801,8 +13839,8 @@ static void ggml_compute_forward_softcap_max_f32(
         }
 #endif
 
-        float max = -INFINITY;
-        ggml_vec_max_f32(nc, &max, wp);
+        //float max = -INFINITY;
+        //ggml_vec_max_f32(nc, &max, wp);
 
         ggml_float sum = ggml_vec_soft_max_f32(nc, dp, wp, max);
         assert(sum > 0.0);
