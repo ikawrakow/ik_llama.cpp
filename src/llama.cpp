@@ -8692,8 +8692,9 @@ struct llm_build_context {
     struct ggml_tensor * build_inp_KQ_mask(bool causal = true) {
         auto nx = causal ? n_kv : n_tokens;
         // Note: we only use a binary mask when nx%32 == 0 because otherwise the CUDA implementation becomes way more messy
+        //bool can_be_binary = binary_kq && !lctx.is_encoding && !flash_attn && !hparams.use_alibi && nx%32 == 0;
+        //auto type = can_be_binary ? GGML_TYPE_I32 : flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
         auto type = !lctx.is_encoding ? !binary_kq || flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
-        //auto type = flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32;
         if (type == GGML_TYPE_I32) nx /= 32;
         lctx.inp_KQ_mask = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask, "KQ_mask", -1);
@@ -8705,6 +8706,8 @@ struct llm_build_context {
         GGML_ASSERT(hparams.n_swa > 0);
         auto nx = causal ? n_kv : n_tokens;
         // Note: we only use a binary mask when nx%32 == 0 because otherwise the CUDA implementation becomes way more messy
+        //bool can_be_binary = binary_kq && !lctx.is_encoding && !flash_attn && !hparams.use_alibi && nx%32 == 0;
+        //auto type = can_be_binary ? GGML_TYPE_I32 : flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
         auto type = !lctx.is_encoding ? !binary_kq || flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
         if (type == GGML_TYPE_I32) nx /= 32;
         lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));

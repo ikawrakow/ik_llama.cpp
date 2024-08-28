@@ -2181,7 +2181,6 @@ static inline float ggml_vec_add_f32_f32(const int n, const float * x, float * y
     return max;
 }
 #else
-// TODO add AVX2
 static inline float ggml_vec_add_f32_f16(const int n, const ggml_half * x, float * y, float slope) {
     float max = -INFINITY;
     for (int i = 0; i < n; ++i) {
