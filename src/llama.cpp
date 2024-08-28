@@ -8687,39 +8687,28 @@ struct llm_build_context {
     }
 
     struct ggml_tensor * build_inp_KQ_mask(bool causal = true) {
-        auto type = hparams.use_alibi ? GGML_TYPE_F32 : GGML_TYPE_I32;
         auto nx = causal ? n_kv : n_tokens;
-        if (type == GGML_TYPE_I32) nx = (nx + 31)/32;
+        // Note: we only use a binary mask when nx%32 == 0 because otherwise the CUDA implementation becomes way more messy
+        auto type = !lctx.is_encoding ? flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
+        //auto type = flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32;
+        if (type == GGML_TYPE_I32) nx /= 32;
         lctx.inp_KQ_mask = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask, "KQ_mask", -1);
         ggml_set_input(lctx.inp_KQ_mask);
-        return flash_attn && type == GGML_TYPE_F32 ? ggml_cast(ctx0, lctx.inp_KQ_mask, GGML_TYPE_F16) : lctx.inp_KQ_mask;
-        //lctx.inp_KQ_mask = causal
-        //    ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
-        //    : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
-        //cb(lctx.inp_KQ_mask, "KQ_mask", -1);
-        //ggml_set_input(lctx.inp_KQ_mask);
-
-        //return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask, GGML_TYPE_F16) : lctx.inp_KQ_mask;
+        return lctx.inp_KQ_mask;
     }
 
     struct ggml_tensor * build_inp_KQ_mask_swa(bool causal = true) {
         GGML_ASSERT(hparams.n_swa > 0);
-        auto type = hparams.use_alibi ? GGML_TYPE_F32 : GGML_TYPE_I32;
         auto nx = causal ? n_kv : n_tokens;
-        if (type == GGML_TYPE_I32) nx = (nx + 31)/32;
+        // Note: we only use a binary mask when nx%32 == 0 because otherwise the CUDA implementation becomes way more messy
+        auto type = !lctx.is_encoding ? flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
+        if (type == GGML_TYPE_I32) nx /= 32;
         lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
         ggml_set_input(lctx.inp_KQ_mask_swa);
 
-        return flash_attn && type == GGML_TYPE_F32 ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa;
-        //lctx.inp_KQ_mask_swa = causal
-        //    ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
-        //    : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
-        //cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
-        //ggml_set_input(lctx.inp_KQ_mask_swa);
-
-        //return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa;
+        return lctx.inp_KQ_mask_swa;
     }
 
     struct ggml_tensor * build_inp_mean() {
@@ -14273,9 +14262,6 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             const int64_t n_kv     = kv_self.n;
             const int64_t n_tokens = batch.n_tokens;
 
-            float * data     = nullptr;
-            float * data_swa = nullptr;
-
             if (lctx.inp_KQ_mask && lctx.inp_KQ_mask_swa) {
                 GGML_ASSERT(lctx.inp_KQ_mask->type == lctx.inp_KQ_mask_swa->type);
             }
@@ -14288,7 +14274,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             }
 
             auto mask_type = lctx.inp_KQ_mask ? lctx.inp_KQ_mask->type : lctx.inp_KQ_mask_swa->type;
-            GGML_ASSERT(mask_type == GGML_TYPE_I32 || mask_type == GGML_TYPE_F32);
+            GGML_ASSERT(mask_type == GGML_TYPE_I32 || mask_type == GGML_TYPE_F32 || mask_type == GGML_TYPE_F16);
 
             if (mask_type == GGML_TYPE_I32) {
                 // in order this to be true, we are not using alibi
@@ -14329,7 +14315,44 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 }
             }
 
+            else if (mask_type == GGML_TYPE_F16) {
+                ggml_fp16_t * h_data     = lctx.inp_KQ_mask     ? (ggml_fp16_t *)lctx.inp_KQ_mask->data     : nullptr;
+                ggml_fp16_t * h_data_swa = lctx.inp_KQ_mask_swa ? (ggml_fp16_t *)lctx.inp_KQ_mask_swa->data : nullptr;
+                ggml_fp16_t h_zero = ggml_fp32_to_fp16(0.0f);
+                ggml_fp16_t h_inf  = ggml_fp32_to_fp16(-INFINITY);
+                for (int j = 0; j < n_tokens; ++j) {
+                    const llama_pos    pos    = batch.pos[j];
+                    const llama_seq_id seq_id = batch.seq_id[j][0];
+
+                    for (int i = 0; i < n_kv; ++i) {
+                        ggml_fp16_t f;
+                        if (!lctx.kv_self.cells[i].has_seq_id(seq_id) || lctx.kv_self.cells[i].pos > pos) f = h_inf;
+                        else f = hparams.use_alibi ? ggml_fp32_to_fp16(-std::abs(lctx.kv_self.cells[i].pos - pos)) : h_zero;
+                        if (h_data) h_data[j*n_kv + i] = f;
+                        if (h_data_swa) h_data_swa[j*n_kv + i] = pos - lctx.kv_self.cells[i].pos >= (int32_t)hparams.n_swa ? h_inf : f;
+                    }
+                }
+                auto n_pad = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+                if (n_pad > n_tokens) {
+                    if (h_data) {
+                        for (int j = 0; j < n_kv; ++j) h_data[n_tokens*n_kv + j] = h_inf;
+                        for (int i = n_tokens+1; i < n_pad; ++i) {
+                            std::memcpy(h_data + i*n_kv, h_data + n_tokens*n_kv, n_kv*sizeof(ggml_fp16_t));
+                        }
+                    }
+                    if (h_data_swa) {
+                        for (int j = 0; j < n_kv; ++j) h_data_swa[n_tokens*n_kv + j] = h_inf;
+                        for (int i = n_tokens+1; i < n_pad; ++i) {
+                            std::memcpy(h_data_swa + i*n_kv, h_data_swa + n_tokens*n_kv, n_kv*sizeof(ggml_fp16_t));
+                        }
+                    }
+                }
+            }
+
             else {
+
+                float * data     = nullptr;
+                float * data_swa = nullptr;
 
                 if (lctx.inp_KQ_mask) {
                     data = (float *) lctx.inp_KQ_mask->data;
