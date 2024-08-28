@@ -2074,23 +2074,54 @@ static inline float ggml_vec_add_f32_f32(const int n, const float * x, float * y
     }
     return max;
 }
-#else
-// TODO
+#elif __ARM_NEON
 static inline float ggml_vec_add_f32_f16(const int n, const ggml_half * x, float * y, float slope) {
-    GGML_UNUSED(n);
-    GGML_UNUSED(x);
-    GGML_UNUSED(y);
-    GGML_UNUSED(slope);
-    GGML_ASSERT(false);
-    return 0.f;
+    float32x4_t vslope = vdupq_n_f32(slope);
+    float32x4_t vmax = vdupq_n_f32(-INFINITY);
+    for (int j = 0; j < n/4; ++j) {
+        float32x4_t val = vmlaq_f32(vld1q_f32(y + 4*j), vslope, vcvt_f32_f16(vld1_f16((const float16_t *)x + 4*j)));
+        vmax = vmaxq_f32(vmax, val);
+        vst1q_f32(y + 4*j, val);
+    }
+    float max = vmaxvq_f32(vmax);
+    for (int i = 4*(n/4); i < n; ++i) {
+        y[i] += slope*x[i];
+        max = MAX(max, y[i]);
+    }
+    return max;
 }
 static inline float ggml_vec_add_f32_f32(const int n, const float * x, float * y, float slope) {
-    GGML_UNUSED(n);
-    GGML_UNUSED(x);
-    GGML_UNUSED(y);
-    GGML_UNUSED(slope);
-    GGML_ASSERT(false);
-    return 0.f;
+    float32x4_t vslope = vdupq_n_f32(slope);
+    float32x4_t vmax = vdupq_n_f32(-INFINITY);
+    for (int j = 0; j < n/4; ++j) {
+        float32x4_t val = vmlaq_f32(vld1q_f32(y + 4*j), vslope, vld1q_f32(x + 4*j));
+        vmax = vmaxq_f32(vmax, val);
+        vst1q_f32(y + 4*j, val);
+    }
+    float max = vmaxvq_f32(vmax);
+    for (int i = 4*(n/4); i < n; ++i) {
+        y[i] += slope*x[i];
+        max = MAX(max, y[i]);
+    }
+    return max;
+}
+#else
+// TODO add AVX2
+static inline float ggml_vec_add_f32_f16(const int n, const ggml_half * x, float * y, float slope) {
+    float max = -INFINITY;
+    for (int i = 0; i < n; ++i) {
+        y[i] += slope * GGML_FP16_TO_FP32(x[i]);
+        max = MAX(max, y[i]);
+    }
+    return max;
+}
+static inline float ggml_vec_add_f32_f32(const int n, const float * x, float * y, float slope) {
+    float max = -INFINITY;
+    for (int i = 0; i < n; ++i) {
+        y[i] += slope * x[i];
+        max = MAX(max, y[i]);
+    }
+    return max;
 }
 #endif
 
