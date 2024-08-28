@@ -67,6 +67,8 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_SOFT_MAX_F16_4,
     GGML_METAL_KERNEL_TYPE_SOFT_MAX_F32,
     GGML_METAL_KERNEL_TYPE_SOFT_MAX_F32_4,
+    GGML_METAL_KERNEL_TYPE_SOFT_MAX_U32,
+    GGML_METAL_KERNEL_TYPE_SOFT_MAX_U32_4,
     GGML_METAL_KERNEL_TYPE_SOFT_CAP_MAX_F16,
     GGML_METAL_KERNEL_TYPE_SOFT_CAP_MAX_F16_4,
     GGML_METAL_KERNEL_TYPE_SOFT_CAP_MAX_F32,
@@ -578,6 +580,8 @@ static struct ggml_backend_metal_context * ggml_metal_init(int n_cb) {
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFT_MAX_F16_4,                soft_max_f16_4,                 ctx->support_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFT_MAX_F32,                  soft_max_f32,                   ctx->support_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFT_MAX_F32_4,                soft_max_f32_4,                 ctx->support_simdgroup_reduction);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFT_MAX_U32,                  soft_max_u32,                   ctx->support_simdgroup_reduction);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFT_MAX_U32_4,                soft_max_u32_4,                 ctx->support_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFT_CAP_MAX_F16,              soft_cap_max_f16,               ctx->support_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFT_CAP_MAX_F16_4,            soft_cap_max_f16_4,             ctx->support_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SOFT_CAP_MAX_F32,              soft_cap_max_f32,               ctx->support_simdgroup_reduction);
@@ -1633,19 +1637,22 @@ static enum ggml_status ggml_metal_graph_compute(
                     } break;
                 case GGML_OP_SOFT_MAX:
                     {
-                        GGML_ASSERT(!src1 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32);
+                        GGML_ASSERT(!src1 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_I32);
 
                         int nth = 32; // SIMD width
 
                         id<MTLComputePipelineState> pipeline = nil;
 
                         const bool use_f16 = (src1 && src1->type == GGML_TYPE_F16);
+                        const bool use_u32 = (src1 && src1->type == GGML_TYPE_I32);
 
                         if (ne00%4 == 0) {
                             while (nth < ne00/4 && nth*ne01*ne02*ne03 < 256) {
                                 nth *= 2;
                             }
-                            if (use_f16) {
+                            if (use_u32) {
+                                pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SOFT_MAX_U32_4].pipeline;
+                            } else if (use_f16) {
                                 pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SOFT_MAX_F16_4].pipeline;
                             } else {
                                 pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SOFT_MAX_F32_4].pipeline;
@@ -1654,7 +1661,9 @@ static enum ggml_status ggml_metal_graph_compute(
                             while (nth < ne00 && nth*ne01*ne02*ne03 < 256) {
                                 nth *= 2;
                             }
-                            if (use_f16) {
+                            if (use_u32) {
+                                pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SOFT_MAX_U32].pipeline;
+                            } else if (use_f16) {
                                 pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SOFT_MAX_F16].pipeline;
                             } else {
                                 pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SOFT_MAX_F32].pipeline;
