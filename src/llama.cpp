@@ -2348,6 +2348,7 @@ struct llama_cparams {
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;
+    bool binary_kq;
 
     enum llama_pooling_type pooling_type;
 
@@ -8446,6 +8447,7 @@ struct llm_build_context {
     const int32_t n_ctx_orig;
 
     const bool flash_attn;
+    const bool binary_kq;
 
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
@@ -8495,6 +8497,7 @@ struct llm_build_context {
         kv_head          (worst_case ? (kv_self.recurrent ? 0 : kv_self.size - n_tokens) : kv_self.head),
         n_ctx_orig       (cparams.n_ctx_orig_yarn),
         flash_attn       (cparams.flash_attn),
+        binary_kq        (cparams.binary_kq),
         pooling_type     (cparams.pooling_type),
         rope_type        (hparams.rope_type),
         cb               (cb),
@@ -8689,7 +8692,7 @@ struct llm_build_context {
     struct ggml_tensor * build_inp_KQ_mask(bool causal = true) {
         auto nx = causal ? n_kv : n_tokens;
         // Note: we only use a binary mask when nx%32 == 0 because otherwise the CUDA implementation becomes way more messy
-        auto type = !lctx.is_encoding ? flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
+        auto type = !lctx.is_encoding ? !binary_kq || flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
         //auto type = flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32;
         if (type == GGML_TYPE_I32) nx /= 32;
         lctx.inp_KQ_mask = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
@@ -8702,7 +8705,7 @@ struct llm_build_context {
         GGML_ASSERT(hparams.n_swa > 0);
         auto nx = causal ? n_kv : n_tokens;
         // Note: we only use a binary mask when nx%32 == 0 because otherwise the CUDA implementation becomes way more messy
-        auto type = !lctx.is_encoding ? flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
+        auto type = !lctx.is_encoding ? !binary_kq || flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
         if (type == GGML_TYPE_I32) nx /= 32;
         lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
@@ -16727,6 +16730,7 @@ struct llama_context_params llama_context_default_params() {
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ false,
+        /*.binary_kq                   =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
     };
@@ -16917,6 +16921,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
+    cparams.binary_kq        = params.binary_kq;
     cparams.pooling_type     = params.pooling_type;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
@@ -16983,6 +16988,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: n_batch    = %u\n",     __func__, cparams.n_batch);
     LLAMA_LOG_INFO("%s: n_ubatch   = %u\n",     __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: flash_attn = %d\n",     __func__, cparams.flash_attn);
+    LLAMA_LOG_INFO("%s: binary_kq  = %d\n",     __func__, cparams.binary_kq);
     LLAMA_LOG_INFO("%s: freq_base  = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale = %g\n",     __func__, cparams.rope_freq_scale);
 

@@ -2939,6 +2939,60 @@ static float ggml_vec_cpy_softcap_mask_f32(const int n, const float * x, float *
     }
     return _mm512_reduce_max_ps(vmax);
 }
+//#elif __ARM_NEON
+//static float ggml_vec_cpy_softcap_mask_f32(const int n, const float * x, float * y, const uint32_t * mask, float s_before, float s_after) {
+//    //const uint16_t * mask16 = (const uint16_t *)mask;
+//    const uint8_t * mask8 = (const uint8_t *)mask;
+//    float32x4_t vinf = vdupq_n_f32(-INFINITY);
+//    float32x4x4_t vmax = { vinf, vinf, vinf, vinf };
+//    float32x4_t vs_before = vdupq_n_f32(s_before);
+//    float32x4_t vs_after  = vdupq_n_f32(s_after );
+//    const uint8x16_t vmask = vreinterpretq_u8_u64(vdupq_n_u64(0x8040201008040201));
+//    //const uint8x8_t vmask = vreinterpret_u8_u64(vdup_n_u64(0x8040201008040201));
+//    //static const uint32_t k_shuffle[8] = { 0x00000000, 0x01010101, 0x02020202, 0x03030303,
+//    //                                       0x04040404, 0x05050505, 0x06060606, 0x07070707 };
+//    //const uint8x8x4_t vtab = vld1_u8_x4((const uint8_t *)k_shuffle);
+//    //for (int i = 0; i < n/16; ++i) {
+//    //    float32x4x4_t vx = vld1q_f32_x4(x + 16*i);
+//    //    uint8x8_t m1 = vceq_u8(vand_u8(vdup_n_u8(mask8[2*i+0]), vmask), vmask);
+//    //    uint8x8_t m2 = vceq_u8(vand_u8(vdup_n_u8(mask8[2*i+1]), vmask), vmask);
+//    //    uint8x16x4_t mk = { vcombine_u8(vqtbl1_u8(m1, vtab.val[0]), vqtbl1_u8(m1, vtab.val[1])),
+//    //    for (int k = 0; k < 4; ++k) {
+//    //        vx.val[k] = ggml_v_softcap(vx.val[k], vs_before, vs_after);
+//    //        //uint8x16_t mk = vcombine(vqtbl1_u8(m1, vtab.val[k]), 
+//    //        uint8x16_t v_on  = vandq_u8(vreinterpretq_u8_f32(vx.val[k]), mk);
+//    //        uint8x16_t v_off = vandq_u8(vreinterpretq_u8_f32(vinf),      mk);
+//    //        vx.val[k] = vreinterpretq_f32_u8(vorrq_u8(v_on, v_off));
+//    //        vmax.val[k] = vmaxq_f32(vmax.val[k], vx.val[k]);
+//    //        vst1q_f32(y + 16*i + 4*k, vx.val[k]);
+//    //    }
+//    //}
+//    static const uint32_t k_shuffle[16] = { 0x00000000, 0x01010101, 0x02020202, 0x03030303,
+//                                            0x04040404, 0x05050505, 0x06060606, 0x07070707,
+//                                            0x08080808, 0x09090909, 0x0a0a0a0a, 0x0b0b0b0b,
+//                                            0x0c0c0c0c, 0x0d0d0d0d, 0x0e0e0e0e, 0x0f0f0f0f};
+//    const uint8x16x4_t vtab = vld1q_u8_x4((const uint8_t *)k_shuffle);
+//    for (int i = 0; i < n/16; ++i) {
+//        float32x4x4_t vx = vld1q_f32_x4(x + 16*i);
+//        uint8x16_t m = vcombine_u8(vdup_n_u8(mask8[2*i+0]), vdup_n_u8(mask8[2*i+1]));
+//        m = vceqq_u8(vandq_u8(m, vmask), vmask);
+//        for (int k = 0; k < 4; ++k) {
+//            vx.val[k] = ggml_v_softcap(vx.val[k], vs_before, vs_after);
+//            uint8x16_t mk = vqtbl1q_u8(m, vtab.val[k]);
+//            uint8x16_t v_on  = vandq_u8(vreinterpretq_u8_f32(vx.val[k]), mk);
+//            uint8x16_t v_off = vandq_u8(vreinterpretq_u8_f32(vinf),      mk);
+//            vx.val[k] = vreinterpretq_f32_u8(vorrq_u8(v_on, v_off));
+//            vmax.val[k] = vmaxq_f32(vmax.val[k], vx.val[k]);
+//            vst1q_f32(y + 16*i + 4*k, vx.val[k]);
+//        }
+//    }
+//    float max = vmaxvq_f32(vmax.val[0]);
+//    for (int k = 1; k < 4; ++k) {
+//        float maxk = vmaxvq_f32(vmax.val[k]);
+//        max = MAX(max, maxk);
+//    }
+//    return max;
+//}
 #else
 static float ggml_vec_cpy_softcap_mask_f32(const int n, const float * x, float * y, const uint32_t * mask, float s_before, float s_after) {
     GGML_UNUSED(n);
@@ -2947,6 +3001,7 @@ static float ggml_vec_cpy_softcap_mask_f32(const int n, const float * x, float *
     GGML_UNUSED(mask);
     GGML_UNUSED(s_before);
     GGML_UNUSED(s_after);
+    GGML_ASSERT(false);
     return 0.f;
 }
 #endif
