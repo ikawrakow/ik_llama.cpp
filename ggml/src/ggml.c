@@ -2074,7 +2074,82 @@ static inline float ggml_vec_add_f32_f32(const int n, const float * x, float * y
     }
     return max;
 }
-#elif __ARM_NEON
+#elif defined __AVX2__
+static inline float hmax_f32x8(__m256 v) {
+    __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(v, 1), _mm256_castps256_ps128(v));
+    max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
+    max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
+    return _mm_cvtss_f32( max4 );
+}
+static inline float ggml_vec_add_f32_f16(const int n, const ggml_half * x, float * y, float slope) {
+    __m256 vmax = _mm256_set1_ps(-INFINITY);
+    if (fabsf(slope - 1.0f) < 1e-5f) {
+        for (int j = 0; j < n/8; ++j) {
+            __m256 vmask = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)x + j));
+            __m256 v = _mm256_add_ps(vmask, _mm256_loadu_ps(y + 8*j));
+            _mm256_storeu_ps(y + 8*j, v);
+            vmax = _mm256_max_ps(vmax, v);
+        }
+        float max = hmax_f32x8(vmax);
+        for (int i = 8*(n/8); i < n; ++i) {
+            y[i] += slope*GGML_FP16_TO_FP32(x[i]);
+            max = MAX(max, y[i]);
+        }
+        return max;
+    }
+    __m256 vslope = _mm256_set1_ps(slope);
+    for (int j = 0; j < n/8; ++j) {
+#ifdef __FMA__
+        __m256 v = _mm256_fmadd_ps(vslope, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)x + j)), _mm256_loadu_ps(y + 8*j));
+#else
+        __m256 vmask = _mm256_mul_ps(vslope, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)x + j)));
+        __m256 v = _mm256_add_ps(vmask, _mm256_loadu_ps(y + 8*j));
+#endif
+        _mm256_storeu_ps(y + 8*j, v);
+        vmax = _mm256_max_ps(vmax, v);
+    }
+    float max = hmax_f32x8(vmax);
+    for (int i = 8*(n/8); i < n; ++i) {
+        y[i] += slope*GGML_FP16_TO_FP32(x[i]);
+        max = MAX(max, y[i]);
+    }
+    return max;
+}
+static inline float ggml_vec_add_f32_f32(const int n, const float * x, float * y, float slope) {
+    __m256 vmax = _mm256_set1_ps(-INFINITY);
+    if (fabsf(slope - 1.0f) < 1e-5f) {
+        for (int j = 0; j < n/8; ++j) {
+            __m256 vmask = _mm256_loadu_ps(x + 8*j);
+            __m256 v = _mm256_add_ps(vmask, _mm256_loadu_ps(y + 8*j));
+            _mm256_storeu_ps(y + 8*j, v);
+            vmax = _mm256_max_ps(vmax, v);
+        }
+        float max = hmax_f32x8(vmax);
+        for (int i = 8*(n/8); i < n; ++i) {
+            y[i] += slope*x[i];
+            max = MAX(max, y[i]);
+        }
+        return max;
+    }
+    __m256 vslope = _mm256_set1_ps(slope);
+    for (int j = 0; j < n/8; ++j) {
+#ifdef __FMA__
+        __m256 v = _mm256_fmadd_ps(vslope, _mm256_loadu_ps(x + 8*j), _mm256_loadu_ps(y + 8*j));
+#else
+        __m256 vmask = _mm256_mul_ps(vslope, _mm256_loadu_ps(x + 8*j));
+        __m256 v = _mm256_add_ps(vmask, _mm256_loadu_ps(y + 8*j));
+#endif
+        _mm256_storeu_ps(y + 8*j, v);
+        vmax = _mm256_max_ps(vmax, v);
+    }
+    float max = hmax_f32x8(vmax);
+    for (int i = 8*(n/8); i < n; ++i) {
+        y[i] += slope*x[i];
+        max = MAX(max, y[i]);
+    }
+    return max;
+}
+#elif defined __ARM_NEON
 static inline float ggml_vec_add_f32_f16(const int n, const ggml_half * x, float * y, float slope) {
     float32x4_t vslope = vdupq_n_f32(slope);
     float32x4_t vmax = vdupq_n_f32(-INFINITY);
