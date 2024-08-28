@@ -8687,10 +8687,10 @@ struct llm_build_context {
     }
 
     struct ggml_tensor * build_inp_KQ_mask(bool causal = true) {
-        auto type = hparams.use_alibi ? GGML_TYPE_F32 : GGML_TYPE_F16;
-        lctx.inp_KQ_mask = causal
-            ? ggml_new_tensor_2d(ctx0, type, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
-            : ggml_new_tensor_2d(ctx0, type, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        auto type = hparams.use_alibi ? GGML_TYPE_F32 : GGML_TYPE_I32;
+        auto nx = causal ? n_kv : n_tokens;
+        if (type == GGML_TYPE_I32) nx = (nx + 31)/32;
+        lctx.inp_KQ_mask = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask, "KQ_mask", -1);
         ggml_set_input(lctx.inp_KQ_mask);
         return flash_attn && type == GGML_TYPE_F32 ? ggml_cast(ctx0, lctx.inp_KQ_mask, GGML_TYPE_F16) : lctx.inp_KQ_mask;
@@ -8705,11 +8705,10 @@ struct llm_build_context {
 
     struct ggml_tensor * build_inp_KQ_mask_swa(bool causal = true) {
         GGML_ASSERT(hparams.n_swa > 0);
-
-        auto type = hparams.use_alibi ? GGML_TYPE_F32 : GGML_TYPE_F16;
-        lctx.inp_KQ_mask_swa = causal
-            ? ggml_new_tensor_2d(ctx0, type, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
-            : ggml_new_tensor_2d(ctx0, type, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        auto type = hparams.use_alibi ? GGML_TYPE_F32 : GGML_TYPE_I32;
+        auto nx = causal ? n_kv : n_tokens;
+        if (type == GGML_TYPE_I32) nx = (nx + 31)/32;
+        lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
         ggml_set_input(lctx.inp_KQ_mask_swa);
 
@@ -14288,40 +14287,45 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask_swa->buffer));
             }
 
-            auto float_type = lctx.inp_KQ_mask ? lctx.inp_KQ_mask->type : lctx.inp_KQ_mask_swa->type;
-            GGML_ASSERT(float_type == GGML_TYPE_F16 || float_type == GGML_TYPE_F32);
+            auto mask_type = lctx.inp_KQ_mask ? lctx.inp_KQ_mask->type : lctx.inp_KQ_mask_swa->type;
+            GGML_ASSERT(mask_type == GGML_TYPE_I32 || mask_type == GGML_TYPE_F32);
 
-            if (float_type == GGML_TYPE_F16) {
+            if (mask_type == GGML_TYPE_I32) {
                 // in order this to be true, we are not using alibi
                 GGML_ASSERT(!hparams.use_alibi);
-                auto h_zero = ggml_fp32_to_fp16(0.0f);
-                auto h_inf  = ggml_fp32_to_fp16(-INFINITY);
-                ggml_fp16_t * h_data = lctx.inp_KQ_mask ? (ggml_fp16_t *)lctx.inp_KQ_mask->data : nullptr;
-                ggml_fp16_t * h_data_swa = lctx.inp_KQ_mask_swa ? (ggml_fp16_t *)lctx.inp_KQ_mask_swa->data : nullptr;
+                uint32_t * h_data = lctx.inp_KQ_mask ? (uint32_t *)lctx.inp_KQ_mask->data : nullptr;
+                uint32_t * h_data_swa = lctx.inp_KQ_mask_swa ? (uint32_t *)lctx.inp_KQ_mask_swa->data : nullptr;
                 for (int j = 0; j < n_tokens; ++j) {
                     const llama_pos    pos    = batch.pos[j];
                     const llama_seq_id seq_id = batch.seq_id[j][0];
 
+                    uint32_t u = 0, u_swa = 0;
+                    uint32_t m = 1;
+
                     for (int i = 0; i < n_kv; ++i) {
-                        auto f = lctx.kv_self.cells[i].pos <= pos && lctx.kv_self.cells[i].has_seq_id(seq_id) ? h_zero : h_inf;
-                        if (h_data) h_data[j*n_kv + i] = f;
-                        if (h_data_swa) {
-                            if (pos - lctx.kv_self.cells[i].pos >= (int32_t)hparams.n_swa) f = h_inf;
-                            h_data_swa[j*n_kv + i] = f;
+                        if (lctx.kv_self.cells[i].pos > pos || !lctx.kv_self.cells[i].has_seq_id(seq_id)) {
+                            u |= m; u_swa |= m;
+                        }
+                        if (pos - lctx.kv_self.cells[i].pos >= (int32_t)hparams.n_swa) u_swa |= m;
+                        m <<= 1;
+                        if (!m) {
+                            if (h_data) *h_data++ = ~u;
+                            if (h_data_swa) *h_data_swa++ = ~u_swa;
+                            u = u_swa = 0; m = 1;
                         }
                     }
+                    if (m > 1) {
+                        if (h_data) *h_data++ = ~u;
+                        if (h_data_swa) *h_data_swa++ = ~u_swa;
+                    }
+
                 }
 
-                if (h_data) {
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) h_data[i*n_kv + j] = h_inf;
-                    }
-                }
-
-                if (h_data_swa) {
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) h_data_swa[i*n_kv + j] = h_inf;
-                    }
+                auto n_pad = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+                if (n_pad > n_tokens) {
+                    auto n_kv_32 = (n_kv + 31)/32;
+                    if (h_data) std::memset(h_data, 0, (n_pad - n_tokens)*n_kv_32*sizeof(uint32_t));
+                    if (h_data_swa) std::memset(h_data_swa, 0, (n_pad - n_tokens)*n_kv_32*sizeof(uint32_t));
                 }
             }
 
