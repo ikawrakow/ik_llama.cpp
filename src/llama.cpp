@@ -16905,6 +16905,10 @@ struct llama_context * llama_new_context_with_model(
         return nullptr;
     }
 
+    if (params.binary_kq && params.flash_attn) {
+        LLAMA_LOG_WARN("%s: binary-KQ mask is currently not used in flash_attn\n", __func__);
+    }
+
     llama_context * ctx = new llama_context(*model);
 
     const auto & hparams = model->hparams;
