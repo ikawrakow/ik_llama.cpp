@@ -44,7 +44,8 @@ void iqk_flash_helper(int nq,                 // number of elements in q
                       float         slope,
                       float       * qk);      // softmax(k*q) - k elements
 
-void iqk_flash_helper_2(int nq,                 // number of elements in q
+void iqk_flash_helper_2(bool is_alibi,
+                       int nq,                 // number of elements in q
                        int nk,                 // number of rows in k
                        int stride_k,           // distance between rows in k (in bytes)
                        int stride_v,           // distance between rows in k (in bytes)
@@ -56,6 +57,21 @@ void iqk_flash_helper_2(int nq,                 // number of elements in q
                        float         slope,
                        float       * qk,
                        float       * qkv);      // softmax(k*q) - k elements
+
+void iqk_flash_helper_3(int ne00,
+                        int nq,                 // number of elements in q
+                        int nk,                 // number of rows in k
+                        int stride_q,
+                        int stride_k,           // distance between rows in k (in bytes)
+                        int stride_v,           // distance between rows in v (in bytes)
+                        int stride_m,           // distance between rows in mask (in bytes)
+                        int stride_qkv,         // distance between rows in mask (in bytes)
+                        const float * q,        // q vector
+                        const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
+                        const void  * v,
+                        const void  * mask,     // mask. If not null, assumed to be fp16. nk elements
+                        float         scale,
+                        float       * qkv);     // v*softmax(k*q)
 
 #ifdef __cplusplus
 }

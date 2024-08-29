@@ -16217,6 +16217,25 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     memcpy(&scale,    (float *) dst->op_params + 0, sizeof(float));
     memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
 
+    if (nr%nth == 0 && max_bias <= 0.0f && q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
+        mask && mask->type == GGML_TYPE_F16) {
+        int counter = 0;
+        for (int64_t iq3 = 0; iq3 < neq3; iq3++) {
+            for (int64_t iq2 = 0; iq2 < neq2; iq2++) {
+                if (counter++ % nth == ith) {
+                    iqk_flash_helper_3(D, neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1], ne1*nb1/sizeof(float),
+                            (const float *)((const char *)q->data + iq2*q->nb[2] + iq3*q->nb[3]),
+                            (const void  *)((const char *)k->data + iq2/rk2*k->nb[2] + iq3/rk3*k->nb[3]),
+                            (const void  *)((const char *)v->data + iq2/rv2*v->nb[2] + iq3/rv3*v->nb[3]),
+                            (const void  *)((const char *)mask->data),
+                            scale,
+                            (float *)((char *) dst->data + (iq3*ne2*ne1 + iq2)*nb1)); // + iq1*ne1)*nb1))
+                }
+            }
+        }
+        return;
+    }
+
     const uint32_t n_head      = neq2;
     const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
 
@@ -16296,7 +16315,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         //    }
         //}
 
-        iqk_flash_helper_2(D, nek1, nbk1, nbv1,
+        iqk_flash_helper_2(max_bias > 0, D, nek1, nbk1, nbv1,
                 (const float *)((char *) q->data + iq1*nbq1 + iq2*nbq2 + iq3*nbq3),
                 (const void  *)((char *) k->data + ik2*nbk2 + ik3*nbk3),
                 (const void  *)((char *) v->data + iv2*nbv2 + iv3*nbv3),
