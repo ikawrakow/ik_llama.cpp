@@ -14368,6 +14368,8 @@ static bool ggml_fused_mul_mat_softmax(const struct ggml_compute_params * params
         struct ggml_tensor * mul_mat,
         struct ggml_tensor * soft_max) {
 
+    return false;
+
     float op_params[2];
     memcpy(op_params, soft_max->op_params, sizeof(op_params));
     if (soft_max->type != GGML_TYPE_F32 || soft_max->src[1]->type != GGML_TYPE_F32 || op_params[1] > 0) return false;
@@ -14496,12 +14498,12 @@ static void ggml_compute_forward_soft_max_f32(
 
     //if (ith == 0) printf("%s: nc = %d, nr = %d, use_f16 = %d, max_bias = %g, src1 = %d\n", __func__, nc, nr, use_f16, max_bias, src1 ? 1 : 0);
 
-    if (!use_f16 && max_bias <= 0) {
-        if (iqk_soft_max_noalibi(nc, ir0, ir1, ne00, ne01,
-                    (const float *)src0->data, src0->nb[1]/sizeof(float),
-                          (float *)dst->data,  dst->nb[1]/sizeof(float),
-                    src1 ? (const float *)src1->data : NULL, scale, wp)) return;
-    }
+    //if (!use_f16 && max_bias <= 0) {
+    //    if (iqk_soft_max_noalibi(nc, ir0, ir1, ne00, ne01,
+    //                (const float *)src0->data, src0->nb[1]/sizeof(float),
+    //                      (float *)dst->data,  dst->nb[1]/sizeof(float),
+    //                src1 ? (const float *)src1->data : NULL, scale, wp)) return;
+    //}
 
     //    for (int i1 = ir0; i1 < ir1; i1++) {
 
@@ -16219,20 +16221,37 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
     if (nr%nth == 0 && max_bias <= 0.0f && q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
         mask && mask->type == GGML_TYPE_F16) {
+        //if (ith == 0) printf("%s: D = %d, neq2 = %d, neq1 = %d, nek1 = %d\n", __func__, (int)D, (int)neq2, (int)neq1, (int)nek1);
         int counter = 0;
+        const int ntg = 4;
         for (int64_t iq3 = 0; iq3 < neq3; iq3++) {
             for (int64_t iq2 = 0; iq2 < neq2; iq2++) {
-                if (counter++ % nth == ith) {
-                    iqk_flash_helper_3(D, neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1], ne1*nb1/sizeof(float),
-                            (const float *)((const char *)q->data + iq2*q->nb[2] + iq3*q->nb[3]),
+                if (counter++ % (nth/ntg) == ith/ntg) {
+                    int iq1 = (ith%ntg)*neq1/ntg;
+                    iqk_flash_helper_3(D, neq1/ntg, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1], ne1*nb1/sizeof(float),
+                            (const float *)((const char *)q->data + iq2*q->nb[2] + iq3*q->nb[3] + iq1*q->nb[1]),
                             (const void  *)((const char *)k->data + iq2/rk2*k->nb[2] + iq3/rk3*k->nb[3]),
                             (const void  *)((const char *)v->data + iq2/rv2*v->nb[2] + iq3/rv3*v->nb[3]),
-                            (const void  *)((const char *)mask->data),
+                            (const void  *)((const char *)mask->data + iq1*mask->nb[1]),
                             scale,
-                            (float *)((char *) dst->data + (iq3*ne2*ne1 + iq2)*nb1)); // + iq1*ne1)*nb1))
+                            (float *)((char *) dst->data + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1));
                 }
             }
         }
+        //for (int64_t iq3 = 0; iq3 < neq3; iq3++) {
+        //    for (int64_t iq2 = 0; iq2 < neq2; iq2++) {
+        //        if (counter++ % nth == ith) {
+        //            iqk_flash_helper_3(D, neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1], ne1*nb1/sizeof(float),
+        //                    (const float *)((const char *)q->data + iq2*q->nb[2] + iq3*q->nb[3]),
+        //                    (const void  *)((const char *)k->data + iq2/rk2*k->nb[2] + iq3/rk3*k->nb[3]),
+        //                    (const void  *)((const char *)v->data + iq2/rv2*v->nb[2] + iq3/rv3*v->nb[3]),
+        //                    (const void  *)((const char *)mask->data),
+        //                    scale,
+        //                    //(float *)params->wdata + ith*8*nek1,
+        //                    (float *)((char *) dst->data + (iq3*ne2*ne1 + iq2)*nb1)); // + iq1*ne1)*nb1))
+        //        }
+        //    }
+        //}
         return;
     }
 
@@ -17817,11 +17836,11 @@ static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_MUL_MAT:
             {
-                if (next && next->op == GGML_OP_SOFT_MAX) {
-                    result = ggml_fused_mul_mat_softmax(params, tensor, next);
-                } else {
+                //if (next && next->op == GGML_OP_SOFT_MAX) {
+                //    result = ggml_fused_mul_mat_softmax(params, tensor, next);
+                //} else {
                     ggml_compute_forward_mul_mat(params, tensor);
-                }
+                //}
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
@@ -19822,7 +19841,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
             case GGML_OP_FLASH_ATTN_EXT:
                 {
                     const int64_t ne00 = node->src[0]->ne[0]; // D
-                    int64_t ne01 = node->src[1]->ne[1];
+                    int64_t ne01 = 8*node->src[1]->ne[1];
                     ne01 = CACHE_LINE_SIZE_F32*((ne01 + CACHE_LINE_SIZE_F32 - 1)/CACHE_LINE_SIZE_F32);
                     cur = (3*ne00 + ne01)*sizeof(float)*n_tasks;
                     //printf("flash: ne00 = %d, ne01 = %d (%d)\n", (int)ne00, (int)ne01, (int)node->src[0]->ne[1]);

@@ -6790,32 +6790,60 @@ void iqk_flash_helper_3(int ne00,
     __m512 vms[q_step];
     __m512 vals[k_step/16];
     float qkv_cache[128*q_step];
-    bool need_scaling[q_step];
+    int need_scaling[q_step];
     auto vscale = _mm512_set1_ps(scale);
     for (int i1 = 0; i1 < nq1/q_step; ++i1) {
         for (int j = 0; j < q_step; ++j) {
             S[j] = 0; M[j] = -INFINITY;
         }
         for (int k1 = 0; k1 < nk1/k_step; ++k1) {
-            for (int l1 = 0; l1 < k_step; ++l1) {
-                auto kr = (const ggml_half *)((const char *)k + (k_step*k1 + l1)*stride_k);
-                for (int i = 0; i < 8; ++i) vk[i] = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)kr + i));
+            //for (int l1 = 0; l1 < k_step; ++l1) {
+            //    auto kr = (const ggml_half *)((const char *)k + (k_step*k1 + l1)*stride_k);
+            //    for (int i = 0; i < 8; ++i) vk[i] = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)kr + i));
+            //    for (int m1 = 0; m1 < q_step; ++m1) {
+            //        // q index is q_step*i1 + m1
+            //        // k index is k_step*k1 + l1
+            //        const ggml_half * mp = (const ggml_half *)((const char *)mask + stride_m*(q_step*i1 + m1)) + k_step*k1;
+            //        if (mp[l1] == h_inf) {
+            //            cache[k_step*m1 + l1] = -INFINITY;
+            //            continue;
+            //        }
+            //        auto qr = q + (q_step*i1 + m1)*stride_q;
+            //        auto vsum = _mm512_mul_ps(vk[0], _mm512_loadu_ps(qr));
+            //        for (int i = 1; i < 8; ++i) vsum = _mm512_fmadd_ps(vk[i], _mm512_loadu_ps(qr + 16*i), vsum);
+            //        cache[k_step*m1 + l1] = _mm512_reduce_add_ps(vsum);
+            //    }
+            //}
+            for (int l1 = 0; l1 < k_step; l1 += 2) {
+                auto kr1 = (const ggml_half *)((const char *)k + (k_step*k1 + l1 + 0)*stride_k);
+                auto kr2 = (const ggml_half *)((const char *)k + (k_step*k1 + l1 + 1)*stride_k);
+                for (int i = 0; i < 8; ++i) vk[i+0] = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)kr1 + i));
+                for (int i = 0; i < 8; ++i) vk[i+8] = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)kr2 + i));
                 for (int m1 = 0; m1 < q_step; ++m1) {
                     // q index is q_step*i1 + m1
                     // k index is k_step*k1 + l1
                     const ggml_half * mp = (const ggml_half *)((const char *)mask + stride_m*(q_step*i1 + m1)) + k_step*k1;
-                    if (mp[l1] == h_inf) {
-                        cache[k_step*m1 + l1] = -INFINITY;
+                    cache[k_step*m1 + l1 + 0] = cache[k_step*m1 + l1 + 1] = -INFINITY;
+                    if (mp[l1+0] == h_inf && mp[l1+1] == h_inf) {
                         continue;
                     }
+                    __m512 qv[8];
                     auto qr = q + (q_step*i1 + m1)*stride_q;
-                    auto vsum = _mm512_mul_ps(vk[0], _mm512_loadu_ps(qr));
-                    for (int i = 1; i < 8; ++i) vsum = _mm512_fmadd_ps(vk[i], _mm512_loadu_ps(qr + 16*i), vsum);
-                    cache[k_step*m1 + l1] = _mm512_reduce_add_ps(vsum);
+                    for (int i = 0; i < 8; ++i) qv[i] = _mm512_loadu_ps(qr + 16*i);
+                    if (mp[l1+0] != h_inf) {
+                        auto vsum = _mm512_mul_ps(vk[0], qv[0]);
+                        for (int i = 1; i < 8; ++i) vsum = _mm512_fmadd_ps(vk[i], qv[i], vsum);
+                        cache[k_step*m1 + l1 + 0] = _mm512_reduce_add_ps(vsum);
+                    }
+                    if (mp[l1+1] != h_inf) {
+                        auto vsum = _mm512_mul_ps(vk[8], qv[0]);
+                        for (int i = 1; i < 8; ++i) vsum = _mm512_fmadd_ps(vk[i+8], qv[i], vsum);
+                        cache[k_step*m1 + l1 + 1] = _mm512_reduce_add_ps(vsum);
+                    }
                 }
             }
             for (int j = 0; j < q_step; ++j) {
-                auto R = qkv_cache + 128*j;
+                //auto R = qkv_cache + 128*j;
                 //auto R = qkv + (q_step*i1 + j)*stride_qkv;
                 for (int l = 0; l < k_step/16; ++l) vals[l] = _mm512_mul_ps(vscale, _mm512_loadu_ps(cache + k_step*j + 16*l));
                 auto smax = _mm512_reduce_max_ps(_mm512_max_ps(vals[0], vals[1]));
@@ -6825,15 +6853,15 @@ void iqk_flash_helper_3(int ne00,
                 //auto smax = _mm512_reduce_max_ps(_mm512_max_ps(val1, val2));
                 ////auto val = _mm512_mul_ps(vscale, _mm512_loadu_ps(cache + k_step*j));
                 ////auto smax = _mm512_reduce_max_ps(val);
-                need_scaling[j] = false;
+                need_scaling[j] = 0;
                 if (smax > M[j]) {
                     if (M[j] > -INFINITY) {
                         float m = expf(M[j] - smax);
                         vms[j] = _mm512_set1_ps(m);
-                        need_scaling[j] = true;
+                        need_scaling[j] = 1;
                         S[j] *= m;
                     } else {
-                        std::memset(R, 0, 128*sizeof(float));
+                        need_scaling[j] = 2;
                         S[j] = 0;
                     }
                     M[j] = smax;
@@ -6856,13 +6884,17 @@ void iqk_flash_helper_3(int ne00,
             }
             for (int i = 0; i < 8; i += 2) {
                 for (int j = 0; j < q_step; ++j) {
+                    if (need_scaling[j] == 2) {
+                        vk[2*j+0] = vk[2*j+1] = _mm512_setzero_ps();
+                    } else {
                     //auto R = qkv + (q_step*i1 + j)*stride_qkv;
                     auto R = qkv_cache + 128*j;
                     vk[2*j+0] = _mm512_loadu_ps(R + 16*i);
                     vk[2*j+1] = _mm512_loadu_ps(R + 16*i + 16);
-                    if (need_scaling[j]) {
+                    if (need_scaling[j] == 1) {
                         vk[2*j+0] = _mm512_mul_ps(vk[2*j+0], vms[j]);
                         vk[2*j+1] = _mm512_mul_ps(vk[2*j+1], vms[j]);
+                    }
                     }
                 }
                 for (int l1 = 0; l1 < k_step; ++l1) {
@@ -6960,6 +6992,146 @@ void iqk_flash_helper_3(int ne00,
         q += 16*stride_q;
     }
 
+}
+
+void iqk_flash_helper_4(int ne00,
+                        int nq1,                // number of elements in q
+                        int nk1,                // number of rows in k
+                        int stride_q,
+                        int stride_k,           // distance between rows in k (in bytes)
+                        int stride_v,           // distance between rows in v (in bytes)
+                        int stride_m,           // distance between rows in mask (in bytes)
+                        int stride_qkv,         // distance between rows in mask (in bytes)
+                        const float * q,        // q vector
+                        const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
+                        const void  * v,
+                        const void  * mask,     // mask. If not null, assumed to be fp16. nk elements
+                        float         scale,
+                        float       * qk,
+                        float       * qkv) {
+    constexpr int q_step = 8;
+    constexpr int k_step = 32; //16;
+    if (nq1%q_step != 0 || nk1%k_step != 0) {
+        for (int iq1 = 0; iq1 < nq1; ++iq1) {
+            iqk_flash_helper_2(false, ne00, nk1, stride_k, stride_v,
+                    q, k, v, (const void *)((const char *)mask + iq1*stride_m),
+                    scale, 1.0f, nullptr, qkv);
+            q   += stride_q;
+            qkv += stride_qkv;
+        }
+        return;
+    }
+    stride_q /= sizeof(float);
+    const ggml_half h_inf = GGML_FP32_TO_FP16(-INFINITY);
+    float cache[q_step*k_step];
+    __m512 vk[16];
+    __m512 kq_max[q_step];
+    //float S[q_step];
+    //__m512 norm[q_step];
+    auto vscale = _mm512_set1_ps(scale);
+    for (int i1 = 0; i1 < nq1/q_step; ++i1) {
+        for (int j = 0; j < q_step; ++j) kq_max[j] = _mm512_set1_ps(-INFINITY);
+        for (int k1 = 0; k1 < nk1/k_step; ++k1) {
+            for (int l1 = 0; l1 < k_step; ++l1) {
+                auto kr = (const ggml_half *)((const char *)k + (k_step*k1 + l1)*stride_k);
+                for (int i = 0; i < 8; ++i) vk[i] = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)kr + i));
+                for (int m1 = 0; m1 < q_step; ++m1) {
+                    // q index is q_step*i1 + m1
+                    // k index is k_step*k1 + l1
+                    const ggml_half * mp = (const ggml_half *)((const char *)mask + stride_m*(q_step*i1 + m1)) + k_step*k1;
+                    if (mp[l1] == h_inf) {
+                        cache[k_step*m1 + l1] = -INFINITY;
+                        continue;
+                    }
+                    auto qr = q + (q_step*i1 + m1)*stride_q;
+                    auto vsum = _mm512_mul_ps(vk[0], _mm512_loadu_ps(qr));
+                    for (int i = 1; i < 8; ++i) vsum = _mm512_fmadd_ps(vk[i], _mm512_loadu_ps(qr + 16*i), vsum);
+                    cache[k_step*m1 + l1] = _mm512_reduce_add_ps(vsum);
+                }
+            }
+            auto R = qk + k1*k_step;
+            for (int j = 0; j < q_step; ++j) {
+                for (int l = 0; l < k_step/16; ++l) {
+                    auto val = _mm512_mul_ps(vscale, _mm512_loadu_ps(cache + k_step*j + 16*l));
+                    _mm512_storeu_ps(R + 16*l, val);
+                    kq_max[j] = _mm512_max_ps(kq_max[j], val);
+                }
+                R += nk1;
+            }
+        }
+        auto R = qk;
+        for (int j = 0; j < q_step; ++j) {
+            auto max = _mm512_reduce_max_ps(kq_max[j]);
+            auto vmax = _mm512_set1_ps(-max);
+            auto vsum = _mm512_setzero_ps();
+            for (int i = 0; i < nk1/16; ++i) {
+                auto val = v_expf(_mm512_add_ps(vmax, _mm512_loadu_ps(R + 16*i)));
+                _mm512_storeu_ps(R + 16*i, val);
+                vsum = _mm512_add_ps(vsum, val);
+            }
+            auto sum = _mm512_reduce_add_ps(vsum);
+            GGML_ASSERT(sum > 0);
+            // we store the norm in kq_max
+            kq_max[j] = _mm512_set1_ps(1/sum);
+            //S[j] = 1/sum;
+            //auto norm = _mm512_set1_ps(1/sum);
+            //for (int i = 0; i < nk1/16; ++i) {
+            //    _mm512_storeu_ps(R + 16*i, _mm512_mul_ps(norm, _mm512_loadu_ps(R + 16*i)));
+            //}
+            R += nk1;
+        }
+
+        //for (int j = 0; j < q_step; j += 2) {
+        //    for (int i = 0; i < 16; ++i) vk[i] = _mm512_setzero_ps();
+        //    for (int k1 = 0; k1 < nk1; ++k1) {
+        //        auto vr = (const ggml_half *)((const char *)v + k1*stride_v);
+        //        auto vs1 = _mm512_set1_ps(qk[nk1*j + k1]);
+        //        auto vs2 = _mm512_set1_ps(qk[nk1*j + k1 + nk1]);
+        //        for (int i = 0; i < 8; ++i) {
+        //            auto val = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i*)vr+i));
+        //            vk[i+0] = _mm512_fmadd_ps(vs1, val, vk[i+0]);
+        //            vk[i+8] = _mm512_fmadd_ps(vs2, val, vk[i+8]);
+        //        }
+        //    }
+        //    auto norm = _mm512_set1_ps(S[j]);
+        //    for (int i = 0; i < 8; ++i) _mm512_storeu_ps(qkv + (q_step*i1 + j + 0)*stride_qkv + 16*i, _mm512_mul_ps(norm, vk[i+0]));
+        //    norm = _mm512_set1_ps(S[j+1]);
+        //    for (int i = 0; i < 8; ++i) _mm512_storeu_ps(qkv + (q_step*i1 + j + 1)*stride_qkv + 16*i, _mm512_mul_ps(norm, vk[i+8]));
+        //}
+
+        for (int i = 0; i < 8; i += 2) {
+            for (int j = 0; j < q_step; ++j) vk[2*j+0] = vk[2*j+1] = _mm512_setzero_ps();
+            for (int k1 = 0; k1 < nk1; ++k1) {
+                auto vr = (const ggml_half *)((const char *)v + k1*stride_v);
+                auto val1 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i*)vr+i+0));
+                auto val2 = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i*)vr+i+1));
+                for (int j = 0; j < q_step; ++j) {
+                    auto vs = _mm512_set1_ps(qk[nk1*j + k1]);
+                    vk[2*j+0] = _mm512_fmadd_ps(val1, vs, vk[2*j+0]);
+                    vk[2*j+1] = _mm512_fmadd_ps(val2, vs, vk[2*j+1]);
+                }
+            }
+            for (int j = 0; j < q_step; ++j) {
+                //auto norm = _mm512_set1_ps(S[j]);
+                _mm512_storeu_ps(qkv + (q_step*i1 + j)*stride_qkv + 16*i,      _mm512_mul_ps(kq_max[j], vk[2*j+0]));
+                _mm512_storeu_ps(qkv + (q_step*i1 + j)*stride_qkv + 16*i + 16, _mm512_mul_ps(kq_max[j], vk[2*j+1]));
+            }
+        }
+
+        //for (int i = 0; i < 8; ++i) {
+        //    for (int j = 0; j < q_step; ++j) vk[j] = _mm512_setzero_ps();
+        //    for (int k1 = 0; k1 < nk1; ++k1) {
+        //        auto vr = (const ggml_half *)((const char *)v + k1*stride_v);
+        //        auto val = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i*)vr+i));
+        //        for (int j = 0; j < q_step; ++j) {
+        //            vk[j] = _mm512_fmadd_ps(val, _mm512_set1_ps(qk[nk1*j + k1]), vk[j]);
+        //        }
+        //    }
+        //    for (int j = 0; j < q_step; ++j) {
+        //        _mm512_storeu_ps(qkv + (q_step*i1 + j)*stride_qkv + 16*i, vk[j]);
+        //    }
+        //}
+    }
 }
 
 
