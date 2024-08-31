@@ -7020,6 +7020,51 @@ void iqk_flash_helper_3(int ne00,
 
 }
 
+//bool iqk_flash_attention_noalibi_f16(int ith, int nth,
+//        int neq1, int neq2, int neq3, int nek2, int nev2,
+//        int64_t nbq1, int64_t nbq2,
+//        int64_t nbk1, int64_t nbk2,
+//        int64_t nbv1, int64_t nbv2,
+//                        int ne00,
+//                        int nq,                 // number of elements in q
+//                        int nk,                 // number of rows in k
+//                        int stride_q,
+//                        int stride_k,           // distance between rows in k (in bytes)
+//                        int stride_v,           // distance between rows in v (in bytes)
+//                        int stride_m,           // distance between rows in mask (in bytes)
+//                        int stride_qkv,         // distance between rows in mask (in bytes)
+//                        const float * q,        // q vector
+//                        const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
+//                        const void  * v,
+//                        const void  * mask,     // mask. If not null, assumed to be fp16. nk elements
+//                        float         scale,
+//                        float       * qkv) {     // v*softmax(k*q)
+//    if (nk%32 != 0 || !mask || neq3 > 1) return false;
+//    int rk2 = neq2/nek2;
+//    int rv2 = neq2/nev2;
+//    int nmat = neq2*neq3;
+//    int64_t work_per_mat = int64_t(nq)*nk*ne00;
+//    int ntg = 1;
+//    if      (nth%4 == 0 && work_per_mat >= (1 << 21)) ntg = 4;
+//    else if (nth%2 == 0 && work_per_mat >= (1 << 19)) ntg = 2;
+//    if (nmat%(nth/ntg) != 0) return false;
+//    int counter = 0;
+//    for (int iq2 = 0; iq2 < neq2; ++iq2) {
+//        if (counter++ % (nth/ntg) == ith/ntg) {
+//            int iq1 = (ith%ntg)*neq1/ntg;
+//            iqk_flash_helper_3(ne00, neq1/ntg, nk, nbq1, nbk1, nbv1, stride_m, stride_qkv,
+//                    q + (iq2*nbq2 + iq1*nbq1)/sizeof(float),
+//                    (const void  *)((const char *)k + iq2/rk2*nbk2),
+//                    (const void  *)((const char *)v + iq2/rv2*nbv2),
+//                    (const void  *)((const char *)mask + iq1*stride_m),
+//                    scale,
+//                    qkv + iq1*stride_qkv + iq2*nb1);
+//
+//        }
+//    }
+//    return true;
+//}
+
 void iqk_flash_helper_4(int ne00,
                         int nq1,                // number of elements in q
                         int nk1,                // number of rows in k

@@ -89,6 +89,25 @@ void iqk_flash_helper_4(int ne00,
                         float       * qk,       // work buffer for storing Q*K
                         float       * qkv);     // v*softmax(k*q)
 
+bool iqk_flash_attention_noalibi_f16(int ith, int nth,
+        int neq2, int neq3, int nek2, int nek3, int nev2, int nev3,
+        int64_t nbq1, int64_t nbq2, int64_t nbq3,
+        int64_t nbk2, int64_t nbk3, int64_t nbv2, int64_t nbv3,
+                        int ne00,
+                        int nq,                 // number of elements in q
+                        int nk,                 // number of rows in k
+                        int stride_q,
+                        int stride_k,           // distance between rows in k (in bytes)
+                        int stride_v,           // distance between rows in v (in bytes)
+                        int stride_m,           // distance between rows in mask (in bytes)
+                        int stride_qkv,         // distance between rows in mask (in bytes)
+                        const float * q,        // q vector
+                        const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
+                        const void  * v,
+                        const void  * mask,     // mask. If not null, assumed to be fp16. nk elements
+                        float         scale,
+                        float       * qkv);     // v*softmax(k*q)
+
 #ifdef __cplusplus
 }
 #endif
