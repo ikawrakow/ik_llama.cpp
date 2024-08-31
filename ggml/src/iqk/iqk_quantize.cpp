@@ -291,9 +291,11 @@ void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
     static_assert(QK_IQ1BN == 64, "This dot product implementation for iq2_bn requires a block size of 64");
 
+#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_BN, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
         return;
     }
+#endif
 
     constexpr int Nj = QK_IQ1BN/4;
 
@@ -622,9 +624,11 @@ void vec_dot_iq2_k_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * 
     GGML_UNUSED(by);
     GGML_UNUSED(bs);
 
+#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
         return;
     }
+#endif
 
     const int nb = n / QK_K;
 
@@ -893,9 +897,11 @@ void vec_dot_iq3_k_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * 
     GGML_UNUSED(by);
     GGML_UNUSED(bs);
 
+#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ3_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
         return;
     }
+#endif
 
     const int nb = n / QK_K;
 
@@ -943,9 +949,11 @@ void vec_dot_iq4_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     GGML_UNUSED(by);
     GGML_UNUSED(bs);
 
+#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
         return;
     }
+#endif
 
     const int nb = n / QK_K;
 
@@ -1241,9 +1249,11 @@ void vec_dot_iq5_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     GGML_UNUSED(by);
     GGML_UNUSED(bs);
 
+#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ5_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
         return;
     }
+#endif
 
     const int nb = n / QK_K;
 
@@ -1580,9 +1590,11 @@ void vec_dot_iq6_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     GGML_UNUSED(by);
     GGML_UNUSED(bs);
 
+#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ6_K, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
         return;
     }
+#endif
 
     // TODO
     //const int nb = n / QK_K;
@@ -1950,9 +1962,11 @@ void dequantize_row_iq2_tn(const block_iq2_tn * x, float * y, int64_t k) {
 }
 
 void   vec_dot_iq2_tn_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_TN, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
         return;
     }
+#endif
 
     const int nb = n / QK_K;
 
