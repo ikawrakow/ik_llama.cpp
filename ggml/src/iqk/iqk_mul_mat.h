@@ -58,7 +58,7 @@ void iqk_flash_helper_2(bool is_alibi,
                        float       * qk,
                        float       * qkv);      // softmax(k*q) - k elements
 
-void iqk_flash_helper_3(int ne00,
+bool iqk_flash_helper_3(int ne00,
                         int nq,                 // number of elements in q
                         int nk,                 // number of rows in k
                         int stride_q,
