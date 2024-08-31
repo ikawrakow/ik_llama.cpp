@@ -16151,7 +16151,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
 #if GGML_USE_IQK_MULMAT
     if (max_bias <= 0.0f && q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
-        mask && mask->type == GGML_TYPE_F16 && softcap == 0.0f) {
+        mask && mask->type == GGML_TYPE_F16) {
         int64_t work_per_slice = D*nek1*neq1;
         int ntg = 1;
         if      (nth%8 == 0 && work_per_slice >= (1 << 23)) ntg = 8;
@@ -16169,7 +16169,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                                 (const void  *)((const char *)k->data + iq2/rk2*k->nb[2] + iq3/rk3*k->nb[3]),
                                 (const void  *)((const char *)v->data + iq2/rv2*v->nb[2] + iq3/rv3*v->nb[3]),
                                 (const void  *)((const char *)mask->data + iq1*mask->nb[1]),
-                                scale,
+                                scale, softcap,
                                 (float *)((char *) dst->data + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1))) goto IQK_Flash_Attn_NotAvailable;
                     }
                 }

@@ -34,6 +34,7 @@ bool iqk_flash_attn_noalibi(int D,                  // head size
                             const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                             const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
                             float         scale,    // scale applied before softmax
+                            float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             float       * qkv);     // v*softmax(scale*(k*q))
 
 #ifdef __cplusplus

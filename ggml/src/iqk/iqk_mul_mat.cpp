@@ -5945,6 +5945,15 @@ inline float32x4_t v_expf(float32x4_t x) {
     return vbslq_f32(vcagtq_f32(n, vdupq_n_f32(192)), vmulq_f32(s1, s1),
                      vbslq_f32(c, vmulq_f32(vfmaq_f32(s2, s2, j), s1), vfmaq_f32(k, k, j)));
 }
+inline float32x4_t v_tanh(float32x4_t x) {
+    const float32x4_t one = vdupq_n_f32(1.0f);
+    const float32x4_t two_x = vmulq_f32(x, vdupq_n_f32(2.f));
+    const float32x4_t exp_two_x = v_expf(two_x);
+    const uint32x4_t mask = vcgtq_f32(x, vdupq_n_f32(10.f));
+    const float32x4_t res = vdivq_f32(vsubq_f32(exp_two_x, one), vaddq_f32(exp_two_x, one));
+    return vreinterpretq_f32_u32(vorrq_u32(vandq_u32(vreinterpretq_u32_f32(one), mask), vbicq_u32(vreinterpretq_u32_f32(res), mask)));
+    //return vdivq_f32(vsubq_f32(exp_two_x, one), vaddq_f32(exp_two_x, one));
+}
 #endif
 
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
@@ -5979,6 +5988,13 @@ inline __m512 v_expf(__m512 x) {
   const __m512 alt = _mm512_mask_blend_ps(
       _mm512_cmp_ps_mask(n, zero, _CMP_LE_OQ), _mm512_set1_ps(INFINITY), zero);
   return _mm512_mask_blend_ps(d, res, alt);
+}
+inline __m512 v_tanh(__m512 x) {
+    const __m512 one = _mm512_set1_ps(1.0f);
+    const __m512 exp_two_x = v_expf(_mm512_mul_ps(x, _mm512_set1_ps(2.f)));
+    const __mmask16 mask = _mm512_cmp_ps_mask(x, _mm512_set1_ps(10.f), _CMP_GT_OQ);
+    const __m512 res = _mm512_div_ps(_mm512_sub_ps(exp_two_x, one), _mm512_add_ps(exp_two_x, one));
+    return _mm512_mask_blend_ps(mask, res, one);
 }
 #endif
 
@@ -6026,22 +6042,37 @@ inline __m256 v_expf(__m256 x) {
                             _mm256_mul_ps(_mm256_fmadd_ps(s2, j, s2), s1)),
               _mm256_andnot_ps(_mm256_castsi256_ps(c), _mm256_fmadd_ps(k, j, k)))));
 }
+inline __m256 v_tanh(__m256 x) {
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 exp_two_x = v_expf(_mm256_mul_ps(x, _mm256_set1_ps(2.f)));
+    const __m256 res = _mm256_div_ps(_mm256_sub_ps(exp_two_x, one), _mm256_add_ps(exp_two_x, one));
+    const __m256 mask = _mm256_cmp_ps(x, _mm256_set1_ps(10.f), _CMP_GT_OQ);
+    return _mm256_or_ps(_mm256_and_ps(mask, one), _mm256_andnot_ps(mask, res));
+}
+
 #endif
 } // namespace
 
 #ifdef HAVE_FANCY_SIMD
 
 namespace {
+
+// In some functions below we have two branches, one for small attention heads, and one for large
+// My intent was to invoke the "small head" branch for attention heads with <= 128 elements, and the
+// "large head" branch for attentions heads of size 256 (e.g., Gemma-2). But the "large head" branch
+// has a bug that I don't see, so for now we use the "small head" branch for all head sizes.
+// We definitely run out of SIMD registers for head siZe of 256, so performance is sub-optimal
+// in this case. But it is still much better than mainline ggml and llama.cpp
 template <int D, int q_step, int k_step>
 struct FlashAttn {
     static_assert(D%16 == 0 && D <= 256);
     static_assert(k_step%16 == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
-    constexpr static int vk_size = D <= 128 ? D/8 : D/16;
+    constexpr static int vk_size = D <= 256 ? D/8 : D/16;
     static_assert(q_step <= vk_size);
 
-    FlashAttn(float scale) : vscale(_mm512_set1_ps(scale)), h_inf(GGML_FP32_TO_FP16(-INFINITY)) {}
+    FlashAttn(float scale, float softcap) : vscale(_mm512_set1_ps(scale)), softcap(softcap), h_inf(GGML_FP32_TO_FP16(-INFINITY)) {}
 
     inline void init_qstep() {
         for (int j = 0; j < q_step; ++j) {
@@ -6072,17 +6103,40 @@ struct FlashAttn {
     }
 
     inline void update_M_S(int j, [[maybe_unused]] const char * mask) {
-        if constexpr (D <= 128) {
-            for (int l = 0; l < k_step/16; ++l) vk[l] = _mm512_mul_ps(vscale, _mm512_loadu_ps(cache + k_step*j + 16*l));
+        if (softcap <= 0.0f) {
+            if constexpr (D <= 256) {
+                for (int l = 0; l < k_step/16; ++l) vk[l] = _mm512_mul_ps(vscale, _mm512_loadu_ps(cache + k_step*j + 16*l));
+            } else {
+                auto vinf = _mm512_set1_ps(-INFINITY);
+                const ggml_half * mp = (const ggml_half *)mask;
+                for (int l = 0; l < k_step/16; ++l) {
+                    auto val  = _mm512_loadu_ps(cache + k_step*j + 16*l);
+                    auto m16 = _mm256_cmpeq_epi16_mask(_mm256_loadu_si256((const __m256i *)mp), _mm256_setzero_si256());
+                    vk[l] = _mm512_mask_mul_ps(vinf, m16, vscale, val);
+                }
+            }
         } else {
-            auto vinf = _mm512_set1_ps(-INFINITY);
-            const ggml_half * mp = (const ggml_half *)mask;
-            for (int l = 0; l < k_step/16; ++l) {
-                auto val  = _mm512_loadu_ps(cache + k_step*j + 16*l);
-                auto m16 = _mm256_cmpeq_epi16_mask(_mm256_loadu_si256((const __m256i *)mp), _mm256_setzero_si256());
-                vk[l] = _mm512_mask_mul_ps(vinf, m16, vscale, val);
+            auto v_softcap = _mm512_set1_ps(softcap);
+            if constexpr (D <= 256) {
+                for (int l = 0; l < k_step/16; ++l) {
+                    auto val = _mm512_loadu_ps(cache + k_step*j + 16*l);
+                    //vk[l] = _mm512_mul_ps(vscale, v_tanh(_mm512_mul_ps(v_softcap, val)));
+                    vk[l] = _mm512_mul_ps(v_softcap, v_tanh(_mm512_mul_ps(vscale, val)));
+                }
+            } else {
+                auto vinf = _mm512_set1_ps(-INFINITY);
+                const ggml_half * mp = (const ggml_half *)mask;
+                for (int l = 0; l < k_step/16; ++l) {
+                    auto m16 = _mm256_cmpeq_epi16_mask(_mm256_loadu_si256((const __m256i *)mp+l), _mm256_setzero_si256());
+                    auto val  = _mm512_loadu_ps(cache + k_step*j + 16*l);
+                    //val = v_tanh(_mm512_mul_ps(v_softcap, val));
+                    //vk[l] = _mm512_mask_mul_ps(vinf, m16, vscale, val);
+                    val = v_tanh(_mm512_mul_ps(vscale, val));
+                    vk[l] = _mm512_mask_mul_ps(vinf, m16, v_softcap, val);
+                }
             }
         }
+
         float smax = reduce_T<_mm512_reduce_max_ps, _mm512_max_ps>(vk);
         need_scaling[j] = 0;
         if (smax > M[j]) {
@@ -6124,7 +6178,7 @@ struct FlashAttn {
         }
     }
 
-    template <int Size = D, class = std::enable_if<Size <= 128>>
+    template <int Size = D, class = std::enable_if<Size <= 256>>
     inline void mult_mask_kq(int stride_k, int stride_q, int stride_m,
             const char * k, const float * q, const char * mask) {
         __m512 qv[D/16];
@@ -6139,7 +6193,7 @@ struct FlashAttn {
         }
     }
 
-    template <int Size = D, class = std::enable_if<Size >= 129>>
+    template <int Size = D, class = std::enable_if<Size >= 257>>
     inline void mult_mask_kq(int stride_k, int stride_q, const char * k, const float * q) {
         DataInfo info{cache, (const char *)q, k_step*sizeof(float), stride_q*sizeof(float), 0, 0, nullptr, 0};
         for (int i = 0; i < q_step/4; ++i) {
@@ -6157,7 +6211,7 @@ struct FlashAttn {
         }
     }
 
-    template <int Size = D, class = std::enable_if<Size <= 128>>
+    template <int Size = D, class = std::enable_if<Size <= 256>>
     inline void mult_mask_kq(int nq, int stride_k, int stride_q, int stride_m,
             const char * k, const float * q, const char * mask) {
         __m512 qv[D/16];
@@ -6171,7 +6225,7 @@ struct FlashAttn {
             }
         }
     }
-    template <int Size = D, class = std::enable_if<Size >= 129>>
+    template <int Size = D, class = std::enable_if<Size >= 257>>
     inline void mult_mask_kq(int nq, int stride_k, int stride_q, const char * k, const float * q) {
         DataInfo info{cache, (const char *)q, k_step*sizeof(float), stride_q*sizeof(float), 0, 0, nullptr, 0};
         for (int i = 0; i < nq/4; ++i) {
@@ -6190,7 +6244,7 @@ struct FlashAttn {
     }
 
     inline void multiply_mask_kq(int stride_k, int stride_q, int stride_m, const char * k, const float * q, const char * mask) {
-        if constexpr (D <= 128) {
+        if constexpr (D <= 256) {
             mult_mask_kq(stride_k, stride_q, stride_m, k, q, mask);
         }
         else {
@@ -6198,11 +6252,12 @@ struct FlashAttn {
         }
         for (int j = 0; j < q_step; ++j) {
             update_M_S(j, mask);
+            mask += stride_m;
         }
     }
 
     inline void multiply_mask_kq(int nq, int stride_k, int stride_q, int stride_m, const char * k, const float * q, const char * mask) {
-        if constexpr (D <= 128) {
+        if constexpr (D <= 256) {
             mult_mask_kq(nq, stride_k, stride_q, stride_m, k, q, mask);
         }
         else {
@@ -6210,6 +6265,7 @@ struct FlashAttn {
         }
         for (int j = 0; j < nq; ++j) {
             update_M_S(j, mask);
+            mask += stride_m;
         }
     }
 
@@ -6268,6 +6324,7 @@ struct FlashAttn {
     __m512 vms[q_step];
     __m512 vk[vk_size];
     const __m512 vscale;
+    const float softcap;
     const ggml_half h_inf;
 
     typedef __m512 (*combine_t)(__m512, __m512);
@@ -6417,13 +6474,13 @@ void FlashAttn<D, q_step, k_step>::accumulate_qkv(int nq1, int stride_v, const c
 template <int D, int q_step, int k_step>
 inline void iqk_flash_helper_T(int nq1, int nk1, int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * k, const char * v, const char * mask,
-                        float scale, float * qkv) {
+                        float scale, float softcap, float * qkv) {
     if (nq1 >= q_step) {
-        FlashAttn<D, q_step, k_step> fa(scale);
+        FlashAttn<D, q_step, k_step> fa(scale, softcap);
         fa.compute(nq1, nk1, stride_k, stride_q, stride_m, stride_v, stride_qkv,
                 (const char *)k, q, (const char *)mask, (const char *)v, qkv);
     } else {
-        FlashAttn<D, 1, k_step> fa(scale);
+        FlashAttn<D, 1, k_step> fa(scale, softcap);
         fa.compute(nq1, nk1, stride_k, stride_q, stride_m, stride_v, stride_qkv,
                 (const char *)k, q, (const char *)mask, (const char *)v, qkv);
     }
@@ -6443,6 +6500,7 @@ bool iqk_flash_attn_noalibi(int D,                  // head size
                             const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                             const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
                             float         scale,    // scale applied before softmax
+                            float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             float       * qkv) {    // v*softmax(scale*(k*q))
 
     if (!mask || nk1%32 != 0) return false; // the implementation assumes mask is not null and nk is a multiple of 32
@@ -6455,17 +6513,17 @@ bool iqk_flash_attn_noalibi(int D,                  // head size
 
     switch (D) {
         case 64:
-            iqk_flash_helper_T< 64, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, qkv); break;
+            iqk_flash_helper_T< 64, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 80:
-            iqk_flash_helper_T< 80, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, qkv); break;
+            iqk_flash_helper_T< 80, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 96:
-            iqk_flash_helper_T< 96, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, qkv); break;
+            iqk_flash_helper_T< 96, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 112:
-            iqk_flash_helper_T<112, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, qkv); break;
+            iqk_flash_helper_T<112, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 128:
-            iqk_flash_helper_T<128, 8, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, qkv); break;
+            iqk_flash_helper_T<128, 8, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 256:
-            iqk_flash_helper_T<256, 8, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, qkv); break;
+            iqk_flash_helper_T<256, 8, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         default:
             return false;
     }
@@ -6488,6 +6546,7 @@ bool iqk_flash_attn_noalibi([[maybe_unused]] int D,                  // head siz
                             [[maybe_unused]] const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                             [[maybe_unused]] const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
                             [[maybe_unused]] float         scale,    // scale applied before softmax
+                            [[maybe_unused]] float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             [[maybe_unused]] float       * qkv) {    // v*softmax(scale*(k*q))
     return false;
 }
@@ -6518,6 +6577,7 @@ bool iqk_flash_attn_noalibi([[maybe_unused]] int D,                  // head siz
                             [[maybe_unused]] const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                             [[maybe_unused]] const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
                             [[maybe_unused]] float         scale,    // scale applied before softmax
+                            [[maybe_unused]] float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             [[maybe_unused]] float       * qkv) {    // v*softmax(scale*(k*q))
     return false;
 }
