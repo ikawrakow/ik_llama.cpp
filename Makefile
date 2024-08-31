@@ -574,6 +574,7 @@ endif # GGML_NVPL
 
 OBJ_GGML    += ggml/src/iqk/iqk_quantize.o
 ifndef GGML_NO_IQKMULMAT
+	MK_CFLAGS   += -DGGML_USE_IQK_MULMAT
 	MK_CPPFLAGS += -DGGML_USE_IQK_MULMAT
 	OBJ_GGML    += ggml/src/iqk/iqk_mul_mat.o
 endif
@@ -1228,6 +1229,7 @@ clean:
 	rm -rvf ggml/*.so
 	rm -vrf ggml/src/*.o
 	rm -rvf ggml/src/llamafile/*.o
+	rm -rvf ggml/src/iqk/*.o
 	rm -rvf common/build-info.cpp
 	rm -vrf ggml/src/ggml-metal-embed.metal
 	rm -vrf ggml/src/ggml-cuda/*.o
