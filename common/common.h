@@ -122,6 +122,7 @@ struct gpt_params {
     std::string hf_file              = ""; // HF file
     std::string prompt               = "";
     std::string prompt_file          = ""; // store the external prompt file name
+    bool prompt_is_binary            = false; // don't fool around when the prompt contains binary data (as it is for multiple choice)
     std::string path_prompt_cache    = ""; // path to file for saving/loading prompt eval state
     std::string input_prefix         = ""; // string to prefix user inputs with
     std::string input_suffix         = ""; // string to suffix user inputs with

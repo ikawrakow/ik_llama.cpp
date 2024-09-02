@@ -250,7 +250,9 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     gpt_params_handle_hf_token(params);
 
     if (params.escape) {
-        string_process_escapes(params.prompt);
+        if (!params.prompt_is_binary) {
+            string_process_escapes(params.prompt);
+        }
         string_process_escapes(params.input_prefix);
         string_process_escapes(params.input_suffix);
         string_process_escapes(sparams.cfg_negative_prompt);
@@ -334,6 +336,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-p" || arg == "--prompt") {
         CHECK_ARG
         params.prompt = argv[i];
+        params.prompt_is_binary = false;
         return true;
     }
     if (arg == "-e" || arg == "--escape") {
@@ -371,6 +374,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         ss << file.rdbuf();
         params.prompt = ss.str();
         fprintf(stderr, "Read %zu bytes from binary file %s\n", params.prompt.size(), argv[i]);
+        params.prompt_is_binary = true;
         return true;
     }
     if (arg == "-f" || arg == "--file") {
@@ -387,6 +391,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         if (!params.prompt.empty() && params.prompt.back() == '\n') {
             params.prompt.pop_back();
         }
+        params.prompt_is_binary = false;
         return true;
     }
     if (arg == "--in-file") {
