@@ -6120,7 +6120,7 @@ struct FlashAttn {
         }
         auto qr = q + m1*stride_q;
         auto vsum = _mm512_mul_ps(vk[0], _mm512_loadu_ps(qr));
-        for (int i = 0; i < D/16; ++i) {
+        for (int i = 1; i < D/16; ++i) {
             vsum = _mm512_fmadd_ps(vk[i], _mm512_loadu_ps(qr + 16*i), vsum);
         }
         cache[k_step*m1 + l1] = _mm512_reduce_add_ps(vsum);
@@ -6138,6 +6138,11 @@ struct FlashAttn {
         }
 
         float smax = reduce_T<_mm512_reduce_max_ps, _mm512_max_ps>(vk);
+        if (smax == -INFINITY) {
+            std::memset(cache + k_step*j, 0, k_step*sizeof(float));
+            need_scaling[j] = M[j] == -INFINITY ? 2 : 0;
+            return;
+        }
         need_scaling[j] = 0;
         if (smax > M[j]) {
             if (M[j] > -INFINITY) {
@@ -6404,6 +6409,7 @@ template <int D, int q_step, int k_step>
 inline void iqk_flash_helper_T(int nq1, int nk1, int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * k, const char * v, const char * mask,
                         float scale, float softcap, float * qkv) {
+
     if (nq1 >= q_step) {
         FlashAttn<D, q_step, k_step> fa(scale, softcap);
         fa.compute(nq1, nk1, stride_k, stride_q, stride_m, stride_v, stride_qkv,
