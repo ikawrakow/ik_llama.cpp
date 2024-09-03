@@ -6529,45 +6529,6 @@ struct FlashAttn {
         }
     }
 
-    //void compute(int nq1, int nk1, int stride_k, int stride_q, int stride_m, int stride_v, int stride_qkv,
-    //        const char * k, const float * q, const char * mask, const char * v, float * qkv) {
-    //    KHelperF16<D, k_step> kh(k, stride_k);
-    //    KHelperF16<D, k_step> vh(v, stride_v);
-    //    for (int i1 = 0; i1 < nq1/q_step; ++i1) {
-    //        init_qstep();
-    //        kh.reset_block();
-    //        vh.reset_block();
-    //        auto mr = mask;
-    //        for (int k1 = 0; k1 < nk1/k_step; ++k1) {
-    //            multiply_mask_kq(kh, stride_q, stride_m, q, mr);
-    //            accumulate_qkv(vh);
-    //            kh.next_block();
-    //            vh.next_block();
-    //            mr += k_step*sizeof(ggml_half);
-    //        }
-    //        normalize_and_store(stride_qkv, qkv);
-
-    //        q    += q_step*stride_q;
-    //        mask += q_step*stride_m;
-    //        qkv  += q_step*stride_qkv;
-    //    }
-    //    int n_left = nq1 - q_step*(nq1/q_step);
-    //    if (n_left > 0) {
-    //        init_qstep();
-    //        kh.reset_block();
-    //        vh.reset_block();
-    //        auto mr = mask;
-    //        for (int k1 = 0; k1 < nk1/k_step; ++k1) {
-    //            multiply_mask_kq(n_left, kh, stride_q, stride_m, q, mr);
-    //            accumulate_qkv(n_left, vh);
-    //            kh.next_block();
-    //            vh.next_block();
-    //            mr += k_step*sizeof(ggml_half);
-    //        }
-    //        normalize_and_store(n_left, stride_qkv, qkv);
-    //    }
-    //}
-
     template <typename KHelper, typename VHelper>
     void compute(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
             const float * q, const char * mask, float * qkv) {
