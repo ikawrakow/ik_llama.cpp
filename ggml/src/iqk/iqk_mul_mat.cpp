@@ -5263,6 +5263,37 @@ inline void mul_mat_qX_Y_q8_Y(int n, Dequantizer& deq, Q8& q8, const DataInfo& i
 }
 
 template <typename Dequantizer, typename Q8>
+inline void mul_mat_qX_Y_q8_Y_IK(int n, Dequantizer& deq1, Dequantizer& deq2, Q8& q8, const DataInfo& info, int nrc_x) {
+    const int nb = n / QK4_1;
+
+    float16x4_t sc16[2*Q8::nrc_y];
+    float32x4_t acc[2*Q8::nrc_y];
+
+    for (int ix = 0; ix < nrc_x; ix += 2) {
+
+        deq1.new_row(ix+0);
+        deq2.new_row(ix+1);
+
+        for (int iy = 0; iy < 2*Q8::nrc_y; ++iy) acc[iy] = vdupq_n_f32(0.f);
+
+        for (int i = 0; i < nb/4; ++i) {
+            q8.process_scales(i, deq1, sc16+0, acc+0);
+            q8.process_scales(i, deq2, sc16+Q8::nrc_y, acc+Q8::nrc_y);
+            sum_4(i, deq1, q8, sc16+0, acc+0);
+            sum_4(i, deq2, q8, sc16+Q8::nrc_y, acc+Q8::nrc_y);
+        }
+        //for (int i = 4*(nb/4); i < nb; ++i) {
+        //    q8.process_1_block(i, deq, acc);
+        //}
+
+        for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+            info.store(ix+0, iy, vaddvq_f32(acc[iy]));
+            info.store(ix+1, iy, vaddvq_f32(acc[iy+Q8::nrc_y]));
+        }
+    }
+}
+
+template <typename Dequantizer, typename Q8>
 inline void mul_mat_qX_Y_q8_Y_1(int n, Dequantizer& deq1, Dequantizer& deq2, Q8& q8, const DataInfo& info, int nrc_x) {
     const int nb = n / QK4_1;
 
@@ -5312,8 +5343,13 @@ static void mul_mat_qX_0_q8_0(int n, const void * vx, size_t bx, const DataInfo&
         Dequantizer deq1(vx, bx), deq2(vx, bx);
         mul_mat_qX_Y_q8_Y_1(n, deq1, deq2, q8, info, nrc_x);
     } else {
-        Dequantizer deq(vx, bx);
-        mul_mat_qX_Y_q8_Y(n, deq, q8, info, nrc_x);
+        if (nrc_x%2 == 0) {
+            Dequantizer deq1(vx, bx), deq2(vx, bx);
+            mul_mat_qX_Y_q8_Y_IK(n, deq1, deq2, q8, info, nrc_x);
+        } else {
+            Dequantizer deq(vx, bx);
+            mul_mat_qX_Y_q8_Y(n, deq, q8, info, nrc_x);
+        }
     }
 }
 
