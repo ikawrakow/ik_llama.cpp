@@ -3208,52 +3208,6 @@ template <typename Float, int nrc_in> struct QFT final : public QFBase {
     const Float * y[nrc];
 };
 
-
-//template <typename Qy, typename Qx, typename F>
-//IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
-//    assert(n%FBase::k_step == 0);
-//    int nb = n/F::k_step;
-//    int nb4 = n/4;
-//    Qy y(info);
-//    Qx x(cx + ix0*bx, bx);
-//    typename F::Data xv[Qx::nrc];
-//    typename F::Acc  acc[Qx::nrc*Qy::nrc];
-//    auto yv = y.load1(0, 0);
-//    for (int ix = 0; ix < Qx::nrc; ++ix) {
-//        xv[ix] = x.load1(ix, 0);
-//        acc[ix] = F::acc_first(yv, xv[ix]);
-//    }
-//    for (int iy = 1; iy < Qy::nrc; ++iy) {
-//        yv = y.load1(iy, 0);
-//        for (int ix = 0; ix < Qx::nrc; ++ix) acc[Qx::nrc*iy + ix] = F::acc_first(yv, xv[ix]);
-//    }
-//    for (int i = 1; i < nb; ++i) {
-//        yv = y.load1(0, i);
-//        for (int ix = 0; ix < Qx::nrc; ++ix) {
-//            xv[ix] = x.load1(ix, i);
-//            acc[ix] = F::acc(acc[ix], yv, xv[ix]);
-//        }
-//        for (int iy = 1; iy < Qy::nrc; ++iy) {
-//            yv = y.load1(iy, i);
-//            for (int ix = 0; ix < Qx::nrc; ++ix) acc[Qx::nrc*iy + ix] = F::acc(acc[Qx::nrc*iy + ix], yv, xv[ix]);
-//        }
-//    }
-//    if constexpr (F::k_step < 32) {
-//        for (int i = (F::k_step/4)*nb; i < nb4; ++i) {
-//            yv = y.load_tail(0, i);
-//            for (int ix = 0; ix < Qx::nrc; ++ix) {
-//                xv[ix] = x.load_tail(ix, i);
-//                acc[ix] = F::acc(acc[ix], yv, xv[ix]);
-//            }
-//            for (int iy = 1; iy < Qy::nrc; ++iy) {
-//                yv = y.load_tail(iy, i);
-//                for (int ix = 0; ix < Qx::nrc; ++ix) acc[Qx::nrc*iy + ix] = F::acc(acc[Qx::nrc*iy + ix], yv, xv[ix]);
-//            }
-//        }
-//    }
-//    for (int iy = 0; iy < Qy::nrc; ++iy) for (int ix = 0; ix < Qx::nrc; ++ix) info.store(ix0+ix, iy, F::hsum(acc[Qx::nrc*iy+ix]));
-//}
-
 template <typename Qy, typename Qx>
 IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
     int nb = n/QFBase::k_step;
