@@ -3208,9 +3208,54 @@ template <typename Float, int nrc_in> struct QFT final : public QFBase {
     const Float * y[nrc];
 };
 
+
+//template <typename Qy, typename Qx, typename F>
+//IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
+//    assert(n%FBase::k_step == 0);
+//    int nb = n/F::k_step;
+//    int nb4 = n/4;
+//    Qy y(info);
+//    Qx x(cx + ix0*bx, bx);
+//    typename F::Data xv[Qx::nrc];
+//    typename F::Acc  acc[Qx::nrc*Qy::nrc];
+//    auto yv = y.load1(0, 0);
+//    for (int ix = 0; ix < Qx::nrc; ++ix) {
+//        xv[ix] = x.load1(ix, 0);
+//        acc[ix] = F::acc_first(yv, xv[ix]);
+//    }
+//    for (int iy = 1; iy < Qy::nrc; ++iy) {
+//        yv = y.load1(iy, 0);
+//        for (int ix = 0; ix < Qx::nrc; ++ix) acc[Qx::nrc*iy + ix] = F::acc_first(yv, xv[ix]);
+//    }
+//    for (int i = 1; i < nb; ++i) {
+//        yv = y.load1(0, i);
+//        for (int ix = 0; ix < Qx::nrc; ++ix) {
+//            xv[ix] = x.load1(ix, i);
+//            acc[ix] = F::acc(acc[ix], yv, xv[ix]);
+//        }
+//        for (int iy = 1; iy < Qy::nrc; ++iy) {
+//            yv = y.load1(iy, i);
+//            for (int ix = 0; ix < Qx::nrc; ++ix) acc[Qx::nrc*iy + ix] = F::acc(acc[Qx::nrc*iy + ix], yv, xv[ix]);
+//        }
+//    }
+//    if constexpr (F::k_step < 32) {
+//        for (int i = (F::k_step/4)*nb; i < nb4; ++i) {
+//            yv = y.load_tail(0, i);
+//            for (int ix = 0; ix < Qx::nrc; ++ix) {
+//                xv[ix] = x.load_tail(ix, i);
+//                acc[ix] = F::acc(acc[ix], yv, xv[ix]);
+//            }
+//            for (int iy = 1; iy < Qy::nrc; ++iy) {
+//                yv = y.load_tail(iy, i);
+//                for (int ix = 0; ix < Qx::nrc; ++ix) acc[Qx::nrc*iy + ix] = F::acc(acc[Qx::nrc*iy + ix], yv, xv[ix]);
+//            }
+//        }
+//    }
+//    for (int iy = 0; iy < Qy::nrc; ++iy) for (int ix = 0; ix < Qx::nrc; ++ix) info.store(ix0+ix, iy, F::hsum(acc[Qx::nrc*iy+ix]));
+//}
+
 template <typename Qy, typename Qx>
 IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
-    assert(n%QFBase::k_step == 0);
     int nb = n/QFBase::k_step;
     int nb4 = n/4;
     Qy y(info);
@@ -3256,7 +3301,6 @@ IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, 
 // f16, but I don't have a CPU capable of f16 vector arithmetic, so not doing it for now.
 template <int nrc_y, typename FloatX, typename FloatY>
 void mul_mat_fX_fY_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    assert(n%QFBase::k_step == 0);
 #ifdef __AVX512F__
     constexpr int k_nx = 5;
 #else
@@ -3278,6 +3322,82 @@ void mul_mat_fX_fY_T(int n, const void * vx, size_t bx, const DataInfo& info, in
 #endif
     }
 }
+
+#ifdef __AVX512BF16__
+struct QFBaseBF16 {
+    constexpr static int k_step = 32;
+    using Data = __m512bh;
+    using Acc  = __m512;
+    static inline Data load(const ggml_bf16_t * x) { return __m512bh(_mm512_loadu_si512((const __m512i *)x)); }
+    static inline Acc acc(Acc prev, const Data& y, const Data& x) {
+        return _mm512_dpbf16_ps(prev, y, x);
+    }
+    static inline Acc acc_first(const Data& y, const Data& x) {
+        return _mm512_dpbf16_ps(_mm512_setzero_ps(), y, x);
+    }
+    static inline float hsum(Acc acc) {
+        return _mm512_reduce_add_ps(acc);
+    }
+};
+template <int nrc_in> struct QFTBF16 final : public QFBaseBF16 {
+    constexpr static int nrc = nrc_in;
+    QFTBF16(const DataInfo& info) {
+        for (int iy = 0; iy < nrc; ++iy) y[iy] = (const ggml_bf16_t *)info.src1_row(iy);
+    }
+    QFTBF16(const char * cx, size_t bx) {
+        for (int iy = 0; iy < nrc; ++iy) y[iy] = (const ggml_bf16_t *)(cx + iy*bx);
+    }
+    IQK_ALWAYS_INLINE Data load1(int iy, int i) const { return load(y[iy] + k_step*i); }
+    const ggml_bf16_t * y[nrc];
+};
+
+template <int nrc_y, int nrc_x>
+IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
+    int nb = n/QFBaseBF16::k_step;
+    QFTBF16<nrc_y> y(info);
+    QFTBF16<nrc_x> x(cx + ix0*bx, bx);
+    QFBaseBF16::Data xv[nrc_x];
+    QFBaseBF16::Acc  acc[nrc_x*nrc_y];
+    auto yv = y.load1(0, 0);
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        xv[ix] = x.load1(ix, 0);
+        acc[ix] = QFBaseBF16::acc_first(yv, xv[ix]);
+    }
+    for (int iy = 1; iy < nrc_y; ++iy) {
+        yv = y.load1(iy, 0);
+        for (int ix = 0; ix < nrc_x; ++ix) acc[nrc_x*iy + ix] = QFBaseBF16::acc_first(yv, xv[ix]);
+    }
+    for (int i = 1; i < nb; ++i) {
+        yv = y.load1(0, i);
+        for (int ix = 0; ix < nrc_x; ++ix) {
+            xv[ix] = x.load1(ix, i);
+            acc[ix] = QFBaseBF16::acc(acc[ix], yv, xv[ix]);
+        }
+        for (int iy = 1; iy < nrc_y; ++iy) {
+            yv = y.load1(iy, i);
+            for (int ix = 0; ix < nrc_x; ++ix) acc[nrc_x*iy + ix] = QFBaseBF16::acc(acc[nrc_x*iy + ix], yv, xv[ix]);
+        }
+    }
+    for (int iy = 0; iy < nrc_y; ++iy) for (int ix = 0; ix < nrc_x; ++ix) info.store(ix0+ix, iy, QFBaseBF16::hsum(acc[nrc_x*iy+ix]));
+}
+template <int nrc_y>
+void mul_mat_fX_fY_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    constexpr int k_nx = 5;
+    const char * cx = (const char *)vx;
+    for (int ix = 0; ix < nrc_x/k_nx; ++ix) {
+        mul_mat_Qx_Qy_MxN<nrc_y, k_nx>(n, cx, bx, ix*k_nx, info);
+    }
+    int last_x = k_nx*(nrc_x/k_nx);
+    if (last_x == nrc_x) return;
+    int nx = nrc_x - last_x;
+    switch (nx) {
+        case 1: mul_mat_Qx_Qy_MxN<nrc_y, 1>(n, cx, bx, last_x, info); break;
+        case 2: mul_mat_Qx_Qy_MxN<nrc_y, 2>(n, cx, bx, last_x, info); break;
+        case 3: mul_mat_Qx_Qy_MxN<nrc_y, 3>(n, cx, bx, last_x, info); break;
+        case 4: mul_mat_Qx_Qy_MxN<nrc_y, 4>(n, cx, bx, last_x, info); break;
+    }
+}
+#endif
 
 //
 // Tiled Q8_0 x Q8_0 implementation. Not used as the templated legacy quant implementation
@@ -3451,9 +3571,31 @@ void set_mul_mat_f(MulMat& mm) {
 #endif
 }
 
+#ifdef __AVX512BF16__
+void set_mul_mat_bf16(MulMat& mm) {
+    for (auto& f : mm.funcs) f = nullptr;
+    mm.funcs[0] = mul_mat_fX_fY_T<1>;
+    mm.funcs[1] = mul_mat_fX_fY_T<2>;
+    mm.funcs[2] = mul_mat_fX_fY_T<3>;
+    mm.funcs[3] = mul_mat_fX_fY_T<4>;
+    mm.funcs[4] = mul_mat_fX_fY_T<5>;
+}
+#endif
+
 bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
 
     (void)Ny;
+
+    if (typeA == GGML_TYPE_BF16) {
+        if (ne00 % 32) return false;
+        switch (typeB) {
+#ifdef __AVX512BF16__
+            case GGML_TYPE_BF16: set_mul_mat_bf16(mm); break;
+#endif
+            default: return false;
+        }
+        return true;
+    }
 
     if (typeA == GGML_TYPE_F16 || typeA == GGML_TYPE_F32) {
         if (ne00 % 4) return false;
