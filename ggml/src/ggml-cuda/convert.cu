@@ -935,14 +935,6 @@ static __global__ void convert_from_bf16(const nv_bfloat16 * __restrict__ x, dst
     }
 
     y[i] = __bfloat162float(x[i]);
-
-    //typedef union { uint32_t u; float f; } aux_t;
-
-    //const uint16_t * u16 = (const uint16_t *) x;
-    //aux_t aux;
-    //aux.u = u16[i] << 16;
-
-    //y[i] = aux.f;
 }
 
 static __global__ void convert_to_bf16(const float * __restrict__ x, nv_bfloat16 * __restrict__ y, const int64_t k) {
@@ -977,9 +969,6 @@ static void convert_from_bf16_cuda(const void * __restrict__ vx, dst_t * __restr
     const int num_blocks = (k + CUDA_DEQUANTIZE_BLOCK_SIZE - 1) / CUDA_DEQUANTIZE_BLOCK_SIZE;
     convert_from_bf16<<<num_blocks, CUDA_DEQUANTIZE_BLOCK_SIZE, 0, stream>>>((const nv_bfloat16 *)vx, y, k);
 }
-
-//=> to_bf16_cuda_t = void(*)(const void * __restrict__ x, nv_bfloat16 * y, int64_t k, cudaStream_t stream);
-
 
 template <typename src_t>
 static void convert_to_bf16_cuda(const void * __restrict__ vx, nv_bfloat16 * __restrict__ y, const int64_t k, cudaStream_t stream) {
