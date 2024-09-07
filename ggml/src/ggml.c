@@ -5751,6 +5751,11 @@ static struct ggml_tensor * ggml_fused_rms_norm_impl(
         return ggml_rms_norm_impl(ctx, a, eps, inplace);
     }
 
+    //printf("%s: %zd x %zd x %zd %zd", __func__, a->ne[0], a->ne[1], a->ne[2], a->ne[3]);
+    //if (b) printf(", b = %zd x %zd x %zd %zd, ", b->ne[0], b->ne[1], b->ne[2], b->ne[3]);
+    //if (c) printf(", c = %zd x %zd x %zd %zd, ", c->ne[0], c->ne[1], c->ne[2], c->ne[3]);
+    //printf("\n");
+
     bool is_node = false;
 
     if (!inplace && (a->grad)) {
