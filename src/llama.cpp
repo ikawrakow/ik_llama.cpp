@@ -7988,9 +7988,12 @@ static struct ggml_tensor * llm_build_norm(
          const llm_build_cb & cb,
                         int   il, float scale_eps = 1) {
 
-    if (type == LLM_NORM_RMS && !mb) {
+    if (type == LLM_NORM_RMS && mw) {
         cur = ggml_fused_rms_norm(ctx, cur, mw, scale_eps * hparams.f_norm_rms_eps);
-        cb(cur, "fused_norm", il);
+        if (mb) {
+            cb(cur, "fused_norm", il);
+            cur = ggml_add(ctx, cur, mb);
+        }
         return cur;
     }
 

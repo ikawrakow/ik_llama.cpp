@@ -2616,6 +2616,7 @@ static enum ggml_status ggml_metal_graph_compute(
                         GGML_ASSERT(ne00 % 4 == 0);
                         GGML_ASSERT(ggml_is_contiguous_1(src0));
                         GGML_ASSERT(src1->ne[0] == src0->ne[0]);
+                        GGML_ASSERT(src1->type  == GGML_TYPE_F32);
                         GGML_ASSERT(ggml_nrows(src1) == 1);
 
                         float eps;
