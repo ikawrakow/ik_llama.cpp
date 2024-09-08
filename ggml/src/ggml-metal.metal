@@ -1038,6 +1038,57 @@ kernel void kernel_rms_norm(
     }
 }
 
+kernel void kernel_fused_rms_norm(
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        constant   int64_t & ne00,
+        constant  uint64_t & nb01,
+        constant     float & eps,
+        threadgroup float  * buf [[threadgroup(0)]],
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint sgitg[[simdgroup_index_in_threadgroup]],
+        uint tiisg[[thread_index_in_simdgroup]],
+        uint   ntg[[threads_per_threadgroup]]) {
+    device const float4 * x = (device const float4 *) ((device const char *) src0 + tgpig*nb01);
+
+    float4 sumf = 0;
+    float all_sum = 0;
+
+    // parallel sum
+    for (int i00 = tpitg; i00 < ne00/4; i00 += ntg) {
+        sumf += x[i00] * x[i00];
+    }
+    all_sum = sumf[0] + sumf[1] + sumf[2] + sumf[3];
+    all_sum = simd_sum(all_sum);
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = all_sum;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        all_sum = buf[tiisg];
+        all_sum = simd_sum(all_sum);
+    }
+
+    const float mean  = all_sum/ne00;
+    const float scale = 1.0f/sqrt(mean + eps);
+
+    device float4 * y = (device float4 *) (dst + tgpig*ne00);
+    device float4 * z = (device float4 *)src1;
+    for (int i00 = tpitg; i00 < ne00/4; i00 += ntg) {
+        y[i00] = x[i00] * z[i00] * scale;
+    }
+}
+
 kernel void kernel_group_norm(
         device const float * src0,
         device       float * dst,
