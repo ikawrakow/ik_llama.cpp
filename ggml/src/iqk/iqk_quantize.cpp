@@ -119,6 +119,54 @@ void quantize_row_iq1_bn(const float * x, void * y, int64_t k) {
     quantize_iq1_bn(x, y, 1, k, nullptr);
 }
 
+void quantize_row_iq1_tn_ref(const float * x, block_iq1_tn  * y, int64_t k) {
+    quantize_iq1_tn(x, (void *)y, 1, k, nullptr);
+}
+
+void quantize_row_iq1_tn(const float * x, void * y, int64_t k) {
+    quantize_iq1_tn(x, y, 1, k, nullptr);
+}
+
+size_t quantize_iq1_tn(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_ASSERT(n_per_row >= 2*QK_K); // so we have space for the scale
+    int nblock = n_per_row/QK_IQ1BN;
+    float tmp[QK_IQ1BN];
+    char * qrow = (char *)dst;
+    auto row_size = ggml_row_size(GGML_TYPE_IQ1_TN, n_per_row);
+    IQ1BNQuantizer iq1bn;
+    for (int row = 0; row < nrows; ++row) {
+        float max = fabsf(src[0]);
+        for (int j = 1; j < n_per_row; ++j) max = std::max(max, fabsf(src[j]));
+        if (!(max > 0)) printf("%s: found max = %g?\n", __func__, max);
+        //GGML_ASSERT(max > 0);
+        *(ggml_half *)qrow = GGML_FP32_TO_FP16(max);
+        block_iq1_bn * y = (block_iq1_bn *)(qrow + sizeof(ggml_half));
+        const float * xb = src;
+        for (int ib = 0; ib < nblock; ++ib) {
+            for (int j = 0; j < QK_IQ1BN; ++j) tmp[j] = xb[j] < -0.5f*max ? -1 : xb[j] <= 0.5f*max ? 0 : 1;
+            iq1bn.quantize_one_row_1bn(tmp, y, QK_IQ1BN, imatrix);
+            ++y;
+            xb += QK_IQ1BN;
+        }
+        src  += n_per_row;
+        qrow += row_size;
+    }
+    return nrows*row_size;
+}
+
+void dequantize_row_iq1_tn(const block_iq1_tn * x, float * y, int64_t k) {
+    float scale = GGML_FP16_TO_FP32(*(const ggml_half *)x);
+    const block_iq1_bn * iq1bn = (const block_iq1_bn *)((const char *)x + sizeof(ggml_half));
+    dequantize_row_iq1_bn(iq1bn, y, k);
+    for (int j = 0; j < int(k); ++j) y[j] *= scale;
+}
+
+void vec_dot_iq1_tn_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+    float scale = GGML_FP16_TO_FP32(*(const ggml_half *)vx);
+    ggml_vec_dot_iq1_bn_q8_K64(n, s, bs, (const void *)((const char *)vx + sizeof(ggml_half)), bx, vy, by, nrc);
+    *s *= scale;
+}
+
 void dequantize_row_iq1_bn(const block_iq1_bn * x, float * y, int64_t k) {
     assert(k%QK_IQ1BN == 0);
     int nblock = k / QK_IQ1BN;
