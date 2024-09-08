@@ -104,6 +104,7 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_GET_ROWS_IQ6_K,
     GGML_METAL_KERNEL_TYPE_GET_ROWS_I32,
     GGML_METAL_KERNEL_TYPE_RMS_NORM,
+    GGML_METAL_KERNEL_TYPE_FUSED_RMS_NORM,
     GGML_METAL_KERNEL_TYPE_GROUP_NORM,
     GGML_METAL_KERNEL_TYPE_NORM,
     GGML_METAL_KERNEL_TYPE_MUL_MV_F32_F32,
@@ -613,6 +614,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(int n_cb) {
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_GET_ROWS_IQ6_K,                get_rows_iq6_k,                 true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_GET_ROWS_I32,                  get_rows_i32,                   true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_RMS_NORM,                      rms_norm,                       ctx->support_simdgroup_reduction);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FUSED_RMS_NORM,                fused_rms_norm,                 ctx->support_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_GROUP_NORM,                    group_norm,                     ctx->support_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_NORM,                          norm,                           true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_F32_F32,                mul_mv_f32_f32,                 ctx->support_simdgroup_reduction);
@@ -884,6 +886,7 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
             return true; //ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op);
         case GGML_OP_SOFT_MAX:
         case GGML_OP_RMS_NORM:
+        case GGML_OP_FUSED_RMS_NORM:
         case GGML_OP_GROUP_NORM:
             return ctx->support_simdgroup_reduction;
         case GGML_OP_NORM:
@@ -2602,6 +2605,37 @@ static enum ggml_status ggml_metal_graph_compute(
                         [encoder setBytes:&ne00    length:sizeof( int64_t) atIndex:2];
                         [encoder setBytes:&nb01    length:sizeof(uint64_t) atIndex:3];
                         [encoder setBytes:&eps     length:sizeof(   float) atIndex:4];
+                        [encoder setThreadgroupMemoryLength:32*sizeof(float) atIndex:0];
+
+                        const int64_t nrows = ggml_nrows(src0);
+
+                        [encoder dispatchThreadgroups:MTLSizeMake(nrows, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+                    } break;
+                case GGML_OP_FUSED_RMS_NORM:
+                    {
+                        GGML_ASSERT(ne00 % 4 == 0);
+                        GGML_ASSERT(ggml_is_contiguous_1(src0));
+                        GGML_ASSERT(src1->ne[0] == src0->ne[0]);
+                        GGML_ASSERT(ggml_nrows(src1) == 1);
+
+                        float eps;
+                        memcpy(&eps, dst->op_params, sizeof(float));
+
+                        int nth = 32; // SIMD width
+
+                        while (nth < ne00/4 && nth < 1024) {
+                            nth *= 2;
+                        }
+
+                        id<MTLComputePipelineState> pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FUSED_RMS_NORM].pipeline;
+
+                        [encoder setComputePipelineState:pipeline];
+                        [encoder setBuffer:id_src0 offset:offs_src0        atIndex:0];
+                        [encoder setBuffer:id_src1 offset:offs_src1        atIndex:1];
+                        [encoder setBuffer:id_dst  offset:offs_dst         atIndex:2];
+                        [encoder setBytes:&ne00    length:sizeof( int64_t) atIndex:3];
+                        [encoder setBytes:&nb01    length:sizeof(uint64_t) atIndex:4];
+                        [encoder setBytes:&eps     length:sizeof(   float) atIndex:5];
                         [encoder setThreadgroupMemoryLength:32*sizeof(float) atIndex:0];
 
                         const int64_t nrows = ggml_nrows(src0);
