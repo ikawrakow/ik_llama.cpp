@@ -379,8 +379,10 @@ void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
 
 void quantize_row_q8_K64_ref(const float * x, block_q8_K64 * y, int64_t k) {
 
+    GGML_ASSERT(k >= 8*QK_IQ1BN);
+
     float * dptr = (float *)y;
-    auto qs = (int8_t *)(dptr + 4);
+    auto qs = (int8_t *)(dptr + 8);
 #ifdef __ARM_NEON
     static const uint8_t k_shuffle[16] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60};
     auto shuffle = vld1q_u8(k_shuffle);
@@ -399,16 +401,22 @@ void quantize_row_q8_K64_ref(const float * x, block_q8_K64 * y, int64_t k) {
         vid[i] = vdupq_n_f32(id);
     }
     int8x16x4_t q;
+    int32x4_t qsum = {};
+    const int8x16_t m1 = vdupq_n_s8(1);
     for (int j = 0; j < k; j += 16) {
         for (int i = 0; i < 4; ++i) {
             auto val = vld1q_f32(x + j + 4*i);
             val = vmulq_f32(vid[i], val);
-            q.val[i] = vreinterpretq_s8_s32(vcvtnq_s32_f32(val));
+            auto ival = vcvtnq_s32_f32(val);
+            q.val[i] = vreinterpretq_s8_s32(ival);
         }
         auto qi = vqtbl4q_s8(q, shuffle);
+        qsum = ggml_vdotq_s32(qsum, qi, m1);
         vst1q_s8(qs, qi);
         qs += 16;
     }
+    auto sumf = vmulq_f32(vld1q_f32(dptr), vcvtq_f32_s32(qsum));
+    vst1q_f32(dptr + 4, sumf);
 #elif defined __AVX__
     __m128 max[4] = {};
     __m128 sign_bit = _mm_set1_ps(-0.f);
@@ -455,11 +463,16 @@ void quantize_row_q8_K64_ref(const float * x, block_q8_K64 * y, int64_t k) {
         dptr[i] = aux[i]/127;
         aux[i] = dptr[i] > 0 ? 1/dptr[i] : 0.f;
     }
+    int32_t sum[4] = {};
     for (int j = 0; j < k; j += 16) {
         for (int i = 0; i < 4; ++i) {
-            for (int l = 0; l < 4; ++l) qs[j+4*i+l] = nearest_int(aux[i]*x[j+4*i+l]);
+            for (int l = 0; l < 4; ++l) {
+                qs[j+4*i+l] = nearest_int(aux[i]*x[j+4*i+l]);
+                sum[i] += qs[j+4*i+l];
+            }
         }
     }
+    for (int i = 0; i < 4; ++i) dptr[4+i] = dptr[i]*sum[i];
 #endif
 }
 
