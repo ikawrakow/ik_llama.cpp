@@ -624,7 +624,7 @@ void launch_fattn(
     if (need_f16_K && K->type != GGML_TYPE_F16) {
         K_f16.alloc(ggml_nelements(K));
         to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(K->type);
-        to_fp16(K_data, K_f16.ptr, ggml_nelements(K), main_stream);
+        to_fp16(K_data, K_f16.ptr, 1, ggml_nelements(K), main_stream);
         K_data = (char *) K_f16.ptr;
 
         const size_t bs = ggml_blck_size(K->type);
@@ -638,7 +638,7 @@ void launch_fattn(
     if (need_f16_V && V->type != GGML_TYPE_F16) {
         V_f16.alloc(ggml_nelements(V));
         to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(V->type);
-        to_fp16(V_data, V_f16.ptr, ggml_nelements(V), main_stream);
+        to_fp16(V_data, V_f16.ptr, 1, ggml_nelements(V), main_stream);
         V_data = (char *) V_f16.ptr;
 
         const size_t bs = ggml_blck_size(V->type);
