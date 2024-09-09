@@ -437,6 +437,9 @@ void quantize_row_q8_K64_ref(const float * x, block_q8_K64 * y, int64_t k) {
         vid[i] = _mm_set1_ps(id);
     }
     __m128i q[4];
+    __m128i sums = _mm_setzero_si128();
+    __m128i m1_8 = _mm_set1_epi8(1);
+    __m128i m1_16 = _mm_set1_epi16(1);
     for (int j = 0; j < k; j += 16) {
         for (int i = 0; i < 4; ++i) {
             auto val = _mm_loadu_ps(x + j + 4*i);
@@ -446,9 +449,13 @@ void quantize_row_q8_K64_ref(const float * x, block_q8_K64 * y, int64_t k) {
         auto q1 = _mm_packs_epi32(q[0], q[1]);
         auto q2 = _mm_packs_epi32(q[2], q[3]);
         auto qi = _mm_packs_epi16(q1, q2);
+        auto aux = _mm_maddubs_epi16(m1_8, qi);
+        sums = _mm_add_epi32(sums, _mm_madd_epi16(m1_16, aux));
         _mm_storeu_si128((__m128i *)qs, qi);
         qs += 16;
     }
+    auto minus = _mm_mul_ps(_mm_loadu_ps(dptr), _mm_cvtepi32_ps(sums));
+    _mm_storeu_ps(dptr + 4, minus);
 #else
     float aux[4] = {0.f, 0.f, 0.f, 0.f};
     for (int j = 0; j < k; j += 16) {
