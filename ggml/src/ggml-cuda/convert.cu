@@ -8,14 +8,6 @@
 #include "convert.cuh"
 #include "dequantize.cuh"
 
-//template<typename T>
-//using to_t_cuda_internal_t = void (*)(const void * __restrict__ x, T * __restrict__ y, int64_t k, cudaStream_t stream);
-//
-//template <typename T>
-//void to_t_cuda_wrapper(to_t_cuda_internal_t<T> impl, const void * __restrict__ x, T * __restrict__ y, int64_t nrows, int64_t n_per_row, cudaStream_t stream) {
-//    impl(x, y, nrows*n_per_row, stream);
-//}
-
 #define CUDA_Q8_0_NE_ALIGN 2048
 
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
