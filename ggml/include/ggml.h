@@ -391,15 +391,17 @@ extern "C" {
         GGML_TYPE_Q4_0_4_4 = 31,
         GGML_TYPE_Q4_0_4_8 = 32,
         GGML_TYPE_Q4_0_8_8 = 33,
-        GGML_TYPE_IQ1_BN  = 34,
-        GGML_TYPE_IQ2_BN  = 35,
-        GGML_TYPE_Q8_K64  = 36,
-        GGML_TYPE_IQ2_K   = 37,
-        GGML_TYPE_IQ3_K   = 38,
-        GGML_TYPE_IQ4_K   = 39,
-        GGML_TYPE_IQ5_K   = 40,
-        GGML_TYPE_IQ6_K   = 41,
-        GGML_TYPE_IQ2_TN  = 42,
+        //
+        GGML_TYPE_IQ1_BN  = 134,
+        GGML_TYPE_IQ2_BN  = 135,
+        GGML_TYPE_Q8_K64  = 136,
+        GGML_TYPE_IQ2_K   = 137,
+        GGML_TYPE_IQ3_K   = 138,
+        GGML_TYPE_IQ4_K   = 139,
+        GGML_TYPE_IQ5_K   = 140,
+        GGML_TYPE_IQ6_K   = 141,
+        GGML_TYPE_IQ2_TN  = 142,
+        GGML_TYPE_IQ1_TN  = 143,
         GGML_TYPE_COUNT,
     };
 
@@ -444,14 +446,16 @@ extern "C" {
         GGML_FTYPE_MOSTLY_Q4_0_4_4 = 25, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q4_0_4_8 = 26, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q4_0_8_8 = 27, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ1_BN  = 28, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ2_BN  = 29, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ2_K   = 30, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ3_K   = 31, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ4_K   = 32, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ5_K   = 33, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ6_K   = 34, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ2_TN  = 35, // except 1d tensors
+        //
+        GGML_FTYPE_MOSTLY_IQ1_BN  = 128, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ2_BN  = 129, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ2_K   = 130, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ3_K   = 131, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ4_K   = 132, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ5_K   = 133, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ6_K   = 134, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ2_TN  = 135, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ1_TN  = 136, // except 1d tensors
     };
 
     // available tensor operations:
