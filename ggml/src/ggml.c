@@ -13094,14 +13094,14 @@ UseGgmlGemm1:;
         int64_t t2 = ggml_time_us();
         if (ith == 0) printf("quantize(%s): %d us\n", dst->name, (int)(t2 - t1));
 #endif
-    }
 
-    if (ith == 0) {
-        // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
-        atomic_store(&params->shared->current_chunk, nth);
-    }
+        if (ith == 0) {
+            // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
+            atomic_store(&params->shared->current_chunk, nth);
+        }
 
-    ggml_barrier(params->shared);
+        ggml_barrier(params->shared);
+    }
 
     const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
 
@@ -13119,8 +13119,6 @@ UseGgmlGemm1:;
     }
 IQK_MulMat_Not_Available2:;
 #endif
-
-    ggml_barrier(params->shared);
 
 #if GGML_USE_LLAMAFILE
     if (src1->type != vec_dot_type) {
