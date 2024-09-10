@@ -6421,7 +6421,7 @@ struct BaseHelper {
 };
 
 struct F16 {
-#ifdef z_HAVE_FANCY_SIMD
+#ifdef HAVE_FANCY_SIMD
     using Data = __m512;
     constexpr static int block_size = 16;
     static inline Data zero() { return _mm512_setzero_ps(); }
@@ -6507,10 +6507,9 @@ struct HelperQ80 final : public BaseHelper<step> {
     static_assert(step == QK8_0);
     using Base = BaseHelper<step>;
     using F16  = HelperF16<D, step>;
-    using Data = typename F16::Data;
     HelperQ80(const char * data, int stride) : Base(data, stride) {}
 
-    inline void load(int l1, Data * vk) const {
+    inline void load(int l1, __m512 * vk) const {
         auto dl = (const block_q8_0_x4 *)Base::lblock(l1);
         if constexpr (D >= 128) {
             __m512 vd[4];
