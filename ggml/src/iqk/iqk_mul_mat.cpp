@@ -6424,6 +6424,8 @@ struct F16 {
 #ifdef HAVE_FANCY_SIMD
     using Data = __m512;
     constexpr static int block_size = 16;
+    constexpr static int num_registers = 32;
+    constexpr static int q_step = 8;
     static inline Data zero() { return _mm512_setzero_ps(); }
     static inline Data load(const char * ptr, int i) { return _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)ptr + i)); }
     static inline Data set1(float val) { return _mm512_set1_ps(val); }
@@ -6443,6 +6445,8 @@ struct F16 {
 #else
     using Data = __m256;
     constexpr static int block_size = 8;
+    constexpr static int num_registers = 16;
+    constexpr static int q_step = 8;
     static inline Data zero() { return _mm256_setzero_ps(); }
     static inline Data load(const char * ptr, int i) { return _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)ptr + i)); }
     static inline Data set1(float val) { return _mm256_set1_ps(val); }
@@ -6824,7 +6828,7 @@ struct FlashQKfp32 {
     static_assert(k_step%F16::block_size == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
-    constexpr static bool is_small_head = D <= 8*F16::block_size;
+    constexpr static bool is_small_head = D <= (F16::num_registers/2)*F16::block_size;
 
     template <bool small = is_small_head, class = std::enable_if<small>>
     static inline void mult_mask_kq_one(int l1, int m1, int stride_q, int stride_m, const float * q, const char * mask,
@@ -7445,19 +7449,19 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
 
     switch (D) {
         case 64:
-            iqk_flash_helper_T< 64, 8, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            iqk_flash_helper_T< 64, F16::q_step, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         // Disable until we fix accumulate_qkv for odd D/16
         //case 80:
         //    iqk_flash_helper_T< 80, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 96:
-            iqk_flash_helper_T< 96, 8, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            iqk_flash_helper_T< 96, F16::q_step, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         // Disable until we fix accumulate_qkv for odd D/16
         //case 112:
         //    iqk_flash_helper_T<112, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 128:
-            iqk_flash_helper_T<128, 8, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            iqk_flash_helper_T<128, F16::q_step, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 256:
-            iqk_flash_helper_T<256, 8, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            iqk_flash_helper_T<256, F16::q_step, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         default:
             return false;
     }
