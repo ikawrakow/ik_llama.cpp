@@ -7351,7 +7351,6 @@ struct DequantizerIQ1TN {
 };
 
 // each block_q contains 16*nl weights
-//template<typename T, typename T4x4, typename simdgroup_T8x8, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread T4x4 &)>
 template<typename T, typename simdgroup_T8x8, typename Dequantizer>
 kernel void kernel_mul_mm(device const  uchar * src0,
                           device const  uchar * src1,
@@ -7401,11 +7400,9 @@ kernel void kernel_mul_mm(device const  uchar * src0,
     const uint i13 = im/ne12;
 
     uint   offset0 = (i12/r2)*nb02 + (i13/r3)*(nb02*ne02);
-    //ushort offset1 = il/nl;
 
-    device const char * cx = (device const char *)(src0 + (r0 * BLOCK_SIZE_M + thread_row) * nb01 + offset0);
-    //device const block_q * x = (device const block_q *)(src0 + (r0 * BLOCK_SIZE_M + thread_row) * nb01 + offset0) + offset1;
-    device const float   * y = (device const float   *)(src1
+    device const char  * cx = (device const char *)(src0 + (r0 * BLOCK_SIZE_M + thread_row) * nb01 + offset0);
+    device const float * y = (device const float   *)(src1
         + nb12 * im
         + nb11 * (r1 * BLOCK_SIZE_N + thread_col)
         + nb10 * (BLOCK_SIZE_K / THREAD_PER_COL * (tiitg % THREAD_PER_COL)));
@@ -7415,7 +7412,6 @@ kernel void kernel_mul_mm(device const  uchar * src0,
     for (int loop_k = 0; loop_k < ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
         typename Dequantizer::type4x4 temp_a;
-        //dequantize_func(x, il, temp_a);
         deq.convert(temp_a);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -7429,8 +7425,6 @@ kernel void kernel_mul_mm(device const  uchar * src0,
         *(threadgroup float2x4 *)(sb + (tiitg % THREAD_PER_COL) * 8 * 32 + 8 * (tiitg / THREAD_PER_COL)) = *((device float2x4 *)y);
 
         deq.next();
-        //il = (il + 2 < nl) ? il + 2 : il % 2;
-        //x  = (il < 2) ? x + (2+nl-1)/nl : x;
         y += BLOCK_SIZE_K;
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -7490,7 +7484,6 @@ kernel void kernel_mul_mm(device const  uchar * src0,
 }
 
 // same as kernel_mul_mm_impl, but src1 and dst are accessed via indices stored in rowids
-//template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &), bool needs_row_begin = false>
 template<typename Dequantizer>
 void kernel_mul_mm_id_impl(
         device const  uchar * src0,
@@ -7612,7 +7605,6 @@ void kernel_mul_mm_id_impl(
     }
 }
 
-//template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &)>
 template<typename Dequantizer>
 kernel void kernel_mul_mm_id(
         device const   uchar * src0s,
