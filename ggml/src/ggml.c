@@ -982,7 +982,8 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq2_tn,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq2_tn_ref,
         .vec_dot                  = vec_dot_iq2_tn_q8_k,
-        .vec_dot_type             = GGML_TYPE_Q8_K,
+        //.vec_dot_type             = GGML_TYPE_Q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K64,
         .nrows                    = 1,
     },
     [GGML_TYPE_IQ1_TN] = {
