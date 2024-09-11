@@ -6769,8 +6769,8 @@ struct HelperQ41 final : public BaseHelper<step> {
         auto vm = F16::set1(GGML_FP16_TO_FP32(dl->m));
         auto q  = _mm_loadu_si128((const __m128i *)dl->qs);
 #ifdef HAVE_FANCY_SIMD
-        auto ql = _mm_add_epi8(_mm_and_si128(q, mask), m8);
-        auto qh = _mm_add_epi8(_mm_and_si128(_mm_srli_epi16(q, 4), mask), m8);
+        auto ql = _mm_and_si128(q, mask);
+        auto qh = _mm_and_si128(_mm_srli_epi16(q, 4), mask);
         v1 = _mm512_fmadd_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(ql)), vm);
         v2 = _mm512_fmadd_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(qh)), vm);
 #else
