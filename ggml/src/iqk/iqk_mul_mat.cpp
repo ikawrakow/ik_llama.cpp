@@ -6548,22 +6548,23 @@ struct HelperF16 final : public BaseHelper<step> {
     }
 };
 
-#ifdef HAVE_FANCY_SIMD
+#if defined __AVX2__
 template <int D, int step>
 struct HelperQ80 final : public BaseHelper<step> {
     static_assert(step == QK8_0);
     using Base = BaseHelper<step>;
-    using F16  = HelperF16<D, step>;
+    //using F16  = HelperF16<D, step>;
     HelperQ80(const char * data, int stride) : Base(data, stride) {}
 
-    inline void load(int l1, __m512 * vk) const {
+    inline void load(int l1, F16::Data * vk) const {
         auto dl = (const block_q8_0_x4 *)Base::lblock(l1);
         if constexpr (D >= 128) {
-            __m512 vd[4];
+            F16::Data vd[4];
             for (int ib = 0; ib < D/128; ++ib) {
                 const auto& b8 = dl[ib];
                 auto scales4 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)b8.d));
                 auto scales8 = _mm256_insertf128_ps(_mm256_castps128_ps256(scales4), scales4, 1);
+#ifdef HAVE_FANCY_SIMD
                 auto scales  = _mm512_insertf32x8(_mm512_castps256_ps512(scales8), scales8, 1);
                 vd[0] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(0, 0, 0, 0));
                 vd[1] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(1, 1, 1, 1));
@@ -6573,32 +6574,61 @@ struct HelperQ80 final : public BaseHelper<step> {
                     vk[8*ib+2*i+0] = _mm512_mul_ps(vd[i], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)b8.qs+2*i+0))));
                     vk[8*ib+2*i+1] = _mm512_mul_ps(vd[i], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)b8.qs+2*i+1))));
                 }
+#else
+                vd[0] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(0, 0, 0, 0));
+                vd[1] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(1, 1, 1, 1));
+                vd[2] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(2, 2, 2, 2));
+                vd[3] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(3, 3, 3, 3));
+                for (int i = 0; i < 4; ++i) {
+                    vk[8*ib+4*i+0] = _mm256_mul_ps(vd[i], _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*i+ 0)))));
+                    vk[8*ib+4*i+1] = _mm256_mul_ps(vd[i], _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*i+ 8)))));
+                    vk[8*ib+4*i+2] = _mm256_mul_ps(vd[i], _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*i+16)))));
+                    vk[8*ib+4*i+3] = _mm256_mul_ps(vd[i], _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*i+24)))));
+                }
+#endif
             }
         } else {
             for (int i = 0; i < D/32; ++i) {
                 const auto& b8 = dl[i/4];
                 int ii = i%4;
-                auto vd = _mm512_set1_ps(GGML_FP16_TO_FP32(b8.d[ii]));
+                auto vd = F16::set1(GGML_FP16_TO_FP32(b8.d[ii]));
+#ifdef HAVE_FANCY_SIMD
                 vk[2*i+0] = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)b8.qs+2*ii+0))));
                 vk[2*i+1] = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)b8.qs+2*ii+1))));
+#else
+                vk[4*i+0] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*ii+ 0)))));
+                vk[4*i+1] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*ii+ 8)))));
+                vk[4*i+2] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*ii+16)))));
+                vk[4*i+3] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*ii+24)))));
+#endif
             }
         }
     }
 
-    inline void load(int l1, int i, __m512& v1, __m512& v2) const {
-        auto dl = (const block_q8_0_x4 *)Base::lblock(l1) + i/8;
-        int ii = (i/2)%4;
-        auto vd = _mm512_set1_ps(GGML_FP16_TO_FP32(dl->d[ii]));
+    inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
+        // Say D = 256 -> i is 0, 2, 4, 6, 8, ..., 28, 30. 128/8 = 16 -> we use 1st block of 128 for i = 0, 2, ..., 14, second for i = 16, 18, ..., 30
+        // i = 0, 2 -> ii = 0, i = 4, 6 -> ii = 1, i = 8, 10 -> ii = 2, i = 12, 14 -> ii = 3, i = 16, 18 -> ii = 0, etc.
+        // i*F16::block_size/128
+        auto dl = (const block_q8_0_x4 *)Base::lblock(l1) + i/(128/F16::block_size);
+        int ii = (i*F16::block_size/32)%4;
+        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d[ii]));
+#ifdef HAVE_FANCY_SIMD
         v1 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+2*ii+0))));
         v2 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+2*ii+1))));
+#else
+        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+32*ii+((i+0)*F16::block_size)%32)))));
+        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+32*ii+((i+1)*F16::block_size)%32)))));
+#endif
     }
 
-    inline void load_2(int l1, __m512 * vk) const {
+    inline void load_2(int l1, F16::Data * vk) const {
         load(l1+0, vk+0);
-        load(l1+1, vk+D/16);
+        load(l1+1, vk+D/F16::block_size);
     }
 };
+#endif
 
+#ifdef HAVE_FANCY_SIMD
 template <int D, int step>
 struct HelperQ40 final : public BaseHelper<step> {
     static_assert(step == QK4_0);
@@ -7518,11 +7548,12 @@ inline void iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
             HelperF16<D, k_step> vh(v, stride_v);
             iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
-#ifdef HAVE_FANCY_SIMD
+#ifdef __AVX2__
         case GGML_TYPE_Q8_0: {
             HelperQ80<D, k_step> vh(v, stride_v);
             iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
+#ifdef HAVE_FANCY_SIMD
         case GGML_TYPE_Q4_0: {
             HelperQ40<D, k_step> vh(v, stride_v);
             iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
@@ -7531,6 +7562,7 @@ inline void iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
             HelperQ41<D, k_step> vh(v, stride_v);
             iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
+#endif
 #endif
         default: break;
     }
@@ -7547,11 +7579,12 @@ inline void iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
             HelperF16<D, k_step> kh(k, stride_k);
             iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
         } break;
-#ifdef HAVE_FANCY_SIMD
+#ifdef __AVX2__
         case GGML_TYPE_Q8_0: {
             HelperQ80<D, k_step> kh(k, stride_k);
             iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
         } break;
+#ifdef HAVE_FANCY_SIMD
         case GGML_TYPE_Q4_0: {
             HelperQ40<D, k_step> kh(k, stride_k);
             iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
@@ -7561,21 +7594,25 @@ inline void iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
             iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
         } break;
 #endif
+#endif
         default: break;
     }
 
 }
 
 inline bool flash_attn_is_supported(ggml_type type) {
-#ifdef HAVE_FANCY_SIMD
+#ifdef __AVX2__
+    if (type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0) return true;
 #ifdef __AVX512BF16__
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1;
-#else
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1;
+    if (type == GGML_TYPE_BF16) return true;
+#endif
+#ifdef HAVE_FANCY_SIMD
+    if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1) return true;
 #endif
 #else
-    return type == GGML_TYPE_F16;
+    if (type == GGML_TYPE_F16) return true;
 #endif
+    return false;
 }
 }
 
