@@ -6854,79 +6854,7 @@ struct HelperQ80 final : public BaseHelper<step> {
     using block_q8 = block_q8_0;
     HelperQ80(const char * data, int stride) : Base(data, stride) {}
 
-    inline void load(int l1, F16::Data * vk) const {
-        auto dl = (const block_q8_0_x4 *)Base::lblock(l1);
-        if constexpr (D >= 128) {
-#ifdef __aarch64__
-            for (int ib = 0; ib < D/128; ++ib) {
-                const auto& b8 = dl[ib];
-                auto d = (const float16_t *)b8.d;
-                for (int i = 0; i < 4; ++i) {
-                    auto di = vdupq_n_f16(d[i]);
-                    auto qs = vld1_s8_x4(b8.qs + 32*i);
-                    vk[16*ib+4*i+0] = vmulq_f16(di, vcvtq_f16_s16(vmovl_s8(qs.val[0])));
-                    vk[16*ib+4*i+1] = vmulq_f16(di, vcvtq_f16_s16(vmovl_s8(qs.val[1])));
-                    vk[16*ib+4*i+2] = vmulq_f16(di, vcvtq_f16_s16(vmovl_s8(qs.val[2])));
-                    vk[16*ib+4*i+3] = vmulq_f16(di, vcvtq_f16_s16(vmovl_s8(qs.val[3])));
-                }
-            }
-#else
-            F16::Data vd[4];
-            for (int ib = 0; ib < D/128; ++ib) {
-                const auto& b8 = dl[ib];
-                auto scales4 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)b8.d));
-                auto scales8 = _mm256_insertf128_ps(_mm256_castps128_ps256(scales4), scales4, 1);
-#ifdef HAVE_FANCY_SIMD
-                auto scales  = _mm512_insertf32x8(_mm512_castps256_ps512(scales8), scales8, 1);
-                vd[0] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(0, 0, 0, 0));
-                vd[1] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(1, 1, 1, 1));
-                vd[2] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(2, 2, 2, 2));
-                vd[3] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(3, 3, 3, 3));
-                for (int i = 0; i < 4; ++i) {
-                    vk[8*ib+2*i+0] = _mm512_mul_ps(vd[i], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)b8.qs+2*i+0))));
-                    vk[8*ib+2*i+1] = _mm512_mul_ps(vd[i], _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)b8.qs+2*i+1))));
-                }
-#else
-                vd[0] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(0, 0, 0, 0));
-                vd[1] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(1, 1, 1, 1));
-                vd[2] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(2, 2, 2, 2));
-                vd[3] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(3, 3, 3, 3));
-                for (int i = 0; i < 4; ++i) {
-                    vk[16*ib+4*i+0] = _mm256_mul_ps(vd[i], _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*i+ 0)))));
-                    vk[16*ib+4*i+1] = _mm256_mul_ps(vd[i], _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*i+ 8)))));
-                    vk[16*ib+4*i+2] = _mm256_mul_ps(vd[i], _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*i+16)))));
-                    vk[16*ib+4*i+3] = _mm256_mul_ps(vd[i], _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*i+24)))));
-                }
-#endif // HAVE_FANCY_SIMD
-            }
-#endif // __aarch64__
-        } else {
-            for (int i = 0; i < D/32; ++i) {
-                const auto& b8 = dl[i/4];
-                int ii = i%4;
-#ifdef __aarch64__
-                auto vd = F16::set1(b8.d[ii]);
-                auto qs = vld1_s8_x4(b8.qs + 32*i);
-                vk[4*i+0] = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[0])));
-                vk[4*i+1] = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[1])));
-                vk[4*i+2] = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[2])));
-                vk[4*i+3] = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[3])));
-#else
-                auto vd = F16::set1(GGML_FP16_TO_FP32(b8.d[ii]));
-#ifdef HAVE_FANCY_SIMD
-                vk[2*i+0] = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)b8.qs+2*ii+0))));
-                vk[2*i+1] = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)b8.qs+2*ii+1))));
-#else
-                vk[4*i+0] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*ii+ 0)))));
-                vk[4*i+1] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*ii+ 8)))));
-                vk[4*i+2] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*ii+16)))));
-                vk[4*i+3] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(b8.qs+32*ii+24)))));
-#endif
-#endif
-            }
-        }
-    }
-
+    // Needed for v * softmax(k * q)
     inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
         int j = F16::block_size*i;
         auto dl = (const block_q8_0_x4 *)Base::lblock(l1) + j/(4*QK8_0);
@@ -6947,11 +6875,6 @@ struct HelperQ80 final : public BaseHelper<step> {
         v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+32*ii+j%32+8)))));
 #endif
 #endif
-    }
-
-    inline void load_2(int l1, F16::Data * vk) const {
-        load(l1+0, vk+0);
-        load(l1+1, vk+D/F16::block_size);
     }
 
     static inline void convert(int nq, int stride_q, const float * q, block_q8_0 * y) {
@@ -6980,91 +6903,7 @@ struct HelperQ40 final : public BaseHelper<step> {
     using block_q8 = block_q8_0;
     HelperQ40(const char * data, int stride) : Base(data, stride) {}
 
-
-    inline void load(int l1, F16::Data * vk) const {
-        auto dl = (const block_q4_0 *)Base::lblock(l1);
-#ifdef __aarch64__
-        for (int i = 0; i < D/32; ++i) {
-            auto& b4 = dl[i];
-            auto vd = vdupq_n_f16(*(const float16_t *)&b4.d);
-            auto qs = vld1q_u8(b4.qs);
-            auto ql = vaddq_s8(vandq_u8(qs, mask), m8);
-            auto qh = vaddq_s8(vshrq_n_u8(qs, 4), m8);
-            vk[4*i+0] = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_low_s8(ql))));
-            vk[4*i+1] = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_high_s8(ql))));
-            vk[4*i+2] = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_low_s8(qh))));
-            vk[4*i+3] = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(vget_high_s8(qh))));
-        }
-#else
-        if constexpr (D >= 128) {
-            ggml_half aux[4];
-            F16::Data vd[4];
-            for (int ib = 0; ib < D/128; ++ib) {
-                for (int i = 0; i < 4; ++i) {
-                    auto& b4 = dl[4*ib+i];
-                    aux[i] = b4.d;
-                    auto q  = _mm_loadu_si128((const __m128i *)b4.qs);
-                    auto ql = _mm_add_epi8(_mm_and_si128(q, mask), m8);
-                    auto qh = _mm_add_epi8(_mm_and_si128(_mm_srli_epi16(q, 4), mask), m8);
-#ifdef HAVE_FANCY_SIMD
-                    vk[8*ib+2*i+0] = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(ql));
-                    vk[8*ib+2*i+1] = _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(qh));
-#else
-                    auto ql16 = _mm256_cvtepi8_epi16(ql);
-                    auto qh16 = _mm256_cvtepi8_epi16(qh);
-                    vk[16*ib+4*i+0] = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(ql16)));
-                    vk[16*ib+4*i+1] = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(ql16, 1)));
-                    vk[16*ib+4*i+2] = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(qh16)));
-                    vk[16*ib+4*i+3] = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(qh16, 1)));
-#endif
-                }
-                auto scales4 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)aux));
-                auto scales8 = _mm256_insertf128_ps(_mm256_castps128_ps256(scales4), scales4, 1);
-#ifdef HAVE_FANCY_SIMD
-                auto scales  = _mm512_insertf32x8(_mm512_castps256_ps512(scales8), scales8, 1);
-                vd[0] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(0, 0, 0, 0));
-                vd[1] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(1, 1, 1, 1));
-                vd[2] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(2, 2, 2, 2));
-                vd[3] = _mm512_shuffle_ps(scales, scales, _MM_SHUFFLE(3, 3, 3, 3));
-                for (int i = 0; i < 4; ++i) {
-                    vk[8*ib+2*i+0] = _mm512_mul_ps(vd[i], vk[8*ib+2*i+0]);
-                    vk[8*ib+2*i+1] = _mm512_mul_ps(vd[i], vk[8*ib+2*i+1]);
-                }
-#else
-                vd[0] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(0, 0, 0, 0));
-                vd[1] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(1, 1, 1, 1));
-                vd[2] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(2, 2, 2, 2));
-                vd[3] = _mm256_shuffle_ps(scales8, scales8, _MM_SHUFFLE(3, 3, 3, 3));
-                for (int i = 0; i < 4; ++i) {
-                    vk[16*ib+4*i+0] = _mm256_mul_ps(vd[i], vk[16*ib+4*i+0]);
-                    vk[16*ib+4*i+1] = _mm256_mul_ps(vd[i], vk[16*ib+4*i+1]);
-                    vk[16*ib+4*i+2] = _mm256_mul_ps(vd[i], vk[16*ib+4*i+2]);
-                    vk[16*ib+4*i+3] = _mm256_mul_ps(vd[i], vk[16*ib+4*i+3]);
-                }
-#endif
-            }
-        } else {
-            for (int i = 0; i < D/32; ++i) {
-                auto vd = F16::set1(GGML_FP16_TO_FP32(dl[i].d));
-                auto q  = _mm_loadu_si128((const __m128i *)dl[i].qs);
-                auto ql = _mm_add_epi8(_mm_and_si128(q, mask), m8);
-                auto qh = _mm_add_epi8(_mm_and_si128(_mm_srli_epi16(q, 4), mask), m8);
-#ifdef HAVE_FANCY_SIMD
-                vk[2*i+0] = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(ql)));
-                vk[2*i+1] = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(qh)));
-#else
-                auto ql16 = _mm256_cvtepi8_epi16(ql);
-                auto qh16 = _mm256_cvtepi8_epi16(qh);
-                vk[4*i+0] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(ql16))));
-                vk[4*i+1] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(ql16, 1))));
-                vk[4*i+2] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(qh16))));
-                vk[4*i+3] = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(qh16, 1))));
-#endif
-            }
-        }
-#endif
-    }
-
+    // Needed for v * softmax(k * q)
     inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
         int j = F16::block_size*i;
         auto dl = (const block_q4_0 *)Base::lblock(l1) + j/QK4_0;
@@ -7092,11 +6931,6 @@ struct HelperQ40 final : public BaseHelper<step> {
 #endif
     }
 
-    inline void load_2(int l1, F16::Data * vk) const {
-        load(l1+0, vk+0);
-        load(l1+1, vk+D/F16::block_size);
-    }
-
 #ifdef __AVX2__
     const __m128i mask = _mm_set1_epi8(0xf);
     const __m128i m8   = _mm_set1_epi8(-8);
@@ -7113,41 +6947,7 @@ struct HelperQ41 final : public BaseHelper<step> {
     using block_q8 = block_q8_1;
     HelperQ41(const char * data, int stride) : Base(data, stride) {}
 
-    inline void load(int l1, F16::Data * vk) const {
-        auto dl = (const block_q4_1 *)Base::lblock(l1);
-        for (int i = 0; i < D/32; ++i) {
-#ifdef __aarch64__
-            auto vd = F16::set1(*(const float16_t *)&dl[i].d);
-            auto vm = F16::set1(*(const float16_t *)&dl[i].m);
-            auto q  = vld1q_u8(dl[i].qs);
-            auto ql = vandq_u8(q, mask);
-            auto qh = vshrq_n_u8(q, 4);
-            vk[4*i+0] = vfmaq_f16(vm, vd, vcvtq_f16_u16(vmovl_u8(vget_low_u8(ql))));
-            vk[4*i+1] = vfmaq_f16(vm, vd, vcvtq_f16_u16(vmovl_u8(vget_high_u8(ql))));
-            vk[4*i+2] = vfmaq_f16(vm, vd, vcvtq_f16_u16(vmovl_u8(vget_low_u8(qh))));
-            vk[4*i+3] = vfmaq_f16(vm, vd, vcvtq_f16_u16(vmovl_u8(vget_high_u8(qh))));
-#else
-            auto vd = F16::set1(GGML_FP16_TO_FP32(dl[i].d));
-            auto vm = F16::set1(GGML_FP16_TO_FP32(dl[i].m));
-            auto q  = _mm_loadu_si128((const __m128i *)dl[i].qs);
-            auto ql = _mm_and_si128(q, mask);
-            auto qh = _mm_and_si128(_mm_srli_epi16(q, 4), mask);
-#ifdef HAVE_FANCY_SIMD
-            vk[2*i+0] = _mm512_fmadd_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(ql)), vm);
-            vk[2*i+1] = _mm512_fmadd_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(qh)), vm);
-#else
-            auto ql16 = _mm256_cvtepi8_epi16(ql);
-            auto qh16 = _mm256_cvtepi8_epi16(qh);
-            vk[4*i+0] = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(ql16))), vm);
-            vk[4*i+1] = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(ql16, 1))), vm);
-            vk[4*i+2] = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_castsi256_si128(qh16))), vm);
-            vk[4*i+3] = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(qh16, 1))), vm);
-            vk[4*i+0] = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(ql)), vm);
-#endif
-#endif
-        }
-    }
-
+    // Needed for v * softmax(k * q)
     inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
         int j = F16::block_size*i;
         auto dl = (const block_q4_1 *)Base::lblock(l1) + j/QK4_1;
@@ -7174,11 +6974,6 @@ struct HelperQ41 final : public BaseHelper<step> {
         v2 = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(_mm256_extracti128_si256(q16, 1))), vm);
 #endif
 #endif
-    }
-
-    inline void load_2(int l1, F16::Data * vk) const {
-        load(l1+0, vk+0);
-        load(l1+1, vk+D/F16::block_size);
     }
 
 #ifdef __aarch64__
