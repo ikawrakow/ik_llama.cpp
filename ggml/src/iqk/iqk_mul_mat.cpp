@@ -2923,6 +2923,29 @@ struct ScaleHelperQ_0 {
     template <typename Q> inline float prepare1(float d, const Q * y) const { return d*prepare1(y); }
 };
 
+template <int min_value>
+struct ScaleHelperQ_0_1 {
+    ggml_half scales8[4];
+    template <typename Q>
+    inline __m256 prepare4(const Q * y) {
+        for (int j = 0; j < 4; ++j) scales8[j] = y[j].d;
+        auto s4 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)scales8));
+        return _mm256_set_m128(_mm_mul_ps(s4, min), s4);
+    }
+    template <typename Q>
+    inline __m256 prepare4(__m256 other_scales, const Q * y) {
+        return _mm_mul256_ps(other_scales, prepare4<Q>(y));
+    }
+    template <typename Q> inline std::pair<float, float> prepare1(const Q * y) const {
+        float d = GGML_FP16_TO_FP32(y->d);
+        return std::make_pair(d, -d*float(min_value));
+    }
+    std::pair<float, float> inline prepare1(const std::pair<float, float>& dm, const block_q8_1 * y) const {
+        return std::make_pair(dm.first*GGML_FP16_TO_FP32(y->d), dm.second*GGML_FP16_TO_FP32(y->s));
+    }
+    const __m128 min = _mm_set1_ps(float(-min_value));
+};
+
 struct ScaleHelperQ8_1 {
     template <typename Q>
     inline __m256 prepare4(const Q * y) {
@@ -3044,6 +3067,7 @@ using AccumType1 = AccumT<MinusType1<nrc_y>, nrc_y, is_multiple_of_4>;
 using Sum4Type0 = Sum4<block_q8_0, block_q8_0_x4, SignedDot>;
 using Sum4Type1 = Sum4<block_q8_1, block_q8_1_x4, UnsignedDot>;
 using Sum4TypeQ80 = Sum4<block_q8_0, block_q8_0_x4, SignedDot, false>;
+using Sum4TypeQ81 = Sum4<block_q8_1, block_q8_1_x4, UnsignedDot, false>;
 
 template <typename Unpacker, typename AccumType, typename Scales, typename Q8, int nrc_y>
 void mul_mat_qX_q8_Helper(int nb, const void * vx, size_t bx, const DataInfo& info, const Q8 ** y, int nrc_x) {
@@ -3103,11 +3127,24 @@ struct Q8_0_Dequantizer {
     }
 };
 
+struct Q8_0_1_Dequantizer {
+    inline __m256i dequant(const block_q8_0 * x) const {
+        return _mm256_add_epi8(_mm256_set1_epi8(127), _mm256_loadu_si256((const __m256i *)x->qs));
+    }
+};
+
 struct Q4_0_Dequantizer {
     Dequantizer4bit b4;
     const __m256i m8 = _mm256_set1_epi8(-8);
     inline __m256i dequant(const block_q4_0 * x) const {
         return _mm256_add_epi8(b4.dequant(x->qs), m8);
+    }
+};
+
+struct Q4_0_1_Dequantizer {
+    Dequantizer4bit b4;
+    inline __m256i dequant(const block_q4_0 * x) const {
+        return b4.dequant(x->qs);
     }
 };
 
@@ -3231,9 +3268,19 @@ struct Q8_0_Unpacker final : public Q_Unpacker<block_q8_0, ScaleHelperQ_0, Q8_0_
     using Sum4T = Sum4TypeQ80;
     inline static int block_size() { return QK8_0; }
 };
+struct Q8_0_1_Unpacker final : public Q_Unpacker<block_q8_0, ScaleHelperQ_0_1<127>, Q8_0_1_Dequantizer> {
+    Q8_0_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ81;
+    inline static int block_size() { return QK8_0; }
+};
 struct Q4_0_Unpacker final : public Q_Unpacker<block_q4_0, ScaleHelperQ_0, Q4_0_Dequantizer> {
     Q4_0_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4TypeQ80;
+    inline static int block_size() { return QK4_0; }
+};
+struct Q4_0_1_Unpacker final : public Q_Unpacker<block_q4_0, ScaleHelperQ_0_1<8>, Q4_0_1_Dequantizer> {
+    Q4_0_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ81;
     inline static int block_size() { return QK4_0; }
 };
 struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0, IQ4_NL_Dequantizer> {
@@ -3550,7 +3597,8 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
             m.funcs[6] = mul_mat_qX_0_q8_0_T<Dequantizer, 7>;
             m.funcs[7] = mul_mat_qX_0_q8_0_T<Dequantizer, 8>;
         }
-        else if constexpr (std::is_same_v<Dequantizer, Q4_1_Unpacker> || std::is_same_v<Dequantizer, Q5_1_Unpacker>) {
+        else if constexpr (std::is_same_v<Dequantizer, Q4_1_Unpacker> || std::is_same_v<Dequantizer, Q5_1_Unpacker> ||
+                           std::is_same_v<Dequantizer, Q8_0_1_Unpacker> || std::is_same_v<Dequantizer, Q4_0_1_Unpacker>) {
             m.funcs[0] = mul_mat_qX_1_q8_1_T<Dequantizer, 1>;
             m.funcs[1] = mul_mat_qX_1_q8_1_T<Dequantizer, 2>;
             m.funcs[2] = mul_mat_qX_1_q8_1_T<Dequantizer, 3>;
@@ -3815,8 +3863,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_Q4_0:
             assert (ne00 % QK4_0 == 0);
-            MulMat::set_functions<Q4_0_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_0;
+            //MulMat::set_functions<Q4_0_Unpacker>(mm);
+            //expected_typeB = GGML_TYPE_Q8_0;
+            MulMat::set_functions<Q4_0_1_Unpacker>(mm);
+            expected_typeB = GGML_TYPE_Q8_1;
             break;
         case GGML_TYPE_Q4_1:
             assert (ne00 % QK4_1 == 0);
@@ -3835,8 +3885,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_Q8_0:
             assert (ne00 % QK8_0 == 0);
-            MulMat::set_functions<Q8_0_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_0;
+            //MulMat::set_functions<Q8_0_Unpacker>(mm);
+            //expected_typeB = GGML_TYPE_Q8_0;
+            MulMat::set_functions<Q8_0_1_Unpacker>(mm);
+            expected_typeB = GGML_TYPE_Q8_1;
             break;
         case GGML_TYPE_IQ4_NL:
             assert (ne00 % QK4_NL == 0);
