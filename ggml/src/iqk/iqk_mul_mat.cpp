@@ -3195,11 +3195,12 @@ struct Q5_0_Dequantizer {
     }
 };
 
+template <typename Q5>
 struct Q5_1_Dequantizer {
     Dequantizer4bit b4;
     HBitDequantizer hbit;
     const __m256i mh = _mm256_set1_epi8(0x10);
-    inline __m256i dequant(const block_q5_1 * x) const {
+    inline __m256i dequant(const Q5 * x) const {
         const __m256i vqh = _mm256_and_si256(hbit.to_bytes(x->qh), mh);
         return _mm256_or_si256(b4.dequant(x->qs), vqh);
     }
@@ -3293,12 +3294,17 @@ struct Q5_0_Unpacker final : public Q_Unpacker<block_q5_0, ScaleHelperQ_0, Q5_0_
     using Sum4T = Sum4TypeQ80;
     inline static int block_size() { return QK5_0; }
 };
+struct Q5_0_1_Unpacker final : public Q_Unpacker<block_q5_0, ScaleHelperQ_0_1<16>, Q5_1_Dequantizer<block_q5_0>> {
+    Q5_0_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ81;
+    inline static int block_size() { return QK5_0; }
+};
 struct Q4_1_Unpacker final : public Q_Unpacker<block_q4_1, ScaleHelperQ_1, Q4_1_Dequantizer> {
     Q4_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4Type1;
     inline static int block_size() { return QK4_1; }
 };
-struct Q5_1_Unpacker final : public Q_Unpacker<block_q5_1, ScaleHelperQ_1, Q5_1_Dequantizer> {
+struct Q5_1_Unpacker final : public Q_Unpacker<block_q5_1, ScaleHelperQ_1, Q5_1_Dequantizer<block_q5_1>> {
     Q5_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4Type1;
     inline static int block_size() { return QK4_1; }
@@ -3598,7 +3604,8 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
             m.funcs[7] = mul_mat_qX_0_q8_0_T<Dequantizer, 8>;
         }
         else if constexpr (std::is_same_v<Dequantizer, Q4_1_Unpacker> || std::is_same_v<Dequantizer, Q5_1_Unpacker> ||
-                           std::is_same_v<Dequantizer, Q8_0_1_Unpacker> || std::is_same_v<Dequantizer, Q4_0_1_Unpacker>) {
+                           std::is_same_v<Dequantizer, Q8_0_1_Unpacker> || std::is_same_v<Dequantizer, Q4_0_1_Unpacker> ||
+                           std::is_same_v<Dequantizer, Q5_0_1_Unpacker>) {
             m.funcs[0] = mul_mat_qX_1_q8_1_T<Dequantizer, 1>;
             m.funcs[1] = mul_mat_qX_1_q8_1_T<Dequantizer, 2>;
             m.funcs[2] = mul_mat_qX_1_q8_1_T<Dequantizer, 3>;
@@ -3875,8 +3882,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_Q5_0:
             assert (ne00 % QK5_0 == 0);
-            MulMat::set_functions<Q5_0_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_0;
+            //MulMat::set_functions<Q5_0_Unpacker>(mm);
+            //expected_typeB = GGML_TYPE_Q8_0;
+            MulMat::set_functions<Q5_0_1_Unpacker>(mm);
+            expected_typeB = GGML_TYPE_Q8_1;
             break;
         case GGML_TYPE_Q5_1:
             assert (ne00 % QK5_1 == 0);
