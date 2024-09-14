@@ -4,6 +4,7 @@
 #include <cuda.h>
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
+#include <cuda_bf16.h>
 
 #if CUDART_VERSION < 11020
 #define CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED CU_DEVICE_ATTRIBUTE_VIRTUAL_ADDRESS_MANAGEMENT_SUPPORTED
