@@ -189,6 +189,7 @@ inline void make_q4_scales(const uint8_t * scales8, uint32_t * aux32) {
     aux32[0] = a0 & 0x3f3f3f3f;
 }
 
+#ifndef HAVE_FANCY_SIMD
 const uint64_t keven_signs[128] = {
     0x0101010101010101, 0xff010101010101ff, 0xff0101010101ff01, 0x010101010101ffff,
     0xff01010101ff0101, 0x0101010101ff01ff, 0x0101010101ffff01, 0xff01010101ffffff,
@@ -223,6 +224,7 @@ const uint64_t keven_signs[128] = {
     0x01ffffffff010101, 0xffffffffff0101ff, 0xffffffffff01ff01, 0x01ffffffff01ffff,
     0xffffffffffff0101, 0x01ffffffffff01ff, 0x01ffffffffffff01, 0xffffffffffffffff,
 };
+#endif
 
 }
 
