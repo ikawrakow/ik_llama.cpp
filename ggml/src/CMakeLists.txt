@@ -935,6 +935,10 @@ endif()
 if (GGML_ALL_WARNINGS)
     if (NOT MSVC)
         list(APPEND WARNING_FLAGS -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function)
+        if (APPLE)
+            # shut up c99 extensions warning I get on my system due to arm_neon.h
+            list(APPEND WARNING_FLAGS -Wno-c99-extensions)
+        endif()
         list(APPEND C_FLAGS       -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes
                                   -Werror=implicit-int -Werror=implicit-function-declaration)
         list(APPEND CXX_FLAGS     -Wmissing-declarations -Wmissing-noreturn)
