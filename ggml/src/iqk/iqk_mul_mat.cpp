@@ -268,11 +268,33 @@ IQK_ALWAYS_INLINE __m256 hsum_float_8x8(__m256 * accm) {
     for (int i = 0; i < 2; ++i) accm[i] = _mm256_add_ps(_mm256_unpacklo_ps(accm[i], accm[i+2]), _mm256_unpackhi_ps(accm[i], accm[i+2]));
     return _mm256_add_ps(_mm256_unpacklo_ps(accm[0], accm[1]), _mm256_unpackhi_ps(accm[0], accm[1]));
 }
+#ifdef HAVE_FANCY_SIMD
 IQK_ALWAYS_INLINE void store_8(int ix, __m256 * accm, const DataInfo& info) {
     union { __m256 vec; float val[8]; } h;
     h.vec = hsum_float_8x8(accm);
     for (int iy = 0; iy < 8; ++iy) info.store(ix, iy, h.val[iy]);
 }
+#else
+// Somehow on the AVX2 system that I have available (Ryzen-5975WX), the store_8 version above
+// and the commented out store_8 version below are slower than this.
+IQK_ALWAYS_INLINE void store_8(int ix, __m256 * accm, const DataInfo& info) {
+    for (int iy = 0; iy < 8; ++iy) info.store(ix, iy, hsum_float_8(accm[iy]));
+}
+//IQK_ALWAYS_INLINE __m128 hsum_float_4x4(__m128 * a) {
+//    for (int i = 0; i < 2; ++i) a[i] = _mm_add_ps(_mm_unpacklo_ps(a[i], a[i+2]), _mm_unpackhi_ps(a[i], a[i+2]));
+//    return _mm_add_ps(_mm_unpacklo_ps(a[0], a[1]), _mm_unpackhi_ps(a[0], a[1]));
+//}
+//IQK_ALWAYS_INLINE void store_8(int ix, __m256 * accm, const DataInfo& info) {
+//    union { __m128 vec; float val[4]; } h;
+//    __m128 a[4];
+//    for (int i = 0; i < 4; ++i) a[i] = _mm_add_ps(_mm256_castps256_ps128(accm[i]), _mm256_extractf128_ps(accm[i], 1));
+//    h.vec = hsum_float_4x4(a);
+//    for (int iy = 0; iy < 4; ++iy) info.store(ix, iy, h.val[iy]);
+//    for (int i = 0; i < 4; ++i) a[i] = _mm_add_ps(_mm256_castps256_ps128(accm[i+4]), _mm256_extractf128_ps(accm[i+4], 1));
+//    h.vec = hsum_float_4x4(a);
+//    for (int iy = 0; iy < 4; ++iy) info.store(ix, iy+4, h.val[iy]);
+#endif
+
 
 #define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
 
