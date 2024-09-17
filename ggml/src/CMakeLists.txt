@@ -934,7 +934,7 @@ endif()
 
 if (GGML_ALL_WARNINGS)
     if (NOT MSVC)
-        list(APPEND WARNING_FLAGS -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function)
+        list(APPEND WARNING_FLAGS -Wall -Wextra -Wpedantic -Wcast-qual -Wno-unused-function -Wno-c99-extensions)
         list(APPEND C_FLAGS       -Wshadow -Wstrict-prototypes -Wpointer-arith -Wmissing-prototypes
                                   -Werror=implicit-int -Werror=implicit-function-declaration)
         list(APPEND CXX_FLAGS     -Wmissing-declarations -Wmissing-noreturn)
