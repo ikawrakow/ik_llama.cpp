@@ -404,10 +404,9 @@ typedef struct {
 } block_iq1_tn;
 static_assert(sizeof(block_iq1_tn) == 54, "wrong iq1_tn block size/padding");
 typedef struct {
-    ggml_half d;
     uint8_t qs[QK_K/4];
 } block_iq2_tn;
-static_assert(sizeof(block_iq2_tn) == sizeof(ggml_half) + QK_K/4, "wrong iqt_bn block size/padding");
+static_assert(sizeof(block_iq2_tn) == QK_K/4, "wrong iqt_bn block size/padding");
 
 // Used by IQ1_M quants
 typedef union {

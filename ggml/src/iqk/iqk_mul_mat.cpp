@@ -140,8 +140,9 @@ bool iqk_mul_mat(long Nx, long Ny, long ne00,
         return false;
     }
 
-    auto row_size_qx = strideA*ggml_type_size(ggml_type(typeA));
-    auto row_size_qy = strideB*ggml_type_size(ggml_type(typeB));
+    size_t row_size_qx = strideA; //*ggml_type_size(ggml_type(typeA));
+    size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
+    //if (ith == 0) printf("%s: ne00 = %d, row_size_qx = %d, strideA = %d\n", __func__, int(ne00), int(row_size_qx), int(strideA));
 
     auto nrc_x = (Nx + nth - 1)/nth;
     auto first_x = ith*nrc_x;
@@ -165,8 +166,8 @@ bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
     }
-    auto row_size_qx = strideA*ggml_type_size(ggml_type(typeA));
-    auto row_size_qy = strideB*ggml_type_size(ggml_type(typeB));
+    size_t row_size_qx = strideA; //*ggml_type_size(ggml_type(typeA));
+    size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
     int nrc_x = (Nx + nth - 1)/nth;
     int first_x = ith*nrc_x;
     if (first_x + nrc_x > Nx) nrc_x = Nx - first_x;
@@ -378,11 +379,17 @@ struct ScaleIQ4XS {
     const __m128i m32 = _mm_set1_epi16(-32);
 };
 
-template <typename Block>
+template <typename Block, bool per_row_scale = false>
 struct BaseDequantizer {
     BaseDequantizer(const void * vx, size_t bx) : vx(vx), bx(bx) {}
     inline void new_row(int ix) {
-        x = (const Block *)((const char *)vx + bx*ix);
+        if constexpr (per_row_scale) {
+            const float * dptr = (const float *)((const char *)vx + bx*ix);
+            d = *dptr;
+            x = (const Block *)(dptr + 1);
+        } else {
+            x = (const Block *)((const char *)vx + bx*ix);
+        }
     }
 
     const void *  vx;
@@ -700,14 +707,13 @@ struct DequantizerQ2K final : public BaseDequantizer<block_q2_K> {
 
 };
 
-struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
+struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn, true> {
     DequantizerIQ2TN(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
     template <typename Q8>
     inline void new_block(int i, [[maybe_unused]] const Q8& q8, [[maybe_unused]] __m256 * accm, [[maybe_unused]] __m512i * scales) {
         new_block(i);
     }
     inline void new_block(int i) {
-        d = GGML_FP16_TO_FP32(x[i].d);
         bits.prepare(x[i].qs);
     }
     Q2Bits bits;
@@ -1158,7 +1164,7 @@ static void mul_mat_iq2tn_q8_K_AVX512(int n, const void * vx, size_t bx, const D
 
             deq1.new_block(i);
             deq2.new_block(i);
-            float d = 0.5f*(deq1.d + deq2.d); // The scale is supposed to be per per tensor, so we can use the same scale for both rows
+            //float d = 0.5f*(deq1.d + deq2.d); // The scale is supposed to be per per tensor, so we can use the same scale for both rows
 
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto sumi_scales_256 = _mm256_madd_epi16(_mm256_set1_epi16(-1), q8.load_bsums(iy, i));
@@ -1176,7 +1182,7 @@ static void mul_mat_iq2tn_q8_K_AVX512(int n, const void * vx, size_t bx, const D
                 sumi_1 = _mm512_dpbusd_epi32(sumi_1, deq1.bits.values[3], q8q);
                 sumi_2 = _mm512_dpbusd_epi32(sumi_2, deq2.bits.values[3], q8q);
                 // The scale is supposed to be per per tensor, so we can use the same scale
-                auto vd = _mm512_set1_ps(d*q8.scale(iy, i));
+                auto vd = _mm512_set1_ps(/*d* */q8.scale(iy, i));
                 accd[2*iy+0] = _mm512_fmadd_ps(vd, _mm512_cvtepi32_ps(sumi_1), accd[2*iy+0]);
                 accd[2*iy+1] = _mm512_fmadd_ps(vd, _mm512_cvtepi32_ps(sumi_2), accd[2*iy+1]);
                 // Leaving this here just in case ternary models start using per row scales
@@ -1187,8 +1193,8 @@ static void mul_mat_iq2tn_q8_K_AVX512(int n, const void * vx, size_t bx, const D
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix+0, iy, _mm512_reduce_add_ps(accd[2*iy+0]));
-            info.store(ix+1, iy, _mm512_reduce_add_ps(accd[2*iy+1]));
+            info.store(ix+0, iy, deq1.d*_mm512_reduce_add_ps(accd[2*iy+0]));
+            info.store(ix+1, iy, deq2.d*_mm512_reduce_add_ps(accd[2*iy+1]));
         }
 
     }

@@ -2517,6 +2517,7 @@ extern "C" {
         int64_t                  ncols; // number of columns to process simultaneously
         ggml_gemv_t              gemv;
         ggml_gemm_t              gemm;
+        int64_t                  row_meta_size;
     } ggml_type_traits_t;
 
     GGML_API ggml_type_traits_t ggml_internal_get_type_traits(enum ggml_type type);
