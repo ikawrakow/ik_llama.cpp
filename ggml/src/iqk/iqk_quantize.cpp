@@ -698,10 +698,8 @@ void vec_dot_iq2_k_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * 
     }
 #endif
 
-    const int nb = n / QK_K;
+    GGML_ABORT("not implemented");
 
-    const block_iq2_k * x = (const block_iq2_k *)vx;
-    const block_q8_K  * y = (const block_q8_K *)vy;
 }
 
 //
@@ -971,10 +969,7 @@ void vec_dot_iq3_k_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * 
     }
 #endif
 
-    const int nb = n / QK_K;
-
-    const block_iq2_k * x = (const block_iq2_k *)vx;
-    const block_q8_K  * y = (const block_q8_K *)vy;
+    GGML_ABORT("not implemented");
 }
 
 //
@@ -1664,6 +1659,8 @@ void vec_dot_iq6_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx,
     }
 #endif
 
+    GGML_ABORT("not implemented");
+
     // TODO
     //const int nb = n / QK_K;
 
@@ -2030,6 +2027,10 @@ void dequantize_row_iq2_tn(const block_iq2_tn * x, float * y, int64_t k) {
 }
 
 void   vec_dot_iq2_tn_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    GGML_UNUSED(nrc);
 #if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_TN, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
         return;
