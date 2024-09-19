@@ -4110,14 +4110,23 @@ struct Q2bits {
     }
 };
 
-template <typename block_q>
+template <typename block_q, bool has_row_scale = false>
 struct BaseDequantizer {
     BaseDequantizer(const void * vx, size_t bx, int nrc) : vx(vx), x(nullptr), bx(bx), nrc(nrc) {}
-    inline void new_row(int ix) { x = (const block_q *)((const char *)vx + ix*bx); }
+    inline void new_row(int ix) {
+        if constexpr (has_row_scale) {
+            const float * dptr = (const float *)((const char *)vx + ix*bx);
+            d = *dptr;
+            x = (const block_q *)(dptr + 1);
+        } else {
+            x = (const block_q *)((const char *)vx + ix*bx);
+        }
+    }
     const void * vx;
     const block_q * x;
     const size_t bx;
     const int nrc;
+    float d;
 };
 
 struct DequantizerQ4K final : public BaseDequantizer<block_q4_K> {
@@ -4139,7 +4148,6 @@ struct DequantizerQ4K final : public BaseDequantizer<block_q4_K> {
     Q4bits bits;
     Scales8 s8;
 
-    float d;
 };
 
 struct HighBit5 {
@@ -4208,7 +4216,6 @@ struct DequantizerQ5K final : public BaseDequantizer<block_q5_K> {
 
     uint8x16x2_t hbits;
 
-    float d;
 };
 
 inline int32x4x4_t make_wider(const int16x8x2_t& scales16) {
@@ -4262,7 +4269,6 @@ struct DequantizerQ6K final : public BaseDequantizer<block_q6_K> {
 
     const uint8x16_t mhb = vdupq_n_u8(0x30);
 
-    float d;
 };
 
 struct DequantizerQ3K final : public BaseDequantizer<block_q3_K> {
@@ -4323,7 +4329,6 @@ struct DequantizerQ3K final : public BaseDequantizer<block_q3_K> {
     uint8x16_t mask;
     HighBit3 h;
 
-    float d;
 };
 
 struct DequantizerQ2K final : public BaseDequantizer<block_q2_K> {
@@ -4395,7 +4400,6 @@ struct DequantizerQ2K final : public BaseDequantizer<block_q2_K> {
 
     Q2bits bits;
 
-    float d;
 };
 
 // ============================= i-quants
@@ -4459,7 +4463,6 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
     const int8x16_t values;
     const uint8x16_t hshuff = vreinterpretq_u8_u32(uint32x4_t{0x09010800, 0x0b030a02, 0x0d050c04, 0x0f070e06});
 
-    float d;
 };
 
 struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
@@ -4509,7 +4512,6 @@ struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
     const uint8x16_t hm = vdupq_n_u8(0x10);
     uint8x16x2_t hbits;
 
-    float d;
 };
 
 struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
@@ -4544,7 +4546,6 @@ struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
     const int8x16x4_t values;
     const uint8x16_t hm = vdupq_n_u8(0x30);
 
-    float d;
 };
 
 struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
@@ -4576,7 +4577,6 @@ struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
     const int8x16_t values = vreinterpretq_s8_u64(vdupq_n_u64(0x000000001101f3e1));
     const uint8x16_t hshuff = vreinterpretq_u8_u32(uint32x4_t{0x09010800, 0x0b030a02, 0x0d050c04, 0x0f070e06});
 
-    float d;
 };
 
 struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
@@ -4636,7 +4636,6 @@ struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
     const uint8x16_t sign_mask = vreinterpretq_u8_u64(uint64x2_t{0x0808040402020101, 0x8080404020201010});
     const uint8x16_t sign_shuffle = load_sign_shuffle();
 
-    float d;
 };
 
 struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
@@ -4694,7 +4693,6 @@ struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
 
     constexpr static uint32x2_t hshuff = {0x05010400, 0x07030602};
 
-    float d;
 };
 
 struct SimpleBits {
@@ -4753,7 +4751,6 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
     uint32x4x4_t data;
     SimpleBits bits;
 
-    float d;
 };
 
 inline int32x4x4_t prepare_4bit_scales16(const uint8_t * sc) {
@@ -4799,7 +4796,6 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
 
     SimpleBits bits;
 
-    float d;
 
 };
 
@@ -4863,7 +4859,6 @@ struct DequantizerIQ2S final : public BaseDequantizer<block_iq2_s> {
     SimpleBits bits;
     SignHelper sh;
 
-    float d;
 
 };
 
@@ -4896,8 +4891,6 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
 
     SimpleBits bits;
     uint32x4x2_t gas;
-
-    float d;
 
 };
 
@@ -4957,11 +4950,9 @@ struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
     SignHelper sh;
     uint32x4x2_t gas;
 
-    float d;
-
 };
 
-struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
+struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn, true> {
     DequantizerIQ2TN(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc) {}
 
     constexpr static int num_blocks() { return 16; }
@@ -4972,9 +4963,7 @@ struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
     //    d = GGML_FP16_TO_FP32(x[i].d);
     //}
 
-    inline void new_block(int i) {
-        d = GGML_FP16_TO_FP32(x[i].d);
-    }
+    inline void new_block(int) { }
 
     template <typename Q8>
     inline void compute(const Q8& q8, int i, int j, int32x4_t * sumi) {
@@ -5025,8 +5014,6 @@ struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
     }
 
     Q2bits bits;
-
-    float d;
 };
 
 template <int nrc_y>
