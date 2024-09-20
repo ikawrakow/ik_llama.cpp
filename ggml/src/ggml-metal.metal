@@ -7444,47 +7444,19 @@ struct DefaultDequantizer {
     short il;
 };
 
-template <typename T4x4>
-struct DequantizerIQ1TN {
+template <typename T4x4, typename Block, typename Scale, int nl, void (*dequantize)(device const Block *, short, thread T4x4&)>
+struct DequantizerRS{
     using type4x4 = T4x4;
-    using Block   = block_iq1_bn;;
-    DequantizerIQ1TN(device const char * cx, short il = 0) : il(il) {
-        d = *(device const half *)cx;
-        x = (device const Block *)(cx + sizeof(half));
+    DequantizerRS(device const char * cx, short il = 0) : il(il) {
+        d = *(device const Scale *)cx;
+        x = (device const Block *)(cx + sizeof(Scale));
     }
     inline void convert(thread T4x4& t) const {
-        dequantize_iq1_bn(x, il, t);
+        dequantize(x, il, t);
         t *= d;
     }
     inline void convert(int64_t ind, thread T4x4& t) {
-        dequantize_iq1_bn(x + ind/4, ind%4, t);
-        t *= d;
-    }
-    inline void next() {
-        constexpr int short nl = 4;
-        il = (il + 2 < nl) ? il + 2 : il % 2;
-        x  = (il < 2) ? x + (2+nl-1)/nl : x;
-    }
-    device const Block * x;
-    short il;
-    half d;
-};
-
-template <typename T4x4>
-struct DequantizerIQ2TN {
-    using type4x4 = T4x4;
-    using Block   = block_iq2_tn;
-    constexpr constant static int nl = 16;
-    DequantizerIQ2TN(device const char * cx, short il = 0) : il(il) {
-        d = *(device const float *)cx;
-        x = (device const Block *)(cx + sizeof(float));
-    }
-    inline void convert(thread T4x4& t) const {
-        dequantize_iq2_tn(x, il, t);
-        t *= d;
-    }
-    inline void convert(int64_t ind, thread T4x4& t) {
-        dequantize_iq2_tn(x + ind/nl, ind%nl, t);
+        dequantize(x + ind/nl, ind%nl, t);
         t *= d;
     }
     inline void next() {
@@ -7493,7 +7465,7 @@ struct DequantizerIQ2TN {
     }
     device const Block * x;
     short il;
-    float d;
+    Scale d;
 };
 
 // each block_q contains 16*nl weights
@@ -7865,8 +7837,8 @@ template [[host_name("kernel_get_rows_iq5_k")]]   kernel get_rows_q_t kernel_get
 template [[host_name("kernel_get_rows_iq6_k")]]   kernel get_rows_q_t kernel_get_rows_q<block_iq6_k,   QK_NL, dequantize_iq6_k>;
 template [[host_name("kernel_get_rows_iq1_bn")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq1_bn,  4,     dequantize_iq1_bn>;
 template [[host_name("kernel_get_rows_iq2_bn")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq2_bn,  4,     dequantize_iq2_bn>;
-template [[host_name("kernel_get_rows_iq1_tn")]]  kernel get_rows_q_t kernel_get_rows_q2<DequantizerIQ1TN<float4x4>>;
-template [[host_name("kernel_get_rows_iq2_tn")]]  kernel get_rows_q_t kernel_get_rows_q2<DequantizerIQ2TN<float4x4>>;
+template [[host_name("kernel_get_rows_iq1_tn")]]  kernel get_rows_q_t kernel_get_rows_q2<DequantizerRS<float4x4, block_iq1_bn,  half,  4, dequantize_iq1_bn>>;
+template [[host_name("kernel_get_rows_iq2_tn")]]  kernel get_rows_q_t kernel_get_rows_q2<DequantizerRS<float4x4, block_iq2_tn, float, 16, dequantize_iq2_tn>>;
 
 //
 // matrix-matrix multiplication
@@ -7906,8 +7878,8 @@ template [[host_name("kernel_mul_mm_iq5_k_f32")]]   kernel mat_mm_t kernel_mul_m
 template [[host_name("kernel_mul_mm_iq6_k_f32")]]   kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DD<block_iq6_k,   QK_NL, dequantize_iq6_k>>;
 template [[host_name("kernel_mul_mm_iq1_bn_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DD<block_iq1_bn,  4,     dequantize_iq1_bn>>;
 template [[host_name("kernel_mul_mm_iq2_bn_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DD<block_iq2_bn,  4,     dequantize_iq2_bn>>;
-template [[host_name("kernel_mul_mm_iq1_tn_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DequantizerIQ1TN<half4x4>>;
-template [[host_name("kernel_mul_mm_iq2_tn_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DequantizerIQ2TN<half4x4>>;
+template [[host_name("kernel_mul_mm_iq1_tn_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DequantizerRS<half4x4, block_iq1_bn,  half,  4, dequantize_iq1_bn>>;
+template [[host_name("kernel_mul_mm_iq2_tn_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DequantizerRS<half4x4, block_iq2_tn, float, 16, dequantize_iq2_tn>>;
 
 //
 // indirect matrix-matrix multiplication
@@ -7944,8 +7916,8 @@ template [[host_name("kernel_mul_mm_id_iq3_k_f32")]]   kernel mat_mm_id_t kernel
 template [[host_name("kernel_mul_mm_id_iq4_k_f32")]]   kernel mat_mm_id_t kernel_mul_mm_id<DD<block_iq4_k,   QK_NL, dequantize_iq4_k>>;
 template [[host_name("kernel_mul_mm_id_iq5_k_f32")]]   kernel mat_mm_id_t kernel_mul_mm_id<DD<block_iq5_k,   QK_NL, dequantize_iq5_k>>;
 template [[host_name("kernel_mul_mm_id_iq6_k_f32")]]   kernel mat_mm_id_t kernel_mul_mm_id<DD<block_iq6_k,   QK_NL, dequantize_iq6_k>>;
-template [[host_name("kernel_mul_mm_id_iq1_tn_f32")]]  kernel mat_mm_id_t kernel_mul_mm_id<DequantizerIQ1TN<half4x4>>;
-template [[host_name("kernel_mul_mm_id_iq2_tn_f32")]]  kernel mat_mm_id_t kernel_mul_mm_id<DequantizerIQ2TN<half4x4>>;
+template [[host_name("kernel_mul_mm_id_iq1_tn_f32")]]  kernel mat_mm_id_t kernel_mul_mm_id<DequantizerRS<half4x4, block_iq1_bn,  half,  4, dequantize_iq1_bn>>;
+template [[host_name("kernel_mul_mm_id_iq2_tn_f32")]]  kernel mat_mm_id_t kernel_mul_mm_id<DequantizerRS<half4x4, block_iq2_tn, float, 16, dequantize_iq2_tn>>;
 
 //
 // matrix-vector multiplication
