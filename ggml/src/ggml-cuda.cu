@@ -1179,6 +1179,7 @@ static cudaError_t ggml_cuda_cpy_tensor_2d(
     const int64_t nb2 = src->nb[2];
     const int64_t nb3 = src->nb[3];
     const enum ggml_type type = src->type;
+    // TODO: fix this usage of type size and block size
     const int64_t ts = ggml_type_size(type);
     const int64_t bs = ggml_blck_size(type);
     int64_t i1_diff = i1_high - i1_low;
@@ -1441,6 +1442,7 @@ static void ggml_cuda_op_mul_mat(
 
     const int64_t i02_divisor = ne12 / ne02;
 
+    // TODO: fix this usage of type size and block size
     const size_t src0_ts = ggml_type_size(src0->type);
     const size_t src0_bs = ggml_blck_size(src0->type);
     const size_t q8_1_ts = sizeof(block_q8_1);
