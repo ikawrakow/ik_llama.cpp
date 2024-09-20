@@ -1038,7 +1038,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_iq1_tn_q8_k,
         .vec_dot_type             = GGML_TYPE_Q8_K64,
         .nrows                    = 1,
-        .row_meta_size            = 0,
+        .row_meta_size            = 2,
     },
     [GGML_TYPE_IQ4_NL] = {
         .type_name                = "iq4_nl",
@@ -13914,7 +13914,7 @@ static void ggml_compute_forward_softcap(
         default:
             {
                 GGML_ASSERT(false);
-            } break;
+            }
     }
 }
 
@@ -14030,7 +14030,7 @@ static void ggml_compute_forward_softcap_max(
         default:
             {
                 GGML_ASSERT(false);
-            } break;
+            }
     }
 }
 
@@ -18696,11 +18696,11 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_SOFTCAP:
             {
                 GGML_ASSERT(false); // TODO: not implemented
-            } break;
+            }
         case GGML_OP_SOFT_CAP_MAX:
             {
                 GGML_ASSERT(false); // TODO: not implemented
-            } break;
+            }
         case GGML_OP_SET:
             {
                 const size_t nb1     = ((int32_t *) tensor->op_params)[0];

@@ -5504,7 +5504,7 @@ void kernel_mul_mv_iq1_tn_f32_impl(
 
     // Why are we not passing in src0->nb[0]?
     // But because we are not, we need to use this hack
-    const uint row_size = sizeof(block_iq1_tn)*(ne00/QK_K);
+    const uint row_size = 2+sizeof(block_iq1_tn)*(ne00/QK_K);
 
     const int first_row = (r0 * N_SIMDGROUP + sgitg) * N_DST;
 
