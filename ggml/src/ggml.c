@@ -2007,7 +2007,7 @@ struct ggml_context_container {
     struct ggml_context context;
 };
 
-#define GGML_CACHE_LINE 64
+#define GGML_CACHE_LINE 128
 #if defined(__clang__) || defined(__GNUC__)
 #define GGML_CACHE_ALIGN __attribute__((aligned(GGML_CACHE_LINE)))
 #elif defined _MSC_VER
@@ -3406,6 +3406,7 @@ inline static void ggml_critical_section_start(void) {
 
 #if defined(__aarch64__) && ( defined(__clang__) || defined(__GNUC__) )
 static inline void ggml_thread_cpu_relax(void) {
+    //__asm__ __volatile__("isb\n");
     __asm__ volatile("yield" ::: "memory");
 }
 #elif defined(__x86_64__)
