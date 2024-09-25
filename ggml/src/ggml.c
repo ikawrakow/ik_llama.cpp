@@ -2007,6 +2007,15 @@ struct ggml_context_container {
     struct ggml_context context;
 };
 
+#define GGML_CACHE_LINE 64
+#if defined(__clang__) || defined(__GNUC__)
+#define GGML_CACHE_ALIGN __attribute__((aligned(GGML_CACHE_LINE)))
+#elif defined _MSC_VER
+#define GGML_CACHE_ALIGN __declspec(align(GGML_CACHE_LINE))
+#else
+#define GGML_CACHE_ALIGN
+#endif
+
 struct ggml_compute_state_shared {
     const struct ggml_cgraph * cgraph;
     const struct ggml_cplan * cplan;
@@ -2014,13 +2023,12 @@ struct ggml_compute_state_shared {
     int n_threads;
 
     // synchronization primitives
-    atomic_int n_barrier;
-    atomic_int n_barrier_passed;
+    atomic_int GGML_CACHE_ALIGN n_barrier;
+    atomic_int GGML_CACHE_ALIGN n_barrier_passed;
+    atomic_int current_chunk; // currently processing chunk during mul_mat, shared between all the threads
 
     ggml_abort_callback abort_callback; // abort ggml_graph_compute when true
     void * abort_callback_data;
-
-    atomic_int current_chunk; // currently processing chunk during mul_mat, shared between all the threads
 
     enum ggml_status ec;
 };
@@ -3396,6 +3404,18 @@ inline static void ggml_critical_section_start(void) {
     }
 }
 
+#if defined(__aarch64__) && ( defined(__clang__) || defined(__GNUC__) )
+static inline void ggml_thread_cpu_relax(void) {
+    __asm__ volatile("yield" ::: "memory");
+}
+#elif defined(__x86_64__)
+static inline void ggml_thread_cpu_relax(void) {
+    _mm_pause();
+}
+#else
+static inline void ggml_thread_cpu_relax(void) {;}
+#endif
+
 #ifdef GGML_USE_OPENMP
 static void ggml_barrier(struct ggml_compute_state_shared * shared) {
     if (shared->n_threads == 1) {
@@ -3410,33 +3430,34 @@ static void ggml_barrier(struct ggml_compute_state_shared * shared) {
         return;
     }
 
-    atomic_int * n_barrier = &shared->n_barrier;
-    atomic_int * n_barrier_passed = &shared->n_barrier_passed;
+    int n_passed = atomic_load_explicit(&shared->n_barrier_passed, memory_order_relaxed);
 
-    int n_threads = shared->n_threads;
-    int passed_old = atomic_load(n_barrier_passed);
+    // enter barrier (full seq-cst fence)
+    int n_barrier = atomic_fetch_add_explicit(&shared->n_barrier, 1, memory_order_seq_cst);
 
-    if (atomic_fetch_add(n_barrier, 1) == n_threads - 1) {
+    if (n_barrier == (shared->n_threads - 1)) {
         // last thread
-        atomic_store(n_barrier, 0);
-        atomic_fetch_add(n_barrier_passed, 1);
-    } else {
-        // wait for other threads
-        const int n_spin_before_sleep = 100000;
-        while (true) {
-            for (int i = 0; i < n_spin_before_sleep; i++) {
-                if (atomic_load(n_barrier_passed) != passed_old) {
-                    return;
-                }
-            #if defined(__SSE3__)
-                _mm_pause();
-            #elif defined __ARM_NEON
-                __asm__ __volatile__("isb\n");
-            #endif
-            }
-            sched_yield();
-        }
+        atomic_store_explicit(&shared->n_barrier, 0, memory_order_relaxed);
+
+        // exit barrier (fill seq-cst fence)
+        atomic_fetch_add_explicit(&shared->n_barrier_passed, 1, memory_order_seq_cst);
+        return;
     }
+
+    // wait for other threads
+    while (atomic_load_explicit(&shared->n_barrier_passed, memory_order_relaxed) == n_passed) {
+        ggml_thread_cpu_relax();
+    }
+
+    atomic_thread_fence(memory_order_seq_cst);
+
+    //// exit barrier (full seq-cst fence)
+    //// TSAN doesn't support standalone fence yet, we use a dummy read-modify-write instead
+    //#ifdef GGML_TSAN_ENABLED
+    //atomic_fetch_add_explicit(&shared->n_barrier_passed, 0, memory_order_seq_cst);
+    //#else
+    //atomic_thread_fence(memory_order_seq_cst);
+    //#endif
 }
 #endif
 
@@ -19987,9 +20008,9 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         /*.n_threads               =*/ n_threads,
         /*.n_barrier               =*/ 0,
         /*.n_barrier_passed        =*/ 0,
+        /*.current_chunk           =*/ 0,
         /*.abort_callback          =*/ NULL,
         /*.abort_callback_data     =*/ NULL,
-        /*.current_chunk           =*/ 0,
         /*.ec                      =*/ GGML_STATUS_SUCCESS,
     };
 
