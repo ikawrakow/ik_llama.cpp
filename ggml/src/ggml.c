@@ -3629,6 +3629,10 @@ GGML_CALL int64_t ggml_nrows(const struct ggml_tensor * tensor) {
     return tensor->ne[1]*tensor->ne[2]*tensor->ne[3];
 }
 
+GGML_CALL int64_t ggml_blck_size(enum ggml_type type) {
+    return type_traits[type].blck_size;
+}
+
 GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
     size_t nbytes;
     size_t blck_size = ggml_blck_size(tensor->type);
@@ -3650,10 +3654,6 @@ GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
 
 size_t ggml_nbytes_pad(const struct ggml_tensor * tensor) {
     return GGML_PAD(ggml_nbytes(tensor), GGML_MEM_ALIGN);
-}
-
-GGML_CALL int64_t ggml_blck_size(enum ggml_type type) {
-    return type_traits[type].blck_size;
 }
 
 GGML_CALL size_t ggml_type_size(enum ggml_type type) {
