@@ -4498,9 +4498,9 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ5_K:    return "IQ5_K - 5.5 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ6_K:    return "IQ6_K - 6.6 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ1_BN:   return "IQ1_BN - 1.625 bpw Bitnet";
-        case LLAMA_FTYPE_MOSTLY_IQ1_TN:   return "IQ1_TN - 1.6875 bpw TriLM";
+        case LLAMA_FTYPE_MOSTLY_IQ1_TN:   return "IQ1_TN - 1.625 bpw TriLM";
         case LLAMA_FTYPE_MOSTLY_IQ2_BN:   return "IQ2_BN - 2.00 bpw Bitnet";
-        case LLAMA_FTYPE_MOSTLY_IQ2_TN:   return "IQ2_TN - 2.06 bpw TriLM";
+        case LLAMA_FTYPE_MOSTLY_IQ2_TN:   return "IQ2_TN - 2.00 bpw TriLM";
         case LLAMA_FTYPE_MOSTLY_IQ3_S:    return "IQ3_S - 3.4375 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_M:    return "IQ3_S mix - 3.66 bpw";
         case LLAMA_FTYPE_MOSTLY_Q4_0_4_4: return "Q4_0_4_4";

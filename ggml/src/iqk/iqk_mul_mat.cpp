@@ -140,8 +140,9 @@ bool iqk_mul_mat(long Nx, long Ny, long ne00,
         return false;
     }
 
-    auto row_size_qx = strideA*ggml_type_size(ggml_type(typeA));
-    auto row_size_qy = strideB*ggml_type_size(ggml_type(typeB));
+    size_t row_size_qx = strideA; //*ggml_type_size(ggml_type(typeA));
+    size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
+    //if (ith == 0) printf("%s: ne00 = %d, row_size_qx = %d, strideA = %d\n", __func__, int(ne00), int(row_size_qx), int(strideA));
 
     auto nrc_x = (Nx + nth - 1)/nth;
     auto first_x = ith*nrc_x;
@@ -165,8 +166,8 @@ bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
     }
-    auto row_size_qx = strideA*ggml_type_size(ggml_type(typeA));
-    auto row_size_qy = strideB*ggml_type_size(ggml_type(typeB));
+    size_t row_size_qx = strideA; //*ggml_type_size(ggml_type(typeA));
+    size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
     int nrc_x = (Nx + nth - 1)/nth;
     int first_x = ith*nrc_x;
     if (first_x + nrc_x > Nx) nrc_x = Nx - first_x;
@@ -378,11 +379,17 @@ struct ScaleIQ4XS {
     const __m128i m32 = _mm_set1_epi16(-32);
 };
 
-template <typename Block>
+template <typename Block, bool per_row_scale = false>
 struct BaseDequantizer {
     BaseDequantizer(const void * vx, size_t bx) : vx(vx), bx(bx) {}
     inline void new_row(int ix) {
-        x = (const Block *)((const char *)vx + bx*ix);
+        if constexpr (per_row_scale) {
+            const float * dptr = (const float *)((const char *)vx + bx*ix);
+            d = *dptr;
+            x = (const Block *)(dptr + 1);
+        } else {
+            x = (const Block *)((const char *)vx + bx*ix);
+        }
     }
 
     const void *  vx;
@@ -700,14 +707,13 @@ struct DequantizerQ2K final : public BaseDequantizer<block_q2_K> {
 
 };
 
-struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
+struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn, true> {
     DequantizerIQ2TN(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
     template <typename Q8>
     inline void new_block(int i, [[maybe_unused]] const Q8& q8, [[maybe_unused]] __m256 * accm, [[maybe_unused]] __m512i * scales) {
         new_block(i);
     }
     inline void new_block(int i) {
-        d = GGML_FP16_TO_FP32(x[i].d);
         bits.prepare(x[i].qs);
     }
     Q2Bits bits;
@@ -1158,7 +1164,7 @@ static void mul_mat_iq2tn_q8_K_AVX512(int n, const void * vx, size_t bx, const D
 
             deq1.new_block(i);
             deq2.new_block(i);
-            float d = 0.5f*(deq1.d + deq2.d); // The scale is supposed to be per per tensor, so we can use the same scale for both rows
+            //float d = 0.5f*(deq1.d + deq2.d); // The scale is supposed to be per per tensor, so we can use the same scale for both rows
 
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto sumi_scales_256 = _mm256_madd_epi16(_mm256_set1_epi16(-1), q8.load_bsums(iy, i));
@@ -1176,7 +1182,7 @@ static void mul_mat_iq2tn_q8_K_AVX512(int n, const void * vx, size_t bx, const D
                 sumi_1 = _mm512_dpbusd_epi32(sumi_1, deq1.bits.values[3], q8q);
                 sumi_2 = _mm512_dpbusd_epi32(sumi_2, deq2.bits.values[3], q8q);
                 // The scale is supposed to be per per tensor, so we can use the same scale
-                auto vd = _mm512_set1_ps(d*q8.scale(iy, i));
+                auto vd = _mm512_set1_ps(/*d* */q8.scale(iy, i));
                 accd[2*iy+0] = _mm512_fmadd_ps(vd, _mm512_cvtepi32_ps(sumi_1), accd[2*iy+0]);
                 accd[2*iy+1] = _mm512_fmadd_ps(vd, _mm512_cvtepi32_ps(sumi_2), accd[2*iy+1]);
                 // Leaving this here just in case ternary models start using per row scales
@@ -1187,8 +1193,8 @@ static void mul_mat_iq2tn_q8_K_AVX512(int n, const void * vx, size_t bx, const D
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix+0, iy, _mm512_reduce_add_ps(accd[2*iy+0]));
-            info.store(ix+1, iy, _mm512_reduce_add_ps(accd[2*iy+1]));
+            info.store(ix+0, iy, deq1.d*_mm512_reduce_add_ps(accd[2*iy+0]));
+            info.store(ix+1, iy, deq2.d*_mm512_reduce_add_ps(accd[2*iy+1]));
         }
 
     }
@@ -4104,14 +4110,23 @@ struct Q2bits {
     }
 };
 
-template <typename block_q>
+template <typename block_q, bool has_row_scale = false>
 struct BaseDequantizer {
     BaseDequantizer(const void * vx, size_t bx, int nrc) : vx(vx), x(nullptr), bx(bx), nrc(nrc) {}
-    inline void new_row(int ix) { x = (const block_q *)((const char *)vx + ix*bx); }
+    inline void new_row(int ix) {
+        if constexpr (has_row_scale) {
+            const float * dptr = (const float *)((const char *)vx + ix*bx);
+            d = *dptr;
+            x = (const block_q *)(dptr + 1);
+        } else {
+            x = (const block_q *)((const char *)vx + ix*bx);
+        }
+    }
     const void * vx;
     const block_q * x;
     const size_t bx;
     const int nrc;
+    float d;
 };
 
 struct DequantizerQ4K final : public BaseDequantizer<block_q4_K> {
@@ -4133,7 +4148,6 @@ struct DequantizerQ4K final : public BaseDequantizer<block_q4_K> {
     Q4bits bits;
     Scales8 s8;
 
-    float d;
 };
 
 struct HighBit5 {
@@ -4202,7 +4216,6 @@ struct DequantizerQ5K final : public BaseDequantizer<block_q5_K> {
 
     uint8x16x2_t hbits;
 
-    float d;
 };
 
 inline int32x4x4_t make_wider(const int16x8x2_t& scales16) {
@@ -4256,7 +4269,6 @@ struct DequantizerQ6K final : public BaseDequantizer<block_q6_K> {
 
     const uint8x16_t mhb = vdupq_n_u8(0x30);
 
-    float d;
 };
 
 struct DequantizerQ3K final : public BaseDequantizer<block_q3_K> {
@@ -4317,7 +4329,6 @@ struct DequantizerQ3K final : public BaseDequantizer<block_q3_K> {
     uint8x16_t mask;
     HighBit3 h;
 
-    float d;
 };
 
 struct DequantizerQ2K final : public BaseDequantizer<block_q2_K> {
@@ -4389,7 +4400,6 @@ struct DequantizerQ2K final : public BaseDequantizer<block_q2_K> {
 
     Q2bits bits;
 
-    float d;
 };
 
 // ============================= i-quants
@@ -4453,7 +4463,6 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
     const int8x16_t values;
     const uint8x16_t hshuff = vreinterpretq_u8_u32(uint32x4_t{0x09010800, 0x0b030a02, 0x0d050c04, 0x0f070e06});
 
-    float d;
 };
 
 struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
@@ -4503,7 +4512,6 @@ struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
     const uint8x16_t hm = vdupq_n_u8(0x10);
     uint8x16x2_t hbits;
 
-    float d;
 };
 
 struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
@@ -4538,7 +4546,6 @@ struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
     const int8x16x4_t values;
     const uint8x16_t hm = vdupq_n_u8(0x30);
 
-    float d;
 };
 
 struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
@@ -4570,7 +4577,6 @@ struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
     const int8x16_t values = vreinterpretq_s8_u64(vdupq_n_u64(0x000000001101f3e1));
     const uint8x16_t hshuff = vreinterpretq_u8_u32(uint32x4_t{0x09010800, 0x0b030a02, 0x0d050c04, 0x0f070e06});
 
-    float d;
 };
 
 struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
@@ -4630,7 +4636,6 @@ struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
     const uint8x16_t sign_mask = vreinterpretq_u8_u64(uint64x2_t{0x0808040402020101, 0x8080404020201010});
     const uint8x16_t sign_shuffle = load_sign_shuffle();
 
-    float d;
 };
 
 struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
@@ -4688,7 +4693,6 @@ struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
 
     constexpr static uint32x2_t hshuff = {0x05010400, 0x07030602};
 
-    float d;
 };
 
 struct SimpleBits {
@@ -4747,7 +4751,6 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
     uint32x4x4_t data;
     SimpleBits bits;
 
-    float d;
 };
 
 inline int32x4x4_t prepare_4bit_scales16(const uint8_t * sc) {
@@ -4793,7 +4796,6 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
 
     SimpleBits bits;
 
-    float d;
 
 };
 
@@ -4857,7 +4859,6 @@ struct DequantizerIQ2S final : public BaseDequantizer<block_iq2_s> {
     SimpleBits bits;
     SignHelper sh;
 
-    float d;
 
 };
 
@@ -4890,8 +4891,6 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
 
     SimpleBits bits;
     uint32x4x2_t gas;
-
-    float d;
 
 };
 
@@ -4951,11 +4950,9 @@ struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
     SignHelper sh;
     uint32x4x2_t gas;
 
-    float d;
-
 };
 
-struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
+struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn, true> {
     DequantizerIQ2TN(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc) {}
 
     constexpr static int num_blocks() { return 16; }
@@ -4966,9 +4963,7 @@ struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
     //    d = GGML_FP16_TO_FP32(x[i].d);
     //}
 
-    inline void new_block(int i) {
-        d = GGML_FP16_TO_FP32(x[i].d);
-    }
+    inline void new_block(int) { }
 
     template <typename Q8>
     inline void compute(const Q8& q8, int i, int j, int32x4_t * sumi) {
@@ -5019,8 +5014,6 @@ struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
     }
 
     Q2bits bits;
-
-    float d;
 };
 
 template <int nrc_y>
