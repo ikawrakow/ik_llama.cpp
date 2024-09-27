@@ -519,7 +519,8 @@ __device__ __forceinline__ float vec_dot_iq3_k_q8_1(
 static __device__ __forceinline__ float vec_dot_iq2_tn_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
-    const block_iq2_tn * bq2 = (const block_iq2_tn *) vbq + kbx;
+    float scale = *(const float *)vbq;
+    const block_iq2_tn * bq2 = (const block_iq2_tn *)((const char *)vbq + sizeof(float)) + kbx;
 
     const int bq8_offset = QR2_K * (iqs / QI8_1);
 
@@ -533,19 +534,7 @@ static __device__ __forceinline__ float vec_dot_iq2_tn_q8_1(
         sumf += d8 * (ggml_cuda_dp4a(v & 0x03030303, u, 0) - ggml_cuda_dp4a(0x01010101, u, 0));
         v >>= 2;
     }
-    return __half2float(bq2->d) * sumf;
-
-    //float sumf_d = 0;
-    //float sumf_m = 0;
-    //for (int i = 0; i < QR2_K; ++ i) {
-    //    int u = *((const int *)bq8_1[bq8_offset + i].qs + iqs % QI8_1);
-    //    float2 d8 = __half22float2(bq8_1[bq8_offset + i].ds);
-    //    sumf_d += d8.x * ggml_cuda_dp4a(v & 0x03030303, u, 0);
-    //    sumf_m += d8.y;
-    //    v >>= 2;
-    //}
-    //return __half2float(bq2->d) * (sumf_d - 0.125f * sumf_m);
-
+    return scale * sumf;
 }
 
 static __device__ __forceinline__ float vec_dot_iq1_tn_q8_1(

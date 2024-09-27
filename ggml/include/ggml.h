@@ -744,6 +744,7 @@ extern "C" {
     GGML_API GGML_CALL size_t  ggml_nbytes      (const struct ggml_tensor * tensor);
     GGML_API           size_t  ggml_nbytes_pad  (const struct ggml_tensor * tensor); // same as ggml_nbytes() but padded to GGML_MEM_ALIGN
 
+    // TODO: remove the following from the public API to avoid unnecessary assumptions about data layout
     GGML_API GGML_CALL int64_t ggml_blck_size(enum ggml_type type);
     GGML_API GGML_CALL size_t  ggml_type_size(enum ggml_type type);             // size in bytes for all elements in a block
     GGML_API GGML_CALL size_t  ggml_row_size (enum ggml_type type, int64_t ne); // size in bytes for all elements in a row
@@ -2517,6 +2518,7 @@ extern "C" {
         int64_t                  ncols; // number of columns to process simultaneously
         ggml_gemv_t              gemv;
         ggml_gemm_t              gemm;
+        int64_t                  row_meta_size;
     } ggml_type_traits_t;
 
     GGML_API ggml_type_traits_t ggml_internal_get_type_traits(enum ggml_type type);

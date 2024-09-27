@@ -1972,15 +1972,15 @@ void quantize_row_iq2_tn_ref(const float * x, block_iq2_tn  * y, int64_t k) {
     auto quantize = [] (float xmax, float x) {
         return x < -0.5f*xmax ? 0 : x < 0.5f*xmax ? 1 : 2;
     };
+    int n = k;
+    float max = x[0];
+    for (int j = 1; j < n; ++j) max = std::max(max, fabsf(x[j]));
+
+    *(float *)y = max;
+    y = (block_iq2_tn *)((float *)y + 1);
 
     for (int ibl = 0; ibl < nb; ++ibl) {
         auto xb = x + QK_K*ibl;
-        float max = xb[0];
-        for (int j = 0; j < QK_K; ++j) {
-            float ax = fabsf(xb[j]);
-            max = std::max(ax, max);
-        }
-        y[ibl].d = GGML_FP32_TO_FP16(max);
         auto qs = y[ibl].qs;
         for (int l = 0; l < QK_K/128; ++l) {
             for (int j = 0; j < 32; ++j) {
@@ -1992,7 +1992,7 @@ void quantize_row_iq2_tn_ref(const float * x, block_iq2_tn  * y, int64_t k) {
     }
 }
 
-void   quantize_row_iq2_tn(const float * x, void * y, int64_t k) {
+void quantize_row_iq2_tn(const float * x, void * y, int64_t k) {
     quantize_row_iq2_tn_ref(x, (block_iq2_tn *)y, k);
 }
 
@@ -2009,9 +2009,11 @@ size_t quantize_iq2_tn(const float * src, void * dst, int64_t nrows, int64_t n_p
 
 void dequantize_row_iq2_tn(const block_iq2_tn * x, float * y, int64_t k) {
     GGML_ASSERT(k%QK_K == 0);
+    const float * dptr = (const float *)x;
+    float d = *dptr;
+    x = (const block_iq2_tn *)(dptr + 1);
     int nb = k/QK_K;
     for (int ibl = 0; ibl < nb; ++ibl) {
-        float d = GGML_FP16_TO_FP32(x[ibl].d);
         auto qs = x[ibl].qs;
         for (int l = 0; l < QK_K/128; ++l) {
             for (int j = 0; j < 32; ++j) {
@@ -2039,13 +2041,14 @@ void   vec_dot_iq2_tn_q8_k(int n, float * s, size_t bs, const void * vx, size_t 
 
     const int nb = n / QK_K;
 
-    const block_iq2_tn * x = (const block_iq2_tn *)vx;
+    const float * dptr = (const float *)vx;
+    const float d = *dptr;
+    const block_iq2_tn * x = (const block_iq2_tn *)(dptr + 1);
     const block_q8_K   * y = (const block_q8_K  *)vy;
 
     float sumf = 0;
 
     for (int i = 0; i < nb; i++) {
-        float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
         auto qs = x[i].qs;
         auto q8 = y[i].qs;
         int sumi1 = 0, sumi2 = 0, sumi3 = 0,sumi4 = 0;
