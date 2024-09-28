@@ -5719,6 +5719,8 @@ struct ggml_tensor * ggml_silu_inplace(
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SILU);
 }
 
+// ggml_swiglu
+
 struct ggml_tensor * ggml_swiglu(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
@@ -12287,7 +12289,7 @@ static void ggml_compute_forward_silu(
     }
 }
 
-// ggml_compute_forward_silu
+// ggml_compute_forward_swiglu
 
 static void ggml_compute_forward_swiglu_f32(
         const struct ggml_compute_params * params,
