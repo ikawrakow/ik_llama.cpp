@@ -8111,16 +8111,18 @@ static struct ggml_tensor * llm_build_ffn(
             } break;
         case LLM_FFN_SWIGLU:
             {
-                // Project to 4h. If using swiglu double the output width, see https://arxiv.org/pdf/2002.05202.pdf
-                int64_t split_point = cur->ne[0] / 2;
-                struct ggml_tensor * x0 = ggml_cont(ctx, ggml_view_2d(ctx, cur, split_point, cur->ne[1], cur->nb[1], 0));
-                struct ggml_tensor * x1 = ggml_cont(ctx, ggml_view_2d(ctx, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur)));
+                cur = ggml_swiglu(ctx, cur);
+                cb(cur, "ffn_swiglu", il);
+                //// Project to 4h. If using swiglu double the output width, see https://arxiv.org/pdf/2002.05202.pdf
+                //int64_t split_point = cur->ne[0] / 2;
+                //struct ggml_tensor * x0 = ggml_cont(ctx, ggml_view_2d(ctx, cur, split_point, cur->ne[1], cur->nb[1], 0));
+                //struct ggml_tensor * x1 = ggml_cont(ctx, ggml_view_2d(ctx, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur)));
 
-                x0 = ggml_silu(ctx, x0);
-                cb(cur, "ffn_silu", il);
+                //x0 = ggml_silu(ctx, x0);
+                //cb(cur, "ffn_silu", il);
 
-                cur = ggml_mul(ctx, x0, x1);
-                cb(cur, "ffn_mul", il);
+                //cur = ggml_mul(ctx, x0, x1);
+                //cb(cur, "ffn_mul", il);
             } break;
     }
 
