@@ -401,25 +401,25 @@ kernel void kernel_silu_4(
 kernel void kernel_swiglu(
         device const float * src0,
         device       float * dst,
-        constant   int64_t & ne0,
-        constant   int64_t & stride,
+        constant      uint & ne0,
+        constant      uint & stride,
         uint tpig[[thread_position_in_grid]]) {
-    const int64_t row = tpig/ne0;
-    const int64_t idx = tpig%ne0;
-    const int64_t j   = row*stride + idx;
+    const uint row = tpig/ne0;
+    const uint idx = tpig%ne0;
+    const uint j   = row*stride + idx;
     dst[tpig] = src0[j] * src0[j + ne0] / (1.0f + exp(-src0[j]));
 }
 
 kernel void kernel_swiglu_4(
         device const float4 * src0,
         device       float4 * dst,
-        constant    int64_t & ne0,
-        constant    int64_t & stride,
+        constant       uint & ne0,
+        constant       uint & stride,
         uint tpig[[thread_position_in_grid]]) {
-    const int64_t row = tpig/(ne0/4);
-    const int64_t idx = tpig%(ne0/4);
-    const int64_t j   = row*(stride/4) + idx;
-    dst[tpig] = src0[j] * src0[j + ne0/4] / (1.0f + exp(-src0[j]));
+    const uint row = tpig/ne0;
+    const uint idx = tpig%ne0;
+    const uint j   = row*stride + idx;
+    dst[tpig] = src0[j] * src0[j + ne0] / (1.0f + exp(-src0[j]));
 }
 
 kernel void kernel_sqr(

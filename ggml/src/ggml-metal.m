@@ -1609,19 +1609,22 @@ static enum ggml_status ggml_metal_graph_compute(
 
                                 id<MTLComputePipelineState> pipeline = nil;
 
+                                uint32_t n_per_row = ne0;
+                                uint32_t stride    = src0->nb[1]/sizeof(float);
+
                                 if (ne0 % 4 == 0) {
                                     pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SWIGLU_4].pipeline;
                                     n /= 4;
+                                    n_per_row /= 4;
+                                    stride /= 4;
                                 } else {
                                     pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SWIGLU].pipeline;
                                 }
 
-                                const int64_t stride = src0->nb[1]/sizeof(float);
-
                                 [encoder setComputePipelineState:pipeline];
                                 [encoder setBuffer:id_src0 offset:offs_src0 atIndex:0];
                                 [encoder setBuffer:id_dst  offset:offs_dst  atIndex:1];
-                                [encoder setBytes:&ne0 length:sizeof(ne0) atIndex:2];
+                                [encoder setBytes:&n_per_row length:sizeof(n_per_row) atIndex:2];
                                 [encoder setBytes:&stride length:sizeof(stride) atIndex:3];
 
                                 [encoder dispatchThreadgroups:MTLSizeMake(n, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
