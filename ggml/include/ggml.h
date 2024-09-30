@@ -487,6 +487,7 @@ extern "C" {
         GGML_OP_RMS_NORM_BACK,
         GGML_OP_GROUP_NORM,
         GGML_OP_FUSED_RMS_NORM,
+        GGML_OP_FUSED_MUL_UNARY,
 
         GGML_OP_MUL_MAT,
         GGML_OP_MUL_MAT_ID,
@@ -962,6 +963,18 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_fused_mul_unary(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            enum ggml_unary_op    op);
+
+    GGML_API struct ggml_tensor * ggml_fused_mul_unary_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            enum ggml_unary_op    op);
 
     GGML_API struct ggml_tensor * ggml_div(
             struct ggml_context * ctx,
