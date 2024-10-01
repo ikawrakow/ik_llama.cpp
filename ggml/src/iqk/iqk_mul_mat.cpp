@@ -542,6 +542,12 @@ struct SimpleBits {
     __m256i values[4];
 };
 
+__m256i inline load_iq4nl_values_256() {
+    static const uint8_t kvalues_iq4nl[16] = {1, 24, 45, 63, 79, 93, 106, 118, 129, 141, 153, 166, 181, 197, 217, 241};
+    auto val128 = _mm_loadu_si128((const __m128i *)kvalues_iq4nl);
+    return MM256_SET_M128I(val128, val128);
+}
+
 #ifdef HAVE_FANCY_SIMD
 //====================================== Zen4 ==================================================
 
@@ -608,12 +614,6 @@ struct DequantizerQ4K final : public BaseDequantizer<block_q4_K> {
     Q4Bits bits;
     Scales8K s8k;
 };
-
-__m256i inline load_iq4nl_values_256() {
-    static const uint8_t kvalues_iq4nl[16] = {1, 24, 45, 63, 79, 93, 106, 118, 129, 141, 153, 166, 181, 197, 217, 241};
-    auto val128 = _mm_loadu_si128((const __m128i *)kvalues_iq4nl);
-    return MM256_SET_M128I(val128, val128);
-}
 
 __m512i inline load_iq4nl_values_512() {
     auto val256 = load_iq4nl_values_256();
@@ -1422,14 +1422,8 @@ struct DequantizerQ4K final : public BaseDequantizer<block_q4_K> {
     Scales8K s8k;
 };
 
-__m256i load_iq4nl_values() {
-    static const uint8_t kvalues_iq4nl[16] = {1, 24, 45, 63, 79, 93, 106, 118, 129, 141, 153, 166, 181, 197, 217, 241};
-    auto val128 = _mm_loadu_si128((const __m128i *)kvalues_iq4nl);
-    return MM256_SET_M128I(val128, val128);
-}
-
 struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
-    DequantizerIQ4XS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values()) {}
+    DequantizerIQ4XS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_256()) {}
     template <typename Q8>
     inline __m256i new_block(int i, const Q8& q8, __m256 * accd) {
         d = GGML_FP16_TO_FP32(x[i].d);
@@ -1567,7 +1561,7 @@ struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
 };
 
 struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
-    DequantizerIQ4K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), iqxk(4, -128), values(load_iq4nl_values()) {}
+    DequantizerIQ4K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), iqxk(4, -128), values(load_iq4nl_values_256()) {}
     template <typename Q8>
     inline void new_block(int i, const Q8& q8, __m256 * accm, __m256i * scales) {
         d = GGML_FP16_TO_FP32(x[i].d);
@@ -1784,12 +1778,9 @@ struct DequantizerQ6K final : public BaseDequantizer<block_q6_K> {
     const __m256i mh = _mm256_set1_epi8(0x30);
 };
 
-struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn> {
+struct DequantizerIQ2TN final : public BaseDequantizer<block_iq2_tn, true> {
     DequantizerIQ2TN(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
 
-    inline void new_block(int i) {
-        d = GGML_FP16_TO_FP32(x[i].d);
-    }
     inline void prepare(int i, int j) {
         bits.prepare(x[i].qs, j);
     }
@@ -1815,8 +1806,6 @@ IQK_NOINLINE void mul_mat_iq2tn_q8_K(int n, const void * vx, size_t bx, const Da
         deq2.new_row(ix);
 
         for (int i = 0; i < nb; ++i) {
-
-            deq1.new_block(i);
 
             if  constexpr (nrc_y == 1) {
                 deq1.prepare(i, 0);
