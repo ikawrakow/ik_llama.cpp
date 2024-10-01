@@ -609,10 +609,14 @@ struct DequantizerQ4K final : public BaseDequantizer<block_q4_K> {
     Scales8K s8k;
 };
 
-__m512i load_iq4nl_values_512() {
+__m256i inline load_iq4nl_values_256() {
     static const uint8_t kvalues_iq4nl[16] = {1, 24, 45, 63, 79, 93, 106, 118, 129, 141, 153, 166, 181, 197, 217, 241};
     auto val128 = _mm_loadu_si128((const __m128i *)kvalues_iq4nl);
-    auto val256 = MM256_SET_M128I(val128, val128);
+    return MM256_SET_M128I(val128, val128);
+}
+
+__m512i inline load_iq4nl_values_512() {
+    auto val256 = load_iq4nl_values_256();
     return _mm512_inserti32x8(_mm512_castsi256_si512(val256), val256, 1);
 }
 
@@ -3181,14 +3185,9 @@ struct Q4_0_1_Dequantizer {
 
 struct IQ4_NL_Dequantizer {
     Dequantizer4bit b4;
-    const __m256i values = load_values();
+    const __m256i values = load_iq4nl_values_256();
     inline __m256i dequant(const block_iq4_nl * x) const {
         return _mm256_shuffle_epi8(values, b4.dequant(x->qs));
-    }
-    static __m256i load_values() {
-        static const int8_t iq4nl_values[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
-        auto aux = _mm_loadu_si128((const __m128i *)iq4nl_values);
-        return MM256_SET_M128I(aux, aux);
     }
 };
 
@@ -3315,9 +3314,9 @@ struct Q4_0_1_Unpacker final : public Q_Unpacker<block_q4_0, ScaleHelperQ_0_1<8>
     using Sum4T = Sum4TypeQ81;
     inline static int block_size() { return QK4_0; }
 };
-struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0, IQ4_NL_Dequantizer> {
+struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0_1<128>, IQ4_NL_Dequantizer> {
     IQ4_NL_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
-    using Sum4T = Sum4TypeQ80;
+    using Sum4T = Sum4TypeQ81;
     inline static int block_size() { return QK4_NL; }
 };
 struct Q5_0_Unpacker final : public Q_Unpacker<block_q5_0, ScaleHelperQ_0, Q5_0_Dequantizer> {
@@ -3341,7 +3340,7 @@ struct Q5_1_Unpacker final : public Q_Unpacker<block_q5_1, ScaleHelperQ_1, Q5_1_
     inline static int block_size() { return QK4_1; }
 };
 
-// float matrices - we handle f16 and f32, but only to f32 result
+// float matrices - we handle f16, bf16 (if native bf16 support is available) and f32, but only to f32 result
 
 struct QFBase {
 #ifdef __AVX512F__
@@ -3624,7 +3623,7 @@ void mul_mat_q80_q80_T(int n, const void * vx, size_t bx, const DataInfo& info, 
 
 template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
         if constexpr (std::is_same_v<Dequantizer, Q4_0_Unpacker> || std::is_same_v<Dequantizer, Q5_0_Unpacker> ||
-                      std::is_same_v<Dequantizer, Q8_0_Unpacker> || std::is_same_v<Dequantizer, IQ4_NL_Unpacker>) {
+                      std::is_same_v<Dequantizer, Q8_0_Unpacker>) {
             m.funcs[0] = mul_mat_qX_0_q8_0_T<Dequantizer, 1>;
             m.funcs[1] = mul_mat_qX_0_q8_0_T<Dequantizer, 2>;
             m.funcs[2] = mul_mat_qX_0_q8_0_T<Dequantizer, 3>;
@@ -3636,7 +3635,7 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
         }
         else if constexpr (std::is_same_v<Dequantizer, Q4_1_Unpacker> || std::is_same_v<Dequantizer, Q5_1_Unpacker> ||
                            std::is_same_v<Dequantizer, Q8_0_1_Unpacker> || std::is_same_v<Dequantizer, Q4_0_1_Unpacker> ||
-                           std::is_same_v<Dequantizer, Q5_0_1_Unpacker>) {
+                           std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, IQ4_NL_Unpacker>) {
             m.funcs[0] = mul_mat_qX_1_q8_1_T<Dequantizer, 1>;
             m.funcs[1] = mul_mat_qX_1_q8_1_T<Dequantizer, 2>;
             m.funcs[2] = mul_mat_qX_1_q8_1_T<Dequantizer, 3>;
@@ -3933,7 +3932,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_IQ4_NL:
             assert (ne00 % QK4_NL == 0);
             MulMat::set_functions<IQ4_NL_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_0;
+            expected_typeB = GGML_TYPE_Q8_1;
             break;
 
         default:
