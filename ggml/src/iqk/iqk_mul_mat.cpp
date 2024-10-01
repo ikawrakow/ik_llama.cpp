@@ -7184,10 +7184,11 @@ struct HelperIQ4nl final : public BaseHelper<step> {
     using Base = BaseHelper<step>;
 #ifdef __aarch64__
     using block_q8 = block_q8_0;
+    HelperIQ4nl(const char * data, int stride) : Base(data, stride), values(vld1q_s8(iq4k_values)) {}
 #else
+    HelperIQ4nl(const char * data, int stride) : Base(data, stride) {}
     using block_q8 = block_q8_1;
 #endif
-    HelperIQ4nl(const char * data, int stride) : Base(data, stride), values(vld1q_s8(iq4k_values)) {}
 
     // Needed for v * softmax(k * q)
     inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
