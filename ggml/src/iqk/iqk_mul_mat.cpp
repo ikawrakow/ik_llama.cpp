@@ -3228,14 +3228,15 @@ struct Q5_1_Dequantizer {
         return _mm256_or_si256(b4.dequant(x->qs), vqh);
     }
 };
-struct Q6_1_Dequantizer {
+struct Q6_0_1_Dequantizer {
     Dequantizer4bit b4;
     const __m256i mh = _mm256_set1_epi8(0x30);
+    const __m256i shift1 = _mm256_set_epi64x(0, 2, 0, 4);
+    const __m256i shift2 = _mm256_set_epi64x(2, 0, 0, 0);
     inline __m256i dequant(const block_q6_0 * x) const {
         uint64_t aux64; std::memcpy(&aux64, x->qh, 8);
-        auto h128 = _mm_set_epi64x(aux64, aux64 << 4);
-        auto h256 = MM256_SET_M128I(_mm_srli_epi16(h128, 2), h128);
-        return _mm256_or_si256(b4.dequant(x->qs), _mm256_and_si256(h256, mh));
+        auto h256 = _mm256_sllv_epi64(_mm256_set1_epi64x(aux64), shift1);
+        return _mm256_or_si256(b4.dequant(x->qs), _mm256_and_si256(_mm256_srlv_epi64(h256, shift2), mh));
     }
 };
 
@@ -3342,10 +3343,10 @@ struct Q5_1_Unpacker final : public Q_Unpacker<block_q5_1, ScaleHelperQ_1, Q5_1_
     using Sum4T = Sum4Type1;
     inline static int block_size() { return QK4_1; }
 };
-struct Q6_0_1_Unpacker final : public Q_Unpacker<block_q6_0, ScaleHelperQ_0_1<32>, Q6_1_Dequantizer> {
+struct Q6_0_1_Unpacker final : public Q_Unpacker<block_q6_0, ScaleHelperQ_0_1<32>, Q6_0_1_Dequantizer> {
     Q6_0_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4TypeQ81;
-    inline static int block_size() { return QK5_0; }
+    inline static int block_size() { return QK6_0; }
 };
 
 // float matrices - we handle f16, bf16 (if native bf16 support is available) and f32, but only to f32 result
