@@ -9,6 +9,7 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
         type == GGML_TYPE_Q4_1 ? vec_dot_q4_1_q8_1 :
         type == GGML_TYPE_Q5_0 ? vec_dot_q5_0_q8_1 :
         type == GGML_TYPE_Q5_1 ? vec_dot_q5_1_q8_1 :
+        type == GGML_TYPE_Q6_0 ? vec_dot_q6_0_q8_1 :
         type == GGML_TYPE_Q8_0 ? vec_dot_q8_0_q8_1 :
         type == GGML_TYPE_Q2_K ? vec_dot_q2_K_q8_1 :
         type == GGML_TYPE_Q3_K ? vec_dot_q3_K_q8_1 :
@@ -34,6 +35,7 @@ static constexpr __device__ int get_vdr_mmvq(ggml_type type) {
         type == GGML_TYPE_Q4_1    ? VDR_Q4_1_Q8_1_MMVQ :
         type == GGML_TYPE_Q5_0    ? VDR_Q5_0_Q8_1_MMVQ :
         type == GGML_TYPE_Q5_1    ? VDR_Q5_1_Q8_1_MMVQ :
+        type == GGML_TYPE_Q6_0    ? VDR_Q6_0_Q8_1_MMVQ :
         type == GGML_TYPE_Q8_0    ? VDR_Q8_0_Q8_1_MMVQ :
         type == GGML_TYPE_Q2_K    ? VDR_Q2_K_Q8_1_MMVQ :
         type == GGML_TYPE_Q3_K    ? VDR_Q3_K_Q8_1_MMVQ :
@@ -232,6 +234,13 @@ static void mul_mat_vec_q5_1_q8_1_cuda(
     mul_mat_vec_q_cuda<GGML_TYPE_Q5_1>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
 }
 
+static void mul_mat_vec_q6_0_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+
+    mul_mat_vec_q_cuda<GGML_TYPE_Q6_0>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+}
+
 static void mul_mat_vec_q8_0_q8_1_cuda(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
@@ -383,6 +392,9 @@ void ggml_cuda_op_mul_mat_vec_q(
             break;
         case GGML_TYPE_Q5_1:
             mul_mat_vec_q5_1_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
+            break;
+        case GGML_TYPE_Q6_0:
+            mul_mat_vec_q6_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
             break;
         case GGML_TYPE_Q8_0:
             mul_mat_vec_q8_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);

@@ -95,6 +95,9 @@ typedef sycl::half2 ggml_half2;
 #define QI5_1 (QK5_1 / (4 * QR5_1))
 #define QR5_1 2
 
+#define QI6_0 (QK6_0 / (4 * QR6_0))
+#define QR6_0 2
+
 #define QI8_0 (QK8_0 / (4 * QR8_0))
 #define QR8_0 1
 
@@ -186,6 +189,14 @@ typedef struct {
     uint8_t qs[QK5_1 / 2]; // nibbles / quants
 } block_q5_1;
 static_assert(sizeof(block_q5_1) == 2 * sizeof(ggml_half) + sizeof(uint32_t) + QK5_1 / 2, "wrong q5_1 block size/padding");
+
+#define QK6_0 32
+typedef struct {
+    ggml_half d;         // delta
+    uint8_t qh[QK6_0/4]; // 5+6-th bit of quants
+    uint8_t qs[QK6_0/2]; // nibbles / quants
+} block_q6_0;
+static_assert(sizeof(block_q6_0) == sizeof(ggml_half) + QK6_0/2 + QK6_0/4, "wrong q6_0 block size/padding");
 
 #define QK8_0 32
 typedef struct {
