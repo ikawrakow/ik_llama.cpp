@@ -870,12 +870,15 @@ void quantize_row_q6_0_ref(const float * restrict x, block_q6_0 * restrict y, in
         const float d  = max / -32;
         const float id = d ? 1.0f/d : 0.0f;
 
-        y[i].d = GGML_FP32_TO_FP16(d);
+        //y[i].d = GGML_FP32_TO_FP16(d);
         memset(y[i].qh, 0, qk/4);
 
+        float sumqx = 0, sumq2 = 0;
         for (int j = 0; j < qk/2; ++j) {
             const float x0 = x[i*qk + 0    + j]*id;
             const float x1 = x[i*qk + qk/2 + j]*id;
+            const float w0 = x0*x0;
+            const float w1 = x1*x1;
 
             const uint8_t xi0 = MIN(63, (int8_t)(x0 + 32.5f));
             const uint8_t xi1 = MIN(63, (int8_t)(x1 + 32.5f));
@@ -885,7 +888,12 @@ void quantize_row_q6_0_ref(const float * restrict x, block_q6_0 * restrict y, in
             const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
             y[i].qh[j%(qk/4)] |= (h << 4*(j/(qk/4)));
 
+            const float q0 = (float)xi0 - 32.f;
+            const float q1 = (float)xi1 - 32.f;
+            sumqx += w0*x[i*qk + j]*q0 + w1*x[i*qk + qk/2 + j]*q1;
+            sumq2 += w0*q0*q0 + w1*q1*q1;
         }
+        y[i].d = sumq2 > 0 ? GGML_FP32_TO_FP16(sumqx/sumq2) : GGML_FP32_TO_FP16(d);
     }
 }
 
