@@ -3228,6 +3228,16 @@ struct Q5_1_Dequantizer {
         return _mm256_or_si256(b4.dequant(x->qs), vqh);
     }
 };
+struct Q6_1_Dequantizer {
+    Dequantizer4bit b4;
+    const __m256i mh = _mm256_set1_epi8(0x30);
+    inline __m256i dequant(const block_q6_0 * x) const {
+        uint64_t aux64; std::memcpy(&aux64, x->qh, 8);
+        auto h128 = _mm_set_epi64x(aux64, aux64 << 4);
+        auto h256 = MM256_SET_M128I(_mm_srli_epi16(h128, 2), h128);
+        return _mm256_or_si256(b4.dequant(x->qs), _mm256_and_si256(h256, mh));
+    }
+};
 
 template <typename Q, typename Scales, typename Dequantizer>
 struct Q_Unpacker {
@@ -3331,6 +3341,11 @@ struct Q5_1_Unpacker final : public Q_Unpacker<block_q5_1, ScaleHelperQ_1, Q5_1_
     Q5_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4Type1;
     inline static int block_size() { return QK4_1; }
+};
+struct Q6_0_1_Unpacker final : public Q_Unpacker<block_q6_0, ScaleHelperQ_0_1<32>, Q6_1_Dequantizer> {
+    Q6_0_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ81;
+    inline static int block_size() { return QK5_0; }
 };
 
 // float matrices - we handle f16, bf16 (if native bf16 support is available) and f32, but only to f32 result
@@ -3628,7 +3643,8 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
         }
         else if constexpr (std::is_same_v<Dequantizer, Q4_1_Unpacker> || std::is_same_v<Dequantizer, Q5_1_Unpacker> ||
                            std::is_same_v<Dequantizer, Q8_0_1_Unpacker> || std::is_same_v<Dequantizer, Q4_0_1_Unpacker> ||
-                           std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, IQ4_NL_Unpacker>) {
+                           std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, IQ4_NL_Unpacker> ||
+                           std::is_same_v<Dequantizer, Q6_0_1_Unpacker>) {
             m.funcs[0] = mul_mat_qX_1_q8_1_T<Dequantizer, 1>;
             m.funcs[1] = mul_mat_qX_1_q8_1_T<Dequantizer, 2>;
             m.funcs[2] = mul_mat_qX_1_q8_1_T<Dequantizer, 3>;
@@ -3893,8 +3909,6 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_Q4_0:
             assert (ne00 % QK4_0 == 0);
-            //MulMat::set_functions<Q4_0_Unpacker>(mm);
-            //expected_typeB = GGML_TYPE_Q8_0;
             MulMat::set_functions<Q4_0_1_Unpacker>(mm);
             expected_typeB = GGML_TYPE_Q8_1;
             break;
@@ -3905,8 +3919,6 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_Q5_0:
             assert (ne00 % QK5_0 == 0);
-            //MulMat::set_functions<Q5_0_Unpacker>(mm);
-            //expected_typeB = GGML_TYPE_Q8_0;
             MulMat::set_functions<Q5_0_1_Unpacker>(mm);
             expected_typeB = GGML_TYPE_Q8_1;
             break;
@@ -3915,10 +3927,13 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             MulMat::set_functions<Q5_1_Unpacker>(mm);
             expected_typeB = GGML_TYPE_Q8_1;
             break;
+        case GGML_TYPE_Q6_0:
+            assert (ne00 % QK6_0 == 0);
+            MulMat::set_functions<Q6_0_1_Unpacker>(mm);
+            expected_typeB = GGML_TYPE_Q8_1;
+            break;
         case GGML_TYPE_Q8_0:
             assert (ne00 % QK8_0 == 0);
-            //MulMat::set_functions<Q8_0_Unpacker>(mm);
-            //expected_typeB = GGML_TYPE_Q8_0;
             MulMat::set_functions<Q8_0_1_Unpacker>(mm);
             expected_typeB = GGML_TYPE_Q8_1;
             break;

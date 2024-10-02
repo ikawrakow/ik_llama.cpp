@@ -187,6 +187,14 @@ typedef struct {
 } block_q5_1;
 static_assert(sizeof(block_q5_1) == 2 * sizeof(ggml_half) + sizeof(uint32_t) + QK5_1 / 2, "wrong q5_1 block size/padding");
 
+#define QK6_0 32
+typedef struct {
+    ggml_half d;         // delta
+    uint8_t qh[QK6_0/4]; // 5+6-th bit of quants
+    uint8_t qs[QK6_0/2]; // nibbles / quants
+} block_q6_0;
+static_assert(sizeof(block_q6_0) == sizeof(ggml_half) + QK6_0/2 + QK6_0/4, "wrong q6_0 block size/padding");
+
 #define QK8_0 32
 typedef struct {
     ggml_half d;       // delta
