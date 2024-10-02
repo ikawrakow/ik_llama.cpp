@@ -58,8 +58,8 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q6_0_q8_1_imp
 
 #pragma unroll
     for (int i = 0; i < vdr; ++i) {
-        const int vi0 = ((vl[i] >> 0) & 0x0F0F0F0F) | ((vh[i/2] << 4) & 0x30303030);
-        const int vi1 = ((vl[i] >> 4) & 0x0F0F0F0F) | ((vh[i/2] << 2) & 0x30303030);
+        const int vi0 = ((vl[i] >> 0) & 0x0F0F0F0F) | ((vh[i] << 4) & 0x30303030);
+        const int vi1 = ((vl[i] >> 4) & 0x0F0F0F0F) | ((vh[i] << 2) & 0x30303030);
 
         // SIMD dot product of quantized values
         sumi = ggml_cuda_dp4a(vi0, u[2*i+0], sumi);
