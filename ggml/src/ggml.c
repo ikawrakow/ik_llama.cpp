@@ -13641,9 +13641,10 @@ static void ggml_compute_forward_mul_mat_id(
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
 
-    char * wdata_src1_end = (src1->type == vec_dot_type) ?
-            (char *) params->wdata :
-            (char *) params->wdata + GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(src1)), sizeof(int64_t));
+    char * qdata = (char *)params->wdata + params->wsize - params->qsize;
+
+    char * wdata_src1_end = (src1->type == vec_dot_type) ?  qdata :
+            qdata + GGML_PAD(GGML_MAX_NAME + ggml_row_size(vec_dot_type, ggml_nelements(src1)), sizeof(int64_t));
 
     struct mmid_row_mapping {
         int32_t i1;
@@ -13653,14 +13654,19 @@ static void ggml_compute_forward_mul_mat_id(
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
     struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne11]
 
+    bool store_name = false;
     if (src1->type != vec_dot_type) {
-        char * wdata = params->wdata;
+        if (strncmp(src1->name, qdata, GGML_MAX_NAME) == 0) {
+            goto QuantizationAlreadyDone;
+        }
+        store_name = true;
+        char * wdata = qdata + GGML_MAX_NAME;
 
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1*ne11;
         const size_t nbw3 = nbw2*ne12;
 
-        assert(params->wsize >= ne13*nbw3);
+        assert(params->qsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
@@ -13676,7 +13682,12 @@ static void ggml_compute_forward_mul_mat_id(
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
 
+QuantizationAlreadyDone:;
     if (ith == 0) {
+        if (store_name) {
+            memcpy(qdata, src1->name, GGML_MAX_NAME);
+        }
+
         // initialize matrix_row_counts
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
 
@@ -13705,7 +13716,7 @@ static void ggml_compute_forward_mul_mat_id(
 
         const char * src0_cur = (const char *) src0->data + cur_a*nb02;
 
-        const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+        const void * wdata    = (src1->type == vec_dot_type) ? src1->data : qdata + GGML_MAX_NAME;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
         const int64_t nr0 = ne01; // src0 rows
