@@ -2102,6 +2102,7 @@ struct ggml_compute_params {
 
     // work buffer for all threads
     size_t wsize;
+    size_t qsize;
     void * wdata;
 
     struct ggml_compute_state_shared * shared;
@@ -13421,7 +13422,12 @@ UseGgmlGemm1:;
 #endif
 
     if (src1->type != vec_dot_type) {
-        char * wdata = params->wdata;
+        char * wdata = (char *)params->wdata + params->wsize - params->qsize;
+
+        if (strncmp(src1->name, wdata - GGML_MAX_NAME, GGML_MAX_NAME) == 0) {
+            goto AlreadyQunatized;
+        }
+        wdata += GGML_MAX_NAME;
 
 #if IK_PRINT_TIMING
         int64_t t1 = ggml_time_us();
@@ -13431,7 +13437,7 @@ UseGgmlGemm1:;
         const size_t nbw2 = nbw1*ne11;
         const size_t nbw3 = nbw2*ne12;
 
-        assert(params->wsize >= ne13*nbw3);
+        assert(params->qsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
@@ -13459,14 +13465,18 @@ UseGgmlGemm1:;
 #endif
 
         if (ith == 0) {
+            wdata -= GGML_MAX_NAME;
+            memcpy(wdata, src1->name, GGML_MAX_NAME);
             // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
             atomic_store(&params->shared->current_chunk, nth);
         }
 
+AlreadyQunatized:;
         ggml_barrier(params->shared);
     }
 
-    const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+    const void * wdata = (src1->type == vec_dot_type) ? src1->data
+                       : (const void *)((const char *)params->wdata + params->wsize - params->qsize + GGML_MAX_NAME);
 
 #if GGML_USE_IQK_MULMAT
     if (src1->type != vec_dot_type && dst->type == GGML_TYPE_F32) {
@@ -13631,9 +13641,10 @@ static void ggml_compute_forward_mul_mat_id(
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
 
-    char * wdata_src1_end = (src1->type == vec_dot_type) ?
-            (char *) params->wdata :
-            (char *) params->wdata + GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(src1)), sizeof(int64_t));
+    char * qdata = (char *)params->wdata + params->wsize - params->qsize;
+
+    char * wdata_src1_end = (src1->type == vec_dot_type) ?  qdata :
+            qdata + GGML_PAD(GGML_MAX_NAME + ggml_row_size(vec_dot_type, ggml_nelements(src1)), sizeof(int64_t));
 
     struct mmid_row_mapping {
         int32_t i1;
@@ -13643,14 +13654,19 @@ static void ggml_compute_forward_mul_mat_id(
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
     struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne11]
 
+    bool store_name = false;
     if (src1->type != vec_dot_type) {
-        char * wdata = params->wdata;
+        if (strncmp(src1->name, qdata, GGML_MAX_NAME) == 0) {
+            goto QuantizationAlreadyDone;
+        }
+        store_name = true;
+        char * wdata = qdata + GGML_MAX_NAME;
 
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1*ne11;
         const size_t nbw3 = nbw2*ne12;
 
-        assert(params->wsize >= ne13*nbw3);
+        assert(params->qsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
@@ -13666,7 +13682,12 @@ static void ggml_compute_forward_mul_mat_id(
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
 
+QuantizationAlreadyDone:;
     if (ith == 0) {
+        if (store_name) {
+            memcpy(qdata, src1->name, GGML_MAX_NAME);
+        }
+
         // initialize matrix_row_counts
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
 
@@ -13695,7 +13716,7 @@ static void ggml_compute_forward_mul_mat_id(
 
         const char * src0_cur = (const char *) src0->data + cur_a*nb02;
 
-        const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+        const void * wdata    = (src1->type == vec_dot_type) ? src1->data : qdata + GGML_MAX_NAME;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
         const int64_t nr0 = ne01; // src0 rows
@@ -20148,6 +20169,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
     }
 
     size_t work_size = 0;
+    size_t q_size = 0;
 
     struct ggml_cplan cplan;
     memset(&cplan, 0, sizeof(struct ggml_cplan));
@@ -20163,6 +20185,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
         max_tasks = MAX(max_tasks, n_tasks);
 
         size_t cur = 0;
+        size_t cur_q = 0;
 
         switch (node->op) {
             case GGML_OP_CPY:
@@ -20193,7 +20216,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const enum ggml_type vec_dot_type = type_traits[node->src[0]->type].vec_dot_type;
 
                     if (node->src[1]->type != vec_dot_type) {
-                        cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
+                        cur_q = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
                     }
                 } break;
             case GGML_OP_MUL_MAT_ID:
@@ -20203,12 +20226,12 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const struct ggml_tensor * src1 = node->src[1];
                     const enum ggml_type vec_dot_type = type_traits[src0->type].vec_dot_type;
                     if (src1->type != vec_dot_type) {
-                        cur += ggml_row_size(vec_dot_type, ggml_nelements(src1));
+                        cur_q += ggml_row_size(vec_dot_type, ggml_nelements(src1));
                     }
                     const int n_as = src0->ne[2];
-                    cur += GGML_PAD(cur, sizeof(int64_t));       // align
-                    cur += n_as * sizeof(int64_t);               // matrix_row_counts
-                    cur += n_as * src1->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur_q += GGML_PAD(cur, sizeof(int64_t));       // align
+                    cur_q += n_as * sizeof(int64_t);               // matrix_row_counts
+                    cur_q += n_as * src1->ne[2] * sizeof(int64_t); // matrix_rows
                 } break;
             case GGML_OP_OUT_PROD:
                 {
@@ -20297,14 +20320,20 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
         }
 
         work_size = MAX(work_size, cur);
+        q_size    = MAX(q_size, cur_q);
     }
 
     if (work_size > 0) {
         work_size += CACHE_LINE_SIZE*(n_threads - 1);
     }
+    if (q_size > 0) {
+        q_size += GGML_MAX_NAME;
+    }
+    work_size += q_size;
 
     cplan.n_threads = MIN(max_tasks, n_threads);
     cplan.work_size = work_size;
+    cplan.q_size    = q_size;
     cplan.work_data = NULL;
 
     return cplan;
@@ -20322,6 +20351,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         /*.ith   =*/ state->ith,
         /*.nth   =*/ state->shared->n_threads,
         /*.wsize =*/ cplan->work_size,
+        /*.qsize =*/ cplan->q_size,
         /*.wdata =*/ cplan->work_data,
         /*.shared=*/ state->shared,
     };
