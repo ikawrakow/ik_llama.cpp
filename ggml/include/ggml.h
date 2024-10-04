@@ -654,6 +654,7 @@ extern "C" {
     // since https://github.com/ggerganov/ggml/issues/287
     struct ggml_cplan {
         size_t    work_size; // size of work buffer, calculated by `ggml_graph_plan()`
+        size_t    q_size;
         uint8_t * work_data; // work buffer, to be allocated by caller before calling to `ggml_graph_compute()`
 
         int n_threads;
