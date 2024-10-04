@@ -589,7 +589,6 @@ void quantize_row_iq2_k_impl(const float * x, void * vy, int n_per_row, const fl
         if (!max_abs_scale) continue;
 
         float d = max_abs_scale/15;
-        y[ibl].d = GGML_FP32_TO_FP16(d);
         y[ibl].extra = extra;
         float id = 1/d;
 
@@ -624,7 +623,7 @@ void quantize_row_iq2_k_impl(const float * x, void * vy, int n_per_row, const fl
                 }
             }
         }
-        if (sumq2 > 0) y[ibl].d = GGML_FP32_TO_FP16(sumqx/sumq2);
+        y[ibl].d = GGML_FP32_TO_FP16(1.025f*(sumq2 > 0 ? sumqx/sumq2 : d));
 
     }
 }
@@ -854,7 +853,6 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
         if (!max_abs_scale) continue;
 
         float d = max_abs_scale/31;
-        y[ibl].d = GGML_FP32_TO_FP16(d);
         y[ibl].extra = extra;
         float id = 1/d;
 
@@ -892,7 +890,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
                 }
             }
         }
-        if (sumq2 > 0) y[ibl].d = GGML_FP32_TO_FP16(sumqx/sumq2);
+        y[ibl].d = GGML_FP32_TO_FP16(1.01f*(sumq2 > 0 ? sumqx/sumq2 : d));
 
     }
 }
