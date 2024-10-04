@@ -19040,11 +19040,11 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
             } break;
         case GGML_OP_SOFTCAP:
             {
-                GGML_ASSERT(false); // TODO: not implemented
+                GGML_ABORT("fatal error"); // TODO: not implemented
             }
         case GGML_OP_SOFT_CAP_MAX:
             {
-                GGML_ASSERT(false); // TODO: not implemented
+                GGML_ABORT("fatal error"); // TODO: not implemented
             }
         case GGML_OP_SET:
             {
