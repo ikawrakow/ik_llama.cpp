@@ -13459,6 +13459,8 @@ UseGgmlGemm1:;
             }
         }
 
+        ggml_barrier(params->shared);
+
 #if IK_PRINT_TIMING
         int64_t t2 = ggml_time_us();
         if (ith == 0) printf("quantize(%s): %d us\n", dst->name, (int)(t2 - t1));
@@ -13468,11 +13470,10 @@ UseGgmlGemm1:;
             wdata -= GGML_MAX_NAME;
             memcpy(wdata, src1->name, GGML_MAX_NAME);
             // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
-            atomic_store(&params->shared->current_chunk, nth);
+            //atomic_store(&params->shared->current_chunk, nth);
         }
 
 AlreadyQunatized:;
-        ggml_barrier(params->shared);
     }
 
     const void * wdata = (src1->type == vec_dot_type) ? src1->data
