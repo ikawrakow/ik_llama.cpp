@@ -28,6 +28,7 @@ struct quantize_stats_params {
     bool per_layer_stats = false;
     bool print_histogram = false;
     bool reference = false;
+    bool transpose = false;
     std::vector<std::string> include_layers;
     std::vector<std::string> exclude_layers;
     std::vector<enum ggml_type> include_types;
@@ -146,16 +147,17 @@ static bool tensor_is_contiguous(const struct ggml_tensor * tensor) {
         tensor->nb[3] == tensor->nb[2]*tensor->ne[2];
 }
 
-static void test_roundtrip_on_chunk(
+static void test_roundtrip_on_chunk(bool fill_data,
     const ggml_tensor * layer, int64_t offset, int64_t chunk_size, const ggml_type_traits_t & qfns, bool use_reference,
-    float * input_scratch, char * quantized_scratch, float * output_scratch, error_stats & stats
-) {
-    if (layer->type == GGML_TYPE_F16) {
-        for (int i = 0; i < chunk_size; i++) {
-            input_scratch[i] = ggml_get_f32_1d(layer, i + offset);
+    float * input_scratch, char * quantized_scratch, float * output_scratch, error_stats & stats) {
+    if (fill_data) {
+        if (layer->type == GGML_TYPE_F16) {
+            for (int i = 0; i < chunk_size; i++) {
+                input_scratch[i] = ggml_get_f32_1d(layer, i + offset);
+            }
+        } else {
+            input_scratch = ggml_get_data_f32(layer) + offset;
         }
-    } else {
-        input_scratch = ggml_get_data_f32(layer) + offset;
     }
 
     if (use_reference) {
@@ -170,19 +172,44 @@ static void test_roundtrip_on_chunk(
 
 
 // Run quantization function for a single layer and update error stats
-static void test_roundtrip_on_layer(
+static void test_roundtrip_on_layer(bool transpose,
     std::string & name, bool print_layer_stats, const ggml_type_traits_t & qfns, bool use_reference,
     const ggml_tensor * layer, std::vector<float> & input_scratch, std::vector<char> & quantized_scratch,
-    std::vector<float> & output_scratch, error_stats & total_error, int max_thread = 0
-) {
+    std::vector<float> & output_scratch, error_stats & total_error, int max_thread = 0) {
     assert(tensor_is_contiguous(layer));
     error_stats layer_error {};
     uint64_t nelements = ggml_nelements(layer);
 
     float* input_scratch_ptr = nullptr;
-    if (layer->type == GGML_TYPE_F16) {
+    if (transpose) {
+        if (layer->ne[2] > 1 || layer->ne[3] > 1 || layer->ne[1] < 256 || !ggml_is_contiguous(layer)) {
+            printf("%s: transpose option requires contiguous 2D tensor with >= 256 rows\n", __func__);
+            return;
+        }
         if (input_scratch.size() < nelements) input_scratch.resize(nelements);
+        if (layer->type == GGML_TYPE_F16) {
+            const ggml_fp16_t * data = (const ggml_fp16_t *)layer->data;
+            for (int i = 0; i < layer->ne[0]; ++i) for (int j = 0; j < layer->ne[1]; ++j) {
+                input_scratch[i*layer->ne[1] + j] = ggml_fp16_to_fp32(data[j*layer->ne[0] + i]);
+            }
+        }
+        else if (layer->type == GGML_TYPE_F32) {
+            const float * data = (const float *)layer->data;
+            for (int i = 0; i < layer->ne[0]; ++i) for (int j = 0; j < layer->ne[1]; ++j) {
+                input_scratch[i*layer->ne[1] + j] = data[j*layer->ne[0] + i];
+            }
+        }
+        else {
+            printf("%s: unsupported type %s\n", __func__, ggml_type_name(layer->type));
+            return;
+        }
         input_scratch_ptr = input_scratch.data();
+    }
+    else {
+        if (layer->type == GGML_TYPE_F16) {
+            if (input_scratch.size() < nelements) input_scratch.resize(nelements);
+            input_scratch_ptr = input_scratch.data();
+        }
     }
     if (quantized_scratch.size() < 4*nelements) quantized_scratch.resize(4*nelements);
     if (output_scratch.size() < nelements) output_scratch.resize(nelements);
@@ -192,14 +219,14 @@ static void test_roundtrip_on_layer(
     int num_chunks = (nelements + chunk_size - 1)/chunk_size;
 
     if (num_chunks < 2 || max_thread < 2) {
-        test_roundtrip_on_chunk(layer, 0, nelements, qfns, use_reference, input_scratch_ptr, quantized_scratch.data(),
+        test_roundtrip_on_chunk(!transpose, layer, 0, nelements, qfns, use_reference, input_scratch_ptr, quantized_scratch.data(),
                 output_scratch.data(), print_layer_stats ? layer_error : total_error);
     } else {
         auto & stats = print_layer_stats ? layer_error : total_error;
         std::mutex mutex;
         uint64_t counter = 0;
         auto compute = [&mutex, &counter, &stats, &qfns, nelements, layer, use_reference, input_scratch_ptr,
-             &quantized_scratch, &output_scratch, chunk_size] () {
+             &quantized_scratch, &output_scratch, chunk_size, transpose] () {
             error_stats local_stats {};
             while (true) {
                 std::unique_lock<std::mutex> lock(mutex);
@@ -210,7 +237,7 @@ static void test_roundtrip_on_layer(
                 }
                 lock.unlock();
                 uint64_t chunk = offset + chunk_size < nelements ? chunk_size : nelements - offset;
-                test_roundtrip_on_chunk(layer, offset, chunk, qfns, use_reference, input_scratch_ptr + offset,
+                test_roundtrip_on_chunk(!transpose, layer, offset, chunk, qfns, use_reference, input_scratch_ptr + offset,
                         quantized_scratch.data() + 4*offset, output_scratch.data() + offset, local_stats);
             }
         };
@@ -249,6 +276,8 @@ int main(int argc, char ** argv) {
             params.verbose = true;
         } else if (arg == "-p" || arg == "--per-layer-stats") {
             params.per_layer_stats = true;
+        } else if (arg == "--transpose") {
+            params.transpose = true;
         } else if (arg == "--histogram") {
             params.print_histogram = true;
         } else if (arg == "-m" || arg == "--model") {
@@ -404,7 +433,7 @@ int main(int argc, char ** argv) {
                 }
                 std::string layer_name { ggml_type_name(type) };
                 layer_name += "::" + kv_tensor.first;
-                test_roundtrip_on_layer(
+                test_roundtrip_on_layer(params.transpose,
                         layer_name,
                         params.per_layer_stats,
                         qfns,
