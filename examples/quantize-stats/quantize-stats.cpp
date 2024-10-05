@@ -2,6 +2,9 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
+#include "iqk/iqk_quantize.h"
+#define GGML_COMMON_DECL_C
+#include "ggml-common.h"
 
 #include <algorithm>
 #include <cassert>
@@ -17,6 +20,7 @@
 #include <vector>
 #include <thread>
 #include <mutex>
+#include <fstream>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -33,6 +37,112 @@ struct quantize_stats_params {
     std::vector<std::string> exclude_layers;
     std::vector<enum ggml_type> include_types;
 };
+
+using Imatrix = std::unordered_map<std::string, std::vector<float>>;
+
+static void analyze_layer(const std::string & name, const ggml_tensor * layer, std::vector<float> & input_scratch,
+        const Imatrix& imatrix) {
+
+    if (layer->ne[0] == 1 || layer->ne[1] == 1) return;
+
+    if (!ggml_is_contiguous(layer)) {
+        printf("%s: %s is not contiguous\n", __func__, layer->name);
+        return;
+    }
+
+    int nelements = ggml_nelements(layer);
+
+    float* input_scratch_ptr = nullptr;
+    if (layer->type == GGML_TYPE_F16) {
+        if ((int)input_scratch.size() < nelements) input_scratch.resize(nelements);
+        for (int i = 0; i < nelements; ++i) {
+            input_scratch[i] = ggml_get_f32_1d(layer, i);
+        }
+        input_scratch_ptr = input_scratch.data();
+    } else {
+        input_scratch_ptr = ggml_get_data_f32(layer);
+    }
+
+    int n_per_row = layer->ne[0];
+    int nrows  = nelements/n_per_row;
+
+    std::vector<std::pair<float,int>> sumv(n_per_row);
+    for (int j = 0; j < n_per_row; ++j) sumv[j] = {0.f, j};
+
+    for (int row = 0; row < nrows; ++row) {
+        auto x = input_scratch_ptr + row*n_per_row;
+        for (int j = 0; j < n_per_row; ++j) sumv[j].first += x[j]*x[j];
+    }
+
+    auto it = imatrix.find(layer->name);
+    bool have_imatrix = false;
+    if (it != imatrix.end() && int(it->second.size()) == n_per_row) {
+        have_imatrix = true;
+        for (int j = 0; j < n_per_row; ++j) sumv[j].first *= it->second[j];
+    }
+    std::sort(sumv.begin(), sumv.end(), std::greater<std::pair<float,int>>{});
+
+    printf("%s:  %g  %g  %g\n", name.c_str(), sumv.front().first, sumv[n_per_row/2].first, sumv.back().first);
+
+    int nblock = n_per_row/256;
+    int nblock_high = int(nblock*0.1f + 0.5f);
+    if (nblock_high == 0) return;
+
+    std::vector<float> part1(256*nblock_high*nrows);
+    std::vector<float> part2(256*(nblock-nblock_high)*nrows);
+
+    for (int row = 0; row < nrows; ++row) {
+        auto x = input_scratch_ptr + row*n_per_row;
+        auto yh = part1.data() + 256*nblock_high*row;
+        auto yl = part2.data() + 256*(nblock-nblock_high)*row;
+        for (int j = 0; j < 256*nblock_high; ++j) yh[j] = x[sumv[j].second];
+        for (int j = 256*nblock_high; j < 256*nblock; ++j) yl[j-256*nblock_high] = x[sumv[j].second];
+    }
+
+    std::vector<float> reordered_imatrix;
+    if (have_imatrix) {
+        reordered_imatrix.resize(256*nblock);
+        for (int j = 0; j < 256*nblock; ++j) reordered_imatrix[j] = it->second[sumv[j].second];
+    }
+
+    auto row_size_h = ggml_row_size(GGML_TYPE_IQ3_K, 256*nblock_high);
+    auto row_size_l = ggml_row_size(GGML_TYPE_IQ2_K, 256*(nblock-nblock_high));
+
+    std::vector<char> qdata_h(row_size_h*nrows);
+    std::vector<char> qdata_l(row_size_l*nrows);
+
+    ggml_quantize_chunk(GGML_TYPE_IQ3_K, part1.data(), (void *)qdata_h.data(), 0, nrows, 256*nblock_high, reordered_imatrix.data());
+    ggml_quantize_chunk(GGML_TYPE_IQ2_K, part2.data(), (void *)qdata_l.data(), 0, nrows, 256*(nblock-nblock_high),
+            have_imatrix ? reordered_imatrix.data() + 256*nblock_high : nullptr);
+
+    std::vector<float> deq_part1(256*nblock_high*nrows);
+    std::vector<float> deq_part2(256*(nblock-nblock_high)*nrows);
+
+    dequantize_row_iq3_k((const block_iq3_k *)qdata_h.data(), deq_part1.data(), deq_part1.size());
+    dequantize_row_iq2_k((const block_iq2_k *)qdata_l.data(), deq_part2.data(), deq_part2.size());
+
+    double mse = 0, sumw = 0;
+    for (int row = 0; row < nrows; ++row) {
+        auto xh = part1.data() + 256*nblock_high*row;
+        auto xl = part2.data() + 256*(nblock-nblock_high)*row;
+        auto yh = deq_part1.data() + 256*nblock_high*row;
+        auto yl = deq_part2.data() + 256*(nblock-nblock_high)*row;
+        for (int j = 0; j < 256*nblock_high; ++j) {
+            float w = have_imatrix ? reordered_imatrix[j] : 1;
+            float diff = xh[j] - yh[j];
+            mse += w*diff*diff;
+            sumw += w;
+        }
+        for (int j = 0; j < 256*(nblock-nblock_high); ++j) {
+            float w = have_imatrix ? reordered_imatrix[j+256*nblock_high] : 1;
+            float diff = xl[j] - yl[j];
+            mse += w*diff*diff;
+            sumw += w;
+        }
+    }
+    printf("    rmse = %g\n", sqrt(mse/sumw));
+
+}
 
 constexpr size_t HISTOGRAM_BUCKETS = 150;
 constexpr double HISTOGRAM_RANGE = 0.03;
@@ -254,6 +364,69 @@ static void test_roundtrip_on_layer(bool transpose,
     }
 }
 
+static int load_imatrix(const std::string & imatrix_file, std::string & imatrix_dataset, Imatrix& imatrix_data) {
+    std::ifstream in(imatrix_file.c_str(), std::ios::binary);
+    if (!in) {
+        printf("%s: failed to open %s\n",__func__, imatrix_file.c_str());
+        exit(1);
+    }
+    int n_entries;
+    in.read((char *)&n_entries, sizeof(n_entries));
+    if (in.fail() || n_entries < 1) {
+        printf("%s: no data in file %s\n", __func__, imatrix_file.c_str());
+        exit(1);
+    }
+    for (int i = 0; i < n_entries; ++i) {
+        int len; in.read((char *)&len, sizeof(len));
+        std::vector<char> name_as_vec(len+1);
+        in.read((char *)name_as_vec.data(), len);
+        if (in.fail()) {
+            printf("%s: failed reading name for entry %d from %s\n", __func__, i+1, imatrix_file.c_str());
+            exit(1);
+        }
+        name_as_vec[len] = 0;
+        std::string name{name_as_vec.data()};
+        auto & e = imatrix_data[name];
+        int ncall;
+        in.read((char *)&ncall, sizeof(ncall));
+        int nval;
+        in.read((char *)&nval, sizeof(nval));
+        if (in.fail() || nval < 1) {
+            printf("%s: failed reading number of values for entry %d\n", __func__, i);
+            imatrix_data = {};
+            exit(1);
+        }
+        e.resize(nval);
+        in.read((char *)e.data(), nval*sizeof(float));
+        if (in.fail()) {
+            printf("%s: failed reading data for entry %d\n", __func__, i);
+            imatrix_data = {};
+            exit(1);
+        }
+        if (ncall > 0) {
+            for (auto& v : e) v /= ncall;
+        }
+
+        if (getenv("LLAMA_TRACE")) {
+            printf("%s: loaded data (size = %6d, ncall = %6d) for '%s'\n", __func__, int(e.size()), ncall, name.c_str());
+        }
+    }
+
+    // latest imatrix version contains the dataset filename at the end of the file
+    int m_last_call = 0;
+    if (in.peek() != EOF) {
+        in.read((char *)&m_last_call, sizeof(m_last_call));
+        int dataset_len;
+        in.read((char *)&dataset_len, sizeof(dataset_len));
+        std::vector<char> dataset_as_vec(dataset_len);
+        in.read(dataset_as_vec.data(), dataset_len);
+        imatrix_dataset.assign(dataset_as_vec.begin(), dataset_as_vec.end());
+        printf("%s: imatrix dataset='%s'\n", __func__, imatrix_dataset.c_str());
+    }
+    printf("%s: loaded %d importance matrix entries from %s computed on %d chunks\n", __func__, int(imatrix_data.size()), imatrix_file.c_str(), m_last_call);
+    return m_last_call;
+}
+
 int main(int argc, char ** argv) {
     ggml_time_init();
 
@@ -263,7 +436,9 @@ int main(int argc, char ** argv) {
 
     int max_thread = 0;
     bool invalid_param = false;
+    bool analyze = false;
     std::string arg;
+    std::string imatrix_file;
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
 
@@ -276,6 +451,8 @@ int main(int argc, char ** argv) {
             params.verbose = true;
         } else if (arg == "-p" || arg == "--per-layer-stats") {
             params.per_layer_stats = true;
+        } else if (arg == "-a" || arg == "--analyze") {
+            analyze = true;
         } else if (arg == "--transpose") {
             params.transpose = true;
         } else if (arg == "--histogram") {
@@ -286,6 +463,12 @@ int main(int argc, char ** argv) {
                 break;
             }
             params.model = argv[i];
+        } else if (arg == "-im" || arg == "--imatrix") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            imatrix_file = argv[i];
         } else if (arg == "-l" || arg == "--include-layer") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -330,6 +513,12 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
         quantize_stats_print_usage(argc, argv);
         return 1;
+    }
+
+    Imatrix imatrix;
+    if (!imatrix_file.empty()) {
+        std::string dum;
+        load_imatrix(imatrix_file, dum, imatrix);
     }
 
     print_build_info();
@@ -433,18 +622,21 @@ int main(int argc, char ** argv) {
                 }
                 std::string layer_name { ggml_type_name(type) };
                 layer_name += "::" + kv_tensor.first;
-                test_roundtrip_on_layer(params.transpose,
-                        layer_name,
-                        params.per_layer_stats,
-                        qfns,
-                        params.reference,
-                        kv_tensor.second,
-                        input_scratch,
-                        quantized_scratch,
-                        output_scratch,
-                        global_stats,
-                        max_thread
-                );
+                if (analyze) {
+                    analyze_layer(layer_name, kv_tensor.second, input_scratch, imatrix);
+                } else {
+                    test_roundtrip_on_layer(params.transpose,
+                            layer_name,
+                            params.per_layer_stats,
+                            qfns,
+                            params.reference,
+                            kv_tensor.second,
+                            input_scratch,
+                            quantized_scratch,
+                            output_scratch,
+                            global_stats,
+                            max_thread);
+                }
             }
 
             print_error_stats(ggml_type_name(type), global_stats, params.print_histogram);
