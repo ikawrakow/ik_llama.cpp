@@ -67,25 +67,22 @@ std::pair<std::vector<float>, std::vector<float>> split_tensor(const ggml_tensor
     int n_per_row = layer->ne[0];
     int nrows  = nelements/n_per_row;
 
-    std::vector<std::pair<float,int>> sumv(n_per_row);
-    for (int j = 0; j < n_per_row; ++j) sumv[j] = {0.f, j};
-
-    for (int row = 0; row < nrows; ++row) {
-        auto x = input_scratch_ptr + row*n_per_row;
-        for (int j = 0; j < n_per_row; ++j) sumv[j].first += x[j]*x[j];
+    const float * imatrix_data = nullptr;
+    if (auto it = imatrix.find(layer->name); it != imatrix.end() && int(it->second.size()) == n_per_row) {
+        imatrix_data = it->second.data();
     }
 
-    auto it = imatrix.find(layer->name);
-    bool have_imatrix = false;
-    if (it != imatrix.end() && int(it->second.size()) == n_per_row) {
-        have_imatrix = true;
-        for (int j = 0; j < n_per_row; ++j) sumv[j].first *= it->second[j];
+    std::vector<uint16_t> order(n_per_row);
+    if (!iqk_reorder(layer, imatrix_data, order.data())) {
+        return {};
     }
-    std::sort(sumv.begin(), sumv.end(), std::greater<std::pair<float,int>>{});
 
     int nblock = n_per_row/256;
     int nblock_high = int(nblock*0.1f + 0.5f);
     if (nblock_high == 0) return {};
+
+    std::sort(order.data(), order.data() + 256*nblock_high);
+    std::sort(order.data() + 256*nblock_high, order.data() + 256*nblock);
 
     std::vector<float> part1(256*nblock_high*nrows);
     std::vector<float> part2(256*(nblock-nblock_high)*nrows);
@@ -94,8 +91,8 @@ std::pair<std::vector<float>, std::vector<float>> split_tensor(const ggml_tensor
         auto x = input_scratch_ptr + row*n_per_row;
         auto yh = part1.data() + 256*nblock_high*row;
         auto yl = part2.data() + 256*(nblock-nblock_high)*row;
-        for (int j = 0; j < 256*nblock_high; ++j) yh[j] = x[sumv[j].second];
-        for (int j = 256*nblock_high; j < 256*nblock; ++j) yl[j-256*nblock_high] = x[sumv[j].second];
+        for (int j = 0; j < 256*nblock_high; ++j) yh[j] = x[order[j]];
+        for (int j = 256*nblock_high; j < 256*nblock; ++j) yl[j-256*nblock_high] = x[order[j]];
     }
 
     return std::make_pair(std::move(part1), std::move(part2));
@@ -721,9 +718,14 @@ int main(int argc, char ** argv) {
                     auto h_type = get_better_type(type);
                     auto h_qfns = ggml_internal_get_type_traits(h_type);
                     if (!h_qfns.from_float || !h_qfns.to_float) continue;
+                    std::string name1{kv_tensor.second->name}, name2(name1);
+                    name1 += "_part1";
+                    name2 += "_part2";
                     ggml_tensor part1, part2;
-                    snprintf(part1.name, 64, "%s_part1", kv_tensor.second->name);
-                    snprintf(part2.name, 64, "%s_part2", kv_tensor.second->name);
+                    std::memcpy(part1.name, name1.data(), name1.size() < 64 ? name1.size() + 1 : 64);
+                    std::memcpy(part2.name, name2.data(), name2.size() < 64 ? name2.size() + 1 : 64);
+                    //snprintf(part1.name, 64, "%s_part1", kv_tensor.second->name);
+                    //snprintf(part2.name, 64, "%s_part2", kv_tensor.second->name);
                     auto nrows = ggml_nrows(kv_tensor.second);
                     part1.ne[0] = part_h.size()/nrows;
                     part1.ne[1] = part_h.size()/part1.ne[0];

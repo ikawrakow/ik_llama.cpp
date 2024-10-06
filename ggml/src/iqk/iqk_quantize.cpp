@@ -20,6 +20,7 @@
 #include <array>
 #include <algorithm>
 #include <cstring>
+#include <thread>
 
 namespace {
 
@@ -2165,4 +2166,83 @@ void iqk_quantize_row_q8_K(const float * x, void * vy, int64_t k) {
     }
 #endif
 
+}
+
+namespace {
+inline void add_x2(int n, float * sumx2, const float * x) {
+    for (int j = 0; j < n; ++j) sumx2[j] += x[j]*x[j];
+}
+inline void add_x2(int n, float * sumx2, const ggml_half * x) {
+    for (int j = 0; j < n; ++j) {
+        float v = GGML_FP16_TO_FP32(x[j]);
+        sumx2[j] += v*v;
+    }
+}
+inline void add_x2(int n, float * sumx2, const ggml_bf16_t * x) {
+    const uint16_t * ux = (const uint16_t *)x;
+    typedef union { uint32_t u; float f; } helper_t;
+    helper_t h;
+    for (int j = 0; j < n; ++j) {
+        h.u = (uint32_t)ux[j] << 16;
+        sumx2[j] += h.f*h.f;
+    }
+}
+}
+
+bool iqk_reorder(const ggml_tensor * t, const float * imatrix, uint16_t * order) {
+    if (!ggml_is_contiguous(t) || (t->type != GGML_TYPE_F32 && t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_BF16)) {
+        return false;
+    }
+    int n_per_row = t->ne[0];
+    int nrows = ggml_nrows(t);
+    int max_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
+    int chunk = 64;
+    std::vector<float> sumx2(n_per_row, 0);
+    auto compute = [&sumx2, n_per_row, nrows, chunk, max_thread, t] (int ith) {
+        const char * cx0 = (const char *)t->data;
+        for (int i = ith*chunk; i < n_per_row; i += max_thread*chunk) {
+            auto y = sumx2.data() + i;
+            auto cx = cx0 + i*t->nb[0];
+            int n = i + chunk <= n_per_row ? chunk : n_per_row - chunk;
+            if (t->type == GGML_TYPE_F32) {
+                const float * x = (const float *)cx;
+                for (int row = 0; row < nrows; ++row) {
+                    add_x2(n, y, x);
+                    x += t->ne[0];
+                }
+            }
+            else if (t->type == GGML_TYPE_F16) {
+                const ggml_half * x = (const ggml_half *)cx;
+                for (int row = 0; row < nrows; ++row) {
+                    add_x2(n, y, x);
+                    x += t->ne[0];
+                }
+            }
+            else {
+                const ggml_bf16_t * x = (const ggml_bf16_t *)cx;
+                for (int row = 0; row < nrows; ++row) {
+                    add_x2(n, y, x);
+                    x += t->ne[0];
+                }
+            }
+            for (int row = 0; row < n_per_row; ++row) {
+                cx += t->nb[1];
+            }
+        }
+    };
+    std::vector<std::thread> workers(max_thread-1);
+    int ith = 0;
+    for (auto& w : workers) w = std::thread(compute, ith++);
+    compute(ith);
+    for (auto& w : workers) w.join();
+
+    if (imatrix) {
+        for (int j = 0; j < n_per_row; ++j) sumx2[j] *= imatrix[j];
+    }
+    std::vector<std::pair<float, int>> sorted(n_per_row);
+    for (int j = 0; j < n_per_row; ++j) sorted[j] = {sumx2[j], j};
+    std::sort(sorted.begin(), sorted.end(), std::greater<std::pair<float, int>>{});
+    for (int j = 0; j < n_per_row; ++j) order[j] = sorted[j].second;
+    //std::sort(order, order + n_per_row);
+    return true;
 }

@@ -57,6 +57,9 @@ void   vec_dot_iq1_tn_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void
 
 void iqk_quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 
+struct ggml_tensor;
+bool iqk_reorder(const struct ggml_tensor * t, const float * imatrix, uint16_t * order);
+
 #ifdef __cplusplus
 }
 #endif
