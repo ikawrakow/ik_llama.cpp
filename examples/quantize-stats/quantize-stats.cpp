@@ -21,6 +21,7 @@
 #include <thread>
 #include <mutex>
 #include <fstream>
+#include <memory>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -39,6 +40,89 @@ struct quantize_stats_params {
 };
 
 using Imatrix = std::unordered_map<std::string, std::vector<float>>;
+
+std::pair<std::vector<float>, std::vector<float>> split_tensor(const ggml_tensor * layer,
+        std::vector<float> & input_scratch, const Imatrix& imatrix) {
+
+    if (layer->ne[0] == 1 || layer->ne[1] == 1) return {};
+
+    if (!ggml_is_contiguous(layer)) {
+        printf("%s: %s is not contiguous\n", __func__, layer->name);
+        return {};
+    }
+
+    int nelements = ggml_nelements(layer);
+
+    float* input_scratch_ptr = nullptr;
+    if (layer->type == GGML_TYPE_F16) {
+        if ((int)input_scratch.size() < nelements) input_scratch.resize(nelements);
+        for (int i = 0; i < nelements; ++i) {
+            input_scratch[i] = ggml_get_f32_1d(layer, i);
+        }
+        input_scratch_ptr = input_scratch.data();
+    } else {
+        input_scratch_ptr = ggml_get_data_f32(layer);
+    }
+
+    int n_per_row = layer->ne[0];
+    int nrows  = nelements/n_per_row;
+
+    std::vector<std::pair<float,int>> sumv(n_per_row);
+    for (int j = 0; j < n_per_row; ++j) sumv[j] = {0.f, j};
+
+    for (int row = 0; row < nrows; ++row) {
+        auto x = input_scratch_ptr + row*n_per_row;
+        for (int j = 0; j < n_per_row; ++j) sumv[j].first += x[j]*x[j];
+    }
+
+    auto it = imatrix.find(layer->name);
+    bool have_imatrix = false;
+    if (it != imatrix.end() && int(it->second.size()) == n_per_row) {
+        have_imatrix = true;
+        for (int j = 0; j < n_per_row; ++j) sumv[j].first *= it->second[j];
+    }
+    std::sort(sumv.begin(), sumv.end(), std::greater<std::pair<float,int>>{});
+
+    int nblock = n_per_row/256;
+    int nblock_high = int(nblock*0.1f + 0.5f);
+    if (nblock_high == 0) return {};
+
+    std::vector<float> part1(256*nblock_high*nrows);
+    std::vector<float> part2(256*(nblock-nblock_high)*nrows);
+
+    for (int row = 0; row < nrows; ++row) {
+        auto x = input_scratch_ptr + row*n_per_row;
+        auto yh = part1.data() + 256*nblock_high*row;
+        auto yl = part2.data() + 256*(nblock-nblock_high)*row;
+        for (int j = 0; j < 256*nblock_high; ++j) yh[j] = x[sumv[j].second];
+        for (int j = 256*nblock_high; j < 256*nblock; ++j) yl[j-256*nblock_high] = x[sumv[j].second];
+    }
+
+    return std::make_pair(std::move(part1), std::move(part2));
+}
+
+ggml_type get_better_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_IQ2_K: return GGML_TYPE_IQ3_K;
+        case GGML_TYPE_IQ3_K: return GGML_TYPE_IQ4_K;
+        case GGML_TYPE_IQ4_K: return GGML_TYPE_IQ5_K;
+        case GGML_TYPE_IQ5_K: return GGML_TYPE_IQ6_K;
+        case GGML_TYPE_IQ6_K: return GGML_TYPE_Q8_0;
+        case GGML_TYPE_Q2_K: return GGML_TYPE_Q3_K;
+        case GGML_TYPE_Q3_K: return GGML_TYPE_Q4_K;
+        case GGML_TYPE_Q4_K: return GGML_TYPE_Q5_K;
+        case GGML_TYPE_Q5_K: return GGML_TYPE_Q6_K;
+        case GGML_TYPE_Q6_K: return GGML_TYPE_Q8_0;
+        case GGML_TYPE_IQ2_XXS: return GGML_TYPE_IQ3_XXS;
+        case GGML_TYPE_IQ2_XS:  return GGML_TYPE_IQ3_XXS;
+        case GGML_TYPE_IQ2_S:   return GGML_TYPE_IQ3_S;
+        case GGML_TYPE_IQ3_XXS: return GGML_TYPE_IQ4_XS;
+        case GGML_TYPE_IQ3_S:   return GGML_TYPE_IQ4_XS;
+        case GGML_TYPE_IQ4_XS:  return GGML_TYPE_IQ5_K;
+        default: throw std::runtime_error("No better type");
+    }
+}
+
 
 static void analyze_layer(const std::string & name, const ggml_tensor * layer, std::vector<float> & input_scratch,
         const Imatrix& imatrix) {
@@ -283,7 +367,7 @@ static void test_roundtrip_on_chunk(bool fill_data,
 
 // Run quantization function for a single layer and update error stats
 static void test_roundtrip_on_layer(bool transpose,
-    std::string & name, bool print_layer_stats, const ggml_type_traits_t & qfns, bool use_reference,
+    const std::string & name, bool print_layer_stats, const ggml_type_traits_t & qfns, bool use_reference,
     const ggml_tensor * layer, std::vector<float> & input_scratch, std::vector<char> & quantized_scratch,
     std::vector<float> & output_scratch, error_stats & total_error, int max_thread = 0) {
     assert(tensor_is_contiguous(layer));
@@ -439,6 +523,7 @@ int main(int argc, char ** argv) {
     bool analyze = false;
     std::string arg;
     std::string imatrix_file;
+    float split_fraction = -1.f;
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
 
@@ -463,6 +548,12 @@ int main(int argc, char ** argv) {
                 break;
             }
             params.model = argv[i];
+        } else if (arg == "--split") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            split_fraction = atof(argv[i]);
         } else if (arg == "-im" || arg == "--imatrix") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -624,6 +715,50 @@ int main(int argc, char ** argv) {
                 layer_name += "::" + kv_tensor.first;
                 if (analyze) {
                     analyze_layer(layer_name, kv_tensor.second, input_scratch, imatrix);
+                } else if (split_fraction > 0 && split_fraction < 1) {
+                    auto [part_h, part_l] = split_tensor(kv_tensor.second, input_scratch, imatrix);
+                    if (part_h.empty() || part_l.empty()) continue;
+                    auto h_type = get_better_type(type);
+                    auto h_qfns = ggml_internal_get_type_traits(h_type);
+                    if (!h_qfns.from_float || !h_qfns.to_float) continue;
+                    ggml_tensor part1, part2;
+                    snprintf(part1.name, 64, "%s_part1", kv_tensor.second->name);
+                    snprintf(part2.name, 64, "%s_part2", kv_tensor.second->name);
+                    auto nrows = ggml_nrows(kv_tensor.second);
+                    part1.ne[0] = part_h.size()/nrows;
+                    part1.ne[1] = part_h.size()/part1.ne[0];
+                    part1.ne[2] = part1.ne[3] = 1;
+                    part2.ne[0] = part_l.size()/nrows;
+                    part2.ne[1] = part_l.size()/part2.ne[0];
+                    part2.ne[2] = part2.ne[3] = 1;
+                    part1.type = part2.type = GGML_TYPE_F32;
+                    part1.nb[0] = part2.nb[0] = sizeof(float);
+                    for (int k = 1; k < 4; ++k) part1.nb[k] = part1.nb[k-1]*part1.ne[k-1];
+                    for (int k = 1; k < 4; ++k) part2.nb[k] = part2.nb[k-1]*part2.ne[k-1];
+                    part1.data = (void *)part_h.data();
+                    part2.data = (void *)part_l.data();
+                    test_roundtrip_on_layer(false,
+                            std::string(part1.name),
+                            params.per_layer_stats,
+                            h_qfns,
+                            params.reference,
+                            &part1,
+                            input_scratch,
+                            quantized_scratch,
+                            output_scratch,
+                            global_stats,
+                            max_thread);
+                    test_roundtrip_on_layer(false,
+                            std::string(part2.name),
+                            params.per_layer_stats,
+                            qfns,
+                            params.reference,
+                            &part2,
+                            input_scratch,
+                            quantized_scratch,
+                            output_scratch,
+                            global_stats,
+                            max_thread);
                 } else {
                     test_roundtrip_on_layer(params.transpose,
                             layer_name,
