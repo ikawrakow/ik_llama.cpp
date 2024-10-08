@@ -43,6 +43,7 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "Q3_K_L",   LLAMA_FTYPE_MOSTLY_Q3_K_L,   " 3.35G, +0.1764 ppl @ LLaMA-v1-7B", },
     { "IQ4_NL",   LLAMA_FTYPE_MOSTLY_IQ4_NL,   " 4.50 bpw non-linear quantization", },
     { "IQ4_XS",   LLAMA_FTYPE_MOSTLY_IQ4_XS,   " 4.25 bpw non-linear quantization", },
+    { "IQ4_XXS",  LLAMA_FTYPE_MOSTLY_IQ4_XXS,  " 4.06 bpw non-linear quantization", },
     { "IQ2_K",    LLAMA_FTYPE_MOSTLY_IQ2_K,    " 2.375 bpw non-linear quantization",},
     { "IQ3_K",    LLAMA_FTYPE_MOSTLY_IQ3_K,    " 3.44 bpw non-linear quantization", },
     { "IQ4_K",    LLAMA_FTYPE_MOSTLY_IQ4_K,    " 4.5 bpw non-linear quantization",  },

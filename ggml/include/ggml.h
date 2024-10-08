@@ -403,6 +403,7 @@ extern "C" {
         GGML_TYPE_IQ6_K   = 141,
         GGML_TYPE_IQ2_TN  = 142,
         GGML_TYPE_IQ1_TN  = 143,
+        GGML_TYPE_IQ4_XXS = 144,
         GGML_TYPE_COUNT,
     };
 
@@ -458,6 +459,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ6_K   = 134, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_TN  = 135, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_TN  = 136, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ4_XXS = 137, // except 1d tensors
     };
 
     // available tensor operations:
