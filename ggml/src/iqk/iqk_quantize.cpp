@@ -2175,7 +2175,7 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
         const float * quant_weights,
         const int ntry) {
 
-    GGML_ASSERT(super_block_size == 256 && block_size == 128);
+    //GGML_ASSERT(super_block_size == 256 && block_size == 128);
 
     float * dptr = (float *)cy;
     block_iq4_xxs * y = (block_iq4_xxs *)(dptr + 1);
@@ -2286,7 +2286,7 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
     if (!d) return;
     float id = d ? 1/d : 0.f;
     float sumqx = 0, sumq2 = 0;
-    float mse = 0;
+    //float mse = 0;
     for (int ibl = 0; ibl < n_per_row/super_block_size; ++ibl) {
         const float * xbl = x + ibl*super_block_size;
         float sigma2 = 0;
@@ -2320,8 +2320,8 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
                 float q2 = block_values[i2]*l;
                 sumqx += w1*q1*xb[j] + w2*q2*xb[j+block_size/2];
                 sumq2 += w1*q1*q1 + w2*q2*q2;
-                float diff = xb[j] - d*q1; mse += diff*diff;
-                diff = xb[j+block_size/2] - d*q2; mse += diff*diff;
+                //float diff = xb[j] - d*q1; mse += diff*diff;
+                //diff = xb[j+block_size/2] - d*q2; mse += diff*diff;
             }
         }
     }
@@ -2340,7 +2340,7 @@ void quantize_row_iq4_xxs(const float * x, void * y, int64_t k) {
 
 size_t quantize_iq4_xxs(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     //printf("============ %s(%d, %d)\n", __func__, int(nrows), int(n_per_row));
-    constexpr int kBlockSize = 128;
+    constexpr int kBlockSize = 64; //128;
     GGML_ASSERT(n_per_row%QK_K == 0);
     auto row_size = ggml_row_size(GGML_TYPE_IQ4_XXS, n_per_row);
     char * qrow = (char *)dst;
@@ -2355,7 +2355,7 @@ size_t quantize_iq4_xxs(const float * src, void * dst, int64_t nrows, int64_t n_
 }
 
 void dequantize_row_iq4_xxs(const block_iq4_xxs * x, float * y, int64_t k) {
-    constexpr int kBlockSize = 128;
+    constexpr int kBlockSize = 64; //128;
     GGML_ASSERT(k%QK_K == 0);
     const float * dptr = (const float *)x;
     float d = *dptr;
