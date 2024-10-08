@@ -13279,7 +13279,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
         return;
     }
 
-    const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+    const void * wdata = (src1->type == vec_dot_type) ? src1->data : (char *)params->wdata + params->wsize - params->qsize + GGML_MAX_NAME;
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
     assert(ne12 % ne02 == 0);
@@ -13533,6 +13533,11 @@ IQK_MulMat_Not_Available2:;
     }
 UseGgmlGemm2:;
 #endif
+
+    if (ith == 0) {
+        atomic_store(&params->shared->current_chunk, nth);
+    }
+    ggml_barrier(params->shared);
 
     // This is the size of the first dimension of the result, so we can iterate that way. (see the ASSERT above, these are the same numbers)
     const int64_t nr0 = ne0;

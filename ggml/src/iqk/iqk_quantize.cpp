@@ -2376,6 +2376,46 @@ void dequantize_row_iq4_xxs(const block_iq4_xxs * x, float * y, int64_t k) {
     }
 }
 
-void  vec_dot_iq4_xxs_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void  vec_dot_iq4_xxs_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+    constexpr int kBlockSize = 32;
+//#if GGML_USE_IQK_MULMAT
+//    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_XXS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+//        return;
+//    }
+//#endif
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    const float * dptr = (const float *)vx;
+    const float d = *dptr;
+    //printf("%s: n = %d, d = %g\n", __func__, n, d);
+    const block_iq4_xxs * x = (const block_iq4_xxs *)(dptr + 1);
+    const block_q8_K    * y = (const block_q8_K    *)vy;
+    int nblock = n/QK_K;
+    float sumf = 0;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        //int sumi = 0;
+        auto qy = y[ibl].qs;
+        auto qx = x[ibl].qs;
+        float db = d * y[ibl].d;
+        for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
+            float dl = db * ((x[ibl].scales[ib] & 254) - 127);
+            //int ls = (x[ibl].scales[ib] & 254) - 127;
+            const int8_t * values = iq4k_values + ((x[ibl].scales[ib] & 1) << 4);
+            int suml = 0;
+            for (int j = 0; j < kBlockSize/2; ++j) {
+                suml += qy[j               ] * values[qx[j] & 0xf]
+                      + qy[j + kBlockSize/2] * values[qx[j] >>  4];
+            }
+            sumf += dl * suml;
+            //sumi += ls * suml;
+            qy += kBlockSize;
+            qx += kBlockSize/2;
+        }
+        //sumf += d * y[ibl].d * sumi;
+    }
+    *s = sumf;
 }
 
