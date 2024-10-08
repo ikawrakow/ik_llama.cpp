@@ -626,15 +626,15 @@ static __global__ void dequantize_block_iq4_xxs(const void * __restrict__ vx, ds
     const int64_t i   = ii - (row*n_per_row)/QK_K;
 
     const int64_t tid = threadIdx.x;
-    const int64_t ib = tid/8; // 0...3
-    const int64_t il = tid%8; // 0...7
-    dst_t * y = yy + ii*QK_K + 64*ib + 4*il;
-    const uint8_t  * q4 = x[i].qs + 32*ib + 4*il;
+    const int64_t il = tid/8; // 0...3
+    const int64_t ib = tid%8; // 0...7
+    dst_t * y = yy + ii*QK_K + 32*ib + 4*il;
+    const uint8_t  * q4 = x[i].qs + 16*ib + 4*il;
     const float d = scale * ((x[i].scales[ib] & 254) - 127);
     const int8_t * values = iq4k_values + ((x[i].scales[ib] & 1) << 4);
     for (int j = 0; j < 4; ++j) {
         y[j+ 0] = d * values[q4[j] & 0xf];
-        y[j+32] = d * values[q4[j] >>  4];
+        y[j+16] = d * values[q4[j] >>  4];
     }
 }
 

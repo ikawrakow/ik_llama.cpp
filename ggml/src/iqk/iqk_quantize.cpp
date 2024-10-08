@@ -2340,7 +2340,7 @@ void quantize_row_iq4_xxs(const float * x, void * y, int64_t k) {
 
 size_t quantize_iq4_xxs(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     //printf("============ %s(%d, %d)\n", __func__, int(nrows), int(n_per_row));
-    constexpr int kBlockSize = 64; //128;
+    constexpr int kBlockSize = 32; //128;
     GGML_ASSERT(n_per_row%QK_K == 0);
     auto row_size = ggml_row_size(GGML_TYPE_IQ4_XXS, n_per_row);
     char * qrow = (char *)dst;
@@ -2355,7 +2355,7 @@ size_t quantize_iq4_xxs(const float * src, void * dst, int64_t nrows, int64_t n_
 }
 
 void dequantize_row_iq4_xxs(const block_iq4_xxs * x, float * y, int64_t k) {
-    constexpr int kBlockSize = 64; //128;
+    constexpr int kBlockSize = 32; //128;
     GGML_ASSERT(k%QK_K == 0);
     const float * dptr = (const float *)x;
     float d = *dptr;
