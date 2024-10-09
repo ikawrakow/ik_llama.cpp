@@ -4809,6 +4809,35 @@ struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
 
 };
 
+struct DequantizerIQ4XXS final : public BaseDequantizer<block_iq4_xxs, true> {
+
+    DequantizerIQ4XXS(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc), values(vld1q_s8_x2(iq4k_values)) {}
+
+    constexpr static int num_blocks() { return 8; }
+    constexpr static bool should_scale_quants() { return false; }
+
+    template <typename Q8>
+    inline int32x4x2_t new_block(int i, const Q8& q8, float32x4_t * acc) {
+        (void)q8;
+        (void)acc;
+        auto scales16 = vaddq_s16(vreinterpretq_s16_u16(vandq_u16(vmovl_u8(vld1_u8(x[i].scales)), mask)), m127);
+        int32x4x2_t scales = {vmovl_s16(vget_low_s16(scales16)), vmovl_s16(vget_high_s16(scales16))};
+        return scales;
+    }
+    inline void prepare(int i, int j) {
+        bits.prepare16(x[i].qs+64*j);
+        for (int k = 0; k < 4; ++k) {
+            bits.b1.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[x[i].scales[4*j+k] & 1], bits.b1.val[k]));
+            bits.b2.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[x[i].scales[4*j+k] & 1], bits.b2.val[k]));
+        }
+    }
+
+    Q4bits bits;
+    const int8x16x2_t values;
+    const uint16x8_t  mask = vdupq_n_u16(254);
+    const int16x8_t   m127 = vdupq_n_s16(-127);
+};
+
 struct SimpleBits {
     uint8x16x4_t b1;
     uint8x16x4_t b2;
@@ -6540,6 +6569,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_IQ4_XS:
             MulMat::set_functions<DequantizerIQ4XS>(m);
+            break;
+        case GGML_TYPE_IQ4_XXS:
+            MulMat::set_functions<DequantizerIQ4XXS>(m);
             break;
         case GGML_TYPE_IQ4_K:
             MulMat::set_functions<DequantizerIQ4K>(m);
