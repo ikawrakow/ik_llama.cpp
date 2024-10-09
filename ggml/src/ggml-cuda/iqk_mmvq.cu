@@ -214,15 +214,15 @@ __device__ __forceinline__ float vec_dot_iq4_k_q8_1(
     return d * (sumi1 * ls1 + sumi2 * ls2);
 }
 
-#define VDR_IQ4_XXS_Q8_1_MMVQ 4
-#define VDR_IQ4_XXS_Q8_1_MMQ  4
+#define VDR_IQ4_KS_Q8_1_MMVQ 4
+#define VDR_IQ4_KS_Q8_1_MMQ  4
 
 // TODO
-__device__ __forceinline__ float vec_dot_iq4_xxs_q8_1(
+__device__ __forceinline__ float vec_dot_iq4_ks_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
     float scale = *(const float *)vbq;
-    const block_iq4_xxs * bq4 = (const block_iq4_xxs *)((const char *)vbq + sizeof(float)) + kbx;
+    const block_iq4_ks * bq4 = (const block_iq4_ks *)((const char *)vbq + sizeof(float)) + kbx;
     const uint8_t * all_values = (const uint8_t *)iq4k_values;
 
     // iqs is 0...28
@@ -638,11 +638,11 @@ void mul_mat_vec_iq4_k_q8_1_cuda(
     iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ4_K, VDR_IQ4_K_Q8_1_MMVQ, vec_dot_iq4_k_q8_1>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
 }
 
-void mul_mat_vec_iq4_xxs_q8_1_cuda(
+void mul_mat_vec_iq4_ks_q8_1_cuda(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
 
-    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ4_XXS, VDR_IQ4_XXS_Q8_1_MMVQ, vec_dot_iq4_xxs_q8_1>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ4_KS, VDR_IQ4_KS_Q8_1_MMVQ, vec_dot_iq4_ks_q8_1>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
 }
 
 void mul_mat_vec_iq5_k_q8_1_cuda(

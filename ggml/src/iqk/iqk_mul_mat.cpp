@@ -1107,7 +1107,7 @@ struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
     const __m512i permute2 = _mm512_set_epi64(15, 14, 13, 12, 7, 6, 5, 4);
 };
 
-struct DequantizerIQ4XXS final : public BaseDequantizer<block_iq4_xxs, true> {
+struct DequantizerIQ4XXS final : public BaseDequantizer<block_iq4_ks, true> {
     DequantizerIQ4XXS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_512()) {}
     template <typename Q8>
     inline void new_block(int i, const Q8& q8, __m256 * accm, __m512i * scales) {
@@ -1740,7 +1740,7 @@ struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
     const __m256i mh       = _mm256_set1_epi8(-128); // to avoid stupid warning about 0x80 overflowing
 };
 
-struct DequantizerIQ4XXS final : public BaseDequantizer<block_iq4_xxs, true> {
+struct DequantizerIQ4XXS final : public BaseDequantizer<block_iq4_ks, true> {
     DequantizerIQ4XXS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_256()) {}
     template <typename Q8>
     inline __m256i new_block(int i, const Q8& q8, __m256 * accd) {
@@ -3911,7 +3911,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             assert (ne00 % QK_K == 0);
             MulMat::set_functions<DequantizerIQ4XS>(mm);
             break;
-        case GGML_TYPE_IQ4_XXS:
+        case GGML_TYPE_IQ4_KS:
             assert (ne00 % QK_K == 0);
             MulMat::set_functions<DequantizerIQ4XXS>(mm);
             break;
@@ -4809,7 +4809,7 @@ struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
 
 };
 
-struct DequantizerIQ4XXS final : public BaseDequantizer<block_iq4_xxs, true> {
+struct DequantizerIQ4XXS final : public BaseDequantizer<block_iq4_ks, true> {
 
     DequantizerIQ4XXS(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc), values(vld1q_s8_x2(iq4k_values)) {}
 
@@ -6570,7 +6570,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_IQ4_XS:
             MulMat::set_functions<DequantizerIQ4XS>(m);
             break;
-        case GGML_TYPE_IQ4_XXS:
+        case GGML_TYPE_IQ4_KS:
             MulMat::set_functions<DequantizerIQ4XXS>(m);
             break;
         case GGML_TYPE_IQ4_K:

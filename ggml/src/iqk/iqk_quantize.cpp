@@ -2178,14 +2178,14 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
     //GGML_ASSERT(super_block_size == 256 && block_size == 128);
 
     float * dptr = (float *)cy;
-    block_iq4_xxs * y = (block_iq4_xxs *)(dptr + 1);
+    block_iq4_ks * y = (block_iq4_ks *)(dptr + 1);
 
     const int8_t * shifted_values = values + 16;
 
     float amax_scale = 0;
 
     for (int ibl = 0; ibl < n_per_row/super_block_size; ++ibl) {
-        memset(&y[ibl], 0, sizeof(block_iq4_xxs));
+        memset(&y[ibl], 0, sizeof(block_iq4_ks));
         const float * xbl = x + ibl*super_block_size;
         auto scales = all_scales + ibl*(super_block_size/block_size);
         float sigma2 = 0;
@@ -2330,19 +2330,19 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
 }
 }
 
-void quantize_row_iq4_xxs_ref(const float * x, block_iq4_xxs * y, int64_t k) {
-    quantize_iq4_xxs(x, (void *)y, 1, k, nullptr);
+void quantize_row_iq4_ks_ref(const float * x, block_iq4_ks * y, int64_t k) {
+    quantize_iq4_ks(x, (void *)y, 1, k, nullptr);
 }
 
-void quantize_row_iq4_xxs(const float * x, void * y, int64_t k) {
-    quantize_iq4_xxs(x, (void *)y, 1, k, nullptr);
+void quantize_row_iq4_ks(const float * x, void * y, int64_t k) {
+    quantize_iq4_ks(x, (void *)y, 1, k, nullptr);
 }
 
-size_t quantize_iq4_xxs(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+size_t quantize_iq4_ks(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     //printf("============ %s(%d, %d)\n", __func__, int(nrows), int(n_per_row));
     constexpr int kBlockSize = 32; //128;
     GGML_ASSERT(n_per_row%QK_K == 0);
-    auto row_size = ggml_row_size(GGML_TYPE_IQ4_XXS, n_per_row);
+    auto row_size = ggml_row_size(GGML_TYPE_IQ4_KS, n_per_row);
     char * qrow = (char *)dst;
     float weight[kBlockSize];
     std::vector<float> all_scales(n_per_row/kBlockSize);
@@ -2354,12 +2354,12 @@ size_t quantize_iq4_xxs(const float * src, void * dst, int64_t nrows, int64_t n_
     return nrows * row_size;
 }
 
-void dequantize_row_iq4_xxs(const block_iq4_xxs * x, float * y, int64_t k) {
+void dequantize_row_iq4_ks(const block_iq4_ks * x, float * y, int64_t k) {
     constexpr int kBlockSize = 32; //128;
     GGML_ASSERT(k%QK_K == 0);
     const float * dptr = (const float *)x;
     float d = *dptr;
-    x = (const block_iq4_xxs *)(dptr + 1);
+    x = (const block_iq4_ks *)(dptr + 1);
     int nblock = k/QK_K;
     for (int ibl = 0; ibl < nblock; ++ibl) {
         auto qs = x[ibl].qs;
@@ -2376,13 +2376,13 @@ void dequantize_row_iq4_xxs(const block_iq4_xxs * x, float * y, int64_t k) {
     }
 }
 
-void  vec_dot_iq4_xxs_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+void  vec_dot_iq4_ks_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
     constexpr int kBlockSize = 32;
-//#if GGML_USE_IQK_MULMAT
-//    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_XXS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
-//        return;
-//    }
-//#endif
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KS, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs);
@@ -2391,7 +2391,7 @@ void  vec_dot_iq4_xxs_q8_k(int n, float * s, size_t bs, const void * vx, size_t 
     const float * dptr = (const float *)vx;
     const float d = *dptr;
     //printf("%s: n = %d, d = %g\n", __func__, n, d);
-    const block_iq4_xxs * x = (const block_iq4_xxs *)(dptr + 1);
+    const block_iq4_ks * x = (const block_iq4_ks *)(dptr + 1);
     const block_q8_K    * y = (const block_q8_K    *)vy;
     int nblock = n/QK_K;
     float sumf = 0;
