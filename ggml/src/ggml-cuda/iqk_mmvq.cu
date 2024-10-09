@@ -559,9 +559,9 @@ __device__ __forceinline__ float vec_dot_iq3_ks_q8_1(
     const int hshift = 4*(1-ib128);
 
     const uint16_t * values1 = iq3k_table + ((bq3->scales[4*ib128+0] << 6) & 0x40);
-    const uint16_t * values2 = iq3k_table + ((bq3->scales[4*ib128+0] << 6) & 0x40);
-    const uint16_t * values3 = iq3k_table + ((bq3->scales[4*ib128+0] << 6) & 0x40);
-    const uint16_t * values4 = iq3k_table + ((bq3->scales[4*ib128+0] << 6) & 0x40);
+    const uint16_t * values2 = iq3k_table + ((bq3->scales[4*ib128+1] << 6) & 0x40);
+    const uint16_t * values3 = iq3k_table + ((bq3->scales[4*ib128+2] << 6) & 0x40);
+    const uint16_t * values4 = iq3k_table + ((bq3->scales[4*ib128+3] << 6) & 0x40);
 
     const int * q8;
     int sumi[4] = {0, 0, 0, 0};
