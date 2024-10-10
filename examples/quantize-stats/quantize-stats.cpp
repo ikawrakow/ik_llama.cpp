@@ -17,6 +17,7 @@
 #include <vector>
 #include <thread>
 #include <mutex>
+#include <array>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -227,6 +228,31 @@ static void test_roundtrip_on_layer(
     }
 }
 
+static void print_fp_stats(const char * msg, const uint64_t * counts) {
+    printf("===== %s\n", msg);
+    uint64_t tot = 0; for (int i = 0; i < 32; ++i) tot += counts[i];
+    double norm = 1./tot;
+    for (int i = 0; i < 32; ++i) {
+        if (!counts[i]) continue;
+        uint16_t val = i << 10;
+        float f = ggml_fp16_to_fp32(val);
+        printf("%2d    %f   %g\n", i, norm*counts[i], f);
+    }
+}
+
+static void analyze_tensor_fp(const ggml_tensor * t, uint64_t * H) {
+    if (t->type != GGML_TYPE_F16) return;
+    if (!ggml_is_contiguous(t)) return;
+    int n = ggml_nelements(t);
+    const uint16_t * x = (const uint16_t *)t->data;
+    std::array<uint64_t, 32> counts = {};
+    for (int j = 0; j < n; ++j) {
+        ++counts[(x[j] >> 10) & 31];
+    }
+    for (int i = 0; i < 32; ++i) H[i] += counts[i];
+    print_fp_stats(t->name, counts.data());
+}
+
 int main(int argc, char ** argv) {
     ggml_time_init();
 
@@ -236,6 +262,7 @@ int main(int argc, char ** argv) {
 
     int max_thread = 0;
     bool invalid_param = false;
+    bool analyze_fp = false;
     std::string arg;
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -249,6 +276,8 @@ int main(int argc, char ** argv) {
             params.verbose = true;
         } else if (arg == "-p" || arg == "--per-layer-stats") {
             params.per_layer_stats = true;
+        } else if (arg == "-afp" || arg == "--analyze-fp") {
+            analyze_fp = true;
         } else if (arg == "--histogram") {
             params.print_histogram = true;
         } else if (arg == "-m" || arg == "--model") {
@@ -374,6 +403,22 @@ int main(int argc, char ** argv) {
     std::vector<float> input_scratch;
     std::vector<char> quantized_scratch;
     std::vector<float> output_scratch;
+
+    if (analyze_fp) {
+        for (const auto& kv_tensor : tensors) {
+            if (!layer_included(params, kv_tensor.first)) {
+                continue;
+            }
+            if (kv_tensor.second->ne[0] == 1 || kv_tensor.second->ne[1] == 1) {
+                // we never quantize those
+                continue;
+            }
+            std::array<uint64_t, 32> H = {};
+            analyze_tensor_fp(kv_tensor.second, H.data());
+            print_fp_stats("Total", H.data());
+        }
+        return 0;
+    }
 
     // loop throught quantization types
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
