@@ -4835,6 +4835,9 @@ struct DequantizerIQ3KS final : public BaseDequantizer<block_iq3_ks, true> {
             hbits.val[0] = vshrq_n_u8(hbits.val[0], 4);
             hbits.val[1] = vshrq_n_u8(hbits.val[1], 4);
         }
+        auto s32 = (const uint32_t *)x[i].scales;
+        auto aux32 = s32[j] & 0x01010101;
+        auto aux8 = (const uint8_t *)&aux32;
         bits.b1.val[0] = vorrq_u8(bits.b1.val[0], vandq_u8(vshlq_n_u8(hbits.val[0], 2), hmask));
         bits.b1.val[1] = vorrq_u8(bits.b1.val[1], vandq_u8(vshlq_n_u8(hbits.val[1], 2), hmask));
         bits.b1.val[2] = vorrq_u8(bits.b1.val[2], vandq_u8(vshlq_n_u8(hbits.val[0], 1), hmask));
@@ -4845,14 +4848,14 @@ struct DequantizerIQ3KS final : public BaseDequantizer<block_iq3_ks, true> {
         bits.b2.val[3] = vorrq_u8(bits.b2.val[3], vandq_u8(vshrq_n_u8(hbits.val[1], 1), hmask));
         // bits.b1 is 0....63
         // bits.b2 is 64..127
-        bits.b1.val[0] = vqtbl1q_s8(values.val[x[i].scales[4*j+0] & 1], bits.b1.val[0]);
-        bits.b1.val[1] = vqtbl1q_s8(values.val[x[i].scales[4*j+0] & 1], bits.b1.val[1]);
-        bits.b1.val[2] = vqtbl1q_s8(values.val[x[i].scales[4*j+1] & 1], bits.b1.val[2]);
-        bits.b1.val[3] = vqtbl1q_s8(values.val[x[i].scales[4*j+1] & 1], bits.b1.val[3]);
-        bits.b2.val[0] = vqtbl1q_s8(values.val[x[i].scales[4*j+2] & 1], bits.b2.val[0]);
-        bits.b2.val[1] = vqtbl1q_s8(values.val[x[i].scales[4*j+2] & 1], bits.b2.val[1]);
-        bits.b2.val[2] = vqtbl1q_s8(values.val[x[i].scales[4*j+3] & 1], bits.b2.val[2]);
-        bits.b2.val[3] = vqtbl1q_s8(values.val[x[i].scales[4*j+3] & 1], bits.b2.val[3]);
+        bits.b1.val[0] = vqtbl1q_s8(values.val[aux8[0]], bits.b1.val[0]);
+        bits.b1.val[1] = vqtbl1q_s8(values.val[aux8[0]], bits.b1.val[1]);
+        bits.b1.val[2] = vqtbl1q_s8(values.val[aux8[1]], bits.b1.val[2]);
+        bits.b1.val[3] = vqtbl1q_s8(values.val[aux8[1]], bits.b1.val[3]);
+        bits.b2.val[0] = vqtbl1q_s8(values.val[aux8[2]], bits.b2.val[0]);
+        bits.b2.val[1] = vqtbl1q_s8(values.val[aux8[2]], bits.b2.val[1]);
+        bits.b2.val[2] = vqtbl1q_s8(values.val[aux8[3]], bits.b2.val[2]);
+        bits.b2.val[3] = vqtbl1q_s8(values.val[aux8[3]], bits.b2.val[3]);
     }
     static int8x16x2_t load_values() {
         int8x8_t val1 = vld1_s8(iq3nl_values);
@@ -4943,9 +4946,12 @@ struct DequantizerIQ4KS final : public BaseDequantizer<block_iq4_ks, true> {
     }
     inline void prepare(int i, int j) {
         bits.prepare16(x[i].qs+64*j);
+        auto s32 = (const uint32_t *)x[i].scales;
+        auto aux32 = s32[j] & 0x01010101;
+        auto aux8 = (const uint8_t *)&aux32;
         for (int k = 0; k < 4; ++k) {
-            bits.b1.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[x[i].scales[4*j+k] & 1], bits.b1.val[k]));
-            bits.b2.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[x[i].scales[4*j+k] & 1], bits.b2.val[k]));
+            bits.b1.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[aux8[k/2  ]], bits.b1.val[k]));
+            bits.b2.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[aux8[k/2+2]], bits.b2.val[k]));
         }
     }
 
