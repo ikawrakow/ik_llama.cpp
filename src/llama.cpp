@@ -5882,18 +5882,40 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
     LLAMA_LOG_INFO("%s: model type       = %s\n",     __func__, llama_model_type_name(model.type));
     LLAMA_LOG_INFO("%s: model ftype      = %s\n",     __func__, llama_model_ftype_name(model.ftype).c_str());
     if (ml.n_elements >= 1e12) {
-        LLAMA_LOG_INFO("%s: model params     = %.2f T\n", __func__, ml.n_elements*1e-12);
+        LLAMA_LOG_INFO("%s: model params     = %.3f T\n", __func__, ml.n_elements*1e-12);
     } else if (ml.n_elements >= 1e9) {
-        LLAMA_LOG_INFO("%s: model params     = %.2f B\n", __func__, ml.n_elements*1e-9);
+        LLAMA_LOG_INFO("%s: model params     = %.3f B\n", __func__, ml.n_elements*1e-9);
     } else if (ml.n_elements >= 1e6) {
-        LLAMA_LOG_INFO("%s: model params     = %.2f M\n", __func__, ml.n_elements*1e-6);
+        LLAMA_LOG_INFO("%s: model params     = %.3f M\n", __func__, ml.n_elements*1e-6);
     } else {
-        LLAMA_LOG_INFO("%s: model params     = %.2f K\n", __func__, ml.n_elements*1e-3);
+        LLAMA_LOG_INFO("%s: model params     = %.3f K\n", __func__, ml.n_elements*1e-3);
     }
     if (ml.n_bytes < GiB) {
-        LLAMA_LOG_INFO("%s: model size       = %.2f MiB (%.2f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0,        ml.n_bytes*8.0/ml.n_elements);
+        LLAMA_LOG_INFO("%s: model size       = %.3f MiB (%.3f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0,        ml.n_bytes*8.0/ml.n_elements);
     } else {
-        LLAMA_LOG_INFO("%s: model size       = %.2f GiB (%.2f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0/1024.0, ml.n_bytes*8.0/ml.n_elements);
+        LLAMA_LOG_INFO("%s: model size       = %.3f GiB (%.3f BPW) \n", __func__, ml.n_bytes/1024.0/1024.0/1024.0, ml.n_bytes*8.0/ml.n_elements);
+    }
+    {
+        auto n_bytes = ml.n_bytes;
+        auto n_elements = ml.n_elements;
+        auto meta_tke = ml.get_tensor_meta("token_embd.weight");
+        auto meta_out = ml.get_tensor_meta("output.weight");
+        if (meta_tke && meta_out) {
+            n_bytes -= ggml_nbytes(meta_tke);
+            n_elements -= ggml_nelements(meta_tke);
+            n_bytes -= ggml_nbytes(meta_out);
+            n_elements -= ggml_nelements(meta_out);
+            if (n_bytes < GiB) {
+                LLAMA_LOG_INFO("%s: repeating layers = %.3f MiB (%.3f BPW", __func__, n_bytes/1024.0/1024.0,        n_bytes*8.0/n_elements);
+            } else {
+                LLAMA_LOG_INFO("%s: repeating layers = %.3f GiB (%.3f BPW", __func__, n_bytes/1024.0/1024.0/1024.0, n_bytes*8.0/n_elements);
+            }
+            if (ml.n_elements >= 1e9) {
+                printf(", %.3f B parameters)\n", n_elements*1e-9);
+            } else {
+                printf(", %.3f M parameters)\n", n_elements*1e-6);
+            }
+        }
     }
 
     // general kv
