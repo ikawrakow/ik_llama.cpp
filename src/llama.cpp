@@ -5911,9 +5911,9 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
                 LLAMA_LOG_INFO("%s: repeating layers = %.3f GiB (%.3f BPW", __func__, n_bytes/1024.0/1024.0/1024.0, n_bytes*8.0/n_elements);
             }
             if (ml.n_elements >= 1e9) {
-                printf(", %.3f B parameters)\n", n_elements*1e-9);
+                LLAMA_LOG_INFO(", %.3f B parameters)\n", n_elements*1e-9);
             } else {
-                printf(", %.3f M parameters)\n", n_elements*1e-6);
+                LLAMA_LOG_INFO(", %.3f M parameters)\n", n_elements*1e-6);
             }
         }
     }
