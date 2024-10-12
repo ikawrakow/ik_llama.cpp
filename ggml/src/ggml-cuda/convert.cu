@@ -744,6 +744,34 @@ static __global__ void dequantize_block_iq2_k(const void * __restrict__ vx, dst_
 }
 
 template<typename dst_t>
+static __global__ void dequantize_block_iq2_ks(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
+
+    int64_t ii  = blockIdx.x;
+    int64_t row = (QK_K * ii) / n_per_row;
+    const char * cx = (const char *)vx + row * row_size;
+    const float d = *(const float *)cx;
+    const block_iq2_ks * x = (const block_iq2_ks *)(cx + sizeof(float));
+    const int64_t i   = ii - (row*n_per_row)/QK_K;
+
+    const int tid = threadIdx.x;
+    int ib128 = tid/16; // 0 or 1
+    int il    = tid%16; // 0...15
+    dst_t * y = yy + ii*QK_K + 128*ib128 + 2*il;
+    const int16_t extra = x[i].extra >> 4*ib128;
+    const float dl1 = d * (((x[i].scales[2*ib128+0] & 0xf) | ((extra >> 4) & 0x10)) - 16);
+    const float dl2 = d * (((x[i].scales[2*ib128+0] >>  4) | ((extra >> 5) & 0x10)) - 16);
+    const float dl3 = d * (((x[i].scales[2*ib128+1] & 0xf) | ((extra >> 6) & 0x10)) - 16);
+    const float dl4 = d * (((x[i].scales[2*ib128+1] >>  4) | ((extra >> 7) & 0x10)) - 16);
+    const uint8_t * qs = x[i].qs + 32*ib128 + 2*il;
+    for (int j = 0; j < 2; ++j) {
+        y[j+ 0] = dl1 * iq2nl_values[((qs[j] >> 0) & 0x03) + ((extra << 2) & 4)];
+        y[j+32] = dl2 * iq2nl_values[((qs[j] >> 2) & 0x03) + ((extra << 1) & 4)];
+        y[j+64] = dl3 * iq2nl_values[((qs[j] >> 4) & 0x03) + ((extra >> 0) & 4)];
+        y[j+96] = dl4 * iq2nl_values[((qs[j] >> 6) & 0x03) + ((extra >> 1) & 4)];
+    }
+}
+
+template<typename dst_t>
 static __global__ void dequantize_block_iq3_k(const void * __restrict__ vx, dst_t * __restrict__ yy) {
 
     const int i   = blockIdx.x;
@@ -953,6 +981,14 @@ static void dequantize_row_iq4_ks_cuda(const void * vx, dst_t * y, const int64_t
 }
 
 template<typename dst_t>
+static void dequantize_row_iq2_ks_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ2_KS, n_per_row);
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_iq2_ks<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+}
+
+template<typename dst_t>
 static void dequantize_row_iq2_k_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
     const int64_t k = nrows * n_per_row;
     const int nb = (k + QK_K - 1) / QK_K;
@@ -1116,6 +1152,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq4_xs_cuda;
         case GGML_TYPE_IQ4_KS:
             return dequantize_row_iq4_ks_cuda;
+        case GGML_TYPE_IQ2_KS:
+            return dequantize_row_iq2_ks_cuda;
         case GGML_TYPE_IQ2_K:
             return dequantize_row_iq2_k_cuda;
         case GGML_TYPE_IQ3_K:
@@ -1187,6 +1225,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq4_xs_cuda;
         case GGML_TYPE_IQ4_KS:
             return dequantize_row_iq4_ks_cuda;
+        case GGML_TYPE_IQ2_KS:
+            return dequantize_row_iq2_ks_cuda;
         case GGML_TYPE_IQ2_K:
             return dequantize_row_iq2_k_cuda;
         case GGML_TYPE_IQ3_K:
