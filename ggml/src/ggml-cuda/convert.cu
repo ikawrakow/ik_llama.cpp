@@ -749,8 +749,8 @@ static __global__ void dequantize_block_iq2_ks(const void * __restrict__ vx, dst
     int64_t ii  = blockIdx.x;
     int64_t row = (QK_K * ii) / n_per_row;
     const char * cx = (const char *)vx + row * row_size;
-    const float d = *(const float *)cx;
-    const block_iq2_ks * x = (const block_iq2_ks *)(cx + sizeof(float));
+    const float d = (float)*(const half *)cx;
+    const block_iq2_ks * x = (const block_iq2_ks *)(cx + sizeof(half));
     const int64_t i   = ii - (row*n_per_row)/QK_K;
 
     const int tid = threadIdx.x;

@@ -460,8 +460,8 @@ __device__ __forceinline__ float vec_dot_iq2_k_q8_1(
 __device__ __forceinline__ float vec_dot_iq2_ks_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
-    float scale = *(const float *)vbq;
-    const block_iq2_ks * bq2 = (const block_iq2_ks *)((const char *)vbq + sizeof(float)) + kbx;
+    float scale = *(const half *)vbq;
+    const block_iq2_ks * bq2 = (const block_iq2_ks *)((const char *)vbq + sizeof(half)) + kbx;
 
     int i4 = iqs/4;  // 0...7. We will process q8 blocks 4*(i4/4), 4*(i4/4)+1, 4*(i4/4)+2, 4*(i4/4)+3
     const int32_t  * q8_1 = (const int *)bq8_1[4*(i4/4)+0].qs + 2*(i4%4);
