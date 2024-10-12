@@ -917,10 +917,6 @@ struct DequantizerIQ2KS final : public BaseDequantizer<block_iq2_ks, true, true>
         auto all_scales = _mm512_inserti32x8(_mm512_castsi256_si512(scales256), scales256, 1);
         scales[0] = _mm512_shuffle_epi8(all_scales, s8k.shuffles512[0]);
         scales[1] = _mm512_shuffle_epi8(all_scales, s8k.shuffles512[1]);
-        //scales[0] = _mm512_shuffle_epi8(all_scales, shuffles[0]);
-        //scales[1] = _mm512_shuffle_epi8(all_scales, shuffles[1]);
-        //scales[2] = _mm512_shuffle_epi8(all_scales, shuffles[2]);
-        //scales[3] = _mm512_shuffle_epi8(all_scales, shuffles[3]);
     }
     inline void prepare(const uint8_t * q2) {
         bits.prepare(q2);
@@ -935,13 +931,13 @@ struct DequantizerIQ2KS final : public BaseDequantizer<block_iq2_ks, true, true>
         auto val256 = MM256_SET_M128I(val128, val128);
         return _mm512_inserti32x8(_mm512_castsi256_si512(val256), val256, 1);
     }
-    inline __m128i make_scales(const uint8_t * scales_l, const uint8_t scales_h) const {
+    inline __m128i make_scales(const uint8_t * scales_l, uint8_t scales_h) const {
         const uint16_t * scales = (const uint16_t *)scales_l;
-        uint32_t aux32 = scales[0] | (scales[1] << 16);
+        uint32_t aux32 = scales[0] | (uint32_t(scales[1]) << 16);
         auto scl = _mm_srlv_epi32(_mm_set1_epi32(aux32), shift);
         scl = _mm_and_si128(_mm_shuffle_epi8(scl, shuffle), _mm_set1_epi8(0xf));
         auto sch = _mm_set1_epi8(scales_h);
-        sch = _mm_and_si128(_mm_cmpeq_epi8(_mm_and_si128(sch, hmask), hmask), m16);
+        sch = _mm_and_si128(_mm_cmpeq_epi8(_mm_and_si128(sch, hmask), _mm_setzero_si128()), m16);
         return _mm_cvtepi8_epi16(_mm_add_epi8(scl, sch));
     }
     Q2Bits bits;
