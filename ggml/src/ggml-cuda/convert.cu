@@ -729,10 +729,10 @@ static __global__ void dequantize_block_iq2_k(const void * __restrict__ vx, dst_
     int il    = tid%16; // 0...15
     dst_t * y = yy + i*QK_K + 128*ib128 + 2*il;
     const float d = (float)x[i].d;
-    const float dl1 = d * (2*((x[i].scales[4*ib128+0] >> 4*(il/8)) & 0xf) - 15);
-    const float dl2 = d * (2*((x[i].scales[4*ib128+1] >> 4*(il/8)) & 0xf) - 15);
-    const float dl3 = d * (2*((x[i].scales[4*ib128+2] >> 4*(il/8)) & 0xf) - 15);
-    const float dl4 = d * (2*((x[i].scales[4*ib128+3] >> 4*(il/8)) & 0xf) - 15);
+    const float dl1 = d * (((x[i].scales[4*ib128+0] >> 4*(il/8)) & 0xf) - 8);
+    const float dl2 = d * (((x[i].scales[4*ib128+1] >> 4*(il/8)) & 0xf) - 8);
+    const float dl3 = d * (((x[i].scales[4*ib128+2] >> 4*(il/8)) & 0xf) - 8);
+    const float dl4 = d * (((x[i].scales[4*ib128+3] >> 4*(il/8)) & 0xf) - 8);
     const uint8_t * qs = x[i].qs + 32*ib128 + 2*il;
     const int16_t extra = x[i].extra >> (8*ib128 + (il/8));
     for (int j = 0; j < 2; ++j) {
