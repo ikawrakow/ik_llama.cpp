@@ -425,7 +425,7 @@ __device__ __forceinline__ float vec_dot_iq2_k_q8_1(
     // -> scales_l[4*(i4/4) + k] >> 4*(((i4%4)/2)%2)
 
     const uint32_t * scales = (const uint32_t *)bq2->scales;
-    uint32_t s32 = __vsub4(((scales[i4/4] >> 4*(((i4%4)/2)%2)) & 0x0f0f0f0f) << 1, 0x0f0f0f0f);
+    uint32_t s32 = __vsub4((scales[i4/4] >> 4*(((i4%4)/2)%2)) & 0x0f0f0f0f, 0x08080808);
     const int8_t * s8 = (const int8_t *)&s32;
 
     aux32[0] = ((val1 >> 0) & 0x03030303); aux32[1] = ((val2 >> 0) & 0x03030303); values = all_values + ((extra & 0x01) << 8);

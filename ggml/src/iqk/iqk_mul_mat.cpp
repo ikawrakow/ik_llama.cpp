@@ -889,13 +889,13 @@ struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
     inline __m128i make_scales(const uint8_t * scales_l) const {
         uint64_t aux64; std::memcpy(&aux64, scales_l, 8);
         auto scl = _mm_and_si128(_mm_set_epi64x(aux64 >> 4, aux64), _mm_set1_epi8(0xf));
-        return _mm_add_epi8(_mm_slli_epi16(scl, 1), m15);
+        return _mm_add_epi8(scl, m8);
     }
     Q2Bits bits;
     const IQXKScales iqxk;
 
     const __m512i values;
-    const __m128i m15 = _mm_set1_epi8(-15);
+    const __m128i m8 = _mm_set1_epi8(-8);
 };
 
 struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
@@ -1555,13 +1555,13 @@ struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
     inline __m128i make_scales(const uint8_t * scales_l) const {
         uint64_t aux64; std::memcpy(&aux64, scales_l, 8);
         auto scl = _mm_and_si128(_mm_set_epi64x(aux64 >> 4, aux64), maskl);
-        return _mm_add_epi8(_mm_slli_epi16(scl, 1), m15);
+        return _mm_add_epi8(scl, m8);
     }
 
     Q2Bits bits;
     const IQXKScales iqxk;
     const __m256i values;
-    const __m128i m15      = _mm_set1_epi8(-15);
+    const __m128i m8       = _mm_set1_epi8(-8);
     const __m128i maskl    = _mm_set1_epi8(0xf);
 };
 
@@ -4683,7 +4683,7 @@ struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
     inline int8x16_t make_scales(const uint8_t * scales_l) const {
         uint8x8_t aux = vld1_u8(scales_l);
         uint8x16_t scl8 = vandq_u8(vcombine_u8(aux, vshr_n_u8(aux, 4)), vdupq_n_u8(0xf));
-        int8x16_t scales = vaddq_s8(vreinterpretq_s8_u8(vshlq_n_u8(scl8, 1)), vdupq_n_s8(-15));
+        int8x16_t scales = vaddq_s8(vreinterpretq_s8_u8(scl8), vdupq_n_s8(-8));
         return vqtbl1q_s8(scales, hshuff);
     }
 
