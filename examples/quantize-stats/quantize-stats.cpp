@@ -3,6 +3,10 @@
 #include "ggml.h"
 #include "llama.h"
 
+#define GGML_COMMON_DECL_C
+#define GGML_COMMON_IMPL_C
+#include "../ggml/src/ggml-common.h"
+
 #include <algorithm>
 #include <cassert>
 #include <cinttypes>
@@ -21,6 +25,20 @@
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
+#include <intrin.h>
+#include <ammintrin.h>
+#include <nmmintrin.h>
+#include <immintrin.h>
+#include <stdlib.h>
+inline int popcount(uint8_t x) { return __popcnt(x); }
+inline int popcount(uint16_t x) { return __popcnt(x); }
+inline int popcount(uint32_t x) { return __popcnt(x); }
+inline int popcount(uint64_t x) { return _mm_popcnt_u64(x); }
+#else
+constexpr int popcount(uint8_t x) { return __builtin_popcount(x); }
+constexpr int popcount(uint16_t x) { return __builtin_popcount(x); }
+constexpr int popcount(uint32_t x) { return __builtin_popcount(x); }
+constexpr int popcount(uint64_t x) { return __builtin_popcountll(x); }
 #endif
 
 struct quantize_stats_params {
@@ -228,6 +246,97 @@ static void test_roundtrip_on_layer(
     }
 }
 
+static void analyze_iq4ks(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_elements) {
+    int row_size = ggml_row_size(GGML_TYPE_IQ4_KS, n_per_row);
+    int nblock = n_per_row/QK_K;
+    int nthread = std::max(1, int(std::thread::hardware_concurrency()/2));
+    int chunk = (nrows + 8*nthread - 1)/(8*nthread);
+    std::mutex mutex;
+    int counter = 0;
+    float mse0 = 0, mse = 0;
+    auto compute = [&mutex, &counter, &mse0, &mse, values, row_size, nblock, nrows, n_per_row, chunk] () {
+        std::vector<char> Q(row_size);
+        float lmse0 = 0, lmse = 0;
+        while (true) {
+            std::unique_lock<std::mutex> lock(mutex);
+            int first = counter; counter += chunk;
+            if (first >= nrows) {
+                mse += lmse; mse0 += lmse0;
+                return;
+            }
+            lock.unlock();
+            int last = std::min(first + chunk, nrows);
+            for (int row = first; row < last; ++row) {
+                auto xr = values + row*n_per_row;
+                ggml_quantize_chunk(GGML_TYPE_IQ4_KS, xr, (void *)Q.data(), 0, 1, n_per_row, nullptr);
+                const float * dptr = (const float *)Q.data();
+                const float d = *dptr;
+                const block_iq4_ks * iq4 = (const block_iq4_ks *)(dptr + 1);
+                for (int ibl = 0; ibl < nblock; ++ibl) {
+                    const float * xbl = xr + ibl*QK_K;
+                    auto qs = iq4[ibl].qs;
+                    for (int ib = 0; ib < QK_K/32; ++ib) {
+                        const float * xb = xbl + 32*ib;
+                        const float dl = d * ((iq4[ibl].scales[ib] & 254) - 127);
+                        const int8_t * values = iq4k_values + ((iq4[ibl].scales[ib] & 1) << 4);
+                        for (int j = 0; j < 16; j += 2) {
+                            uint16_t v0 = *(const uint16_t *)(qs + j);
+                            int non = popcount(v0);
+                            float diff1 = xb[j+ 0] - dl*values[qs[j+0] & 0xf];
+                            float diff2 = xb[j+16] - dl*values[qs[j+0] >>  4];
+                            float diff3 = xb[j+ 1] - dl*values[qs[j+1] & 0xf];
+                            float diff4 = xb[j+17] - dl*values[qs[j+1] >>  4];
+                            lmse0 += diff1*diff1 + diff2*diff2 + diff3*diff3 + diff4*diff4;
+                            if (non%2 == 0) {
+                                lmse += diff1*diff1 + diff2*diff2 + diff3*diff3 + diff4*diff4;
+                            } else {
+                                float best = std::numeric_limits<float>::max();
+                                for (int k = 0; k < 16; k += 4) {
+                                    uint16_t v = v0 ^ (1 << k);
+                                    uint8_t v1 = v;
+                                    uint8_t v2 = v >> 8;
+                                    diff1 = xb[j+ 0] - dl*values[v1 & 0xf];
+                                    diff2 = xb[j+16] - dl*values[v1 >>  4];
+                                    diff3 = xb[j+ 1] - dl*values[v2 & 0xf];
+                                    diff4 = xb[j+17] - dl*values[v2 >>  4];
+                                    float score = diff1*diff1 + diff2*diff2 + diff3*diff3 + diff4*diff4;
+                                    if (score < best) best = score;
+                                }
+                                lmse += best;
+                            }
+                        }
+                        qs += 16;
+                    }
+                }
+            }
+        }
+    };
+    std::vector<std::thread> workers(nthread-1);
+    for (auto& w : workers) w = std::thread(compute);
+    compute();
+    for (auto& w : workers) w.join();
+    tot_mse += mse;
+    tot_elements += n_per_row*nrows;
+    printf("%s:  %g  %g    %g\n", name, sqrt(mse0/(n_per_row*nrows)), sqrt(mse/(n_per_row*nrows)), sqrt(tot_mse/tot_elements));
+}
+
+static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_elements) {
+    if (!ggml_is_contiguous(t) || (t->type != GGML_TYPE_F32 && t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_BF16)) {
+        return;
+    }
+    if (t->type == GGML_TYPE_F32) {
+        analyze_iq4ks(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_elements);
+    } else {
+        std::vector<float> aux(t->ne[0]*t->ne[1]);
+        if (t->type == GGML_TYPE_F16) {
+            ggml_fp16_to_fp32_row((const ggml_fp16_t *)t->data, aux.data(), aux.size());
+        } else {
+            ggml_bf16_to_fp32_row((const ggml_bf16_t *)t->data, aux.data(), aux.size());
+        }
+        analyze_iq4ks(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_elements);
+    }
+}
+
 static void print_fp_stats(const char * msg, const uint64_t * counts) {
     printf("===== %s\n", msg);
     uint64_t tot = 0; for (int i = 0; i < 32; ++i) tot += counts[i];
@@ -263,6 +372,7 @@ int main(int argc, char ** argv) {
     int max_thread = 0;
     bool invalid_param = false;
     bool analyze_fp = false;
+    bool analyze = false;
     std::string arg;
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -278,6 +388,8 @@ int main(int argc, char ** argv) {
             params.per_layer_stats = true;
         } else if (arg == "-afp" || arg == "--analyze-fp") {
             analyze_fp = true;
+        } else if (arg == "-a" || arg == "--analyze") {
+            analyze = true;
         } else if (arg == "--histogram") {
             params.print_histogram = true;
         } else if (arg == "-m" || arg == "--model") {
@@ -403,6 +515,21 @@ int main(int argc, char ** argv) {
     std::vector<float> input_scratch;
     std::vector<char> quantized_scratch;
     std::vector<float> output_scratch;
+
+    if (analyze) {
+        float tot_mse = 0, tot_elements = 0;
+        for (const auto& kv_tensor : tensors) {
+            if (!layer_included(params, kv_tensor.first)) {
+                continue;
+            }
+            if (kv_tensor.second->ne[0] == 1 || kv_tensor.second->ne[1] == 1) {
+                // we never quantize those
+                continue;
+            }
+            analyze_iq4ks(kv_tensor.second, tot_mse, tot_elements);
+        }
+        return 0;
+    }
 
     if (analyze_fp) {
         for (const auto& kv_tensor : tensors) {
