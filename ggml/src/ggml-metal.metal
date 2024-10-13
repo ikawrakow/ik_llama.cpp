@@ -6202,14 +6202,14 @@ void kernel_mul_mv_iq2_k_f32_impl(
             device const uint32_t * q32 = (device const uint32_t *)xb.qs + 8*iq + 2*ir;
             device const uint32_t * sc  = (device const uint32_t *)xb.scales;
 
-            const uint32_t scales32 = ((sc[iq] >> 4*is) & 0x0f0f0f0f) << 1;
+            const uint32_t scales32 = (sc[iq] >> 4*is) & 0x0f0f0f0f;
             thread const int8_t * s8 = (thread const int8_t *)&scales32;
             uint16_t extra = xb.extra >> (8*iq + is);
 
             shift[0] = (extra << 2) & 4;
-            shift[1] = (extra << 1) & 4;
-            shift[2] = (extra >> 0) & 4;
-            shift[3] = (extra >> 1) & 4;
+            shift[1] = (extra << 0) & 4;
+            shift[2] = (extra >> 2) & 4;
+            shift[3] = (extra >> 4) & 4;
 
             float4 acc = {0.f};
             for (int l = 0; l < 4; ++l) {
@@ -6218,7 +6218,7 @@ void kernel_mul_mv_iq2_k_f32_impl(
                 aux32[1] = (q32[1] >> 2*l) & 0x03030303;
                 for (int j = 0; j < 8; ++j) acc[l] += yl[8*l+j] * values[aux8[j]];
             }
-            sumf[row] += (float)xb.d * (acc[0] * (s8[0] - 15) + acc[1] * (s8[1] - 15) + acc[2] * (s8[2] - 15) + acc[3] * (s8[3] - 15));
+            sumf[row] += (float)xb.d * (acc[0] * (s8[0] - 8) + acc[1] * (s8[1] - 8) + acc[2] * (s8[2] - 8) + acc[3] * (s8[3] - 8));
 
         }
 
@@ -6254,6 +6254,7 @@ kernel void kernel_mul_mv_iq2_k_f32(
         constant   int64_t & ne1,
         constant   uint    & r2,
         constant   uint    & r3,
+        threadgroup int8_t * shared_values,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint  tiisg[[thread_index_in_simdgroup]],
         uint  sgitg[[simdgroup_index_in_threadgroup]]) {
