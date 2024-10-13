@@ -7705,10 +7705,10 @@ template <typename type4x4>
 void dequantize_iq2_k(device const block_iq2_k * xb, short il, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256
     device const uint32_t * q32 = (device const uint32_t *)xb->qs + 8*(il/8) + 4*(il&1);
-    half d = xb->d * (2*((xb->scales[il/2] >> 4*(il&1)) & 0xf) - 15);
+    half d = xb->d * (((xb->scales[il/2] >> 4*(il&1)) & 0xf) - 8);
 
-    constant int8_t * int_values = iq2nl_values + 4*((xb->extra >> il) & 1);
-    half4 values = { d * int_values[0], d * int_values[1], d * int_values[2], d * int_values[3] };
+    constant half4 * half_values = (constant half4 *)kvalues_iq2k_h;
+    half4 values = half_values[(xb->extra >> il) & 1] * d;
 
     const int shift = 2*((il%8)/2);
     uint32_t aux32;
