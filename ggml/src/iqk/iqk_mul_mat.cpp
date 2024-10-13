@@ -1825,6 +1825,49 @@ struct DequantizerIQ4KS final : public BaseDequantizer<block_iq4_ks, true> {
     const __m256i shuff2   = _mm256_set_epi64x(0x0f0e0f0e0d0c0d0c, 0x0b0a0b0a09080908, 0x0f0e0f0e0d0c0d0c, 0x0b0a0b0a09080908);
 };
 
+struct DequantizerIQ2KS final : public BaseDequantizer<block_iq2_ks, true, true> {
+    DequantizerIQ2KS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_values()) {}
+    template <typename Q8>
+    inline __m256i new_block(int i, const Q8& q8, __m256 * accm) {
+        auto scales128 = make_scales(x[i].scales, x[i].extra >> 8);
+        auto shifts = _mm_and_si128(_mm_cmpeq_epi8(_mm_and_si128(_mm_set1_epi8(x[i].extra), hmask), hmask), m5);
+        auto scales_s = _mm_mullo_epi16(scales128, _mm_cvtepi8_epi16(_mm_add_epi8(m32, shifts)));
+        s8k.accum_mins(scales_s, q8, i, d, accm);
+        return MM256_SET_M128I(scales128, scales128);
+    }
+    inline void prepare(int i, int j) {
+        bits.prepare(x[i].qs, j);
+        bits.values[0] = _mm256_shuffle_epi8(values, bits.values[0]);
+        bits.values[1] = _mm256_shuffle_epi8(values, bits.values[1]);
+        bits.values[2] = _mm256_shuffle_epi8(values, bits.values[2]);
+        bits.values[3] = _mm256_shuffle_epi8(values, bits.values[3]);
+    }
+    static inline __m256i load_values() {
+        static const uint8_t kvalues_iq2nl[16] = {1, 19, 33, 49, 0, 0, 0, 0,  6, 24, 38, 54, 0, 0, 0, 0};
+        auto val128 = _mm_loadu_si128((const __m128i *)kvalues_iq2nl);
+        return MM256_SET_M128I(val128, val128);
+    }
+    inline __m128i make_scales(const uint8_t * scales_l, uint8_t scales_h) const {
+        const uint16_t * scales = (const uint16_t *)scales_l;
+        uint32_t aux32 = scales[0] | (uint32_t(scales[1]) << 16);
+        auto scl = _mm_srlv_epi32(_mm_set1_epi32(aux32), shift);
+        scl = _mm_and_si128(_mm_shuffle_epi8(scl, shuffle), _mm_set1_epi8(0xf));
+        auto sch = _mm_set1_epi8(scales_h);
+        sch = _mm_and_si128(_mm_cmpeq_epi8(_mm_and_si128(sch, hmask), _mm_setzero_si128()), m16);
+        return _mm_cvtepi8_epi16(_mm_add_epi8(scl, sch));
+    }
+    Q2Bits bits;
+    Scales8KBase s8k;
+
+    const __m256i values;
+    const __m128i m16 = _mm_set1_epi8(-16);
+    const __m128i m5  = _mm_set1_epi8(5);
+    const __m128i m32 = _mm_set1_epi8(-32);
+    const __m128i hmask = _mm_set1_epi64x(0x8040201008040201);
+    const __m128i shuffle = _mm_set1_epi64x(0x0703060205010400);
+    const __m128i shift = _mm_set_epi32(0, 0, 4, 0);
+};
+
 struct DequantizerQ5K final : public BaseDequantizer<block_q5_K> {
     DequantizerQ5K(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
     template <typename Q8>
