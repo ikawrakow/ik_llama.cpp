@@ -570,7 +570,7 @@ void quantize_row_iq2_k_impl(const float * x, void * vy, int n_per_row, const fl
 
         uint16_t extra = 0;
 
-        float max_abs_scale = 0, max_scale = 0;
+        float max_abs_scale = 0;
 
         for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
             const float * xb = xbl + kBlockSize*ib;
@@ -633,10 +633,7 @@ void quantize_row_iq2_k_impl(const float * x, void * vy, int n_per_row, const fl
             if (is_shifted) extra |= (1 << ib);
 
             float abs_scale = fabsf(scales[ib]);
-            if (abs_scale > max_abs_scale) {
-                max_abs_scale = abs_scale;
-                max_scale = scales[ib];
-            }
+            max_abs_scale = std::max(max_abs_scale, abs_scale);
         }
 
         if (!max_abs_scale) continue;
@@ -1132,7 +1129,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
         const float * xbl = x + ibl*QK_K;
         float sumx2 = 0;
         for (int j = 0; j < QK_K; ++j) sumx2 += xbl[j]*xbl[j];
-        const float sigma2 = sumx2/QK_K;
+        const float sigma2 = 1.5f*sumx2/QK_K;
 
         uint16_t extra = 0;
 
