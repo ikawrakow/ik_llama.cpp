@@ -2841,11 +2841,15 @@ const uint16_t * scramble_table() {
             uint16_t val = i;
             int non = popcount(val);
             if (non%2) val |= (1 << 15);
+            bool found = false;
             for (int j = 0; j < int(table.size()); ++j) {
                 if ((j ^ (j << 1)) == val) {
-                    //printf("%5d  %5u  %5d\n", i, val, j);
-                    table[i] = j; break;
+                    table[i] = j; found = true; break;
                 }
+            }
+            if (!found) {
+                printf("Oops: did not find for %d %u\n", i, val);
+                exit(1);
             }
         }
     }
@@ -2892,6 +2896,8 @@ uint16_t prune_iq4ks(uint16_t v, const int8_t * values, const float * x, const f
 void prune_iq4ks_to_iq4kss(int n_per_row, const uint16_t * table, const char * cx, const float * x, char *cy,
         const float * quant_weights, float * weight, float * all_scales) {
     constexpr int kBlockSize = 32;
+    float xv[4], w[4];
+    uint16_t vps[kBlockSize/4];
     const float * dptr_ks = (const float *)cx;
     const float d_ks = *dptr_ks;
     const block_iq4_ks * iq4ks = (const block_iq4_ks *)(dptr_ks + 1);
@@ -2906,6 +2912,7 @@ void prune_iq4ks_to_iq4kss(int n_per_row, const uint16_t * table, const char * c
         float sigma2 = 0;
         for (int j = 0; j < QK_K; ++j) sigma2 += xbl[j]*xbl[j];
         sigma2 *= 2.f/QK_K;
+        const uint16_t * q4 = (const uint16_t *)iq4ks[ibl].qs;
         for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
             const float * xb = xbl + ib*kBlockSize;
             if (quant_weights) {
@@ -2917,65 +2924,42 @@ void prune_iq4ks_to_iq4kss(int n_per_row, const uint16_t * table, const char * c
             const int8_t * values = iq4k_values + ((iq4ks[ibl].scales[ib] & 1) << 4);
             float dl  = d_ks * ((iq4ks[ibl].scales[ib] & 254) - 127);
             float sumqx = 0, sumq2 = 0;
+            for (int k = 0; k < kBlockSize/4; ++k) {
+                xv[0] = xb[2*k+0]; xv[1] = xb[2*k+kBlockSize/2]; xv[2] = xb[2*k+1]; xv[3] = xb[2*k+1+kBlockSize/2];
+                w[0] = weight[2*k+0]; w[1] = weight[2*k+kBlockSize/2]; w[2] = weight[2*k+1]; w[3] = weight[2*k+1+kBlockSize/2];
+                auto vp = prune_iq4ks(q4[k], values, xv, w, dl);
+                vps[k] = table[vp & 0x7fff];
+                for (int j = 0; j < 4; ++j) {
+                    float q = values[(vp >> 4*j) & 0xf];
+                    sumqx += w[j]*q*xv[j];
+                    sumq2 += w[j]*q*q;
+                }
+            }
             for (int k = 0; k < kBlockSize/8; ++k) {
-                uint16_t vl = 0, vh = 0;
-                for (int j = 0; j < 4; ++j) {
-                    uint8_t ql = iq4ks[ibl].qs[(kBlockSize/2)*ib + (kBlockSize/8)*k + j] & 0xf;
-                    uint8_t qh = iq4ks[ibl].qs[(kBlockSize/2)*ib + (kBlockSize/8)*k + j] >>  4;
-                    vl |= ql << 4*j;
-                    vh |= qh << 4*j;
-                }
-                auto vlp = prune_iq4ks(vl, values, xb + 4*k, weight + 4*k, dl);
-                auto vhp = prune_iq4ks(vh, values, xb + 4*k + kBlockSize/2, weight + 4*k + kBlockSize/2, dl);
-                auto vlp_s = table[vlp & 0x7fff];
-                auto vhp_s = table[vhp & 0x7fff];
-                y[ibl].qs[(kBlockSize/8)*ib + k] = vlp_s | (vhp_s << 15) | (((iq4ks[ibl].scales[ib] >> 2*k) & 3) << 30);
-                if ((vlp_s ^ (vlp_s << 1)) != vlp) {
-                    printf("Oops(l): vl = %u (%d) vlp = %u (%d) vlp_s = %u check = %u\n", vl, popcount(vl), vlp, popcount(vlp), vlp_s, vlp_s ^ (vlp_s << 1));
-                    exit(1);
-                }
-                if ((vhp_s ^ (vhp_s << 1)) != vhp) {
-                    printf("Oops(h): vh = %u (%d) vhp = %u (%d) vhp_s = %u check = %u\n", vh, popcount(vh), vhp, popcount(vhp), vhp_s, vhp_s ^ (vhp_s << 1));
-                    exit(1);
-                }
-                for (int j = 0; j < 4; ++j) {
-                    float ql = values[(vlp >> 4*j) & 0xf];
-                    float qh = values[(vhp >> 4*j) & 0xf];
-                    sumqx += weight[4*k+j]*ql*xb[4*k+j] + weight[4*k+j+16]*qh*xb[4*k+j+16];
-                    sumq2 += weight[4*k+j]*ql*ql + weight[4*k+j+16]*qh*qh;
-                }
-                //for (int j = 0; j < 4; ++j) {
-                //    uint8_t ql = iq4ks[ibl].qs[(kBlockSize/2)*ib + (kBlockSize/8)*k + j] & 0xf;
-                //    uint8_t qh = iq4ks[ibl].qs[(kBlockSize/2)*ib + (kBlockSize/8)*k + j] >>  4;
-                //    uint8_t qlp = (vlp >> 4*j) & 0xf;
-                //    uint8_t qhp = (vhp >> 4*j) & 0xf;
-                //    float diffl = dl*values[ql] - xb[4*k+j];
-                //    float diffh = dl*values[qh] - xb[4*k+j+16];
-                //    float difflp = dl*values[qlp] - xb[4*k+j];
-                //    float diffhp = dl*values[qhp] - xb[4*k+j+16];
-                //    printf("%d %d %d: %u %u %u %u   %g %g   %g %g\n", ib, k, j, ql, qh, qlp, qhp, diffl, diffh, difflp, diffhp);
-                //}
+                y[ibl].qs[(kBlockSize/8)*ib + k] = vps[2*k+0] | (vps[2*k+1] << 15) | (((iq4ks[ibl].scales[ib] >> 2*k) & 3) << 30);
+                //y[ibl].qs[(kBlockSize/8)*ib + k] = vps[2*k+0] | (vps[2*k+1] << 15);
             }
             scales[ib] = sumq2 > 0 ? sumqx/sumq2 : dl;
             max_abs_scale = std::max(max_abs_scale, scales[ib]);
+            q4 += kBlockSize/4;
         }
     }
-    if (!max_abs_scale) return;
-    float d = max_abs_scale/127;
-    *dptr = d;
-    float id = 1/d;
-    for (int ibl = 0; ibl < nblock; ++ibl) {
-        auto scales = all_scales + ibl*(QK_K/kBlockSize);
-        for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
-            int l = nearest_int(0.5f*(id*scales[ib]+127.f));
-            l = std::max(0, std::min(127, l)) << 1;
-            l |= (iq4ks[ibl].scales[ib] & 1);
-            for (int k = 0; k < 4; ++k) {
-                y[ibl].qs[4*ib+k] &= 0x3fffffff;
-                y[ibl].qs[4*ib+k] |= (((l >> 2*k) & 3) << 30);
-            }
-        }
-    }
+    //if (!max_abs_scale) return;
+    //float d = max_abs_scale/127;
+    //*dptr = d;
+    //float id = 1/d;
+    //for (int ibl = 0; ibl < nblock; ++ibl) {
+    //    auto scales = all_scales + ibl*(QK_K/kBlockSize);
+    //    for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
+    //        int l = nearest_int(0.5f*(id*scales[ib]+127.f));
+    //        l = std::max(0, std::min(127, l)) << 1;
+    //        l |= (iq4ks[ibl].scales[ib] & 1);
+    //        for (int k = 0; k < 4; ++k) {
+    //            //y[ibl].qs[4*ib+k] &= 0x3fffffff;
+    //            y[ibl].qs[4*ib+k] |= (((l >> 2*k) & 3) << 30);
+    //        }
+    //    }
+    //}
 }
 }
 
@@ -3010,36 +2994,36 @@ void dequantize_row_iq4_kss(const block_iq4_kss * x, float * y, int64_t k) {
     const float * dptr = (const float *)x;
     const float d = *dptr;
     x = (const block_iq4_kss *)(dptr + 1);
-    //uint32_t aux32[4];
-    //const uint8_t * aux8 = (const uint8_t *)aux32;
+    uint32_t aux32[4];
+    const uint8_t * aux8 = (const uint8_t *)aux32;
     for (int ibl = 0; ibl < k/QK_K; ++ibl) {
         auto qs = x[ibl].qs;
         for (int ib = 0; ib < QK_K/32; ++ib) {
-            uint8_t ls = ((qs[0] >> 30) | ((qs[1] >> 28) & 0x0c) | ((qs[2] >> 26) & 0x30) | ((qs[3] >> 24) & 0xc0));
-            const int8_t * values = iq4k_values + ((ls & 1) << 4);
-            const float dl = d * ((ls & 254) - 127);
-            for (int k = 0; k < 4; ++k) {
-                uint16_t vl = qs[k] & 0x7fff;
-                vl ^= (vl << 1);
-                uint16_t vh = (qs[k] >> 15) & 0x7fff;
-                vh ^= (vh << 1);
-                for (int j = 0; j < 4; ++j) {
-                    y[4*k + j +  0] = dl*values[(vl >> 4*j) & 0xf];
-                    y[4*k + j + 16] = dl*values[(vh >> 4*j) & 0xf];
-                }
-            }
-            //int16_t ls = 0;
-            //for (int k = 0; k < 4; ++k) {
-            //    aux32[k] = (qs[k] & 0x00007fff) | ((qs[k] << 1) & 0x7fff0000);
-            //    aux32[k] ^= (aux32[k] << 1);
-            //    ls |= (qs[k] >> 30) << 2*k;
-            //}
+            //uint8_t ls = ((qs[0] >> 30) | ((qs[1] >> 28) & 0x0c) | ((qs[2] >> 26) & 0x30) | ((qs[3] >> 24) & 0xc0));
             //const int8_t * values = iq4k_values + ((ls & 1) << 4);
-            //float dl = d * ((ls & 254) - 127);
-            //for (int j = 0; j < 16; ++j) {
-            //    y[j+ 0] = dl * values[aux8[j] & 0xf];
-            //    y[j+16] = dl * values[aux8[j] >>  4];
+            //const float dl = d * ((ls & 254) - 127);
+            //for (int k = 0; k < 4; ++k) {
+            //    uint16_t vl = qs[k] & 0x7fff;
+            //    vl ^= (vl << 1);
+            //    uint16_t vh = (qs[k] >> 15) & 0x7fff;
+            //    vh ^= (vh << 1);
+            //    for (int j = 0; j < 4; ++j) {
+            //        y[4*k + j +  0] = dl*values[(vl >> 4*j) & 0xf];
+            //        y[4*k + j + 16] = dl*values[(vh >> 4*j) & 0xf];
+            //    }
             //}
+            int16_t ls = 0;
+            for (int k = 0; k < 4; ++k) {
+                aux32[k] = (qs[k] & 0x00007fff) | ((qs[k] << 1) & 0x7fff0000);
+                aux32[k] ^= (aux32[k] << 1);
+                ls |= (qs[k] >> 30) << 2*k;
+            }
+            const int8_t * values = iq4k_values + ((ls & 1) << 4);
+            float dl = d * ((ls & 254) - 127);
+            for (int j = 0; j < 16; ++j) {
+                y[j+ 0] = dl * values[aux8[j] & 0xf];
+                y[j+16] = dl * values[aux8[j] >>  4];
+            }
             y  += 32;
             qs += 4;
         }
