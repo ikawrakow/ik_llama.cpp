@@ -3092,15 +3092,16 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                 }
                 l += 127;
                 if (mse_m < mse_p) l |= 1;
-                for (int k = 0; k < block_size/8; ++k) {
-                    auto v1 = table[v[2*k+0] & 0x7fff];
-                    auto v2 = table[v[2*k+1] & 0x7fff];
-                    y[ibl].qs[(block_size/8)*ib + k] = v1 | (v2 << 15) | (((l >> 2*k) & 3) << 30);
+                uint16_t * q16 = (uint16_t *)y[ibl].qs + (block_size/4)*ib;
+                for (int k = 0; k < block_size/4; ++k) {
+                    auto val = table[v[k] & 0x7fff];
+                    q16[k] = (val << 1) | ((l >> k) & 1);
                 }
             } else {
                 l += 127;
-                for (int k = 0; k < block_size/8; ++k) {
-                    y[ibl].qs[(block_size/8)*ib + k] |= (((l >> 2*k) & 3) << 30);
+                uint16_t * q16 = (uint16_t *)y[ibl].qs + (block_size/4)*ib;
+                for (int k = 0; k < block_size/4; ++k) {
+                    q16[k] = ((l >> k) & 1);
                 }
             }
         }
@@ -3208,10 +3209,10 @@ void dequantize_row_iq4_kss(const block_iq4_kss * x, float * y, int64_t k) {
     const float * dptr = (const float *)x;
     const float d = *dptr;
     x = (const block_iq4_kss *)(dptr + 1);
-    uint32_t aux32[4];
-    const uint8_t * aux8 = (const uint8_t *)aux32;
+    uint16_t aux16[8];
+    const uint8_t * aux8 = (const uint8_t *)aux16;
     for (int ibl = 0; ibl < k/QK_K; ++ibl) {
-        auto qs = x[ibl].qs;
+        auto qs = (const uint16_t *)x[ibl].qs;
         for (int ib = 0; ib < QK_K/32; ++ib) {
             //uint8_t ls = ((qs[0] >> 30) | ((qs[1] >> 28) & 0x0c) | ((qs[2] >> 26) & 0x30) | ((qs[3] >> 24) & 0xc0));
             //const int8_t * values = iq4k_values + ((ls & 1) << 4);
@@ -3227,10 +3228,10 @@ void dequantize_row_iq4_kss(const block_iq4_kss * x, float * y, int64_t k) {
             //    }
             //}
             int16_t ls = 0;
-            for (int k = 0; k < 4; ++k) {
-                aux32[k] = (qs[k] & 0x00007fff) | ((qs[k] << 1) & 0x7fff0000);
-                aux32[k] ^= (aux32[k] << 1);
-                ls |= (qs[k] >> 30) << 2*k;
+            for (int k = 0; k < 8; ++k) {
+                aux16[k] = qs[k] & 0xfffe;
+                aux16[k] ^= (aux16[k] >> 1);
+                ls |= (qs[k] & 1) << k;
             }
             const int8_t * values = iq4k_values + ((ls & 1) << 4);
             float dl = d * ((ls & 254) - 127);
@@ -3239,7 +3240,7 @@ void dequantize_row_iq4_kss(const block_iq4_kss * x, float * y, int64_t k) {
                 y[j+16] = dl * values[aux8[j] >>  4];
             }
             y  += 32;
-            qs += 4;
+            qs += 8;
         }
     }
 }

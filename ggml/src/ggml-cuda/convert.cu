@@ -653,12 +653,13 @@ static __global__ void dequantize_block_iq4_kss(const void * __restrict__ vx, ds
     const int64_t ib = tid%8; // 0...7
     dst_t * y = yy + ii*QK_K + 32*ib + 4*il;
     const uint32_t * q4 = x[i].qs + 4*ib;
-    uint8_t ls = (q4[0] >> 30) | ((q4[1] >> 28) & 0x0c) | ((q4[2] >> 26) & 0x30) | ((q4[3] >> 24) & 0xc0);
+    uint32_t s32 = (q4[0] & 0x00010001) | ((q4[1] & 0x00010001) << 2) | ((q4[2] & 0x00010001) << 4) | ((q4[3] & 0x00010001) << 6);
+    uint8_t ls = (s32 | (s32 >> 15)) & 0xff;
     const float d = scale * ((ls & 254) - 127);
     const int8_t * values = iq4k_values + ((ls & 1) << 4);
     uint32_t aux32[2];
-    aux32[0] = (q4[il] & 0x00007fff) | ((q4[il] << 1) & 0x7fff0000);
-    aux32[0] ^= (aux32[0] << 1);
+    aux32[0] = q4[il] & 0xfffefffe;
+    aux32[0] ^= (aux32[0] >> 1);
     aux32[1] = ((aux32[0] >> 4) & 0x0f0f0f0f);
     aux32[0] &= 0x0f0f0f0f;
     const uint8_t * aux8 = (const uint8_t *)aux32;
