@@ -694,7 +694,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^abc?d*efg+(hij)?kl$"
         })""",
         R"""(
-            root ::= "\"" "ab" "c"? "d"* "ef" "g"+ ("hij")? "kl" "\"" space
+            root ::= "\"" ("ab" "c"? "d"* "ef" "g"+ ("hij")? "kl") "\"" space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
@@ -707,7 +707,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^\\[\\]\\{\\}\\(\\)\\|\\+\\*\\?$"
         })""",
         R"""(
-            root ::= "\"" "[]{}()|+*?" "\"" space
+            root ::= "\"" ("[]{}()|+*?") "\"" space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
@@ -720,7 +720,20 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^\"$"
         })""",
         R"""(
-            root ::= "\"" "\"" "\"" space
+            root ::= "\"" ("\"") "\"" space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with top-level alternation",
+        R"""({
+            "type": "string",
+            "pattern": "^A|B|C|D$"
+        })""",
+        R"""(
+            root ::= "\"" ("A" | "B" | "C" | "D") "\"" space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
@@ -734,7 +747,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             dot ::= [^\x0A\x0D]
-            root ::= "\"" ("(" root-1{1,3} ")")? root-1{3,3} "-" root-1{4,4} " " "a"{3,5} "nd" dot dot dot "\"" space
+            root ::= "\"" (("(" root-1{1,3} ")")? root-1{3,3} "-" root-1{4,4} " " "a"{3,5} "nd" dot dot dot) "\"" space
             root-1 ::= [0-9]
             space ::= | " " | "\n" [ \t]{0,20}
         )"""

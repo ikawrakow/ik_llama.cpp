@@ -615,7 +615,7 @@ private:
             }
             return join_seq();
         };
-        return _add_rule(name, "\"\\\"\" " + to_rule(transform()) + " \"\\\"\" space");
+        return _add_rule(name, "\"\\\"\" (" + to_rule(transform()) + ") \"\\\"\" space");
     }
 
     /*
