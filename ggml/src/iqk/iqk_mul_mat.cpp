@@ -1882,8 +1882,54 @@ struct DequantizerIQ4KS final : public BaseDequantizer<block_iq4_ks, true> {
     const __m128i m128     = _mm_set1_epi16(-128);
     const __m128i m1       = _mm_set1_epi16(1);
     const __m128i m4       = _mm_set1_epi16(4);
-    const __m256i shuff1   = _mm256_set_epi64x(0x0706070605040504, 0x0302030201000100, 0x0706070605040504, 0x0302030201000100);
-    const __m256i shuff2   = _mm256_set_epi64x(0x0f0e0f0e0d0c0d0c, 0x0b0a0b0a09080908, 0x0f0e0f0e0d0c0d0c, 0x0b0a0b0a09080908);
+};
+
+struct DequantizerIQ4KSS final : public BaseDequantizer<block_iq4_kss, true> {
+    DequantizerIQ4KSS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_256()) {}
+    template <typename Q8>
+    inline __m256i new_block(int i, const Q8& q8, __m256 * accd) {
+        union { __m256i vec; uint16_t val[16]; } helper;
+        for (int k = 0; k < 4; ++k) {
+            data[k] = _mm256_loadu_si256((const __m256i *)x[i].qs + k);
+            auto p = _mm256_and_si256(_mm256_cmpeq_epi16(_mm256_and_si256(data[k], m1), m1), smask);
+            p = _mm256_add_epi32(_mm256_unpackhi_epi64(p, p), p);
+            p = _mm256_add_epi32(_mm256_shuffle_epi32(p, _MM_SHUFFLE(2, 3, 0, 1)), p);
+            helper.vec = _mm256_hadd_epi16(p, p);
+            aux[2*k+0] = helper.val[0];
+            aux[2*k+1] = helper.val[8];
+            data[k] = _mm256_and_si256(data[k], bmask);
+            data[k] = _mm256_xor_si256(data[k], _mm256_srli_epi16(data[k], 1));
+        }
+        auto scales128 = _mm_loadu_si128((const __m128i *)aux);
+        auto shifts = _mm_and_si128(_mm_cmpeq_epi16(_mm_and_si128(scales128, _mm256_castsi256_si128(m1)), _mm256_castsi256_si128(m1)), m4);
+        scales128 = _mm_add_epi16(_mm_and_si128(scales128, mask), m127);
+        auto scales_s = _mm_mullo_epi16(scales128, _mm_add_epi16(m128, shifts));
+        s8k.accum_mins(scales_s, q8, i, d, accd);
+        return MM256_SET_M128I(scales128, scales128);
+    }
+    inline void prepare(int, int j) {
+        for (int k = 0; k < 2; ++k) {
+            auto p1 = _mm256_castsi256_si128(data[2*j+k]);
+            auto p2 = _mm256_extractf128_si256(data[2*j+k], 1);
+            bits.values[2*k+0] = _mm256_and_si256(MM256_SET_M128I(_mm_srli_epi16(p1, 4), p1), bits.ml);
+            bits.values[2*k+0] = _mm256_shuffle_epi8(values, bits.values[2*k+0]);
+            bits.values[2*k+1] = _mm256_and_si256(MM256_SET_M128I(_mm_srli_epi16(p2, 4), p2), bits.ml);
+            bits.values[2*k+1] = _mm256_shuffle_epi8(values, bits.values[2*k+1]);
+        }
+    }
+
+    Q4Bits bits;
+    Scales8KBase s8k;
+    const __m256i values;
+    __m256i data[4];
+    const __m256i smask    = _mm256_set_epi64x(0x0080004000200010, 0x0008000400020001, 0x0080004000200010, 0x0008000400020001);
+    const __m256i bmask    = _mm256_set1_epi16(0xfffe);
+    const __m128i mask     = _mm_set1_epi16(254);
+    const __m128i m127     = _mm_set1_epi16(-127);
+    const __m128i m128     = _mm_set1_epi16(-128);
+    const __m256i m1       = _mm256_set1_epi16(1);
+    const __m128i m4       = _mm_set1_epi16(4);
+    uint16_t aux[8];
 };
 
 struct DequantizerIQ2KS final : public BaseDequantizer<block_iq2_ks, true, true> {
