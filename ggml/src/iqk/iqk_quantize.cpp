@@ -3258,4 +3258,324 @@ void vec_dot_iq4_kss_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
     GGML_UNUSED(by);
 }
 
+namespace {
+struct WorkIQ4NN {
+    constexpr static int nhbin = 256;
+    WorkIQ4NN(int n) : n_per_row(n) {
+        weight.resize(n_per_row);
+        L.resize(n_per_row);
+        sum0.resize(nhbin+1);
+        sum1.resize(nhbin+1);
+        sum2.resize(nhbin+1);
+        values.resize(16);
+        adjusted_values.resize(16);
+        counts.resize(16);
+        bins.resize(17);
+    }
+    std::vector<float> weight;
+    std::vector<double> sum0, sum1, sum2;
+    std::vector<float> values, adjusted_values, counts;
+    std::vector<uint16_t> L;
+    std::vector<int> bins;
+    int n_per_row;
+};
+
+inline float get_mse_d(int imin, int imax, const double* sum0, const double* sum1, const double* sum2) {
+    double n = sum0[imax] - sum0[imin];
+    if (!n) return 0.f;
+    double s = sum1[imax] - sum1[imin];
+    return sum2[imax] - sum2[imin] - s*s/n;
+}
+
+inline int divide_bin_d(int n, const double* sum0, const double* sum1, const double* sum2, float& new_mse) {
+    float best_mse = get_mse_d(0, n, sum0, sum1, sum2);
+    int best_i = -1;
+    for (int i = 1; i < n; ++i) {
+        float mse = get_mse_d(0, i, sum0, sum1, sum2) + get_mse_d(i, n, sum0, sum1, sum2);
+        if (mse < best_mse) {
+            best_mse = mse;
+            best_i = i;
+        }
+    }
+    new_mse = best_mse;
+    return best_i;
+}
+
+int make_the_bins_d(int nbin, int nhave, const double * sum0, const double * sum1, const double * sum2, int * bins) {
+    float tmp_mse;
+    while (nhave < nbin + 1) {
+        float best_delta = 0;
+        int best_bin = -1, div = -1;
+        for (int bin=0; bin<nhave-1; ++bin) {
+            float cur_mse = get_mse_d(bins[bin], bins[bin+1], sum0, sum1, sum2);
+            int n = bins[bin+1] - bins[bin];
+            if (n > 1) {
+                int bin_div = divide_bin_d(n, sum0 + bins[bin], sum1 + bins[bin], sum2 + bins[bin], tmp_mse);
+                if (bin_div >= 0 && tmp_mse < cur_mse) {
+                    float delta = cur_mse - tmp_mse;
+                    if (delta > best_delta) {
+                        best_delta = delta; best_bin = bin;
+                        div = bins[bin] + bin_div;
+                    }
+                }
+            }
+        }
+        if (best_bin < 0) {
+            //printf("Oops: failed to find bin\n");
+            //printf("nbin = %d, nh = %d, nhave = %d\n",nbin,nh,nhave);
+            //for (int bin=0; bin<nhave-1; ++bin) {
+            //    float cur_mse = get_mse_d(bins[bin], bins[bin+1], sum0, sum1, sum2);
+            //    int n = bins[bin+1] - bins[bin];
+            //    printf("bin %d: bin = %d, n = %d, mse = %g\n",bin,bins[bin],n,(double)cur_mse);
+            //}
+            return nhave;
+        }
+        for (int i = nhave-1; i > best_bin; --i) bins[i+1] = bins[i];
+        bins[best_bin+1] = div;
+        ++nhave;
+    }
+    for (int it = 0; it < 10; ++it) {
+        int nchanged = 0;
+        for (int bin=0; bin<nhave-2; bin+=2) {
+            int bin_div = divide_bin_d(bins[bin+2] - bins[bin], sum0 + bins[bin], sum1 + bins[bin], sum2 + bins[bin], tmp_mse);
+            if (bin_div >= 0) {
+                if (bins[bin] + bin_div != bins[bin+1]) {
+                    bins[bin+1] = bins[bin] + bin_div;
+                    ++nchanged;
+                }
+            }
+        }
+        for (int bin=1; bin<nhave-2; bin+=2) {
+            int bin_div = divide_bin_d(bins[bin+2] - bins[bin], sum0 + bins[bin], sum1 + bins[bin], sum2 + bins[bin], tmp_mse);
+            if (bin_div >= 0) {
+                if (bins[bin] + bin_div != bins[bin+1]) {
+                    bins[bin+1] = bins[bin] + bin_div;
+                    ++nchanged;
+                }
+            }
+        }
+        if (nchanged == 0) break;
+    }
+    return nhave;
+}
+
+int make_bins_d(int nbin, int nh, const double * sum0, const double * sum1, const double * sum2, int * bins) {
+    int nhave = 0;
+    bins[nhave++] = 0;
+    bins[nhave++] = nh;
+    return make_the_bins_d(nbin, nhave, sum0, sum1, sum2, bins);
+}
+
+inline int find_index(int n, const int * bins, int l) {
+    if (l <= bins[0]) return 0;
+    if (l >= bins[n-1]) return n-1;
+    int ml = 0, mu = n-1;
+    while (mu-ml > 1) {
+        int mav = (ml+mu)/2;
+        if (l < bins[mav]) mu = mav; else ml = mav;
+    }
+    return mu-1;
+}
+
+void quantize_row_iq4_knn_impl(const float * x, char * qrow, const float * imatrix, WorkIQ4NN& work) {
+    GGML_UNUSED(qrow);
+    GGML_UNUSED(imatrix);
+    GGML_UNUSED(work);
+
+    int n_per_row = work.n_per_row;
+
+    float * dptr = (float *)qrow;
+    *dptr = 0;
+    int8_t * int_values = (int8_t *)(dptr + 1);
+    uint8_t * qs = (uint8_t *)(int_values + 16);
+    memset(int_values, 0, 16);
+    memset(qs, 0, work.n_per_row/2);
+
+    float sigma2 = 0;
+    float xmin = x[0], xmax = x[0];
+    for (int j = 0; j < work.n_per_row; ++j) {
+        sigma2 += x[j]*x[j];
+        xmin = std::min(xmin, x[j]);
+        xmax = std::max(xmax, x[j]);
+    }
+    if (xmax == 0) {
+        *dptr = xmin;
+        int_values[0] = 1;
+        return;
+    }
+    sigma2 *= 2.f/work.n_per_row;
+    auto weight = work.weight.data();
+    if (imatrix) {
+        for (int j = 0; j < n_per_row; ++j) weight[j] = imatrix[j] * sqrtf(sigma2 + x[j]*x[j]);
+    } else {
+        for (int j = 0; j < n_per_row; ++j) weight[j] = 0.25f*sigma2 + x[j]*x[j];
+    }
+
+    auto sum0 = work.sum0.data();
+    auto sum1 = work.sum1.data();
+    auto sum2 = work.sum2.data();
+    std::memset(sum0, 0, (work.nhbin+1)*sizeof(double));
+    std::memset(sum1, 0, (work.nhbin+1)*sizeof(double));
+    std::memset(sum2, 0, (work.nhbin+1)*sizeof(double));
+
+    float id = (work.nhbin - 1)/(xmax - xmin);
+    for (int j = 0; j < n_per_row; ++j) {
+        int l = nearest_int(id*(x[j] - xmin));
+        work.L[j] = l;
+        double w = double(weight[j]);
+        double xv = double(x[j]);
+        sum0[l+1] += w;
+        sum1[l+1] += w*xv;
+        sum2[l+1] += w*xv*xv;
+    }
+
+    for (int j = 0; j < work.nhbin; ++j) {
+        sum0[j+1] += sum0[j];
+        sum1[j+1] += sum1[j];
+        sum2[j+1] += sum2[j];
+    }
+
+    auto bins = work.bins.data();
+    int nbin = make_bins_d(16, work.nhbin, sum0, sum1, sum2, bins);
+
+    //printf("Got %d bins:\n", nbin);
+    //for (int i = 0; i < nbin; ++i) printf("%2d  %3d\n", i, bins[i]);
+
+    GGML_ASSERT(nbin <= 17);
+
+    std::memset(work.values.data(), 0, 16*sizeof(float));
+    memset(work.adjusted_values.data(), 0, 16*sizeof(float));
+    memset(work.counts.data(), 0, 16*sizeof(float));
+    for (int j = 0; j < n_per_row; ++j) {
+        int l = find_index(nbin, bins, work.L[j]);
+        l = std::min(15, l);
+        work.L[j] = l;
+        float w = weight[j];
+        work.adjusted_values[l] += w*x[j];
+        work.counts[l] += w;
+    }
+
+    const int ntry = 11;
+
+    int nchanged = 0;
+    for (int itry = 0; itry < ntry; ++itry) {
+        //printf("======== Iteration %d\n", itry);
+        for (int i = 0; i < 16; ++i) {
+            if (work.counts[i] > 0) work.values[i] = work.adjusted_values[i]/work.counts[i];
+            //printf("%2d  %g  %g  %g\n", i, work.values[i], work.adjusted_values[i], work.counts[i]);
+            work.adjusted_values[i] = work.counts[i] = 0;
+        }
+        nchanged = 0;
+        for (int j = 0; j < n_per_row; ++j) {
+            int idx0 = work.L[j];
+            int idx = idx0;
+            float diff = fabsf(x[j] - work.values[idx]);
+            if (idx0 > 0) {
+                float this_diff = fabsf(x[j] - work.values[idx0-1]);
+                if (this_diff < diff) {
+                    diff = this_diff; idx = idx0-1;
+                }
+            }
+            if (idx0 < nbin-1) {
+                float this_diff = fabsf(x[j] - work.values[idx0+1]);
+                if (this_diff < diff) {
+                    diff = this_diff; idx = idx0+1;
+                }
+            }
+            if (idx != idx0) {
+                ++nchanged;
+                work.L[j] = idx;
+            }
+            float w = weight[j];
+            work.adjusted_values[idx] += w*x[j];
+            work.counts[idx] += w;
+        }
+        //printf("nchanged = %d\n", nchanged);
+        if (nchanged == 0) break;
+    }
+    if (nchanged > 0) {
+        for (int i = 0; i < 16; ++i) {
+            if (work.counts[i] > 0) work.values[i] = work.adjusted_values[i]/work.counts[i];
+        }
+    }
+
+    float max = 0, amax = 0;
+    for (int i = 0; i < 16; ++i) {
+        float ax = fabsf(work.values[i]);
+        if (ax > amax) {
+            amax = ax; max = work.values[i];
+        }
+    }
+
+    float d = -max/128;
+    //printf("amax = %g, max = %g d = %g\n", amax, max, d);
+    *dptr = d;
+    id = d ? 1/d : 0.f;
+    for (int i = 0; i < 16; ++i) {
+        int l = nearest_int(id*work.values[i]);
+        int_values[i] = std::max(-128, std::min(127, l));
+        //printf("int_values[%d] = %d\n", i, int_values[i]);
+    }
+
+    int nb32 = n_per_row/32;
+    auto L = work.L.data();
+    for (int ib = 0; ib < nb32; ++ib) {
+        for (int j = 0; j < 16; ++j) {
+            qs[j] = L[j] | (L[j+16] << 4);
+        }
+        qs += 16;
+        L  += 32;
+    }
+}
+}
+
+size_t quantize_iq4_knn(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    auto row_size = ggml_row_size(GGML_TYPE_IQ4_KNN, n_per_row);
+    auto qrow = (char *)dst;
+    WorkIQ4NN work(n_per_row);
+    for (int row = 0; row < nrows; ++row) {
+        quantize_row_iq4_knn_impl(src, qrow, imatrix, work);
+        src  += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
+}
+
+void quantize_row_iq4_knn_ref(const float * x, block_iq4_knn * y, int64_t k) {
+    quantize_iq4_knn(x, y, 1, k, nullptr);
+}
+
+void quantize_row_iq4_knn(const float * x, void * y, int64_t k) {
+    quantize_iq4_knn(x, (block_iq4_knn *)y, 1, k, nullptr);
+}
+
+void dequantize_row_iq4_knn(const block_iq4_knn * x, float * y, int64_t k) {
+    const float * dptr = (const float *)x;
+    const float d = *dptr;
+    const int8_t * values = (const int8_t *)(dptr + 1);
+    const uint8_t * qs = (const uint8_t *)(values + 16);
+    int nblock = k/32;
+    for (int ib = 0; ib < nblock; ++ib) {
+        for (int j = 0; j < 16; ++j) {
+            y[j+ 0] = d * values[qs[j] & 0xf];
+            y[j+16] = d * values[qs[j] >>  4];
+        }
+        y  += 32;
+        qs += 16;
+    }
+}
+
+void vec_dot_iq4_knn_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KNN, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
 
