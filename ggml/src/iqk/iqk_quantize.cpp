@@ -3499,22 +3499,18 @@ void quantize_row_iq4_knn_impl(const float * x, char * qrow, const float * imatr
         }
     }
 
-    float max = 0, amax = 0;
+    float amax = 0;
     for (int i = 0; i < 16; ++i) {
         float ax = fabsf(work.values[i]);
-        if (ax > amax) {
-            amax = ax; max = work.values[i];
-        }
+        amax = std::max(ax, amax);
     }
 
-    float d = -max/128;
-    //printf("amax = %g, max = %g d = %g\n", amax, max, d);
+    float d = amax/127;
     *dptr = d;
     id = d ? 1/d : 0.f;
     for (int i = 0; i < 16; ++i) {
         int l = nearest_int(id*work.values[i]);
-        int_values[i] = std::max(-128, std::min(127, l));
-        //printf("int_values[%d] = %d\n", i, int_values[i]);
+        int_values[i] = std::max(-127, std::min(127, l));
     }
 
     int nb32 = n_per_row/32;
