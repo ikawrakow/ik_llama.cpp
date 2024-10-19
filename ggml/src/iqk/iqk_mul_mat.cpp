@@ -52,6 +52,9 @@
 #ifdef _MSC_VER
 #define IQK_NOINLINE __declspec(noinline)
 #define IQK_ALWAYS_INLINE inline
+#if !defined __x86_64__ && defined _M_X64
+#define __x86_64__
+#endif
 #else
 #define IQK_NOINLINE __attribute__((__noinline__))
 #define IQK_ALWAYS_INLINE __attribute__((__always_inline__))
@@ -7171,15 +7174,11 @@ struct F16 {
     static inline Data sub(Data v1, Data v2) { return _mm512_sub_ps(v1, v2); }
     static inline Data load(const float * ptr) { return _mm512_loadu_ps(ptr); }
     static inline void store(float * ptr, Data data) { _mm512_storeu_ps(ptr, data); }
+    static inline Data fmadd(Data prev, Data v1, Data v2) { return _mm512_fmadd_ps(v1, v2, prev); }
     static inline float reduce_max(Data data) { return _mm512_reduce_max_ps(data); }
     static inline float reduce_add(Data data) { return _mm512_reduce_add_ps(data); }
-    static inline Data fmadd(Data prev, Data v1, Data v2) { return _mm512_fmadd_ps(v1, v2, prev); }
-    template <int k_step> static inline float reduce_max(const Data * data) {
-        return reduce_T<k_step, _mm512_max_ps, _mm512_reduce_max_ps>(data);
-    }
-    template <int k_step> static inline float reduce_add(const Data * data) {
-        return reduce_T<k_step, _mm512_add_ps, _mm512_reduce_add_ps>(data);
-    }
+    static inline Data max(Data v1, Data v2) { return _mm512_max_ps(v1, v2); }
+    static inline Data add(Data v1, Data v2) { return _mm512_add_ps(v1, v2); }
 #elif defined __AVX2__
     using Data = __m256;
     constexpr static int block_size = 8;
@@ -7195,12 +7194,8 @@ struct F16 {
     static inline Data fmadd(Data prev, Data v1, Data v2) { return _mm256_fmadd_ps(v1, v2, prev); }
     static inline float reduce_max(Data data) { return hmax_float_8(data); }
     static inline float reduce_add(Data data) { return hsum_float_8(data); }
-    template <int k_step> static inline float reduce_max(const Data * data) {
-        return reduce_T<k_step, _mm256_max_ps, &F16::reduce_max>(data);
-    }
-    template <int k_step> static inline float reduce_add(const Data * data) {
-        return reduce_T<k_step, _mm256_add_ps, &F16::reduce_add>(data);
-    }
+    static inline Data max(Data v1, Data v2) { return _mm256_max_ps(v1, v2); }
+    static inline Data add(Data v1, Data v2) { return _mm256_add_ps(v1, v2); }
 #else
     using Data = float16x8_t;
     constexpr static int block_size = 8;
@@ -7230,13 +7225,15 @@ struct F16 {
         auto sum = vadd_f16(vget_low_f16(data), vget_high_f16(data));
         return vaddvq_f32(vcvt_f32_f16(sum));
     }
+    static inline Data max(Data v1, Data v2) { return vmaxq_f16(v1, v2); }
+    static inline Data add(Data v1, Data v2) { return vaddq_f16(v1, v2); }
+#endif
     template <int k_step> static inline float reduce_max(const Data * data) {
-        return reduce_T<k_step, vmaxq_f16, &F16::reduce_max>(data);
+        return reduce_T<k_step, &F16::max, &F16::reduce_max>(data);
     }
     template <int k_step> static inline float reduce_add(const Data * data) {
-        return reduce_T<k_step, vaddq_f16, &F16::reduce_add>(data);
+        return reduce_T<k_step, &F16::add, &F16::reduce_add>(data);
     }
-#endif
     template <int k_step, Data (*Op_combine)(Data, Data), float (*Op)(Data)>
     static float reduce_T(const Data * data) {
         float result;
