@@ -232,6 +232,12 @@ extern "C" {
     GGML_API void ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, void * addr);
     GGML_API void ggml_backend_view_init(struct ggml_tensor * tensor);
 
+    // Utility to query whether cached GGML graph is in use
+    GGML_API bool ggml_use_cached_graph(ggml_backend_sched_t sched);
+
+    // Set whether or not to use GGML graph caching
+    GGML_API void ggml_set_cached_graph(ggml_backend_sched_t sched, bool set_value);
+
 
 #ifdef  __cplusplus
 }
