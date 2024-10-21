@@ -136,6 +136,49 @@ static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q4_1(
     return sum;
 }
 
+static __device__ __forceinline__ int get_one_int_from_table_16(const int & q4) {
+    const uint8_t * q0_8 = (const uint8_t *) &q4;
+    const char4 val0_8 = make_char4(kvalues_iq4nl[q0_8[0]], kvalues_iq4nl[q0_8[1]], kvalues_iq4nl[q0_8[2]], kvalues_iq4nl[q0_8[3]]);
+    return *((const int *) &val0_8);
+}
+
+template<typename T, int D>
+static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_iq4_nl(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_iq4_nl * K_iq4_nl = (const block_iq4_nl *) K_c;
+    GGML_UNUSED(Q_v);
+
+    T sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/sizeof(int); k_KQ_0 += WARP_SIZE) {
+        const int k_KQ = k_KQ_0 + threadIdx.x;
+
+        const int ib    = k_KQ /  QI8_1;
+        const int iqs4  = k_KQ %  QI4_NL;
+        const int shift = k_KQ & (QI8_1/2);
+
+        const int v = get_one_int_from_table_16((get_int_b2(K_iq4_nl[ib].qs, iqs4) >> shift) & 0x0F0F0F0F);
+        const int u = Q_q8[k_KQ_0/WARP_SIZE];
+
+        const int sumi = ggml_cuda_dp4a(v, u, 0);
+
+#ifdef FP16_AVAILABLE
+        if (std::is_same<T, half>::value) {
+            const half2  * Q_ds = (const half2  *) Q_ds_v;
+            sum += (T) (((half)sumi) * K_iq4_nl[ib].d * Q_ds[k_KQ_0/WARP_SIZE].x);
+        } else
+#endif // FP16_AVAILABLE
+        {
+            const float2 * Q_ds = (const float2 *) Q_ds_v;
+            sum += (T) ((float)sumi * __half2float(K_iq4_nl[ib].d) * Q_ds[k_KQ_0/WARP_SIZE].x);
+        }
+    }
+
+    return sum;
+}
+
 template<typename T, int D>
 static __device__ __forceinline__ T vec_dot_fattn_vec_KQ_q5_0(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
@@ -495,24 +538,26 @@ static __device__ __forceinline__ T dequantize_1_f16(const void * __restrict__ v
 
 template <int D>
 constexpr __device__ vec_dot_KQ_f16_t get_vec_dot_KQ_f16(ggml_type type_K) {
-    return type_K == GGML_TYPE_Q4_0 ? vec_dot_fattn_vec_KQ_q4_0<half, D> :
-        type_K == GGML_TYPE_Q4_1 ? vec_dot_fattn_vec_KQ_q4_1<half, D> :
-        type_K == GGML_TYPE_Q5_0 ? vec_dot_fattn_vec_KQ_q5_0<half, D> :
-        type_K == GGML_TYPE_Q5_1 ? vec_dot_fattn_vec_KQ_q5_1<half, D> :
-        type_K == GGML_TYPE_Q8_0 ? vec_dot_fattn_vec_KQ_q8_0<half, D> :
-        type_K == GGML_TYPE_F16 ? vec_dot_fattn_vec_KQ_f16<half, D> :
-        nullptr;
+    return type_K == GGML_TYPE_Q4_0   ? vec_dot_fattn_vec_KQ_q4_0<half, D>   :
+           type_K == GGML_TYPE_Q4_1   ? vec_dot_fattn_vec_KQ_q4_1<half, D>   :
+           type_K == GGML_TYPE_IQ4_NL ? vec_dot_fattn_vec_KQ_iq4_nl<half, D> :
+           type_K == GGML_TYPE_Q5_0   ? vec_dot_fattn_vec_KQ_q5_0<half, D>   :
+           type_K == GGML_TYPE_Q5_1   ? vec_dot_fattn_vec_KQ_q5_1<half, D>   :
+           type_K == GGML_TYPE_Q8_0   ? vec_dot_fattn_vec_KQ_q8_0<half, D>   :
+           type_K == GGML_TYPE_F16    ? vec_dot_fattn_vec_KQ_f16<half, D>    :
+           nullptr;
 }
 
 template <int D>
 constexpr __device__ vec_dot_KQ_f32_t get_vec_dot_KQ_f32(ggml_type type_K) {
-    return type_K == GGML_TYPE_Q4_0 ? vec_dot_fattn_vec_KQ_q4_0<float, D> :
-        type_K == GGML_TYPE_Q4_1 ? vec_dot_fattn_vec_KQ_q4_1<float, D> :
-        type_K == GGML_TYPE_Q5_0 ? vec_dot_fattn_vec_KQ_q5_0<float, D> :
-        type_K == GGML_TYPE_Q5_1 ? vec_dot_fattn_vec_KQ_q5_1<float, D> :
-        type_K == GGML_TYPE_Q8_0 ? vec_dot_fattn_vec_KQ_q8_0<float, D> :
-        type_K == GGML_TYPE_F16 ? vec_dot_fattn_vec_KQ_f16<float, D> :
-        nullptr;
+    return type_K == GGML_TYPE_Q4_0   ? vec_dot_fattn_vec_KQ_q4_0<float, D>   :
+           type_K == GGML_TYPE_Q4_1   ? vec_dot_fattn_vec_KQ_q4_1<float, D>   :
+           type_K == GGML_TYPE_IQ4_NL ? vec_dot_fattn_vec_KQ_iq4_nl<float, D> :
+           type_K == GGML_TYPE_Q5_0   ? vec_dot_fattn_vec_KQ_q5_0<float, D>   :
+           type_K == GGML_TYPE_Q5_1   ? vec_dot_fattn_vec_KQ_q5_1<float, D>   :
+           type_K == GGML_TYPE_Q8_0   ? vec_dot_fattn_vec_KQ_q8_0<float, D>   :
+           type_K == GGML_TYPE_F16    ? vec_dot_fattn_vec_KQ_f16<float, D>    :
+           nullptr;
 }
 
 constexpr __device__ dequantize_1_f16_t get_dequantize_1_f16(ggml_type type_V) {
@@ -590,10 +635,11 @@ static void on_no_fattn_vec_case(const int D) {
     } else if (D == 128) {
         fprintf(stderr, "Unsupported KV type combination for head_size 128.\n");
         fprintf(stderr, "Supported combinations:\n");
-        fprintf(stderr, "  - K == q4_0, V == q4_0,   4.50 BPV\n");
-        fprintf(stderr, "  - K == q8_0, V == iq4_nl, 6.50 BPV\n");
-        fprintf(stderr, "  - K == q8_0, V == q8_0,   8.50 BPV\n");
-        fprintf(stderr, "  - K == f16,  V == f16,   16.00 BPV\n");
+        fprintf(stderr, "  - K == q4_0,   V == q4_0,   4.50 BPV\n");
+        fprintf(stderr, "  - K == iq4_nl, V == iq4_nl, 4.50 BPV\n");
+        fprintf(stderr, "  - K == q8_0,   V == iq4_nl, 6.50 BPV\n");
+        fprintf(stderr, "  - K == q8_0,   V == q8_0,   8.50 BPV\n");
+        fprintf(stderr, "  - K == f16,    V == f16,   16.00 BPV\n");
         fprintf(stderr, "Compile with GGML_CUDA_FA_ALL_QUANTS for all combinations of q4_0, q4_1, iq4_nl, q5_0, q5_1, q8_0, and f16.\n");
         GGML_ABORT("fatal error");
     } else {
