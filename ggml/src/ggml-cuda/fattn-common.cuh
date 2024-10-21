@@ -590,10 +590,11 @@ static void on_no_fattn_vec_case(const int D) {
     } else if (D == 128) {
         fprintf(stderr, "Unsupported KV type combination for head_size 128.\n");
         fprintf(stderr, "Supported combinations:\n");
-        fprintf(stderr, "  - K == q4_0, V == q4_0,  4.50 BPV\n");
-        fprintf(stderr, "  - K == q8_0, V == q8_0,  8.50 BPV\n");
-        fprintf(stderr, "  - K == f16,  V == f16,  16.00 BPV\n");
-        fprintf(stderr, "Compile with GGML_CUDA_FA_ALL_QUANTS for all combinations of q4_0, q4_1, q5_0, q5_1, q8_0, and f16.\n");
+        fprintf(stderr, "  - K == q4_0, V == q4_0,   4.50 BPV\n");
+        fprintf(stderr, "  - K == q8_0, V == iq4_nl, 6.50 BPV\n");
+        fprintf(stderr, "  - K == q8_0, V == q8_0,   8.50 BPV\n");
+        fprintf(stderr, "  - K == f16,  V == f16,   16.00 BPV\n");
+        fprintf(stderr, "Compile with GGML_CUDA_FA_ALL_QUANTS for all combinations of q4_0, q4_1, iq4_nl, q5_0, q5_1, q8_0, and f16.\n");
         GGML_ABORT("fatal error");
     } else {
         fprintf(stderr, "Unsupported KV type combination for head_size 256.\n");
