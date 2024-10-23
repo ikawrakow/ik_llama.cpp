@@ -6638,11 +6638,13 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
 
     float scale;
     ggml_half d16;
+    char * c16 = (char *)&d16;
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         const char * cx = ((const char *)vx + ix*bx);
-        std::memcpy(&d16, cx, sizeof(d16));
+        c16[0] = cx[0]; c16[1] = cx[1];
+        //std::memcpy(&d16, cx, sizeof(d16));
         cx += sizeof(d16);
         scale = GGML_FP16_TO_FP32(d16);
 
@@ -6718,7 +6720,9 @@ static void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
-        const block_iq2_bn * x = (const block_iq2_bn *)((const char *)vx + ix*bx);
+        const float * dptr = (const float *)((const char *)vx + ix*bx);
+        const float d = *dptr;
+        const block_iq2_bn * x = (const block_iq2_bn *)(dptr + 1);
 
         if constexpr (nrc_y == 1) {
             int8x16x4_t v1;
@@ -6781,7 +6785,7 @@ static void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, -vaddvq_f32(vfmsq_f32(q8.minus(iy), q8.scale(iy), vcvtq_f32_s32(accd[iy]))));
+            info.store(ix, iy, -d*vaddvq_f32(vfmsq_f32(q8.minus(iy), q8.scale(iy), vcvtq_f32_s32(accd[iy]))));
         }
     }
 }
@@ -6928,14 +6932,14 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             expected_Btype = GGML_TYPE_Q8_K64;
             break;
         case GGML_TYPE_IQ1_TN:
-            m.funcs[0] = mul_mat_iq1bn_q8_K64<1;
-            m.funcs[1] = mul_mat_iq1bn_q8_K64<2;
-            m.funcs[2] = mul_mat_iq1bn_q8_K64<3;
-            m.funcs[3] = mul_mat_iq1bn_q8_K64<4;
-            m.funcs[4] = mul_mat_iq1bn_q8_K64<5;
-            m.funcs[5] = mul_mat_iq1bn_q8_K64<6;
-            m.funcs[6] = mul_mat_iq1bn_q8_K64<7;
-            m.funcs[7] = mul_mat_iq1bn_q8_K64<8;
+            m.funcs[0] = mul_mat_iq1bn_q8_K64<1>;
+            m.funcs[1] = mul_mat_iq1bn_q8_K64<2>;
+            m.funcs[2] = mul_mat_iq1bn_q8_K64<3>;
+            m.funcs[3] = mul_mat_iq1bn_q8_K64<4>;
+            m.funcs[4] = mul_mat_iq1bn_q8_K64<5>;
+            m.funcs[5] = mul_mat_iq1bn_q8_K64<6>;
+            m.funcs[6] = mul_mat_iq1bn_q8_K64<7>;
+            m.funcs[7] = mul_mat_iq1bn_q8_K64<8>;
             expected_Btype = GGML_TYPE_Q8_K64;
             break;
         case GGML_TYPE_IQ2_BN:
