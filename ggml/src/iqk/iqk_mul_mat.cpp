@@ -2471,7 +2471,7 @@ struct DequantizerIQ1BN {
 
 };
 
-template <int nrc_y, bool is_iq1_tn>
+template <int nrc_y>
 IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     const int nb = n / QK_IQ1BN;
     Q8_K64<nrc_y> q8(info);
@@ -2486,14 +2486,14 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
     const block_iq1_bn * x;
     const char * cx0 = (const char *)vx;
     float scale;
+    ggml_half d16;
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         const char * cx = cx0 + ix*bx;
-        if constexpr (is_iq1_tn) {
-            scale = GGML_FP16_TO_FP32(*(const ggml_half *)cx);
-            cx += sizeof(ggml_half);
-        }
+        std::memcpy(&d16, cx, sizeof(d16));
+        scale = GGML_FP16_TO_FP32(d16);
+        cx += sizeof(d16);
         x = (const block_iq1_bn *)cx;
 
         if constexpr (nrc_y == 1) {
@@ -2561,11 +2561,7 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
             auto vd = q8.scale(iy);
             auto sumi = _mm_add_epi32(_mm256_castsi256_si128(accd[iy]), _mm256_extractf128_si256(accd[iy], 1));
             auto sumf = _mm_fmsub_ps(vd, _mm_cvtepi32_ps(sumi), q8.minus(iy));
-            if constexpr (is_iq1_tn) {
-                info.store(ix, iy, scale*hsum_float_4(sumf));
-            } else {
-                info.store(ix, iy, hsum_float_4(sumf));
-            }
+            info.store(ix, iy, scale*hsum_float_4(sumf));
         }
 
     }
@@ -4173,26 +4169,26 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_IQ1_BN:
             assert (ne00 % QK_IQ1BN == 0);
-            mm.funcs[0] = mul_mat_iq1bn_q8_K64<1, false>;
-            mm.funcs[1] = mul_mat_iq1bn_q8_K64<2, false>;
-            mm.funcs[2] = mul_mat_iq1bn_q8_K64<3, false>;
-            mm.funcs[3] = mul_mat_iq1bn_q8_K64<4, false>;
-            mm.funcs[4] = mul_mat_iq1bn_q8_K64<5, false>;
-            mm.funcs[5] = mul_mat_iq1bn_q8_K64<6, false>;
-            mm.funcs[6] = mul_mat_iq1bn_q8_K64<7, false>;
-            mm.funcs[7] = mul_mat_iq1bn_q8_K64<8, false>;
+            mm.funcs[0] = mul_mat_iq1bn_q8_K64<1>;
+            mm.funcs[1] = mul_mat_iq1bn_q8_K64<2>;
+            mm.funcs[2] = mul_mat_iq1bn_q8_K64<3>;
+            mm.funcs[3] = mul_mat_iq1bn_q8_K64<4>;
+            mm.funcs[4] = mul_mat_iq1bn_q8_K64<5>;
+            mm.funcs[5] = mul_mat_iq1bn_q8_K64<6>;
+            mm.funcs[6] = mul_mat_iq1bn_q8_K64<7>;
+            mm.funcs[7] = mul_mat_iq1bn_q8_K64<8>;
             expected_typeB = GGML_TYPE_Q8_K64;
             break;
         case GGML_TYPE_IQ1_TN:
             assert (ne00 % QK_IQ1BN == 0);
-            mm.funcs[0] = mul_mat_iq1bn_q8_K64<1, true>;
-            mm.funcs[1] = mul_mat_iq1bn_q8_K64<2, true>;
-            mm.funcs[2] = mul_mat_iq1bn_q8_K64<3, true>;
-            mm.funcs[3] = mul_mat_iq1bn_q8_K64<4, true>;
-            mm.funcs[4] = mul_mat_iq1bn_q8_K64<5, true>;
-            mm.funcs[5] = mul_mat_iq1bn_q8_K64<6, true>;
-            mm.funcs[6] = mul_mat_iq1bn_q8_K64<7, true>;
-            mm.funcs[7] = mul_mat_iq1bn_q8_K64<8, true>;
+            mm.funcs[0] = mul_mat_iq1bn_q8_K64<1>;
+            mm.funcs[1] = mul_mat_iq1bn_q8_K64<2>;
+            mm.funcs[2] = mul_mat_iq1bn_q8_K64<3>;
+            mm.funcs[3] = mul_mat_iq1bn_q8_K64<4>;
+            mm.funcs[4] = mul_mat_iq1bn_q8_K64<5>;
+            mm.funcs[5] = mul_mat_iq1bn_q8_K64<6>;
+            mm.funcs[6] = mul_mat_iq1bn_q8_K64<7>;
+            mm.funcs[7] = mul_mat_iq1bn_q8_K64<8>;
             expected_typeB = GGML_TYPE_Q8_K64;
             break;
         case GGML_TYPE_IQ2_BN:
@@ -6630,7 +6626,7 @@ struct DequantizerIQ1BN {
     }
 };
 
-template <int nrc_y, bool is_iq1_tn>
+template <int nrc_y>
 static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     const int nb = n / QK_IQ1BN;
 
@@ -6641,14 +6637,14 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
     int8x16x4_t v1, v2;
 
     float scale;
+    ggml_half d16;
 
     for (int ix = 0; ix < nrc_x; ++ix) {
 
         const char * cx = ((const char *)vx + ix*bx);
-        if constexpr (is_iq1_tn) {
-            scale = GGML_FP16_TO_FP32(*(const ggml_half *)cx);
-            cx += sizeof(ggml_half);
-        }
+        std::memcpy(&d16, cx, sizeof(d16));
+        cx += sizeof(d16);
+        scale = GGML_FP16_TO_FP32(d16);
 
         const block_iq1_bn * x = (const block_iq1_bn *)cx;
 
@@ -6704,11 +6700,7 @@ static void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
-            if constexpr (is_iq1_tn) {
-                info.store(ix, iy, -scale * vaddvq_f32(vfmsq_f32(q8.minus(iy), q8.scale(iy), vcvtq_f32_s32(accd[iy]))));
-            } else {
-                info.store(ix, iy, -vaddvq_f32(vfmsq_f32(q8.minus(iy), q8.scale(iy), vcvtq_f32_s32(accd[iy]))));
-            }
+            info.store(ix, iy, -scale * vaddvq_f32(vfmsq_f32(q8.minus(iy), q8.scale(iy), vcvtq_f32_s32(accd[iy]))));
         }
 
     }
@@ -6925,25 +6917,25 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             MulMat::set_functions<DequantizerIQ3S>(m);
             break;
         case GGML_TYPE_IQ1_BN:
-            m.funcs[0] = mul_mat_iq1bn_q8_K64<1, false>;
-            m.funcs[1] = mul_mat_iq1bn_q8_K64<2, false>;
-            m.funcs[2] = mul_mat_iq1bn_q8_K64<3, false>;
-            m.funcs[3] = mul_mat_iq1bn_q8_K64<4, false>;
-            m.funcs[4] = mul_mat_iq1bn_q8_K64<5, false>;
-            m.funcs[5] = mul_mat_iq1bn_q8_K64<6, false>;
-            m.funcs[6] = mul_mat_iq1bn_q8_K64<7, false>;
-            m.funcs[7] = mul_mat_iq1bn_q8_K64<8, false>;
+            m.funcs[0] = mul_mat_iq1bn_q8_K64<1>;
+            m.funcs[1] = mul_mat_iq1bn_q8_K64<2>;
+            m.funcs[2] = mul_mat_iq1bn_q8_K64<3>;
+            m.funcs[3] = mul_mat_iq1bn_q8_K64<4>;
+            m.funcs[4] = mul_mat_iq1bn_q8_K64<5>;
+            m.funcs[5] = mul_mat_iq1bn_q8_K64<6>;
+            m.funcs[6] = mul_mat_iq1bn_q8_K64<7>;
+            m.funcs[7] = mul_mat_iq1bn_q8_K64<8>;
             expected_Btype = GGML_TYPE_Q8_K64;
             break;
         case GGML_TYPE_IQ1_TN:
-            m.funcs[0] = mul_mat_iq1bn_q8_K64<1, true>;
-            m.funcs[1] = mul_mat_iq1bn_q8_K64<2, true>;
-            m.funcs[2] = mul_mat_iq1bn_q8_K64<3, true>;
-            m.funcs[3] = mul_mat_iq1bn_q8_K64<4, true>;
-            m.funcs[4] = mul_mat_iq1bn_q8_K64<5, true>;
-            m.funcs[5] = mul_mat_iq1bn_q8_K64<6, true>;
-            m.funcs[6] = mul_mat_iq1bn_q8_K64<7, true>;
-            m.funcs[7] = mul_mat_iq1bn_q8_K64<8, true>;
+            m.funcs[0] = mul_mat_iq1bn_q8_K64<1;
+            m.funcs[1] = mul_mat_iq1bn_q8_K64<2;
+            m.funcs[2] = mul_mat_iq1bn_q8_K64<3;
+            m.funcs[3] = mul_mat_iq1bn_q8_K64<4;
+            m.funcs[4] = mul_mat_iq1bn_q8_K64<5;
+            m.funcs[5] = mul_mat_iq1bn_q8_K64<6;
+            m.funcs[6] = mul_mat_iq1bn_q8_K64<7;
+            m.funcs[7] = mul_mat_iq1bn_q8_K64<8;
             expected_Btype = GGML_TYPE_Q8_K64;
             break;
         case GGML_TYPE_IQ2_BN:

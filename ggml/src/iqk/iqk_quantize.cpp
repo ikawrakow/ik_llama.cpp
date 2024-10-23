@@ -119,6 +119,16 @@ void IQ1BNQuantizer::quantize_one_row_1bn(const float * src, block_iq1_bn * y, i
 
     const int nblock = n_per_row/QK_IQ1BN;
 
+    ggml_half * dptr = (ggml_half *)y;
+    y = (block_iq1_bn *)(dptr + 1);
+
+    float max = 0;
+    for (int j = 0; j < n_per_row; ++j) max = std::max(max, fabsf(src[j]));
+    ggml_half d = GGML_FP32_TO_FP16(max);
+    std::memcpy(dptr, &d, sizeof(d));
+
+    float thresh = 0.5f*max;
+
     for (int ib = 0; ib < nblock; ++ib) {
         std::memset(&y[ib], 0, sizeof(block_iq1_bn));
         auto xb = src + ib*QK_IQ1BN;
@@ -128,14 +138,14 @@ void IQ1BNQuantizer::quantize_one_row_1bn(const float * src, block_iq1_bn * y, i
                 int idx = 0;
                 for (int j = 0; j < 5; ++j) {
                     float v = xb[16*i16 + 5*k + j];
-                    int q = fabsf(v) < 1e-6f ? 1 : v < 0 ? 0 : 2;
+                    int q = fabsf(v) < thresh ? 1 : v < 0 ? 0 : 2;
                     idx += k_nb[j]*q;
                 }
                 idx = (256*idx + k_nb[5] - 1)/k_nb[5];
                 y[ib].ql[3*i16 + k] = idx;
             }
             float v = xb[16*i16 + 15];
-            int q = fabsf(v) < 1e-6f ? 1 : v < 0 ? 0 : 2;
+            int q = fabsf(v) < thresh ? 1 : v < 0 ? 0 : 2;
             v13 += k_nb[i16]*q;
         }
         y[ib].extra = (256*v13 + k_nb[5] - 1)/k_nb[5];
@@ -173,13 +183,13 @@ void IQ1BNQuantizer::quantize_one_row_2bn(const float * src, block_iq2_bn * y, i
 
 size_t quantize_iq1_bn(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     IQ1BNQuantizer iq1bn;
-    int nblock = n_per_row/QK_IQ1BN;
-    block_iq1_bn * y = (block_iq1_bn *)dst;
+    auto row_size = ggml_row_size(GGML_TYPE_IQ1_BN, n_per_row);
+    auto qrow = (char *)dst;
     for (int row = 0; row < nrows; ++row) {
-        iq1bn.quantize_one_row_1bn(src + row*n_per_row, y, n_per_row, imatrix);
-        y += nblock;
+        iq1bn.quantize_one_row_1bn(src + row*n_per_row, (block_iq1_bn *)qrow, n_per_row, imatrix);
+        qrow += row_size;
     }
-    return sizeof(block_iq1_bn)*nblock*nrows;
+    return nrows*row_size;
 }
 
 void quantize_row_iq1_bn_ref(const float * x, block_iq1_bn * y, int64_t k) {
@@ -199,30 +209,7 @@ void quantize_row_iq1_tn(const float * x, void * y, int64_t k) {
 }
 
 size_t quantize_iq1_tn(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
-    GGML_ASSERT(n_per_row >= 2*QK_K); // so we have space for the scale
-    int nblock = n_per_row/QK_IQ1BN;
-    float tmp[QK_IQ1BN];
-    char * qrow = (char *)dst;
-    auto row_size = ggml_row_size(GGML_TYPE_IQ1_TN, n_per_row);
-    IQ1BNQuantizer iq1bn;
-    for (int row = 0; row < nrows; ++row) {
-        float max = fabsf(src[0]);
-        for (int j = 1; j < n_per_row; ++j) max = std::max(max, fabsf(src[j]));
-        if (!(max > 0)) printf("%s: found max = %g?\n", __func__, max);
-        //GGML_ASSERT(max > 0);
-        *(ggml_half *)qrow = GGML_FP32_TO_FP16(max);
-        block_iq1_bn * y = (block_iq1_bn *)(qrow + sizeof(ggml_half));
-        const float * xb = src;
-        for (int ib = 0; ib < nblock; ++ib) {
-            for (int j = 0; j < QK_IQ1BN; ++j) tmp[j] = xb[j] < -0.5f*max ? -1 : xb[j] <= 0.5f*max ? 0 : 1;
-            iq1bn.quantize_one_row_1bn(tmp, y, QK_IQ1BN, imatrix);
-            ++y;
-            xb += QK_IQ1BN;
-        }
-        src  += n_per_row;
-        qrow += row_size;
-    }
-    return nrows*row_size;
+    return quantize_iq1_bn(src, dst, nrows, n_per_row, imatrix);
 }
 
 void dequantize_row_iq1_tn(const block_iq1_tn * x, float * y, int64_t k) {
