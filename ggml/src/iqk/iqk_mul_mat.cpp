@@ -2571,7 +2571,7 @@ IQK_NOINLINE void mul_mat_iq1bn_q8_K64(int n, const void * vx, size_t bx, const 
     }
 }
 
-struct DequantizeIQ2BN final : public BaseDequantizer<block_iq2_bn> {
+struct DequantizeIQ2BN final : public BaseDequantizer<block_iq2_bn, true> {
     DequantizeIQ2BN(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
 
     IQK_ALWAYS_INLINE void prepare4(int i, __m256i * val) const {
@@ -2671,7 +2671,7 @@ IQK_NOINLINE void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const 
             auto vd = q8.scale(iy);
             auto sumi = _mm_add_epi32(_mm256_castsi256_si128(accd[iy]), _mm256_extractf128_si256(accd[iy], 1));
             auto sumf = _mm_fmsub_ps(vd, _mm_cvtepi32_ps(sumi), q8.minus(iy));
-            info.store(ix, iy, hsum_float_4(sumf));
+            info.store(ix, iy, deq.d*hsum_float_4(sumf));
         }
     }
 }

@@ -13329,7 +13329,7 @@ struct llm_build_context {
                 float q_scale; std::memcpy(&q_scale, model.layers[il].wq->op_params, sizeof(float));
                 // Note: we could save this scale operation by applying the Q scale on the K * Q product further down
                 // (which also uses a scale). This works on the CPU and Metal backends, but produces NaNs on CUDA.
-                Qcur = ggml_scale(ctx0, Qcur, q_scale);
+                if (fabsf(q_scale-1) > 1e-4f) Qcur = ggml_scale(ctx0, Qcur, q_scale);
                 cb(Qcur, "Qcur", il);
                 if (model.layers[il].bq) {
                     Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
@@ -13339,7 +13339,7 @@ struct llm_build_context {
                 // B1.K
                 struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, model.layers[il].wk, cur);
                 float k_scale; std::memcpy(&k_scale, model.layers[il].wk->op_params, sizeof(float));
-                Kcur = ggml_scale(ctx0, Kcur, k_scale);
+                if (fabsf(k_scale-1) > 1e-4f) Kcur = ggml_scale(ctx0, Kcur, k_scale);
                 cb(Kcur, "Kcur", il);
                 if (model.layers[il].bk) {
                     Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
@@ -13351,7 +13351,7 @@ struct llm_build_context {
                 float v_scale; std::memcpy(&v_scale, model.layers[il].wv->op_params, sizeof(float));
                 cb(Vcur, "Vcur", il);
                 if (model.layers[il].bv) {
-                    Vcur = ggml_scale(ctx0, Vcur, v_scale);
+                    if (fabsf(v_scale-1) > 1e-4f) Vcur = ggml_scale(ctx0, Vcur, v_scale);
                     Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                     cb(Vcur, "Vcur", il);
                     v_scale = 1;
@@ -13431,7 +13431,7 @@ struct llm_build_context {
 
                 cur = ggml_mul_mat(ctx0, model.layers[il].wo, cur_attn);
                 float wo_scale; std::memcpy(&wo_scale, model.layers[il].wo->op_params, sizeof(float));
-                cur = ggml_scale(ctx0, cur, wo_scale);
+                if (fabsf(wo_scale-1) > 1e-4f) cur = ggml_scale(ctx0, cur, wo_scale);
 
                 cb(cur, "kqv_out", il);
             }
@@ -13460,7 +13460,7 @@ struct llm_build_context {
 
                 cur = ggml_mul_mat(ctx0, model.layers[il].ffn_gate, cur);
                 float ffn_gate_scale; std::memcpy(&ffn_gate_scale, model.layers[il].ffn_gate->op_params, sizeof(float));
-                cur = ggml_scale(ctx0, cur, ffn_gate_scale);
+                if (fabsf(ffn_gate_scale-1) > 1e-4f) cur = ggml_scale(ctx0, cur, ffn_gate_scale);
 
                 cb(cur, "ffn_gate", il);
 
@@ -13479,7 +13479,7 @@ struct llm_build_context {
 
                 cur = ggml_mul_mat(ctx0, model.layers[il].ffn_down, cur);
                 float ffn_down_scale; std::memcpy(&ffn_down_scale, model.layers[il].ffn_down->op_params, sizeof(float));
-                cur = ggml_scale(ctx0, cur, ffn_down_scale);
+                if (fabsf(ffn_down_scale-1) > 1e-4f) cur = ggml_scale(ctx0, cur, ffn_down_scale);
                 cb(cur, "ffn_down", il);
             }
             cur = ggml_add(ctx0, cur, ffn_inp);
