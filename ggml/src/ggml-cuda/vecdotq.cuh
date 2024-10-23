@@ -1167,45 +1167,6 @@ static __device__ __forceinline__ float vec_dot_iq1_bn_q8_1(
     return __low2float(bq8_1[iqs].ds) * sumi;
 }
 
-static __device__ __forceinline__ float vec_dot_iq2_bn_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-    const block_iq2_bn * bq2 = (const block_iq2_bn *) vbq + kbx;
-
-    // iqs is 0 or 1
-
-#if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
-    auto qs  = (const uint16_t *)bq2->qs + 4*iqs;
-    auto q8l = (const int *)bq8_1[0].qs + 2*iqs;
-    auto q8h = (const int *)bq8_1[1].qs + 2*iqs;
-    int sumi1 = 0, sumi2 = 0, sumi3 = 0, sumi4 = 0;
-    for (int j = 0; j < 2; ++j) {
-        int vl = qs[2*j+0] | (uint32_t(qs[2*j+1]) << 16);
-        int vh = vl >> 4;
-        sumi1 = __dp4a(vl & 0x03030303, q8l[j+0], sumi1);
-        sumi2 = __dp4a(vl & 0x0c0c0c0c, q8l[j+4], sumi2);
-        sumi3 = __dp4a(vh & 0x03030303, q8h[j+0], sumi3);
-        sumi4 = __dp4a(vh & 0x0c0c0c0c, q8h[j+4], sumi4);
-    }
-    auto d8l = __half22float2(bq8_1[0].ds);
-    auto d8h = __half22float2(bq8_1[1].ds);
-    return d8l.x * (sumi1 + 0.25f*sumi2) + d8h.x * (sumi3 + 0.25f * sumi4) - 0.5f*d8l.y - 0.5f*d8h.y;
-#else
-    int sumi1 = 0, sumi2 = 0, sumi3 = 0, sumi4 = 0;
-    auto q8l = bq8_1[0].qs + 8*iqs;
-    auto q8h = bq8_1[1].qs + 8*iqs;
-    auto qs  = bq2->qs + 8*iqs;
-    for (int j = 0; j < 8; ++j) {
-        sumi1 += q8l[j+ 0] * (qs[j] & 0x03);
-        sumi2 += q8l[j+16] * (qs[j] & 0x0c);
-        sumi3 += q8h[j+ 0] * (qs[j] & 0x30);
-        sumi4 += q8h[j+16] * (qs[j] & 0xc0);
-    }
-    auto d8l = __half22float2(bq8_1[0].ds);
-    auto d8h = __half22float2(bq8_1[1].ds);
-    return d8l.x * (sumi1 + 0.25f*sumi2) + 0.0625f * d8h.x*(sumi3 + 0.25f*sumi4) - 0.5f*d8l.y - 0.5f*d8h.y;
-#endif
-}
-
 static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4) {
     const int      q0_32  = (q4 >> 0) & 0x0F0F0F0F;
     const int8_t * q0_8   = (const int8_t *) &q0_32;
