@@ -521,38 +521,45 @@ static __global__ void dequantize_block_iq1_tn(const void * __restrict__ vx, dst
 }
 
 template<typename dst_t>
-static __global__ void dequantize_block_iq1_bn(const void * __restrict__ vx, dst_t * __restrict__ yy, int nb64) {
+static __global__ void dequantize_block_iq1_bn(const void * __restrict__ vx, dst_t * __restrict__ yy,
+        int64_t n_per_row, int64_t row_size, int64_t nrows) {
 
-    const int64_t ii  = blockIdx.x;
-    const block_iq1_bn * x = (const block_iq1_bn *) vx;
+    int64_t ii  = 256*blockIdx.x;
+    const int tid = threadIdx.x;
+    const int il = tid/4; // 0...7
+    const int ib = tid%4; // 0...3
+    dst_t * y = yy + ii + 64*ib + 8*il;
+
+    int64_t row = ii / n_per_row;
+    if (row >= nrows) return;
+    const char * cx = (const char *)vx + row * row_size;
+    half d16; memcpy(&d16, cx, sizeof(d16)); // in case not 2-byte aligned
+    float d = d16;
+    const block_iq1_bn * x = (const block_iq1_bn *)(cx + sizeof(d16));
+    ii -= row*n_per_row;
+    int64_t i = ii/QK_IQ1BN + ib;
 
     static const uint8_t k_mult[5] = {81, 27, 9, 3, 1};
 
 //#define COMPUTE_VS(v) 3*v >> 8
 #define COMPUTE_VS(v) (v + (v >> 1)) >> 7
 
-    const int tid = threadIdx.x;
-    const int il = tid/4; // 0...7
-    const int ib = tid%4; // 0...3
-    dst_t * y = yy + ii*QK_K + 64*ib + 8*il;
-    int64_t i = QK_K/QK_IQ1BN * ii + ib;
-    if (i >= nb64) return;
     const int i16 = il/2;
     uint8_t q = x[i].ql[3*i16+2*(il%2)];
     for (int j = 0; j < 5; ++j) {
         uint8_t v = k_mult[j]*q;
         int8_t vs = COMPUTE_VS(v);
-        y[2*(il%2)+j] = vs - 1;
+        y[2*(il%2)+j] = d*(vs - 1);
     }
     q = x[i].ql[3*i16+1];
     for (int j = 0; j < 2; ++j) {
         uint8_t v = k_mult[3*(il%2)+j]*q;
         int8_t vs = COMPUTE_VS(v);
-        y[5*(1-(il%2))+j] = vs-1;
+        y[5*(1-(il%2))+j] = d*(vs-1);
     }
     uint8_t v = (il%2) ? k_mult[i16]*x[i].extra : k_mult[2]*q;
     int8_t vs = COMPUTE_VS(v);
-    y[7] = vs - 1;
+    y[7] = d*(vs - 1);
 
 #undef COMPUTE_VS
 }
@@ -979,9 +986,9 @@ static void dequantize_row_iq1_m_cuda(const void * vx, dst_t * y, const int64_t 
 template<typename dst_t>
 static void dequantize_row_iq1_bn_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
     const int64_t k = nrows * n_per_row;
-    const int nb64 = k / QK_IQ1BN;
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ1_BN, n_per_row);
     const int nb = (k + 255) / 256;
-    dequantize_block_iq1_bn<<<nb, 32, 0, stream>>>(vx, y, nb64);
+    dequantize_block_iq1_bn<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size, nrows);
 }
 
 template<typename dst_t>

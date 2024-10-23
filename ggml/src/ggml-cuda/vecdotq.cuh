@@ -1117,56 +1117,6 @@ static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
     return d * ((sumi[0] + sumf[0]) * sc0 + (sumi[1] + sumf[1]) * sc1);
 }
 
-static __device__ __forceinline__ float vec_dot_iq1_bn_q8_1(
-    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
-    const block_iq1_bn * bq1 = (const block_iq1_bn *) vbq + kbx;
-
-    static const uint8_t k_mult[5] = {81, 27, 9, 3, 1};
-
-    // iqs is 0 or 1
-
-    int sumi = 0;
-#if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
-    const int * q8 = (const int *)bq8_1[iqs].qs;
-    int val[4];
-    for (int l = 0; l < 2; ++l) {
-        int8_t * a = (int8_t *)val;
-        const int i16 = 2*iqs + l;
-        for (int k = 0; k < 3; ++k) {
-            uint8_t q = bq1->ql[3*i16+k];
-            for (int j = 0; j < 5; ++j) {
-                uint8_t v = k_mult[j]*q;
-                int8_t vs = 3*v >> 8; //(v + (v >> 1)) >> 7;
-                *a++ = vs-1;
-            }
-        }
-        uint8_t v = k_mult[i16]*bq1->extra;
-        int8_t vs = 3*v >> 8; //(v + (v >> 1)) >> 7;
-        *a++ = vs-1;
-        sumi = __dp4a(val[0], q8[4*l+0], __dp4a(val[1], q8[4*l+1], __dp4a(val[2], q8[4*l+2], __dp4a(val[3], q8[4*l+3], sumi))));
-    }
-#else
-    const int8_t * q8 = bq8_1[iqs].qs;
-    for (int l = 0; l < 2; ++l) {
-        const int i16 = 2*iqs + l;
-        for (int k = 0; k < 3; ++k) {
-            uint8_t q = bq1->ql[3*i16+k];
-            for (int j = 0; j < 5; ++j) {
-                uint8_t v = k_mult[j]*q;
-                int8_t vs = (v + (v >> 1)) >> 7;
-                sumi += q8[j]*(vs - 1);
-            }
-            q8 += 5;
-        }
-        uint8_t v = k_mult[i16]*bq1->extra;
-        int8_t vs = (v + (v >> 1)) >> 7;
-        sumi += q8[0]*(vs - 1);
-        q8++;
-    }
-#endif
-    return __low2float(bq8_1[iqs].ds) * sumi;
-}
-
 static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4) {
     const int      q0_32  = (q4 >> 0) & 0x0F0F0F0F;
     const int8_t * q0_8   = (const int8_t *) &q0_32;
