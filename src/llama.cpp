@@ -3862,8 +3862,6 @@ struct llama_model_loader {
                 case GGML_TYPE_IQ1_M:   ftype = LLAMA_FTYPE_MOSTLY_IQ1_M;   break;
                 case GGML_TYPE_IQ1_BN:  ftype = LLAMA_FTYPE_MOSTLY_IQ1_BN;  break;
                 case GGML_TYPE_IQ2_BN:  ftype = LLAMA_FTYPE_MOSTLY_IQ2_BN;  break;
-                case GGML_TYPE_IQ1_TN:  ftype = LLAMA_FTYPE_MOSTLY_IQ1_TN;  break;
-                case GGML_TYPE_IQ2_TN:  ftype = LLAMA_FTYPE_MOSTLY_IQ2_TN;  break;
                 case GGML_TYPE_IQ4_NL:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_NL;  break;
                 case GGML_TYPE_IQ4_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_XS;  break;
                 case GGML_TYPE_IQ4_KS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_KS;  break;
@@ -4579,9 +4577,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ5_K:    return "IQ5_K - 5.5 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ6_K:    return "IQ6_K - 6.6 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ1_BN:   return "IQ1_BN - 1.625 bpw Bitnet";
-        case LLAMA_FTYPE_MOSTLY_IQ1_TN:   return "IQ1_TN - 1.625 bpw TriLM";
         case LLAMA_FTYPE_MOSTLY_IQ2_BN:   return "IQ2_BN - 2.00 bpw Bitnet";
-        case LLAMA_FTYPE_MOSTLY_IQ2_TN:   return "IQ2_TN - 2.00 bpw TriLM";
         case LLAMA_FTYPE_MOSTLY_IQ3_S:    return "IQ3_S - 3.4375 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_M:    return "IQ3_S mix - 3.66 bpw";
         case LLAMA_FTYPE_MOSTLY_Q4_0_4_4: return "Q4_0_4_4";
@@ -13329,7 +13325,7 @@ struct llm_build_context {
                 float q_scale; std::memcpy(&q_scale, model.layers[il].wq->op_params, sizeof(float));
                 // Note: we could save this scale operation by applying the Q scale on the K * Q product further down
                 // (which also uses a scale). This works on the CPU and Metal backends, but produces NaNs on CUDA.
-                Qcur = ggml_scale(ctx0, Qcur, q_scale);
+                if (fabsf(q_scale-1) > 1e-4f) Qcur = ggml_scale(ctx0, Qcur, q_scale);
                 cb(Qcur, "Qcur", il);
                 if (model.layers[il].bq) {
                     Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
@@ -13339,7 +13335,7 @@ struct llm_build_context {
                 // B1.K
                 struct ggml_tensor * Kcur = ggml_mul_mat(ctx0, model.layers[il].wk, cur);
                 float k_scale; std::memcpy(&k_scale, model.layers[il].wk->op_params, sizeof(float));
-                Kcur = ggml_scale(ctx0, Kcur, k_scale);
+                if (fabsf(k_scale-1) > 1e-4f) Kcur = ggml_scale(ctx0, Kcur, k_scale);
                 cb(Kcur, "Kcur", il);
                 if (model.layers[il].bk) {
                     Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
@@ -13349,13 +13345,12 @@ struct llm_build_context {
                 // B1.V
                 struct ggml_tensor * Vcur = ggml_mul_mat(ctx0, model.layers[il].wv, cur);
                 float v_scale; std::memcpy(&v_scale, model.layers[il].wv->op_params, sizeof(float));
-                cb(Vcur, "Vcur", il);
                 if (model.layers[il].bv) {
-                    Vcur = ggml_scale(ctx0, Vcur, v_scale);
-                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
-                    cb(Vcur, "Vcur", il);
+                    if (fabsf(v_scale-1) > 1e-4f) Vcur = ggml_scale(ctx0, Vcur, v_scale);
                     v_scale = 1;
+                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                 }
+                cb(Vcur, "Vcur", il);
 
                 Qcur = ggml_rope_ext(
                     ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_pos, nullptr,
@@ -13371,56 +13366,10 @@ struct llm_build_context {
                 );
                 cb(Kcur, "Kcur", il);
 
-                llm_build_kv_store(ctx0, hparams, cparams, kv_self, gf, Kcur, Vcur, n_tokens, kv_head, cb, il);
-
-                const int64_t n_ctx                 = cparams.n_ctx;
-                const int64_t n_head                = hparams.n_head();
-                const int64_t n_head_kv             = hparams.n_head_kv();
-                const int64_t n_embd_head_k         = hparams.n_embd_head_k;
-                const int64_t n_embd_k_gqa          = hparams.n_embd_k_gqa();
-                const int64_t n_embd_head_v         = hparams.n_embd_head_v;
-                const int64_t n_embd_v_gqa          = hparams.n_embd_v_gqa();
-
-                float                      kq_scale = 1.0f/sqrtf(float(n_embd_head));
-                // We would use this if we did not apply the Q scale above. Sadly, this fails on CUDA.
-                //float                      kq_scale = q_scale/sqrtf(float(n_embd_head));
-                struct ggml_tensor *       cur_attn;
-                struct ggml_tensor *              q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
-                cb(q, "q", il);
-
-                struct ggml_tensor * k =
-                    ggml_view_3d(ctx0, kv_self.k_l[il],
-                            n_embd_head_k, n_kv, n_head_kv,
-                            ggml_row_size(kv_self.k_l[il]->type, n_embd_k_gqa),
-                            ggml_row_size(kv_self.k_l[il]->type, n_embd_head_k),
-                            0);
-                cb(k, "k", il);
-
-                struct ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
-                cb(kq, "kq", il);
-
-                kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
-                cb(kq, "kq_soft_max_ext", il);
-
-                GGML_ASSERT(kv_self.size == n_ctx);
-
-                // split cached v into n_head heads
-                struct ggml_tensor * v =
-                    ggml_view_3d(ctx0, kv_self.v_l[il],
-                            n_kv, n_embd_head_v, n_head_kv,
-                            ggml_element_size(kv_self.v_l[il])*n_ctx,
-                            ggml_element_size(kv_self.v_l[il])*n_ctx*n_embd_head_v,
-                            0);
-                cb(v, "v", il);
-
-                struct ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
-                cb(kqv, "kqv", il);
-
-                struct ggml_tensor * kqv_merged = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-                cb(kqv_merged, "kqv_merged", il);
-
-                cur_attn = ggml_cont_2d(ctx0, kqv_merged, n_embd_head_v*n_head, n_tokens);
-                cb(cur_attn, "kqv_merged_cont", il);
+                ggml_tensor * cur_attn = llm_build_kv(ctx0, lctx, kv_self, gf,
+                        // we cannot pass model.layers[il].wo and model.layers[il].bo because we need to do rms_norm first
+                        nullptr, nullptr,
+                        Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
 
                 cur_attn = llm_build_norm(ctx0, cur_attn, hparams,
                         model.layers[il].attn_sub_norm, NULL,
@@ -13431,7 +13380,7 @@ struct llm_build_context {
 
                 cur = ggml_mul_mat(ctx0, model.layers[il].wo, cur_attn);
                 float wo_scale; std::memcpy(&wo_scale, model.layers[il].wo->op_params, sizeof(float));
-                cur = ggml_scale(ctx0, cur, wo_scale);
+                if (fabsf(wo_scale-1) > 1e-4f) cur = ggml_scale(ctx0, cur, wo_scale);
 
                 cb(cur, "kqv_out", il);
             }
@@ -13460,7 +13409,7 @@ struct llm_build_context {
 
                 cur = ggml_mul_mat(ctx0, model.layers[il].ffn_gate, cur);
                 float ffn_gate_scale; std::memcpy(&ffn_gate_scale, model.layers[il].ffn_gate->op_params, sizeof(float));
-                cur = ggml_scale(ctx0, cur, ffn_gate_scale);
+                if (fabsf(ffn_gate_scale-1) > 1e-4f) cur = ggml_scale(ctx0, cur, ffn_gate_scale);
 
                 cb(cur, "ffn_gate", il);
 
@@ -13479,7 +13428,7 @@ struct llm_build_context {
 
                 cur = ggml_mul_mat(ctx0, model.layers[il].ffn_down, cur);
                 float ffn_down_scale; std::memcpy(&ffn_down_scale, model.layers[il].ffn_down->op_params, sizeof(float));
-                cur = ggml_scale(ctx0, cur, ffn_down_scale);
+                if (fabsf(ffn_down_scale-1) > 1e-4f) cur = ggml_scale(ctx0, cur, ffn_down_scale);
                 cb(cur, "ffn_down", il);
             }
             cur = ggml_add(ctx0, cur, ffn_inp);
@@ -15903,9 +15852,6 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             else if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_BN || ftype == LLAMA_FTYPE_MOSTLY_IQ2_BN) {
                 new_type = GGML_TYPE_IQ4_NL;
             }
-            else if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_TN || ftype == LLAMA_FTYPE_MOSTLY_IQ2_TN) {
-                new_type = GGML_TYPE_Q4_K;
-            }
             else if (new_type == GGML_TYPE_Q4_0_4_4 || new_type == GGML_TYPE_Q4_0_4_8 ||
                      new_type == GGML_TYPE_Q4_0_8_8) {
                 new_type = GGML_TYPE_Q4_0;
@@ -16154,8 +16100,8 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         new_type == GGML_TYPE_IQ2_XS  || new_type == GGML_TYPE_IQ2_XXS || new_type == GGML_TYPE_IQ2_S  ||
         new_type == GGML_TYPE_IQ3_XXS || new_type == GGML_TYPE_IQ1_S   || new_type == GGML_TYPE_IQ3_S  ||
         new_type == GGML_TYPE_IQ1_M   || new_type == GGML_TYPE_IQ4_K   || new_type == GGML_TYPE_IQ2_K  ||
-        new_type == GGML_TYPE_IQ5_K   || new_type == GGML_TYPE_IQ3_K   || new_type == GGML_TYPE_IQ2_TN ||
-        new_type == GGML_TYPE_IQ6_K   || new_type == GGML_TYPE_IQ1_TN  || new_type == GGML_TYPE_IQ4_KS ||
+        new_type == GGML_TYPE_IQ5_K   || new_type == GGML_TYPE_IQ3_K   ||
+        new_type == GGML_TYPE_IQ6_K   || new_type == GGML_TYPE_IQ4_KS  ||
         new_type == GGML_TYPE_IQ2_KS  || new_type == GGML_TYPE_IQ4_KSS) {
         int nx = tensor->ne[0];
         int ny = tensor->ne[1];
@@ -16182,8 +16128,6 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             case GGML_TYPE_IQ3_S:
             case GGML_TYPE_IQ1_S:
             case GGML_TYPE_IQ1_M:
-            case GGML_TYPE_IQ1_TN:
-            case GGML_TYPE_IQ2_TN:
             case GGML_TYPE_Q2_K:
             case GGML_TYPE_Q3_K:
             case GGML_TYPE_IQ2_K:
@@ -16297,8 +16241,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_IQ1_M:   default_type = GGML_TYPE_IQ1_M;   break;
         case LLAMA_FTYPE_MOSTLY_IQ1_BN:  default_type = GGML_TYPE_IQ1_BN;  break;
         case LLAMA_FTYPE_MOSTLY_IQ2_BN:  default_type = GGML_TYPE_IQ2_BN;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ1_TN:  default_type = GGML_TYPE_IQ1_TN;  break;
-        case LLAMA_FTYPE_MOSTLY_IQ2_TN:  default_type = GGML_TYPE_IQ2_TN;  break;
         case LLAMA_FTYPE_MOSTLY_IQ4_NL:  default_type = GGML_TYPE_IQ4_NL;  break;
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:  default_type = GGML_TYPE_IQ4_XS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KS:  default_type = GGML_TYPE_IQ4_KS;  break;
