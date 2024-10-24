@@ -84,7 +84,8 @@ static __global__ void quantize_mmq_q8_1(
         }
     }
 
-    const float d_inv = 127.0f / amax;
+    const float d = amax/127.f;
+    const float d_inv = d > 0 ? 1/d : 0.f;
     char4 q;
     q.x = roundf(xi.x*d_inv);
     q.y = roundf(xi.y*d_inv);
@@ -106,8 +107,6 @@ static __global__ void quantize_mmq_q8_1(
             return;
         }
 
-        const float d = 1.0f / d_inv;
-
         y[ib].d2s6[iqs/64] = d;
 
         return;
@@ -116,8 +115,6 @@ static __global__ void quantize_mmq_q8_1(
     if (iqs % 32 != 0) {
         return;
     }
-
-    const float d = 1.0f / d_inv;
 
     if (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
         y[ib].ds4[iqs/32] = make_half2(d, sum);
