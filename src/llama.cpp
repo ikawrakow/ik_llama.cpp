@@ -13345,13 +13345,12 @@ struct llm_build_context {
                 // B1.V
                 struct ggml_tensor * Vcur = ggml_mul_mat(ctx0, model.layers[il].wv, cur);
                 float v_scale; std::memcpy(&v_scale, model.layers[il].wv->op_params, sizeof(float));
-                cb(Vcur, "Vcur", il);
                 if (model.layers[il].bv) {
                     if (fabsf(v_scale-1) > 1e-4f) Vcur = ggml_scale(ctx0, Vcur, v_scale);
-                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
-                    cb(Vcur, "Vcur", il);
                     v_scale = 1;
+                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                 }
+                cb(Vcur, "Vcur", il);
 
                 Qcur = ggml_rope_ext(
                     ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_pos, nullptr,
@@ -13367,56 +13366,10 @@ struct llm_build_context {
                 );
                 cb(Kcur, "Kcur", il);
 
-                llm_build_kv_store(ctx0, hparams, cparams, kv_self, gf, Kcur, Vcur, n_tokens, kv_head, cb, il);
-
-                const int64_t n_ctx                 = cparams.n_ctx;
-                const int64_t n_head                = hparams.n_head();
-                const int64_t n_head_kv             = hparams.n_head_kv();
-                const int64_t n_embd_head_k         = hparams.n_embd_head_k;
-                const int64_t n_embd_k_gqa          = hparams.n_embd_k_gqa();
-                const int64_t n_embd_head_v         = hparams.n_embd_head_v;
-                const int64_t n_embd_v_gqa          = hparams.n_embd_v_gqa();
-
-                float                      kq_scale = 1.0f/sqrtf(float(n_embd_head));
-                // We would use this if we did not apply the Q scale above. Sadly, this fails on CUDA.
-                //float                      kq_scale = q_scale/sqrtf(float(n_embd_head));
-                struct ggml_tensor *       cur_attn;
-                struct ggml_tensor *              q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
-                cb(q, "q", il);
-
-                struct ggml_tensor * k =
-                    ggml_view_3d(ctx0, kv_self.k_l[il],
-                            n_embd_head_k, n_kv, n_head_kv,
-                            ggml_row_size(kv_self.k_l[il]->type, n_embd_k_gqa),
-                            ggml_row_size(kv_self.k_l[il]->type, n_embd_head_k),
-                            0);
-                cb(k, "k", il);
-
-                struct ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
-                cb(kq, "kq", il);
-
-                kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
-                cb(kq, "kq_soft_max_ext", il);
-
-                GGML_ASSERT(kv_self.size == n_ctx);
-
-                // split cached v into n_head heads
-                struct ggml_tensor * v =
-                    ggml_view_3d(ctx0, kv_self.v_l[il],
-                            n_kv, n_embd_head_v, n_head_kv,
-                            ggml_element_size(kv_self.v_l[il])*n_ctx,
-                            ggml_element_size(kv_self.v_l[il])*n_ctx*n_embd_head_v,
-                            0);
-                cb(v, "v", il);
-
-                struct ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
-                cb(kqv, "kqv", il);
-
-                struct ggml_tensor * kqv_merged = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-                cb(kqv_merged, "kqv_merged", il);
-
-                cur_attn = ggml_cont_2d(ctx0, kqv_merged, n_embd_head_v*n_head, n_tokens);
-                cb(cur_attn, "kqv_merged_cont", il);
+                ggml_tensor * cur_attn = llm_build_kv(ctx0, lctx, kv_self, gf,
+                        // we cannot pass model.layers[il].wo and model.layers[il].bo because we need to do rms_norm first
+                        nullptr, nullptr,
+                        Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
 
                 cur_attn = llm_build_norm(ctx0, cur_attn, hparams,
                         model.layers[il].attn_sub_norm, NULL,
