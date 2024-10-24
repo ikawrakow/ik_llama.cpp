@@ -2803,7 +2803,6 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                 continue;
             }
             float best = 0;
-            bool is_shifted = false;
             float d = -max/iq4k_values[0];
             std::memset(vs, 0, block_size);
             for (int itry = -ntry; itry <= ntry; ++itry) {
@@ -2836,10 +2835,10 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                 }
                 bool copy_p = false, copy_m = false;
                 if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
-                    d = sumqx_p/sumq2_p; best = d * sumqx_p; is_shifted = false; copy_p = true;
+                    d = sumqx_p/sumq2_p; best = d * sumqx_p; copy_p = true;
                 }
                 if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
-                    d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = false; copy_m = true;
+                    d = sumqx_m/sumq2_m; best = d * sumqx_m; copy_m = true;
                 }
                 if (copy_m) {
                     std::memcpy(vs, vms, block_size);
@@ -2876,10 +2875,10 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                 }
                 copy_p = copy_m = false;
                 if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
-                    d = sumqx_p/sumq2_p; best = d * sumqx_p; is_shifted = true; copy_p = true;
+                    d = sumqx_p/sumq2_p; best = d * sumqx_p; copy_p = true;
                 }
                 if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
-                    d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = true; copy_m = true;
+                    d = sumqx_m/sumq2_m; best = d * sumqx_m; copy_m = true;
                 }
                 if (copy_m) {
                     std::memcpy(vs, vms, block_size);

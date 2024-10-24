@@ -1244,7 +1244,7 @@ struct DequantizerIQ4KSS final : public BaseDequantizer<block_iq4_kss, true> {
     Q4Bits bits;
     Scales8KBase s8k;
     const __m512i values;
-    const __m512i mask15   = _mm512_set1_epi16(0xfffe);
+    const __m512i mask15   = _mm512_set1_epi16(-2); // value is 0xfffe, but to shut up the stupid compiler warning we use the signed value
     const __m512i mask1    = _mm512_set1_epi16(1);
     const __m512i permute1 = _mm512_set_epi64(11, 10, 3, 2,  9,  8, 1, 0);
     const __m512i permute2 = _mm512_set_epi64(15, 14, 7, 6, 13, 12, 5, 4);
