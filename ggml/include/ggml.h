@@ -401,8 +401,8 @@ extern "C" {
         GGML_TYPE_IQ4_K   = 139,
         GGML_TYPE_IQ5_K   = 140,
         GGML_TYPE_IQ6_K   = 141,
-        GGML_TYPE_IQ2_TN  = 142,
-        GGML_TYPE_IQ1_TN  = 143,
+        // depricated: GGML_TYPE_IQ2_TN  = 142,
+        // depricated: GGML_TYPE_IQ1_TN  = 143,
         GGML_TYPE_IQ4_KS  = 144,
         GGML_TYPE_IQ2_KS  = 145,
         GGML_TYPE_IQ4_KSS = 146,
@@ -595,13 +595,6 @@ extern "C" {
         GGML_TENSOR_FLAG_INPUT  = 1,
         GGML_TENSOR_FLAG_OUTPUT = 2,
         GGML_TENSOR_FLAG_PARAM  = 4,
-    };
-
-    // Flag (used on GGML_OP_CPY nodes) on whether node is associated with K or V cache
-    enum ggml_kv_cache_flag {
-        GGML_KV_CACHE_FLAG_NONE = 0,
-        GGML_KV_CACHE_FLAG_K = 1,
-        GGML_KV_CACHE_FLAG_V = 2
     };
 
     // ggml object
