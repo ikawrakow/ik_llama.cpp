@@ -459,8 +459,8 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ4_K   = 132, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ5_K   = 133, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ6_K   = 134, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ2_TN  = 135, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ1_TN  = 136, // except 1d tensors
+        // depricated: GGML_FTYPE_MOSTLY_IQ2_TN  = 135, // except 1d tensors
+        // depricated: GGML_FTYPE_MOSTLY_IQ1_TN  = 136, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_KS  = 137, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_KS  = 138, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_KSS = 139, // except 1d tensors
