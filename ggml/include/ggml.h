@@ -597,13 +597,6 @@ extern "C" {
         GGML_TENSOR_FLAG_PARAM  = 4,
     };
 
-    // Flag (used on GGML_OP_CPY nodes) on whether node is associated with K or V cache
-    enum ggml_kv_cache_flag {
-        GGML_KV_CACHE_FLAG_NONE = 0,
-        GGML_KV_CACHE_FLAG_K = 1,
-        GGML_KV_CACHE_FLAG_V = 2
-    };
-
     // ggml object
     struct ggml_object {
         size_t offs;
