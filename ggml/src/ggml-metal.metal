@@ -5459,16 +5459,14 @@ void kernel_mul_mv_iq1_bn_f32_impl(
 
     device const float * y4 = (device const float *)y + 32 * ix + 16 * ir;
 
-    const float values[3] = {-1.f, 0.f, 1.f};
-
-    constexpr uint8_t k_mult[5] = {81, 27, 9, 3, 1};
+    constexpr uint16_t k_mult[5] = {81, 27, 9, 3, 1};
 
     const int ib  = ix % (QK_IQ1BN / 32);
     const int i16 = 2*ib + ir;
 
+    float sumy = 0;
     for (int ib32 = ix; ib32 < nb32; ib32 += 16) {
 
-        float sumy = 0;
         for (int j = 0; j < 16; ++j) { yl[j] = y4[j]; sumy += y4[j]; }
 
         const int ibl = ib32 / (QK_IQ1BN / 32);
@@ -5494,7 +5492,7 @@ void kernel_mul_mv_iq1_bn_f32_impl(
             v += v << 1;
             acc += yl[15] * (v & 0xff00);
 
-            sumf[row] += 0.00390625f * acc - sumy;
+            sumf[row] += acc;
 
             extra += row_size;
             ql    += row_size;
@@ -5504,7 +5502,7 @@ void kernel_mul_mv_iq1_bn_f32_impl(
     }
 
     for (int row = 0; row < N_DST; row += 2) {
-        float2 r = {sumf[row], sumf[row+1]};
+        float2 r = {0.00390625f * sumf[row] - sumy, 0.00390625 * sumf[row+1] - sumy};
         r = simd_sum(r);
         if (tiisg < 2) {
             dst[r1*ne0 + im*ne0*ne1 + first_row + row + tiisg] = r[tiisg] * scale[row + tiisg];
