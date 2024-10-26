@@ -694,13 +694,13 @@ __device__ __forceinline__ float vec_dot_iq2_bn_q8_1(
     // iqs is 0 or 1
 
 #if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
-    auto qs  = (const uint16_t *)bq2->qs + 4*iqs;
+    auto qs  = (const int *)bq2->qs + 2*iqs;
     auto q8l = (const int *)bq8_1[0].qs + 2*iqs;
     auto q8h = (const int *)bq8_1[1].qs + 2*iqs;
     int sumi1 = 0, sumi2 = 0, sumi3 = 0, sumi4 = 0;
     for (int j = 0; j < 2; ++j) {
-        int vl = qs[2*j+0] | (uint32_t(qs[2*j+1]) << 16);
-        int vh = vl >> 4;
+        int vl = qs[j];
+        int vh = qs[j] >> 4;
         sumi1 = __dp4a(vl & 0x03030303, q8l[j+0], sumi1);
         sumi2 = __dp4a(vl & 0x0c0c0c0c, q8l[j+4], sumi2);
         sumi3 = __dp4a(vh & 0x03030303, q8h[j+0], sumi3);
@@ -708,6 +708,7 @@ __device__ __forceinline__ float vec_dot_iq2_bn_q8_1(
     }
     auto d8l = __half22float2(bq8_1[0].ds);
     auto d8h = __half22float2(bq8_1[1].ds);
+    return scale * (d8l.x * (sumi1 + 0.25f*sumi2) + d8h.x * (sumi3 + 0.25f * sumi4) - 0.5f*d8l.y - 0.5f*d8h.y);
 #else
     int sumi1 = 0, sumi2 = 0, sumi3 = 0, sumi4 = 0;
     auto q8l = bq8_1[0].qs + 8*iqs;
@@ -723,7 +724,6 @@ __device__ __forceinline__ float vec_dot_iq2_bn_q8_1(
     auto d8h = __half22float2(bq8_1[1].ds);
     return scale * (d8l.x * (sumi1 + 0.25f*sumi2) + 0.0625f * d8h.x*(sumi3 + 0.25f*sumi4) - 0.5f*d8l.y - 0.5f*d8h.y);
 #endif
-    return scale * (d8l.x * (sumi1 + 0.25f*sumi2) + d8h.x * (sumi3 + 0.25f * sumi4) - 0.5f*d8l.y - 0.5f*d8h.y);
 }
 
 } // namespace
