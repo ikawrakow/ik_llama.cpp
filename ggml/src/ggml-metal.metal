@@ -5478,17 +5478,20 @@ void kernel_mul_mv_iq1_bn_f32_impl(
         for (int row = 0; row < N_DST; row++) {
 
             float acc = 0;
-            int i = 0;
+            thread const float * yy = yl;
             for (int k = 0; k < 3; ++k) {
-                uint8_t q = ql[k];
-                for (int j = 0; j < 5; ++j) {
-                    uint8_t v = k_mult[j]*q;
-                    v = 3*v >> 8; //(v + (v >> 1)) >> 7;
-                    acc += yl[i++] * values[v];
+                uint16_t q = ql[k];
+                for (int j = 4; j >= 0; --j) {
+                    uint8_t v = q;
+                    v = 3*v >> 8;
+                    acc += yy[j] * values[v];
+                    q += (q << 1);
                 }
+                yy += 5;
             }
             uint8_t v = k_mult[i16]*extra[0];
-            v = 3*v >> 8; //(v + (v >> 1)) >> 7;
+            v = 3*v >> 8;
+            //v = (v + (v << 1)) >> 8;
             acc += yl[15] * values[v];
 
             sumf[row] += acc;
