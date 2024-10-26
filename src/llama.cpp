@@ -13399,12 +13399,7 @@ struct llm_build_context {
 
                 cb(cur, "ffn_gate", il);
 
-
-                // combine this with the above scale into ggml_scaled_silu
-                cur = ggml_silu(ctx0, cur);
-                cb(cur, "ffn_silu", il);
-
-                cur = ggml_mul(ctx0, cur, tmp);
+                cur = ggml_fused_mul_unary(ctx0, cur, tmp, GGML_UNARY_OP_SILU);
                 cb(cur, "ffn_gate_par", il);
 
                 cur = llm_build_norm(ctx0, cur, hparams,
