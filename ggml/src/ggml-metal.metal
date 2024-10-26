@@ -5468,7 +5468,8 @@ void kernel_mul_mv_iq1_bn_f32_impl(
 
     for (int ib32 = ix; ib32 < nb32; ib32 += 16) {
 
-        for (int j = 0; j < 16; ++j) yl[j] = y4[j];
+        float sumy = 0;
+        for (int j = 0; j < 16; ++j) { yl[j] = y4[j]; sumy += y4[j]; }
 
         const int ibl = ib32 / (QK_IQ1BN / 32);
         device const block_iq1_bn * xr = x + ibl;
@@ -5482,19 +5483,18 @@ void kernel_mul_mv_iq1_bn_f32_impl(
             for (int k = 0; k < 3; ++k) {
                 uint16_t q = ql[k];
                 for (int j = 4; j >= 0; --j) {
-                    uint8_t v = q;
-                    v = 3*v >> 8;
-                    acc += yy[j] * values[v];
-                    q += (q << 1);
+                    uint16_t v = q & 0xff;
+                    v += v << 1;
+                    acc += yy[j] * (v & 0xff00);
+                    q += q << 1;
                 }
                 yy += 5;
             }
-            uint8_t v = k_mult[i16]*extra[0];
-            v = 3*v >> 8;
-            //v = (v + (v << 1)) >> 8;
-            acc += yl[15] * values[v];
+            uint16_t v = (k_mult[i16]*extra[0]) & 0xff;
+            v += v << 1;
+            acc += yl[15] * (v & 0xff00);
 
-            sumf[row] += acc;
+            sumf[row] += 0.00390625f * acc - sumy;
 
             extra += row_size;
             ql    += row_size;
