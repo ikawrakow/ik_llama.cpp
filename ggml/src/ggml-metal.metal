@@ -7476,22 +7476,23 @@ template <typename type4x4>
 void dequantize_iq1_bn(device const block_iq1_bn * xb, short il, thread type4x4 & reg) {
     // il is in 0...3
 
-    constexpr uint8_t k_mult[5] = {81, 27, 9, 3, 1};
+    constexpr uint16_t k_mult[5] = {81, 27, 9, 3, 1};
+    constexpr half k_values[3] = {-1.h, 0.h, 1.h};
 
-    int i = 0;
     for (int k = 0; k < 3; ++k) {
-        uint8_t q = xb->ql[3*il + k];
-        for (int j = 0; j < 5; ++j) {
-            uint8_t v = k_mult[j]*q;
-            int8_t vs = 3*v >> 8;
-            //int8_t vs = (v + (v >> 1)) >> 7;
-            reg[i/4][i%4] = vs - 1;
-            ++i;
+        uint16_t q = xb->ql[3*il + k];
+        int i = 5*k + 4;
+        for (int j = 4; j >= 0; --j) {
+            uint16_t v = q & 0xff;
+            v += v << 1;
+            reg[i/4][i%4] = k_values[v >> 8];
+            q += q << 1;
+            --i;
         }
     }
-    uint8_t v = k_mult[il]*xb->extra;
-    int8_t vs = 3*v >> 8; //(v + (v >> 1)) >> 7;
-    reg[3][3] = vs - 1;
+    uint16_t v = (k_mult[il]*xb->extra) & 0xff;
+    v += v << 1;
+    reg[3][3] = k_values[v >> 8];
 }
 
 template <typename type4x4>
