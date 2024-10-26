@@ -7498,9 +7498,9 @@ void dequantize_iq1_bn(device const block_iq1_bn * xb, short il, thread type4x4 
 template <typename type4x4>
 void dequantize_iq2_bn(device const block_iq2_bn * xb, short il, thread type4x4 & reg) {
     // il is in 0...3
-    constexpr float k_scale[4] = {1.f, 0.25f, 0.0625f, 0.015625f};
+    constexpr half k_scale[4] = {1.h, 0.25h, 0.0625h, 0.015625h};
     constexpr uint8_t k_mask[4] = {0x03, 0x0c, 0x30, 0xc0};
-    const float d = k_scale[il];
+    const half d = k_scale[il];
     uint8_t mask = k_mask[il];
 
     for (int j = 0; j < 16; ++j) {
