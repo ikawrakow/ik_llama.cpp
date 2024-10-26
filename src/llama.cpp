@@ -8326,22 +8326,24 @@ static struct ggml_tensor * llm_build_moe_ffn(
     ggml_tensor * gate = llm_build_lora_mm_id(lctx, ctx, gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
     cb(gate, "ffn_moe_gate", il);
 
-    switch (type_op) {
-        case LLM_FFN_SILU:
-            {
-                gate = ggml_silu(ctx, gate);
-                cb(gate, "ffn_moe_silu", il);
-            } break;
-        case LLM_FFN_GELU:
-            {
-                gate = ggml_gelu(ctx, gate);
-                cb(gate, "ffn_moe_gelu", il);
-            } break;
-        default:
-            GGML_ABORT("fatal error");
-    }
+    // This is equivalent to the commented out code below
+    ggml_tensor * par = ggml_fused_mul_unary(ctx, gate, up, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
 
-    ggml_tensor * par = ggml_mul(ctx, up, gate); // [n_ff, n_expert_used, n_tokens]
+    //switch (type_op) {
+    //    case LLM_FFN_SILU:
+    //        {
+    //            gate = ggml_silu(ctx, gate);
+    //            cb(gate, "ffn_moe_silu", il);
+    //        } break;
+    //    case LLM_FFN_GELU:
+    //        {
+    //            gate = ggml_gelu(ctx, gate);
+    //            cb(gate, "ffn_moe_gelu", il);
+    //        } break;
+    //    default:
+    //        GGML_ABORT("fatal error");
+    //}
+    //ggml_tensor * par = ggml_mul(ctx, up, gate); // [n_ff, n_expert_used, n_tokens]
     cb(par, "ffn_moe_gate_par", il);
 
     ggml_tensor * experts = llm_build_lora_mm_id(lctx, ctx, down_exps, par, selected_experts); // [n_embd, n_expert_used, n_tokens]
