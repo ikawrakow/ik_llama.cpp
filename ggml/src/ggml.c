@@ -5132,7 +5132,7 @@ struct ggml_tensor * ggml_multi_add(
     }
 
     for (int i = 1; i < n_used; ++i) {
-        if (!ggml_are_same_shape(a_used[i], a[0])) {
+        if (!ggml_are_same_shape(a_used[i], a_used[0])) {
             GGML_ABORT("fayal error");
         }
     }
@@ -5141,7 +5141,7 @@ struct ggml_tensor * ggml_multi_add(
 
     result->op   = GGML_OP_MULTI_ADD;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
-    for (int i = 1; i < n_used; ++i) {
+    for (int i = 0; i < n_used; ++i) {
         result->src[i] = a_used[i];
     }
     for (int i = n_used; i < GGML_MAX_SRC; ++i) {
