@@ -479,6 +479,44 @@ kernel void kernel_sqr(
     dst[tpig] = src0[tpig] * src0[tpig];
 }
 
+kernel void kernel_multi_add_4(
+        device const float4 * src0,
+        device       float4 * dst,
+        constant int64_t    & ne0,
+        constant int64_t    & ne1,
+        constant int64_t    & nb1,
+        constant int64_t    & nb01,
+        constant int        & n_expert,
+        uint tpig[[thread_position_in_grid]]) {
+
+    int64_t i0 = tpig % (ne0/4);
+    int64_t i1 = tpig / (ne0/4);
+    device float4 * dst_ptr = dst + i1*(nb1/16) + i0;
+    device const float4 * src_ptr = src0 + i1*(nb01/16) + i0;
+    float4 sum = src_ptr[0] + src_ptr[ne0/4];
+    for (int i = 2; i < n_expert; ++i) sum += src_ptr[i*ne0/4];
+    dst_ptr[0] = sum;
+}
+
+kernel void kernel_multi_add(
+        device const float  * src0,
+        device       float  * dst,
+        constant int64_t    & ne0,
+        constant int64_t    & ne1,
+        constant int64_t    & nb1,
+        constant int64_t    & nb01,
+        constant int        & n_expert,
+        uint tpig[[thread_position_in_grid]]) {
+
+    int64_t i0 = tpig % ne0;
+    int64_t i1 = tpig / ne0;
+    device float * dst_ptr = dst + i1*nb1/4 + i0;
+    device const float * src_ptr = src0 + i1*nb01/4 + i0;
+    float sum = src_ptr[0] + src_ptr[ne0];
+    for (int i = 2; i < n_expert; ++i) sum += src_ptr[i*ne0];
+    dst_ptr[0] = sum;
+}
+
 kernel void kernel_sum_rows(
         device const float * src0,
         device       float * dst,
