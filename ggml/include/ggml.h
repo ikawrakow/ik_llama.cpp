@@ -933,7 +933,8 @@ extern "C" {
 
     GGML_API struct ggml_tensor * ggml_multi_add(
             struct ggml_context * ctx,
-            struct ggml_tensor ** a);
+            struct ggml_tensor  * a,
+            int n_experts);
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b

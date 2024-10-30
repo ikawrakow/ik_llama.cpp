@@ -8358,44 +8358,33 @@ static struct ggml_tensor * llm_build_moe_ffn(
         return ggml_add(ctx, ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], 0),
                              ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], experts->nb[1]));
     }
-    if (n_expert_used <= GGML_MAX_SRC) {
-        ggml_tensor * src[GGML_MAX_SRC];
-        for (int i = 0; i < n_expert_used; ++i) {
-            src[i] = ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
-        }
-        for (int i = n_expert_used; i < GGML_MAX_SRC; ++i) src[i] = nullptr;
-        return ggml_multi_add(ctx, src);
-    }
+    return ggml_multi_add(ctx, ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], 0), n_expert_used);
 
-    GGML_ABORT("fatal error");
+    //// aggregate experts
+    //ggml_tensor * moe_out = nullptr;
+    ////ggml_tensor * first_expert = nullptr;
+    //for (int i = 0; i < n_expert_used; ++i) {
+    //    ggml_tensor * cur_expert = ggml_view_2d(ctx, experts, n_embd, n_tokens,
+    //            experts->nb[2], i*experts->nb[1]);
 
-    //int nloop = (n_expert_used + GGML_MAX_SRC - 1)/GGML_MAX_SRC;
+    //    if (i == 0) {
+    //        moe_out = cur_expert;
+    //        //first_expert = cur_expert;
+    //        //printf("%s: %d: %d x %d x %d x %d | %d x %d x %d x %d\n", __func__, ggml_is_contiguous(first_expert),
+    //        //        (int)cur_expert->ne[0], (int)cur_expert->ne[1], (int)cur_expert->ne[2], (int)cur_expert->ne[3],
+    //        //        (int)cur_expert->nb[0], (int)cur_expert->nb[1], (int)cur_expert->nb[2], (int)cur_expert->nb[3]);
+    //    } else {
+    //        moe_out = ggml_add(ctx, moe_out, cur_expert);
+    //        //printf("%s: %d  %d\n", __func__, ggml_is_contiguous(cur_expert), ggml_are_same_shape(cur_expert, first_expert));
+    //    }
+    //}
 
-    // aggregate experts
-    ggml_tensor * moe_out = nullptr;
-    //ggml_tensor * first_expert = nullptr;
-    for (int i = 0; i < n_expert_used; ++i) {
-        ggml_tensor * cur_expert = ggml_view_2d(ctx, experts, n_embd, n_tokens,
-                experts->nb[2], i*experts->nb[1]);
+    //if (n_expert_used == 1) {
+    //    // avoid returning a non-contiguous tensor
+    //    moe_out = ggml_cont(ctx, moe_out);
+    //}
 
-        if (i == 0) {
-            moe_out = cur_expert;
-            //first_expert = cur_expert;
-            //printf("%s: %d: %d x %d x %d x %d | %d x %d x %d x %d\n", __func__, ggml_is_contiguous(first_expert),
-            //        (int)cur_expert->ne[0], (int)cur_expert->ne[1], (int)cur_expert->ne[2], (int)cur_expert->ne[3],
-            //        (int)cur_expert->nb[0], (int)cur_expert->nb[1], (int)cur_expert->nb[2], (int)cur_expert->nb[3]);
-        } else {
-            moe_out = ggml_add(ctx, moe_out, cur_expert);
-            //printf("%s: %d  %d\n", __func__, ggml_is_contiguous(cur_expert), ggml_are_same_shape(cur_expert, first_expert));
-        }
-    }
-
-    if (n_expert_used == 1) {
-        // avoid returning a non-contiguous tensor
-        moe_out = ggml_cont(ctx, moe_out);
-    }
-
-    return moe_out;
+    //return moe_out;
 }
 
 static struct ggml_tensor * llm_build_kqv(

@@ -5112,41 +5112,21 @@ struct ggml_tensor * ggml_add_inplace(
 
 struct ggml_tensor * ggml_multi_add(
         struct ggml_context * ctx,
-        struct ggml_tensor ** a) {
+        struct ggml_tensor  * a,
+        int n_experts) {
 
     bool is_node = false;
 
-    struct ggml_tensor * a_used[GGML_MAX_SRC];
-    int n_used = 0;
-    for (int i = 0; i < GGML_MAX_SRC; ++i) {
-        if (a[i]) {
-            a_used[n_used++] = a[i];
-        }
-    }
-
-    if (n_used < 2) {
+    if (n_experts < 1) {
         GGML_ABORT("fatal error");
     }
-    if (n_used == 2) {
-        return ggml_add(ctx, a_used[0], a_used[1]);
-    }
 
-    for (int i = 1; i < n_used; ++i) {
-        if (!ggml_are_same_shape(a_used[i], a_used[0])) {
-            GGML_ABORT("fayal error");
-        }
-    }
-
-    struct ggml_tensor * result = ggml_dup_tensor(ctx, a_used[0]);
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
     result->op   = GGML_OP_MULTI_ADD;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
-    for (int i = 0; i < n_used; ++i) {
-        result->src[i] = a_used[i];
-    }
-    for (int i = n_used; i < GGML_MAX_SRC; ++i) {
-        result->src[i] = NULL;
-    }
+    result->src[0] = a;
+    result->op_params[0] = n_experts;
 
     return result;
 }
@@ -10474,13 +10454,15 @@ static void ggml_compute_forward_multi_add_f32(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
 
+    struct ggml_tensor * src = dst->src[0];
+
     GGML_ASSERT(dst->nb[0] == sizeof(float));
-    for (int i = 0; i < GGML_MAX_SRC; ++i) {
-        if (dst->src[i]) {
-            GGML_ASSERT(ggml_are_same_shape(dst->src[i], dst));
-            GGML_ASSERT(dst->src[i]->nb[0] == sizeof(float));
-        }
-    }
+    GGML_ASSERT(src->nb[0] == sizeof(float));
+    GGML_ASSERT(ggml_are_same_shape(src, dst));
+    GGML_ASSERT(dst->ne[2] == 1 && dst->ne[3] == 1);
+
+    const int n_add = dst->op_params[0];
+    GGML_ASSERT(n_add > 0);
 
     const int ith = params->ith;
     const int nth = params->nth;
@@ -10495,22 +10477,14 @@ static void ggml_compute_forward_multi_add_f32(
     const int ir1 = MIN(ir0 + dr, nr);
 
     int64_t ne0 = dst->ne[0];
-    int64_t ne1 = dst->ne[1];
-    int64_t ne2 = dst->ne[2];
 
-    for (int ir = ir0; ir < ir1; ++ir) {
-        // src1 is broadcastable across src0 and dst in i1, i2, i3
-        const int64_t i3 = ir/(ne2*ne1);
-        const int64_t i2 = (ir - i3*ne2*ne1)/ne1;
-        const int64_t i1 = (ir - i3*ne2*ne1 - i2*ne1);
+    for (int i1 = ir0; i1 < ir1; ++i1) {
 
-        float * dst_ptr  = (float *) ((char *) dst->data  + i3*dst->nb[3]  + i2*dst->nb[2]  + i1*dst->nb[1] );
+        float * dst_ptr  = (float *) ((char *) dst->data + i1*dst->nb[1] );
+        const float * data = (const float *) ((const char *)src->data + i1*src->nb[1]);
         memset(dst_ptr, 0, ne0*sizeof(float));
-        for (int i = 0; i < GGML_MAX_SRC; ++i) {
-            struct ggml_tensor * src = dst->src[i];
-            if (!src) continue;
-            const float * data = (const float *) ((const char *) src->data + i3*src->nb[3] + i2*src->nb[2] + i1*src->nb[1]);
-            ggml_vec_add_f32(ne0, dst_ptr, dst_ptr, data);
+        for (int j = 0; j < n_add; ++j) {
+            ggml_vec_add_f32(ne0, dst_ptr, dst_ptr, data + j*ne0);
         }
     }
 }
