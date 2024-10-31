@@ -494,6 +494,7 @@ extern "C" {
         GGML_OP_GROUP_NORM,
         GGML_OP_FUSED_RMS_NORM,
         GGML_OP_FUSED_MUL_UNARY,
+        GGML_OP_MULTI_ADD,
 
         GGML_OP_MUL_MAT,
         GGML_OP_MUL_MAT_ID,
@@ -929,6 +930,11 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_multi_add(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int n_experts);
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b
