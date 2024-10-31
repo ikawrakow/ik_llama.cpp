@@ -8235,6 +8235,7 @@ kernel void kernel_mul_mm_id(
         threadgroup    uchar * shared_memory [[threadgroup(0)]],
         uint3                  tgpig[[threadgroup_position_in_grid]],
         uint                   tiitg[[thread_index_in_threadgroup]],
+        uint3                  ntg3[[threads_per_threadgroup]],
         uint                   sgitg[[simdgroup_index_in_threadgroup]]) {
 
     const int32_t i02 = tgpig.z;
@@ -8242,24 +8243,86 @@ kernel void kernel_mul_mm_id(
 
     device const uchar * src0 = src0s + i02*nb02;
 
-    // row indices
-    threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192);
+    uint ntg = ntg3.x * ntg3.y * ntg3.z;
+    uint n   = nei0*nei1;
 
-    // TODO: parallelize this loop
-    int64_t _ne1 = 0;
-    for (ushort ii1 = 0; ii1 < nei1; ii1++) {
-        for (ushort ii0 = 0; ii0 < nei0; ii0++) {
-            int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
-            if (id == i02) {
-                //if (tiitg == 0) {
-                    rowids[_ne1] = ushort2(ii0, ii1);
-                //}
-                _ne1++;
-            }
-        }
+    //uint npt = (n + ntg - 1) / ntg;
+    //uint first = tiitg * npt;
+    //uint last  = first + npt <= n ? first + npt : n;
+
+    //uint nhave = 0;
+    //for (uint i = first; i < last; ++i) {
+    //    uint ii0 = i % nei0;
+    //    uint ii1 = i / nei0;
+    //    int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
+    //    if (id == i02) ++nhave;
+    //}
+    //threadgroup uint * nums = (threadgroup uint *)shared_memory;
+    //nums[tiitg] = nhave;
+    //threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    //uint nprev = 0;
+    //for (uint i = 0; i < tiitg; ++i) nprev += nums[i];
+    //int64_t _ne1 = nprev;
+    //for (uint i = tiitg; i < ntg; ++i) _ne1 += nums[i];
+
+    //threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192);
+    //for (uint i = first; i < last; ++i) {
+    //    uint ii0 = i % nei0;
+    //    uint ii1 = i / nei0;
+    //    int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
+    //    if (id == i02) rowids[nprev++] = ushort2(ii0, ii1);
+    //}
+
+    //threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    //
+    // The following is slightly faster than the commented out version above
+    //
+    uint nhave = 0;
+    for (uint i = tiitg; i < n; i += ntg) {
+        uint ii0 = i % nei0;
+        uint ii1 = i / nei0;
+        int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
+        if (id == i02) ++nhave;
     }
-
+    threadgroup uint * nums = (threadgroup uint *)shared_memory;
+    nums[tiitg] = nhave;
     threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    uint nprev = 0;
+    for (uint i = 0; i < tiitg; ++i) nprev += nums[i];
+    int64_t _ne1 = nprev;
+    for (uint i = tiitg; i < ntg; ++i) _ne1 += nums[i];
+
+    threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192);
+    for (uint i = tiitg; i < n; i += ntg) {
+        uint ii0 = i % nei0;
+        uint ii1 = i / nei0;
+        int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
+        if (id == i02) rowids[nprev++] = ushort2(ii0, ii1);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // This is the original version that is ridiculously slow.
+    //// row indices
+    //threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192);
+
+    //// TODO: parallelize this loop
+    //int64_t _ne1 = 0;
+    //for (ushort ii1 = 0; ii1 < nei1; ii1++) {
+    //    for (ushort ii0 = 0; ii0 < nei0; ii0++) {
+    //        int32_t id = ((device int32_t *) (ids + ii1*nbi1))[ii0];
+    //        if (id == i02) {
+    //            //if (tiitg == 0) {
+    //                rowids[_ne1] = ushort2(ii0, ii1);
+    //            //}
+    //            _ne1++;
+    //        }
+    //    }
+    //}
+
+    //threadgroup_barrier(mem_flags::mem_threadgroup);
 
     kernel_mul_mm_id_impl<Dequantizer>(
         src0,
