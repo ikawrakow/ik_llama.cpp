@@ -184,6 +184,37 @@ __device__ __forceinline__ void get_int_from_table_16_shift(const uint32_t & q4,
     val2 = v1 | (v2 << 16);
 }
 
+__device__ __forceinline__ void get_int_from_table_16_shift_4(const uint32_t * q4, uint16_t shift, const uint8_t * all_values,
+        int * val) {
+
+    uint32_t aux32; const uint8_t * q8 = (const uint8_t *)&aux32;
+    uint16_t v1, v2;
+
+    const uint8_t * values = all_values + 16*(shift & 1);
+
+    aux32 = q4[0] & 0x0f0f0f0f;
+    v1 = values[q8[0]] | (values[q8[1]] << 8);
+    v2 = values[q8[2]] | (values[q8[3]] << 8);
+    val[0] = v1 | (v2 << 16);
+
+    aux32 = (q4[0] >> 4) & 0x0f0f0f0f;
+    v1 = values[q8[0]] | (values[q8[1]] << 8);
+    v2 = values[q8[2]] | (values[q8[3]] << 8);
+    val[2] = v1 | (v2 << 16);
+
+    values = all_values + 8*(shift & 2);
+
+    aux32 = q4[1] & 0x0f0f0f0f;
+    v1 = values[q8[0]] | (values[q8[1]] << 8);
+    v2 = values[q8[2]] | (values[q8[3]] << 8);
+    val[1] = v1 | (v2 << 16);
+
+    aux32 = (q4[1] >> 4) & 0x0f0f0f0f;
+    v1 = values[q8[0]] | (values[q8[1]] << 8);
+    v2 = values[q8[2]] | (values[q8[3]] << 8);
+    val[3] = v1 | (v2 << 16);
+}
+
 #define VDR_IQ4_K_Q8_1_MMVQ 4
 #define VDR_IQ4_K_Q8_1_MMQ  4
 
@@ -193,25 +224,56 @@ __device__ __forceinline__ float vec_dot_iq4_k_q8_1(
     const block_iq4_k * bq4 = (const block_iq4_k *) vbq + kbx;
     const uint8_t * all_values = (const uint8_t *)iq4k_values;
 
-    // iqs is 0...28
-    const int ib32 = iqs/4;
-    // Why iqs/4 ?
-    const int32_t  * q8 = (const int *)bq8_1[ib32].qs;
-    const uint16_t * q4 = (const uint16_t *)bq4->qs + 8*ib32;
-    const uint16_t extra = bq4->extra >> 2*ib32;
-    int v1, v2;
-    int sumi1 = 0, sumi2 = 0;
-    for (int j = 0; j < 4; ++j) {
-        const uint32_t aux32 = q4[2*j+0] | (q4[2*j+1] << 16);
-        get_int_from_table_16_shift(aux32, extra, all_values, v1, v2);
-        sumi1 = ggml_cuda_dp4a(v1, q8[j+0], sumi1);
-        sumi2 = ggml_cuda_dp4a(v2, q8[j+4], sumi2);
-    }
-    const float d = __half2float(bq4->d) * __low2float(bq8_1[ib32].ds);
+    // iqs is 0, 4, 8, 12, 16, 20, 24, 28
+    // we want iqs =  0 to process quants 0....7 + 64...71 + 128...135 + 192...199
+    //             =  4 to process quants 8...15 + 72...79 + 136...143 + 200...207
+    //             ...
+    //             = 28 to process quants 56..63 + 120..127+ 184...192 + 248...255
+    const int ib32 = iqs/4; // 0...7
+    const uint32_t * q4 = (const uint32_t *)bq4->qs + 2*ib32;
     const uint8_t sh = bq4->scales_h[ib32/2] >> 4*(ib32%2);
     const int ls1 = ((bq4->scales_l[ib32] & 0xf) | ((sh << 4) & 0x30)) - 32;
     const int ls2 = ((bq4->scales_l[ib32] >>  4) | ((sh << 2) & 0x30)) - 32;
-    return d * (sumi1 * ls1 + sumi2 * ls2);
+    const uint16_t extra = bq4->extra >> 2*ib32;
+    int val[4];
+
+    //const int32_t * q8 = (const int *)bq8_1[ib32].qs;
+
+    //get_int_from_table_16_shift_4(q4, extra, all_values, val);
+    //int sumi1 = ggml_cuda_dp4a(val[0], q8[0], ggml_cuda_dp4a(val[2], q8[2], 0));
+    //int sumi2 = ggml_cuda_dp4a(val[1], q8[1], ggml_cuda_dp4a(val[3], q8[3], 0));
+
+    //get_int_from_table_16_shift_4(q4+16, extra, all_values, val);
+    //sumi1 = ggml_cuda_dp4a(val[0], q8[4], ggml_cuda_dp4a(val[2], q8[6], sumi1));
+    //sumi2 = ggml_cuda_dp4a(val[1], q8[5], ggml_cuda_dp4a(val[3], q8[7], sumi2));
+
+    //return __half2float(bq4->d) * __low2float(bq8_1[ib32].ds) * (sumi1*ls1 + sumi2*ls2);
+
+    get_int_from_table_16_shift_4(q4, extra, all_values, val);
+    const int32_t * q8 = (const int *)bq8_1[ib32/4].qs + 2*(ib32%4);
+    int sumi1 = ggml_cuda_dp4a(val[0], q8[0], 0);
+    int sumi2 = ggml_cuda_dp4a(val[1], q8[1], 0);
+    float sumf = (sumi1*ls1 + sumi2*ls2) * __low2float(bq8_1[ib32/4].ds);
+
+    q8 = (const int *)bq8_1[ib32/4+2].qs + 2*(ib32%4);
+    sumi1 = ggml_cuda_dp4a(val[2], q8[0], 0);
+    sumi2 = ggml_cuda_dp4a(val[3], q8[1], 0);
+    sumf += (sumi1*ls1 + sumi2*ls2) * __low2float(bq8_1[ib32/4+2].ds);
+
+    get_int_from_table_16_shift_4(q4+16, extra, all_values, val);
+
+    q8 = (const int *)bq8_1[ib32/4+4].qs + 2*(ib32%4);
+    sumi1 = ggml_cuda_dp4a(val[0], q8[0], 0);
+    sumi2 = ggml_cuda_dp4a(val[1], q8[1], 0);
+    sumf += (sumi1*ls1 + sumi2*ls2) * __low2float(bq8_1[ib32/4+4].ds);
+
+    q8 = (const int *)bq8_1[ib32/4+6].qs + 2*(ib32%4);
+    sumi1 = ggml_cuda_dp4a(val[2], q8[0], 0);
+    sumi2 = ggml_cuda_dp4a(val[3], q8[1], 0);
+    sumf += (sumi1*ls1 + sumi2*ls2) * __low2float(bq8_1[ib32/4+6].ds);
+
+    return __half2float(bq4->d) * sumf;
+
 }
 
 #define VDR_IQ4_KS_Q8_1_MMVQ 4

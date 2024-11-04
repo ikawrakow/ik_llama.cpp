@@ -37,6 +37,48 @@ static __global__ void quantize_q8_1(const float * __restrict__ x, void * __rest
     reinterpret_cast<half&>(y[ib].ds.y) = sum;
 }
 
+/*
+static __global__ void quantize_q8_1_iqk(const float * __restrict__ x, void * __restrict__ vy, const int64_t kx, const int64_t kx0_padded) {
+    const int64_t ix0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (ix0 >= kx0_padded) {
+        return;
+    }
+
+    const int64_t ix1 = blockIdx.y;
+
+    const int64_t i_padded = ix1*kx0_padded + ix0;
+
+    block_q8_1 * y = (block_q8_1 *) vy;
+
+    const int64_t ib256  = i_padded / QK_K; // block index
+    const int64_t iqs256 = i_padded % QK_K; // quant index
+
+    const int64_t ib32  = 8*ib256 + iqs256/32;
+    const int64_t iqs   = iqs256%32;
+    const int64_t idx   = QK_K*ib256 + 8*(iqs%8) + 64*(iqs/8);
+
+    const float xi = idx < kx ? x[ix1*kx + idx] : 0.0f;
+    float amax = fabsf(xi);
+    float sum = xi;
+
+    amax = warp_reduce_max(amax);
+    sum = warp_reduce_sum(sum);
+
+    const float d = amax / 127;
+    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+    y[ib32].qs[iqs] = q;
+
+    if (iqs > 0) {
+        return;
+    }
+
+    reinterpret_cast<half&>(y[ib32].ds.x) = d;
+    reinterpret_cast<half&>(y[ib32].ds.y) = sum;
+}
+*/
+
 template <mmq_q8_1_ds_layout ds_layout>
 static __global__ void quantize_mmq_q8_1(
     const float * __restrict__ x, void * __restrict__ vy, const int64_t kx0, const int64_t kx1, const int64_t kx0_padded) {
@@ -129,11 +171,16 @@ void quantize_row_q8_1_cuda(
 
     GGML_ASSERT(kx0_padded % QK8_1 == 0);
 
+    //printf("%s: kx0=%d, kx1=%d, channels=%d, kx0_padded=%d\n", __func__, (int)kx0, (int)kx1, (int)channels, (int)kx0_padded);
+
     const int64_t block_num_x = (kx0_padded + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
     const dim3 num_blocks(block_num_x, kx1*channels, 1);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+    //switch (type_x) {
+    //    case GGML_TYPE_IQ4_K: quantize_q8_1_iqk<<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx0_padded); break;
+    //    default: quantize_q8_1<<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx0_padded);
+    //}
     quantize_q8_1<<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx0_padded);
-
     GGML_UNUSED(type_x);
 }
 

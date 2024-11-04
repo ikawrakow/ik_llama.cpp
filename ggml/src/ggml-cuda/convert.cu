@@ -622,19 +622,20 @@ static __global__ void dequantize_block_iq4_k(const void * __restrict__ vx, dst_
     const block_iq4_k * x = (const block_iq4_k *)vx;
 
     const int64_t tid = threadIdx.x;
-    const int64_t il = tid/8; // 0...3
-    const int64_t ib = tid%8; // 0...7
-    dst_t * y = yy + i*QK_K + 32*ib + 4*il;
-    const uint8_t  * q4 = x[i].qs + 16*ib + 4*il;
+    const int64_t il = tid/16; // 0 or 1
+    const int64_t ib = tid%16; // 0...15
+    dst_t * y = yy + i*QK_K + 4*ib + 2*il;
+    const uint8_t * q4 = x[i].qs + 4*ib + 2*il;
     const float d = (float)x[i].d;
-    const uint8_t sh = x[i].scales_h[ib/2] >> 4*(ib%2);
-    const float d1 = d * (((x[i].scales_l[ib] & 0xf) | ((sh << 4) & 0x30)) - 32);
-    const float d2 = d * (((x[i].scales_l[ib] >>  4) | ((sh << 2) & 0x30)) - 32);
-    const int8_t * values1 = iq4k_values + 16*((x[i].extra >> (2*ib+0)) & 1);
-    const int8_t * values2 = iq4k_values + 16*((x[i].extra >> (2*ib+1)) & 1);
-    for (int j = 0; j < 4; ++j) {
-        y[j+ 0] = d1 * values1[q4[j] & 0xf];
-        y[j+16] = d2 * values2[q4[j] >>  4];
+    const uint16_t * scales_h = (uint16_t *)x[i].scales_h;
+    const uint8_t sh = scales_h[ib/8] >> 2*(ib%8);
+    const float dl = d * ((((x[i].scales_l[ib/2] >> 4*(ib%2)) & 0xf) | ((sh << 4) & 0x30)) - 32);
+    const int8_t * values = iq4k_values + (((x[i].extra >> ib) & 1) << 4);
+    for (int j = 0; j < 2; ++j) {
+        y[j+  0] = dl * values[q4[j+ 0] & 0xf];
+        y[j+ 64] = dl * values[q4[j+ 0] >>  4];
+        y[j+128] = dl * values[q4[j+64] & 0xf];
+        y[j+192] = dl * values[q4[j+64] >>  4];
     }
 }
 
