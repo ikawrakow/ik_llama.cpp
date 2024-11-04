@@ -406,6 +406,7 @@ extern "C" {
         GGML_TYPE_IQ4_KS  = 144,
         GGML_TYPE_IQ2_KS  = 145,
         GGML_TYPE_IQ4_KSS = 146,
+        GGML_TYPE_Q8_K16  = 147,
         GGML_TYPE_COUNT,
     };
 

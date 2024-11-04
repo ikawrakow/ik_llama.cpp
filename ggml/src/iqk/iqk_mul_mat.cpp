@@ -988,45 +988,89 @@ struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
     const __m128i hshuff = _mm_loadu_si128((const __m128i*)k_shuff);
     constexpr static uint8_t k_shuff[16] = {0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15};
 };
+//struct IQXKScales2 {
+//    IQXKScales2(uint8_t shift, int8_t min_val) : eshift(_mm256_set1_epi16(shift)), min(_mm256_set1_epi16(min_val)) {}
+//    template <typename Q8>
+//    inline void process(int i, float d, uint16_t extra, __m128i scales8, const Q8& q8, __m256 * accm, __m512i * scales) const {
+//        process(i, d, extra, _mm256_cvtepi8_epi16(_mm_shuffle_epi8(scales8, scale_shuffle)), q8, accm, scales);
+//    }
+//    template <typename Q8>
+//    inline void process(int i, float d, uint16_t extra, __m256i scales16, const Q8& q8, __m256 * accm, __m512i * scales) const {
+//        auto scales_s = _mm256_mullo_epi16(scales16, _mm256_mask_add_epi16(min, extra, min, eshift));
+//        for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+//            const __m256i prod  = _mm256_madd_epi16(scales_s, q8.load_bsums(iy, i));
+//            accm[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d * q8.scale(iy, i)), _mm256_cvtepi32_ps(prod), accm[iy]);
+//        }
+//        auto aux_1 = MM256_SET_M128I(_mm256_castsi256_si128(scales16), _mm256_castsi256_si128(scales16));
+//        auto aux_2 = MM256_SET_M128I(_mm256_extracti128_si256(scales16, 1), _mm256_extracti128_si256(scales16, 1));
+//        auto scales16_1 = _mm512_inserti32x8(_mm512_castsi256_si512(aux_1), aux_1, 1);
+//        auto scales16_2 = _mm512_inserti32x8(_mm512_castsi256_si512(aux_2), aux_2, 1);
+//        scales[0] = _mm512_shuffle_epi8(scales16_1, shuffles[0]);
+//        scales[1] = _mm512_shuffle_epi8(scales16_1, shuffles[1]);
+//        scales[2] = _mm512_shuffle_epi8(scales16_2, shuffles[0]);
+//        scales[3] = _mm512_shuffle_epi8(scales16_2, shuffles[1]);
+//    }
+//    const __m256i eshift;
+//    const __m256i min;
+//    const __m128i scale_shuffle = _mm_set_epi32(0x0f070e06, 0x0d050c04, 0x0b030a02, 0x09010800);
+//    const __m128i emask         = _mm_set_epi32(0x80804040, 0x20201010, 0x08080404, 0x02020101);
+//    const __m128i eshuffle      = _mm_set_epi32(0x0f0d0b09, 0x07050301, 0x0e0c0a08, 0x06040200);
+//    const __m512i shuffles[2] = {
+//        _mm512_inserti32x4(_mm512_inserti32x4(_mm512_inserti32x4(_mm512_inserti32x4(_mm512_setzero_si512(),
+//                            _mm_set1_epi16(0x0100), 0), _mm_set1_epi16(0x0302), 1), _mm_set1_epi16(0x0504), 2), _mm_set1_epi16(0x0706), 3),
+//        _mm512_inserti32x4(_mm512_inserti32x4(_mm512_inserti32x4(_mm512_inserti32x4(_mm512_setzero_si512(),
+//                            _mm_set1_epi16(0x0908), 0), _mm_set1_epi16(0x0b0a), 1), _mm_set1_epi16(0x0d0c), 2), _mm_set1_epi16(0x0f0e), 3)
+//    };
+//};
 
+// d4*d8*sum[y_i*s_i*(x_i + b_i) = d4*d8*(sum[s_i*y_i*x_i] + sum[y_i*s_i*b_i] =
+// d4*d8*sum[s_k*(xy_k + by_k)]
 struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
-    DequantizerIQ4K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), iqxk(4, -128), values(load_iq4nl_values_512()) {}
-    template <typename Q8>
-    inline void new_block(int i, const Q8& q8, __m256 * accm, __m512i * scales) {
+    DequantizerIQ4K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_512()) {}
+    inline __m512 new_block(int i, __m512& scales_s) {
         d = GGML_FP16_TO_FP32(x[i].d);
+        auto scales8 = make_scales(x[i].scales_l, x[i].scales_h);
+        scales_s = _mm512_mask_blend_ps(x[i].extra, min1, min2);
         prepare(x[i].qs);
-        iqxk.process(i, d, x[i].extra, make_scales(x[i].scales_l, (const uint16_t *)x[i].scales_h), q8, accm, scales);
+        return _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(scales8));
+        //auto scales16 = _mm256_cvtepi8_epi16(scales8);
+        //scales_s = _mm256_mask_blend_epi16(x[i].extra, min1, min2);
+        ////scales_s = _mm256_mullo_epi16(scales16, _mm256_mask_blend_epi16(x[i].extra, min1, min2));
+        //prepare(x[i].qs);
+        //return _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(scales16));
     }
     inline void prepare(const uint8_t * q4) {
         bits.prepare64(q4);
-        // We now have in bits.valuse[0]: 0...15, 32...47, 64...79, 96...111
-        //                bits.valuse[1]: 16..31, 48...63, 80...95, 112..127
-        //                etc.
-        auto tmp = _mm512_permutex2var_epi64(bits.values[0], permute1, bits.values[1]);
-        bits.values[1] = _mm512_shuffle_epi8(values, _mm512_permutex2var_epi64(bits.values[0], permute2, bits.values[1]));
-        bits.values[0] = _mm512_shuffle_epi8(values, tmp);
-        tmp = _mm512_permutex2var_epi64(bits.values[2], permute1, bits.values[3]);
-        bits.values[3] = _mm512_shuffle_epi8(values, _mm512_permutex2var_epi64(bits.values[2], permute2, bits.values[3]));
-        bits.values[2] = _mm512_shuffle_epi8(values, tmp);
+        bits.values[0] = _mm512_shuffle_epi8(values, bits.values[0]);
+        bits.values[1] = _mm512_shuffle_epi8(values, bits.values[1]);
+        bits.values[2] = _mm512_shuffle_epi8(values, bits.values[2]);
+        bits.values[3] = _mm512_shuffle_epi8(values, bits.values[3]);
     }
-    __m128i make_scales(const uint8_t * scales_l, const uint16_t * scales_h) const {
+    __m128i make_scales(const uint8_t * scales_l, const uint8_t * scales_h) const {
+        //uint8_t Ls[QK_K/16];
+        //for (int j = 0; j < QK_K/32; ++j) {
+        //    const uint8_t sh = scales_h[j/2] >> 4*(j%2);
+        //    Ls[2*j+0] = ((scales_l[j] & 0xf) | ((sh << 4) & 0x30)) - 32;
+        //    Ls[2*j+1] = ((scales_l[j] >>  4) | ((sh << 2) & 0x30)) - 32;
+        //}
+        //return _mm_loadu_si128((const __m128i *)Ls);
         uint64_t aux64;
         memcpy(&aux64, scales_l, 8);
+        uint32_t aux32 = *(const uint32_t *)scales_h;
         auto scl = _mm_and_si128(_mm_set_epi64x(aux64 >> 4, aux64), maskl);
-        const uint32_t aux32 = scales_h[0] | (scales_h[1] << 16);
         auto aux = _mm_and_si128(_mm_set_epi32(aux32 >> 2, aux32, aux32 << 2, aux32 << 4), maskh);
-        auto sch = _mm_shuffle_epi8(aux, iqxk.scale_shuffle);
-        return _mm_add_epi8(_mm_or_si128(scl, sch), m32);
+        auto sch = _mm_shuffle_epi8(aux, scale_shuffle);
+        return _mm_shuffle_epi8(_mm_add_epi8(_mm_or_si128(scl, sch), m32), scale_shuffle);
     }
 
     Q4Bits bits;
-    const IQXKScales2 iqxk;
     const __m512i values;
-    const __m512i permute1 = _mm512_set_epi64(11, 10, 3, 2,  9,  8, 1, 0);
-    const __m512i permute2 = _mm512_set_epi64(15, 14, 7, 6, 13, 12, 5, 4);
     const __m128i maskl    = _mm_set1_epi8(0xf);
     const __m128i maskh    = _mm_set1_epi8(0x30);
     const __m128i m32      = _mm_set1_epi8(-32);
+    const __m128i scale_shuffle = _mm_set_epi32(0x0f070e06, 0x0d050c04, 0x0b030a02, 0x09010800);
+    const __m512  min1     = _mm512_set1_ps(-128.f);
+    const __m512  min2     = _mm512_set1_ps(-124.f);
 };
 
 struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
@@ -1365,6 +1409,47 @@ static void mul_mat_iqX_k_q8_K_AVX512(int n, const void * vx, size_t bx, const D
         for (int iy = 0; iy < nrc_y; ++iy) {
             auto sum256 = _mm256_add_ps(_mm512_castps512_ps256(accd[iy]), _mm512_extractf32x8_ps(accd[iy], 1));
             info.store(ix, iy, hsum_float_8(_mm256_add_ps(accm[iy], sum256)));
+        }
+
+    }
+}
+
+template <typename Dequantizer, int nrc_y>
+static void mul_mat_iqX_k_q8_K16_AVX512(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+
+    Q8<nrc_y> q8(info);
+
+    Dequantizer deq(vx, bx);
+
+    __m512  accd[nrc_y];
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+
+        for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = _mm512_setzero_ps();
+
+        deq.new_row(ix);
+
+        for (int i = 0; i < nb; ++i) {
+
+            __m512 shifts;
+            auto scales = deq.new_block(i, shifts);
+
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto vd = _mm512_mul_ps(_mm512_set1_ps(deq.d*q8.scale(iy, i)), scales);
+                auto bs = _mm512_mul_ps(shifts, _mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(q8.load_bsums(iy, i))));
+                auto sumi = _mm512_setzero_si512();
+                sumi = _mm512_dpbusd_epi32(sumi, deq.bits.values[0], q8.load_quants64(iy, i, 0));
+                sumi = _mm512_dpbusd_epi32(sumi, deq.bits.values[1], q8.load_quants64(iy, i, 1));
+                sumi = _mm512_dpbusd_epi32(sumi, deq.bits.values[2], q8.load_quants64(iy, i, 2));
+                sumi = _mm512_dpbusd_epi32(sumi, deq.bits.values[3], q8.load_quants64(iy, i, 3));
+                accd[iy] = _mm512_fmadd_ps(vd, _mm512_add_ps(bs, _mm512_cvtepi32_ps(sumi)), accd[iy]);
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, _mm512_reduce_add_ps(accd[iy]));
         }
 
     }
@@ -3774,7 +3859,7 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
 #ifdef HAVE_FANCY_SIMD
             if constexpr (std::is_same_v<Dequantizer, DequantizerIQ6K> ||
                           std::is_same_v<Dequantizer, DequantizerIQ5K> ||
-                          std::is_same_v<Dequantizer, DequantizerIQ4K> ||
+                          //std::is_same_v<Dequantizer, DequantizerIQ4K> ||
                           std::is_same_v<Dequantizer, DequantizerIQ3K> ||
                           std::is_same_v<Dequantizer, DequantizerIQ4XS>||
                           std::is_same_v<Dequantizer, DequantizerIQ4KS>||
@@ -3936,7 +4021,15 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_IQ4_K:
             assert (ne00 % QK_K == 0);
-            MulMat::set_functions<DequantizerIQ4K>(mm);
+            mm.funcs[0] = mul_mat_iqX_k_q8_K16_AVX512<DequantizerIQ4K, 1>;
+            mm.funcs[1] = mul_mat_iqX_k_q8_K16_AVX512<DequantizerIQ4K, 2>;
+            mm.funcs[2] = mul_mat_iqX_k_q8_K16_AVX512<DequantizerIQ4K, 3>;
+            mm.funcs[3] = mul_mat_iqX_k_q8_K16_AVX512<DequantizerIQ4K, 4>;
+            mm.funcs[4] = mul_mat_iqX_k_q8_K16_AVX512<DequantizerIQ4K, 5>;
+            mm.funcs[5] = mul_mat_iqX_k_q8_K16_AVX512<DequantizerIQ4K, 6>;
+            mm.funcs[6] = mul_mat_iqX_k_q8_K16_AVX512<DequantizerIQ4K, 7>;
+            mm.funcs[7] = mul_mat_iqX_k_q8_K16_AVX512<DequantizerIQ4K, 8>;
+            expected_typeB = GGML_TYPE_Q8_K16;
             break;
         case GGML_TYPE_IQ5_K:
             assert (ne00 % QK_K == 0);

@@ -62,6 +62,7 @@ void   dequantize_row_iq2_ks(const block_iq2_ks  * GGML_RESTRICT x, float * GGML
 void   vec_dot_iq2_ks_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
 void iqk_quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
+void iqk_quantize_row_q8_K16(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 
 #ifdef __cplusplus
 }
