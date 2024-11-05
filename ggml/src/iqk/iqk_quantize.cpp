@@ -3119,4 +3119,216 @@ void vec_dot_iq4_kss_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
     GGML_UNUSED(by);
 }
 
+// ========================================== iq2_kt ====================================================
+
+namespace {
+class QuantizerIQ2KT {
+public:
+    constexpr static int kSuperBlockSize = 256;
+    constexpr static int kBlockSize = 8;
+    constexpr static int kNblock = kSuperBlockSize/kBlockSize;
+    constexpr static int kNumVal = 1 << 12;
+    QuantizerIQ2KT();
+    const float * values() const { return m_values.data(); }
+    static inline void set_values(uint32_t i, float * result) {
+        constexpr uint32_t ka = 89226354;
+        constexpr uint32_t kb = 64248484;
+        constexpr uint32_t kmask = 0x8fff8fff;
+        constexpr uint32_t km32 = 0x3b603b60;
+        uint32_t x = i + 4096;
+        for (int k = 0; k < kBlockSize; ++k) {
+            x = ka*x + kb;
+            uint32_t s = (x & kmask) ^ km32;
+            float val = GGML_FP16_TO_FP32(s & 65535) + GGML_FP16_TO_FP32(s >> 16);
+            int ival = nearest_int(16.f*val);
+            result[k] = ival;
+        }
+    }
+private:
+    std::vector<float> m_values;
+};
+QuantizerIQ2KT::QuantizerIQ2KT() {
+    m_values.resize(kNumVal*kBlockSize);
+    float * data = m_values.data();
+    for (int i = 0; i < kNumVal; ++i) {
+        set_values(i, data);
+        data += kBlockSize;
+    }
+}
+const QuantizerIQ2KT& iq2kt_quantizer() {
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    static QuantizerIQ2KT quantizer;
+    return quantizer;
+}
+#ifdef __AVX2__
+__m256 hsum_float_8x8(__m256 * accm) {
+     for (int i = 0; i < 4; ++i) {
+         accm[i] = _mm256_set_m128(_mm_add_ps(_mm256_castps256_ps128(accm[i+4]), _mm256_extractf128_ps(accm[i+4], 1)),
+                                   _mm_add_ps(_mm256_castps256_ps128(accm[i+0]), _mm256_extractf128_ps(accm[i+0], 1)));
+     }
+     for (int i = 0; i < 2; ++i) accm[i] = _mm256_add_ps(_mm256_unpacklo_ps(accm[i], accm[i+2]), _mm256_unpackhi_ps(accm[i], accm[i+2]));
+     return _mm256_add_ps(_mm256_unpacklo_ps(accm[0], accm[1]), _mm256_unpackhi_ps(accm[0], accm[1]));
+}
+#endif
+void quantize_row_iq2_kt_impl(const float * x, void * vy, int n_per_row, const float * quant_weights) {
+
+    static_assert(QuantizerIQ2KT::kNumVal%8 == 0);
+
+    block_iq2_kt * y = (block_iq2_kt *)vy;
+
+    float weight[QuantizerIQ2KT::kBlockSize];
+    float scales[QuantizerIQ2KT::kNblock];
+
+    const int nblock = n_per_row/QuantizerIQ2KT::kSuperBlockSize;
+
+    auto& quantizer = iq2kt_quantizer();
+    auto values = quantizer.values();
+
+#ifdef __AVX2__
+    __m256 sqx[8];
+    __m256 sq2[8];
+    __m256i add_idx = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+    float sx[8];
+    int   index[8];
+#endif
+
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+
+        memset(&y[ibl], 0, sizeof(block_iq2_kt));
+
+        const float * xbl = x + ibl*QuantizerIQ2KT::kSuperBlockSize;
+        float sumx2 = 0;
+        for (int j = 0; j < QuantizerIQ2KT::kSuperBlockSize; ++j) sumx2 += xbl[j]*xbl[j];
+        const float sigma2 = 1.5f*sumx2/QuantizerIQ2KT::kSuperBlockSize;
+
+        float amax_scale = 0, max_scale = 0;
+
+        for (int ib = 0; ib < QuantizerIQ2KT::kNblock; ++ib) {
+            const float * xb = xbl + QuantizerIQ2KT::kBlockSize*ib;
+            if (quant_weights) {
+                const float * qw = quant_weights + ibl*QuantizerIQ2KT::kSuperBlockSize + ib*QuantizerIQ2KT::kBlockSize;
+                for (int j = 0; j < QuantizerIQ2KT::kBlockSize; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+            } else {
+                for (int j = 0; j < QuantizerIQ2KT::kBlockSize; ++j) weight[j] = 1;//0.25f*sigma2 + xb[j]*xb[j];
+            }
+#ifdef __AVX2__
+            auto vw = _mm256_loadu_ps(weight);
+            auto vx = _mm256_loadu_ps(xb);
+            auto vbest = _mm256_set1_ps(0.f);
+            auto best_index = _mm256_set1_epi32(-1);
+            for (int j = 0; j < QuantizerIQ2KT::kNumVal; j += 8) {
+                auto idx = _mm256_add_epi32(_mm256_set1_epi32(j), add_idx);
+                for (int i = 0; i < 8; ++i) {
+                    auto vq = _mm256_loadu_ps(values + QuantizerIQ2KT::kBlockSize*(j+i));
+                    auto wqv = _mm256_mul_ps(vq, vw);
+                    sqx[i] = _mm256_mul_ps(wqv, vx);
+                    sq2[i] = _mm256_mul_ps(wqv, vq);
+                }
+                auto sumqx = hsum_float_8x8(sqx);
+                auto sumq2 = hsum_float_8x8(sq2);
+                //auto score = _mm256_div_ps(_mm256_mul_ps(sumqx, sumqx), sumq2);
+                auto score = _mm256_mul_ps(_mm256_mul_ps(sumqx, sumqx), _mm256_rcp_ps(sumq2));
+                auto mask  = _mm256_cmp_ps(score, vbest, _CMP_GT_OQ);
+                best_index = _mm256_or_si256(_mm256_and_si256(_mm256_castps_si256(mask), idx),
+                                          _mm256_andnot_si256(_mm256_castps_si256(mask), best_index));
+                vbest = _mm256_max_ps(vbest, score);
+            }
+            _mm256_store_ps(sx, vbest);
+            _mm256_store_si256((__m256i *)index, best_index);
+            float best = sx[0]; int jbest = index[0];
+            for (int j = 1; j < 8; ++j) {
+                if (sx[j] > best) { best = sx[j]; jbest = index[j]; }
+            }
+            auto qv = values + QuantizerIQ2KT::kBlockSize*jbest;
+            float sumqx = 0, sumq2 = 0;
+            for (int k = 0; k < QuantizerIQ2KT::kBlockSize; ++k) {
+                sumqx += weight[k]*qv[k]*xb[k];
+                sumq2 += weight[k]*qv[k]*qv[k];
+            }
+            scales[ib] = sumqx/sumq2;
+            float abs_scale = std::abs(scales[ib]);
+            if (abs_scale > amax_scale) {
+                amax_scale = abs_scale; max_scale = scales[ib];
+            }
+            y[ibl].ql[ib] = (jbest & 255);
+            y[ibl].qh[ib%(QuantizerIQ2KT::kNblock/2)] |= ((jbest >> 8) << 4*(ib/(QuantizerIQ2KT::kNblock/2)));
+#else
+#endif
+        }
+        float d = max_scale/iq4k_values[0];
+        y[ibl].d = GGML_FP32_TO_FP16(d);
+        float id = d ? 1/d : 0.f;
+
+        for (int ib = 0; ib < QuantizerIQ2KT::kNblock; ++ib) {
+            int ls = best_index_iq4nl(iq4k_values, id*scales[ib]);
+            y[ibl].scales[ib%(QuantizerIQ2KT::kNblock/2)] |= (ls << 4*(ib/(QuantizerIQ2KT::kNblock/2)));
+        }
+    }
+
+}
+}
+
+void quantize_row_iq2_kt_ref(const float * GGML_RESTRICT x, block_iq2_kt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    quantize_iq2_kt(x, (void *)y, 1, k, nullptr);
+}
+
+void quantize_row_iq2_kt(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_K == 0);
+    block_iq2_kt * y = (block_iq2_kt *)vy;
+    quantize_row_iq2_kt_ref(x, y, k);
+}
+
+size_t quantize_iq2_kt(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    auto row_size = ggml_row_size(GGML_TYPE_IQ2_KT, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_iq2_kt_impl(src, (void *)qrow, n_per_row, imatrix);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
+}
+
+void dequantize_row_iq2_kt(const block_iq2_kt * x, float * y, int64_t k) {
+    assert(k % QuantizerIQ2KT::kSuperBlockSize == 0);
+    const int nb = k / QuantizerIQ2KT::kSuperBlockSize;
+    auto& deq = iq2kt_quantizer();
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const float d = GGML_FP16_TO_FP32(x[ibl].d);
+        auto yl = y + ibl*QuantizerIQ2KT::kSuperBlockSize;
+        auto yh = yl + QuantizerIQ2KT::kSuperBlockSize/2;
+        for (int ib = 0; ib < QuantizerIQ2KT::kNblock/2; ++ib) {
+            uint32_t idx1 = x[ibl].ql[ib] | ((x[ibl].qh[ib] & 0xf) << 8);
+            uint32_t idx2 = x[ibl].ql[ib+QuantizerIQ2KT::kNblock/2] | ((x[ibl].qh[ib] >> 4) << 8);
+            deq.set_values(idx1, yl);
+            deq.set_values(idx2, yh);
+            float s1 = d * iq4k_values[x[ibl].scales[ib] & 0xf];
+            float s2 = d * iq4k_values[x[ibl].scales[ib] >>  4];
+            for (int j = 0; j < QuantizerIQ2KT::kBlockSize; ++j) yl[j] *= s1;
+            for (int j = 0; j < QuantizerIQ2KT::kBlockSize; ++j) yh[j] *= s2;
+            yl += QuantizerIQ2KT::kBlockSize;
+            yh += QuantizerIQ2KT::kBlockSize;
+        }
+    }
+}
+
+void vec_dot_iq2_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    GGML_UNUSED(nrc);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    GGML_UNUSED(bs);
+
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+
+}
+
 
