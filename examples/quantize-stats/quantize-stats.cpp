@@ -250,6 +250,34 @@ static void test_roundtrip_on_layer(
     }
 }
 
+static inline int nearest_int(float fval) {
+    assert(fval <= 4194303.f);
+    float val = fval + 12582912.f;
+    int i; memcpy(&i, &val, sizeof(int));
+    return (i & 0x007fffff) - 0x00400000;
+}
+
+static const int8_t scale_values[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
+
+//static std::vector<float> make_values(int nval, int n_per_val) {
+//    GGML_ASSERT(n_per_val%4 == 0);
+//    std::vector<float> result(nval*n_per_val);
+//    const uint32_t a = 89226354, b = 64248484;
+//    float * data = result.data();
+//    uint32_t aux32;
+//    const uint8_t * q = (const uint8_t *)&aux32;
+//    for (int i = 0; i < nval; ++i) {
+//        uint32_t x = i + 32767;
+//        for (int k = 0; k < n_per_val/4; ++k) {
+//            x = a*x + b;
+//            aux32 = x & 0x0f0f0f0f;
+//            for (int l = 0; l < 4; ++l) data[4*k+l] = scale_values[q[l]];
+//        }
+//        data += n_per_val;
+//    }
+//    return result;
+//}
+
 static std::vector<float> make_values(int nval, int n_per_val) {
     std::vector<float> result(nval*n_per_val);
     uint16_t m16 = ggml_fp32_to_fp16(0.922f);
@@ -261,12 +289,32 @@ static std::vector<float> make_values(int nval, int n_per_val) {
         for (int k = 0; k < n_per_val; ++k) {
             x = a*x + b;
             uint32_t s = (x & 0b10001111111111111000111111111111) ^ m32;
-            data[k] = ggml_fp16_to_fp32(s & 65535) + ggml_fp16_to_fp32(s >> 16);
+            float val = ggml_fp16_to_fp32(s & 65535) + ggml_fp16_to_fp32(s >> 16);
+            //int ival = nearest_int(31.5f*val);
+            int ival = nearest_int(16.f*val);
+            data[k] = ival;
+            //data[k] = ggml_fp16_to_fp32(s & 65535) + ggml_fp16_to_fp32(s >> 16);
         }
         data += n_per_val;
     }
     return result;
 }
+
+//static std::vector<float> make_values(int nval, int n_per_val) {
+//    std::vector<float> result(nval*n_per_val);
+//    const uint32_t a = 34038481, b = 76625530;
+//    float * data = result.data();
+//    for (int i = 0; i < nval; ++i) {
+//        uint32_t x = i + 4096;
+//        for (int k = 0; k < n_per_val; ++k) {
+//            x = a*x + b;
+//            uint32_t s = (x & 255) + ((x >> 8) & 255) + ((x >> 16) & 255) + ((x >> 24) & 255);
+//            data[k] = (s - 510.f)/147.8f;
+//        }
+//        data += n_per_val;
+//    }
+//    return result;
+//}
 
 #ifdef __AVX2__
 static inline float hsum_float_4(__m128 x) {
@@ -287,12 +335,23 @@ static __m256 hsum_float_8x8(__m256 * accm) {
 }
 #endif
 
-static inline int nearest_int(float fval) {
-    assert(fval <= 4194303.f);
-    float val = fval + 12582912.f;
-    int i; memcpy(&i, &val, sizeof(int));
-    return (i & 0x007fffff) - 0x00400000;
+const int8_t scale_index[241] = {
+     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 16, 16,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,
+     1, 17, 17,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 18,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3,
+     3,  3,  3,  3,  3,  3, 19,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4, 20,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5,
+     5,  5, 21, 21,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6, 22,  7,  7,  7,  7,  7,  7,  7,  7,  7,  7, 23, 23,  8,  8,  8,  8,
+     8,  8,  8,  8,  8,  8, 24,  9,  9,  9,  9,  9,  9,  9,  9,  9,  9,  9, 25, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 26, 26,
+    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 27, 27, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 28, 13, 13, 13,
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 29, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+    14, 14, 14, 14, 30, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15
+};
+inline int best_index_scale(const int8_t * values, float x) {
+    int ix = (int)x - values[0];
+    if (ix < 0 || ix >= 241) return ix < 0 ? 0 : 15;
+    ix = scale_index[ix];
+    return ix < 16 ? ix : x - values[ix-16] < values[ix-15] - x ? ix-16 : ix-15;
 }
+
 
 static void analyze_x(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_mse_q, float& tot_elements) {
     constexpr int kNumVal = 1 << 12;
@@ -384,28 +443,57 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
                         lmse += diff*diff;
                     }
                 }
-                for (int ibl = 0; ibl < n_per_row/kSuperBlockSize; ++ibl) {
-                    auto sb = scales.data() + ibl*(kSuperBlockSize/kBlockSize);
-                    auto idx = best_idx.data() + ibl*(kSuperBlockSize/kBlockSize);
-                    auto xbl = xr + ibl*kSuperBlockSize;
-                    float amax_scale = 0;
-                    for (int ib = 0; ib < kSuperBlockSize/kBlockSize; ++ib) {
-                        amax_scale = std::max(amax_scale, std::abs(sb[ib]));
-                    }
-                    float id = amax_scale > 0 ? 15/amax_scale : 0;
-                    float d = amax_scale/15;
-                    for (int ib = 0; ib < kSuperBlockSize/kBlockSize; ++ib) {
-                        int ls = nearest_int(0.5f*(id*sb[ib]+15));
-                        ls = std::max(0, std::min(ls, 15));
-                        float dl = d*(2*ls - 15);
-                        auto xb = xbl + kBlockSize*ib;
-                        auto qv = codes.data() + kBlockSize*idx[ib];
-                        for (int k = 0; k < kBlockSize; ++k) {
-                            float diff = xb[k] - dl*qv[k];
-                            lmse_q += diff*diff;
-                        }
+                float amax_scale = std::abs(scales[0]);
+                float max_scale  = scales[0];
+                for (int ib = 1; ib < n_per_row/kBlockSize; ++ib) {
+                    float ax = std::abs(scales[ib]);
+                    if (ax > amax_scale) {
+                        amax_scale = ax;
+                        max_scale = scales[ib];
                     }
                 }
+                float d = max_scale/scale_values[0];
+                float id = d ? 1/d : 0.f;
+                for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+                    int ls = best_index_scale(scale_values, id*scales[ib]);
+                    float dl = d * scale_values[ls];
+                    auto xb = xr + kBlockSize*ib;
+                    auto qv = codes.data() + kBlockSize*best_idx[ib];
+                    for (int k = 0; k < kBlockSize; ++k) {
+                        float diff = xb[k] - dl*qv[k];
+                        lmse_q += diff*diff;
+                    }
+                }
+                //for (int ibl = 0; ibl < n_per_row/kSuperBlockSize; ++ibl) {
+                //    auto sb = scales.data() + ibl*(kSuperBlockSize/kBlockSize);
+                //    auto idx = best_idx.data() + ibl*(kSuperBlockSize/kBlockSize);
+                //    auto xbl = xr + ibl*kSuperBlockSize;
+                //    float amax_scale = 0, max_scale = 0;
+                //    for (int ib = 0; ib < kSuperBlockSize/kBlockSize; ++ib) {
+                //        float ax = std::abs(sb[ib]);
+                //        if (ax > amax_scale) {
+                //            amax_scale = ax; max_scale = sb[ib];
+                //        }
+                //        //amax_scale = std::max(amax_scale, std::abs(sb[ib]));
+                //    }
+                //    float d = max_scale/scale_values[0];
+                //    float id = d ? 1/d : 0.f;
+                //    //float id = amax_scale > 0 ? 15/amax_scale : 0;
+                //    //float d = amax_scale/15;
+                //    for (int ib = 0; ib < kSuperBlockSize/kBlockSize; ++ib) {
+                //        int ls = best_index_scale(scale_values, id*sb[ib]);
+                //        float dl = d * scale_values[ls];
+                //        //int ls = nearest_int(0.5f*(id*sb[ib]+15));
+                //        //ls = std::max(0, std::min(ls, 15));
+                //        //float dl = d*(2*ls - 15);
+                //        auto xb = xbl + kBlockSize*ib;
+                //        auto qv = codes.data() + kBlockSize*idx[ib];
+                //        for (int k = 0; k < kBlockSize; ++k) {
+                //            float diff = xb[k] - dl*qv[k];
+                //            lmse_q += diff*diff;
+                //        }
+                //    }
+                //}
             }
         }
     };
