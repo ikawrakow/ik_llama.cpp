@@ -41,6 +41,10 @@ constexpr int popcount(uint32_t x) { return __builtin_popcount(x); }
 constexpr int popcount(uint64_t x) { return __builtin_popcountll(x); }
 #endif
 
+#ifdef __AVX2__
+#include <immintrin.h>
+#endif
+
 struct quantize_stats_params {
     std::string model = DEFAULT_MODEL_PATH;
     bool verbose = false;
@@ -253,7 +257,7 @@ static std::vector<float> make_values(int nval, int n_per_val) {
     const uint32_t a = 89226354, b = 64248484;
     float * data = result.data();
     for (int i = 0; i < nval; ++i) {
-        uint32_t x = i;
+        uint32_t x = i + 4096;
         for (int k = 0; k < n_per_val; ++k) {
             x = a*x + b;
             uint32_t s = (x & 0b10001111111111111000111111111111) ^ m32;
@@ -264,14 +268,33 @@ static std::vector<float> make_values(int nval, int n_per_val) {
     return result;
 }
 
+#ifdef __AVX2__
+static inline float hsum_float_4(__m128 x) {
+    x = _mm_add_ps(x, _mm_movehl_ps(x, x));
+    x = _mm_add_ss(x, _mm_movehdup_ps(x));
+    return _mm_cvtss_f32(x);
+}
+static inline float hsum_float_8(__m256 x) {
+    return hsum_float_4(_mm_add_ps(_mm256_castps256_ps128(x), _mm256_extractf128_ps(x, 1)));
+}
+#endif
+
 static void analyze_x(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_elements) {
-    auto codes = make_values(4096, 8);
+    constexpr int kNumVal = 1 << 12;
+    constexpr int kBlockSize = 8;
+    auto codes = make_values(kNumVal, kBlockSize);
+    std::vector<float> sumq2(kNumVal);
+    for (int j = 0; j < kNumVal; ++j) {
+        auto data = codes.data() + kBlockSize*j;
+        float sum = 0; for (int k = 0; k < kBlockSize; ++k) sum += data[k]*data[k];
+        sumq2[j] = sum;
+    }
     int nthread = std::max(1, int(std::thread::hardware_concurrency()/2));
     int chunk = (nrows + 8*nthread - 1)/(8*nthread);
     std::mutex mutex;
     int counter = 0;
     float mse = 0;
-    auto compute = [&mutex, &counter, &mse, &codes, values, nrows, n_per_row, chunk] () {
+    auto compute = [&mutex, &counter, &mse, &codes, &sumq2, values, nrows, n_per_row, chunk] () {
         float lmse = 0;
         while (true) {
             std::unique_lock<std::mutex> lock(mutex);
@@ -282,24 +305,41 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
             }
             lock.unlock();
             int last = std::min(first + chunk, nrows);
+#ifdef __AVX2__
+            __m256 vx[kBlockSize/8];
+#endif
             for (int row = first; row < last; ++row) {
                 auto xr = values + row*n_per_row;
-                for (int ib = 0; ib < n_per_row/8; ++ib) {
-                    auto xb = xr + 8*ib;
+                for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
                     float best = 0, d = 0; int jbest = -1;
-                    for (int j = 0; j < 4096; ++j) {
-                        auto qv = codes.data() + 8*j;
-                        float sumqx = 0, sumq2 = 0;
-                        for (int k = 0; k < 8; ++k) {
-                            sumqx += qv[k]*xb[k];
-                            sumq2 += qv[k]*qv[k];
+                    auto xb = xr + kBlockSize*ib;
+#ifdef __AVX2__
+                    for (int l = 0; l < kBlockSize/8; ++l) vx[l] = _mm256_loadu_ps(xb+8*l);
+                    for (int j = 0; j < kNumVal; ++j) {
+                        if (!sumq2[j]) continue;
+                        auto sx = _mm256_setzero_ps();
+                        for (int l = 0; l < kBlockSize/8; ++l) {
+                            auto qv = _mm256_loadu_ps(codes.data() + kBlockSize*j + 8*l);
+                            sx = _mm256_fmadd_ps(vx[l], qv, sx);
                         }
-                        if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
-                            d = sumqx/sumq2; best = d*sumqx; jbest = j;
+                        float sumqx = hsum_float_8(sx);
+                        if (sumqx*sumqx > best*sumq2[j]) {
+                            d = sumqx/sumq2[j]; best = d*sumqx; jbest = j;
                         }
                     }
-                    auto qv = codes.data() + 8*jbest;
-                    for (int k = 0; k < 8; ++k) {
+#else
+                    for (int j = 0; j < kNumVal; ++j) {
+                        if (!sumq2[j]) continue;
+                        auto qv = codes.data() + kBlockSize*j;
+                        float sumqx = 0;
+                        for (int k = 0; k < kBlockSize; ++k) sumqx += qv[k]*xb[k];
+                        if (sumqx*sumqx > best*sumq2[j]) {
+                            d = sumqx/sumq2[j]; best = d*sumqx; jbest = j;
+                        }
+                    }
+#endif
+                    auto qv = codes.data() + kBlockSize*jbest;
+                    for (int k = 0; k < kBlockSize; ++k) {
                         float diff = xb[k] - d*qv[k];
                         lmse += diff*diff;
                     }
