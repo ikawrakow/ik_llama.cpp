@@ -246,6 +246,76 @@ static void test_roundtrip_on_layer(
     }
 }
 
+static std::vector<float> make_values(int nval, int n_per_val) {
+    std::vector<float> result(nval*n_per_val);
+    uint16_t m16 = ggml_fp32_to_fp16(0.922f);
+    uint32_t m32 = (uint32_t(m16) << 16) | m16;
+    const uint32_t a = 89226354, b = 64248484;
+    float * data = result.data();
+    for (int i = 0; i < nval; ++i) {
+        uint32_t x = i;
+        for (int k = 0; k < n_per_val; ++k) {
+            x = a*x + b;
+            uint32_t s = (x & 0b10001111111111111000111111111111) ^ m32;
+            data[k] = ggml_fp16_to_fp32(s & 65535) + ggml_fp16_to_fp32(s >> 16);
+        }
+        data += n_per_val;
+    }
+    return result;
+}
+
+static void analyze_x(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_elements) {
+    auto codes = make_values(4096, 8);
+    int nthread = std::max(1, int(std::thread::hardware_concurrency()/2));
+    int chunk = (nrows + 8*nthread - 1)/(8*nthread);
+    std::mutex mutex;
+    int counter = 0;
+    float mse = 0;
+    auto compute = [&mutex, &counter, &mse, &codes, values, nrows, n_per_row, chunk] () {
+        float lmse = 0;
+        while (true) {
+            std::unique_lock<std::mutex> lock(mutex);
+            int first = counter; counter += chunk;
+            if (first >= nrows) {
+                mse += lmse;
+                return;
+            }
+            lock.unlock();
+            int last = std::min(first + chunk, nrows);
+            for (int row = first; row < last; ++row) {
+                auto xr = values + row*n_per_row;
+                for (int ib = 0; ib < n_per_row/8; ++ib) {
+                    auto xb = xr + 8*ib;
+                    float best = 0, d = 0; int jbest = -1;
+                    for (int j = 0; j < 4096; ++j) {
+                        auto qv = codes.data() + 8*j;
+                        float sumqx = 0, sumq2 = 0;
+                        for (int k = 0; k < 8; ++k) {
+                            sumqx += qv[k]*xb[k];
+                            sumq2 += qv[k]*qv[k];
+                        }
+                        if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                            d = sumqx/sumq2; best = d*sumqx; jbest = j;
+                        }
+                    }
+                    auto qv = codes.data() + 8*jbest;
+                    for (int k = 0; k < 8; ++k) {
+                        float diff = xb[k] - d*qv[k];
+                        lmse += diff*diff;
+                    }
+                }
+            }
+        }
+    };
+    std::vector<std::thread> workers(nthread-1);
+    for (auto& w : workers) w = std::thread(compute);
+    compute();
+    for (auto& w : workers) w.join();
+    tot_mse += mse;
+    tot_elements += n_per_row*nrows;
+    printf("%s:   %g    %g\n", name, sqrt(mse/(n_per_row*nrows)), sqrt(tot_mse/tot_elements));
+}
+
 static void analyze_iq4ks(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_elements) {
     int row_size = ggml_row_size(GGML_TYPE_IQ4_KS, n_per_row);
     int nblock = n_per_row/QK_K;
@@ -343,7 +413,8 @@ static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_elem
         return;
     }
     if (t->type == GGML_TYPE_F32) {
-        analyze_iq4ks(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_elements);
+        //analyze_iq4ks(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_elements);
+        analyze_x(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_elements);
     } else {
         std::vector<float> aux(t->ne[0]*t->ne[1]);
         if (t->type == GGML_TYPE_F16) {
@@ -351,7 +422,8 @@ static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_elem
         } else {
             ggml_bf16_to_fp32_row((const ggml_bf16_t *)t->data, aux.data(), aux.size());
         }
-        analyze_iq4ks(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_elements);
+        //analyze_iq4ks(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_elements);
+        analyze_x(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_elements);
     }
 }
 
