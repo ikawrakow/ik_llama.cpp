@@ -287,9 +287,17 @@ static __m256 hsum_float_8x8(__m256 * accm) {
 }
 #endif
 
-static void analyze_x(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_elements) {
+static inline int nearest_int(float fval) {
+    assert(fval <= 4194303.f);
+    float val = fval + 12582912.f;
+    int i; memcpy(&i, &val, sizeof(int));
+    return (i & 0x007fffff) - 0x00400000;
+}
+
+static void analyze_x(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_mse_q, float& tot_elements) {
     constexpr int kNumVal = 1 << 12;
     constexpr int kBlockSize = 8;
+    constexpr int kSuperBlockSize = 256;
     static_assert(kNumVal%8 == 0);
     auto codes = make_values(kNumVal, kBlockSize);
     std::vector<float> sumq2i(kNumVal);
@@ -302,14 +310,16 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
     int chunk = (nrows + 8*nthread - 1)/(8*nthread);
     std::mutex mutex;
     int counter = 0;
-    float mse = 0;
-    auto compute = [&mutex, &counter, &mse, &codes, &sumq2i, values, nrows, n_per_row, chunk] () {
-        float lmse = 0;
+    float mse = 0, mse_q = 0;
+    auto compute = [&mutex, &counter, &mse, &mse_q, &codes, &sumq2i, values, nrows, n_per_row, chunk] () {
+        float lmse = 0, lmse_q = 0;
+        std::vector<float> scales(n_per_row/kBlockSize);
+        std::vector<int> best_idx(n_per_row/kBlockSize);
         while (true) {
             std::unique_lock<std::mutex> lock(mutex);
             int first = counter; counter += chunk;
             if (first >= nrows) {
-                mse += lmse;
+                mse += lmse; mse_q += lmse_q;
                 return;
             }
             lock.unlock();
@@ -344,12 +354,6 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
                         auto mask  = _mm256_cmp_ps(score, vbest, _CMP_GT_OQ);
                         best_index = _mm256_or_si256(_mm256_and_si256(idx, _mm256_castps_si256(mask)), _mm256_andnot_si256(_mm256_castps_si256(mask), best_index));
                         vbest = _mm256_max_ps(vbest, score);
-                        //_mm256_storeu_ps(sx, hsum_float_8x8(sqx));
-                        //for (int i = 0; i < 8; ++i) {
-                        //    if (sx[i]*sx[i]*sumq2i[j+i] > best) {
-                        //        d = sx[i]*sumq2i[j+i]; best = d*sx[i]; jbest = j+i;
-                        //    }
-                        //}
                     }
                     _mm256_store_ps(sx, vbest);
                     _mm256_store_si256((__m256i *)index, best_index);
@@ -373,9 +377,33 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
                     }
                     auto qv = codes.data() + kBlockSize*jbest;
 #endif
+                    scales[ib] = d;
+                    best_idx[ib] = jbest;
                     for (int k = 0; k < kBlockSize; ++k) {
                         float diff = xb[k] - d*qv[k];
                         lmse += diff*diff;
+                    }
+                }
+                for (int ibl = 0; ibl < n_per_row/kSuperBlockSize; ++ibl) {
+                    auto sb = scales.data() + ibl*(kSuperBlockSize/kBlockSize);
+                    auto idx = best_idx.data() + ibl*(kSuperBlockSize/kBlockSize);
+                    auto xbl = xr + ibl*kSuperBlockSize;
+                    float amax_scale = 0;
+                    for (int ib = 0; ib < kSuperBlockSize/kBlockSize; ++ib) {
+                        amax_scale = std::max(amax_scale, std::abs(sb[ib]));
+                    }
+                    float id = amax_scale > 0 ? 15/amax_scale : 0;
+                    float d = amax_scale/15;
+                    for (int ib = 0; ib < kSuperBlockSize/kBlockSize; ++ib) {
+                        int ls = nearest_int(0.5f*(id*sb[ib]+15));
+                        ls = std::max(0, std::min(ls, 15));
+                        float dl = d*(2*ls - 15);
+                        auto xb = xbl + kBlockSize*ib;
+                        auto qv = codes.data() + kBlockSize*idx[ib];
+                        for (int k = 0; k < kBlockSize; ++k) {
+                            float diff = xb[k] - dl*qv[k];
+                            lmse_q += diff*diff;
+                        }
                     }
                 }
             }
@@ -386,8 +414,10 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
     compute();
     for (auto& w : workers) w.join();
     tot_mse += mse;
+    tot_mse_q += mse_q;
     tot_elements += n_per_row*nrows;
-    printf("%s:   %g    %g\n", name, sqrt(mse/(n_per_row*nrows)), sqrt(tot_mse/tot_elements));
+    printf("%s:   %g    %g      %g   %g\n", name, sqrt(mse/(n_per_row*nrows)), sqrt(tot_mse/tot_elements),
+            sqrt(mse_q/(n_per_row*nrows)), sqrt(tot_mse_q/tot_elements));
 }
 
 static void analyze_iq4ks(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_elements) {
@@ -482,13 +512,13 @@ static void analyze_iq4ks(const char * name, int nrows, int n_per_row, const flo
     printf("%s:  %g  %g    %g\n", name, sqrt(mse0/(n_per_row*nrows)), sqrt(mse/(n_per_row*nrows)), sqrt(tot_mse/tot_elements));
 }
 
-static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_elements) {
+static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_mse_q, float& tot_elements) {
     if (!ggml_is_contiguous(t) || (t->type != GGML_TYPE_F32 && t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_BF16)) {
         return;
     }
     if (t->type == GGML_TYPE_F32) {
         //analyze_iq4ks(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_elements);
-        analyze_x(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_elements);
+        analyze_x(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_mse_q, tot_elements);
     } else {
         std::vector<float> aux(t->ne[0]*t->ne[1]);
         if (t->type == GGML_TYPE_F16) {
@@ -497,7 +527,7 @@ static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_elem
             ggml_bf16_to_fp32_row((const ggml_bf16_t *)t->data, aux.data(), aux.size());
         }
         //analyze_iq4ks(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_elements);
-        analyze_x(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_elements);
+        analyze_x(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_mse_q, tot_elements);
     }
 }
 
@@ -681,7 +711,7 @@ int main(int argc, char ** argv) {
     std::vector<float> output_scratch;
 
     if (analyze) {
-        float tot_mse = 0, tot_elements = 0;
+        float tot_mse = 0, tot_mse_q = 0, tot_elements = 0;
         for (const auto& kv_tensor : tensors) {
             if (!layer_included(params, kv_tensor.first)) {
                 continue;
@@ -690,7 +720,7 @@ int main(int argc, char ** argv) {
                 // we never quantize those
                 continue;
             }
-            analyze_iq4ks(kv_tensor.second, tot_mse, tot_elements);
+            analyze_iq4ks(kv_tensor.second, tot_mse, tot_mse_q, tot_elements);
         }
         return 0;
     }
