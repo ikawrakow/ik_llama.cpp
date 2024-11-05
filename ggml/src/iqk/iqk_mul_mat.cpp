@@ -4649,17 +4649,43 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
     constexpr static int num_blocks() { return 16; }
     constexpr static bool should_scale_quants() { return false; }
 
-    template <typename Q8>
-    inline int32x4x4_t new_block(int i, const Q8& q8, float32x4_t * acc) {
+    inline float32x4x4_t new_block(int i) {
         d = GGML_FP16_TO_FP32(x[i].d);
-        return Scale16Extra::new_block(i, d, x[i].extra, 4, make_scales(x[i].scales_l, x[i].scales_h), q8, acc);
-    }
-    inline void prepare(int i, int j) {
-        bits.prepare16(x[i].qs+64*j);
-        for (int k = 0; k < 4; ++k) {
-            bits.b1.val[k] = vqtbl1q_s8(values, bits.b1.val[k]);
-            bits.b2.val[k] = vqtbl1q_s8(values, bits.b2.val[k]);
+        auto extra = vreinterpretq_u8_u16(vdupq_n_u16(x[i].extra));
+        auto extra1 = vuzp1q_u8(extra, extra);
+        auto extra2 = vuzp2q_u8(extra, extra);
+        int8x16x4_t shifts;
+        shifts.val[0] = vandq_s8(vceqq_u8(vandq_u8(extra1, emasks.val[0]), emasks.val[0]), m4);
+        shifts.val[1] = vandq_s8(vceqq_u8(vandq_u8(extra1, emasks.val[1]), emasks.val[1]), m4);
+        shifts.val[2] = vandq_s8(vceqq_u8(vandq_u8(extra2, emasks.val[0]), emasks.val[0]), m4);
+        shifts.val[3] = vandq_s8(vceqq_u8(vandq_u8(extra2, emasks.val[1]), emasks.val[1]), m4);
+        for (int j = 0; j < 2; ++j) {
+            auto bits = vld1q_u8_x4(x[i].qs + 64*j);
+            for (int k = 0; k < 4; ++k) {
+                auto idx1 = vandq_u8(bits.val[k], mask);
+                auto idx2 = vshrq_n_u8(bits.val[k], 4);
+                q4[8*j + k + 0] = vaddq_s8(vqtbl1q_s8(values, idx1), shifts.val[k]);
+                q4[8*j + k + 4] = vaddq_s8(vqtbl1q_s8(values, idx2), shifts.val[k]);
+            }
         }
+        //for (int j = 0; j < 2; ++j) {
+        //    auto bits = vld1q_u8_x4(x[i].qs + 64*j);
+        //    for (int k = 0; k < 4; ++k) {
+        //        auto idx1 = vandq_u8(bits.val[k], mask);
+        //        auto idx2 = vshrq_n_u8(bits.val[k], 4);
+        //        q4[8*j + k + 0] = vqtbl1q_s8(values, idx1);
+        //        q4[8*j + k + 4] = vqtbl1q_s8(values, idx2);
+        //    }
+        //}
+        auto scales8 = make_scales(x[i].scales_l, x[i].scales_h);
+        auto scales16_1 = vmovl_s8(vget_low_s8 (scales8));
+        auto scales16_2 = vmovl_s8(vget_high_s8(scales8));
+        float32x4x4_t scales;
+        scales.val[0] = vcvtq_f32_s32(vmovl_s16(vget_low_s16 (scales16_1)));
+        scales.val[1] = vcvtq_f32_s32(vmovl_s16(vget_high_s16(scales16_1)));
+        scales.val[2] = vcvtq_f32_s32(vmovl_s16(vget_low_s16 (scales16_2)));
+        scales.val[3] = vcvtq_f32_s32(vmovl_s16(vget_high_s16(scales16_2)));
+        return scales;
     }
     inline int8x16_t make_scales(const uint8_t * scales_l, const uint8_t * scales_h) const {
         uint8x8_t aux = vld1_u8(scales_l);
@@ -4671,7 +4697,12 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
         return vaddq_s8(vqtbl1q_s8(scales8, hshuff), vdupq_n_s8(-32));
     }
 
-    Q4bits bits;
+    int8x16_t q4[16];
+
+    const uint8x16_t mask = vdupq_n_u8(0xf);
+    const int8x16_t  m4 = vdupq_n_s8(4);
+    const uint8x16x2_t emasks = { vreinterpretq_u8_u64(uint64x2_t{0x0202020201010101, 0x0808080804040404}),
+                                  vreinterpretq_u8_u64(uint64x2_t{0x2020202010101010, 0x8080808040404040}) };
     const int8x16_t values;
     const uint8x16_t hshuff = vreinterpretq_u8_u32(uint32x4_t{0x09010800, 0x0b030a02, 0x0d050c04, 0x0f070e06});
 
@@ -5335,6 +5366,48 @@ void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInfo& info
 
             for (int iy = 0; iy < nrc_y; ++iy) {
                 acc[iy] = vmlaq_f32(acc[iy], vcvtq_f32_s32(sumi[iy]), vdupq_n_f32(deq.d*q8.scale(iy, i)));
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, vaddvq_f32(acc[iy]));
+        }
+    }
+}
+
+template <int nrc_y>
+void mul_mat_iq4_K_q8_K16_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+
+    Q8<nrc_y, block_q8_K> q8(info);
+
+    DequantizerIQ4K deq(vx, bx, nrc_y);
+
+    int32x4x4_t sumi;
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+
+        deq.new_row(ix);
+
+        float32x4_t acc[nrc_y];
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = vdupq_n_f32(0.f);
+
+        for (int i = 0; i < nb; ++i) {
+
+            auto scales = deq.new_block(i);
+
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y = q8.load_quants_64(iy, i, 0);
+                for (int k = 0; k < 4; ++k) sumi.val[k] = ggml_vdotq_s32(vdupq_n_s32(0), deq.q4[k+0], y.val[k]);
+                y = q8.load_quants_64(iy, i, 1);
+                for (int k = 0; k < 4; ++k) sumi.val[k] = ggml_vdotq_s32(sumi.val[k], deq.q4[k+4], y.val[k]);
+                y = q8.load_quants_64(iy, i, 2);
+                for (int k = 0; k < 4; ++k) sumi.val[k] = ggml_vdotq_s32(sumi.val[k], deq.q4[k+8], y.val[k]);
+                y = q8.load_quants_64(iy, i, 3);
+                for (int k = 0; k < 4; ++k) sumi.val[k] = ggml_vdotq_s32(sumi.val[k], deq.q4[k+12], y.val[k]);
+                auto vd = vdupq_n_f32(deq.d*q8.scale(iy, i));
+                for (int k = 0; k < 4; ++k) acc[iy] = vmlaq_f32(acc[iy], vmulq_f32(vd, scales.val[k]), vcvtq_f32_s32(sumi.val[k]));
             }
         }
 
@@ -6610,7 +6683,16 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             MulMat::set_functions<DequantizerIQ2KS>(m);
             break;
         case GGML_TYPE_IQ4_K:
-            MulMat::set_functions<DequantizerIQ4K>(m);
+            //MulMat::set_functions<DequantizerIQ4K>(m);
+            m.funcs[0] = mul_mat_iq4_K_q8_K16_T<1>;
+            m.funcs[1] = mul_mat_iq4_K_q8_K16_T<2>;
+            m.funcs[2] = mul_mat_iq4_K_q8_K16_T<3>;
+            m.funcs[3] = mul_mat_iq4_K_q8_K16_T<4>;
+            m.funcs[4] = mul_mat_iq4_K_q8_K16_T<5>;
+            m.funcs[5] = mul_mat_iq4_K_q8_K16_T<6>;
+            m.funcs[6] = mul_mat_iq4_K_q8_K16_T<7>;
+            m.funcs[7] = mul_mat_iq4_K_q8_K16_T<8>;
+            expected_Btype = GGML_TYPE_Q8_K16;
             break;
         case GGML_TYPE_IQ5_K:
             MulMat::set_functions<DequantizerIQ5K>(m);
