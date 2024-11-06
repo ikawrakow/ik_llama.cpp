@@ -498,7 +498,7 @@ static std::vector<float> cluster_points(const std::vector<float>& points, int n
 }
 
 static void analyze_x_v2(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_mse_q, float& tot_elements) {
-    constexpr int kNumVal = 1 << 16;
+    constexpr int kNumVal = 1 << 15;
     constexpr int kBlockSize = 32;
     constexpr int kGroupSize = 8;
     constexpr int kNg = kBlockSize/kGroupSize;
@@ -508,7 +508,7 @@ static void analyze_x_v2(const char * name, int nrows, int n_per_row, const floa
     static std::vector<std::vector<int>> p_in_cluster;
     if (codes.empty()) {
         codes = make_values(kNumVal, kGroupSize, 31.75f);
-        clusters = cluster_points(codes, kGroupSize, kNumVal/1024, 200);
+        clusters = cluster_points(codes, kGroupSize, kNumVal/512, 200);
         if (clusters.empty()) { printf("Oops\n"); exit(1); }
         int ncluster = clusters.size()/kGroupSize;
         p_in_cluster.resize(ncluster);
@@ -623,7 +623,7 @@ static void analyze_x_v2(const char * name, int nrows, int n_per_row, const floa
                 sigma2 /= n_per_row;
                 for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
                     auto xb = xr + kBlockSize*ib;
-                    for (int i = 0; i < kBlockSize; ++i) weight[i] = 0.25f*sigma2 + xb[i]*xb[i];
+                    //for (int i = 0; i < kBlockSize; ++i) weight[i] = 0.25f*sigma2 + xb[i]*xb[i];
                     float d = find_best_scale(kBlockSize, xb, weight.data(), iq4k_values, 5);
                     float id = d ? 1/d : 0.f;
 #ifdef __AVX2__
