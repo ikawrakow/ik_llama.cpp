@@ -64,18 +64,18 @@ static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ v
             bdot1 += __hmul2(y[k+ 0], {h[0]+h[1], h[2]+h[3]});
             bdot2 += __hmul2(y[k+64], {h[4]+h[5], h[6]+h[7]});
 #else
-            bdot.x += y[k+ 0].x * (float)(h[0] + h[1]);
-            bdot.y += y[k+ 0].y * (float)(h[2] + h[3]);
-            bdot.x += y[k+64].x * (float)(h[4] + h[5]);
-            bdot.y += y[k+64].y * (float)(h[6] + h[7]);
+            bdot1.x += y[k+ 0].x * (float)(h[0] + h[1]);
+            bdot1.y += y[k+ 0].y * (float)(h[2] + h[3]);
+            bdot2.x += y[k+64].x * (float)(h[4] + h[5]);
+            bdot2.y += y[k+64].y * (float)(h[6] + h[7]);
 #endif
         }
 #ifdef GGML_CUDA_F16
         tmp += __hmul2(dl1, bdot1);
         tmp += __hmul2(dl2, bdot2);
 #else
-        tmp.x += dl.x * bdot.x;
-        tmp.y += dl.y * bdot.y;
+        tmp.x += dl1.x * bdot1.x + dl2.x * bdot2.x;
+        tmp.y += dl1.y * bdot1.y + dl2.y * bdot2.y;
 #endif
     }
 
@@ -635,7 +635,7 @@ static void dequantize_mul_mat_vec_q2_K_cuda(const void * vx, const float * y, f
 
 static void dequantize_mul_mat_vec_iq2_kt_cuda(const void * vx, const dfloat * y, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const int ny = 1;
+    constexpr int ny = 2;
     const int block_num_y = (nrows + ny - 1) / ny;
     const dim3 block_nums(block_num_y, 1, 1);
     const dim3 block_dims(32, ny, 1);
