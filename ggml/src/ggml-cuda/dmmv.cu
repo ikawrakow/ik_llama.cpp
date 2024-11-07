@@ -83,6 +83,10 @@ static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ v
     }
 }
 
+static __global__ void dequantize_mul_mat_vec_iq3_kt(const void * __restrict__ vx, const dfloat * __restrict__ yy, float * __restrict__ dst,
+        const int ncols, int nrows, int64_t row_size) {
+}
+
 static __global__ void dequantize_mul_mat_vec_q2_k(const void * __restrict__ vx, const float * __restrict__ yy, float * __restrict__ dst, const int ncols, int nrows) {
 
     static_assert(16%K_QUANTS_PER_ITERATION == 0, "16 must be divisible by K_QUANTS_PER_ITERATION");
@@ -639,6 +643,16 @@ static void dequantize_mul_mat_vec_iq2_kt_cuda(const void * vx, const dfloat * y
     dequantize_mul_mat_vec_iq2_kt<<<block_nums, block_dims, 0, stream>>>(vx, y, dst, ncols, nrows, row_size);
 }
 
+static void dequantize_mul_mat_vec_iq3_kt_cuda(const void * vx, const dfloat * y, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    constexpr int ny = 2;
+    const int block_num_y = (nrows + ny - 1) / ny;
+    const dim3 block_nums(block_num_y, 1, 1);
+    const dim3 block_dims(32, ny, 1);
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ3_KT, ncols);
+    dequantize_mul_mat_vec_iq3_kt<<<block_nums, block_dims, 0, stream>>>(vx, y, dst, ncols, nrows, row_size);
+}
+
 static void dequantize_mul_mat_vec_q3_K_cuda(const void * vx, const float * y, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
@@ -735,6 +749,9 @@ void ggml_cuda_op_dequantize_mul_mat_vec(
         case GGML_TYPE_IQ2_KT:
             dequantize_mul_mat_vec_iq2_kt_cuda(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
+        case GGML_TYPE_IQ3_KT:
+            dequantize_mul_mat_vec_iq3_kt_cuda(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            break;
         case GGML_TYPE_Q3_K:
             dequantize_mul_mat_vec_q3_K_cuda(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             break;
@@ -768,6 +785,6 @@ bool ggml_cuda_dmmv_type_supported(ggml_type src0_type) {
         src0_type == GGML_TYPE_Q8_0 || src0_type == GGML_TYPE_Q2_K ||
         src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q4_K ||
         src0_type == GGML_TYPE_Q5_K || src0_type == GGML_TYPE_Q6_K ||
-        src0_type == GGML_TYPE_IQ2_KT ||
+        src0_type == GGML_TYPE_IQ2_KT || src0_type == GGML_TYPE_IQ3_KT ||
         src0_type == GGML_TYPE_F16;
 }

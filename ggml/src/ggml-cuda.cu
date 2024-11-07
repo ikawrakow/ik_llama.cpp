@@ -2849,6 +2849,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_IQ2_K:
                     case GGML_TYPE_IQ2_KS:
                     case GGML_TYPE_IQ2_KT:
+                    case GGML_TYPE_IQ3_KT:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ4_K:
                     case GGML_TYPE_IQ5_K:
