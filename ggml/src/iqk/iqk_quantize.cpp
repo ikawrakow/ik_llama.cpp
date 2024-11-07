@@ -3723,7 +3723,7 @@ void vec_dot_iq2_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
 
 namespace {
 
-using QuantizerIQ3KT = QuantizerIQKT<32, 4, 11, 32>;
+using QuantizerIQ3KT = QuantizerIQKT<32, 4, 12, 64>;
 const QuantizerIQ3KT& iq3kt_quantizer() {
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
