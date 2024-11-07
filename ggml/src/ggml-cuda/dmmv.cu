@@ -32,7 +32,7 @@ static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ v
 
     const int num_blocks_per_row = ncols / QK_K;
 
-    dfloat2 tmp = {0, 0};
+    dfloat2 tmp = {};
 
     const int it = threadIdx.x/2;
     const int ix = threadIdx.x%2;
@@ -52,17 +52,13 @@ static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ v
         uint32_t val1 = ql[it+ 0] + 4096;
         uint32_t val2 = ql[it+16] + 4096;
         for (int k = 0; k < 4; ++k) {
-            val1 = ka*val1 + kb;
-            s[0] = (val1 & kmask) ^ km32;
-            val1 = ka*val1 + kb;
-            s[1] = (val1 & kmask) ^ km32;
-            val2 = ka*val2 + kb;
-            s[2] = (val2 & kmask) ^ km32;
-            val2 = ka*val2 + kb;
-            s[3] = (val2 & kmask) ^ km32;
+            val1 = ka*val1 + kb; s[0] = (val1 & kmask) ^ km32;
+            val1 = ka*val1 + kb; s[1] = (val1 & kmask) ^ km32;
+            val2 = ka*val2 + kb; s[2] = (val2 & kmask) ^ km32;
+            val2 = ka*val2 + kb; s[3] = (val2 & kmask) ^ km32;
 #ifdef GGML_CUDA_F16
-            bdot1 += __hmul2(y[k+ 0], {h[0]+h[1], h[2]+h[3]});
-            bdot2 += __hmul2(y[k+64], {h[4]+h[5], h[6]+h[7]});
+            bdot1 = __hfma2(y[k+ 0], {h[0]+h[1], h[2]+h[3]}, bdot1);
+            bdot2 = __hfma2(y[k+64], {h[4]+h[5], h[6]+h[7]}, bdot2);
 #else
             bdot1.x += y[k+ 0].x * (float)(h[0] + h[1]);
             bdot1.y += y[k+ 0].y * (float)(h[2] + h[3]);
@@ -71,8 +67,8 @@ static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ v
 #endif
         }
 #ifdef GGML_CUDA_F16
-        tmp += __hmul2(dl1, bdot1);
-        tmp += __hmul2(dl2, bdot2);
+        tmp = __hfma2(dl1, bdot1, tmp);
+        tmp = __hfma2(dl2, bdot2, tmp);
 #else
         tmp.x += dl1.x * bdot1.x + dl2.x * bdot2.x;
         tmp.y += dl1.y * bdot1.y + dl2.y * bdot2.y;
