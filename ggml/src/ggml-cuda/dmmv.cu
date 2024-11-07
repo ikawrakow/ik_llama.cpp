@@ -36,7 +36,7 @@ static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ v
 
     const int it = threadIdx.x;
 
-    uint32_t s;
+    uint32_t s[2];
     const half * h = (const half *)&s;
 
     for (int i = 0; i < num_blocks_per_row; ++i) {
@@ -45,12 +45,12 @@ static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ v
         const uint16_t * ql = (const uint16_t *)x[i].ql;
         float bdot = 0;
         uint32_t val = ql[it] + 4096;
-        for (int k = 0; k < 8; ++k) {
+        for (int k = 0; k < 8; k += 2) {
             val = ka*val + kb;
-            s = (val & kmask) ^ km32;
-            //float q = (float)h[0] + (float)h[1];
-            float q = (float)(h[0] + h[1]);
-            bdot += q * y[k];
+            s[0] = (val & kmask) ^ km32;
+            val = ka*val + kb;
+            s[1] = (val & kmask) ^ km32;
+            bdot += y[k+0] * (float)(h[0] + h[1]) + y[k+1] * (float)(h[2] + h[3]);
         }
         tmp += dl*bdot;
     }
