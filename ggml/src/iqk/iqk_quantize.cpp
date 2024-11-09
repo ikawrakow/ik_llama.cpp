@@ -3480,13 +3480,11 @@ void QuantizerIQKT<block_size, group_size, num_bits, num_clusters>::find_best_ma
         float sx[8];
         int   index[8];
         auto vid_p = _mm256_set1_ps(id);
-        auto vid_m = _mm256_set1_ps(-id);
         for (int l = 0; l < kNg; ++l) {
             auto xl = xb + 4*l;
             auto wl = weight + 4*l;
             auto vx4 = _mm_loadu_ps(xl);
             auto vx_p = _mm256_mul_ps(vid_p, _mm256_set_m128(vx4, vx4));
-            //auto vx_m = _mm256_mul_ps(vid_m, _mm256_set_m128(vx4, vx4));
             auto vw4 = _mm_loadu_ps(wl);
             auto vw = _mm256_set_m128(vw4, vw4);
             auto vbest = _mm256_set1_ps(INFINITY);
@@ -3500,21 +3498,12 @@ void QuantizerIQKT<block_size, group_size, num_bits, num_clusters>::find_best_ma
                     //sqx[i] = _mm_mul_ps(vw, _mm_mul_ps(vdiff, vdiff));
                     vdiff = _mm256_andnot_ps(sign_bit, vdiff);
                     sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
-                    //vdiff = _mm256_sub_ps(vq, vx_m);
-                    ////sqx[i] = _mm_mul_ps(vw, _mm_mul_ps(vdiff, vdiff));
-                    //vdiff = _mm256_andnot_ps(sign_bit, vdiff);
-                    //sqx[i+4] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
                 }
                 auto score = hsum_float_4x8(sqx);
                 auto mask  = _mm256_cmp_ps(score, vbest, _CMP_LT_OQ);
                 best_index = _mm256_or_si256(_mm256_and_si256(_mm256_castps_si256(mask), idx),
                                        _mm256_andnot_si256(_mm256_castps_si256(mask), best_index));
                 vbest = _mm256_min_ps(vbest, score);
-                //score = hsum_float_4x8(sqx+4);
-                //mask  = _mm256_cmp_ps(score, vbest, _CMP_LT_OQ);
-                //best_index = _mm256_or_si256(_mm256_and_si256(_mm256_castps_si256(mask), idx),
-                //                       _mm256_andnot_si256(_mm256_castps_si256(mask), best_index));
-                //vbest = _mm256_min_ps(vbest, score);
             }
             _mm256_store_ps(sx, vbest);
             _mm256_store_si256((__m256i *)index, best_index);
@@ -3536,21 +3525,12 @@ void QuantizerIQKT<block_size, group_size, num_bits, num_clusters>::find_best_ma
                     //sqx[i] = _mm_mul_ps(vw, _mm_mul_ps(vdiff, vdiff));
                     vdiff = _mm256_andnot_ps(sign_bit, vdiff);
                     sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
-                    //vdiff = _mm256_sub_ps(vq, vx_m);
-                    ////sqx[i] = _mm_mul_ps(vw, _mm_mul_ps(vdiff, vdiff));
-                    //vdiff = _mm256_andnot_ps(sign_bit, vdiff);
-                    //sqx[i+4] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
                 }
                 auto score = hsum_float_4x8(sqx);
                 auto mask  = _mm256_cmp_ps(score, vbest, _CMP_LT_OQ);
                 best_index = _mm256_or_si256(_mm256_and_si256(_mm256_castps_si256(mask), idx),
                                        _mm256_andnot_si256(_mm256_castps_si256(mask), best_index));
                 vbest = _mm256_min_ps(vbest, score);
-                //score = hsum_float_4x8(sqx+4);
-                //mask  = _mm256_cmp_ps(score, vbest, _CMP_LT_OQ);
-                //best_index = _mm256_or_si256(_mm256_and_si256(_mm256_castps_si256(mask), idx),
-                //                       _mm256_andnot_si256(_mm256_castps_si256(mask), best_index));
-                //vbest = _mm256_min_ps(vbest, score);
             }
             _mm256_store_ps(sx, vbest);
             _mm256_store_si256((__m256i *)index, best_index);
@@ -3942,6 +3922,7 @@ const QuantizerIQ3KT& iq3kt_quantizer() {
 void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const float * quant_weights, float * all_scales) {
 
     constexpr float kSigmaScale = 2.0f;
+    constexpr float kStep = 4.0f;
 
     using Q = QuantizerIQ3KT;
 
@@ -3989,25 +3970,20 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
             scales[ib] = 0;
             if (!amax) continue;
             float best = 0;
-            //for (int itry = -5; itry <= 5; ++itry) {
             for (int itry = -3; itry <= 3; ++itry) {
-                quantizer.find_best_match(amax/(96.f + 4.f*itry), xb, weight, best_idx);
+                quantizer.find_best_match(amax/(96.f + kStep*itry), xb, weight, best_idx);
                 auto [dp, score_p] = quantizer.find_best_scale(xb, weight, best_idx);
                 if (score_p > best) {
                     best = score_p;
                     scales[ib] = dp;
                 }
-                quantizer.find_best_match(-amax/(96.f + 4.f*itry), xb, weight, best_idx);
+                quantizer.find_best_match(-amax/(96.f + kStep*itry), xb, weight, best_idx);
                 auto [dm, score_m] = quantizer.find_best_scale(xb, weight, best_idx);
                 if (score_m > best) {
                     best = score_m;
                     scales[ib] = dm;
                 }
             }
-            //float d = amax/96.f;
-            //quantizer.find_best_match(d, xb, weight, best_idx);
-            ////quantizer.find_best_match(xb, weight, best_idx);
-            //scales[ib] = quantizer.find_best_scale(xb, weight, best_idx);
 
             for (int j = 0; j < Q::kNg; ++j) {
                 int jj = ib*Q::kNg + j;
@@ -4038,9 +4014,9 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
     //d *= 1.05f;
     *dptr = d;
 
-    for (int iloop = 0; iloop < 2; ++iloop) {
+    for (int iloop = 0; iloop < 1; ++iloop) {
 
-        d *= 1.05f;
+        //d *= 1.05f;
 
         float sumqx = 0, sumq2 = 0;
         for (int ibl = 0; ibl < nblock; ++ibl) {
