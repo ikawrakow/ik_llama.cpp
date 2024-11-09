@@ -4000,13 +4000,13 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     }
 
-    float d = max_scale/iq4k_values[0];
+    float d = max_scale/iq4k_values[16];
     float id = d ? 1/d : 0.f;
     for (int ibl = 0; ibl < nblock; ++ibl) {
         auto scales = all_scales + ibl*Q::kNblock;
         for (int ib = 0; ib < Q::kNblock/2; ++ib) {
-            int ls1 = best_index_iq4nl(iq4k_values, id*scales[ib]);
-            int ls2 = best_index_iq4nl(iq4k_values, id*scales[ib + Q::kNblock/2]);
+            int ls1 = best_index_iq4nl(iq4k_values+16, id*scales[ib]);
+            int ls2 = best_index_iq4nl(iq4k_values+16, id*scales[ib + Q::kNblock/2]);
             y[ibl].scales[ib] = ls1 | (ls2 << 4);
         }
     }
@@ -4035,7 +4035,7 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
                 } else {
                     for (int j = 0; j < Q::kBlockSize; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
                 }
-                int ls = iq4k_values[(y[ibl].scales[ib%(Q::kNblock/2)] >> 4*(ib/(Q::kNblock/2))) & 0xf];
+                int ls = iq4k_values[((y[ibl].scales[ib%(Q::kNblock/2)] >> 4*(ib/(Q::kNblock/2))) & 0xf)+16];
                 float dl = d*ls;
                 quantizer.find_best_match(dl, xb, weight, best_idx);
 
@@ -4104,8 +4104,8 @@ void dequantize_row_iq3_kt(const block_iq3_kt * x, float * y, int64_t k) {
         auto qlh = qll + kNumGroups/2;
         int jj = 0;
         for (int ib = 0; ib < Q::kNblock/2; ++ib) {
-            float sl = d * iq4k_values[x[ibl].scales[ib] & 0xf];
-            float sh = d * iq4k_values[x[ibl].scales[ib] >>  4];
+            float sl = d * iq4k_values[(x[ibl].scales[ib] & 0xf)+16];
+            float sh = d * iq4k_values[(x[ibl].scales[ib] >>  4)+16];
             for (int ig = 0; ig < Q::kNg; ++ig) {
                 uint16_t ul = qll[jj] | ((x[ibl].qh[jj] << 8) & 0xf00);
                 uint16_t uh = qlh[jj] | ((x[ibl].qh[jj] << 4) & 0xf00);
