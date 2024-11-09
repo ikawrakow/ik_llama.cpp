@@ -3941,6 +3941,14 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     int nblock = n_per_row / Q::kSuperBlockSize;
 
+    float amax_row = 0;
+    for (int j = 0; j < n_per_row; ++j) amax_row = std::max(amax_row, std::abs(x[j]));
+    if (!amax_row) {
+        *dptr = 0.f;
+        std::memset(y, 0, nblock*sizeof(block_iq3_kt));
+        return;
+    }
+
     float amax_scale = 0, max_scale = 0;
 
     for (int ibl = 0; ibl < nblock; ++ibl) {
@@ -3969,15 +3977,16 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
             }
             scales[ib] = 0;
             if (!amax) continue;
+            float scale_0 = std::max(80.f, 127.f*amax/amax_row);
             float best = 0;
             for (int itry = -3; itry <= 3; ++itry) {
-                quantizer.find_best_match(amax/(96.f + kStep*itry), xb, weight, best_idx);
+                quantizer.find_best_match(amax/(scale_0 + kStep*itry), xb, weight, best_idx);
                 auto [dp, score_p] = quantizer.find_best_scale(xb, weight, best_idx);
                 if (score_p > best) {
                     best = score_p;
                     scales[ib] = dp;
                 }
-                quantizer.find_best_match(-amax/(96.f + kStep*itry), xb, weight, best_idx);
+                quantizer.find_best_match(-amax/(scale_0 + kStep*itry), xb, weight, best_idx);
                 auto [dm, score_m] = quantizer.find_best_scale(xb, weight, best_idx);
                 if (score_m > best) {
                     best = score_m;
