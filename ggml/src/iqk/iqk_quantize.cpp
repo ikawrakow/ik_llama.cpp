@@ -3751,10 +3751,7 @@ void quantize_row_iq2_kt_impl(const float * x, void * vy, int n_per_row, const f
 
         memset(&y[ibl], 0, sizeof(block_iq2_kt));
 
-        auto qs = (uint16_t *)y[ibl].ql;
-
         const float * xbl = x + ibl*Q::kSuperBlockSize;
-
         auto scales = all_scales + ibl*Q::kNblock;
 
         for (int ib = 0; ib < Q::kNblock; ++ib) {
@@ -3765,13 +3762,11 @@ void quantize_row_iq2_kt_impl(const float * x, void * vy, int n_per_row, const f
                 float ax = std::abs(xb[j]);
                 amax = std::max(amax, ax);
             }
-            float d = amax/96.f;
-            quantizer.find_best_match(d, xb, weight, best_idx);
-            auto pair = quantizer.find_best_scale(xb, weight, best_idx);
-            scales[ib] = pair.first;
-
-            for (int j = 0; j < Q::kNg; ++j) qs[j] = best_idx[j];
-            qs += Q::kNg;
+            quantizer.find_best_match( amax/96.f, xb, weight, best_idx);
+            auto [dp, score_p] = quantizer.find_best_scale(xb, weight, best_idx);
+            quantizer.find_best_match(-amax/96.f, xb, weight, best_idx);
+            auto [dm, score_m] = quantizer.find_best_scale(xb, weight, best_idx);
+            scales[ib] = score_p > score_m ? dp : dm;
 
             float abs_scale = std::abs(scales[ib]);
             if (abs_scale > amax_scale) {
