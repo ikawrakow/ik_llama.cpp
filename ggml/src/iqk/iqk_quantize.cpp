@@ -4196,6 +4196,16 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     Q::set_weights(kSigmaScale, nblock, x, quant_weights, all_weights);
 
+    //float sigma_row = 0;
+    //for (int j = 0; j < n_per_row; ++j) sigma_row += x[j]*x[j];
+    //if (!sigma_row) {
+    //    *dptr = 0.f;
+    //    std::memset(y, 0, nblock*sizeof(block_iq4_kt));
+    //    return;
+    //}
+    //sigma_row = sqrt(sigma_row/n_per_row);
+    //float row_scale = 4.f/sigma_row;
+
     float amax_row = 0;
     for (int j = 0; j < n_per_row; ++j) amax_row = std::max(amax_row, std::abs(x[j]));
     if (!amax_row) {
@@ -4230,7 +4240,8 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
             }
             //float scale_0 = 127.f*amax/amax_row;
             //float scale_0 = std::max(64.f, 127.f*amax/amax_row);
-            float scale_0 = std::max(80.f, 127.f*amax/amax_row);
+            float scale_0 = std::max(92.f, 127.f*amax/amax_row);
+            //float scale_0 = row_scale;
             quantizer.find_best_match( amax/scale_0, xb, weight, best_idx);
             auto [dp, score_p] = quantizer.find_best_scale(xb, weight, best_idx);
             quantizer.find_best_match(-amax/scale_0, xb, weight, best_idx+Q::kNg);

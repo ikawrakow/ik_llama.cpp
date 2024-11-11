@@ -15825,8 +15825,8 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                      : !qs.has_imatrix ? GGML_TYPE_IQ3_K : GGML_TYPE_IQ3_KT;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_IQ4_KT) {
-            new_type = qs.model.hparams.n_gqa() >= 4 ? GGML_TYPE_IQ6_K : qs.model.hparams.n_gqa() >= 2 ? GGML_TYPE_IQ5_K
-                     : !qs.has_imatrix ? GGML_TYPE_IQ4_K : GGML_TYPE_IQ4_KT;
+            new_type = qs.model.hparams.n_gqa() >= 4 ? GGML_TYPE_IQ5_K : qs.model.hparams.n_gqa() >= 2 ? GGML_TYPE_IQ4_K
+                     : !qs.has_imatrix ? GGML_TYPE_IQ4_KS : GGML_TYPE_IQ4_KT;
         }
         else if ((ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_S) && qs.model.hparams.n_gqa() >= 2) {
             new_type = GGML_TYPE_IQ4_K;
