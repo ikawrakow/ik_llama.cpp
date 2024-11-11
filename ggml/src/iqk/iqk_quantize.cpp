@@ -3500,10 +3500,11 @@ void QuantizerIQKT<block_size, group_size, num_bits, num_clusters>::find_best_ma
             float best = INFINITY; int jbest = -1;
             auto idx = add_idx;
             for (int j = 0; j < ncluster; j += 8) {
-                //auto idx = _mm256_add_epi32(_mm256_set1_epi32(j), add_idx);
                 for (int i = 0; i < 4; ++i) {
                     auto vq = _mm256_loadu_ps(m_clusters.data() + kGroupSize*(j+2*i));
                     auto vdiff = _mm256_sub_ps(vq, vx_p);
+                    //vdiff = _mm256_mul_ps(vdiff, vdiff);
+                    //sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, vdiff));
                     vdiff = _mm256_andnot_ps(sign_bit, vdiff);
                     sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
                 }
@@ -3528,10 +3529,11 @@ void QuantizerIQKT<block_size, group_size, num_bits, num_clusters>::find_best_ma
             best = INFINITY; jbest = -1;
             idx = add_idx;
             for (int j = 0; j < int(points.size()); j += 8) {
-                //auto idx = _mm256_add_epi32(_mm256_set1_epi32(j), add_idx);
                 for (int i = 0; i < 4; ++i) {
                     auto vq = _mm256_loadu_ps(values.data() + kGroupSize*(j+2*i));
                     auto vdiff = _mm256_sub_ps(vq, vx_p);
+                    //vdiff = _mm256_mul_ps(vdiff, vdiff);
+                    //sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, vdiff));
                     vdiff = _mm256_andnot_ps(sign_bit, vdiff);
                     sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
                 }
@@ -3563,7 +3565,7 @@ void QuantizerIQKT<block_size, group_size, num_bits, num_clusters>::find_best_ma
 template <int block_size, int group_size, int num_bits, int num_clusters>
 std::vector<std::vector<int>> QuantizerIQKT<block_size, group_size, num_bits, num_clusters>::finalize_clusters(
         const std::vector<float>& values, const std::vector<float>& clusters, std::vector<std::vector<float>>& c_values) {
-    constexpr int kNbest = 4;
+    constexpr int kNbest = 5;
     int ncluster = clusters.size()/kGroupSize;
     GGML_ASSERT(ncluster%8 == 0);
     std::vector<std::vector<int>> p_in_cluster(ncluster);
