@@ -171,6 +171,87 @@ static __global__ void dequantize_mul_mat_vec_iq3_kt(const void * __restrict__ v
 
 static __global__ void dequantize_mul_mat_vec_iq4_kt(const void * __restrict__ vx, const dfloat * __restrict__ yy, float * __restrict__ dst,
         const int ncols, int nrows, int64_t row_size) {
+
+    constexpr uint32_t ka = 89226354;
+    constexpr uint32_t kb = 64248484;
+    constexpr uint32_t kmask = 0x8fff8fff;
+    constexpr uint32_t km32 = 0x3b603b60;
+
+    const int row = blockIdx.x*blockDim.y + threadIdx.y;
+    if (row > nrows) return;
+
+    const float * dptr = (const float *)((const char *)vx + row*row_size);
+    const float d = *dptr * 31.75f * 1.015f;
+    const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 1);
+
+    const int num_blocks_per_row = ncols / QK_K;
+
+    dfloat2 tmp = {};
+
+    const int it = threadIdx.x/2;
+    const int ix = threadIdx.x%2;
+
+    uint32_t s[4];
+    const half * h = (const half *)s;
+
+    for (int i = ix; i < num_blocks_per_row; i += 2) {
+        const dfloat2 * y = (const dfloat2 *)(yy + i * QK_K + 8*it);
+        const uint16_t * ql = (const uint16_t *)x[i].ql;
+        const dfloat scale1 = x[i].scales[it/8];
+        const dfloat scale2 = x[i].scales[it/8 + 2];
+        const dfloat2 dl1 = {scale1, scale1};
+        const dfloat2 dl2 = {scale2, scale2};
+        dfloat2 bdot1 = {0, 0};
+        dfloat2 bdot2 = {0, 0};
+        uint32_t val1 = ql[2*it+ 0] + 4096;
+        uint32_t val2 = ql[2*it+32] + 4096;
+        for (int k = 0; k < 2; ++k) {
+            val1 = ka*val1 + kb; s[0] = (val1 & kmask) ^ km32;
+            val1 = ka*val1 + kb; s[1] = (val1 & kmask) ^ km32;
+            val2 = ka*val2 + kb; s[2] = (val2 & kmask) ^ km32;
+            val2 = ka*val2 + kb; s[3] = (val2 & kmask) ^ km32;
+#ifdef GGML_CUDA_F16
+            bdot1 = __hfma2(y[k+ 0], {h[0]+h[1], h[2]+h[3]}, bdot1);
+            bdot2 = __hfma2(y[k+64], {h[4]+h[5], h[6]+h[7]}, bdot2);
+#else
+            bdot1.x += y[k+ 0].x * (float)(h[0] + h[1]);
+            bdot1.y += y[k+ 0].y * (float)(h[2] + h[3]);
+            bdot2.x += y[k+64].x * (float)(h[4] + h[5]);
+            bdot2.y += y[k+64].y * (float)(h[6] + h[7]);
+#endif
+        }
+        val1 = ql[2*it+ 1] + 4096;
+        val2 = ql[2*it+33] + 4096;
+        for (int k = 2; k < 4; ++k) {
+            val1 = ka*val1 + kb; s[0] = (val1 & kmask) ^ km32;
+            val1 = ka*val1 + kb; s[1] = (val1 & kmask) ^ km32;
+            val2 = ka*val2 + kb; s[2] = (val2 & kmask) ^ km32;
+            val2 = ka*val2 + kb; s[3] = (val2 & kmask) ^ km32;
+#ifdef GGML_CUDA_F16
+            bdot1 = __hfma2(y[k+ 0], {h[0]+h[1], h[2]+h[3]}, bdot1);
+            bdot2 = __hfma2(y[k+64], {h[4]+h[5], h[6]+h[7]}, bdot2);
+#else
+            bdot1.x += y[k+ 0].x * (float)(h[0] + h[1]);
+            bdot1.y += y[k+ 0].y * (float)(h[2] + h[3]);
+            bdot2.x += y[k+64].x * (float)(h[4] + h[5]);
+            bdot2.y += y[k+64].y * (float)(h[6] + h[7]);
+#endif
+        }
+#ifdef GGML_CUDA_F16
+        tmp = __hfma2(dl1, bdot1, tmp);
+        tmp = __hfma2(dl2, bdot2, tmp);
+#else
+        tmp.x += dl1.x * bdot1.x + dl2.x * bdot2.x;
+        tmp.y += dl1.y * bdot1.y + dl2.y * bdot2.y;
+#endif
+    }
+
+    // sum up partial sums and write back result
+    tmp = warp_reduce_sum(tmp);
+
+    if (threadIdx.x == 0) {
+        dst[row] = d * (float)(tmp.x + tmp.y);
+    }
 }
 
 static __global__ void dequantize_mul_mat_vec_q2_k(const void * __restrict__ vx, const float * __restrict__ yy, float * __restrict__ dst, const int ncols, int nrows) {
