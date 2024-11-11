@@ -4163,3 +4163,234 @@ void vec_dot_iq3_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
 #endif
 
 }
+
+// ======================================== iq4_kt
+
+namespace{
+
+using QuantizerIQ4KT = QuantizerIQKT<64, 4, 16, 128>;
+
+const QuantizerIQ4KT& iq4kt_quantizer() {
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    static QuantizerIQ4KT quantizer;
+    return quantizer;
+}
+
+void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const float * quant_weights, float * all_scales, float * all_weights) {
+
+    constexpr float kSigmaScale = 2.0f;
+    using Q = QuantizerIQ4KT;
+
+    static_assert(Q::kNumVal%8 == 0);
+
+    float * dptr = (float *)vy;
+
+    block_iq4_kt * y = (block_iq4_kt *)(dptr + 1);
+
+    int   best_idx[2*Q::kNg];
+
+    auto& quantizer = iq4kt_quantizer();
+
+    int nblock = n_per_row / Q::kSuperBlockSize;
+
+    Q::set_weights(kSigmaScale, nblock, x, quant_weights, all_weights);
+
+    float amax_row = 0;
+    for (int j = 0; j < n_per_row; ++j) amax_row = std::max(amax_row, std::abs(x[j]));
+    if (!amax_row) {
+        *dptr = 0.f;
+        std::memset(y, 0, nblock*sizeof(block_iq4_kt));
+        return;
+    }
+
+    float amax_scale = 0, max_scale = 0;
+
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+
+        memset(&y[ibl], 0, sizeof(block_iq4_kt));
+
+        const float * xbl = x + ibl*Q::kSuperBlockSize;
+        auto scales = all_scales + ibl*Q::kNblock;
+
+        auto ql = (uint16_t *)y[ibl].ql;
+
+        for (int ib = 0; ib < Q::kNblock; ++ib) {
+            const float * xb = xbl + Q::kBlockSize*ib;
+            const float * weight = all_weights + ibl*Q::kSuperBlockSize + ib*Q::kBlockSize;
+            float amax = 0;
+            for (int j = 0; j < Q::kBlockSize; ++j) {
+                float ax = std::abs(xb[j]);
+                amax = std::max(amax, ax);
+            }
+            if (!amax) {
+                scales[ib] = 0;
+                ql += Q::kNg;
+                continue;
+            }
+            //float scale_0 = 127.f*amax/amax_row;
+            //float scale_0 = std::max(64.f, 127.f*amax/amax_row);
+            float scale_0 = std::max(80.f, 127.f*amax/amax_row);
+            quantizer.find_best_match( amax/scale_0, xb, weight, best_idx);
+            auto [dp, score_p] = quantizer.find_best_scale(xb, weight, best_idx);
+            quantizer.find_best_match(-amax/scale_0, xb, weight, best_idx+Q::kNg);
+            auto [dm, score_m] = quantizer.find_best_scale(xb, weight, best_idx+Q::kNg);
+            if (score_p > score_m) {
+                scales[ib] = dp;
+                for (int j = 0; j < Q::kNg; ++j) ql[j] = best_idx[j];
+            } else {
+                scales[ib] = dm;
+                for (int j = 0; j < Q::kNg; ++j) ql[j] = best_idx[j+Q::kNg];
+            }
+
+            //float mse = 0;
+            //for (int j = 0; j < Q::kNg; ++j) {
+            //    auto values = quantizer.values() + ql[j]*Q::kGroupSize;
+            //    for (int k = 0; k < Q::kGroupSize; ++k) {
+            //        float diff = scales[ib]*values[k] - xb[j*Q::kGroupSize+k];
+            //        mse += diff*diff;
+            //    }
+            //}
+            //printf("rmse(%d) = %g\n", ib, sqrt(mse/Q::kBlockSize));
+            ql += Q::kNg;
+
+            //scales[ib] = score_p > score_m ? dp : dm;
+
+            float abs_scale = std::abs(scales[ib]);
+            if (abs_scale > amax_scale) {
+                amax_scale = abs_scale;
+                max_scale = scales[ib];
+            }
+        }
+
+    }
+
+    float d = -max_scale/128;
+    float id = d ? 1/d : 0.f;
+    //float mse = 0;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        auto scales = all_scales + ibl*Q::kNblock;
+        //const float * xbl = x + ibl*Q::kSuperBlockSize;
+        //auto ql = (uint16_t *)y[ibl].ql;
+        for (int ib = 0; ib < Q::kNblock; ++ib) {
+            int ls = nearest_int(id*scales[ib]);
+            y[ibl].scales[ib] = std::min(ls, 127);
+            //float dl = d*y[ibl].scales[ib];
+            //const float * xb = xbl + Q::kBlockSize*ib;
+            //for (int j = 0; j < Q::kNg; ++j) {
+            //    auto values = quantizer.values() + ql[j]*Q::kGroupSize;
+            //    for (int k = 0; k < Q::kGroupSize; ++k) {
+            //        float diff = dl*values[k] - xb[j*Q::kGroupSize+k];
+            //        mse += diff*diff;
+            //    }
+            //    ql += Q::kNg;
+            //}
+        }
+    }
+    //printf("rmse = %g\n", sqrt(mse/n_per_row));
+
+    *dptr = d;
+    if (!d) return;
+
+    for (int iloop = 0; iloop < 1; ++iloop) {
+
+        float sumqx = 0, sumq2 = 0;
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+
+            auto qs = (uint16_t *)y[ibl].ql;
+            const float * xbl = x + ibl*Q::kSuperBlockSize;
+
+            for (int ib = 0; ib < Q::kNblock; ++ib) {
+                const float * xb = xbl + Q::kBlockSize*ib;
+                const float * weight = all_weights + ibl*Q::kSuperBlockSize + ib*Q::kBlockSize;
+                int ls = y[ibl].scales[ib];
+                float dl = d*ls;
+                quantizer.find_best_match(dl, xb, weight, best_idx);
+
+                for (int j = 0; j < Q::kNg; ++j) {
+                    qs[j] = best_idx[j];
+                    auto xl = xb + Q::kGroupSize*j;
+                    auto wl = weight + Q::kGroupSize*j;
+                    //auto ql = quantizer.values() + best_idx[j]*Q::kGroupSize;
+                    auto ql = quantizer.values() + qs[j]*Q::kGroupSize;
+                    for (int k = 0; k < Q::kGroupSize; ++k) {
+                        float q = ql[k]*ls;
+                        sumqx += wl[k]*xl[k]*q;
+                        sumq2 += wl[k]*q*q;
+                    }
+                }
+                qs += Q::kNg;
+            }
+        }
+        if (sumq2 > 0) {
+            d = sumqx/sumq2;
+            *dptr = d;
+            if (!d) return;
+        } else {
+            break;
+        }
+    }
+}
+}
+
+void quantize_row_iq4_kt_ref(const float * GGML_RESTRICT x, block_iq4_kt * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    quantize_iq4_kt(x, (void *)y, 1, k, nullptr);
+}
+
+void quantize_row_iq4_kt(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_K == 0);
+    block_iq4_kt * y = (block_iq4_kt *)vy;
+    quantize_row_iq4_kt_ref(x, y, k);
+}
+
+size_t quantize_iq4_kt(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    auto row_size = ggml_row_size(GGML_TYPE_IQ4_KT, n_per_row);
+    std::vector<float> scales(n_per_row/QuantizerIQ4KT::kBlockSize);
+    std::vector<float> weights(n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_iq4_kt_impl(src, (void *)qrow, n_per_row, imatrix, scales.data(), weights.data());
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
+}
+
+void dequantize_row_iq4_kt(const block_iq4_kt * x, float * y, int64_t k) {
+    using Q = QuantizerIQ4KT;
+    assert(k % Q::kSuperBlockSize == 0);
+    const int nb = k / Q::kSuperBlockSize;
+    const float * dptr = (const float *)x;
+    const float d = *dptr * Q::kScale;
+    x = (const block_iq4_kt *)(dptr + 1);
+    auto& deq = iq4kt_quantizer();
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const uint16_t * ql = (const uint16_t *)x[ibl].ql;
+        for (int ib = 0; ib < Q::kNblock; ++ib) {
+            float sl = d * x[ibl].scales[ib];
+            for (int ig = 0; ig < Q::kNg; ++ig) {
+                deq.set_values(ql[ig], y, sl);
+                y += Q::kGroupSize;
+            }
+            ql += Q::kNg;
+        }
+    }
+}
+
+void vec_dot_iq4_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    GGML_UNUSED(nrc);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    GGML_UNUSED(bs);
+
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_KT, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+
+}
