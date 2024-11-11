@@ -181,7 +181,7 @@ static __global__ void dequantize_mul_mat_vec_iq4_kt(const void * __restrict__ v
     if (row > nrows) return;
 
     const float * dptr = (const float *)((const char *)vx + row*row_size);
-    const float d = *dptr * 31.75f * 1.015f;
+    const float d = *dptr * 31.75f * 1.01f;
     const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 1);
 
     const int num_blocks_per_row = ncols / QK_K;

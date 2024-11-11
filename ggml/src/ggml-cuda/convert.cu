@@ -423,7 +423,7 @@ static __global__ void dequantize_block_iq4_kt(const void * __restrict__ vx, dst
     const uint16_t * ql = (const uint16_t *)x[i].ql;
     uint32_t idx1 = ql[2*ib+0] + 4096;
     uint32_t idx2 = ql[2*ib+1] + 4096;
-    const float dl = scale * x[i].scales[ib/8] * 31.75f;
+    const float dl = scale * x[i].scales[ib/8] * 31.75f * 1.01f;
     uint32_t s[2];
     const half * h = (const half *)s;
     for (int j = 0; j < 4; ++j) {
