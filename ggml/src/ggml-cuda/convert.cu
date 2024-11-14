@@ -386,12 +386,14 @@ static __global__ void dequantize_block_iq3_kt(const void * __restrict__ vx, dst
     constexpr uint32_t kmask = 0x8fff8fff;
     constexpr uint32_t km32 = 0x3b603b60;
 
+    const int8_t * scale_values = iq4k_values + 16;
+
     const int64_t tid = threadIdx.x;
     const int64_t ib = tid; // 0...31
     dst_t * y = yy + ii*QK_K + 8*ib;
     uint32_t idx1 = x[i].ql[2*ib+0] + ((x[i].qh[(2*ib+0)%32] << (8-4*((2*ib+0)/32))) & 0xf00) + 4096;
     uint32_t idx2 = x[i].ql[2*ib+1] + ((x[i].qh[(2*ib+1)%32] << (8-4*((2*ib+1)/32))) & 0xf00) + 4096;
-    const float dl = scale * iq4k_values[((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf)+16] * 31.75f * 1.015f;
+    const float dl = scale * scale_values[((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf)] * 31.75f * 1.015f;
     uint32_t s[2];
     const half * h = (const half *)s;
     for (int j = 0; j < 4; ++j) {

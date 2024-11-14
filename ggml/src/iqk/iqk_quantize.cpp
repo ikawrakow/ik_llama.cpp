@@ -3385,7 +3385,6 @@ void QuantizerIQKT<block_size, group_size, num_bits>::find_best_match(float d, c
     } else {
         __m256 sqx[4];
         const __m256i add_idx = _mm256_set_epi32(7, 5, 3, 1, 6, 4, 2, 0);
-        //const __m256 sign_bit = _mm256_set1_ps(-0.f);
         const __m256 sign_bit = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
         float sx[8];
         int   index[8];
@@ -3415,7 +3414,6 @@ void QuantizerIQKT<block_size, group_size, num_bits>::find_best_match(float d, c
                         auto vdiff = _mm256_sub_ps(vq, vx);
                         //vdiff = _mm256_mul_ps(vdiff, vdiff);
                         //sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, vdiff));
-                        //vdiff = _mm256_andnot_ps(sign_bit, vdiff);
                         vdiff = _mm256_and_ps(sign_bit, vdiff);
                         sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
                     }
@@ -3446,7 +3444,6 @@ void QuantizerIQKT<block_size, group_size, num_bits>::find_best_match(float d, c
                     auto vdiff = _mm256_sub_ps(vq, vx);
                     //vdiff = _mm256_mul_ps(vdiff, vdiff);
                     sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, vdiff));
-                    //vdiff = _mm256_andnot_ps(sign_bit, vdiff);
                     //vdiff = _mm256_and_ps(sign_bit, vdiff);
                     //sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
                 }
@@ -3777,7 +3774,7 @@ void quantize_row_iq2_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     float d = max_scale/iq4k_values[0];
     float best = 0;
-    for (int itry = -5; itry <= 5; ++itry) {
+    for (int itry = -9; itry <= 9; ++itry) {
         float id = (itry + iq4k_values[0])/max_scale;
         float sumqx = 0, sumq2 = 0;
         for (int ibl = 0; ibl < nblock; ++ibl) {
@@ -3965,7 +3962,8 @@ const QuantizerIQ3KT& iq3kt_quantizer() {
     return *quantizer;
 }
 
-void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const float * quant_weights, float * all_scales) {
+void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const float * quant_weights, float * all_scales,
+        float * all_weights, float * qtmp) {
 
     constexpr float kSigmaScale = 2.0f;
     constexpr float kStep = 4.0f;
@@ -3980,8 +3978,7 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     block_iq3_kt * y = (block_iq3_kt *)(dptr + 1);
 
-    float weight[Q::kBlockSize];
-    int   best_idx[Q::kNg];
+    int   best_idx[2*Q::kNg];
 
     auto& quantizer = iq3kt_quantizer();
 
@@ -3995,27 +3992,20 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
         return;
     }
 
+    Q::set_weights(kSigmaScale, nblock, x, quant_weights, all_weights);
+
     float amax_scale = 0, max_scale = 0;
 
     for (int ibl = 0; ibl < nblock; ++ibl) {
 
         memset(&y[ibl], 0, sizeof(block_iq3_kt));
 
-        const float * xbl = x + ibl*Q::kSuperBlockSize;
-        float sumx2 = 0;
-        for (int j = 0; j < Q::kSuperBlockSize; ++j) sumx2 += xbl[j]*xbl[j];
-        const float sigma2 = kSigmaScale*sumx2/Q::kSuperBlockSize;
-
         auto scales = all_scales + ibl*Q::kNblock;
+        auto xbl = x + ibl*Q::kSuperBlockSize;
 
         for (int ib = 0; ib < Q::kNblock; ++ib) {
             const float * xb = xbl + Q::kBlockSize*ib;
-            if (quant_weights) {
-                const float * qw = quant_weights + ibl*Q::kSuperBlockSize + ib*Q::kBlockSize;
-                for (int j = 0; j < Q::kBlockSize; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
-            } else {
-                for (int j = 0; j < Q::kBlockSize; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
-            }
+            const float * weight = all_weights + ibl*Q::kSuperBlockSize + ib*Q::kBlockSize;
             float amax = 0;
             for (int j = 0; j < Q::kBlockSize; ++j) {
                 float ax = std::abs(xb[j]);
@@ -4023,12 +4013,6 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
             }
             scales[ib] = 0;
             if (!amax) continue;
-
-            //quantizer.find_best_match( amax/96.f, xb, weight, best_idx);
-            //auto [dp, score_p] = quantizer.find_best_scale(xb, weight, best_idx);
-            //quantizer.find_best_match(-amax/96.f, xb, weight, best_idx);
-            //auto [dm, score_m] = quantizer.find_best_scale(xb, weight, best_idx);
-            //scales[ib] = score_p > score_m ? dp : dm;
 
             //float scale_0 = std::max(80.f, 127.f*amax/amax_row);
             float scale_0 = std::max(80.f, 127.f*amax/amax_row);
@@ -4039,20 +4023,22 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
                 if (score_p > best) {
                     best = score_p;
                     scales[ib] = dp;
+                    std::memcpy(best_idx+Q::kNg, best_idx, Q::kNg*sizeof(int));
                 }
                 quantizer.find_best_match(-amax/(scale_0 + kStep*itry), xb, weight, best_idx);
                 auto [dm, score_m] = quantizer.find_best_scale(xb, weight, best_idx);
                 if (score_m > best) {
                     best = score_m;
                     scales[ib] = dm;
+                    std::memcpy(best_idx+Q::kNg, best_idx, Q::kNg*sizeof(int));
                 }
             }
 
-            //for (int j = 0; j < Q::kNg; ++j) {
-            //    int jj = ib*Q::kNg + j;
-            //    y[ibl].ql[jj] = best_idx[j] & 255;
-            //    y[ibl].qh[jj%(kNumGroups/2)] |= ((best_idx[j] >> 8) << 4*(jj/(kNumGroups/2)));
-            //}
+            auto xt = qtmp + ibl*Q::kSuperBlockSize + ib*Q::kBlockSize;
+            for (int ig = 0; ig < Q::kNg; ++ig) {
+                auto q = quantizer.values() + Q::kGroupSize*best_idx[Q::kNg+ig];
+                for (int j = 0; j < Q::kGroupSize; ++j) *xt++ = q[j];
+            }
 
             float abs_scale = std::abs(scales[ib]);
             if (abs_scale > amax_scale) {
@@ -4063,13 +4049,42 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     }
 
-    float d = max_scale/iq4k_values[16];
+    auto scale_values = iq4k_values + 16;
+
+    float d = max_scale/scale_values[0];
+    float best = 0;
+    for (int itry = -9; itry <= 9; ++itry) {
+        float id = (itry + scale_values[0])/max_scale;
+        float sumqx = 0, sumq2 = 0;
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+            const float * xb = x + ibl*Q::kSuperBlockSize;
+            const float * qb = qtmp + ibl*Q::kSuperBlockSize;
+            const float * wb = all_weights + ibl*Q::kSuperBlockSize;
+            auto scales = all_scales + ibl*Q::kNblock;
+            for (int ib = 0; ib < Q::kNblock; ++ib) {
+                int ls = best_index_iq4nl(scale_values, id*scales[ib]);
+                float dl = scale_values[ls];
+                for (int j = 0; j < Q::kBlockSize; ++j) {
+                    float q = dl*qb[j];
+                    sumqx += wb[j]*xb[j]*q;
+                    sumq2 += wb[j]*q*q;
+                }
+                xb += Q::kBlockSize;
+                wb += Q::kBlockSize;
+                qb += Q::kBlockSize;
+            }
+        }
+        if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+            d = sumqx/sumq2; best = d*sumqx;
+        }
+    }
+
     float id = d ? 1/d : 0.f;
     for (int ibl = 0; ibl < nblock; ++ibl) {
         auto scales = all_scales + ibl*Q::kNblock;
         for (int ib = 0; ib < Q::kNblock/2; ++ib) {
-            int ls1 = best_index_iq4nl(iq4k_values+16, id*scales[ib]);
-            int ls2 = best_index_iq4nl(iq4k_values+16, id*scales[ib + Q::kNblock/2]);
+            int ls1 = best_index_iq4nl(scale_values, id*scales[ib]);
+            int ls2 = best_index_iq4nl(scale_values, id*scales[ib + Q::kNblock/2]);
             y[ibl].scales[ib] = ls1 | (ls2 << 4);
         }
     }
@@ -4083,19 +4098,11 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
 
             std::memset(y[ibl].qh, 0, kNumGroups/2);
             const float * xbl = x + ibl*Q::kSuperBlockSize;
-            float sumx2 = 0;
-            for (int j = 0; j < Q::kSuperBlockSize; ++j) sumx2 += xbl[j]*xbl[j];
-            const float sigma2 = kSigmaScale*sumx2/Q::kSuperBlockSize;
 
             for (int ib = 0; ib < Q::kNblock; ++ib) {
                 const float * xb = xbl + Q::kBlockSize*ib;
-                if (quant_weights) {
-                    const float * qw = quant_weights + ibl*Q::kSuperBlockSize + ib*Q::kBlockSize;
-                    for (int j = 0; j < Q::kBlockSize; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
-                } else {
-                    for (int j = 0; j < Q::kBlockSize; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
-                }
-                int ls = iq4k_values[((y[ibl].scales[ib%(Q::kNblock/2)] >> 4*(ib/(Q::kNblock/2))) & 0xf)+16];
+                const float * weight = all_weights + ibl*Q::kSuperBlockSize + ib*Q::kBlockSize;
+                int ls = scale_values[((y[ibl].scales[ib%(Q::kNblock/2)] >> 4*(ib/(Q::kNblock/2))) & 0xf)];
                 float dl = d*ls;
                 quantizer.find_best_match(dl, xb, weight, best_idx);
 
@@ -4140,9 +4147,10 @@ size_t quantize_iq3_kt(const float * src, void * dst, int64_t nrows, int64_t n_p
     GGML_ASSERT(n_per_row%QK_K == 0);
     auto row_size = ggml_row_size(GGML_TYPE_IQ3_KT, n_per_row);
     std::vector<float> scales(n_per_row/QuantizerIQ3KT::kBlockSize);
+    std::vector<float> weights(n_per_row), xtmp(n_per_row);
     char * qrow = (char *)dst;
     for (int64_t row = 0; row < nrows; ++row) {
-        quantize_row_iq3_kt_impl(src, (void *)qrow, n_per_row, imatrix, scales.data());
+        quantize_row_iq3_kt_impl(src, (void *)qrow, n_per_row, imatrix, scales.data(), weights.data(), xtmp.data());
         src += n_per_row;
         qrow += row_size;
     }
@@ -4156,6 +4164,7 @@ void dequantize_row_iq3_kt(const block_iq3_kt * x, float * y, int64_t k) {
     const int nb = k / Q::kSuperBlockSize;
     const float * dptr = (const float *)x;
     const float d = *dptr * Q::kScale;
+    const int8_t * scale_values = iq4k_values + 16;
     x = (const block_iq3_kt *)(dptr + 1);
     auto& deq = iq3kt_quantizer();
     for (int ibl = 0; ibl < nb; ++ibl) {
@@ -4165,8 +4174,8 @@ void dequantize_row_iq3_kt(const block_iq3_kt * x, float * y, int64_t k) {
         auto qlh = qll + kNumGroups/2;
         int jj = 0;
         for (int ib = 0; ib < Q::kNblock/2; ++ib) {
-            float sl = d * iq4k_values[(x[ibl].scales[ib] & 0xf)+16];
-            float sh = d * iq4k_values[(x[ibl].scales[ib] >>  4)+16];
+            float sl = d * scale_values[(x[ibl].scales[ib] & 0xf)];
+            float sh = d * scale_values[(x[ibl].scales[ib] >>  4)];
             for (int ig = 0; ig < Q::kNg; ++ig) {
                 uint16_t ul = qll[jj] | ((x[ibl].qh[jj] << 8) & 0xf00);
                 uint16_t uh = qlh[jj] | ((x[ibl].qh[jj] << 4) & 0xf00);
