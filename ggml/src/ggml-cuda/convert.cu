@@ -393,6 +393,8 @@ static __global__ void dequantize_block_iq3_kt(const void * __restrict__ vx, dst
     dst_t * y = yy + ii*QK_K + 8*ib;
     uint32_t idx1 = x[i].ql[2*ib+0] + ((x[i].qh[(2*ib+0)%32] << (8-4*((2*ib+0)/32))) & 0xf00) + 4096;
     uint32_t idx2 = x[i].ql[2*ib+1] + ((x[i].qh[(2*ib+1)%32] << (8-4*((2*ib+1)/32))) & 0xf00) + 4096;
+    //const int8_t * sv = (const int8_t *)x[i].scales;
+    //const float dl = scale * sv[ib/8] * 31.75f * 1.015f;
     const float dl = scale * scale_values[((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf)] * 31.75f * 1.015f;
     uint32_t s[2];
     const half * h = (const half *)s;
