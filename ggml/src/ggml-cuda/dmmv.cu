@@ -41,6 +41,16 @@ static __device__ __forceinline__ void trellis_accum(uint32_t& val1, uint32_t& v
 #endif
 }
 
+static __device__ __forceinline__ void trellis_accum(const dfloat2& dl1, const dfloat2& dl2, const dfloat2& bdot1, const dfloat2& bdot2, dfloat2& tmp) {
+#ifdef GGML_CUDA_F16
+        tmp = __hfma2(dl1, bdot1, tmp);
+        tmp = __hfma2(dl2, bdot2, tmp);
+#else
+        tmp.x += dl1.x * bdot1.x + dl2.x * bdot2.x;
+        tmp.y += dl1.y * bdot1.y + dl2.y * bdot2.y;
+#endif
+}
+
 static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ vx, const dfloat * __restrict__ yy, float * __restrict__ dst,
         const int ncols, int nrows, int64_t row_size) {
 
@@ -74,13 +84,7 @@ static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ v
         for (int k = 0; k < 4; ++k) {
             trellis_accum(val1, val2, s, y+k, bdot1, bdot2);
         }
-#ifdef GGML_CUDA_F16
-        tmp = __hfma2(dl1, bdot1, tmp);
-        tmp = __hfma2(dl2, bdot2, tmp);
-#else
-        tmp.x += dl1.x * bdot1.x + dl2.x * bdot2.x;
-        tmp.y += dl1.y * bdot1.y + dl2.y * bdot2.y;
-#endif
+        trellis_accum(dl1, dl2, bdot1, bdot2, tmp);
     }
 
     // sum up partial sums and write back result
@@ -130,13 +134,7 @@ static __global__ void dequantize_mul_mat_vec_iq3_kt(const void * __restrict__ v
         for (int k = 2; k < 4; ++k) {
             trellis_accum(val1, val2, s, y+k, bdot1, bdot2);
         }
-#ifdef GGML_CUDA_F16
-        tmp = __hfma2(dl1, bdot1, tmp);
-        tmp = __hfma2(dl2, bdot2, tmp);
-#else
-        tmp.x += dl1.x * bdot1.x + dl2.x * bdot2.x;
-        tmp.y += dl1.y * bdot1.y + dl2.y * bdot2.y;
-#endif
+        trellis_accum(dl1, dl2, bdot1, bdot2, tmp);
     }
 
     // sum up partial sums and write back result
@@ -190,19 +188,25 @@ static __global__ void dequantize_mul_mat_vec_iq4_kt(const void * __restrict__ v
         uint32_t val2 = ql[jj+32] + ((qh[jj] << 4) & 0xf00) + (((shb[ib32+4] >> (8 + 6*ig+0)) & 7) << 12) + offset2;
         for (int k = 0; k < 2; ++k) {
             trellis_accum(val1, val2, s, y+k, bdot1, bdot2);
+#ifdef GGML_CUDA_F16
+            tmp2 += y[k] + y[k+64];
+#else
+            tmp2.x += y[k].x + y[k+64].x;
+            tmp2.y += y[k].y + y[k+64].y;
+#endif
         }
         val1 = ql[jj+ 1] + ((qh[jj+1] << 8) & 0xf00) + (((shb[ib32+0] >> (8 + 6*ig+3)) & 7) << 12) + offset1;
         val2 = ql[jj+33] + ((qh[jj+1] << 4) & 0xf00) + (((shb[ib32+4] >> (8 + 6*ig+3)) & 7) << 12) + offset2;
         for (int k = 2; k < 4; ++k) {
             trellis_accum(val1, val2, s, y+k, bdot1, bdot2);
-        }
 #ifdef GGML_CUDA_F16
-        tmp1 = __hfma2(dl1, bdot1, tmp1);
-        tmp1 = __hfma2(dl2, bdot2, tmp1);
+            tmp2 += y[k] + y[k+64];
 #else
-        tmp1.x += dl1.x * bdot1.x + dl2.x * bdot2.x;
-        tmp1.y += dl1.y * bdot1.y + dl2.y * bdot2.y;
+            tmp2.x += y[k].x + y[k+64].x;
+            tmp2.y += y[k].y + y[k+64].y;
 #endif
+        }
+        trellis_accum(dl1, dl2, bdot1, bdot2, tmp1);
     }
 
     // sum up partial sums and write back result
