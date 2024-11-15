@@ -411,30 +411,37 @@ static __global__ void dequantize_block_iq4_kt(const void * __restrict__ vx, dst
 
     int64_t ii  = blockIdx.x;
     int64_t row = (QK_K * ii) / n_per_row;
-    const char * cx = (const char *)vx + row * row_size;
-    float scale = *(const float *)cx;
-    const block_iq4_kt * x = (const block_iq4_kt *)(cx + sizeof(float));
+    const float * dptr = (const float *)((const char *)vx + row * row_size);
+    float scale = dptr[0] * 31.75f * 1.01f;
+    float row_av = dptr[1];
+    const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 2);
     const int64_t i = ii - (row*n_per_row)/QK_K;
 
     constexpr uint32_t ka = 89226354;
     constexpr uint32_t kb = 64248484;
     constexpr uint32_t kmask = 0x8fff8fff;
     constexpr uint32_t km32 = 0x3b603b60;
+    constexpr int kNumGroups = 64;
 
     const int64_t tid = threadIdx.x;
     const int64_t ib = tid; // 0...31
     dst_t * y = yy + ii*QK_K + 8*ib;
-    const uint16_t * ql = (const uint16_t *)x[i].ql;
-    uint32_t idx1 = ql[2*ib+0] + 4096;
-    uint32_t idx2 = ql[2*ib+1] + 4096;
-    const float dl = scale * x[i].scales[ib/8] * 31.75f * 1.01f;
+    const uint32_t * shb = x[i].qs;
+    const uint8_t * ql = (const uint8_t *)(shb + 8); //Q::kNblock;
+    const uint8_t * qh = ql + kNumGroups;
+    const int ib32 = ib/4;
+    const int ig = ib%4;
+    const int jj = ib32*8 + 2*ig;
+    uint32_t idx1 = ql[jj+0] + ((qh[(jj+0)%(kNumGroups/2)] << (8 - 4*((jj+0)/(kNumGroups/2)))) & 0xf00) + (((shb[ib32] >> (8 + 6*ig+0)) & 7) << 12) + 4096;
+    uint32_t idx2 = ql[jj+1] + ((qh[(jj+1)%(kNumGroups/2)] << (8 - 4*((jj+1)/(kNumGroups/2)))) & 0xf00) + (((shb[ib32] >> (8 + 6*ig+3)) & 7) << 12) + 4096;
+    const float dl = scale * ((const int8_t *)(shb + ib32))[0];
     uint32_t s[2];
     const half * h = (const half *)s;
     for (int j = 0; j < 4; ++j) {
         idx1 = ka*idx1 + kb; s[0] = (idx1 & kmask) ^ km32;
         idx2 = ka*idx2 + kb; s[1] = (idx2 & kmask) ^ km32;
-        y[j+0] = dl * (float)(h[0] + h[1]);
-        y[j+4] = dl * (float)(h[2] + h[3]);
+        y[j+0] = dl * (float)(h[0] + h[1]) + row_av;
+        y[j+4] = dl * (float)(h[2] + h[3]) + row_av;
     }
 }
 
