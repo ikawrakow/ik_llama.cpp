@@ -165,9 +165,6 @@ static __global__ void dequantize_mul_mat_vec_iq4_kt(const void * __restrict__ v
 
     const int it = threadIdx.x/2; // 0...15
     const int ix = threadIdx.x%2; // 0 or 1
-    const int ib32 = it/4;        // 0...3
-    const int ig = it%4;          // 0...3
-    const int jj = ib32*8 + 2*ig; // 0...30 in steps of 2
 
     uint32_t s[4];
 
@@ -176,34 +173,28 @@ static __global__ void dequantize_mul_mat_vec_iq4_kt(const void * __restrict__ v
         const uint32_t * shb = x[i].qs;
         const uint8_t * ql = (const uint8_t *)(shb + 8);
         const uint8_t * qh = ql + kNumGroups;
-        const uint32_t offset1 = 4096 + ((shb[ib32+0] & 1) << 15);
-        const uint32_t offset2 = 4096 + ((shb[ib32+4] & 1) << 15);
-        const dfloat scale1 = ((shb[ib32+0] & 0xff) >> 1) - 64;
-        const dfloat scale2 = ((shb[ib32+4] & 0xff) >> 1) - 64;
+        const uint32_t offset1 = 4096 + ((shb[it/4+0] & 1) << 15);
+        const uint32_t offset2 = 4096 + ((shb[it/4+4] & 1) << 15);
+        const dfloat scale1 = (int)((shb[it/4+0] & 0xff) >> 1) - 64;
+        const dfloat scale2 = (int)((shb[it/4+4] & 0xff) >> 1) - 64;
         const dfloat2 dl1 = {scale1, scale1};
         const dfloat2 dl2 = {scale2, scale2};
+        const uint32_t sh1 = shb[it/4+0] >> (8 + 6*(it%4));
+        const uint32_t sh2 = shb[it/4+4] >> (8 + 6*(it%4));
         dfloat2 bdot1 = {0, 0};
         dfloat2 bdot2 = {0, 0};
-        uint32_t val1 = ql[jj+ 0] + ((qh[jj] << 8) & 0xf00) + (((shb[ib32+0] >> (8 + 6*ig+0)) & 7) << 12) + offset1;
-        uint32_t val2 = ql[jj+32] + ((qh[jj] << 4) & 0xf00) + (((shb[ib32+4] >> (8 + 6*ig+0)) & 7) << 12) + offset2;
+        uint32_t val1 = ql[2*it+ 0] + ((qh[2*it+0] << 8) & 0xf00) + ((sh1 & 7) << 12) + offset1;
+        uint32_t val2 = ql[2*it+32] + ((qh[2*it+0] << 4) & 0xf00) + ((sh2 & 7) << 12) + offset2;
+        uint32_t val3 = ql[2*it+ 1] + ((qh[2*it+1] << 8) & 0xf00) + ((sh1 & 56) << 9) + offset1;
+        uint32_t val4 = ql[2*it+33] + ((qh[2*it+1] << 4) & 0xf00) + ((sh2 & 56) << 9) + offset2;
         for (int k = 0; k < 2; ++k) {
-            trellis_accum(val1, val2, s, y+k, bdot1, bdot2);
+            trellis_accum(val1, val2, s, y+k+0, bdot1, bdot2);
+            trellis_accum(val3, val4, s, y+k+2, bdot1, bdot2);
 #ifdef GGML_CUDA_F16
-            tmp2 += y[k] + y[k+64];
+            tmp2 += y[k] + y[k+2] + y[k+64] + y[k+66];
 #else
-            tmp2.x += y[k].x + y[k+64].x;
-            tmp2.y += y[k].y + y[k+64].y;
-#endif
-        }
-        val1 = ql[jj+ 1] + ((qh[jj+1] << 8) & 0xf00) + (((shb[ib32+0] >> (8 + 6*ig+3)) & 7) << 12) + offset1;
-        val2 = ql[jj+33] + ((qh[jj+1] << 4) & 0xf00) + (((shb[ib32+4] >> (8 + 6*ig+3)) & 7) << 12) + offset2;
-        for (int k = 2; k < 4; ++k) {
-            trellis_accum(val1, val2, s, y+k, bdot1, bdot2);
-#ifdef GGML_CUDA_F16
-            tmp2 += y[k] + y[k+64];
-#else
-            tmp2.x += y[k].x + y[k+64].x;
-            tmp2.y += y[k].y + y[k+64].y;
+            tmp2.x += y[k].x + y[k+2].x + y[k+64].x + y[k+66].x;
+            tmp2.y += y[k].y + y[k+2].y + y[k+64].y + y[k+66].y;
 #endif
         }
         trellis_accum(dl1, dl2, bdot1, bdot2, tmp1);
