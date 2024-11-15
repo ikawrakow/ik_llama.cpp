@@ -3612,11 +3612,25 @@ std::vector<float> QuantizerIQKT<block_size, group_size, num_bits>::cluster_poin
         for (int ip = 0; ip < npoint; ++ip) {
             auto vp = points.data() + ndim*ip;
             uint16_t u = 0;
-            if (ncluster == 255) {
+            if (ncluster == 256) {
                 for (int k = 0; k < ndim; ++k) u |= (bin4(vp[k]) << 2*k);
             } else {
                 int s = 1;
                 for (int k = 0; k < ndim; ++k) { u += s*bin5(vp[k]); s *= 5; }
+            }
+            if (u >= int(counts.size())) {
+                printf("Oops: u = %u, vp = %g, %g, %g, %g\n", u, vp[0], vp[1], vp[2], vp[3]);
+                u = 0;
+                if (ncluster == 256) {
+                    for (int k = 0; k < ndim; ++k) {
+                        auto bin = bin4(vp[k]); u |= (bin << 2*k);
+                        printf(" bin[%d] = %d, u = %u", k, bin, u);
+                    }
+                } else {
+                    for (int k = 0; k < ndim; ++k) printf(" bin[%d] = %d", k, bin5(vp[k]));
+                }
+                printf("\n");
+                GGML_ABORT("fatal error");
             }
             ++counts[u];
             for (int k = 0; k < ndim; ++k) sump[ndim*u + k] += vp[k];
