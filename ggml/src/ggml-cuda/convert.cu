@@ -432,9 +432,11 @@ static __global__ void dequantize_block_iq4_kt(const void * __restrict__ vx, dst
     const int ib32 = ib/4;
     const int ig = ib%4;
     const int jj = ib32*8 + 2*ig;
-    uint32_t idx1 = ql[jj+0] + ((qh[(jj+0)%(kNumGroups/2)] << (8 - 4*((jj+0)/(kNumGroups/2)))) & 0xf00) + (((shb[ib32] >> (8 + 6*ig+0)) & 7) << 12) + 4096;
-    uint32_t idx2 = ql[jj+1] + ((qh[(jj+1)%(kNumGroups/2)] << (8 - 4*((jj+1)/(kNumGroups/2)))) & 0xf00) + (((shb[ib32] >> (8 + 6*ig+3)) & 7) << 12) + 4096;
-    const float dl = scale * ((const int8_t *)(shb + ib32))[0];
+    uint32_t offset = shb[ib32] & 1 ? 4096 + 32768 : 4096;
+    uint32_t idx1 = ql[jj+0] + ((qh[(jj+0)%(kNumGroups/2)] << (8 - 4*((jj+0)/(kNumGroups/2)))) & 0xf00) + (((shb[ib32] >> (8 + 6*ig+0)) & 7) << 12) + offset;
+    uint32_t idx2 = ql[jj+1] + ((qh[(jj+1)%(kNumGroups/2)] << (8 - 4*((jj+1)/(kNumGroups/2)))) & 0xf00) + (((shb[ib32] >> (8 + 6*ig+3)) & 7) << 12) + offset;
+    int ls = ((shb[ib32] & 0xff) >> 1) - 64;
+    const float dl = scale * ls;
     uint32_t s[2];
     const half * h = (const half *)s;
     for (int j = 0; j < 4; ++j) {
