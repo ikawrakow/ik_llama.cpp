@@ -4036,7 +4036,8 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
             scales[ib] = 0;
             if (!amax) continue;
 
-            float scale_0 = std::max(80.f, 127.f*amax/amax_row);
+            float scale_0 = std::max(80.f, 123.f*amax/amax_row);
+            //float scale_0 = 80.f;
             float best = 0;
             for (int itry = -5; itry <= 5; ++itry) {
                 quantizer.find_best_match(amax/(scale_0 + kStep*itry), xb, weight, best_idx);
