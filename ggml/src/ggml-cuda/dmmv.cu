@@ -41,6 +41,54 @@ static __device__ __forceinline__ void trellis_accum(uint32_t& val1, uint32_t& v
 #endif
 }
 
+//static __device__ __forceinline__ void trellis_accum(uint32_t& val1, uint32_t& val2, uint32_t* s, const dfloat2* y, dfloat2& bdot1, dfloat2& bdot2) {
+//    const half * h = (const half *)s;
+//    s[0] = trellis_next(val1);
+//    s[1] = trellis_next(val1);
+//    s[2] = trellis_next(val1);
+//    s[3] = trellis_next(val1);
+//#ifdef GGML_CUDA_F16
+//    bdot1 = __hfma2(y[ 0], {h[0]+h[1]+h[2]+h[3], h[4]+h[5]+h[6]+h[7]}, bdot1);
+//#else
+//    bdot1.x += y[ 0].x * (float)(h[0] + h[1] + h[2] + h[3]);
+//    bdot1.y += y[ 0].y * (float)(h[4] + h[5] + h[6] + h[7]);
+//#endif
+//    s[0] = trellis_next(val2);
+//    s[1] = trellis_next(val2);
+//    s[2] = trellis_next(val2);
+//    s[3] = trellis_next(val2);
+//#ifdef GGML_CUDA_F16
+//    bdot2 = __hfma2(y[64], {h[0]+h[1]+h[2]+h[3], h[4]+h[5]+h[6]+h[7]}, bdot2);
+//#else
+//    bdot2.x += y[64].x * (float)(h[0] + h[1] + h[2] + h[3]);
+//    bdot2.y += y[64].y * (float)(h[4] + h[5] + h[6] + h[7]);
+//#endif
+//}
+
+static __device__ __forceinline__ void trellis_accum_abs(uint8_t signs1, uint8_t signs2, uint8_t mask1, uint8_t mask2,
+        uint32_t& val1, uint32_t& val2, uint32_t* s, const dfloat2* y, dfloat2& bdot1, dfloat2& bdot2) {
+    const half * h = (const half *)s;
+    s[0] = trellis_next(val1);
+    s[1] = trellis_next(val1);
+    s[2] = trellis_next(val2);
+    s[3] = trellis_next(val2);
+#ifdef GGML_CUDA_F16
+    half h00 = __habs(h[0]+h[1]), h01 = __habs(h[2]+h[3]);
+    half h10 = __habs(h[4]+h[5]), h11 = __habs(h[6]+h[7]);
+    half2 h1 = {signs1 & mask1 ? -h00 : h00, signs2 & mask1 ? -h01 : h01};
+    half2 h2 = {signs1 & mask2 ? -h10 : h10, signs2 & mask2 ? -h11 : h11};
+    //half2 h1 = __hmul2(__habs2({h[0]+h[1], h[2]+h[3]}), {signs1 & mask1 ? -1 : 1, signs2 & mask1 ? -1 : 1});
+    //half2 h2 = __hmul2(__habs2({h[4]+h[5], h[6]+h[7]}), {signs1 & mask2 ? -1 : 1, signs2 & mask2 ? -1 : 1});
+    bdot1 = __hfma2(y[ 0], h1, bdot1);
+    bdot2 = __hfma2(y[64], h2, bdot2);
+#else
+    bdot1.x += y[ 0].x * fabsf((float)(h[0] + h[1])) * (signs1 & mask1 ? -1 : 1);
+    bdot1.y += y[ 0].y * fabsf((float)(h[2] + h[3])) * (signs2 & mask1 ? -1 : 1);
+    bdot2.x += y[64].x * fabsf((float)(h[4] + h[5])) * (signs1 & mask2 ? -1 : 1);
+    bdot2.y += y[64].y * fabsf((float)(h[6] + h[7])) * (signs2 & mask2 ? -1 : 1);
+#endif
+}
+
 static __device__ __forceinline__ void trellis_accum(const dfloat2& dl1, const dfloat2& dl2, const dfloat2& bdot1, const dfloat2& bdot2, dfloat2& tmp) {
 #ifdef GGML_CUDA_F16
         tmp = __hfma2(dl1, bdot1, tmp);
@@ -114,25 +162,23 @@ static __global__ void dequantize_mul_mat_vec_iq3_kt(const void * __restrict__ v
 
     uint32_t s[4];
 
+    uint8_t mask1 = 1 << (it/4);
+    uint8_t mask2 = mask1 << 4;
+
     for (int i = ix; i < num_blocks_per_row; i += 2) {
         const dfloat2 * y = (const dfloat2 *)(yy + i * QK_K + 8*it);
-        const uint8_t * ql = x[i].ql;
-        const uint8_t * qh = x[i].qh;
-        const dfloat scale1 = iq4k_values[(x[i].scales[it/4] & 0xf)+16];
-        const dfloat scale2 = iq4k_values[(x[i].scales[it/4] >>  4)+16];
+        const uint16_t * ql = (const uint16_t *)x[i].ql;
+        const uint8_t  * qh = x[i].qh;
+        const dfloat scale1 = (x[i].scales[it/4] & 0xf);
+        const dfloat scale2 = (x[i].scales[it/4] >>  4);
         const dfloat2 dl1 = {scale1, scale1};
         const dfloat2 dl2 = {scale2, scale2};
         dfloat2 bdot1 = {0, 0};
         dfloat2 bdot2 = {0, 0};
-        uint32_t val1 = ql[2*it+ 0] + ((qh[2*it+0] << 8) & 0xf00) + 4096;
-        uint32_t val2 = ql[2*it+32] + ((qh[2*it+0] << 4) & 0xf00) + 4096;
-        for (int k = 0; k < 2; ++k) {
-            trellis_accum(val1, val2, s, y+k, bdot1, bdot2);
-        }
-        val1 = ql[2*it+ 1] + ((qh[2*it+1] << 8) & 0xf00) + 4096;
-        val2 = ql[2*it+33] + ((qh[2*it+1] << 4) & 0xf00) + 4096;
-        for (int k = 2; k < 4; ++k) {
-            trellis_accum(val1, val2, s, y+k, bdot1, bdot2);
+        uint32_t val1 = ql[it+ 0] + 4096;
+        uint32_t val2 = ql[it+16] + 4096;
+        for (int k = 0; k < 4; ++k) {
+            trellis_accum_abs(qh[(8*it+2*k+0)%32], qh[(8*it+2*k+1)%32], mask1, mask2, val1, val2, s, y+k, bdot1, bdot2);
         }
         trellis_accum(dl1, dl2, bdot1, bdot2, tmp);
     }
