@@ -15801,6 +15801,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                 if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_S || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) new_type = GGML_TYPE_IQ2_KS;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS) new_type = GGML_TYPE_IQ2_XS;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS) new_type = GGML_TYPE_IQ2_S;
+                else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_KS) new_type = GGML_TYPE_IQ2_K;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M) new_type = GGML_TYPE_IQ3_XXS;
             }
         }
