@@ -2406,6 +2406,7 @@ struct llama_cparams {
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;
+    bool binary_kq;
 
     enum llama_pooling_type pooling_type;
 
@@ -8598,6 +8599,7 @@ struct llm_build_context {
     const int32_t n_ctx_orig;
 
     const bool flash_attn;
+    const bool binary_kq;
 
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
@@ -8647,6 +8649,7 @@ struct llm_build_context {
         kv_head          (worst_case ? (kv_self.recurrent ? 0 : kv_self.size - n_tokens) : kv_self.head),
         n_ctx_orig       (cparams.n_ctx_orig_yarn),
         flash_attn       (cparams.flash_attn),
+        binary_kq        (cparams.binary_kq),
         pooling_type     (cparams.pooling_type),
         rope_type        (hparams.rope_type),
         cb               (cb),
@@ -8839,25 +8842,31 @@ struct llm_build_context {
     }
 
     struct ggml_tensor * build_inp_KQ_mask(bool causal = true) {
-        lctx.inp_KQ_mask = causal
-            ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
-            : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        auto nx = causal ? n_kv : n_tokens;
+        // Note: we only use a binary mask when nx%32 == 0 because otherwise the CUDA implementation becomes way more messy
+        //bool can_be_binary = binary_kq && !lctx.is_encoding && !flash_attn && !hparams.use_alibi && nx%32 == 0;
+        //auto type = can_be_binary ? GGML_TYPE_I32 : flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+        auto type = !lctx.is_encoding ? !binary_kq || flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
+        if (type == GGML_TYPE_I32) nx /= 32;
+        lctx.inp_KQ_mask = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask, "KQ_mask", -1);
         ggml_set_input(lctx.inp_KQ_mask);
-
-        return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask, GGML_TYPE_F16) : lctx.inp_KQ_mask;
+        return lctx.inp_KQ_mask;
     }
 
     struct ggml_tensor * build_inp_KQ_mask_swa(bool causal = true) {
         GGML_ASSERT(hparams.n_swa > 0);
-
-        lctx.inp_KQ_mask_swa = causal
-            ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
-            : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        auto nx = causal ? n_kv : n_tokens;
+        // Note: we only use a binary mask when nx%32 == 0 because otherwise the CUDA implementation becomes way more messy
+        //bool can_be_binary = binary_kq && !lctx.is_encoding && !flash_attn && !hparams.use_alibi && nx%32 == 0;
+        //auto type = can_be_binary ? GGML_TYPE_I32 : flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+        auto type = !lctx.is_encoding ? !binary_kq || flash_attn || hparams.use_alibi || (nx%32 != 0) ? GGML_TYPE_F16 : GGML_TYPE_I32 : GGML_TYPE_F32;
+        if (type == GGML_TYPE_I32) nx /= 32;
+        lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, type, nx, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
         ggml_set_input(lctx.inp_KQ_mask_swa);
 
-        return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa;
+        return lctx.inp_KQ_mask_swa;
     }
 
     struct ggml_tensor * build_inp_mean() {
@@ -14385,71 +14394,161 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             const int64_t n_kv     = kv_self.n;
             const int64_t n_tokens = batch.n_tokens;
 
-
-            float * data     = nullptr;
-            float * data_swa = nullptr;
+            if (lctx.inp_KQ_mask && lctx.inp_KQ_mask_swa) {
+                GGML_ASSERT(lctx.inp_KQ_mask->type == lctx.inp_KQ_mask_swa->type);
+            }
 
             if (lctx.inp_KQ_mask) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask->buffer));
-                data = (float *) lctx.inp_KQ_mask->data;
             }
-
             if (lctx.inp_KQ_mask_swa) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask_swa->buffer));
-                data_swa = (float *) lctx.inp_KQ_mask_swa->data;
             }
 
-            // For causal attention, use only the previous KV cells
-            // of the correct sequence for each token of the batch.
-            // It's assumed that if a token in the batch has multiple sequences, they are equivalent.
-            for (int h = 0; h < 1; ++h) {
+            auto mask_type = lctx.inp_KQ_mask ? lctx.inp_KQ_mask->type : lctx.inp_KQ_mask_swa->type;
+            GGML_ASSERT(mask_type == GGML_TYPE_I32 || mask_type == GGML_TYPE_F32 || mask_type == GGML_TYPE_F16);
+
+            if (mask_type == GGML_TYPE_I32) {
+                // in order this to be true, we are not using alibi
+                GGML_ASSERT(!hparams.use_alibi);
+                uint32_t * h_data = lctx.inp_KQ_mask ? (uint32_t *)lctx.inp_KQ_mask->data : nullptr;
+                uint32_t * h_data_swa = lctx.inp_KQ_mask_swa ? (uint32_t *)lctx.inp_KQ_mask_swa->data : nullptr;
+                for (int j = 0; j < n_tokens; ++j) {
+                    const llama_pos    pos    = batch.pos[j];
+                    const llama_seq_id seq_id = batch.seq_id[j][0];
+
+                    uint32_t u = 0, u_swa = 0;
+                    uint32_t m = 1;
+
+                    for (int i = 0; i < n_kv; ++i) {
+                        if (lctx.kv_self.cells[i].pos > pos || !lctx.kv_self.cells[i].has_seq_id(seq_id)) {
+                            u |= m; u_swa |= m;
+                        }
+                        if (pos - lctx.kv_self.cells[i].pos >= (int32_t)hparams.n_swa) u_swa |= m;
+                        m <<= 1;
+                        if (!m) {
+                            if (h_data) *h_data++ = ~u;
+                            if (h_data_swa) *h_data_swa++ = ~u_swa;
+                            u = u_swa = 0; m = 1;
+                        }
+                    }
+                    if (m > 1) {
+                        if (h_data) *h_data++ = ~u;
+                        if (h_data_swa) *h_data_swa++ = ~u_swa;
+                    }
+
+                }
+
+                auto n_pad = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+                if (n_pad > n_tokens) {
+                    auto n_kv_32 = (n_kv + 31)/32;
+                    if (h_data) std::memset(h_data, 0, (n_pad - n_tokens)*n_kv_32*sizeof(uint32_t));
+                    if (h_data_swa) std::memset(h_data_swa, 0, (n_pad - n_tokens)*n_kv_32*sizeof(uint32_t));
+                }
+            }
+
+            else if (mask_type == GGML_TYPE_F16) {
+                ggml_fp16_t * h_data     = lctx.inp_KQ_mask     ? (ggml_fp16_t *)lctx.inp_KQ_mask->data     : nullptr;
+                ggml_fp16_t * h_data_swa = lctx.inp_KQ_mask_swa ? (ggml_fp16_t *)lctx.inp_KQ_mask_swa->data : nullptr;
+                ggml_fp16_t h_zero = ggml_fp32_to_fp16(0.0f);
+                ggml_fp16_t h_inf  = ggml_fp32_to_fp16(-INFINITY);
                 for (int j = 0; j < n_tokens; ++j) {
                     const llama_pos    pos    = batch.pos[j];
                     const llama_seq_id seq_id = batch.seq_id[j][0];
 
                     for (int i = 0; i < n_kv; ++i) {
-                        float f;
-                        if (!lctx.kv_self.cells[i].has_seq_id(seq_id) || lctx.kv_self.cells[i].pos > pos) {
-                            f = -INFINITY;
-                        } else {
-                            if (hparams.use_alibi) {
-                                f = -std::abs(lctx.kv_self.cells[i].pos - pos);
-                            } else {
-                                f = 0.0f;
-                            }
+                        ggml_fp16_t f;
+                        if (!lctx.kv_self.cells[i].has_seq_id(seq_id) || lctx.kv_self.cells[i].pos > pos) f = h_inf;
+                        else f = hparams.use_alibi ? ggml_fp32_to_fp16(-std::abs(lctx.kv_self.cells[i].pos - pos)) : h_zero;
+                        if (h_data) h_data[j*n_kv + i] = f;
+                        if (h_data_swa) h_data_swa[j*n_kv + i] = pos - lctx.kv_self.cells[i].pos >= (int32_t)hparams.n_swa ? h_inf : f;
+                    }
+                }
+                auto n_pad = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+                if (n_pad > n_tokens) {
+                    if (h_data) {
+                        for (int j = 0; j < n_kv; ++j) h_data[n_tokens*n_kv + j] = h_inf;
+                        for (int i = n_tokens+1; i < n_pad; ++i) {
+                            std::memcpy(h_data + i*n_kv, h_data + n_tokens*n_kv, n_kv*sizeof(ggml_fp16_t));
                         }
-
-                        if (data) {
-                            data[h*(n_kv*n_tokens) + j*n_kv + i] = f;
+                    }
+                    if (h_data_swa) {
+                        for (int j = 0; j < n_kv; ++j) h_data_swa[n_tokens*n_kv + j] = h_inf;
+                        for (int i = n_tokens+1; i < n_pad; ++i) {
+                            std::memcpy(h_data_swa + i*n_kv, h_data_swa + n_tokens*n_kv, n_kv*sizeof(ggml_fp16_t));
                         }
+                    }
+                }
+            }
 
-                        // may need to cut off old tokens for sliding window
-                        if (data_swa) {
-                            if (pos - lctx.kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+            else {
+
+                float * data     = nullptr;
+                float * data_swa = nullptr;
+
+                if (lctx.inp_KQ_mask) {
+                    data = (float *) lctx.inp_KQ_mask->data;
+                }
+
+                if (lctx.inp_KQ_mask_swa) {
+                    data_swa = (float *) lctx.inp_KQ_mask_swa->data;
+                }
+
+                // For causal attention, use only the previous KV cells
+                // of the correct sequence for each token of the batch.
+                // It's assumed that if a token in the batch has multiple sequences, they are equivalent.
+                for (int h = 0; h < 1; ++h) {
+                    for (int j = 0; j < n_tokens; ++j) {
+                        const llama_pos    pos    = batch.pos[j];
+                        const llama_seq_id seq_id = batch.seq_id[j][0];
+
+                        for (int i = 0; i < n_kv; ++i) {
+                            float f;
+                            if (!lctx.kv_self.cells[i].has_seq_id(seq_id) || lctx.kv_self.cells[i].pos > pos) {
                                 f = -INFINITY;
+                            } else {
+                                if (hparams.use_alibi) {
+                                    f = -std::abs(lctx.kv_self.cells[i].pos - pos);
+                                } else {
+                                    f = 0.0f;
+                                }
                             }
-                            data_swa[h*(n_kv*n_tokens) + j*n_kv + i] = f;
+
+                            if (data) {
+                                data[h*(n_kv*n_tokens) + j*n_kv + i] = f;
+                            }
+
+                            // may need to cut off old tokens for sliding window
+                            if (data_swa) {
+                                if (pos - lctx.kv_self.cells[i].pos >= (int32_t)hparams.n_swa) {
+                                    f = -INFINITY;
+                                }
+                                data_swa[h*(n_kv*n_tokens) + j*n_kv + i] = f;
+                            }
                         }
                     }
-                }
 
-                if (data) {
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
+                    if (data) {
+                        for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
+                            for (int j = 0; j < n_kv; ++j) {
+                                data[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
+                            }
                         }
                     }
-                }
 
-                if (data_swa) {
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data_swa[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
+                    if (data_swa) {
+                        for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
+                            for (int j = 0; j < n_kv; ++j) {
+                                data_swa[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
+                            }
                         }
                     }
                 }
             }
         } else {
+            // TODO
+            GGML_ASSERT(false);
+
             // when using kv cache, the mask needs to match the kv cache size
             const int64_t n_tokens = batch.n_tokens;
             const int64_t n_stride = hparams.causal_attn && !lctx.is_encoding ? kv_self.n : n_tokens;
@@ -16830,6 +16929,7 @@ struct llama_context_params llama_context_default_params() {
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ false,
+        /*.binary_kq                   =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
     };
@@ -17012,6 +17112,10 @@ struct llama_context * llama_new_context_with_model(
         return nullptr;
     }
 
+    if (params.binary_kq && params.flash_attn) {
+        LLAMA_LOG_WARN("%s: binary-KQ mask is currently not used in flash_attn\n", __func__);
+    }
+
     llama_context * ctx = new llama_context(*model);
 
     const auto & hparams = model->hparams;
@@ -17028,6 +17132,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
+    cparams.binary_kq        = params.binary_kq;
     cparams.pooling_type     = params.pooling_type;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
@@ -17094,6 +17199,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: n_batch    = %u\n",     __func__, cparams.n_batch);
     LLAMA_LOG_INFO("%s: n_ubatch   = %u\n",     __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: flash_attn = %d\n",     __func__, cparams.flash_attn);
+    LLAMA_LOG_INFO("%s: binary_kq  = %d\n",     __func__, cparams.binary_kq);
     LLAMA_LOG_INFO("%s: freq_base  = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale = %g\n",     __func__, cparams.rope_freq_scale);
 
