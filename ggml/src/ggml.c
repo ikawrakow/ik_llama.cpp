@@ -1191,7 +1191,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_iq2_ks_q8_k,
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
-        .row_meta_size            = 2,
+        .row_meta_size            = 10,
     },
     [GGML_TYPE_IQ2_KT] = {
         .type_name                = "iq2_kt",

@@ -851,8 +851,10 @@ static __global__ void dequantize_block_iq2_ks(const void * __restrict__ vx, dst
     int64_t ii  = blockIdx.x;
     int64_t row = (QK_K * ii) / n_per_row;
     const char * cx = (const char *)vx + row * row_size;
-    const float d = (float)*(const half *)cx;
-    const block_iq2_ks * x = (const block_iq2_ks *)(cx + sizeof(half));
+    const float d = (float)*(const half *)cx * 1.01f;
+    const int8_t * row_values = (const int8_t *)(cx + sizeof(half));
+    const block_iq2_ks * x = (const block_iq2_ks *)(row_values + 8);
+    //const block_iq2_ks * x = (const block_iq2_ks *)(cx + sizeof(half));
     const int64_t i   = ii - (row*n_per_row)/QK_K;
 
     const int tid = threadIdx.x;
@@ -866,10 +868,14 @@ static __global__ void dequantize_block_iq2_ks(const void * __restrict__ vx, dst
     const float dl4 = d * (((x[i].scales[2*ib128+1] >>  4) | ((extra >> 7) & 0x10)) - 16);
     const uint8_t * qs = x[i].qs + 32*ib128 + 2*il;
     for (int j = 0; j < 2; ++j) {
-        y[j+ 0] = dl1 * iq2nl_values[((qs[j] >> 0) & 0x03) + ((extra << 2) & 4)];
-        y[j+32] = dl2 * iq2nl_values[((qs[j] >> 2) & 0x03) + ((extra << 1) & 4)];
-        y[j+64] = dl3 * iq2nl_values[((qs[j] >> 4) & 0x03) + ((extra >> 0) & 4)];
-        y[j+96] = dl4 * iq2nl_values[((qs[j] >> 6) & 0x03) + ((extra >> 1) & 4)];
+        //y[j+ 0] = dl1 * iq2nl_values[((qs[j] >> 0) & 0x03) + ((extra << 2) & 4)];
+        //y[j+32] = dl2 * iq2nl_values[((qs[j] >> 2) & 0x03) + ((extra << 1) & 4)];
+        //y[j+64] = dl3 * iq2nl_values[((qs[j] >> 4) & 0x03) + ((extra >> 0) & 4)];
+        //y[j+96] = dl4 * iq2nl_values[((qs[j] >> 6) & 0x03) + ((extra >> 1) & 4)];
+        y[j+ 0] = dl1 * row_values[((qs[j] >> 0) & 0x03) + ((extra << 2) & 4)];
+        y[j+32] = dl2 * row_values[((qs[j] >> 2) & 0x03) + ((extra << 1) & 4)];
+        y[j+64] = dl3 * row_values[((qs[j] >> 4) & 0x03) + ((extra >> 0) & 4)];
+        y[j+96] = dl4 * row_values[((qs[j] >> 6) & 0x03) + ((extra >> 1) & 4)];
     }
 }
 
