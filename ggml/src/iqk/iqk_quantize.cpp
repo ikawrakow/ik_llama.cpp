@@ -2526,6 +2526,7 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
         const float * quant_weights,
         const int ntry) {
 
+    constexpr float kSigmaScale = 1.5f;
     //GGML_ASSERT(super_block_size == 256 && block_size == 128);
 
     float * dptr = (float *)cy;
@@ -2541,7 +2542,7 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
         auto scales = all_scales + ibl*(super_block_size/block_size);
         float sigma2 = 0;
         for (int j = 0; j < super_block_size; ++j) sigma2 += xbl[j]*xbl[j];
-        sigma2 *= 2.f/super_block_size;
+        sigma2 *= kSigmaScale/super_block_size;
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
             const float * xb = xbl + ib*block_size;
             if (quant_weights) {
@@ -2662,7 +2663,7 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
         const float * xbl = x + ibl*super_block_size;
         float sigma2 = 0;
         for (int j = 0; j < super_block_size; ++j) sigma2 += xbl[j]*xbl[j];
-        sigma2 *= 2.f/super_block_size;
+        sigma2 *= kSigmaScale/super_block_size;
         auto scales = all_scales + (super_block_size/block_size)*ibl;
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
             const int8_t * block_values = y[ibl].scales[ib] & 0x01 ? shifted_values : values;
@@ -2854,7 +2855,7 @@ uint16_t prune_iq4ks(uint16_t v, const int8_t * values, const float * x, const f
     return (q4[0] | (q4[1] << 4) | (q4[2] << 8) | (q4[3] << 12));
 }
 static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
-        float * all_scales, float * weight,
+        float * all_scales, float * weight, float * waux,
         const int8_t * values,
         const float * quant_weights,
         const uint16_t * table,
@@ -2862,6 +2863,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
 
     constexpr int super_block_size = 256;
     constexpr int block_size = 32;
+    constexpr float kSigmaScale = 1.5f;
 
     float * dptr = (float *)cy;
     *dptr = 0;
@@ -2870,7 +2872,9 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
     const int8_t * shifted_values = values + 16;
 
     uint16_t vps[block_size/2], vms[block_size/2], vs[block_size/2];
-    float xv[4], wv[4];
+    float xv[4], wv[4], wa[4];
+
+    for (int j = 0; j < block_size; ++j) waux[j] = 1;
 
     float amax_scale = 0;
 
@@ -2880,12 +2884,13 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
         auto scales = all_scales + ibl*(super_block_size/block_size);
         float sigma2 = 0;
         for (int j = 0; j < super_block_size; ++j) sigma2 += xbl[j]*xbl[j];
-        sigma2 *= 2.f/super_block_size;
+        sigma2 *= kSigmaScale/super_block_size;
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
             const float * xb = xbl + ib*block_size;
             if (quant_weights) {
                 const float * qw = quant_weights + ibl*super_block_size + ib*block_size;
                 for (int j = 0; j < block_size; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+                for (int j = 0; j < block_size; ++j) waux[j] = qw[j];
             } else {
                 for (int j = 0; j < block_size; ++j) weight[j] = xb[j]*xb[j];
             }
@@ -2911,14 +2916,15 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                 for (int k = 0; k < block_size/4; ++k) {
                     xv[0] =     xb[2*k+0]; xv[1] =     xb[2*k+0+block_size/2]; xv[2] =     xb[2*k+1]; xv[3] =     xb[2*k+1+block_size/2];
                     wv[0] = weight[2*k+0]; wv[1] = weight[2*k+0+block_size/2]; wv[2] = weight[2*k+1]; wv[3] = weight[2*k+1+block_size/2];
+                    wa[0] =   waux[2*k+0]; wa[1] =   waux[2*k+0+block_size/2]; wa[2] =   waux[2*k+1]; wa[3] =   waux[2*k+1+block_size/2];
                     uint16_t vp = 0, vm = 0;
                     for (int j = 0; j < 4; ++j) {
                         float al = id*xv[j];
                         vp |= (best_index_iq4nl(values,  al) << 4*j);
                         vm |= (best_index_iq4nl(values, -al) << 4*j);
                     }
-                    vp = prune_iq4ks(vp, values, xv, wv,  this_d);
-                    vm = prune_iq4ks(vm, values, xv, wv, -this_d);
+                    vp = prune_iq4ks(vp, values, xv, wa,  this_d);
+                    vm = prune_iq4ks(vm, values, xv, wa, -this_d);
                     for (int j = 0; j < 4; ++j) {
                         float w = wv[j];
                         float q = values[(vp >> 4*j) & 0xf];
@@ -2951,14 +2957,15 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                 for (int k = 0; k < block_size/4; ++k) {
                     xv[0] =     xb[2*k+0]; xv[1] =     xb[2*k+0+block_size/2]; xv[2] =     xb[2*k+1]; xv[3] =     xb[2*k+1+block_size/2];
                     wv[0] = weight[2*k+0]; wv[1] = weight[2*k+0+block_size/2]; wv[2] = weight[2*k+1]; wv[3] = weight[2*k+1+block_size/2];
+                    wa[0] =   waux[2*k+0]; wa[1] =   waux[2*k+0+block_size/2]; wa[2] =   waux[2*k+1]; wa[3] =   waux[2*k+1+block_size/2];
                     uint16_t vp = 0, vm = 0;
                     for (int j = 0; j < 4; ++j) {
                         float al = id*xv[j];
                         vp |= (best_index_iq4nl(shifted_values,  al) << 4*j);
                         vm |= (best_index_iq4nl(shifted_values, -al) << 4*j);
                     }
-                    vp = prune_iq4ks(vp, shifted_values, xv, wv,  this_d);
-                    vm = prune_iq4ks(vm, shifted_values, xv, wv, -this_d);
+                    vp = prune_iq4ks(vp, shifted_values, xv, wa,  this_d);
+                    vm = prune_iq4ks(vm, shifted_values, xv, wa, -this_d);
                     for (int j = 0; j < 4; ++j) {
                         float w = wv[j];
                         float q = shifted_values[(vp >> 4*j) & 0xf];
@@ -2998,7 +3005,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
         const float * xbl = x + ibl*super_block_size;
         float sigma2 = 0;
         for (int j = 0; j < super_block_size; ++j) sigma2 += xbl[j]*xbl[j];
-        sigma2 *= 2.f/super_block_size;
+        sigma2 *= kSigmaScale/super_block_size;
         for (int ib = 0; ib < super_block_size/block_size; ++ib) {
             const float * xb = xbl + ib*block_size;
             if (quant_weights) {
@@ -3016,6 +3023,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                 for (int k = 0; k < block_size/4; ++k) {
                     xv[0] =     xb[2*k+0]; xv[1] =     xb[2*k+0+block_size/2]; xv[2] =     xb[2*k+1]; xv[3] =     xb[2*k+1+block_size/2];
                     wv[0] = weight[2*k+0]; wv[1] = weight[2*k+0+block_size/2]; wv[2] = weight[2*k+1]; wv[3] = weight[2*k+1+block_size/2];
+                    wa[0] =   waux[2*k+0]; wa[1] =   waux[2*k+0+block_size/2]; wa[2] =   waux[2*k+1]; wa[3] =   waux[2*k+1+block_size/2];
                     uint16_t vp = 0, vm = 0;
                     for (int j = 0; j < 4; ++j) {
                         float al = idl*xv[j];
@@ -3145,11 +3153,11 @@ size_t quantize_iq4_kss(const float * src, void * dst, int64_t nrows, int64_t n_
     auto row_size_ks = ggml_row_size(GGML_TYPE_IQ4_KS, n_per_row);
     std::vector<char> work(row_size_ks);
     std::vector<float> all_scales(n_per_row/kBlockSize);
-    float weight[kBlockSize];
+    float weight[kBlockSize], waux[kBlockSize];
     auto qrow = (char *)dst;
     auto table = scramble_table();
     for (int row = 0; row < nrows; ++row) {
-        quantize_row_iq4_kss_impl(n_per_row, src, qrow, all_scales.data(), weight, iq4k_values, imatrix, table, 7);
+        quantize_row_iq4_kss_impl(n_per_row, src, qrow, all_scales.data(), weight, waux, iq4k_values, imatrix, table, 7);
         src  += n_per_row;
         qrow += row_size;
     }
