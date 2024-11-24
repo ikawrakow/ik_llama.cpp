@@ -2583,6 +2583,26 @@ static void quantize_row_iq4_k_impl_bs128(const int super_block_size, const int 
             if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
                 d = sumqx_m/sumq2_m; best = d*sumqx_m;
             }
+            id = -max/shifted_values[0];
+            sumqx_p = sumq2_p = sumqx_m = sumq2_m = 0;
+            for (int j = 0; j < block_size; ++j) {
+                float w = weight[j];
+                float al = id*xb[j];
+                int l = best_index_iq4nl(values, al);
+                float q = values[l];
+                sumqx_p += w*q*xb[j];
+                sumq2_p += w*q*q;
+                l = best_index_iq4nl(values, -al);
+                q = values[l];
+                sumqx_m += w*q*xb[j];
+                sumq2_m += w*q*q;
+            }
+            if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
+                d = sumqx_p/sumq2_p; best = d * sumqx_p; is_shifted = true;
+            }
+            if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+                d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = true;
+            }
             for (int itry = -ntry; itry <= ntry; ++itry) {
                 id = (itry + values[0])/max;
                 sumqx_p = sumq2_p = 0;
