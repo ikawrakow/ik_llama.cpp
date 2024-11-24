@@ -889,7 +889,7 @@ static __global__ void dequantize_block_iq3_k(const void * __restrict__ vx, dst_
     int ib128 = tid/16; // 0 or 1
     int il    = tid%16; // 0...15
     dst_t * y = yy + i*QK_K + 128*ib128 + 2*il;
-    const float d = (float)x[i].d;
+    const float d = (float)x[i].d * 1.005f;
     const uint16_t sh = x[i].scales_h >> (8*ib128 + (il/8));
     const float dl1 = d * ((2*((x[i].scales_l[4*ib128+0] >> 4*(il/8)) & 0xf) + 1) * ((sh & 0x01) ? -1 : 1));
     const float dl2 = d * ((2*((x[i].scales_l[4*ib128+1] >> 4*(il/8)) & 0xf) + 1) * ((sh & 0x04) ? -1 : 1));

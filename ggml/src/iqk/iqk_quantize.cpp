@@ -1185,6 +1185,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
 
     float scales[QK_K/16];
     float weight[16];
+    uint8_t L[QK_K];
 
     const int8_t * shifted_values = iq3nl_values + 8;
 
@@ -1197,6 +1198,8 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
         float sumx2 = 0;
         for (int j = 0; j < QK_K; ++j) sumx2 += xbl[j]*xbl[j];
         const float sigma2 = 1.5f*sumx2/QK_K;
+
+        std::memset(L, 0, QK_K);
 
         uint16_t extra = 0;
 
@@ -1295,6 +1298,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
                     float w = weight[j];
                     float al = id*xb[j];
                     int l = best_index_iq3nl(block_values, al);
+                    L[16*ib + j] = l;
                     float q = block_values[l];
                     sumqx += w*q*xb[j];
                     sumq2 += w*q*q;
@@ -1313,11 +1317,40 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
 
         float d = max_abs_scale/31;
         y[ibl].extra = extra;
-        float id = 1/d;
+        float best_id = 1/d;
+
+        float best = 0;
+        for (int itry = -17; itry <= 17; ++itry) {
+            float id = (31 + 0.2f*itry)/max_abs_scale;
+            float sumqx = 0, sumq2 = 0;
+            for (int ib = 0; ib < QK_K/16; ++ib) {
+                int ls = nearest_int(0.5f*(id*fabsf(scales[ib])-1));
+                ls = MAX(0, MIN(15, ls));
+                ls = (2*ls + 1);
+                if (scales[ib] < 0) ls = -ls;
+                const int8_t * block_values = y[ibl].extra & (1 << ib) ? shifted_values : iq3nl_values;
+                const float * xb = xbl + 16*ib;
+                if (quant_weights) {
+                    const float * qw = quant_weights + ibl*QK_K + ib*16;
+                    for (int j = 0; j < 16; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+                } else {
+                    for (int j = 0; j < 16; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
+                }
+                for (int j = 0; j < 16; ++j) {
+                    float w = weight[j];
+                    float q = block_values[L[16*ib+j]]*ls;
+                    sumqx += w*q*xb[j];
+                    sumq2 += w*q*q;
+                }
+            }
+            if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                d = sumqx/sumq2; best = d*sumqx; best_id = id;
+            }
+        }
 
         float sumqx = 0, sumq2 = 0;
         for (int ib = 0; ib < QK_K/16; ++ib) {
-            int ls = nearest_int(0.5f*(id*fabsf(scales[ib])-1));
+            int ls = nearest_int(0.5f*(best_id*fabsf(scales[ib])-1));
             ls = MAX(0, MIN(15, ls));
             y[ibl].scales_l[ib/2] |= (ls << 4*(ib%2));
             if (scales[ib] < 0) y[ibl].scales_h |= (1 << ib);
