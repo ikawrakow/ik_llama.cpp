@@ -715,7 +715,7 @@ static __global__ void dequantize_block_iq4_kss(const void * __restrict__ vx, ds
     int64_t ii  = blockIdx.x;
     int64_t row = (QK_K * ii) / n_per_row;
     const char * cx = (const char *)vx + row * row_size;
-    float scale = *(const float *)cx;
+    float scale = *(const float *)cx * 1.01f;
     const block_iq4_kss * x = (const block_iq4_kss *)(cx + sizeof(float));
     const int64_t i   = ii - (row*n_per_row)/QK_K;
 

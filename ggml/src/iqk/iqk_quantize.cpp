@@ -2898,7 +2898,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                         vm |= (best_index_iq4nl(values, -al) << 4*j);
                     }
                     vp = prune_iq4ks(vp, values, xv, wv,  this_d);
-                    vm = prune_iq4ks(vm, values, xv, wv,  this_d);
+                    vm = prune_iq4ks(vm, values, xv, wv, -this_d);
                     for (int j = 0; j < 4; ++j) {
                         float w = wv[j];
                         float q = values[(vp >> 4*j) & 0xf];
@@ -2938,7 +2938,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                         vm |= (best_index_iq4nl(shifted_values, -al) << 4*j);
                     }
                     vp = prune_iq4ks(vp, shifted_values, xv, wv,  this_d);
-                    vm = prune_iq4ks(vm, shifted_values, xv, wv,  this_d);
+                    vm = prune_iq4ks(vm, shifted_values, xv, wv, -this_d);
                     for (int j = 0; j < 4; ++j) {
                         float w = wv[j];
                         float q = shifted_values[(vp >> 4*j) & 0xf];
@@ -3002,8 +3002,8 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
                         vp |= (best_index_iq4nl(        values, al) << 4*j);
                         vm |= (best_index_iq4nl(shifted_values, al) << 4*j);
                     }
-                    vp = prune_iq4ks(vp,         values, xv, wv,  dl);
-                    vm = prune_iq4ks(vm, shifted_values, xv, wv,  dl);
+                    vp = prune_iq4ks(vp,         values, xv, wv, dl);
+                    vm = prune_iq4ks(vm, shifted_values, xv, wv, dl);
                     for (int j = 0; j < 4; ++j) {
                         float w = wv[j];
                         float q = values[(vp >> 4*j) & 0xf];
