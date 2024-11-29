@@ -497,6 +497,993 @@ static std::vector<float> cluster_points(const std::vector<float>& points, int n
     return result;
 }
 
+template <typename T>
+static inline int best_index(int n, const T * values, float x) {
+    if (x <= values[0]) return 0;
+    if (x >= values[n-1]) return n-1;
+    int ml = 0, mu = n-1;
+    while (mu - ml > 1) {
+        int mav = (mu + ml)/2;
+        if (x < values[mav]) mu = mav;
+        else ml = mav;
+    }
+    return x - values[mu-1] < values[mu] - x ? mu - 1 : mu;
+}
+
+static void prepare_values(int n_per_row, const float * xr, const float * weights, int8_t * quants, float * scales,
+        float& mse, float& mse2, float& mse3, float& tot_sigma2,
+        std::vector<float>& all_steps) {
+
+    constexpr int kBlockSize = 64;
+    constexpr float kMinGamma = 1.625f;
+
+    float max_amax = 0;
+    for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+        auto xb = xr + ib*kBlockSize;
+        float amax = 0;
+        for (int j = 0; j < kBlockSize; ++j) amax = std::max(amax, std::abs(xb[j]));
+        scales[ib] = amax;
+        max_amax = std::max(amax, max_amax);
+    }
+    if (!max_amax) return;
+    float idm = 16/max_amax;
+    //float idm = 31/max_amax;
+    for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+        int l = nearest_int(idm*scales[ib]);
+        l = std::max(1, std::min(16, l));
+        scales[ib] = 0.0625f*max_amax*l;
+        //int l = nearest_int(0.5f*(idm*scales[ib]-1));
+        //l = std::max(0, std::min(15, l));
+        //l = 2*l + 1;
+        //scales[ib] =  l/idm;
+    }
+    float sigma2 = 0, amax = 0, max = 0;
+    int8_t int_values[16], next_values[16];
+    float grad[16];
+
+    for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+        auto xb = xr + ib*kBlockSize;
+        float norm = 1/scales[ib];
+        for (int j = 0; j < kBlockSize; ++j) {
+            sigma2 += xb[j]*xb[j];
+            float xs = norm*xb[j];
+            float axs = std::abs(xs);
+            if (axs > amax) {
+                amax = axs; max = xs;
+            }
+        }
+    }
+    {
+        auto values1 = iq4k_values;
+        auto values2 = iq4k_values + 16;
+        tot_sigma2 += sigma2;
+        float best = 0, d = max/values1[0];
+        bool is_shifted = false;
+        for (int itry = -9; itry <= 9; ++itry) {
+            float id = (values1[0] + itry)/max;
+            float sumqx = 0, sumq2 = 0;
+            for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+                auto xb = xr + ib*kBlockSize;
+                auto wb = weights + ib*kBlockSize;
+                float norm = 1/scales[ib];
+                for (int j = 0; j < kBlockSize; ++j) {
+                    int idx = best_index_iq4nl(values1, id*norm*xb[j]);
+                    float q = values1[idx]*scales[ib];
+                    sumqx += wb[j]*q*xb[j];
+                    sumq2 += wb[j]*q*q;
+                }
+            }
+            if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                d = sumqx/sumq2; best = d*sumqx; is_shifted = false;
+            }
+            id = (values2[0] + itry)/max;
+            sumqx = sumq2 = 0;
+            for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+                auto xb = xr + ib*kBlockSize;
+                auto wb = weights + ib*kBlockSize;
+                float norm = 1/scales[ib];
+                for (int j = 0; j < kBlockSize; ++j) {
+                    int idx = best_index_iq4nl(values2, id*norm*xb[j]);
+                    float q = values2[idx]*scales[ib];
+                    sumqx += wb[j]*q*xb[j];
+                    sumq2 += wb[j]*q*q;
+                }
+            }
+            if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                d = sumqx/sumq2; best = d*sumqx; is_shifted = true;
+            }
+        }
+        auto values = is_shifted ? values2 : values1;
+        float row_mse = 0;
+        float id = 1/d;
+        for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+            auto xb = xr + ib*kBlockSize;
+            float norm = 1/scales[ib];
+            for (int j = 0; j < kBlockSize; ++j) {
+                int idx = best_index_iq4nl(values, id*norm*xb[j]);
+                quants[ib*kBlockSize+j] = idx;
+                float q = values[idx]*scales[ib];
+                float diff = xb[j] - d*q;
+                row_mse += diff*diff;
+            }
+        }
+        mse2 += row_mse;
+
+        for (int itry = 0; itry < 3; ++itry) {
+            id = 1/d;
+            int nchanged = 0;
+            for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+                auto xb = xr + ib*kBlockSize;
+                auto wb = weights + ib*kBlockSize;
+                float best_mse = 0;
+                for (int j = 0; j < kBlockSize; ++j) {
+                    float q = scales[ib]*values[quants[ib*kBlockSize+j]];
+                    float diff = xb[j] - d*q;
+                    best_mse += wb[j]*diff*diff;
+                }
+                int l = nearest_int(16*scales[ib]/max_amax);
+                if (l > 1) {
+                    float try_scale = 0.0625*max_amax*(l-1);
+                    float norm = 1/try_scale;
+                    float this_mse = 0;
+                    for (int j = 0; j < kBlockSize; ++j) {
+                        int idx = best_index_iq4nl(values, id*norm*xb[j]);
+                        float q = values[idx]*try_scale;
+                        float diff = xb[j] - d*q;
+                        this_mse += wb[j]*diff*diff;
+                    }
+                    if (this_mse < best_mse) {
+                        best_mse = this_mse; scales[ib] = try_scale;
+                        ++nchanged;
+                    }
+                }
+                if (l < 16) {
+                    float try_scale = 0.0625*max_amax*(l+1);
+                    float norm = 1/try_scale;
+                    float this_mse = 0;
+                    for (int j = 0; j < kBlockSize; ++j) {
+                        int idx = best_index_iq4nl(values, id*norm*xb[j]);
+                        float q = values[idx]*try_scale;
+                        float diff = xb[j] - d*q;
+                        this_mse += wb[j]*diff*diff;
+                    }
+                    if (this_mse < best_mse) {
+                        best_mse = this_mse; scales[ib] = try_scale;
+                        ++nchanged;
+                    }
+                }
+            }
+            if (nchanged == 0) break;
+
+            row_mse = 0;
+            float sumqx = 0, sumq2 = 0;
+            for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+                auto xb = xr + ib*kBlockSize;
+                auto wb = weights + ib*kBlockSize;
+                float norm = 1/scales[ib];
+                for (int j = 0; j < kBlockSize; ++j) {
+                    int idx = best_index_iq4nl(values, id*norm*xb[j]);
+                    quants[ib*kBlockSize+j] = idx;
+                    float q = values[idx]*scales[ib];
+                    sumqx += wb[j]*q*xb[j];
+                    sumq2 += wb[j]*q*q;
+                }
+            }
+            d = sumqx/sumq2;
+        }
+
+        id = 1/d;
+        for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+            auto xb = xr + ib*kBlockSize;
+            float norm = 1/scales[ib];
+            for (int j = 0; j < kBlockSize; ++j) {
+                int idx = best_index_iq4nl(values, id*norm*xb[j]);
+                quants[ib*kBlockSize+j] = idx;
+                float q = values[idx]*scales[ib];
+                float diff = xb[j] - d*q;
+                row_mse += diff*diff;
+            }
+        }
+        mse3 += row_mse;
+
+        return;
+
+        for (int i = 0; i < 16; ++i) int_values[i] = values[i];
+
+        for (int iter = 0; iter < 9; ++iter) {
+            id = 1/d;
+            std::memset(grad, 0, 16*sizeof(float));
+            float sumqx, sumq2 = 0;
+            for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+                auto xb = xr + ib*kBlockSize;
+                auto wb = weights + ib*kBlockSize;
+                float norm = 1/scales[ib];
+                float db = d*scales[ib];
+                for (int j = 0; j < kBlockSize; ++j) {
+                    int idx = best_index(16, int_values, id*norm*xb[j]);
+                    float q = scales[ib]*int_values[idx];
+                    grad[idx] += wb[j]*db*(xb[j] - d*q);
+                    quants[ib*kBlockSize+j] = idx;
+                    sumqx += wb[j]*q*xr[j];
+                    sumq2 += wb[j]*q*q;
+                }
+            }
+            all_steps.clear();
+            for (int i = 0; i < 16; ++i) {
+                int l = int_values[i];
+                if (grad[i] > 0) {
+                    int lmax = std::min(127, l + 5);
+                    if (i < 16) lmax = std::min(lmax, int_values[i+1] - 1);
+                    for (int k = l + 1; k <= lmax; ++k) {
+                        float step = (k - 0.4999f - l)/grad[i];
+                        all_steps.push_back(step);
+                    }
+                }
+                else if (grad[i] < 0) {
+                    int lmin = std::max(-128, l - 5);
+                    if (i > 0) lmin = std::max(lmin, int_values[i-1]+1);
+                    for (int k = l-1; k >= lmin; --k) {
+                        float step = (k + 0.499f - l)/grad[i];
+                        all_steps.push_back(step);
+                    }
+                }
+            }
+            float best = sumqx*sumqx/sumq2;
+            int best_is = -1;
+            int nstep = std::min(5, int(all_steps.size()));
+            std::partial_sort(all_steps.begin(), all_steps.begin() + nstep, all_steps.end());
+            float last_sumqx = sumqx, last_sumq2 = sumq2;
+            for (int is = 0; is < nstep; ++is) {
+                for (int i = 0; i < 16; ++i) {
+                    int l = nearest_int(int_values[i] + all_steps[is]*grad[i]);
+                    next_values[i] = std::max(-128, std::min(127, l));
+                }
+                sumqx = last_sumqx, sumq2 = last_sumq2;
+                for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+                    auto xb = xr + ib*kBlockSize;
+                    auto wb = weights + ib*kBlockSize;
+                    for (int j = 0; j < kBlockSize; ++j) {
+                        int l = quants[ib*kBlockSize+j];
+                        int lnew = l;
+                        float dist = std::abs(id*xb[j] - scales[ib]*next_values[l]);
+                        if (l > 0) {
+                            float dist1 = std::abs(id*xb[j] - scales[ib]*next_values[l-1]);
+                            if (dist1 < dist) { dist = dist1; lnew = l - 1; }
+                        }
+                        if (l < 15) {
+                            float dist1 = std::abs(id*xb[j] - scales[ib]*next_values[l+1]);
+                            if (dist1 < dist) { dist = dist1; lnew = l + 1; }
+                        }
+                        if (next_values[lnew] == int_values[l]) continue;
+                        float q = scales[ib]*int_values[l];
+                        sumqx -= wb[j]*q*xb[j];
+                        sumq2 -= wb[j]*q*q;
+                        q = scales[ib]*next_values[lnew];
+                        sumqx += wb[j]*q*xb[j];
+                        sumq2 += wb[j]*q*q;
+                    }
+                }
+                if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                    d = sumqx/sumq2; best = d*sumqx; best_is = is;
+                }
+            }
+            if (best_is < 0) break;
+            for (int i = 0; i < 16; ++i) {
+                int l = nearest_int(int_values[i] + all_steps[best_is]*grad[i]);
+                int_values[i] = l;
+            }
+        }
+        row_mse = 0;
+        for (int j = 0; j < n_per_row; ++j) {
+            float diff = xr[j] - d*scales[j/kBlockSize]*int_values[quants[j]];
+            row_mse += diff*diff;
+        }
+        mse3 += row_mse;
+        return;
+    }
+
+
+    for (int j = 0; j < n_per_row; ++j) {
+        sigma2 += xr[j]*xr[j];
+        float ax = std::abs(xr[j]);
+        if (ax > amax) {
+            amax = ax; max = xr[j];
+        }
+    }
+    if (!sigma2) return;
+    tot_sigma2 += sigma2;
+    float best = 0;
+    float d = max/iq4k_values[0];
+    //bool is_shifted = false;
+    for (int itry = -9; itry <= 9; ++itry) {
+        float id = (iq4k_values[0] + itry)/max;
+        float sumqx = 0, sumq2 = 0;
+        for (int j = 0; j < n_per_row; ++j) {
+            int idx = best_index_iq4nl(iq4k_values, id*xr[j]);
+            float q = iq4k_values[idx];
+            sumqx += weights[j]*q*xr[j];
+            sumq2 += weights[j]*q*q;
+        }
+        if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+            d = sumqx/sumq2; best = d*sumqx; //is_shifted = false;
+        }
+        //id = max/(iq4k_values[16] + itry);
+        //sumqx = sumq2 = 0;
+        //for (int j = 0; j < n_per_row; ++j) {
+        //    int idx = best_index_iq4nl(iq4k_values + 16, id*xr[j]);
+        //    float q = iq4k_values[idx + 16];
+        //    sumqx += weights[j]*q*xr[j];
+        //    sumq2 += weights[j]*q*q;
+        //}
+        //if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+        //    d = sumqx/sumq2; best = d*sumqx; is_shifted = true;
+        //}
+    }
+    float id = 1/d;
+    //for (int i = 0; i < 16; ++i) int_values[i] = iq4k_values[i + (is_shifted ? 16 : 0)];
+    for (int i = 0; i < 16; ++i) int_values[i] = iq4k_values[i];
+    float sumqx = 0, sumq2 = 0;
+    for (int j = 0; j < n_per_row; ++j) {
+        quants[j] = best_index_iq4nl(int_values, id*xr[j]);
+        float q = int_values[quants[j]];
+        sumqx += weights[j]*q*xr[j];
+        sumq2 += weights[j]*q*q;
+    }
+    d = sumqx/sumq2;
+    //float sigma = sqrt(sigma2/n_per_row);
+    //float gamma = amax/sigma;
+    //float alpha = gamma > kMinGamma ? (gamma/kMinGamma - 1)/gamma : 0.f;
+    //float d = -max/(8*sigma*(1 + alpha*gamma));
+    //float id = 1/d;
+    //float row_mse = 0;
+    //for (int j = 0; j < n_per_row; ++j) {
+    //    float xs = xr[j]/sigma;
+    //    float z = xs/(1 + alpha*std::abs(xs));
+    //    int l = nearest_int(id*z);
+    //    l = std::max(-8, std::min(7, l));
+    //    quants[j] = l;
+    //    float q = sigma*l/(1 - alpha*std::abs(d*l));
+    //    float diff = xr[j] - d*q;
+    //    row_mse += diff*diff;
+    //}
+    //mse += row_mse;
+    //alpha = std::abs(alpha*d);
+    //for (int iter = 0; iter < 9; ++iter) {
+    //    float sumqx = 0, sumq2 = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float q = sigma*quants[j]/(1 - alpha*std::abs(quants[j]));
+    //        sumqx += weights[j]*q*xr[j];
+    //        sumq2 += weights[j]*q*q;
+    //    }
+    //    if (sumq2 > 0) d = sumqx/sumq2;
+    //    int nchanged = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float xs = xr[j]/(d*sigma);
+    //        float z = xs/(1 + alpha*std::abs(xs));
+    //        int l = nearest_int(z);
+    //        l = std::max(-8, std::min(7, l));
+    //        if (l != quants[j]) ++nchanged;
+    //        quants[j] = l;
+    //    }
+    //    if (nchanged == 0) break;
+    //}
+    //row_mse = 0;
+    //for (int j = 0; j < n_per_row; ++j) {
+    //    float diff = xr[j] - d*sigma*quants[j]/(1 - alpha*std::abs(quants[j]));
+    //    row_mse += diff*diff;
+    //}
+    //mse2 += row_mse;
+    //float c = 15.f*(1 - 8*alpha);
+    //for (int i = 0; i < 16; ++i) {
+    //    int_values[i] = nearest_int(c*(i-8)/(1-alpha*std::abs(i-8)));
+    //}
+    //float sumqx = 0, sumq2 = 0;
+    //for (int j = 0; j < n_per_row; ++j) {
+    //    quants[j] += 8;
+    //    float q = int_values[quants[j]];
+    //    sumqx += weights[j]*q*xr[j];
+    //    sumq2 += weights[j]*q*q;
+    //}
+    //d = sumqx/sumq2;
+
+    for (int iter = 0; iter < 9; ++iter) {
+        id = 1/d;
+        std::memset(grad, 0, 16*sizeof(float));
+        sumqx = sumq2 = 0;
+        for (int j = 0; j < n_per_row; ++j) {
+            int idx = best_index(16, int_values, id*xr[j]);
+            float q = int_values[idx];
+            grad[idx] += weights[j]*d*(xr[j] - d*q);
+            quants[j] = idx;
+            sumqx += weights[j]*q*xr[j];
+            sumq2 += weights[j]*q*q;
+        }
+        all_steps.clear();
+        for (int i = 0; i < 16; ++i) {
+            int l = int_values[i];
+            if (grad[i] > 0) {
+                int lmax = std::min(127, l + 5);
+                if (i < 16) lmax = std::min(lmax, int_values[i+1] - 1);
+                for (int k = l + 1; k <= lmax; ++k) {
+                    float step = (k - 0.4999f - l)/grad[i];
+                    all_steps.push_back(step);
+                }
+            }
+            else if (grad[i] < 0) {
+                int lmin = std::max(-128, l - 5);
+                if (i > 0) lmin = std::max(lmin, int_values[i-1]+1);
+                for (int k = l-1; k >= lmin; --k) {
+                    float step = (k + 0.499f - l)/grad[i];
+                    all_steps.push_back(step);
+                }
+            }
+        }
+        float best = sumqx*sumqx/sumq2;
+        int best_is = -1;
+        int nstep = std::min(5, int(all_steps.size()));
+        std::partial_sort(all_steps.begin(), all_steps.begin() + nstep, all_steps.end());
+        float last_sumqx = sumqx, last_sumq2 = sumq2;
+        for (int is = 0; is < nstep; ++is) {
+            for (int i = 0; i < 16; ++i) {
+                int l = nearest_int(int_values[i] + all_steps[is]*grad[i]);
+                next_values[i] = std::max(-128, std::min(127, l));
+            }
+            sumqx = last_sumqx, sumq2 = last_sumq2;
+            for (int j = 0; j < n_per_row; ++j) {
+                int l = quants[j];
+                int lnew = l;
+                float dist = std::abs(id*xr[j] - next_values[l]);
+                if (l > 0) {
+                    float dist1 = std::abs(id*xr[j] - next_values[l-1]);
+                    if (dist1 < dist) { dist = dist1; lnew = l - 1; }
+                }
+                if (l < 15) {
+                    float dist1 = std::abs(id*xr[j] - next_values[l+1]);
+                    if (dist1 < dist) { dist = dist1; lnew = l + 1; }
+                }
+                if (next_values[lnew] == int_values[l]) continue;
+                //if (next_values[l] == int_values[l] &&
+                //    (l == 0 || next_values[l-1] == int_values[l-1]) &&
+                //    (l < 15 || next_values[l+1] == int_values[l+1])) continue;
+                //int idx = best_index(16, next_values, id*xr[j]);
+                //if (idx == l) continue;
+                float q = int_values[l];
+                sumqx -= weights[j]*q*xr[j];
+                sumq2 -= weights[j]*q*q;
+                q = next_values[lnew];
+                sumqx += weights[j]*q*xr[j];
+                sumq2 += weights[j]*q*q;
+            }
+            if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+                d = sumqx/sumq2; best = d*sumqx; best_is = is;
+            }
+        }
+        if (best_is < 0) break;
+        for (int i = 0; i < 16; ++i) {
+            int l = nearest_int(int_values[i] + all_steps[best_is]*grad[i]);
+            int_values[i] = l;
+        }
+    }
+    float row_mse = 0;
+    for (int j = 0; j < n_per_row; ++j) {
+        float diff = xr[j] - d*int_values[quants[j]];
+        row_mse += diff*diff;
+    }
+    mse3 += row_mse;
+}
+
+static void analyze_atan(const char * name, int nrows, int n_per_row, const float * values,
+        float& tot_mse, float& tot_elements, std::vector<int64_t>& H) {
+
+
+    int max_thread = std::thread::hardware_concurrency()/2;
+    int nthread = std::min(nrows, max_thread);
+    std::vector<std::thread> workers(nthread-1);
+    std::mutex mutex;
+    int counter = 0;
+    float tot_sigma2 = 0, mse = 0, mse2 = 0, mse3 = 0;
+    auto compute = [&mutex, &counter, &tot_sigma2, &mse, &mse2, &mse3, nrows, n_per_row, values] () {
+        float l_tot_sigma2 = 0, l_mse = 0, l_mse2 = 0, l_mse3 = 0;
+        std::vector<int8_t> quants(n_per_row);
+        std::vector<float> all_steps;
+        std::vector<float> weights(n_per_row);
+        std::vector<float> scales(n_per_row/16);
+        while (true) {
+            std::unique_lock<std::mutex> lock(mutex);
+            int row = counter++;
+            if (row >= nrows) {
+                tot_sigma2 += l_tot_sigma2;
+                mse += l_mse;
+                mse2 += l_mse2;
+                mse3 += l_mse3;
+                return;
+            }
+            lock.unlock();
+            auto xr = values + row*n_per_row;
+            float sigma2 = 0;
+            for (int j = 0; j < n_per_row; ++j) sigma2 += xr[j]*xr[j];
+            sigma2 *= 2.f/n_per_row;
+            for (int j = 0; j < n_per_row; ++j) weights[j] = 1; //0.25f*sigma2 + xr[j]*xr[j];
+            prepare_values(n_per_row, xr, weights.data(), quants.data(), scales.data(), l_mse, l_mse2, l_mse3, l_tot_sigma2, all_steps);
+        }
+    };
+    for (auto& w : workers) w = std::thread(compute);
+    compute();
+    for (auto& w : workers) w.join();
+    constexpr float kMinGamma = 1.625f;
+    //int8_t int_values[16], next_values[16];
+    //std::vector<int8_t> quants(n_per_row);
+    //std::vector<float> all_steps;
+    //float table[16];
+    //float grad[16];
+    //for (int row = 0; row < nrows; ++row) {
+    //    auto xr = values + row*n_per_row;
+    //    float sigma2 = 0, amax = 0, max = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        sigma2 += xr[j]*xr[j];
+    //        float ax = std::abs(xr[j]);
+    //        if (ax > amax) {
+    //            amax = ax; max = xr[j];
+    //        }
+    //    }
+    //    if (!sigma2) continue;
+    //    tot_sigma2 += sigma2;
+    //    float sigma = sqrt(sigma2/n_per_row);
+    //    float gamma = amax/sigma;
+    //    float alpha = gamma > kMinGamma ? (gamma/kMinGamma - 1)/gamma : 0.f;
+    //    float d = -max/(8*sigma*(1 + alpha*gamma));
+    //    float id = 1/d;
+    //    float row_mse = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float xs = xr[j]/sigma;
+    //        float z = xs/(1 + alpha*std::abs(xs));
+    //        int l = nearest_int(id*z);
+    //        l = std::max(-8, std::min(7, l));
+    //        quants[j] = l;
+    //        float q = sigma*l/(1 - alpha*std::abs(d*l));
+    //        float diff = xr[j] - d*q;
+    //        row_mse += diff*diff;
+    //    }
+    //    mse += row_mse;
+    //    //float rmse = sqrt(row_mse/n_per_row);
+    //    //printf("Row %d: rmse = %g, %g, gamma = %g, alpha = %g\n", row, rmse, rmse/sigma, gamma, alpha);
+    //    alpha = std::abs(alpha*d);
+    //    for (int iter = 0; iter < 3; ++iter) {
+    //        float sumqx = 0, sumq2 = 0;
+    //        for (int j = 0; j < n_per_row; ++j) {
+    //            float q = sigma*quants[j]/(1 - alpha*std::abs(quants[j]));
+    //            sumqx += q*xr[j];
+    //            sumq2 += q*q;
+    //        }
+    //        if (sumq2 > 0) d = sumqx/sumq2;
+    //        //sumqx = sumq2 = 0;
+    //        //for (int j = 0; j < n_per_row; ++j) {
+    //        //    int l = quants[j];
+    //        //    if (!l) continue;
+    //        //    float z = xr[j]/(d*sigma);
+    //        //    sumqx += std::abs(z)*(z/l-1);
+    //        //    sumq2 += z*z;
+    //        //}
+    //        //if (sumqx > 0 && sumq2 > 0) alpha = sumqx/sumq2;
+    //        //row_mse = 0;
+    //        //for (int j = 0; j < n_per_row; ++j) {
+    //        //    float diff = xr[j] - d*sigma*quants[j]/(1 - alpha*std::abs(quants[j]));
+    //        //    row_mse += diff*diff;
+    //        //}
+    //        //rmse = sqrt(row_mse/n_per_row);
+    //        //id = 1/d;
+    //        int nchanged = 0;
+    //        for (int j = 0; j < n_per_row; ++j) {
+    //            float xs = xr[j]/(d*sigma);
+    //            float z = xs/(1 + alpha*std::abs(xs));
+    //            int l = nearest_int(z);
+    //            l = std::max(-8, std::min(7, l));
+    //            if (l != quants[j]) ++nchanged;
+    //            quants[j] = l;
+    //        }
+    //        if (nchanged == 0) break;
+    //        //printf("    iteration: d = %g, alpha = %g, %g, rmse = %g, %g, nchanged = %d\n", d, alpha, std::abs(alpha/d), rmse, rmse/sigma, nchanged);
+    //    }
+    //    row_mse = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float diff = xr[j] - d*sigma*quants[j]/(1 - alpha*std::abs(quants[j]));
+    //        row_mse += diff*diff;
+    //    }
+    //    mse2 += row_mse;
+    //    //float amax_table = 0, max_table = 0;
+    //    //for (int i = 0; i < 16; ++i) {
+    //    //    table[i] = d*sigma*(i-8)/(1 - alpha*std::abs(i-8));
+    //    //    float at = std::abs(table[i]);
+    //    //    if (at > amax_table) {
+    //    //        amax_table = at; max_table = table[i];
+    //    //    }
+    //    //}
+    //    //float c = -max_table/124;
+    //    //float ic = 1/c;
+    //    //for (int i = 0; i < 16; ++i) {
+    //    //    int_values[i] = nearest_int(ic*table[i]);
+    //    //}
+    //    float c = 15.f*(1 - 8*alpha);
+    //    //printf("int_values:");
+    //    for (int i = 0; i < 16; ++i) {
+    //        int_values[i] = nearest_int(c*(i-8)/(1-alpha*std::abs(i-8)));
+    //        //printf(" %d", int_values[i]);
+    //    }
+    //    ////printf("\n");
+    //    float sumqx = 0, sumq2 = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        quants[j] += 8;
+    //        float q = int_values[quants[j]];
+    //        sumqx += q*xr[j];
+    //        sumq2 += q*q;
+    //    }
+    //    //printf("Previous d: %g, %g, new d: %g\n", d, d*sigma, sumqx/sumq2);
+    //    d = sumqx/sumq2;
+    //    //row_mse = 0;
+    //    //for (int j = 0; j < n_per_row; ++j) {
+    //    //    float diff = xr[j] - d*int_values[quants[j]];
+    //    //    row_mse += diff*diff;
+    //    //}
+    //    //mse3 += row_mse;
+    //    //continue;
+
+    //    //printf("d = %g, score = %g\n", d, d*sumqx);
+    //    for (int iter = 0; iter < 3; ++iter) {
+    //        id = 1/d;
+    //        std::memset(grad, 0, 16*sizeof(float));
+    //        sumqx = sumq2 = 0;
+    //        for (int j = 0; j < n_per_row; ++j) {
+    //            int idx = best_index(16, int_values, id*xr[j]);
+    //            float q = int_values[idx];
+    //            grad[idx] += d*(xr[j] - d*q);
+    //            quants[j] = idx;
+    //            sumqx += q*xr[j];
+    //            sumq2 += q*q;
+    //        }
+    //        all_steps.clear();
+    //        for (int i = 0; i < 16; ++i) {
+    //            int l = int_values[i];
+    //            if (grad[i] > 0) {
+    //                int lmax = std::min(127, l + 5);
+    //                if (i < 16) lmax = std::min(lmax, int_values[i+1] - 1);
+    //                for (int k = l + 1; k <= lmax; ++k) {
+    //                    float step = (k - 0.4999f - l)/grad[i];
+    //                    all_steps.push_back(step);
+    //                }
+    //            }
+    //            else if (grad[i] < 0) {
+    //                int lmin = std::max(-128, l - 5);
+    //                if (i > 0) lmin = std::max(lmin, int_values[i-1]+1);
+    //                for (int k = l-1; k >= lmin; --k) {
+    //                    float step = (k + 0.499f - l)/grad[i];
+    //                    all_steps.push_back(step);
+    //                }
+    //            }
+    //        }
+    //        float best = sumqx*sumqx/sumq2;
+    //        //printf("Iteration %d: best = %g\n", iter, best);
+    //        int best_is = -1;
+    //        int nstep = std::min(10, int(all_steps.size()));
+    //        std::partial_sort(all_steps.begin(), all_steps.begin() + nstep, all_steps.end());
+    //        for (int is = 0; is < nstep; ++is) {
+    //            //printf("step = %g\n", all_steps[is]);
+    //            for (int i = 0; i < 16; ++i) {
+    //                int l = nearest_int(int_values[i] + all_steps[is]*grad[i]);
+    //                next_values[i] = std::max(-128, std::min(127, l));
+    //                //if (next_values[i] != int_values[i]) printf("%d: %d -> %d\n", i, int_values[i], next_values[i]);
+    //            }
+    //            sumqx = sumq2 = 0;
+    //            for (int j = 0; j < n_per_row; ++j) {
+    //                int idx = best_index(16, next_values, id*xr[j]);
+    //                float q = next_values[idx];
+    //                sumqx += q*xr[j];
+    //                sumq2 += q*q;
+    //            }
+    //            if (sumq2 > 0 && sumqx*sumqx > best*sumq2) {
+    //                d = sumqx/sumq2; best = d*sumqx; best_is = is;
+    //                //printf("New best: %g\n", best);
+    //            }
+    //        }
+    //        if (best_is < 0) break;
+    //        for (int i = 0; i < 16; ++i) {
+    //            int l = nearest_int(int_values[i] + all_steps[best_is]*grad[i]);
+    //            int_values[i] = l;
+    //        }
+    //    }
+    //    row_mse = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float diff = xr[j] - d*int_values[quants[j]];
+    //        row_mse += diff*diff;
+    //    }
+    //    mse3 += row_mse;
+    //}
+    tot_mse += mse3;
+    tot_elements += tot_sigma2;
+    printf("%s:    %g  %g    %g  %g    %g  %g    %g\n", name, sqrt(mse/(nrows*n_per_row)), sqrt(mse/tot_sigma2),
+            sqrt(mse2/(nrows*n_per_row)), sqrt(mse2/tot_sigma2),
+            sqrt(mse3/(nrows*n_per_row)), sqrt(mse3/tot_sigma2),
+            sqrt(tot_mse/tot_elements));
+    return;
+
+    //constexpr int kBlockSize = 32;
+
+    ////std::vector<float> all_alphas(n_per_row/kBlockSize);
+
+    //float tot_sigma2 = 0, mse = 0, mse2 = 0, mse3 = 0;
+    //for (int row = 0; row < nrows; ++row) {
+    //    auto xr = values + row*n_per_row;
+    //    float sigma2 = 0, amax = 0, max = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        sigma2 += xr[j]*xr[j];
+    //        float ax = std::abs(xr[j]);
+    //        if (ax > amax) {
+    //            amax = ax; max = xr[j];
+    //        }
+    //    }
+    //    if (!sigma2) continue;
+    //    tot_sigma2 += sigma2;
+    //    float sigma = sqrt(sigma2/n_per_row);
+    //    float row_mse = 0;
+    //    float row_mse2 = 0;
+    //    for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
+    //        auto xb = xr + ib*kBlockSize;
+    //        float max = 0, amax = 0;
+    //        for (int j = 0; j < kBlockSize; ++j) {
+    //            float ax = std::abs(xb[j]);
+    //            if (ax > amax) {
+    //                amax = ax; max = xb[j];
+    //            }
+    //        }
+    //        float gamma = amax/sigma;
+    //        float alpha = gamma > kMinGamma ? (gamma/kMinGamma - 1)/gamma : 0.f;
+    //        float d = -max/(8*sigma*(1 + alpha*gamma));
+    //        float id = 1/d;
+    //        float sumqx = 0, sumq2 = 0;
+    //        for (int j = 0; j < kBlockSize; ++j) {
+    //            float xs = xb[j]/sigma;
+    //            float z = xs/(1 + alpha*std::abs(xs));
+    //            int l = nearest_int(id*z);
+    //            l = std::max(-8, std::min(7, l));
+    //            float q = sigma*l/(1 - alpha*std::abs(d*l));
+    //            float diff = xb[j] - d*q;
+    //            row_mse += diff*diff;
+    //            sumqx += q*xb[j];
+    //            sumq2 += q*q;
+    //        }
+    //        float dnew = sumq2 > 0 ? sumqx/sumq2 : d;
+    //        for (int j = 0; j < kBlockSize; ++j) {
+    //            float xs = xb[j]/sigma;
+    //            float z = xs/(1 + alpha*std::abs(xs));
+    //            int l = nearest_int(id*z);
+    //            l = std::max(-8, std::min(7, l));
+    //            float q = sigma*l/(1 - alpha*std::abs(d*l));
+    //            float diff = xb[j] - dnew*q;
+    //            row_mse2 += diff*diff;
+    //        }
+    //        //float d = amax/(15*sigma*(1 + alpha*gamma));
+    //        //float id = 1/d;
+    //        //for (int j = 0; j < kBlockSize; ++j) {
+    //        //    float xs = xb[j]/sigma;
+    //        //    float z = xs/(1 + alpha*std::abs(xs));
+    //        //    int l = nearest_int(0.5f*(id*z+15));
+    //        //    l = std::max(0, std::min(15, l));
+    //        //    l = 2*l - 15;
+    //        //    float diff = xb[j] - sigma*d*l/(1 - alpha*std::abs(d*l));
+    //        //    row_mse += diff*diff;
+    //        //}
+    //    }
+    //    mse += row_mse;
+    //    mse2 += row_mse2;
+    //}
+    //tot_mse += mse2;
+    //tot_elements += tot_sigma2;
+    //printf("%s:    %g  %g    %g  %g    %g\n", name, sqrt(mse/(nrows*n_per_row)), sqrt(mse/tot_sigma2),
+    //        sqrt(mse2/(nrows*n_per_row)), sqrt(mse2/tot_sigma2), sqrt(tot_mse/tot_elements));
+    //return;
+
+    //float xc[16], sumx[16], sumw[16];
+    //std::vector<uint8_t> quants(n_per_row);
+    //for (int row = 0; row < nrows; ++row) {
+    //    auto xr = values + row*n_per_row;
+    //    float sigma2 = 0, amax = 0, max = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        sigma2 += xr[j]*xr[j];
+    //        float ax = std::abs(xr[j]);
+    //        if (ax > amax) {
+    //            amax = ax; max = xr[j];
+    //        }
+    //    }
+    //    if (!sigma2) continue;
+    //    tot_sigma2 += sigma2;
+    //    float sigma = sqrt(sigma2/n_per_row);
+    //    float gamma = amax/sigma;
+    //    float alpha = gamma > kMinGamma ? (gamma/kMinGamma - 1)/gamma : 0.f;
+    //    float d = -max/(8*sigma*(1 + alpha*gamma));
+    //    float id = 1/d;
+    //    float row_mse = 0;
+    //    std::memset(sumx, 0, 16*sizeof(float));
+    //    std::memset(sumw, 0, 16*sizeof(float));
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float xs = xr[j]/sigma;
+    //        float z = xs/(1 + alpha*std::abs(xs));
+    //        int l = nearest_int(id*z);
+    //        l = std::max(-8, std::min(7, l));
+    //        float diff = xr[j] - sigma*d*l/(1 - alpha*std::abs(d*l));
+    //        row_mse += diff*diff;
+    //        l += 8;
+    //        quants[j] = l;
+    //        sumx[l] += xr[j];
+    //        sumw[l] += 1;
+    //    }
+    //    mse += row_mse;
+    //    for (int i = 0; i < 16; ++i) {
+    //        xc[i] = sumw[i] > 0 ? sumx[i]/sumw[i] : 0; //d*(i-8);
+    //    }
+    //    float sumqx = 0, sumq2 = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float q = xc[quants[j]];
+    //        sumqx += xr[j]*q;
+    //        sumq2 += q*q;
+    //    }
+    //    if (sumq2 > 0) {
+    //        float d = sumqx/sumq2;
+    //        for (int i = 0; i < 16; ++i) xc[i] *= d;
+    //    }
+    //    row_mse = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        //float al = xc[quants[j]];
+    //        float diff = xr[j] - xc[quants[j]]; //sigma*d*al/(1 - alpha*std::abs(d*al));
+    //        row_mse += diff*diff;
+    //    }
+    //    mse2 += row_mse;
+    //    //for (int iter = 0; iter < 5; ++iter) {
+    //    //    std::memset(sumx, 0, 16*sizeof(float));
+    //    //    std::memset(sumw, 0, 16*sizeof(float));
+    //    //    for (int j = 0; j < n_per_row; ++j) {
+    //    //        int idx = best_index(16, xc, xr[j]);
+    //    //        quants[j] = idx;
+    //    //        sumx[idx] += xr[j];
+    //    //        sumw[idx] += 1;
+    //    //    }
+    //    //    printf("Iteration %d:\n", iter);
+    //    //    for (int i = 0; i < 16; ++i) {
+    //    //        float xnew = sumw[i] > 0 ? sumx[i]/sumw[i] : xc[i];
+    //    //        printf("%d  %g  %g\n", i, xnew, xc[i]);
+    //    //        xc[i] = xnew;
+    //    //        //if (sumw[i] > 0) xc[i] = sumx[i]/sumw[i];
+    //    //    }
+    //    //}
+    //    //row_mse = 0;
+    //    //for (int j = 0; j < n_per_row; ++j) {
+    //    //    float diff = xr[j] - xc[quants[j]];
+    //    //    row_mse += diff*diff;
+    //    //}
+    //    //mse3 += row_mse;
+    //}
+    //tot_mse += mse2;
+    //tot_elements += tot_sigma2;
+    //printf("%s:    %g   %g    %g  %g      %g\n", name, sqrt(mse/(nrows*n_per_row)), sqrt(mse/tot_sigma2), sqrt(mse2/(nrows*n_per_row)), sqrt(mse2/tot_sigma2),
+    //        sqrt(tot_mse/tot_elements));
+    ////printf("%s:    %g   %g    %g  %g    %g  %g\n", name, sqrt(mse/(nrows*n_per_row)), sqrt(mse/tot_sigma2),
+    ////        sqrt(mse2/(nrows*n_per_row)), sqrt(mse2/tot_sigma2), sqrt(mse3/(nrows*n_per_row)), sqrt(mse3/tot_sigma2));
+    //return;
+
+
+    int nbin = H.size();
+    if (!nbin) {
+        nbin = 256;
+        H = std::vector<int64_t>(nbin, 0);
+    }
+    //float delta = 2*kMinGamma/nbin;
+    float delta = kMinGamma/nbin;
+    float idelta = 1/delta;
+    for (int row = 0; row < nrows; ++row) {
+        auto xr = values + row*n_per_row;
+        float sigma2 = 0, amax = 0;
+        for (int j = 0; j < n_per_row; ++j) {
+            sigma2 += xr[j]*xr[j];
+            amax = std::max(amax, std::abs(xr[j]));
+        }
+        if (!sigma2) return;
+        float sigma = sqrt(sigma2/n_per_row);
+        float gamma = amax/sigma;
+        float alpha = gamma > kMinGamma ? (gamma/kMinGamma - 1)/gamma : 0;
+        for (int j = 0; j < n_per_row; ++j) {
+            float xs = xr[j]/sigma;
+            //float z = xs/(1 + alpha*std::abs(xs));
+            //int bin = int((z + kMinGamma)*idelta);
+            float z = std::abs(xs)/(1 + alpha*std::abs(xs));
+            int bin = int(z*idelta);
+            bin = std::max(0, std::min(nbin-1, bin));
+            ++H[bin];
+        }
+    }
+
+    //std::vector<float> xaux(n_per_row);
+    //std::vector<int8_t> quants(n_per_row);
+    //float mse = 0, max_err = 0, tot_sigma2 = 0;
+    //float xc[16];
+    //float sumx[16], sumw[16];
+    //for (int row = 0; row < nrows; ++row) {
+    //    auto xr = values + row*n_per_row;
+    //    float sigma2 = 0;
+    //    for (int j = 0; j < n_per_row; ++j) sigma2 += xr[j]*xr[j];
+    //    if (!sigma2) continue;
+    //    tot_sigma2 += sigma2;
+    //    float sigma = sqrt(sigma2/n_per_row);
+    //    float isigma = 1/sigma;
+    //    for (int j = 0; j < n_per_row; ++j) xaux[j] = atan(isigma*xr[j]);
+    //    float max = xaux[0], min = xaux[0];
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        max = std::max(max, xaux[j]);
+    //        min = std::min(min, xaux[j]);
+    //    }
+    //    float delta = (max - min)/15;
+    //    for (int i = 0; i < 16; ++i) xc[i] = min + delta*i;
+    //    for (int iter = 0; iter < 5; ++iter) {
+    //        std::memset(sumx, 0, 16*sizeof(float));
+    //        std::memset(sumw, 0, 16*sizeof(float));
+    //        for (int j = 0; j < n_per_row; ++j) {
+    //            int idx = best_index(16, xc, xaux[j]);
+    //            sumx[idx] += xaux[j];
+    //            sumw[idx] += 1;
+    //        }
+    //        for (int i = 0; i < 16; ++i) {
+    //            if (sumw[i] > 0) xc[i] = sumx[i]/sumw[i];
+    //        }
+    //    }
+    //    float sumqx = 0, sumq2 = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        int idx = best_index(16, xc, xaux[j]);
+    //        quants[j] = idx;
+    //        float q = xc[idx];
+    //        sumqx += xaux[j]*q;
+    //        sumq2 += q*q;
+    //    }
+    //    float d = sumqx/sumq2;
+    //    for (int i = 0; i < 16; ++i) xc[i] = tan(d*xc[i]);
+    //    sumqx = sumq2 = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float q = xc[quants[j]];
+    //        sumqx += q*xr[j];
+    //        sumq2 += q*q;
+    //    }
+    //    sigma = sumqx/sumq2;
+    //    float row_mse = 0;
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float diff = xr[j] - sigma*xc[quants[j]];
+    //        row_mse += diff*diff;
+    //        max_err = std::max(max_err, std::abs(diff));
+    //    }
+    //    mse += row_mse;
+    //}
+    //float sigma = sqrt(tot_sigma2/(nrows*n_per_row));
+    //printf("%s:   %g  %g  %g  %g\n", name, sqrt(mse/(nrows*n_per_row)), sqrt(mse/tot_sigma2), max_err, max_err/sigma);
+    //return;
+
+    //int nbin = H.size();
+    //if (!nbin) {
+    //    nbin = 256;
+    //    H = std::vector<int64_t>(nbin, 0);
+    //}
+    //float delta = M_PI/nbin;
+    //float idelta = 1/delta;
+    //for (int row = 0; row < nrows; ++row) {
+    //    auto xr = values + row*n_per_row;
+    //    float sigma2 = 0;
+    //    for (int j = 0; j < n_per_row; ++j) sigma2 += xr[j]*xr[j];
+    //    if (!sigma2) return;
+    //    float isigma = 1/sqrt(sigma2/n_per_row);
+    //    for (int j = 0; j < n_per_row; ++j) {
+    //        float z = atan(isigma*xr[j]);
+    //        int bin = int((z + M_PI/2)*idelta);
+    //        bin = std::max(0, std::min(nbin-1, bin));
+    //        ++H[bin];
+    //    }
+    //}
+    printf("Finished %s\n", name);
+}
+
 static void analyze_x_v2(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_mse_q, float& tot_elements) {
     constexpr int kNumVal = 1 << 15;
     constexpr int kBlockSize = 32;
@@ -1035,13 +2022,14 @@ static void analyze_iq4ks(const char * name, int nrows, int n_per_row, const flo
     printf("%s:  %g  %g    %g\n", name, sqrt(mse0/(n_per_row*nrows)), sqrt(mse/(n_per_row*nrows)), sqrt(tot_mse/tot_elements));
 }
 
-static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_mse_q, float& tot_elements) {
+static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_mse_q, float& tot_elements, std::vector<int64_t>& H) {
     if (!ggml_is_contiguous(t) || (t->type != GGML_TYPE_F32 && t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_BF16)) {
         return;
     }
     if (t->type == GGML_TYPE_F32) {
         //analyze_iq4ks(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_elements);
-        analyze_x_v2(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_mse_q, tot_elements);
+        //analyze_x_v2(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_mse_q, tot_elements);
+        analyze_atan(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_elements, H);
     } else {
         std::vector<float> aux(t->ne[0]*t->ne[1]);
         if (t->type == GGML_TYPE_F16) {
@@ -1050,7 +2038,8 @@ static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_mse_
             ggml_bf16_to_fp32_row((const ggml_bf16_t *)t->data, aux.data(), aux.size());
         }
         //analyze_iq4ks(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_elements);
-        analyze_x_v2(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_mse_q, tot_elements);
+        //analyze_x_v2(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_mse_q, tot_elements);
+        analyze_atan(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_elements, H);
     }
 }
 
@@ -1235,6 +2224,7 @@ int main(int argc, char ** argv) {
 
     if (analyze) {
         float tot_mse = 0, tot_mse_q = 0, tot_elements = 0;
+        std::vector<int64_t> H;
         for (const auto& kv_tensor : tensors) {
             if (!layer_included(params, kv_tensor.first)) {
                 continue;
@@ -1243,8 +2233,9 @@ int main(int argc, char ** argv) {
                 // we never quantize those
                 continue;
             }
-            analyze_iq4ks(kv_tensor.second, tot_mse, tot_mse_q, tot_elements);
+            analyze_iq4ks(kv_tensor.second, tot_mse, tot_mse_q, tot_elements, H);
         }
+        for (int j = 0; j < int(H.size()); ++j) printf("%d  %g\n", j, 1.*H[j]);
         return 0;
     }
 

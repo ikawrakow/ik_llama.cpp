@@ -245,6 +245,8 @@ __device__ __forceinline__ float vec_dot_iq4_ks_q8_1(
 __device__ __forceinline__ float vec_dot_iq4_kss_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
+    return 0.f;
+
     float scale = *(const float *)vbq;
     const block_iq4_kss * bq4 = (const block_iq4_kss *)((const char *)vbq + sizeof(float)) + kbx;
     const uint8_t * all_values = (const uint8_t *)iq4k_values;

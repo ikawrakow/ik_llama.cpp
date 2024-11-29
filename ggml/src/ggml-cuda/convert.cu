@@ -715,28 +715,19 @@ static __global__ void dequantize_block_iq4_kss(const void * __restrict__ vx, ds
     int64_t ii  = blockIdx.x;
     int64_t row = (QK_K * ii) / n_per_row;
     const char * cx = (const char *)vx + row * row_size;
-    float scale = *(const float *)cx;
-    const block_iq4_kss * x = (const block_iq4_kss *)(cx + sizeof(float));
-    const int64_t i   = ii - (row*n_per_row)/QK_K;
+    float scale = (float)*(const half *)cx;
+    const block_iq4_kss * x = (const block_iq4_kss *)(cx + sizeof(half));
+    const int8_t * values = iq4k_values + 16;
+    const int64_t i = ii - (row*n_per_row)/QK_K;
 
     const int64_t tid = threadIdx.x;
-    const int64_t il = tid/8; // 0...3
-    const int64_t ib = tid%8; // 0...7
-    dst_t * y = yy + ii*QK_K + 32*ib + 4*il;
-    const uint32_t * q4 = x[i].qs + 4*ib;
-    uint32_t s32 = (q4[0] & 0x00010001) | ((q4[1] & 0x00010001) << 2) | ((q4[2] & 0x00010001) << 4) | ((q4[3] & 0x00010001) << 6);
-    uint8_t ls = (s32 | (s32 >> 15)) & 0xff;
-    const float d = scale * ((ls & 254) - 127);
-    const int8_t * values = iq4k_values + ((ls & 1) << 4);
-    uint32_t aux32[2];
-    aux32[0] = q4[il] & 0xfffefffe;
-    aux32[0] ^= (aux32[0] >> 1);
-    aux32[1] = ((aux32[0] >> 4) & 0x0f0f0f0f);
-    aux32[0] &= 0x0f0f0f0f;
-    const uint8_t * aux8 = (const uint8_t *)aux32;
+    dst_t * y = yy + ii*QK_K + 4*tid;
+    const uint8_t * qs = x[i].qs + 4*tid;
+    float d1 = scale * (((x[i].scales >> (4*(tid/16)+0)) & 0xf) + 1);
+    float d2 = scale * (((x[i].scales >> (4*(tid/16)+8)) & 0xf) + 1);
     for (int j = 0; j < 4; ++j) {
-        y[j+ 0] = d * values[aux8[j+0]];
-        y[j+16] = d * values[aux8[j+4]];
+        y[j       ] = d1 * values[qs[j] & 0xf];
+        y[j+QK_K/2] = d2 * values[qs[j] >>  4];
     }
 }
 
