@@ -15196,6 +15196,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_IQ6_K: break;
         case GGML_TYPE_IQ4_KS: break;
         case GGML_TYPE_IQ4_KSS: break;
+        case GGML_TYPE_IQ4_NL_X4: break;
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
             {
