@@ -6565,9 +6565,8 @@ void mul_mat_iq4_nl_x4_q8_0(int n, const void * vx, size_t bx, const DataInfo& i
     int nb = n / QK4_NL;
     GGML_ASSERT(nb%4 == 0);
     int8x16_t qx[8];
-    float32x4_t acc[nrc_y]; // = {};
+    float32x4_t acc[nrc_y] = {};
     for (int ix = 0; ix < nrc_x; ix += 4) {
-        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = vdupq_n_f32(0.f);
         const block_iq4_nl_x4 * iq4 = (const block_iq4_nl_x4 *)((const char *)vx + ix*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int k = 0; k < 4; ++k) {
@@ -6583,18 +6582,6 @@ void mul_mat_iq4_nl_x4_q8_0(int n, const void * vx, size_t bx, const DataInfo& i
                 qx[7] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[3], 4));  // 28..31
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = vld1q_s8_x2(q8.y[iy][ib4].qs+32*k);
-                    //auto sumi1 = vdupq_n_s32(0);
-                    //auto sumi2 = vdupq_n_s32(0);
-                    //sumi1 = vdotq_laneq_s32(sumi1, qx[0], y.val[0], 0);
-                    //sumi2 = vdotq_laneq_s32(sumi2, qx[1], y.val[1], 0);
-                    //sumi1 = vdotq_laneq_s32(sumi1, qx[2], y.val[0], 1);
-                    //sumi2 = vdotq_laneq_s32(sumi2, qx[3], y.val[1], 1);
-                    //sumi1 = vdotq_laneq_s32(sumi1, qx[4], y.val[0], 2);
-                    //sumi2 = vdotq_laneq_s32(sumi2, qx[5], y.val[1], 2);
-                    //sumi1 = vdotq_laneq_s32(sumi1, qx[6], y.val[0], 3);
-                    //sumi2 = vdotq_laneq_s32(sumi2, qx[7], y.val[1], 3);
-                    //auto d4d8 = vmulq_f32(scales, vdupq_n_f32(GGML_FP16_TO_FP32(q8.y[iy][ib4].d[k])));
-                    //acc[iy] = vfmaq_f32(acc[iy], d4d8, vcvtq_f32_s32(vaddq_s32(sumi1, sumi2)));
                     auto sumi = vdupq_n_s32(0);
                     sumi = vdotq_laneq_s32(sumi, qx[0], y.val[0], 0);
                     sumi = vdotq_laneq_s32(sumi, qx[1], y.val[1], 0);
@@ -6611,7 +6598,7 @@ void mul_mat_iq4_nl_x4_q8_0(int n, const void * vx, size_t bx, const DataInfo& i
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
             info.store(ix, iy, acc[iy]);
-            //acc[iy] = vdupq_n_f32(0.f);
+            acc[iy] = vdupq_n_f32(0.f);
         }
     }
 }
