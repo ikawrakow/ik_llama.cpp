@@ -6603,6 +6603,49 @@ void mul_mat_iq4_nl_x4_q8_0(int n, const void * vx, size_t bx, const DataInfo& i
     }
 }
 
+void mul_mat_iq4_nl_x4_q8_0_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<1, block_q8_0_x4> q8(info);
+    auto m4 = vdupq_n_u8(0xf);
+    auto values = vld1q_s8(iq4k_values);
+    int nb = n / QK4_NL;
+    GGML_ASSERT(nb%4 == 0);
+    int8x16_t qx[8];
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        auto acc = vdupq_n_f32(0.f);
+        const block_iq4_nl_x4 * iq4 = (const block_iq4_nl_x4 *)((const char *)vx + ix*bx);
+        for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+            auto y1 = vld1q_s8_x4(q8.y[0][ib4].qs);
+            auto y2 = vld1q_s8_x4(q8.y[0][ib4].qs+64);
+            for (int k = 0; k < 4; ++k) {
+                auto scales = vcvt_f32_f16(vld1_f16((const float16_t *)iq4[4*ib4+k].d));
+                auto d4d8 = vmulq_f32(scales, vdupq_n_f32(GGML_FP16_TO_FP32(q8.y[0][ib4].d[k])));
+                auto sumi = vdupq_n_s32(0);
+                const auto yval = k < 2 ? y1.val + 2*k : y2.val + 2*(k-2);
+                auto bits   = vld1q_u8_x4(iq4[4*ib4+k].qs);
+                qx[0] = vqtbl1q_s8(values, vandq_u8(bits.val[0], m4));   //  0...3 from the 4 rows
+                qx[1] = vqtbl1q_s8(values, vandq_u8(bits.val[1], m4));   // 16..19
+                sumi = vdotq_laneq_s32(sumi, qx[0], yval[0], 0);
+                sumi = vdotq_laneq_s32(sumi, qx[1], yval[1], 0);
+                qx[2] = vqtbl1q_s8(values, vandq_u8(bits.val[2], m4));   //  4...7
+                qx[3] = vqtbl1q_s8(values, vandq_u8(bits.val[3], m4));   // 20..23
+                sumi = vdotq_laneq_s32(sumi, qx[2], yval[0], 1);
+                sumi = vdotq_laneq_s32(sumi, qx[3], yval[1], 1);
+                qx[4] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[0], 4));  //  8..11
+                qx[5] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[1], 4));  // 24..27
+                sumi = vdotq_laneq_s32(sumi, qx[4], yval[0], 2);
+                sumi = vdotq_laneq_s32(sumi, qx[5], yval[1], 2);
+                qx[6] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[2], 4));  // 12..15
+                qx[7] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[3], 4));  // 28..31
+                sumi = vdotq_laneq_s32(sumi, qx[6], yval[0], 3);
+                sumi = vdotq_laneq_s32(sumi, qx[7], yval[1], 3);
+                acc = vfmaq_f32(acc, d4d8, vcvtq_f32_s32(sumi));
+            }
+        }
+        info.store(ix, 0, acc);
+    }
+}
+
 template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
     if constexpr (std::is_same_v<Dequantizer, DequantizerQ40> || std::is_same_v<Dequantizer, DequantizerQ50> ||
                   std::is_same_v<Dequantizer, DequantizerQ80> || std::is_same_v<Dequantizer, DequantizerIQ4NL> ||
@@ -6773,7 +6816,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             expected_Btype = GGML_TYPE_Q8_0;
             break;
         case GGML_TYPE_IQ4_NL_X4:
-            m.funcs[0] = mul_mat_iq4_nl_x4_q8_0<1>;
+            m.funcs[0] = mul_mat_iq4_nl_x4_q8_0_1;
             m.funcs[1] = mul_mat_iq4_nl_x4_q8_0<2>;
             m.funcs[2] = mul_mat_iq4_nl_x4_q8_0<3>;
             m.funcs[3] = mul_mat_iq4_nl_x4_q8_0<4>;
