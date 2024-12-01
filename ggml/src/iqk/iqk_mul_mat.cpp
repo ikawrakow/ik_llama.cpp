@@ -93,6 +93,11 @@ struct DataInfo {
         _mm_storeu_ps(dst_row(iy) + ix, result);
     }
 #endif
+#ifdef __ARM_NEON
+    inline void store(int ix, int iy, float32x4_t result) const {
+        vst1q_f32(dst_row(iy) + ix, result);
+    }
+#endif
     inline float * dst_row(int iy) const {
         if (!row_mapping) return s + (cur_y + iy)*bs;
         int i12 = row_mapping[cur_y + iy].i2;
@@ -6551,6 +6556,66 @@ static void mul_mat_iq2bn_q8_K64(int n, const void * vx, size_t bx, const DataIn
     }
 }
 
+template <int nrc_y>
+void mul_mat_iq4_nl_x4_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+    auto m4 = vdupq_n_u8(0xf);
+    auto values = vld1q_s8(iq4k_values);
+    int nb = n / QK4_NL;
+    GGML_ASSERT(nb%4 == 0);
+    int8x16_t qx[8];
+    float32x4_t acc[nrc_y]; // = {};
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = vdupq_n_f32(0.f);
+        const block_iq4_nl_x4 * iq4 = (const block_iq4_nl_x4 *)((const char *)vx + ix*bx);
+        for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+            for (int k = 0; k < 4; ++k) {
+                auto scales = vcvt_f32_f16(vld1_f16((const float16_t *)iq4[4*ib4+k].d));
+                auto bits   = vld1q_u8_x4(iq4[4*ib4+k].qs);
+                qx[0] = vqtbl1q_s8(values, vandq_u8(bits.val[0], m4));   //  0...3 from the 4 rows
+                qx[1] = vqtbl1q_s8(values, vandq_u8(bits.val[1], m4));   // 16..19
+                qx[2] = vqtbl1q_s8(values, vandq_u8(bits.val[2], m4));   //  4...7
+                qx[3] = vqtbl1q_s8(values, vandq_u8(bits.val[3], m4));   // 20..23
+                qx[4] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[0], 4));  //  8..11
+                qx[5] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[1], 4));  // 24..27
+                qx[6] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[2], 4));  // 12..15
+                qx[7] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[3], 4));  // 28..31
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto y = vld1q_s8_x2(q8.y[iy][ib4].qs+32*k);
+                    //auto sumi1 = vdupq_n_s32(0);
+                    //auto sumi2 = vdupq_n_s32(0);
+                    //sumi1 = vdotq_laneq_s32(sumi1, qx[0], y.val[0], 0);
+                    //sumi2 = vdotq_laneq_s32(sumi2, qx[1], y.val[1], 0);
+                    //sumi1 = vdotq_laneq_s32(sumi1, qx[2], y.val[0], 1);
+                    //sumi2 = vdotq_laneq_s32(sumi2, qx[3], y.val[1], 1);
+                    //sumi1 = vdotq_laneq_s32(sumi1, qx[4], y.val[0], 2);
+                    //sumi2 = vdotq_laneq_s32(sumi2, qx[5], y.val[1], 2);
+                    //sumi1 = vdotq_laneq_s32(sumi1, qx[6], y.val[0], 3);
+                    //sumi2 = vdotq_laneq_s32(sumi2, qx[7], y.val[1], 3);
+                    //auto d4d8 = vmulq_f32(scales, vdupq_n_f32(GGML_FP16_TO_FP32(q8.y[iy][ib4].d[k])));
+                    //acc[iy] = vfmaq_f32(acc[iy], d4d8, vcvtq_f32_s32(vaddq_s32(sumi1, sumi2)));
+                    auto sumi = vdupq_n_s32(0);
+                    sumi = vdotq_laneq_s32(sumi, qx[0], y.val[0], 0);
+                    sumi = vdotq_laneq_s32(sumi, qx[1], y.val[1], 0);
+                    sumi = vdotq_laneq_s32(sumi, qx[2], y.val[0], 1);
+                    sumi = vdotq_laneq_s32(sumi, qx[3], y.val[1], 1);
+                    sumi = vdotq_laneq_s32(sumi, qx[4], y.val[0], 2);
+                    sumi = vdotq_laneq_s32(sumi, qx[5], y.val[1], 2);
+                    sumi = vdotq_laneq_s32(sumi, qx[6], y.val[0], 3);
+                    sumi = vdotq_laneq_s32(sumi, qx[7], y.val[1], 3);
+                    auto d4d8 = vmulq_f32(scales, vdupq_n_f32(GGML_FP16_TO_FP32(q8.y[iy][ib4].d[k])));
+                    acc[iy] = vfmaq_f32(acc[iy], d4d8, vcvtq_f32_s32(sumi));
+                }
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+            //acc[iy] = vdupq_n_f32(0.f);
+        }
+    }
+}
+
 template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
     if constexpr (std::is_same_v<Dequantizer, DequantizerQ40> || std::is_same_v<Dequantizer, DequantizerQ50> ||
                   std::is_same_v<Dequantizer, DequantizerQ80> || std::is_same_v<Dequantizer, DequantizerIQ4NL> ||
@@ -6718,6 +6783,17 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_IQ4_NL:
             MulMat::set_functions<DequantizerIQ4NL>(m);
+            expected_Btype = GGML_TYPE_Q8_0;
+            break;
+        case GGML_TYPE_IQ4_NL_X4:
+            m.funcs[0] = mul_mat_iq4_nl_x4_q8_0<1>;
+            m.funcs[1] = mul_mat_iq4_nl_x4_q8_0<2>;
+            m.funcs[2] = mul_mat_iq4_nl_x4_q8_0<3>;
+            m.funcs[3] = mul_mat_iq4_nl_x4_q8_0<4>;
+            m.funcs[4] = mul_mat_iq4_nl_x4_q8_0<5>;
+            m.funcs[5] = mul_mat_iq4_nl_x4_q8_0<6>;
+            m.funcs[6] = mul_mat_iq4_nl_x4_q8_0<7>;
+            m.funcs[7] = mul_mat_iq4_nl_x4_q8_0<8>;
             expected_Btype = GGML_TYPE_Q8_0;
             break;
         default:
