@@ -669,12 +669,12 @@ void quantize_row_iq2_k_impl(const float * x, void * vy, int n_per_row, const fl
 }
 }
 
-void quantize_row_iq2_k_ref(const float * GGML_RESTRICT x, block_iq2_k  * GGML_RESTRICT y, int64_t k) {
+void quantize_row_iq2_k_ref(const float * x, block_iq2_k  * y, int64_t k) {
     assert(k % QK_K == 0);
     quantize_iq2_k(x, (void *)y, 1, k, nullptr);
 }
 
-void quantize_row_iq2_k(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+void quantize_row_iq2_k(const float * x, void * vy, int64_t k) {
     assert(k % QK_K == 0);
     block_iq2_k * y = (block_iq2_k *)vy;
     quantize_row_iq2_k_ref(x, y, k);
@@ -692,7 +692,7 @@ size_t quantize_iq2_k(const float * src, void * dst, int64_t nrows, int64_t n_pe
     return nrows * nblock * sizeof(block_iq2_k);
 }
 
-void dequantize_row_iq2_k(const block_iq2_k  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq2_k(const block_iq2_k  * x, float * y, int64_t k) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
 
@@ -723,7 +723,7 @@ void dequantize_row_iq2_k(const block_iq2_k  * GGML_RESTRICT x, float * GGML_RES
 
 }
 
-void vec_dot_iq2_k_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void vec_dot_iq2_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     GGML_UNUSED(nrc);
@@ -967,12 +967,12 @@ void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const f
 }
 }
 
-void quantize_row_iq2_ks_ref(const float * GGML_RESTRICT x, block_iq2_ks * GGML_RESTRICT y, int64_t k) {
+void quantize_row_iq2_ks_ref(const float * x, block_iq2_ks * y, int64_t k) {
     assert(k % QK_K == 0);
     quantize_iq2_ks(x, (void *)y, 1, k, nullptr);
 }
 
-void quantize_row_iq2_ks(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+void quantize_row_iq2_ks(const float * x, void * vy, int64_t k) {
     assert(k % QK_K == 0);
     block_iq2_ks * y = (block_iq2_ks *)vy;
     quantize_row_iq2_ks_ref(x, y, k);
@@ -994,7 +994,7 @@ size_t quantize_iq2_ks(const float * src, void * dst, int64_t nrows, int64_t n_p
     return nrows * row_size;
 }
 
-void dequantize_row_iq2_ks(const block_iq2_ks  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+void dequantize_row_iq2_ks(const block_iq2_ks  * x, float * y, int64_t k) {
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
 
@@ -1334,7 +1334,7 @@ void dequantize_row_iq3_k(const block_iq3_k * x, float * y, int64_t k) {
     }
 }
 
-void vec_dot_iq3_k_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void vec_dot_iq3_k_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     GGML_UNUSED(nrc);
@@ -3113,6 +3113,104 @@ void vec_dot_iq4_kss_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
     }
 #endif
     GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
+//
+// ========================================= x4
+//
+void quantize_row_iq4_nl_x4_ref(const float * x, block_iq4_nl_x4  * y, int64_t k) {
+    // we assume we are called with 4 rows
+    quantize_iq4_nl_x4(x, (void *)y, 4, k/4, nullptr);
+}
+
+void quantize_row_iq4_nl_x4(const float * x, void * y, int64_t k) {
+    // we assume we are called with 4 rows
+    quantize_iq4_nl_x4(x, y, 4, k/4, nullptr);
+}
+
+static void repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, block_iq4_nl_x4 * y) {
+    GGML_ASSERT(nrows%4 == 0);
+    GGML_ASSERT(n_per_row%QK4_NL == 0);
+    int nblock = n_per_row/QK4_NL;
+    const block_iq4_nl * x4[4];
+    for (int row = 0; row < nrows; row += 4) {
+        for (int k = 0; k < 4; ++k) x4[k] = x + nblock*k;
+        for (int ib = 0; ib < nblock; ++ib) {
+            for (int k = 0; k < 4; ++k) y[ib].d[k] = x4[k][ib].d;
+            for (int k = 0; k < 4; ++k) for (int i = 0; i < 4; ++i) {
+                y[ib].qs[4*k+i+ 0] = (x4[k][ib].qs[i+0] & 0xf) | ((x4[k][ib].qs[i+ 8] & 0x0f) << 4);  //  0....3 +  8...11 from each row
+                y[ib].qs[4*k+i+16] = (x4[k][ib].qs[i+0] >>  4) | ((x4[k][ib].qs[i+ 8] & 0xf0));       // 16...19 + 24...27 from each row
+                y[ib].qs[4*k+i+32] = (x4[k][ib].qs[i+4] & 0xf) | ((x4[k][ib].qs[i+12] & 0x0f) << 4);  //  4....7 + 12...15 from each row
+                y[ib].qs[4*k+i+48] = (x4[k][ib].qs[i+4] >>  4) | ((x4[k][ib].qs[i+12] & 0xf0));       // 20...23 + 28...31 from each row
+            }
+        }
+        x += 4*nblock;
+        y += nblock;
+    }
+}
+
+size_t quantize_iq4_nl_x4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_ASSERT(nrows%4 == 0);
+    auto row_size_nl = ggml_row_size(GGML_TYPE_IQ4_NL, n_per_row);
+    std::vector<char> qtmp(4*row_size_nl);
+    //std::vector<float> check1(4*n_per_row), check2(4*n_per_row);
+    char * qrow = (char *)dst;
+    for (int row = 0; row < nrows; row += 4) {
+        quantize_iq4_nl(src, qtmp.data(), 4, n_per_row, imatrix);
+        repack_iq4_nl(4, n_per_row, (const block_iq4_nl *)qtmp.data(), (block_iq4_nl_x4 *)qrow);
+        //dequantize_row_iq4_nl_x4((const block_iq4_nl_x4 *)qrow, check1.data(), 4*n_per_row);
+        //dequantize_row_iq4_nl((const block_iq4_nl *)qtmp.data(), check2.data(), 4*n_per_row);
+        //for (int k = 0; k < 4; ++k) {
+        //    auto x1 = check1.data() + k*n_per_row;
+        //    auto x2 = check2.data() + k*n_per_row;
+        //    int nbad = 0;
+        //    for (int j = 0; j < n_per_row; ++j) {
+        //        if (std::abs(x1[j] - x2[j]) > 1e-8) {
+        //            printf("Oops: %g vs %g\n", x1[j], x2[j]);
+        //            if (++nbad > 20) GGML_ABORT("fatal error");
+        //        }
+        //    }
+        //}
+        src += 4*n_per_row;
+        qrow += 4*row_size_nl;
+    }
+    return nrows*row_size_nl;
+}
+
+void dequantize_row_iq4_nl_x4(const block_iq4_nl_x4 * x, float * y, int64_t k) {
+    // we assume we are called with 4 rows
+    int n_per_row = k/4;
+    int nb = n_per_row/QK4_NL;
+    float * yk[4];
+    for (int k = 0; k < 4; ++k) yk[k] = y + k*n_per_row;
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int k = 0; k < 4; ++k) {
+            float scale = GGML_FP16_TO_FP32(x[ib].d[k]);
+            for (int i = 0; i < 4; ++i) {
+                yk[k][QK4_NL*ib+i+ 0] = scale * iq4k_values[x[ib].qs[4*k+i+ 0] & 0xf];
+                yk[k][QK4_NL*ib+i+ 8] = scale * iq4k_values[x[ib].qs[4*k+i+ 0] >>  4];
+                yk[k][QK4_NL*ib+i+16] = scale * iq4k_values[x[ib].qs[4*k+i+16] & 0xf];
+                yk[k][QK4_NL*ib+i+24] = scale * iq4k_values[x[ib].qs[4*k+i+16] >>  4];
+                yk[k][QK4_NL*ib+i+ 4] = scale * iq4k_values[x[ib].qs[4*k+i+32] & 0xf];
+                yk[k][QK4_NL*ib+i+12] = scale * iq4k_values[x[ib].qs[4*k+i+32] >>  4];
+                yk[k][QK4_NL*ib+i+20] = scale * iq4k_values[x[ib].qs[4*k+i+48] & 0xf];
+                yk[k][QK4_NL*ib+i+28] = scale * iq4k_values[x[ib].qs[4*k+i+48] >>  4];
+            }
+        }
+    }
+}
+
+void vec_dot_iq4_nl_x4_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_NL_X4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK4_NL == 0);
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs);
     GGML_UNUSED(bx);
