@@ -180,6 +180,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ2_KS        = 147, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KSS       = 148, // except 1d tensors
                                                 //
+        LLAMA_FTYPE_MOSTLY_Q4_0_R4       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_NL_X4     = 225, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
