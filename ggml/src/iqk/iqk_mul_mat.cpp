@@ -7300,6 +7300,60 @@ void mul_mat_iq4_nl_x4_q8_0(int n, const void * vx, size_t bx, const DataInfo& i
     }
 }
 
+template <int nrc_y>
+void mul_mat_iq4_xs_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<nrc_y, block_q8_K> q8(info);
+    auto m4 = vdupq_n_u8(0xf);
+    auto values = vld1q_s8(iq4k_values);
+    int nbl = n / QK_K;
+    int8x16_t qx[8];
+    float32x4_t acc[nrc_y] = {};
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        const block_iq4_xs_r4 * iq4 = (const block_iq4_xs_r4 *)((const char *)vx + ix*bx);
+        for (int ibl = 0; ibl < nbl; ++ibl) {
+            const uint32_t * scales_l = (const uint32_t *)iq4[ibl].scales_l;
+            const uint32_t * scales_h = (const uint32_t *)iq4[ibl].scales_h;
+            auto d4 = vcvt_f32_f16(vld1_f16((const float16_t *)iq4[ibl].d));
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                auto ul = (scales_l[ib%4] >> 4*(ib/4)) & 0x0f0f0f0f;
+                auto uh = (scales_h[ib%2] >> 2*(ib/2)) & 0x03030303;
+                auto sl8 = vsub_s8(vreinterpret_s8_s32(vdup_n_s32(ul | (uh << 4))), vdup_n_s8(32));
+                auto sl16 = vmovl_s8(sl8);
+                auto sl32 = vmovl_s16(vget_low_s16(sl16));
+                auto scales = vmulq_f32(d4, vcvtq_f32_s32(sl32));
+                auto bits = vld1q_u8_x4(iq4[ibl].qs + 64*ib);
+                qx[0] = vqtbl1q_s8(values, vandq_u8(bits.val[0], m4));   //  0...3 from the 4 rows
+                qx[1] = vqtbl1q_s8(values, vandq_u8(bits.val[1], m4));   // 16..19
+                qx[2] = vqtbl1q_s8(values, vandq_u8(bits.val[2], m4));   //  4...7
+                qx[3] = vqtbl1q_s8(values, vandq_u8(bits.val[3], m4));   // 20..23
+                qx[4] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[0], 4));  //  8..11
+                qx[5] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[1], 4));  // 24..27
+                qx[6] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[2], 4));  // 12..15
+                qx[7] = vqtbl1q_s8(values, vshrq_n_u8(bits.val[3], 4));  // 28..31
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto y = vld1q_s8_x2(q8.y[iy][ibl].qs+32*ib);
+                    auto sumi = vdupq_n_s32(0);
+                    sumi = vdotq_laneq_s32(sumi, qx[0], y.val[0], 0);
+                    sumi = vdotq_laneq_s32(sumi, qx[1], y.val[1], 0);
+                    sumi = vdotq_laneq_s32(sumi, qx[2], y.val[0], 1);
+                    sumi = vdotq_laneq_s32(sumi, qx[3], y.val[1], 1);
+                    sumi = vdotq_laneq_s32(sumi, qx[4], y.val[0], 2);
+                    sumi = vdotq_laneq_s32(sumi, qx[5], y.val[1], 2);
+                    sumi = vdotq_laneq_s32(sumi, qx[6], y.val[0], 3);
+                    sumi = vdotq_laneq_s32(sumi, qx[7], y.val[1], 3);
+                    auto d4d8 = vmulq_f32(scales, vdupq_n_f32(q8.scale(iy, ibl)));
+                    acc[iy] = vfmaq_f32(acc[iy], d4d8, vcvtq_f32_s32(sumi));
+                }
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+            acc[iy] = vdupq_n_f32(0.f);
+        }
+    }
+}
+
 void mul_mat_iq4_nl_x4_q8_0_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<1, block_q8_0_x4> q8(info);
@@ -7706,6 +7760,17 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             m.funcs[6] = mul_mat_iq4_nl_x4_q8_0<7>;
             m.funcs[7] = mul_mat_iq4_nl_x4_q8_0<8>;
             expected_Btype = GGML_TYPE_Q8_0;
+            break;
+        case GGML_TYPE_IQ4_XS_R4:
+            m.funcs[0] = mul_mat_iq4_nl_x4_q8_0_1;
+            m.funcs[1] = mul_mat_iq4_xs_r4_q8_k<2>;
+            m.funcs[2] = mul_mat_iq4_xs_r4_q8_k<3>;
+            m.funcs[3] = mul_mat_iq4_xs_r4_q8_k<4>;
+            m.funcs[4] = mul_mat_iq4_xs_r4_q8_k<5>;
+            m.funcs[5] = mul_mat_iq4_xs_r4_q8_k<6>;
+            m.funcs[6] = mul_mat_iq4_xs_r4_q8_k<7>;
+            m.funcs[7] = mul_mat_iq4_xs_r4_q8_k<8>;
+            expected_Btype = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_Q4_0_R4:
             m.funcs[0] = mul_mat_q4_0_r4_q8_0<1>;
