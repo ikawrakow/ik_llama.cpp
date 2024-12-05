@@ -161,6 +161,17 @@ struct MulMat {
         }
     }
     static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
+    static inline int num_rows(ggml_type type) {
+        switch (type) {
+            case GGML_TYPE_Q4_0_R4:
+            case GGML_TYPE_Q5_0_R4:
+            case GGML_TYPE_Q6_0_R4:
+            case GGML_TYPE_Q8_0_R4:
+            case GGML_TYPE_IQ4_NL_X4:
+            case GGML_TYPE_IQ2_BN_R4: return 4;
+            default: return 1;
+        }
+    }
 private:
     template <typename Dequantizer> static void set_functions(MulMat& m);
 };
@@ -181,13 +192,15 @@ bool iqk_mul_mat(long Nx, long Ny, long ne00,
     size_t row_size_qy = strideB; //*ggml_type_size(ggml_type(typeB));
     //if (ith == 0) printf("%s: ne00 = %d, row_size_qx = %d, strideA = %d\n", __func__, int(ne00), int(row_size_qx), int(strideA));
 
-    auto nrc_x = (Nx + nth - 1)/nth;
+    auto num_rows = MulMat::num_rows(ggml_type(typeA));
+    GGML_ASSERT(Nx%num_rows == 0);
+    auto nrc_x = (Nx/num_rows + nth - 1)/nth;
     auto first_x = ith*nrc_x;
-    if (first_x + nrc_x > Nx) nrc_x = Nx - first_x;
+    if (first_x + nrc_x > Nx/num_rows) nrc_x = Nx/num_rows - first_x;
 
-    DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+    DataInfo info{C + first_x*num_rows, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
 
-    mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny);
+    mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x*num_rows, row_size_qx, info, nrc_x*num_rows, Ny);
 
     return true;
 }
