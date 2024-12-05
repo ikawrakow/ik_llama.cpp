@@ -319,6 +319,30 @@ template <int nrc, typename block_q8 = block_q8_K> struct Q8 {
     const block_q8 * y[nrc_y];
 };
 
+template <int nrc> struct Q8_16 {
+
+    constexpr static int nrc_y = nrc;
+
+    Q8_16(const DataInfo& info) {
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto ptr = (const float *)info.src1_row(iy);
+            std::memcpy(d + 5*iy, ptr, 5*sizeof(float));
+            y[iy] = (const int8_t *)(ptr + 5);
+        }
+    }
+
+#ifdef HAVE_FANCY_SIMD
+    inline __m512i load_quants64(int iy, int i) const { return _mm512_loadu_si512((const __m512i*)y[iy] + i); }
+#endif
+    inline __m256i load_quants(int iy, int i) const { return _mm256_loadu_si256((const __m256i*)y[iy] + i); }
+    inline float scale(int iy, int k) const { return d[5*iy+k]; }
+    inline float sum_row(int iy) const { return d[5*iy + 4]; }
+    inline __m128 scale(int iy) const { return _mm_loadu_ps(d + 5*iy); }
+
+    float d[5*nrc_y];
+    const int8_t * y[nrc_y];
+};
+
 struct Scales8KBase {
     template <typename Q8>
     inline void accum_mins(const __m128i& mins128, const Q8& q8, int i, float c, __m256 * accd) const {
@@ -2078,6 +2102,141 @@ static void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
 }
 
 #endif  // Zen4 or vanilla AVX2
+
+static void mul_mat_iq2_bn_r4_q8_k16_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    if (nrc_x%4) {
+        printf("%s: %d is not a multiple of 4\n", __func__, nrc_x);
+        GGML_ABORT("fatal error");
+    }
+    Q8_16<1> q8(info);
+    auto m03 = _mm512_set1_epi8(0x03);
+    auto m0c = _mm512_set1_epi8(0x0c);
+    auto m30 = _mm512_set1_epi8(0x30);
+    auto mc0 = _mm512_set1_epi8(0xc0);
+    int nb = n / QK_IQ1BN;
+    __m512i acc[4];
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        acc[0] = acc[1] = acc[2] = acc[3] = _mm512_setzero_si512();
+        const float * dptr = (const float *)((const char *)vx + ix*bx);
+        auto dl = _mm_loadu_ps(dptr);
+        const uint8_t * iq2l = (const uint8_t *)(dptr + 4);
+        for (int ib = 0; ib < nb; ++ib) {
+            auto bits = _mm512_loadu_si512((const __m512i *)iq2l + ib);
+            auto y = q8.load_quants64(0, ib);
+            acc[0] = _mm512_dpbusd_epi32(acc[0], _mm512_and_si512(bits, m03), _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x00)));
+            acc[1] = _mm512_dpbusd_epi32(acc[1], _mm512_and_si512(bits, m0c), _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x55)));
+            acc[2] = _mm512_dpbusd_epi32(acc[2], _mm512_and_si512(bits, m30), _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xaa)));
+            acc[3] = _mm512_dpbusd_epi32(acc[3], _mm512_and_si512(bits, mc0), _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xff)));
+        }
+        auto sumf = _mm512_cvtepi32_ps(acc[0]);
+        sumf = _mm512_fmadd_ps(_mm512_set1_ps(0.25f    ), _mm512_cvtepi32_ps(acc[1]), sumf);
+        sumf = _mm512_fmadd_ps(_mm512_set1_ps(0.0625f  ), _mm512_cvtepi32_ps(acc[2]), sumf);
+        sumf = _mm512_fmadd_ps(_mm512_set1_ps(0.015625f), _mm512_cvtepi32_ps(acc[3]), sumf);
+        auto dy = q8.scale(0);
+        auto sum4 = _mm_mul_ps(_mm512_extractf32x4_ps(sumf, 0), _mm_mul_ps(dl, _mm_shuffle_ps(dy, dy, 0x00)));
+        sum4 = _mm_fmadd_ps(_mm512_extractf32x4_ps(sumf, 1), _mm_mul_ps(dl, _mm_shuffle_ps(dy, dy, 0x55)), sum4);
+        sum4 = _mm_fmadd_ps(_mm512_extractf32x4_ps(sumf, 2), _mm_mul_ps(dl, _mm_shuffle_ps(dy, dy, 0xaa)), sum4);
+        sum4 = _mm_fmadd_ps(_mm512_extractf32x4_ps(sumf, 3), _mm_mul_ps(dl, _mm_shuffle_ps(dy, dy, 0xff)), sum4);
+        sum4 = _mm_fmadd_ps(dl, _mm_set1_ps(-q8.sum_row(0)), sum4);
+        info.store(ix, 0, sum4);
+    }
+}
+
+template <int nrc_y>
+static void mul_mat_iq2_bn_r4_q8_k16(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    if (nrc_x%4) {
+        printf("%s: %d is not a multiple of 4\n", __func__, nrc_x);
+        GGML_ABORT("fatal error");
+    }
+    if constexpr (nrc_y == 1) {
+        mul_mat_iq2_bn_r4_q8_k16_1(n, vx, bx, info, nrc_x);
+    } else {
+    Q8_16<nrc_y> q8(info);
+    auto m3 = _mm512_set1_epi8(0x3);
+    int nb = n / QK_IQ1BN;
+    __m512i acc[2*nrc_y] = {};
+    __m512i qx[8];
+    for (int ix = 0; ix < nrc_x/8; ++ix) {
+        const float * dptr1 = (const float *)((const char *)vx + (8*ix+0)*bx);
+        const float * dptr2 = (const float *)((const char *)vx + (8*ix+4)*bx);
+        auto dl = _mm_loadu_ps(dptr1);
+        auto dh = _mm_loadu_ps(dptr2);
+        const uint8_t * iq2l = (const uint8_t *)(dptr1 + 4);
+        const uint8_t * iq2h = (const uint8_t *)(dptr2 + 4);
+        for (int ib = 0; ib < nb; ++ib) {
+            auto bits_l = _mm512_loadu_si512((const __m512i *)iq2l + ib);
+            auto bits_h = _mm512_loadu_si512((const __m512i *)iq2h + ib);
+            qx[0] = _mm512_and_si512(bits_l, m3);
+            qx[1] = _mm512_and_si512(bits_h, m3);
+            qx[2] = _mm512_and_si512(_mm512_srli_epi16(bits_l, 2), m3);
+            qx[3] = _mm512_and_si512(_mm512_srli_epi16(bits_h, 2), m3);
+            qx[4] = _mm512_and_si512(_mm512_srli_epi16(bits_l, 4), m3);
+            qx[5] = _mm512_and_si512(_mm512_srli_epi16(bits_h, 4), m3);
+            qx[6] = _mm512_and_si512(_mm512_srli_epi16(bits_l, 6), m3);
+            qx[7] = _mm512_and_si512(_mm512_srli_epi16(bits_h, 6), m3);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y = q8.load_quants64(iy, ib);
+                auto sy = _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x00));
+                acc[2*iy+0] = _mm512_dpbusd_epi32(acc[2*iy+0], qx[0], sy);
+                acc[2*iy+1] = _mm512_dpbusd_epi32(acc[2*iy+1], qx[1], sy);
+                sy = _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x55));
+                acc[2*iy+0] = _mm512_dpbusd_epi32(acc[2*iy+0], qx[2], sy);
+                acc[2*iy+1] = _mm512_dpbusd_epi32(acc[2*iy+1], qx[3], sy);
+                sy = _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xaa));
+                acc[2*iy+0] = _mm512_dpbusd_epi32(acc[2*iy+0], qx[4], sy);
+                acc[2*iy+1] = _mm512_dpbusd_epi32(acc[2*iy+1], qx[5], sy);
+                sy = _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xff));
+                acc[2*iy+0] = _mm512_dpbusd_epi32(acc[2*iy+0], qx[6], sy);
+                acc[2*iy+1] = _mm512_dpbusd_epi32(acc[2*iy+1], qx[7], sy);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto dy = q8.scale(iy);
+            __m128 sum4;
+            for (int k = 0; k < 2; ++k) {
+                const auto& dx = k == 0 ? dl : dh;
+                auto sumf = _mm512_cvtepi32_ps(acc[2*iy+k]);
+                sum4 = _mm_mul_ps  (_mm512_extractf32x4_ps(sumf, 0), _mm_mul_ps(dx, _mm_shuffle_ps(dy, dy, 0x00)));
+                sum4 = _mm_fmadd_ps(_mm512_extractf32x4_ps(sumf, 1), _mm_mul_ps(dx, _mm_shuffle_ps(dy, dy, 0x55)), sum4);
+                sum4 = _mm_fmadd_ps(_mm512_extractf32x4_ps(sumf, 2), _mm_mul_ps(dx, _mm_shuffle_ps(dy, dy, 0xaa)), sum4);
+                sum4 = _mm_fmadd_ps(_mm512_extractf32x4_ps(sumf, 3), _mm_mul_ps(dx, _mm_shuffle_ps(dy, dy, 0xff)), sum4);
+                sum4 = _mm_fmadd_ps(dx, _mm_set1_ps(-q8.sum_row(iy)), sum4);
+                info.store(8*ix + 4*k, iy, sum4);
+            }
+            acc[2*iy+0] = acc[2*iy+1] = _mm512_setzero_si512();
+        }
+    }
+    if (int ix = 8*(nrc_x/8); ix < nrc_x) {
+        const float * dptr = (const float *)((const char *)vx + ix*bx);
+        auto dl = _mm_loadu_ps(dptr);
+        const uint8_t * iq2l = (const uint8_t *)(dptr + 4);
+        for (int ib = 0; ib < nb; ++ib) {
+            auto bits_l = _mm512_loadu_si512((const __m512i *)iq2l + ib);
+            qx[0] = _mm512_and_si512(bits_l, m3);
+            qx[1] = _mm512_and_si512(_mm512_srli_epi16(bits_l, 2), m3);
+            qx[2] = _mm512_and_si512(_mm512_srli_epi16(bits_l, 4), m3);
+            qx[3] = _mm512_and_si512(_mm512_srli_epi16(bits_l, 6), m3);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y = q8.load_quants64(iy, ib);
+                acc[iy] = _mm512_dpbusd_epi32(acc[iy], qx[0], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x00)));
+                acc[iy] = _mm512_dpbusd_epi32(acc[iy], qx[1], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x55)));
+                acc[iy] = _mm512_dpbusd_epi32(acc[iy], qx[2], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xaa)));
+                acc[iy] = _mm512_dpbusd_epi32(acc[iy], qx[3], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xff)));
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto dy = q8.scale(iy);
+            auto sumf = _mm512_cvtepi32_ps(acc[iy]);
+            auto sum4 = _mm_mul_ps(_mm512_extractf32x4_ps(sumf, 0), _mm_mul_ps(dl, _mm_shuffle_ps(dy, dy, 0x00)));
+            sum4 = _mm_fmadd_ps(_mm512_extractf32x4_ps(sumf, 1), _mm_mul_ps(dl, _mm_shuffle_ps(dy, dy, 0x55)), sum4);
+            sum4 = _mm_fmadd_ps(_mm512_extractf32x4_ps(sumf, 2), _mm_mul_ps(dl, _mm_shuffle_ps(dy, dy, 0xaa)), sum4);
+            sum4 = _mm_fmadd_ps(_mm512_extractf32x4_ps(sumf, 3), _mm_mul_ps(dl, _mm_shuffle_ps(dy, dy, 0xff)), sum4);
+            sum4 = _mm_fmadd_ps(dl, _mm_set1_ps(-q8.sum_row(iy)), sum4);
+            info.store(ix, iy, sum4);
+        }
+    }
+    }
+}
 
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
@@ -4743,6 +4902,18 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[6] = mul_mat_iq2bn_q8_K64<7>;
             mm.funcs[7] = mul_mat_iq2bn_q8_K64<8>;
             expected_typeB = GGML_TYPE_Q8_K64;
+            break;
+        case GGML_TYPE_IQ2_BN_R4:
+            assert (ne00 % QK_IQ1BN == 0);
+            mm.funcs[0] = mul_mat_iq2_bn_r4_q8_k16<1>;
+            mm.funcs[1] = mul_mat_iq2_bn_r4_q8_k16<2>;
+            mm.funcs[2] = mul_mat_iq2_bn_r4_q8_k16<3>;
+            mm.funcs[3] = mul_mat_iq2_bn_r4_q8_k16<4>;
+            mm.funcs[4] = mul_mat_iq2_bn_r4_q8_k16<5>;
+            mm.funcs[5] = mul_mat_iq2_bn_r4_q8_k16<6>;
+            mm.funcs[6] = mul_mat_iq2_bn_r4_q8_k16<7>;
+            mm.funcs[7] = mul_mat_iq2_bn_r4_q8_k16<8>;
+            expected_typeB = GGML_TYPE_Q8_K16;
             break;
         case GGML_TYPE_Q4_0:
             assert (ne00 % QK4_0 == 0);
