@@ -5512,7 +5512,8 @@ struct QFBaseBF16 {
     using Data = __m512bh;
     using Acc  = __m512;
     static inline Data load(const ggml_bf16_t * x) { return __m512bh(_mm512_loadu_si512((const __m512i *)x)); }
-    static inline Acc acc(Acc prev, const Data& y, const Data& x) {
+    //static inline Acc acc(Acc prev, const Data& y, const Data& x) {
+    static inline Acc acc(Acc prev, Data y, Data x) {
         return _mm512_dpbf16_ps(prev, y, x);
     }
     static inline Acc acc_first(const Data& y, const Data& x) {
@@ -5563,6 +5564,150 @@ IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, 
     }
     for (int iy = 0; iy < nrc_y; ++iy) for (int ix = 0; ix < nrc_x; ++ix) info.store(ix0+ix, iy, QFBaseBF16::hsum(acc[nrc_x*iy+ix]));
 }
+
+template <int nrc_y>
+void mul_mat_Qx_Qy_1xN_r4(int n, const char * cx, size_t bx, const DataInfo& info, int nrc_x) {
+    int nb = n/QFBaseBF16::k_step;
+    //printf("%s: n = %d, nrc_x = %d, bx = %zu nb = %d\n", __func__, n, nrc_x, bx, nb);
+    QFTBF16<nrc_y> y(info);
+    QFBaseBF16::Acc acc[nrc_y] = {};
+    QFBaseBF16::Data xv[4];
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        //printf("Working on %d out of %d\n", ix, nrc_x);
+        QFTBF16<1> x(cx + ix*bx, bx);
+        for (int i = 0; i < nb; ++i) {
+            //printf("    block %d out of %d\n", i, nb);
+            for (int k = 0; k < 4; ++k) xv[k] = x.load1(0, 4*i+k);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                //printf("        iy = %d\n", iy);
+                auto vy = y.load1(iy, i);
+                acc[iy] = QFBaseBF16::acc(acc[iy], xv[0], __m512bh(_mm512_shuffle_epi32(__m512i(vy), _MM_PERM_ENUM(0x00))));
+                acc[iy] = QFBaseBF16::acc(acc[iy], xv[1], __m512bh(_mm512_shuffle_epi32(__m512i(vy), _MM_PERM_ENUM(0x55))));
+                acc[iy] = QFBaseBF16::acc(acc[iy], xv[2], __m512bh(_mm512_shuffle_epi32(__m512i(vy), _MM_PERM_ENUM(0xaa))));
+                acc[iy] = QFBaseBF16::acc(acc[iy], xv[3], __m512bh(_mm512_shuffle_epi32(__m512i(vy), _MM_PERM_ENUM(0xff))));
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto sum256 = _mm256_add_ps(_mm512_castps512_ps256(acc[iy]), _mm512_extractf32x8_ps(acc[iy], 1));
+            auto sum128 = _mm_add_ps(_mm256_castps256_ps128(sum256), _mm256_extractf128_ps(sum256, 1));
+            info.store(ix, iy, sum128);
+            acc[iy] = _mm512_setzero_ps();
+        }
+    }
+}
+
+template <int nrc_y>
+void mul_mat_Qx_Qy_2xN_r4(int n, const char * cx, size_t bx, const DataInfo& info, int nrc_x) {
+    int nb = n/QFBaseBF16::k_step;
+    //printf("%s: n = %d, nrc_x = %d, nrc_y = %d, bx = %zu nb = %d\n", __func__, n, nrc_x, nrc_y, bx, nb);
+    QFTBF16<nrc_y> y(info);
+    QFBaseBF16::Acc acc[2*nrc_y];
+    QFBaseBF16::Data xv[8];
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        QFTBF16<1> x1(cx + (ix+0)*bx, bx);
+        QFTBF16<1> x2(cx + (ix+4)*bx, bx);
+        for (int iy = 0; iy < 2*nrc_y; ++iy) acc[iy] = _mm512_setzero_ps();
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 4; ++k) { xv[2*k+0] = x1.load1(0, 4*i+k); xv[2*k+1] = x2.load1(0, 4*i+k); }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto vy = y.load1(iy, i);
+                __m512bh sy = (__m512bh)_mm512_shuffle_epi32((__m512i)vy, _MM_PERM_ENUM(0x00));
+                acc[2*iy+0] = QFBaseBF16::acc(acc[2*iy+0], xv[0], sy);
+                acc[2*iy+1] = QFBaseBF16::acc(acc[2*iy+1], xv[1], sy);
+                sy = (__m512bh)_mm512_shuffle_epi32((__m512i)vy, _MM_PERM_ENUM(0x55));
+                acc[2*iy+0] = QFBaseBF16::acc(acc[2*iy+0], xv[2], sy);
+                acc[2*iy+1] = QFBaseBF16::acc(acc[2*iy+1], xv[3], sy);
+                sy = (__m512bh)_mm512_shuffle_epi32((__m512i)vy, _MM_PERM_ENUM(0xaa));
+                acc[2*iy+0] = QFBaseBF16::acc(acc[2*iy+0], xv[4], sy);
+                acc[2*iy+1] = QFBaseBF16::acc(acc[2*iy+1], xv[5], sy);
+                sy = (__m512bh)_mm512_shuffle_epi32((__m512i)vy, _MM_PERM_ENUM(0xff));
+                acc[2*iy+0] = QFBaseBF16::acc(acc[2*iy+0], xv[6], sy);
+                acc[2*iy+1] = QFBaseBF16::acc(acc[2*iy+1], xv[7], sy);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto sum256 = _mm256_add_ps(_mm512_castps512_ps256(acc[2*iy+0]), _mm512_extractf32x8_ps(acc[2*iy+0], 1));
+            auto sum128 = _mm_add_ps(_mm256_castps256_ps128(sum256), _mm256_extractf128_ps(sum256, 1));
+            info.store(ix, iy, sum128);
+            sum256 = _mm256_add_ps(_mm512_castps512_ps256(acc[2*iy+1]), _mm512_extractf32x8_ps(acc[2*iy+1], 1));
+            sum128 = _mm_add_ps(_mm256_castps256_ps128(sum256), _mm256_extractf128_ps(sum256, 1));
+            info.store(ix+4, iy, sum128);
+        }
+    }
+}
+
+template <int nrc_y>
+void mul_mat_Qx_Qy_4xN_r4(int n, const char * cx, size_t bx, const DataInfo& info, int nrc_x) {
+    int nb = n/QFBaseBF16::k_step;
+    //printf("%s: n = %d, nrc_x = %d, nrc_y = %d, bx = %zu nb = %d\n", __func__, n, nrc_x, nrc_y, bx, nb);
+    QFTBF16<nrc_y> y(info);
+    QFBaseBF16::Acc acc[4*nrc_y] = {};
+    QFBaseBF16::Data xv[16];
+    for (int ix = 0; ix < nrc_x; ix += 16) {
+        QFTBF16<1> x1(cx + (ix+0)*bx, bx);
+        QFTBF16<1> x2(cx + (ix+4)*bx, bx);
+        QFTBF16<1> x3(cx + (ix+8)*bx, bx);
+        QFTBF16<1> x4(cx + (ix+12)*bx, bx);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 4; ++k) {
+                xv[4*k+0] = x1.load1(0, 4*i+k);
+                xv[4*k+1] = x2.load1(0, 4*i+k);
+                xv[4*k+2] = x3.load1(0, 4*i+k);
+                xv[4*k+3] = x4.load1(0, 4*i+k);
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto vy = y.load1(iy, i);
+                __m512bh sy = (__m512bh)_mm512_shuffle_epi32((__m512i)vy, _MM_PERM_ENUM(0x00));
+                acc[4*iy+0] = QFBaseBF16::acc(acc[4*iy+0], xv[0], sy);
+                acc[4*iy+1] = QFBaseBF16::acc(acc[4*iy+1], xv[1], sy);
+                acc[4*iy+2] = QFBaseBF16::acc(acc[4*iy+2], xv[2], sy);
+                acc[4*iy+3] = QFBaseBF16::acc(acc[4*iy+3], xv[3], sy);
+                sy = (__m512bh)_mm512_shuffle_epi32((__m512i)vy, _MM_PERM_ENUM(0x55));
+                acc[4*iy+0] = QFBaseBF16::acc(acc[4*iy+0], xv[4], sy);
+                acc[4*iy+1] = QFBaseBF16::acc(acc[4*iy+1], xv[5], sy);
+                acc[4*iy+2] = QFBaseBF16::acc(acc[4*iy+2], xv[6], sy);
+                acc[4*iy+3] = QFBaseBF16::acc(acc[4*iy+3], xv[7], sy);
+                sy = (__m512bh)_mm512_shuffle_epi32((__m512i)vy, _MM_PERM_ENUM(0xaa));
+                acc[4*iy+0] = QFBaseBF16::acc(acc[4*iy+0], xv[8], sy);
+                acc[4*iy+1] = QFBaseBF16::acc(acc[4*iy+1], xv[9], sy);
+                acc[4*iy+2] = QFBaseBF16::acc(acc[4*iy+2], xv[10], sy);
+                acc[4*iy+3] = QFBaseBF16::acc(acc[4*iy+3], xv[11], sy);
+                sy = (__m512bh)_mm512_shuffle_epi32((__m512i)vy, _MM_PERM_ENUM(0xff));
+                acc[4*iy+0] = QFBaseBF16::acc(acc[4*iy+0], xv[12], sy);
+                acc[4*iy+1] = QFBaseBF16::acc(acc[4*iy+1], xv[13], sy);
+                acc[4*iy+2] = QFBaseBF16::acc(acc[4*iy+2], xv[14], sy);
+                acc[4*iy+3] = QFBaseBF16::acc(acc[4*iy+3], xv[15], sy);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            for (int k = 0; k < 4; ++k) {
+                auto sum256 = _mm256_add_ps(_mm512_castps512_ps256(acc[4*iy+k]), _mm512_extractf32x8_ps(acc[4*iy+k], 1));
+                auto sum128 = _mm_add_ps(_mm256_castps256_ps128(sum256), _mm256_extractf128_ps(sum256, 1));
+                info.store(ix+4*k, iy, sum128);
+                acc[4*iy+k] = _mm512_setzero_ps();
+            }
+        }
+    }
+}
+
+template <int nrc_y>
+void mul_mat_fX_fY_r4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%16 == 0);
+    const char * cx = (const char *)vx;
+    mul_mat_Qx_Qy_4xN_r4<nrc_y>(n, cx, bx, info, 16*(nrc_x/16));
+    return;
+    //mul_mat_Qx_Qy_1xN_r4<nrc_y>(n, cx, bx, info, nrc_x);
+    //return;
+    if (nrc_x/8 > 0) {
+        mul_mat_Qx_Qy_2xN_r4<nrc_y>(n, cx, bx, info, 8*(nrc_x/8));
+        cx += 8*(nrc_x/8)*bx;
+        nrc_x -= 8*(nrc_x/8);
+    }
+    if (nrc_x/4 > 0) {
+        mul_mat_Qx_Qy_1xN_r4<nrc_y>(n, cx, bx, info, nrc_x);
+    }
+}
+
 template <int nrc_y>
 void mul_mat_fX_fY_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     constexpr int k_nx = nrc_y <= 2 ? 8 : 5;
@@ -5777,6 +5922,17 @@ void set_mul_mat_bf16(MulMat& mm) {
     mm.funcs[3] = mul_mat_fX_fY_T<4>;
     mm.funcs[4] = mul_mat_fX_fY_T<5>;
 }
+void set_mul_mat_bf16_r4(MulMat& mm) {
+    for (auto& f : mm.funcs) f = nullptr;
+    mm.funcs[0] = mul_mat_fX_fY_r4<1>;
+    mm.funcs[1] = mul_mat_fX_fY_r4<2>;
+    mm.funcs[2] = mul_mat_fX_fY_r4<3>;
+    mm.funcs[3] = mul_mat_fX_fY_r4<4>;
+    //mm.funcs[4] = mul_mat_fX_fY_r4<5>;
+    //mm.funcs[5] = mul_mat_fX_fY_r4<6>;
+    //mm.funcs[6] = mul_mat_fX_fY_r4<7>;
+    //mm.funcs[7] = mul_mat_fX_fY_r4<8>;
+}
 #endif
 
 bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
@@ -5788,6 +5944,18 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         switch (typeB) {
 #ifdef __AVX512BF16__
             case GGML_TYPE_BF16: set_mul_mat_bf16(mm); break;
+#endif
+            default: return false;
+        }
+        return true;
+    }
+
+    if (typeA == GGML_TYPE_BF16_R4) {
+        //printf("%s: %s\n", __func__, ggml_type_name((ggml_type)typeB));
+        if (ne00 % 32) return false;
+        switch (typeB) {
+#ifdef __AVX512BF16__
+            case GGML_TYPE_BF16: set_mul_mat_bf16_r4(mm); break;
 #endif
             default: return false;
         }

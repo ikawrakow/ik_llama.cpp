@@ -1231,6 +1231,19 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_BF16_R4] = {
+        .type_name                = "bf16_r4",
+        .blck_size                = 1,
+        .type_size                = sizeof(ggml_bf16_t),
+        .is_quantized             = false,
+        //.to_float                 = (ggml_to_float_t) ggml_bf16_to_fp32_row,
+        //.from_float               = (ggml_from_float_t) ggml_fp32_to_bf16_row,
+        //.from_float_ref           = (ggml_from_float_t) ggml_fp32_to_bf16_row_ref,
+        //.vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_bf16,
+        .vec_dot_type             = GGML_TYPE_BF16,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_Q4_0_4_4] = {
         .type_name                = "q4_0_4x4",
         .blck_size                = QK4_0,
@@ -4110,6 +4123,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_ALL_F32:              wtype = GGML_TYPE_F32;   break;
         case GGML_FTYPE_MOSTLY_F16:           wtype = GGML_TYPE_F16;   break;
         case GGML_FTYPE_MOSTLY_BF16:          wtype = GGML_TYPE_BF16;  break;
+        case GGML_FTYPE_MOSTLY_BF16_R4:       wtype = GGML_TYPE_BF16_R4;break;
         case GGML_FTYPE_MOSTLY_Q4_0:          wtype = GGML_TYPE_Q4_0;  break;
         case GGML_FTYPE_MOSTLY_Q4_1:          wtype = GGML_TYPE_Q4_1;  break;
         case GGML_FTYPE_MOSTLY_Q5_0:          wtype = GGML_TYPE_Q5_0;  break;
@@ -15748,6 +15762,7 @@ static void ggml_compute_forward_clamp(
             } break;
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
+        case GGML_TYPE_BF16_R4:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -22650,6 +22665,11 @@ size_t ggml_quantize_chunk(
                 size_t elemsize = sizeof(ggml_bf16_t);
                 ggml_fp32_to_bf16_row_ref(src + start, (ggml_bf16_t *)dst + start, n);
                 result = n * elemsize;
+            } break;
+        case GGML_TYPE_BF16_R4:
+            {
+                repack_f32_bf16_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row);
+                result = nrows * row_size;
             } break;
         case GGML_TYPE_F32:
             {

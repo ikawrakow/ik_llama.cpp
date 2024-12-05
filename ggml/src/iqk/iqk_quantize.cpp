@@ -4759,3 +4759,59 @@ void vec_dot_q8_k_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
     GGML_UNUSED(by);
 }
 
+//
+// ========================================= bf16_r4
+//
+namespace {
+template <typename Src>
+void repack_bf16(const Src& src, ggml_bf16_t * dst) {
+    GGML_ASSERT(src.nrows%4 == 0);
+    for (int row = 0; row < src.nrows; row += 4) {
+        auto y = dst + 4*row*src.n_per_row;
+        for (int j = 0; j < src.n_per_row; j += 32) {
+            for (int l = 0; l < 4; ++l) {
+                for (int k = 0; k < 4; ++k) for (int i = 0; i < 2; ++i) {
+                    y[32*l+2*k+i+ 0] = src.value(row+k, j+2*l+i+ 0);
+                    y[32*l+2*k+i+ 8] = src.value(row+k, j+2*l+i+ 8);
+                    y[32*l+2*k+i+16] = src.value(row+k, j+2*l+i+16);
+                    y[32*l+2*k+i+24] = src.value(row+k, j+2*l+i+24);
+                }
+            }
+            y += 128;
+        }
+    }
+}
+struct F32toBF16 {
+    F32toBF16(const void * src, int64_t nrows, int64_t n_per_row) : nrows(nrows), n_per_row(n_per_row), x((const float *)src) {}
+    inline ggml_bf16_t value(int row, int j) const {
+        union { float f; uint32_t u; } helper_32;
+        union { ggml_bf16_t f; uint16_t u; } helper_16;
+        helper_32.f = x[row*n_per_row + j];
+        helper_16.u = helper_32.u >> 16;
+        return helper_16.f;
+    }
+    int64_t nrows;
+    int64_t n_per_row;
+private:
+    const float * x;
+};
+struct BF16 {
+    BF16(const void * src, int64_t nrows, int64_t n_per_row) : nrows(nrows), n_per_row(n_per_row), x((const ggml_bf16_t *)src) {}
+    inline ggml_bf16_t value(int row, int j) const { return x[row*n_per_row + j]; }
+    int64_t nrows;
+    int64_t n_per_row;
+private:
+    const ggml_bf16_t * x;
+};
+}
+
+void repack_f32_bf16_r4 (const void * src, void * dst, int64_t nrows, int64_t n_per_row) {
+    F32toBF16 helper(src, nrows, n_per_row);
+    repack_bf16(helper, (ggml_bf16_t *)dst);
+}
+
+void repack_bf16_bf16_r4(const void * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row) {
+    BF16 helper(src, nrows, n_per_row);
+    repack_bf16(helper, (ggml_bf16_t *)dst);
+}
+
