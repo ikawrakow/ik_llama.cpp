@@ -168,6 +168,11 @@ void iqk_mul_mat_vec_q_cuda(
     }
 }
 
+__device__ __forceinline__ float vec_dot_q4_0_r4_q8_1(
+        const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+    return 0;
+}
+
 __device__ __forceinline__ void get_int_from_table_16_shift(const uint32_t & q4, uint16_t shift, const uint8_t * all_values,
         int & val1, int & val2) {
 
@@ -727,6 +732,13 @@ __device__ __forceinline__ float vec_dot_iq2_bn_q8_1(
 }
 
 } // namespace
+
+void mul_mat_vec_q4_0_r4_q8_1_cuda(
+    const void * vx, const void * vy, float * dst,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+
+    iqk_mul_mat_vec_q_cuda<GGML_TYPE_Q4_0_R4, VDR_IQ4_K_Q8_1_MMVQ, vec_dot_q4_0_r4_q8_1>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+}
 
 void mul_mat_vec_iq2_k_q8_1_cuda(
     const void * vx, const void * vy, float * dst,
