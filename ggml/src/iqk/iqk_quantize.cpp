@@ -362,7 +362,7 @@ void ggml_vec_dot_iq1_bn_q8_K64(int n, float * s, size_t bs, const void * vx, si
     *s = d8[0] * (sumi[0] + sumi[1]) + d8[1] * (sumi[2] + sumi[3]) + d8[2] * (sumi[4] + sumi[5]) + d8[3] * (sumi[6] + sumi[7]);
 }
 
-void ggml_vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+void vec_dot_iq2_bn_q8_K64(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 
     GGML_ASSERT(nrc == 1);
     GGML_UNUSED(bs);
@@ -518,6 +518,136 @@ void quantize_row_q8_K64_ref(const float * x, block_q8_K64 * y, int64_t k) {
 
 void quantize_row_q8_K64(const float * x, void * y, int64_t k) {
     quantize_row_q8_K64_ref(x, (block_q8_K64 *)y, k);
+}
+
+#ifdef __AVX2__
+namespace {
+inline float hsum_float_4(__m128 x) {
+    x = _mm_add_ps(x, _mm_movehl_ps(x, x));
+    x = _mm_add_ss(x, _mm_movehdup_ps(x));
+    return _mm_cvtss_f32(x);
+}
+inline float hsum_float_8(__m256 x) {
+    return hsum_float_4(_mm_add_ps(_mm256_castps256_ps128(x), _mm256_extractf128_ps(x, 1))); 
+}
+inline int hsum_i32_8(const __m256i a) {
+    const __m128i sum128 = _mm_add_epi32(_mm256_castsi256_si128(a), _mm256_extractf128_si256(a, 1));
+    const __m128i hi64 = _mm_unpackhi_epi64(sum128, sum128);
+    const __m128i sum64 = _mm_add_epi32(hi64, sum128);
+    const __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));
+    return _mm_cvtsi128_si32(_mm_add_epi32(sum64, hi32));
+}
+inline float hmax_f32_8(__m256 x) {
+    __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x));
+    max4 = _mm_max_ps( max4, _mm_movehl_ps(max4, max4));
+    max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4));
+    return  _mm_cvtss_f32(max4);
+}
+}
+#endif
+
+void quantize_row_q8_K16(const float * x, void * vy, int64_t nk) {
+    float * dptr = (float *)vy;
+    int8_t * qy = (int8_t *)(dptr + 5);
+    int n64 = nk / 64;
+#ifdef __AVX2__
+    __m256 sign_bit = _mm256_set1_ps(-0.f);
+    __m256 vmax[4] = {};
+    __m256 vsum[4] = {};
+    for (int i64 = 0; i64 < n64; ++i64) {
+        for (int k = 0; k < 4; ++k) {
+            auto v1 = _mm256_loadu_ps(x + 64*i64 + 16*k + 0);
+            auto v2 = _mm256_loadu_ps(x + 64*i64 + 16*k + 8);
+            vsum[k] = _mm256_add_ps(vsum[k], _mm256_add_ps(v1, v2));
+            v1 = _mm256_andnot_ps(sign_bit, v1);
+            v2 = _mm256_andnot_ps(sign_bit, v2);
+            vmax[k] = _mm256_max_ps(vmax[k], _mm256_max_ps(v1, v2));
+        }
+    }
+    __m256 sum = _mm256_add_ps(_mm256_add_ps(vsum[0], vsum[1]), _mm256_add_ps(vsum[2], vsum[3]));
+    dptr[4] = hsum_float_8(sum);
+    for (int k = 0; k < 4; ++k) {
+        float max = hmax_f32_8(vmax[k]);
+        dptr[k] = max/127;
+        vmax[k] = _mm256_set1_ps(dptr[k] > 0 ? 1/dptr[k] : 0.f);
+    }
+    __m256i ival[8];
+    const __m256i perm = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+    for (int i64 = 0; i64 < n64; ++i64) {
+        for (int k = 0; k < 4; ++k) {
+            __m256 v0 = _mm256_mul_ps(vmax[k], _mm256_loadu_ps(x + 64*i64 + 16*k + 0));
+            __m256 v1 = _mm256_mul_ps(vmax[k], _mm256_loadu_ps(x + 64*i64 + 16*k + 8));
+            v0 = _mm256_round_ps(v0, _MM_ROUND_NEAREST);
+            v1 = _mm256_round_ps(v1, _MM_ROUND_NEAREST);
+            ival[2*k+0] = _mm256_cvtps_epi32(v0);
+            ival[2*k+1] = _mm256_cvtps_epi32(v1);
+        }
+        for (int k = 0; k < 2; ++k) {
+            auto i0 = _mm256_packs_epi32(ival[4*k+0], ival[4*k+1]);
+            auto i1 = _mm256_packs_epi32(ival[4*k+2], ival[4*k+3]);
+            i0 = _mm256_packs_epi16(i0, i1);
+            i0 = _mm256_permutevar8x32_epi32(i0, perm);
+            _mm256_storeu_si256((__m256i *)qy, i0);
+            qy += 32;
+        }
+    }
+#elif defined __ARM_NEON
+    static const uint8_t k_shuffle[16] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60};
+    auto shuffle = vld1q_u8(k_shuffle);
+    float32x4_t vmax[4] = {};
+    float32x4_t vsum[4] = {};
+    for (int i64 = 0; i64 < n64; ++i64) {
+        for (int k = 0; k < 4; ++k) {
+            auto v = vld1q_f32_x4(x + 64*i64 + 16*k);
+            vsum[k] = vaddq_f32(vsum[k], vaddq_f32(v.val[0], v.val[1]));
+            vsum[k] = vaddq_f32(vsum[k], vaddq_f32(v.val[2], v.val[3]));
+            vmax[k] = vmaxq_f32(vmax[k], vmaxq_f32(vabsq_f32(v.val[0]), vabsq_f32(v.val[1])));
+            vmax[k] = vmaxq_f32(vmax[k], vmaxq_f32(vabsq_f32(v.val[2]), vabsq_f32(v.val[3])));
+        }
+    }
+    dptr[4] = vaddvq_f32(vaddq_f32(vaddq_f32(vsum[0], vsum[1]), vaddq_f32(vsum[2], vsum[3])));
+    for (int k = 0; k < 4; ++k) {
+        float max = vmaxvq_f32(vmax[k]);
+        dptr[k] = max/127;
+        vmax[k] = vdupq_n_f32(dptr[k] > 0 ? 1/dptr[k] : 0.f);
+    }
+    int8x16x4_t q;
+    for (int i64 = 0; i64 < n64; ++i64) {
+        for (int k = 0; k < 4; ++k) {
+            auto v = vld1q_f32_x4(x + 64*i64 + 16*k);
+            for (int j = 0; j < 4; ++j) {
+                q.val[j] = vreinterpretq_s8_s32(vcvtnq_s32_f32(vmulq_f32(vmax[k], v.val[j])));
+            }
+            auto qi = vqtbl4q_s8(q, shuffle);
+            vst1q_s8(qy, qi);
+            qy += 16;
+        }
+    }
+#else
+    float amax[4] = {0.f, 0.f, 0.f, 0.f};
+    for (int i64 = 0; i64 < n64; ++i64) {
+        for (int k = 0; k < 4; ++k) {
+            for (int j = 0; j < 16; ++j) {
+                float ax = std::abs(x[64*i64 + 16*k + j]);
+                amax[k] = std::max(amax[k], ax);
+            }
+        }
+    }
+    for (int k = 0; k < 4; ++k) {
+        dptr[k] = amax[k]/127;
+        amax[k] = dptr[k] > 0 ? 1/dptr[k] : 0.f;
+    }
+    double sumf = 0;
+    for (int i64 = 0; i64 < n64; ++i64) {
+        for (int k = 0; k < 4; ++k) {
+            for (int j = 0; j < 16; ++j) {
+                sumf += x[64*i64 + 16*k + j];
+                qy[64*i64 + 16*k + j] = nearest_int(amax[k]*x[64*i64 + 16*k + j]);
+            }
+        }
+    }
+    dptr[4] = sumf;
+#endif
 }
 
 //
@@ -2339,23 +2469,6 @@ size_t quantize_iq6_k(const float * src, void * dst, int64_t nrows, int64_t n_pe
     return nrows * nblock * sizeof(block_iq6_k);
 }
 
-#ifdef __AVX2__
-namespace {
-inline int hsum_i32_8(const __m256i a) {
-    const __m128i sum128 = _mm_add_epi32(_mm256_castsi256_si128(a), _mm256_extractf128_si256(a, 1));
-    const __m128i hi64 = _mm_unpackhi_epi64(sum128, sum128);
-    const __m128i sum64 = _mm_add_epi32(hi64, sum128);
-    const __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));
-    return _mm_cvtsi128_si32(_mm_add_epi32(sum64, hi32));
-}
-inline float hmax_f32_8(__m256 x) {
-    __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x));
-    max4 = _mm_max_ps( max4, _mm_movehl_ps(max4, max4));
-    max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4));
-    return  _mm_cvtss_f32(max4);
-}
-}
-#endif
 
 void iqk_quantize_row_q8_K(const float * x, void * vy, int64_t k) {
     assert(k % QK_K == 0);
@@ -3680,3 +3793,126 @@ void vec_dot_iq4_xs_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t
     GGML_UNUSED(bx);
     GGML_UNUSED(by);
 }
+
+//
+// ========================================= iq2_bn_r4
+//
+void quantize_row_iq2_bn_r4_ref(const float * x, block_iq2_bn  * y, int64_t k) {
+    quantize_iq2_bn_r4(x, (void *)y, 4, k/4, nullptr);
+}
+
+void quantize_row_iq2_bn_r4(const float * x, void * y, int64_t k) {
+    quantize_iq2_bn_r4(x, y, 4, k/4, nullptr);
+}
+
+namespace {
+void repack_iq2_bn(int nrows, int n_per_row, const char * x, char * y) {
+    GGML_ASSERT(nrows%4 == 0);
+    GGML_ASSERT(n_per_row%QK_IQ1BN == 0);
+    int nblock = n_per_row/QK_IQ1BN;
+    auto row_size = ggml_row_size(GGML_TYPE_IQ2_BN, n_per_row);
+    const uint8_t * x4[4];
+    for (int row = 0; row < nrows; row += 4) {
+        float * dr4 = (float *)(y + 4*row*row_size);
+        for (int k = 0; k < 4; ++k) {
+            const float * dptr = (const float *)(x + (row + k)*row_size);
+            dr4[k] = *dptr;
+            x4[k] = (const uint8_t *)(dptr + 1);
+        }
+        uint8_t * y4 = (uint8_t *)(dr4 + 4);
+        //std::memset(y4, 0, n_per_row);
+        for (int ib = 0; ib < nblock; ++ib) {
+            //  0...3 from rows 0...3 go to 1st 2 bits of  0...15
+            // 16..19 from rows 0...3 go to 1st 2 bits of 16...31
+            // 32..35 from rows 0...3 go to 1st 2 bits of 32...47
+            // 48..51 from rows 0...3 go to 1st 2 bits of 48...63
+            //  4...7 from rows 0...3 go to 2nd 2 bits of  0...15
+            // 20..23 from rows 0...3 go to 2nd 2 bits of 16...31
+            // 36..39 from rows 0...3 go to 2nd 2 bits of 32...47
+            // 52..55 from rows 0...3 go to 2nd 2 bits of 48...63
+            //  8..11 from rows 0...3 go to 3rd 2 bits of  0...15
+            // 24..27 from rows 0...3 go to 3rd 2 bits of 16...31
+            // 40..43 from rows 0...3 go to 3rd 2 bits of 32...47
+            // 56..59 from rows 0...3 go to 3rd 2 bits of 48...63
+            // 12..15 from rows 0...3 go to 4th 2 bits of  0...15
+            // 28..31 from rows 0...3 go to 4th 2 bits of 16...31
+            // 44..47 from rows 0...3 go to 4th 2 bits of 32...47
+            // 60..63 from rows 0...3 go to 4th 2 bits of 48...63
+            for (int k = 0; k < 4; ++k) {
+                for (int l = 0; l < 4; ++l) for (int i = 0; i < 4; ++i) {
+                    y4[64*ib + 4*k + i + 16*l] = (((x4[k][16*ib + i +  0] >> 2*l) & 3) << 0) |
+                                                 (((x4[k][16*ib + i +  4] >> 2*l) & 3) << 2) |
+                                                 (((x4[k][16*ib + i +  8] >> 2*l) & 3) << 4) |
+                                                 (((x4[k][16*ib + i + 12] >> 2*l) & 3) << 6);
+                    //y4[64*ib + 4*k + i +  0] |= (x4[k][16*ib + i] >> 0) & 3;
+                    //y4[64*ib + 4*k + i + 16] |= (x4[k][16*ib + i] >> 2) & 3;
+                    //y4[64*ib + 4*k + i + 32] |= (x4[k][16*ib + i] >> 4) & 3;
+                    //y4[64*ib + 4*k + i + 48] |= (x4[k][16*ib + i] >> 6) & 3;
+                    //y4[64*ib + 4*k + i +  0] |= ((x4[k][16*ib + i + 4] >> 0) & 3) << 2;
+                    //y4[64*ib + 4*k + i + 16] |= ((x4[k][16*ib + i + 4] >> 2) & 3) << 2;
+                    //y4[64*ib + 4*k + i + 32] |= ((x4[k][16*ib + i + 4] >> 4) & 3) << 2;
+                    //y4[64*ib + 4*k + i + 48] |= ((x4[k][16*ib + i + 4] >> 6) & 3) << 2;
+                    //y4[64*ib + 4*k + i +  0] |= ((x4[k][16*ib + i + 8] >> 0) & 3) << 4;
+                    //y4[64*ib + 4*k + i + 16] |= ((x4[k][16*ib + i + 8] >> 2) & 3) << 4;
+                    //y4[64*ib + 4*k + i + 32] |= ((x4[k][16*ib + i + 8] >> 4) & 3) << 4;
+                    //y4[64*ib + 4*k + i + 48] |= ((x4[k][16*ib + i + 8] >> 6) & 3) << 4;
+                    //y4[64*ib + 4*k + i +  0] |= ((x4[k][16*ib + i + 12] >> 0) & 3) << 6;
+                    //y4[64*ib + 4*k + i + 16] |= ((x4[k][16*ib + i + 12] >> 2) & 3) << 6;
+                    //y4[64*ib + 4*k + i + 32] |= ((x4[k][16*ib + i + 12] >> 4) & 3) << 6;
+                    //y4[64*ib + 4*k + i + 48] |= ((x4[k][16*ib + i + 12] >> 6) & 3) << 6;
+                }
+            }
+        }
+    }
+}
+}
+
+size_t quantize_iq2_bn_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_ASSERT(nrows%4 == 0);
+    GGML_ASSERT(n_per_row%QK_IQ1BN == 0);
+    char * qcur = (char *)dst;
+    auto row_size = ggml_row_size(GGML_TYPE_IQ2_BN, n_per_row);
+    std::vector<char> qtmp(4*row_size);
+    for (int row = 0; row < nrows; row += 4) {
+        quantize_iq2_bn(src, (void *)qtmp.data(), 4, n_per_row, imatrix);
+        repack_iq2_bn(4, n_per_row, qtmp.data(), qcur);
+        qcur += 4*row_size;
+        src += 4*n_per_row;
+    }
+    return nrows*row_size;
+}
+
+void dequantize_row_iq2_bn_r4(const block_iq2_bn * x, float * y, int64_t k) {
+    static_assert(QK_IQ1BN == 64);
+    auto n_per_row = k/4;
+    float * y4[4] = {y, y + n_per_row, y + 2*n_per_row, y + 3*n_per_row};
+    const float * d4 = (const float *)x;
+    const uint8_t * qx = (const uint8_t *)(d4 + 4);
+    int nblock = n_per_row/QK_IQ1BN;
+    for (int ib = 0; ib < nblock; ++ib) {
+        for (int k = 0; k < 4; ++k) {
+            for (int l = 0; l < 4; ++l) for (int i = 0; i < 4; ++i) {
+                uint8_t q = qx[4*k + i + 16*l];
+                y4[k][64*ib + 16*l + i +  0] = d4[k] * (((q >> 0) & 3) - 1);
+                y4[k][64*ib + 16*l + i +  4] = d4[k] * (((q >> 2) & 3) - 1);
+                y4[k][64*ib + 16*l + i +  8] = d4[k] * (((q >> 4) & 3) - 1);
+                y4[k][64*ib + 16*l + i + 12] = d4[k] * (((q >> 6) & 3) - 1);
+            }
+        }
+        qx += 64;
+    }
+}
+
+void vec_dot_iq2_bn_r4_q8_K64(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_BN_R4, vx, 0, GGML_TYPE_Q8_K64, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK4_NL == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
