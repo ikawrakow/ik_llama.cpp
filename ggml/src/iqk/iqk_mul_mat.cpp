@@ -2274,6 +2274,7 @@ static void mul_mat_iq2_bn_r4_q8_k16(int n, const void * vx, size_t bx, const Da
     }
 }
 #else
+template <int nrc_y>
 static void mul_mat_iq2_bn_r4_q8_k16(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     if (nrc_x%4) {
         printf("%s: %d is not a multiple of 4\n", __func__, nrc_x);
