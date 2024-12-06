@@ -406,6 +406,7 @@ extern "C" {
         GGML_TYPE_IQ4_KS  = 144,
         GGML_TYPE_IQ2_KS  = 145,
         GGML_TYPE_IQ4_KSS = 146,
+        GGML_TYPE_Q8_K16  = 147,
 
         GGML_TYPE_Q4_0_R4   = 202,
         GGML_TYPE_Q5_0_R4   = 206,
@@ -413,6 +414,7 @@ extern "C" {
         GGML_TYPE_IQ4_NL_X4 = 220, // TODO: rename GGML_TYPE_IQ4_NL_X4 to GGML_TYPE_IQ4_NL_R4
         GGML_TYPE_IQ4_XS_R4 = 223,
         GGML_TYPE_Q6_0_R4   = 233,
+        GGML_TYPE_IQ2_BN_R4 = 335,
         GGML_TYPE_COUNT,
     };
 
@@ -478,6 +480,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ4_NL_X4 = 219, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_XS_R4 = 222, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q6_0_R4   = 227, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ2_BN_R4 = 329, // except 1d tensors
     };
 
     // available tensor operations:
