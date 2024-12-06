@@ -591,6 +591,38 @@ void quantize_row_q8_K16(const float * x, void * vy, int64_t nk) {
             qy += 32;
         }
     }
+#elif defined __ARM_NEON
+    static const uint8_t k_shuffle[16] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60};
+    auto shuffle = vld1q_u8(k_shuffle);
+    float32x4_t vmax[4] = {};
+    float32x4_t vsum[4] = {};
+    for (int i64 = 0; i64 < n64; ++i64) {
+        for (int k = 0; k < 4; ++k) {
+            auto v = vld1q_f32_x4(x + 64*i64 + 16*k);
+            vsum[k] = vaddq_f32(vsum[k], vaddq_f32(v.val[0], v.val[1]));
+            vsum[k] = vaddq_f32(vsum[k], vaddq_f32(v.val[2], v.val[3]));
+            vmax[k] = vmaxq_f32(vmax[k], vmaxq_f32(vabsq_f32(v.val[0]), vabsq_f32(v.val[1])));
+            vmax[k] = vmaxq_f32(vmax[k], vmaxq_f32(vabsq_f32(v.val[2]), vabsq_f32(v.val[3])));
+        }
+    }
+    dptr[4] = vaddvq_f32(vaddq_f32(vaddq_f32(vsum[0], vsum[1]), vaddq_f32(vsum[2], vsum[3])));
+    for (int k = 0; k < 4; ++k) {
+        float max = vmaxvq_f32(vmax[k]);
+        dptr[k] = max/127;
+        vmax[k] = vdupq_n_f32(dptr[k] > 0 ? 1/dptr[k] : 0.f);
+    }
+    int8x16x4_t q;
+    for (int i64 = 0; i64 < n64; ++i64) {
+        for (int k = 0; k < 4; ++k) {
+            auto v = vld1q_f32_x4(x + 64*i64 + 16*k);
+            for (int j = 0; j < 4; ++j) {
+                q.val[j] = vreinterpretq_s8_s32(vcvtnq_s32_f32(vmulq_f32(vmax[k], v.val[j])));
+            }
+            auto qi = vqtbl4q_s8(q, shuffle);
+            vst1q_s8(qy, qi);
+            qy += 16;
+        }
+    }
 #else
     float amax[4] = {0.f, 0.f, 0.f, 0.f};
     for (int i64 = 0; i64 < n64; ++i64) {
