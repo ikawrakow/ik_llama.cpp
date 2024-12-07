@@ -7793,6 +7793,38 @@ void mul_mat_iq4_nl_x4_q8_0_1(int n, const void * vx, size_t bx, const DataInfo&
     }
 }
 
+//template <int nrc_y, int k>
+//inline void do_1_block(int ib4, const Q8<nrc_y, block_q8_0_x4>& q8, const float32x4_t * d8, const block_iq4_nl_x4 * iq4,
+//        int8x16_t * qx, float32x4_t * acc, const uint8x16_t& m4, const uint8x16_t& m88) {
+//    auto scales = vcvt_f32_f16(vld1_f16((const float16_t *)iq4[4*ib4+k].d));
+//    auto bits   = vld1q_u8_x4(iq4[4*ib4+k].qs);
+//    for (int j = 0; j < 4; ++j) bits.val[j] = veorq_u8(m88, bits.val[j]);
+//    qx[0] = vshlq_n_u8(bits.val[0], 4); //  0...3 from the 4 rows
+//    qx[1] = vshlq_n_u8(bits.val[1], 4); // 16..19
+//    qx[2] = vshlq_n_u8(bits.val[2], 4); //  4...7
+//    qx[3] = vshlq_n_u8(bits.val[3], 4); // 20..23
+//    qx[4] = vandq_u8(bits.val[0], m4);  //  8..11
+//    qx[5] = vandq_u8(bits.val[1], m4);  // 24..27
+//    qx[6] = vandq_u8(bits.val[2], m4);  // 12..15
+//    qx[7] = vandq_u8(bits.val[3], m4);  // 28..31
+//    for (int iy = 0; iy < nrc_y; ++iy) {
+//        auto y = vld1q_s8_x2(q8.y[iy][ib4].qs+32*k);
+//        auto sumi = vdupq_n_s32(0);
+//        sumi = vdotq_laneq_s32(sumi, qx[0], y.val[0], 0);
+//        sumi = vdotq_laneq_s32(sumi, qx[2], y.val[0], 1);
+//        sumi = vdotq_laneq_s32(sumi, qx[4], y.val[0], 2);
+//        sumi = vdotq_laneq_s32(sumi, qx[6], y.val[0], 3);
+//        sumi = vdotq_laneq_s32(sumi, qx[1], y.val[1], 0);
+//        sumi = vdotq_laneq_s32(sumi, qx[3], y.val[1], 1);
+//        sumi = vdotq_laneq_s32(sumi, qx[5], y.val[1], 2);
+//        sumi = vdotq_laneq_s32(sumi, qx[7], y.val[1], 3);
+//        //auto d4d8 = vmulq_f32(scales, vdupq_n_f32(GGML_FP16_TO_FP32(q8.y[iy][ib4].d[k])));
+//        //auto d4d8 = vmulq_f32(scales, vdupq_n_f32(d8[4*iy+k]));
+//        auto d4d8 = vmulq_laneq_f32(scales, d8[iy], k);
+//        acc[iy] = vfmaq_f32(acc[iy], d4d8, vcvtq_f32_s32(sumi));
+//    }
+//}
+
 template <int nrc_y>
 void mul_mat_q4_0_r4_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
@@ -7803,10 +7835,20 @@ void mul_mat_q4_0_r4_q8_0(int n, const void * vx, size_t bx, const DataInfo& inf
     int nb = n / QK4_NL;
     GGML_ASSERT(nb%4 == 0);
     int8x16_t qx[8];
+    float d8[4*nrc_y];
+    //float32x4_t d8[nrc_y];
     float32x4_t acc[nrc_y] = {};
     for (int ix = 0; ix < nrc_x; ix += 4) {
         const block_iq4_nl_x4 * iq4 = (const block_iq4_nl_x4 *)((const char *)vx + ix*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                //d8[iy] = vcvt_f32_f16(vld1_f16((const float16_t *)q8.y[iy][ib4].d));
+                vst1q_f32(d8+4*iy, vcvt_f32_f16(vld1_f16((const float16_t *)q8.y[iy][ib4].d)));
+            }
+            //do_1_block<nrc_y, 0>(ib4, q8, d8, iq4, qx, acc, m4, m88);
+            //do_1_block<nrc_y, 1>(ib4, q8, d8, iq4, qx, acc, m4, m88);
+            //do_1_block<nrc_y, 2>(ib4, q8, d8, iq4, qx, acc, m4, m88);
+            //do_1_block<nrc_y, 3>(ib4, q8, d8, iq4, qx, acc, m4, m88);
             for (int k = 0; k < 4; ++k) {
                 auto scales = vcvt_f32_f16(vld1_f16((const float16_t *)iq4[4*ib4+k].d));
                 auto bits   = vld1q_u8_x4(iq4[4*ib4+k].qs);
@@ -7823,14 +7865,15 @@ void mul_mat_q4_0_r4_q8_0(int n, const void * vx, size_t bx, const DataInfo& inf
                     auto y = vld1q_s8_x2(q8.y[iy][ib4].qs+32*k);
                     auto sumi = vdupq_n_s32(0);
                     sumi = vdotq_laneq_s32(sumi, qx[0], y.val[0], 0);
-                    sumi = vdotq_laneq_s32(sumi, qx[1], y.val[1], 0);
                     sumi = vdotq_laneq_s32(sumi, qx[2], y.val[0], 1);
-                    sumi = vdotq_laneq_s32(sumi, qx[3], y.val[1], 1);
                     sumi = vdotq_laneq_s32(sumi, qx[4], y.val[0], 2);
-                    sumi = vdotq_laneq_s32(sumi, qx[5], y.val[1], 2);
                     sumi = vdotq_laneq_s32(sumi, qx[6], y.val[0], 3);
+                    sumi = vdotq_laneq_s32(sumi, qx[1], y.val[1], 0);
+                    sumi = vdotq_laneq_s32(sumi, qx[3], y.val[1], 1);
+                    sumi = vdotq_laneq_s32(sumi, qx[5], y.val[1], 2);
                     sumi = vdotq_laneq_s32(sumi, qx[7], y.val[1], 3);
-                    auto d4d8 = vmulq_f32(scales, vdupq_n_f32(GGML_FP16_TO_FP32(q8.y[iy][ib4].d[k])));
+                    //auto d4d8 = vmulq_f32(scales, vdupq_n_f32(GGML_FP16_TO_FP32(q8.y[iy][ib4].d[k])));
+                    auto d4d8 = vmulq_f32(scales, vdupq_n_f32(d8[4*iy+k]));
                     acc[iy] = vfmaq_f32(acc[iy], d4d8, vcvtq_f32_s32(sumi));
                 }
             }
