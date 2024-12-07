@@ -3916,3 +3916,186 @@ void vec_dot_iq2_bn_r4_q8_K64(int n, float * s, size_t bs, const void * vx, size
     GGML_UNUSED(by);
 }
 
+//
+// ========================================= q4_k_r4
+//
+void quantize_row_q4_k_r4_ref(const float * x, block_q4_k_r4 * y, int64_t k) {
+    quantize_q4_k_r4(x, (void *)y, 4, k/4, nullptr);
+}
+
+void quantize_row_q4_k_r4(const float * x, void * y, int64_t k) {
+    quantize_q4_k_r4(x, y, 4, k/4, nullptr);
+}
+
+namespace {
+template <typename T>
+inline void shuffle_values_q4k_forward(int n_per_row, const T * src, T * dst) {
+    int nblock = n_per_row/QK_K;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        for (int is = 0; is < QK_K/128; ++is) {
+            for (int l = 0; l < 4; ++l) {
+                std::memcpy(dst+32*l+ 0, src+16*l+ 0, 16*sizeof(T));
+                std::memcpy(dst+32*l+16, src+16*l+64, 16*sizeof(T));
+            }
+            dst += 128;
+            src += 128;
+        }
+    }
+}
+template <typename T>
+inline void shuffle_values_q4k_backward(int n_per_row, const T * src, T * dst) {
+    int nblock = n_per_row/QK_K;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        for (int is = 0; is < QK_K/128; ++is) {
+            for (int l = 0; l < 4; ++l) {
+                std::memcpy(dst+16*l+ 0, src+32*l+ 0, 16*sizeof(T));
+                std::memcpy(dst+16*l+64, src+32*l+16, 16*sizeof(T));
+            }
+            dst += 128;
+            src += 128;
+        }
+    }
+}
+inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t& d, uint8_t& m) {
+    if (j < 4) {
+        d = q[j] & 63; m = q[j + 4] & 63;
+    } else {
+        d = (q[j+4] & 0xF) | ((q[j-4] >> 6) << 4);
+        m = (q[j+4] >>  4) | ((q[j-0] >> 6) << 4);
+    }
+}
+void unpack_q4_K(const block_q4_K& x, uint8_t * L, uint8_t * Ld, uint8_t * Lm) {
+    auto qs = x.qs;
+    for (int j = 0; j < QK_K/64; ++j) {
+        get_scale_min_k4(2*j+0, x.scales, Ld[2*j+0], Lm[2*j+0]);
+        get_scale_min_k4(2*j+1, x.scales, Ld[2*j+1], Lm[2*j+1]);
+        for (int i = 0; i < 32; ++i) {
+            L[64*j + i +  0] = qs[i] & 0xf;
+            L[64*j + i + 32] = qs[i] >>  4;
+        }
+        qs += 32;
+    }
+}
+void repack_q4_k(int nrows, int n_per_row, const char * cx, char * cy) {
+    static_assert(QK_K == 256);
+    GGML_ASSERT(nrows%4 == 0);
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    int nblock = n_per_row/QK_K;
+    auto row_size = ggml_row_size(GGML_TYPE_Q4_K, n_per_row);
+    const block_q4_K * x4[4];
+    uint8_t L[QK_K], Ld[QK_K/32], Lm[QK_K/32];
+    for (int row = 0; row < nrows; row += 4) {
+        for (int k = 0; k < 4; ++k) x4[k] = (const block_q4_K *)(cx + (row + k)*row_size);
+        block_q4_k_r4 * y = (block_q4_k_r4 *)(cy + row*row_size);
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+            std::memset(y[ibl].scales_h, 0, QK_K/16);
+            for (int k = 0; k < 4; ++k) {
+                y[ibl].d[k+0] = x4[k][ibl].d;
+                y[ibl].d[k+4] = x4[k][ibl].dmin;
+                unpack_q4_K(x4[k][ibl], L, Ld, Lm);
+                for (int j = 0; j < QK_K/32; ++j) {
+                    y[ibl].scales_l[4*j+k] = (Ld[j] & 0xf) | ((Lm[j] & 0xf) << 4);
+                    uint8_t h = (Ld[j] >> 4) | ((Lm[j] >> 4) << 2);
+                    y[ibl].scales_h[(4*j+k)%16] |= h << 4*((4*j+k)/16);
+                }
+                for (int is = 0; is < 2; ++is) {
+                    for (int l = 0; l < 16; ++l) {
+                        int ll = 32*(l%4) + 2*(l/4);
+                        for (int i = 0; i < 4; ++i) {
+                            y[ibl].qs[256*is + 16*l + 4*k + i] = L[ll+i] | (L[ll+i+4] << 4);
+                        }
+                    }
+                }
+                //for (int i = 0; i < 4; ++i) {
+                //    y[ibl].qs[4*k+i+  0] = L[i+  0] | (L[i+  4] << 4);
+                //    y[ibl].qs[4*k+i+ 16] = L[i+ 32] | (L[i+ 36] << 4);
+                //    y[ibl].qs[4*k+i+ 32] = L[i+ 64] | (L[i+ 68] << 4);
+                //    y[ibl].qs[4*k+i+ 48] = L[i+ 96] | (L[i+100] << 4);
+                //    y[ibl].qs[4*k+i+ 64] = L[i+  8] | (L[i+ 12] << 4);
+                //    y[ibl].qs[4*k+i+ 80] = L[i+ 40] | (L[i+ 44] << 4);
+                //    y[ibl].qs[4*k+i+ 96] = L[i+ 72] | (L[i+ 76] << 4);
+                //    y[ibl].qs[4*k+i+112] = L[i+104] | (L[i+108] << 4);
+                //    y[ibl].qs[4*k+i+128] = L[i+ 16] | (L[i+ 20] << 4);
+                //    y[ibl].qs[4*k+i+144] = L[i+ 48] | (L[i+ 52] << 4);
+                //    y[ibl].qs[4*k+i+160] = L[i+ 80] | (L[i+ 84] << 4);
+                //    y[ibl].qs[4*k+i+176] = L[i+112] | (L[i+116] << 4);
+                //    y[ibl].qs[4*k+i+192] = L[i+ 24] | (L[i+ 28] << 4);
+                //    y[ibl].qs[4*k+i+208] = L[i+ 56] | (L[i+ 60] << 4);
+                //    y[ibl].qs[4*k+i+224] = L[i+ 88] | (L[i+ 92] << 4);
+                //    y[ibl].qs[4*k+i+240] = L[i+120] | (L[i+124] << 4);
+                //}
+            }
+        }
+    }
+}
+}
+
+size_t quantize_q4_k_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    static_assert(QK_K == 256);
+    GGML_ASSERT(nrows%4 == 0);
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    auto row_size = ggml_row_size(GGML_TYPE_Q4_K, n_per_row);
+    std::vector<float> xtmp(n_per_row);
+    std::vector<char>  qtmp(4*row_size);
+    std::vector<float> wtmp;
+    if (imatrix) {
+        wtmp.resize(n_per_row);
+        shuffle_values_q4k_forward(n_per_row, imatrix, wtmp.data());
+    }
+    char * qcur = (char *)dst;
+    for (int row = 0; row < nrows; row += 4) {
+        for (int k = 0; k < 4; ++k) {
+            shuffle_values_q4k_forward(n_per_row, src, xtmp.data());
+            quantize_q4_K(xtmp.data(), qtmp.data() + k*row_size, 1, n_per_row, wtmp.data());
+            src += n_per_row;
+        }
+        repack_q4_k(4, n_per_row, qtmp.data(), qcur);
+        qcur += 4*row_size;
+    }
+    return nrows*row_size;
+}
+
+void dequantize_row_q4_k_r4(const block_q4_k_r4 * x, float * y, int64_t k) {
+    static_assert(QK_K == 256);
+    int n_per_row = k/4;
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    int nblock = n_per_row/QK_K;
+    float * y4[4];
+    for (int k = 0; k < 4; ++k) y4[k] = y + k*n_per_row;
+    float d[8];
+    float dl[8];
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        for (int j = 0; j < 8; ++j) d[j] = GGML_FP16_TO_FP32(x[ibl].d[j]);
+        for (int is = 0; is < 2; ++is) {
+            for (int ib = 0; ib < 4; ++ib) {
+                for (int k = 0; k < 4; ++k) {
+                    int j = 16*is + 4*ib + k;
+                    dl[k+0] = d[k+0] * ((x[ibl].scales_l[j] & 0xf) | (((x[ibl].scales_h[j%16] >> 4*(j/16)) & 0x03) << 4));
+                    dl[k+4] = d[k+4] * ((x[ibl].scales_l[j] >>  4) | (((x[ibl].scales_h[j%16] >> 4*(j/16)) & 0x0c) << 2));
+                }
+                for (int l = 0; l < 4; ++l) {
+                    for (int k = 0; k < 4; ++k) {
+                        for (int i = 0; i < 4; ++i) {
+                            y4[k][QK_K*ibl + 128*is + 16*ib + 8*(l%2) + 64*(l/2) + i + 0] = dl[k] * (x[ibl].qs[QK_K*is + 16*ib + 64*l + 4*k + i] & 0xf) - dl[k+4];
+                            y4[k][QK_K*ibl + 128*is + 16*ib + 8*(l%2) + 64*(l/2) + i + 4] = dl[k] * (x[ibl].qs[QK_K*is + 16*ib + 64*l + 4*k + i] >>  4) - dl[k+4];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void vec_dot_q4_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q4_K_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK4_NL == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
