@@ -91,7 +91,7 @@ static __global__ void dequantize_block_q4_0_r4(const void * __restrict__ vx, ds
 
     dst_t * y = yy + (4*row4 + k)*n_per_row + 32*(2*i+is) + ll;
 
-    const block_iq4_nl_x4 * x = (const block_iq4_nl_x4 *)vx + 2*ii + is;
+    const block_iq4_nl_r4 * x = (const block_iq4_nl_r4 *)vx + 2*ii + is;
     const float d = __half2float(x->d[k]);
     const float dm = -8*d;
 

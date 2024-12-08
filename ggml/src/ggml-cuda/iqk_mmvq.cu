@@ -168,33 +168,18 @@ void iqk_mul_mat_vec_q_cuda(
     }
 }
 
-//template<>
-//struct ggml_cuda_type_traits<GGML_TYPE_Q4_0> {
-//    static constexpr int qk = QK4_0 = 32
-//    static constexpr int qr = QR4_0 =  2
-//    static constexpr int qi = QI4_0 =  4
-//};
-// #define VDR_Q4_0_Q8_1_MMVQ 2
-// #define VDR_Q4_0_Q8_1_MMQ  4
-// constexpr int blocks_per_iter = vdr * nwarps*WARP_SIZE / qi = 2*nwarps*32/4 = 16*nwarps
-
-using block_q4_0_r4 = block_iq4_nl_x4;
+using block_q4_0_r4 = block_iq4_nl_r4;
 
 
 __device__ __forceinline__ float vec_dot_q4_0_r4_q8_1_x(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ y, const int & kbx, const int & l, float * __restrict__ result) {
 
-    // We will have each thread process 32 quants, so 8 quants in each of the 4 interleaved rows
-    // I
-
     const block_q4_0_r4 * x = (block_q4_0_r4 *)vbq + kbx;
-    //const int l = kbx%4;
     const half2 * d4h = (const half2 *)x->d;
     float2 d4[2];
     const float * d = (const float *)d4;
     d4[0] = __half22float2(d4h[0]);
     d4[1] = __half22float2(d4h[1]);
-    //const float d8 = __low2float(y->ds);
     const float2 d8 = __half22float2(y->ds);
 
     const int * q8 = (const int *)y->qs + 4*(l%2) + l/2;
@@ -202,11 +187,6 @@ __device__ __forceinline__ float vec_dot_q4_0_r4_q8_1_x(
 
 #if __CUDA_ARCH__ >= MIN_CC_DP4A // lowest compute capability for integer intrinsics
     for (int k = 0; k < 4; ++k) {
-        // TODO: avoid the __vsub, use the sum stored in Q8_1 instead.
-        //int v1 = __vsub4(q4[k] & 0x0f0f0f0f, 0x08080808);
-        //int v2 = __vsub4((q4[k] >> 4) & 0x0f0f0f0f, 0x08080808);
-        //int dot = __dp4a(v1, q8[0], __dp4a(v2, q8[2], 0));
-        //result[k] += d[k]*d8*dot;
         int v1 = q4[k] & 0x0f0f0f0f;
         int v2 = (q4[k] >> 4) & 0x0f0f0f0f;
         int dot = __dp4a(v1, q8[0], __dp4a(v2, q8[2], 0));
@@ -288,7 +268,7 @@ __global__ void iqk_mul_mat_vec_q4_0_r4(
     }
 }
 
-void iqk_mul_mat_vec_q4_0_r4_cuda(
+static void iqk_mul_mat_vec_q4_0_r4_cuda(
     const void * vx, const void * vy, float * dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
 
