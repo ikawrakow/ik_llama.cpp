@@ -3233,19 +3233,19 @@ void vec_dot_iq4_kss_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
 }
 
 //
-// ========================================= iq4_nl_x4
+// ========================================= iq4_nl_r4
 //
-void quantize_row_iq4_nl_x4_ref(const float * x, block_iq4_nl_x4  * y, int64_t k) {
+void quantize_row_iq4_nl_r4_ref(const float * x, block_iq4_nl_r4  * y, int64_t k) {
     // we assume we are called with 4 rows
-    quantize_iq4_nl_x4(x, (void *)y, 4, k/4, nullptr);
+    quantize_iq4_nl_r4(x, (void *)y, 4, k/4, nullptr);
 }
 
-void quantize_row_iq4_nl_x4(const float * x, void * y, int64_t k) {
+void quantize_row_iq4_nl_r4(const float * x, void * y, int64_t k) {
     // we assume we are called with 4 rows
-    quantize_iq4_nl_x4(x, y, 4, k/4, nullptr);
+    quantize_iq4_nl_r4(x, y, 4, k/4, nullptr);
 }
 
-static void repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, block_iq4_nl_x4 * y) {
+static void repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, block_iq4_nl_r4 * y) {
     GGML_ASSERT(nrows%4 == 0);
     GGML_ASSERT(n_per_row%QK4_NL == 0);
     int nblock = n_per_row/QK4_NL;
@@ -3266,21 +3266,21 @@ static void repack_iq4_nl(int nrows, int n_per_row, const block_iq4_nl * x, bloc
     }
 }
 
-size_t quantize_iq4_nl_x4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+size_t quantize_iq4_nl_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     GGML_ASSERT(nrows%4 == 0);
     auto row_size_nl = ggml_row_size(GGML_TYPE_IQ4_NL, n_per_row);
     std::vector<char> qtmp(4*row_size_nl);
     char * qrow = (char *)dst;
     for (int row = 0; row < nrows; row += 4) {
         quantize_iq4_nl(src, qtmp.data(), 4, n_per_row, imatrix);
-        repack_iq4_nl(4, n_per_row, (const block_iq4_nl *)qtmp.data(), (block_iq4_nl_x4 *)qrow);
+        repack_iq4_nl(4, n_per_row, (const block_iq4_nl *)qtmp.data(), (block_iq4_nl_r4 *)qrow);
         src += 4*n_per_row;
         qrow += 4*row_size_nl;
     }
     return nrows*row_size_nl;
 }
 
-void dequantize_row_iq4_nl_x4(const block_iq4_nl_x4 * x, float * y, int64_t k) {
+void dequantize_row_iq4_nl_r4(const block_iq4_nl_r4 * x, float * y, int64_t k) {
     // we assume we are called with 4 rows
     int n_per_row = k/4;
     int nb = n_per_row/QK4_NL;
@@ -3303,9 +3303,9 @@ void dequantize_row_iq4_nl_x4(const block_iq4_nl_x4 * x, float * y, int64_t k) {
     }
 }
 
-void vec_dot_iq4_nl_x4_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+void vec_dot_iq4_nl_r4_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_NL_X4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_NL_R4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
         return;
     }
 #endif
@@ -3319,7 +3319,7 @@ void vec_dot_iq4_nl_x4_q8_0(int n, float * s, size_t bs, const void * vx, size_t
 //
 // ========================================= q4_0_r4
 //
-void quantize_row_q4_0_r4_ref(const float * x, block_iq4_nl_x4  * y, int64_t k) {
+void quantize_row_q4_0_r4_ref(const float * x, block_iq4_nl_r4  * y, int64_t k) {
     // we assume we are called with 4 rows
     quantize_q4_0_r4(x, (void *)y, 4, k/4, nullptr);
 }
@@ -3329,7 +3329,7 @@ void quantize_row_q4_0_r4(const float * x, void * y, int64_t k) {
     quantize_q4_0_r4(x, y, 4, k/4, nullptr);
 }
 
-static void repack_q4_0(int nrows, int n_per_row, const block_q4_0 * x, block_iq4_nl_x4 * y) {
+static void repack_q4_0(int nrows, int n_per_row, const block_q4_0 * x, block_iq4_nl_r4 * y) {
     GGML_ASSERT(nrows%4 == 0);
     GGML_ASSERT(n_per_row%QK4_NL == 0);
     int nblock = n_per_row/QK4_NL;
@@ -3369,14 +3369,14 @@ size_t quantize_q4_0_r4(const float * src, void * dst, int64_t nrows, int64_t n_
     char * qrow = (char *)dst;
     for (int row = 0; row < nrows; row += 4) {
         quantize_q4_0(src, qtmp.data(), 4, n_per_row, imatrix);
-        repack_iq4_nl(4, n_per_row, (const block_iq4_nl *)qtmp.data(), (block_iq4_nl_x4 *)qrow);
+        repack_iq4_nl(4, n_per_row, (const block_iq4_nl *)qtmp.data(), (block_iq4_nl_r4 *)qrow);
         src += 4*n_per_row;
         qrow += 4*row_size_nl;
     }
     return nrows*row_size_nl;
 }
 
-void dequantize_row_q4_0_r4(const block_iq4_nl_x4 * x, float * y, int64_t k) {
+void dequantize_row_q4_0_r4(const block_iq4_nl_r4 * x, float * y, int64_t k) {
     // we assume we are called with 4 rows
     int n_per_row = k/4;
     int nb = n_per_row/QK4_0;

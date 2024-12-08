@@ -436,8 +436,8 @@ static_assert(sizeof(block_iq4_nl) == sizeof(ggml_half) + QK4_NL/2, "wrong iq4_n
 typedef struct {
     ggml_half d[4];
     uint8_t qs[2*QK4_NL];
-} block_iq4_nl_x4;
-static_assert(sizeof(block_iq4_nl_x4) == 4*sizeof(ggml_half) + 2*QK4_NL, "wrong iq4_nl_x4 block size/padding");
+} block_iq4_nl_r4;
+static_assert(sizeof(block_iq4_nl_r4) == 4*sizeof(ggml_half) + 2*QK4_NL, "wrong iq4_nl_x4 block size/padding");
 
 typedef struct {
     ggml_half d;

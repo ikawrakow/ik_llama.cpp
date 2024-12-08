@@ -167,7 +167,7 @@ struct MulMat {
             case GGML_TYPE_Q5_0_R4:
             case GGML_TYPE_Q6_0_R4:
             case GGML_TYPE_Q8_0_R4:
-            case GGML_TYPE_IQ4_NL_X4:
+            case GGML_TYPE_IQ4_NL_R4:
             case GGML_TYPE_IQ2_BN_R4: return 4;
             default: return 1;
         }
@@ -2340,7 +2340,7 @@ static void mul_mat_iq2_bn_r4_q8_k16(int n, const void * vx, size_t bx, const Da
 
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
-static void mul_mat_iq4_nl_x4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_iq4_nl_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_1_x4> q8(info);
     auto m4 = _mm512_set1_epi8(0xf);
@@ -2350,8 +2350,8 @@ static void mul_mat_iq4_nl_x4_q8_1(int n, const void * vx, size_t bx, const Data
     __m512  acc[2*nrc_y] = {};
     __m512i qx[4];
     for (int ix = 0; ix < nrc_x; ix += 8) {
-        const block_iq4_nl_x4 * iq4l = (const block_iq4_nl_x4 *)((const char *)vx + (ix+0)*bx);
-        const block_iq4_nl_x4 * iq4h = (const block_iq4_nl_x4 *)((const char *)vx + (ix+4)*bx);
+        const block_iq4_nl_r4 * iq4l = (const block_iq4_nl_r4 *)((const char *)vx + (ix+0)*bx);
+        const block_iq4_nl_r4 * iq4h = (const block_iq4_nl_r4 *)((const char *)vx + (ix+4)*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int k = 0; k < 4; ++k) {
                 auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4l[4*ib4+k].d));
@@ -2394,7 +2394,7 @@ static void mul_mat_iq4_nl_x4_q8_1(int n, const void * vx, size_t bx, const Data
 }
 #else
 template <int nrc_y>
-static void mul_mat_iq4_nl_x4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_iq4_nl_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_1_x4> q8(info);
     auto m4 = _mm256_set1_epi8(0xf);
@@ -2405,7 +2405,7 @@ static void mul_mat_iq4_nl_x4_q8_1(int n, const void * vx, size_t bx, const Data
     __m256 acc[nrc_y] = {};
     //__m256 acc[2*nrc_y] = {};
     for (int ix = 0; ix < nrc_x; ix += 4) {
-        const block_iq4_nl_x4 * iq4 = (const block_iq4_nl_x4 *)((const char *)vx + ix*bx);
+        const block_iq4_nl_r4 * iq4 = (const block_iq4_nl_r4 *)((const char *)vx + ix*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int k = 0; k < 4; ++k) {
                 auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4[4*ib4+k].d));
@@ -2455,8 +2455,8 @@ static void mul_mat_q4_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
     __m512  acc[2*nrc_y] = {};
     __m512i qx[4];
     for (int ix = 0; ix < nrc_x; ix += 8) {
-        const block_iq4_nl_x4 * iq4l = (const block_iq4_nl_x4 *)((const char *)vx + (ix+0)*bx);
-        const block_iq4_nl_x4 * iq4h = (const block_iq4_nl_x4 *)((const char *)vx + (ix+4)*bx);
+        const block_iq4_nl_r4 * iq4l = (const block_iq4_nl_r4 *)((const char *)vx + (ix+0)*bx);
+        const block_iq4_nl_r4 * iq4h = (const block_iq4_nl_r4 *)((const char *)vx + (ix+4)*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int k = 0; k < 4; ++k) {
                 auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4l[4*ib4+k].d));
@@ -2508,7 +2508,7 @@ static void mul_mat_q4_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
     GGML_ASSERT(nb%4 == 0);
     __m256 acc[nrc_y] = {};
     for (int ix = 0; ix < nrc_x; ix += 4) {
-        const block_iq4_nl_x4 * iq4 = (const block_iq4_nl_x4 *)((const char *)vx + ix*bx);
+        const block_iq4_nl_r4 * iq4 = (const block_iq4_nl_r4 *)((const char *)vx + ix*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int k = 0; k < 4; ++k) {
                 auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq4[4*ib4+k].d));
@@ -5052,16 +5052,16 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             MulMat::set_functions<IQ4_NL_Unpacker>(mm);
             expected_typeB = GGML_TYPE_Q8_1;
             break;
-        case GGML_TYPE_IQ4_NL_X4:
+        case GGML_TYPE_IQ4_NL_R4:
             assert (ne00 % QK4_NL == 0);
-            mm.funcs[0] = mul_mat_iq4_nl_x4_q8_1<1>;
-            mm.funcs[1] = mul_mat_iq4_nl_x4_q8_1<2>;
-            mm.funcs[2] = mul_mat_iq4_nl_x4_q8_1<3>;
-            mm.funcs[3] = mul_mat_iq4_nl_x4_q8_1<4>;
-            mm.funcs[4] = mul_mat_iq4_nl_x4_q8_1<5>;
-            mm.funcs[5] = mul_mat_iq4_nl_x4_q8_1<6>;
-            mm.funcs[6] = mul_mat_iq4_nl_x4_q8_1<7>;
-            mm.funcs[7] = mul_mat_iq4_nl_x4_q8_1<8>;
+            mm.funcs[0] = mul_mat_iq4_nl_r4_q8_1<1>;
+            mm.funcs[1] = mul_mat_iq4_nl_r4_q8_1<2>;
+            mm.funcs[2] = mul_mat_iq4_nl_r4_q8_1<3>;
+            mm.funcs[3] = mul_mat_iq4_nl_r4_q8_1<4>;
+            mm.funcs[4] = mul_mat_iq4_nl_r4_q8_1<5>;
+            mm.funcs[5] = mul_mat_iq4_nl_r4_q8_1<6>;
+            mm.funcs[6] = mul_mat_iq4_nl_r4_q8_1<7>;
+            mm.funcs[7] = mul_mat_iq4_nl_r4_q8_1<8>;
             expected_typeB = GGML_TYPE_Q8_1;
             break;
         case GGML_TYPE_IQ4_XS_R4:
@@ -7734,7 +7734,7 @@ void mul_mat_iq4_xs_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& i
     }
 }
 
-void mul_mat_iq4_nl_x4_q8_0_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+void mul_mat_iq4_nl_r4_q8_0_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<1, block_q8_0_x4> q8(info);
     auto m4 = vdupq_n_u8(0xf);
@@ -7744,7 +7744,7 @@ void mul_mat_iq4_nl_x4_q8_0_1(int n, const void * vx, size_t bx, const DataInfo&
     int8x16_t qx[8];
     for (int ix = 0; ix < nrc_x; ix += 4) {
         auto acc = vdupq_n_f32(0.f);
-        const block_iq4_nl_x4 * iq4 = (const block_iq4_nl_x4 *)((const char *)vx + ix*bx);
+        const block_iq4_nl_r4 * iq4 = (const block_iq4_nl_r4 *)((const char *)vx + ix*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             auto y1 = vld1q_s8_x4(q8.y[0][ib4].qs);
             auto y2 = vld1q_s8_x4(q8.y[0][ib4].qs+64);
@@ -7812,7 +7812,7 @@ void mul_mat_qx_r4_q8_0(int n, const void * vx, size_t bx, const DataInfo& info,
 
 struct IQ4_NL_R4_Dequantizer {
     IQ4_NL_R4_Dequantizer(const void * vx, size_t bx) : cx((const char *)vx), bx(bx), values(vld1q_s8(iq4k_values)) {}
-    inline void new_row(int ix) { iq4 = (const block_iq4_nl_x4 *)(cx + ix*bx); }
+    inline void new_row(int ix) { iq4 = (const block_iq4_nl_r4 *)(cx + ix*bx); }
     inline float32x4_t prepare(int ib4, int k, int8x16_t * qx) const {
         auto scales = vcvt_f32_f16(vld1_f16((const float16_t *)iq4[4*ib4+k].d));
         auto bits   = vld1q_u8_x4(iq4[4*ib4+k].qs);
@@ -7825,14 +7825,14 @@ struct IQ4_NL_R4_Dequantizer {
 
     const char * cx;
     const size_t bx;
-    const block_iq4_nl_x4 * iq4;
+    const block_iq4_nl_r4 * iq4;
     const uint8x16_t m4 = vdupq_n_u8(0x0f);
     const int8x16_t values;
 };
 
 struct Q4_0_R4_Dequantizer {
     Q4_0_R4_Dequantizer(const void * vx, size_t bx) : cx((const char *)vx), bx(bx) {}
-    inline void new_row(int ix) { iq4 = (const block_iq4_nl_x4 *)(cx + ix*bx); }
+    inline void new_row(int ix) { iq4 = (const block_iq4_nl_r4 *)(cx + ix*bx); }
     inline float32x4_t prepare(int ib4, int k, int8x16_t * qx) const {
         auto scales = vcvt_f32_f16(vld1_f16((const float16_t *)iq4[4*ib4+k].d));
         auto bits   = vld1q_u8_x4(iq4[4*ib4+k].qs);
@@ -7853,7 +7853,7 @@ struct Q4_0_R4_Dequantizer {
 
     const char * cx;
     const size_t bx;
-    const block_iq4_nl_x4 * iq4;
+    const block_iq4_nl_r4 * iq4;
     const uint8x16_t m4 = vdupq_n_u8(0xf0);
     const uint8x16_t m88 = vdupq_n_u8(0x88);
     const float32x4_t norm = vdupq_n_f32(1.f/16);
@@ -8123,7 +8123,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             MulMat::set_functions<DequantizerIQ4NL>(m);
             expected_Btype = GGML_TYPE_Q8_0;
             break;
-        case GGML_TYPE_IQ4_NL_X4:
+        case GGML_TYPE_IQ4_NL_R4:
             SET_MUL_MAT_FUNCTIONS_T(m, mul_mat_qx_r4_q8_0, IQ4_NL_R4_Dequantizer);
             expected_Btype = GGML_TYPE_Q8_0;
             break;
