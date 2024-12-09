@@ -3963,6 +3963,16 @@ inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t& d, uint8_t& m) {
         m = (q[j+4] >>  4) | ((q[j-0] >> 6) << 4);
     }
 }
+inline void convert_q4_k(const block_q4_K& x, uint8_t * L, uint8_t * Ld, uint8_t * Lm) {
+    for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
+        get_scale_min_k4(2*ib64+0, x.scales, Ld[2*ib64+0], Lm[2*ib64+0]);
+        get_scale_min_k4(2*ib64+1, x.scales, Ld[2*ib64+1], Lm[2*ib64+1]);
+        for (int j = 0; j < 32; ++j) {
+            L[64*ib64+j+ 0] = x.qs[32*ib64+j] & 0xf;
+            L[64*ib64+j+32] = x.qs[32*ib64+j] >>  4;
+        }
+    }
+}
 }
 
 static void repack_q4_k(int nrows, int n_per_row, const block_q4_K * x, block_q4_k_r4 * y) {
@@ -3970,7 +3980,7 @@ static void repack_q4_k(int nrows, int n_per_row, const block_q4_K * x, block_q4
     GGML_ASSERT(n_per_row%QK_K == 0);
     int nblock = n_per_row/QK_K;
     const block_q4_K * x4[4];
-    uint8_t ld, lm;
+    uint8_t L[QK_K], Ld[QK_K/32], Lm[QK_K/32];
     for (int row = 0; row < nrows; row += 4) {
         for (int k = 0; k < 4; ++k) x4[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
@@ -3979,29 +3989,35 @@ static void repack_q4_k(int nrows, int n_per_row, const block_q4_K * x, block_q4
             for (int k = 0; k < 4; ++k) {
                 y[ibl].d[k+0] = x4[k][ibl].d;
                 y[ibl].d[k+4] = x4[k][ibl].dmin;
+                convert_q4_k(x4[k][ibl], L, Ld, Lm);
                 for (int ib = 0; ib < QK_K/32; ++ib) {
-                    get_scale_min_k4(ib, x4[k][ibl].scales, ld, lm);
-                    y[ibl].scales_l[4*ib+k] = (ld & 0xf) | ((lm & 0xf) << 4);
-                    uint8_t h = (ld >> 4) | ((lm >> 4) << 2);
+                    y[ibl].scales_l[4*ib+k] = (Ld[ib] & 0xf) | ((Lm[ib] & 0xf) << 4);
+                    uint8_t h = (Ld[ib] >> 4) | ((Lm[ib] >> 4) << 2);
                     y[ibl].scales_h[(4*ib+k)%16] |= (h << 4*((4*ib+k)/16));
+                    for (int i = 0; i < 4; ++i) {
+                        y[ibl].qs[64*ib+4*k+i+ 0] = L[32*ib+i+ 0] | (L[32*ib+i+ 8] << 4);
+                        y[ibl].qs[64*ib+4*k+i+16] = L[32*ib+i+16] | (L[32*ib+i+24] << 4);
+                        y[ibl].qs[64*ib+4*k+i+32] = L[32*ib+i+ 4] | (L[32*ib+i+12] << 4);
+                        y[ibl].qs[64*ib+4*k+i+48] = L[32*ib+i+20] | (L[32*ib+i+28] << 4);
+                    }
                 }
             }
-            for (int ib = 0; ib < QK_K/32; ++ib) {
-                for (int k = 0; k < 4; ++k) for (int i = 0; i < 4; ++i) {
-                    uint8_t l1 = (x4[k][ibl].qs[32*(ib/2)+i+ 0] >> 4*(ib%2)) & 0xf;
-                    uint8_t l2 = (x4[k][ibl].qs[32*(ib/2)+i+ 8] >> 4*(ib%2)) & 0xf;
-                    y[ibl].qs[64*ib+4*k+i+ 0] = l1 | (l2 << 4);
-                    l1 = (x4[k][ibl].qs[32*(ib/2)+i+16] >> 4*(ib%2)) & 0xf;
-                    l2 = (x4[k][ibl].qs[32*(ib/2)+i+24] >> 4*(ib%2)) & 0xf;
-                    y[ibl].qs[64*ib+4*k+i+16] = l1 | (l2 << 4);
-                    l1 = (x4[k][ibl].qs[32*(ib/2)+i+ 4] >> 4*(ib%2)) & 0xf;
-                    l2 = (x4[k][ibl].qs[32*(ib/2)+i+12] >> 4*(ib%2)) & 0xf;
-                    y[ibl].qs[64*ib+4*k+i+32] = l1 | (l2 << 4);
-                    l1 = (x4[k][ibl].qs[32*(ib/2)+i+20] >> 4*(ib%2)) & 0xf;
-                    l2 = (x4[k][ibl].qs[32*(ib/2)+i+28] >> 4*(ib%2)) & 0xf;
-                    y[ibl].qs[64*ib+4*k+i+48] = l1 | (l2 << 4);
-                }
-            }
+            //for (int ib = 0; ib < QK_K/32; ++ib) {
+            //    for (int k = 0; k < 4; ++k) for (int i = 0; i < 4; ++i) {
+            //        uint8_t l1 = (x4[k][ibl].qs[32*(ib/2)+i+ 0] >> 4*(ib%2)) & 0xf;
+            //        uint8_t l2 = (x4[k][ibl].qs[32*(ib/2)+i+ 8] >> 4*(ib%2)) & 0xf;
+            //        y[ibl].qs[64*ib+4*k+i+ 0] = l1 | (l2 << 4);
+            //        l1 = (x4[k][ibl].qs[32*(ib/2)+i+16] >> 4*(ib%2)) & 0xf;
+            //        l2 = (x4[k][ibl].qs[32*(ib/2)+i+24] >> 4*(ib%2)) & 0xf;
+            //        y[ibl].qs[64*ib+4*k+i+16] = l1 | (l2 << 4);
+            //        l1 = (x4[k][ibl].qs[32*(ib/2)+i+ 4] >> 4*(ib%2)) & 0xf;
+            //        l2 = (x4[k][ibl].qs[32*(ib/2)+i+12] >> 4*(ib%2)) & 0xf;
+            //        y[ibl].qs[64*ib+4*k+i+32] = l1 | (l2 << 4);
+            //        l1 = (x4[k][ibl].qs[32*(ib/2)+i+20] >> 4*(ib%2)) & 0xf;
+            //        l2 = (x4[k][ibl].qs[32*(ib/2)+i+28] >> 4*(ib%2)) & 0xf;
+            //        y[ibl].qs[64*ib+4*k+i+48] = l1 | (l2 << 4);
+            //    }
+            //}
         }
         x += 4*nblock;
         y += nblock;
