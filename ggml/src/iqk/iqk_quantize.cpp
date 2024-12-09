@@ -4002,22 +4002,6 @@ static void repack_q4_k(int nrows, int n_per_row, const block_q4_K * x, block_q4
                     }
                 }
             }
-            //for (int ib = 0; ib < QK_K/32; ++ib) {
-            //    for (int k = 0; k < 4; ++k) for (int i = 0; i < 4; ++i) {
-            //        uint8_t l1 = (x4[k][ibl].qs[32*(ib/2)+i+ 0] >> 4*(ib%2)) & 0xf;
-            //        uint8_t l2 = (x4[k][ibl].qs[32*(ib/2)+i+ 8] >> 4*(ib%2)) & 0xf;
-            //        y[ibl].qs[64*ib+4*k+i+ 0] = l1 | (l2 << 4);
-            //        l1 = (x4[k][ibl].qs[32*(ib/2)+i+16] >> 4*(ib%2)) & 0xf;
-            //        l2 = (x4[k][ibl].qs[32*(ib/2)+i+24] >> 4*(ib%2)) & 0xf;
-            //        y[ibl].qs[64*ib+4*k+i+16] = l1 | (l2 << 4);
-            //        l1 = (x4[k][ibl].qs[32*(ib/2)+i+ 4] >> 4*(ib%2)) & 0xf;
-            //        l2 = (x4[k][ibl].qs[32*(ib/2)+i+12] >> 4*(ib%2)) & 0xf;
-            //        y[ibl].qs[64*ib+4*k+i+32] = l1 | (l2 << 4);
-            //        l1 = (x4[k][ibl].qs[32*(ib/2)+i+20] >> 4*(ib%2)) & 0xf;
-            //        l2 = (x4[k][ibl].qs[32*(ib/2)+i+28] >> 4*(ib%2)) & 0xf;
-            //        y[ibl].qs[64*ib+4*k+i+48] = l1 | (l2 << 4);
-            //    }
-            //}
         }
         x += 4*nblock;
         y += nblock;

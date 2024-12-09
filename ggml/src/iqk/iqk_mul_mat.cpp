@@ -3085,27 +3085,6 @@ static void mul_mat_q4_k_r4_q8_k_avx2(int n, const void * vx, size_t bx, const D
     auto m1 = _mm256_set1_epi16(1);
 #endif
     int nbl = n / QK_K;
-    //float q4[1024];
-    //float a[4*nrc_y];
-    //for (int ix = 0; ix < nrc_x; ix += 4) {
-    //    std::memset(a, 0, 4*nrc_y*sizeof(float));
-    //    const block_q4_k_r4 * iq4 = (const block_q4_k_r4 *)((const char *)vx + (ix+0)*bx);
-    //    for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
-    //        dequantize_row_q4_k_r4(iq4 + ibl, q4, 1024);
-    //        for (int iy = 0; iy < nrc_y; ++iy) {
-    //            float d8 = q8.scale(iy, ibl);
-    //            for (int j = 0; j < 256; ++j) {
-    //                float v = d8*q8.y[iy][ibl].qs[j];
-    //                a[4*iy+0] += v * q4[j+  0];
-    //                a[4*iy+1] += v * q4[j+256];
-    //                a[4*iy+2] += v * q4[j+512];
-    //                a[4*iy+3] += v * q4[j+768];
-    //            }
-    //        }
-    //    }
-    //    for (int iy = 0; iy < nrc_y; ++iy) for (int k = 0; k < 4; ++k) info.store(ix+k, iy, a[4*iy+k]);
-    //}
-    //return;
     union { __m256i vec; uint32_t val[8]; } hd, hm;
     __m256  acc[nrc_y] = {};
     __m256i qx[4];
@@ -3161,11 +3140,11 @@ static void mul_mat_q4_k_r4_q8_k_avx2(int n, const void * vx, size_t bx, const D
 
 template <int nrc_y>
 static void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    mul_mat_q4_k_r4_q8_k_avx2<nrc_y>(n, vx, bx, info, nrc_x);
-    return;
-    //if constexpr (nrc_y == 1){
-    //    mul_mat_iq4_xs_r4_q8_k_avx2<1>(n, vx, bx, info, nrc_x);
-    //} else {
+    //mul_mat_q4_k_r4_q8_k_avx2<nrc_y>(n, vx, bx, info, nrc_x);
+    //return;
+    if constexpr (nrc_y == 1){
+        mul_mat_q4_k_r4_q8_k_avx2<1>(n, vx, bx, info, nrc_x);
+    } else {
     GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
     auto mf = _mm512_set1_epi8(0xf);
@@ -3243,7 +3222,7 @@ static void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             info.store(ix+4, iy, sum2);
         }
     }
-    //}
+    }
 }
 
 template <typename Bits>

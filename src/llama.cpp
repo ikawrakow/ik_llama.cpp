@@ -3837,6 +3837,7 @@ struct llama_model_loader {
                 case GGML_TYPE_Q2_K:    ftype = LLAMA_FTYPE_MOSTLY_Q2_K;    break;
                 case GGML_TYPE_Q3_K:    ftype = LLAMA_FTYPE_MOSTLY_Q3_K_M;  break;
                 case GGML_TYPE_Q4_K:    ftype = LLAMA_FTYPE_MOSTLY_Q4_K_M;  break;
+                case GGML_TYPE_Q4_K_R4: ftype = LLAMA_FTYPE_MOSTLY_Q4_K_R4; break;
                 case GGML_TYPE_Q5_K:    ftype = LLAMA_FTYPE_MOSTLY_Q5_K_M;  break;
                 case GGML_TYPE_Q6_K:    ftype = LLAMA_FTYPE_MOSTLY_Q6_K;    break;
                 case GGML_TYPE_IQ2_XXS: ftype = LLAMA_FTYPE_MOSTLY_IQ2_XXS; break;
@@ -15786,6 +15787,9 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             }
             else if (new_type == GGML_TYPE_IQ4_XS_R4) {
                 new_type = GGML_TYPE_IQ4_XS;
+            }
+            else if (new_type == GGML_TYPE_Q4_K_R4) {
+                new_type = GGML_TYPE_Q4_K;
             }
             else if (new_type == GGML_TYPE_Q4_0_R4) {
                 new_type = GGML_TYPE_Q4_0;
