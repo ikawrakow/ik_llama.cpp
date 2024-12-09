@@ -3161,7 +3161,6 @@ static void mul_mat_q4_k_r4_q8_k_avx2(int n, const void * vx, size_t bx, const D
 template <int nrc_y>
 static void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     //mul_mat_q4_k_r4_q8_k_avx2<nrc_y>(n, vx, bx, info, nrc_x);
-    //return;
     if constexpr (nrc_y == 1){
         mul_mat_q4_k_r4_q8_k_avx2<1>(n, vx, bx, info, nrc_x);
     } else {
@@ -3200,12 +3199,10 @@ static void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             hd.vec = _mm512_or_si512(sld, shd);
             hm.vec = _mm512_or_si512(slm, shm);
             for (int ib = 0; ib < QK_K/32; ++ib) {
-                //auto iscales = _mm512_cvtepi8_epi32(_mm_set_epi32(hd.val[ib+8], hd.val[ib+8], hd.val[ib], hd.val[ib]));
                 auto scales1 = _mm256_cvtepi8_epi32(_mm_set1_epi32(hd.val[ib+0]));
                 auto scales2 = _mm256_cvtepi8_epi32(_mm_set1_epi32(hd.val[ib+8]));
                 auto iscales = _mm512_inserti32x8(_mm512_castsi256_si512(scales1), scales2, 1);
                 auto scales  = _mm512_mul_ps(d4, _mm512_cvtepi32_ps(iscales));
-                //iscales = _mm512_cvtepi8_epi32(_mm_set_epi32(hm.val[ib+8], hm.val[ib+8], hm.val[ib], hm.val[ib]));
                 scales1 = _mm256_cvtepi8_epi32(_mm_set1_epi32(hm.val[ib+0]));
                 scales2 = _mm256_cvtepi8_epi32(_mm_set1_epi32(hm.val[ib+8]));
                 iscales = _mm512_inserti32x8(_mm512_castsi256_si512(scales1), scales2, 1);
