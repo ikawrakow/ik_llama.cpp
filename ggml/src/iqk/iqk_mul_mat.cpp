@@ -8343,6 +8343,86 @@ void mul_mat_q4_k_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& inf
 }
 
 template <int nrc_y>
+void mul_mat_q5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<nrc_y, block_q8_K> q8(info);
+    auto mf = vdupq_n_u8(0xf);
+    auto m30 = vdupq_n_u8(0x30);
+    auto m10 = vdupq_n_u8(0x10);
+    int nbl = n / QK_K;
+    int8x16_t qx[8];
+    int8x16x4_t iscales;
+    float32x4x4_t scales;
+    float32x4_t acc[nrc_y] = {};
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        const block_q5_k_r4 * iq5 = (const block_q5_k_r4 *)((const char *)vx + ix*bx);
+        for (int ibl = 0; ibl < nbl; ++ibl) {
+            auto d4 = vcvt_f32_f16(vld1_f16((const float16_t *)iq5[ibl].d));
+            auto m4 = vcvt_f32_f16(vld1_f16((const float16_t *)iq5[ibl].d+4));
+            m4 = vmulq_f32(m4, vdupq_n_f32(-1.f));
+            if constexpr (nrc_y == 1) {
+                d4 = vmulq_f32(d4, vdupq_n_f32(q8.scale(0, ibl)));
+            }
+            auto sl = vld1q_u8_x2(iq5[ibl].scales_l);
+            auto sh = vld1q_u8(iq5[ibl].scales_h);
+            iscales.val[0] = vorrq_u8(vandq_u8(sl.val[0], mf), vandq_u8(vshlq_n_u8(sh, 4), m30));
+            iscales.val[1] = vorrq_u8(vandq_u8(sl.val[1], mf), vandq_u8(sh, m30));
+            iscales.val[2] = vorrq_u8(vshrq_n_u8(sl.val[0], 4), vandq_u8(vshlq_n_u8(sh, 2), m30));
+            iscales.val[3] = vorrq_u8(vshrq_n_u8(sl.val[1], 4), vandq_u8(vshrq_n_u8(sh, 2), m30));
+            for (int is = 0; is < 2; ++is) {
+                auto iscales16_1 = vmovl_s8(vget_low_s8(iscales.val[is+2]));
+                auto iscales16_2 = vmovl_s8(vget_high_s8(iscales.val[is+2]));
+                scales.val[0] = vmulq_f32(m4, vcvtq_f32_s32(vmovl_s16(vget_low_s16(iscales16_1))));
+                scales.val[1] = vmulq_f32(m4, vcvtq_f32_s32(vmovl_s16(vget_high_s16(iscales16_1))));
+                scales.val[2] = vmulq_f32(m4, vcvtq_f32_s32(vmovl_s16(vget_low_s16(iscales16_2))));
+                scales.val[3] = vmulq_f32(m4, vcvtq_f32_s32(vmovl_s16(vget_high_s16(iscales16_2))));
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto m8 = vld1q_f32((const float *)q8.y[iy][ibl].bsums + 4*is);
+                    acc[iy] = vmlaq_laneq_f32(acc[iy], scales.val[0], m8, 0);
+                    acc[iy] = vmlaq_laneq_f32(acc[iy], scales.val[1], m8, 1);
+                    acc[iy] = vmlaq_laneq_f32(acc[iy], scales.val[2], m8, 2);
+                    acc[iy] = vmlaq_laneq_f32(acc[iy], scales.val[3], m8, 3);
+                }
+                iscales16_1 = vmovl_s8(vget_low_s8(iscales.val[is]));
+                iscales16_2 = vmovl_s8(vget_high_s8(iscales.val[is]));
+                scales.val[0] = vmulq_f32(d4, vcvtq_f32_s32(vmovl_s16(vget_low_s16(iscales16_1))));
+                scales.val[1] = vmulq_f32(d4, vcvtq_f32_s32(vmovl_s16(vget_high_s16(iscales16_1))));
+                scales.val[2] = vmulq_f32(d4, vcvtq_f32_s32(vmovl_s16(vget_low_s16(iscales16_2))));
+                scales.val[3] = vmulq_f32(d4, vcvtq_f32_s32(vmovl_s16(vget_high_s16(iscales16_2))));
+                for (int ib = 0; ib < 4; ++ib) {
+                    auto lbits = vld1q_u8_x4(iq5[ibl].qs + 256*is + 64*ib);
+                    auto hbits2 = vld1q_u8(iq5[ibl].qh + 64*is + 16*ib);
+                    auto hbits1 = vshlq_n_u8(hbits2, 4);
+                    prepare_q4_k_quants(mf, lbits, qx);
+                    qx[0] = vorrq_u8(qx[0], vandq_u8(m10, hbits1));
+                    qx[1] = vorrq_u8(qx[1], vandq_u8(m10, hbits2));
+                    qx[2] = vorrq_u8(qx[2], vandq_u8(m10, vshrq_n_u8(hbits1, 2)));
+                    qx[3] = vorrq_u8(qx[3], vandq_u8(m10, vshrq_n_u8(hbits2, 2)));
+                    qx[4] = vorrq_u8(qx[4], vandq_u8(m10, vshrq_n_u8(hbits1, 1)));
+                    qx[5] = vorrq_u8(qx[5], vandq_u8(m10, vshrq_n_u8(hbits2, 1)));
+                    qx[6] = vorrq_u8(qx[6], vandq_u8(m10, vshrq_n_u8(hbits1, 3)));
+                    qx[7] = vorrq_u8(qx[7], vandq_u8(m10, vshrq_n_u8(hbits2, 3)));
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto y = vld1q_s8_x2(q8.y[iy][ibl].qs+128*is+32*ib);
+                        auto sumi = interleaved_dotq(qx, y);
+                        if constexpr (nrc_y == 1) {
+                            acc[iy] = vfmaq_f32(acc[iy], scales.val[ib], vcvtq_f32_s32(sumi));
+                        } else {
+                            auto d4d8 = vmulq_f32(scales.val[ib], vdupq_n_f32(q8.scale(iy, ibl)));
+                            acc[iy] = vfmaq_f32(acc[iy], d4d8, vcvtq_f32_s32(sumi));
+                        }
+                    }
+                }
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+            acc[iy] = vdupq_n_f32(0.f);
+        }
+    }
+}
+
+template <int nrc_y>
 void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
@@ -8796,6 +8876,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_Q4_K_R4:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_q4_k_r4_q8_k);
+            expected_Btype = GGML_TYPE_Q8_K32;
+            break;
+        case GGML_TYPE_Q5_K_R4:
+            SET_MUL_MAT_FUNCTIONS(m, mul_mat_q5_k_r4_q8_k);
             expected_Btype = GGML_TYPE_Q8_K32;
             break;
         case GGML_TYPE_Q6_K_R4:
