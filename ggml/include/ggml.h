@@ -412,6 +412,7 @@ extern "C" {
         GGML_TYPE_Q4_0_R4   = 202,
         GGML_TYPE_Q5_0_R4   = 206,
         GGML_TYPE_Q8_0_R4   = 208,
+        GGML_TYPE_Q3_K_R4   = 211,
         GGML_TYPE_Q4_K_R4   = 212,
         GGML_TYPE_Q5_K_R4   = 213,
         GGML_TYPE_Q6_K_R4   = 214,
@@ -481,6 +482,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_Q4_0_R4   = 202, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q8_0_R4   = 207, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q5_0_R4   = 208, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q3_K_R4   = 211, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q4_K_R4   = 212, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q5_K_R4   = 215, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q6_K_R4   = 214, // except 1d tensors
