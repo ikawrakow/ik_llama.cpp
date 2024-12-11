@@ -163,7 +163,10 @@ struct MulMat {
     static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
     static inline int num_rows(ggml_type type) {
         switch (type) {
+            case GGML_TYPE_Q2_K_R4:
+            case GGML_TYPE_Q3_K_R4:
             case GGML_TYPE_Q4_K_R4:
+            case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q6_K_R4:
             case GGML_TYPE_Q4_0_R4:
             case GGML_TYPE_Q5_0_R4:
