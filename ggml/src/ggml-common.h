@@ -288,6 +288,15 @@ typedef struct {
 } block_q3_K;
 static_assert(sizeof(block_q3_K) == sizeof(ggml_half) + QK_K / 4 + QK_K / 8 + 12, "wrong q3_K block size/padding");
 
+typedef struct {
+    ggml_half d[4];             // super-block scales
+    uint8_t scales_h[QK_K/16];  // scales quantized with 6 bits (high 2 bits)
+    uint8_t scales_l[QK_K/8];   // scales quantized with 6 bits (low  4 bits)
+    uint8_t qh[QK_K/2];         // quants - high bit
+    uint8_t qs[QK_K];           // quants - low 2 bits
+} block_q3_k_r4;
+static_assert(sizeof(block_q3_k_r4) == 4*sizeof(ggml_half) + QK_K/16 + QK_K/8 + QK_K/2 + QK_K, "wrong q3_k_r4 block size/padding");
+
 // 4-bit quantization
 // 8 blocks of 32 elements each
 // weight is represented as x = a * q + b
