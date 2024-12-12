@@ -4572,12 +4572,16 @@ static void repack_iq4_k(int nrows, int n_per_row, const block_iq4_k * x, block_
     for (int row = 0; row < nrows; row += 4) {
         for (int k = 0; k < 4; ++k) x4[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
+            std::memset(y[ibl].extra, 0, 8);
             std::memset(y[ibl].scales_l, 0, QK_K/8);
             std::memset(y[ibl].scales_h, 0, QK_K/16);
             for (int k = 0; k < 4; ++k) {
                 y[ibl].d[k] = x4[k][ibl].d;
-                y[ibl].extra[k] = x4[k][ibl].extra;
+                auto extra = x4[k][ibl].extra;
                 for (int ib = 0; ib < QK_K/32; ++ib) {
+                    if (extra & 1) y[ibl].extra[k+0] |= (1 << ib);
+                    if (extra & 2) y[ibl].extra[k+4] |= (1 << ib);
+                    extra >>= 2;
                     uint8_t sl1 = x4[k][ibl].scales_l[ib] & 0xf;
                     uint8_t sl2 = x4[k][ibl].scales_l[ib] >>  4;
                     uint8_t sh  = x4[k][ibl].scales_h[ib/2] >> 4*(ib%2);
@@ -4627,15 +4631,13 @@ void dequantize_row_iq4_k_r4(const block_iq4_k_r4 * x, float * y, int64_t k) {
     for (int ibl = 0; ibl < nblock; ++ibl) {
         for (int k = 0; k < 4; ++k) {
             const float d = GGML_FP16_TO_FP32(x[ibl].d[k]);
-            auto extra = x[ibl].extra[k];
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 int is = 8*ib + k;
                 float dl1 = d * ((((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[is%16] >> 2*(is/16)) & 3) << 4)) - 32);
                 is += 4;
                 float dl2 = d * ((((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[is%16] >> 2*(is/16)) & 3) << 4)) - 32);
-                auto values1 = iq4k_values + ((extra & 1) << 4);
-                auto values2 = iq4k_values + ((extra & 2) << 3);
-                extra >>= 2;
+                auto values1 = iq4k_values + (x[ibl].extra[k+0] & (1 << ib) ? 16 : 0);
+                auto values2 = iq4k_values + (x[ibl].extra[k+4] & (1 << ib) ? 16 : 0);
                 for (int i = 0; i < 4; ++i) {
                     y4[k][QK_K*ibl+32*ib+i+ 0] = dl1 * values1[x[ibl].qs[64*ib+4*k+i+ 0] & 0xf];
                     y4[k][QK_K*ibl+32*ib+i+ 8] = dl1 * values1[x[ibl].qs[64*ib+4*k+i+ 0] >>  4];

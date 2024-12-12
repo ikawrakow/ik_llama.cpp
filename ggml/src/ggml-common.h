@@ -543,7 +543,7 @@ static_assert(sizeof(block_iq4_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K
 
 typedef struct {
     ggml_half d[4];
-    uint16_t extra[4];
+    uint8_t  extra[8];
     uint8_t  scales_h[QK_K/16];
     uint8_t  scales_l[QK_K/8];
     uint8_t  qs[QK_K*2];
