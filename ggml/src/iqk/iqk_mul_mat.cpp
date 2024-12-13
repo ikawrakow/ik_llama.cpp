@@ -5923,6 +5923,18 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[7] = mul_mat_q3_k_r4_q8_k<8>;
             expected_typeB = GGML_TYPE_Q8_K;
             break;
+        case GGML_TYPE_Q4_K_R4:
+            assert (ne00 % QK_K == 0);
+            mm.funcs[0] = mul_mat_q4_k_r4_q8_k<1>;
+            mm.funcs[1] = mul_mat_q4_k_r4_q8_k<2>;
+            mm.funcs[2] = mul_mat_q4_k_r4_q8_k<3>;
+            mm.funcs[3] = mul_mat_q4_k_r4_q8_k<4>;
+            mm.funcs[4] = mul_mat_q4_k_r4_q8_k<5>;
+            mm.funcs[5] = mul_mat_q4_k_r4_q8_k<6>;
+            mm.funcs[6] = mul_mat_q4_k_r4_q8_k<7>;
+            mm.funcs[7] = mul_mat_q4_k_r4_q8_k<8>;
+            expected_typeB = GGML_TYPE_Q8_K32;
+            break;
         case GGML_TYPE_Q5_K_R4:
             assert (ne00 % QK_K == 0);
             mm.funcs[0] = mul_mat_q5_k_r4_q8_k<1>;
