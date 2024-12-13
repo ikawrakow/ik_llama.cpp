@@ -178,6 +178,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_NL_R4:
             case GGML_TYPE_IQ4_XS_R4:
             case GGML_TYPE_IQ2_BN_R4: return 4;
+            case GGML_TYPE_Q8_K_R8: return 8;
             default: return 1;
         }
     }
@@ -3809,24 +3810,17 @@ template <int nrc_y>
 static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
-#ifdef HAVE_FANCY_SIMD
-    __m256i isum[nrc_y];
-#else
+#ifndef HAVE_FANCY_SIMD
     auto m1 = _mm256_set1_epi16(1);
 #endif
     int nbl = n / QK_K;
     __m256  acc[nrc_y] = {};
+    __m256i isum[nrc_y] = {};
     __m256i qx[4];
     for (int ix = 0; ix < nrc_x; ix += 8) {
         const block_q8_k_r8 * iq8 = (const block_q8_k_r8 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
             auto d4 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq8[ibl].d));
-            auto m4 = _mm256_mul_ps(d4, _mm256_set1_ps(-128.f));
-#ifndef HAVE_FANCY_SIMD
-            if constexpr (nrc_y == 1) {
-                d4 = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(0, ibl)));
-            }
-#endif
             for (int ib = 0; ib < QK_K/16; ++ib) {
                 qx[0] = _mm256_loadu_si256((const __m256i *)iq8[ibl].qs+4*ib+0);
                 qx[1] = _mm256_loadu_si256((const __m256i *)iq8[ibl].qs+4*ib+1);
@@ -3841,28 +3835,23 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
                     isum[iy] = _mm256_dpbusd_epi32(isum[iy], qx[2], _mm256_shuffle_epi32(y, 0xaa));
                     isum[iy] = _mm256_dpbusd_epi32(isum[iy], qx[3], _mm256_shuffle_epi32(y, 0xff));
 #else
-                    auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[0], _mm256_shuffle_epi32(y, 0x00)),
-                                                  _mm256_maddubs_epi16(qx[1], _mm256_shuffle_epi32(y, 0x55)));
-                    auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[2], _mm256_shuffle_epi32(y, 0xaa)),
-                                                  _mm256_maddubs_epi16(qx[3], _mm256_shuffle_epi32(y, 0xff)));
-                    // Quants are in 0...63, so we can add at most 4 as int16_t to be sure of no int16_t overflow
-                    auto sumi = _mm256_add_epi32(_mm256_madd_epi16(m1, sumi1), _mm256_madd_epi16(m1, sumi2));
-                    if constexpr (nrc_y == 1) {
-                        acc[iy] = _mm256_fmadd_ps(scales, _mm256_cvtepi32_ps(sumi), acc[iy]);
-                    } else {
-                        acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(scales, _mm256_set1_ps(q8.scale(iy, ibl))), _mm256_cvtepi32_ps(sumi), acc[iy]);
-                    }
+                    auto sumi1 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(qx[0], _mm256_shuffle_epi32(y, 0x00)));
+                    auto sumi2 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(qx[1], _mm256_shuffle_epi32(y, 0x55)));
+                    auto sumi3 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(qx[2], _mm256_shuffle_epi32(y, 0xaa)));
+                    auto sumi4 = _mm256_madd_epi16(m1, _mm256_maddubs_epi16(qx[3], _mm256_shuffle_epi32(y, 0xff)));
+                    isum[iy] = _mm256_add_epi32(isum[iy], _mm256_add_epi32(sumi1, sumi2));
+                    isum[iy] = _mm256_add_epi32(isum[iy], _mm256_add_epi32(sumi3, sumi4));
 #endif
                 }
             }
-#ifdef HAVE_FANCY_SIMD
+            auto m4 = _mm256_mul_ps(d4, _mm256_set1_ps(-128.f));
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto d4y = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl)));
                 acc[iy] = _mm256_fmadd_ps(d4y, _mm256_cvtepi32_ps(isum[iy]), acc[iy]);
-                acc[iy] = _mm256_fmadd_ps(m4, _mm256_set1_ps(*(const float *)q8.y[iy][ibl].bsums), acc[iy]);
+                auto bsums = (const float *)q8.y[iy][ibl].bsums;
+                acc[iy] = _mm256_fmadd_ps(m4, _mm256_set1_ps(bsums[0]), acc[iy]);
                 isum[iy] = _mm256_setzero_si256();
             }
-#endif
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
             info.store(ix, iy, acc[iy]);
