@@ -3449,7 +3449,7 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
     static const uint8_t k_shuff[32] = {0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15, 0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13, 6, 7, 14, 15};
     auto shuff = _mm256_loadu_si256((const __m256i *)k_shuff);
 #ifdef HAVE_FANCY_SIMD
-    __m256 d4s[nrc_y];
+    __m256i isum[nrc_y] = {};
 #else
     auto m1 = _mm256_set1_epi16(1);
 #endif
@@ -3487,7 +3487,6 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                     sumi = _mm256_dpwssd_epi32(sumi, s4, _mm256_shuffle_epi32(bsums, 0xff));
                     auto d8 = _mm256_set1_ps(q8.scale(iy, ibl));
                     acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(m4, d8), _mm256_cvtepi32_ps(sumi), acc[iy]);
-                    d4s[iy] = _mm256_mul_ps(d4, d8);
 #else
                     sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(s1, _mm256_shuffle_epi32(bsums, 0x00)));
                     sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(s2, _mm256_shuffle_epi32(bsums, 0x55)));
@@ -3507,9 +3506,7 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
             _mm256_storeu_si256((__m256i *)scales+1, all_scales2);
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto iscales = _mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(scales + 8*ib)));
-#ifdef HAVE_FANCY_SIMD
-                auto scales  = _mm256_cvtepi32_ps(iscales);
-#else
+#ifndef HAVE_FANCY_SIMD
                 auto scales  = _mm256_mul_ps(d4, _mm256_cvtepi32_ps(iscales));
 #endif
                 auto lb = _mm256_loadu_si256((const __m256i *)iq2[ibl].qs+ib);
@@ -3525,7 +3522,7 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
                     sumi = _mm256_dpbusd_epi32(sumi, qx[1], _mm256_shuffle_epi32(y, 0x55));
                     sumi = _mm256_dpbusd_epi32(sumi, qx[2], _mm256_shuffle_epi32(y, 0xaa));
                     sumi = _mm256_dpbusd_epi32(sumi, qx[3], _mm256_shuffle_epi32(y, 0xff));
-                    acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(scales, d4s[iy]), _mm256_cvtepi32_ps(sumi), acc[iy]);
+                    isum[iy] = _mm256_add_epi32(isum[iy], _mm256_mullo_epi32(iscales, sumi));
 #else
                     auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(qx[0], _mm256_shuffle_epi32(y, 0x00)),
                                                   _mm256_maddubs_epi16(qx[1], _mm256_shuffle_epi32(y, 0x55)));
@@ -3541,6 +3538,13 @@ static void mul_mat_q2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
 #endif
                 }
             }
+#ifdef HAVE_FANCY_SIMD
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto d4y = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl)));
+                acc[iy] = _mm256_fmadd_ps(d4y, _mm256_cvtepi32_ps(isum[iy]), acc[iy]);
+                isum[iy] = _mm256_setzero_si256();
+            }
+#endif
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
             auto sum = _mm_add_ps(_mm256_castps256_ps128(acc[iy]), _mm256_extractf128_ps(acc[iy], 1));
