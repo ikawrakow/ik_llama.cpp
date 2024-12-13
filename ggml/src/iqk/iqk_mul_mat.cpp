@@ -3345,7 +3345,7 @@ static void mul_mat_q5_k_r4_q8_k_avx2(int n, const void * vx, size_t bx, const D
 template <int nrc_y>
 static void mul_mat_q5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     if constexpr (nrc_y == 1){
-        mul_mat_q4_k_r4_q8_k_avx2<1>(n, vx, bx, info, nrc_x);
+        mul_mat_q5_k_r4_q8_k_avx2<1>(n, vx, bx, info, nrc_x);
     } else {
     GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
