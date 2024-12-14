@@ -384,7 +384,7 @@ static_assert(sizeof(block_q8_K128) == sizeof(float) + 128, "wrong q8_K128 block
 
 typedef struct {
     ggml_half d[8];         // delta
-    uint8_t   qs[8*QK_K];   // quants, stored as unsigned ints
+    int8_t    qs[8*QK_K];   // quants, stored as unsigned ints
 } block_q8_k_r8;
 static_assert(sizeof(block_q8_k_r8) == 8*sizeof(ggml_half) + 8*QK_K, "wrong q8_k_r8 block size/padding");
 

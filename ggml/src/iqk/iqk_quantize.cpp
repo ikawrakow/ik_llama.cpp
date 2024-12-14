@@ -4704,7 +4704,7 @@ static void repack_q8_k(int nrows, int n_per_row, const block_q8_K * x, block_q8
             for (int k = 0; k < 8; ++k) {
                 y[ibl].d[k] = GGML_FP32_TO_FP16(x8[k][ibl].d);
                 for (int ib = 0; ib < QK_K/4; ++ib) {
-                    for (int i = 0; i < 4; ++i) y[ibl].qs[32*ib + 4*k + i] = 128 + x8[k][ibl].qs[4*ib+i];
+                    for (int i = 0; i < 4; ++i) y[ibl].qs[32*ib + 4*k + i] = x8[k][ibl].qs[4*ib+i];
                 }
             }
         }
@@ -4739,7 +4739,7 @@ void dequantize_row_q8_k_r8(const block_q8_k_r8 * x, float * y, int64_t k) {
             const float d = GGML_FP16_TO_FP32(x[ibl].d[k]);
             for (int ib = 0; ib < QK_K/4; ++ib) {
                 for (int i = 0; i < 4; ++i) {
-                    y8[k][QK_K*ibl+4*ib+i] = d * (x[ibl].qs[32*ib+4*k+i] - 128);
+                    y8[k][QK_K*ibl+4*ib+i] = d * x[ibl].qs[32*ib+4*k+i];
                 }
             }
         }
