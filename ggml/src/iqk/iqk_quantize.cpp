@@ -4708,7 +4708,7 @@ static void repack_q8_k(int nrows, int n_per_row, const block_q8_K * x, block_q8
                 }
             }
         }
-        x += 4*nblock;
+        x += 8*nblock;
         y += nblock;
     }
 }
@@ -4763,55 +4763,35 @@ void vec_dot_q8_k_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
 // ========================================= bf16_r4
 //
 namespace {
-template <typename Src>
-void repack_bf16(const Src& src, ggml_bf16_t * dst) {
-    GGML_ASSERT(src.nrows%4 == 0);
-    for (int row = 0; row < src.nrows; row += 4) {
-        auto y = dst + 4*row*src.n_per_row;
-        for (int j = 0; j < src.n_per_row; j += 32) {
-            for (int l = 0; l < 4; ++l) {
-                for (int k = 0; k < 4; ++k) for (int i = 0; i < 2; ++i) {
-                    y[32*l+2*k+i+ 0] = src.value(row+k, j+2*l+i+ 0);
-                    y[32*l+2*k+i+ 8] = src.value(row+k, j+2*l+i+ 8);
-                    y[32*l+2*k+i+16] = src.value(row+k, j+2*l+i+16);
-                    y[32*l+2*k+i+24] = src.value(row+k, j+2*l+i+24);
-                }
+inline ggml_bf16_t to_bf16(const float& x) {
+    union { float f; uint32_t u; } helper;
+    helper.f = x;
+    return ggml_bf16_t{(uint16_t)(helper.u >> 16)};
+}
+inline ggml_bf16_t to_bf16(const ggml_bf16_t& x) { return x; }
+template <typename T>
+void repack_bf16(int nrows, int n_per_row, const T * x, ggml_bf16_t * y) {
+    GGML_ASSERT(nrows%8 == 0);
+    GGML_ASSERT(n_per_row%2 == 0);
+    for (int row = 0; row < nrows; row += 8) {
+        for (int k = 0; k < 8; ++k) {
+            auto x8 = x + k*n_per_row;
+            for (int ib = 0; ib < n_per_row/2; ++ib) {
+                y[16*ib + 2*k + 0] = to_bf16(x8[2*ib+0]);
+                y[16*ib + 2*k + 1] = to_bf16(x8[2*ib+1]);
             }
-            y += 128;
         }
+        x += 8*n_per_row;
+        y += 8*n_per_row;
     }
 }
-struct F32toBF16 {
-    F32toBF16(const void * src, int64_t nrows, int64_t n_per_row) : nrows(nrows), n_per_row(n_per_row), x((const float *)src) {}
-    inline ggml_bf16_t value(int row, int j) const {
-        union { float f; uint32_t u; } helper_32;
-        union { ggml_bf16_t f; uint16_t u; } helper_16;
-        helper_32.f = x[row*n_per_row + j];
-        helper_16.u = helper_32.u >> 16;
-        return helper_16.f;
-    }
-    int64_t nrows;
-    int64_t n_per_row;
-private:
-    const float * x;
-};
-struct BF16 {
-    BF16(const void * src, int64_t nrows, int64_t n_per_row) : nrows(nrows), n_per_row(n_per_row), x((const ggml_bf16_t *)src) {}
-    inline ggml_bf16_t value(int row, int j) const { return x[row*n_per_row + j]; }
-    int64_t nrows;
-    int64_t n_per_row;
-private:
-    const ggml_bf16_t * x;
-};
 }
 
-void repack_f32_bf16_r4 (const void * src, void * dst, int64_t nrows, int64_t n_per_row) {
-    F32toBF16 helper(src, nrows, n_per_row);
-    repack_bf16(helper, (ggml_bf16_t *)dst);
+void repack_f32_bf16_r4(const void * src, void * dst, int64_t nrows, int64_t n_per_row) {
+    repack_bf16(nrows, n_per_row, (const float *)src, (ggml_bf16_t *)dst);
 }
 
 void repack_bf16_bf16_r4(const void * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row) {
-    BF16 helper(src, nrows, n_per_row);
-    repack_bf16(helper, (ggml_bf16_t *)dst);
+    repack_bf16(nrows, n_per_row, (const ggml_bf16_t *)src, (ggml_bf16_t *)dst);
 }
 
