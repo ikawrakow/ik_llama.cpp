@@ -1231,8 +1231,8 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
-    [GGML_TYPE_BF16_R4] = {
-        .type_name                = "bf16_r4",
+    [GGML_TYPE_BF16_R16] = {
+        .type_name                = "bf16_r16",
         .blck_size                = 1,
         .type_size                = sizeof(ggml_bf16_t),
         .is_quantized             = false,
@@ -4123,7 +4123,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_ALL_F32:              wtype = GGML_TYPE_F32;   break;
         case GGML_FTYPE_MOSTLY_F16:           wtype = GGML_TYPE_F16;   break;
         case GGML_FTYPE_MOSTLY_BF16:          wtype = GGML_TYPE_BF16;  break;
-        case GGML_FTYPE_MOSTLY_BF16_R4:       wtype = GGML_TYPE_BF16_R4;break;
+        case GGML_FTYPE_MOSTLY_BF16_R16:      wtype = GGML_TYPE_BF16_R16;break;
         case GGML_FTYPE_MOSTLY_Q4_0:          wtype = GGML_TYPE_Q4_0;  break;
         case GGML_FTYPE_MOSTLY_Q4_1:          wtype = GGML_TYPE_Q4_1;  break;
         case GGML_FTYPE_MOSTLY_Q5_0:          wtype = GGML_TYPE_Q5_0;  break;
@@ -15762,7 +15762,7 @@ static void ggml_compute_forward_clamp(
             } break;
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
-        case GGML_TYPE_BF16_R4:
+        case GGML_TYPE_BF16_R16:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -22666,9 +22666,9 @@ size_t ggml_quantize_chunk(
                 ggml_fp32_to_bf16_row_ref(src + start, (ggml_bf16_t *)dst + start, n);
                 result = n * elemsize;
             } break;
-        case GGML_TYPE_BF16_R4:
+        case GGML_TYPE_BF16_R16:
             {
-                repack_f32_bf16_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row);
+                repack_f32_bf16_r16(src + start, (char *) dst + start_row * row_size, nrows, n_per_row);
                 result = nrows * row_size;
             } break;
         case GGML_TYPE_F32:

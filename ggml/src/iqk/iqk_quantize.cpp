@@ -4787,11 +4787,11 @@ void repack_bf16(int nrows, int n_per_row, const T * x, ggml_bf16_t * y) {
 }
 }
 
-void repack_f32_bf16_r4(const void * src, void * dst, int64_t nrows, int64_t n_per_row) {
+void repack_f32_bf16_r16(const void * src, void * dst, int64_t nrows, int64_t n_per_row) {
     repack_bf16(nrows, n_per_row, (const float *)src, (ggml_bf16_t *)dst);
 }
 
-void repack_bf16_bf16_r4(const void * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row) {
+void repack_bf16_bf16_r16(const void * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row) {
     repack_bf16(nrows, n_per_row, (const ggml_bf16_t *)src, (ggml_bf16_t *)dst);
 }
 

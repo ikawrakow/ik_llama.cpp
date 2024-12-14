@@ -3828,7 +3828,7 @@ struct llama_model_loader {
                 case GGML_TYPE_F32:     ftype = LLAMA_FTYPE_ALL_F32;        break;
                 case GGML_TYPE_F16:     ftype = LLAMA_FTYPE_MOSTLY_F16;     break;
                 case GGML_TYPE_BF16:    ftype = LLAMA_FTYPE_MOSTLY_BF16;    break;
-                case GGML_TYPE_BF16_R4: ftype = LLAMA_FTYPE_MOSTLY_BF16_R4; break;
+                case GGML_TYPE_BF16_R16:ftype = LLAMA_FTYPE_MOSTLY_BF16_R16;break;
                 case GGML_TYPE_Q4_0:    ftype = LLAMA_FTYPE_MOSTLY_Q4_0;    break;
                 case GGML_TYPE_Q4_1:    ftype = LLAMA_FTYPE_MOSTLY_Q4_1;    break;
                 case GGML_TYPE_Q5_0:    ftype = LLAMA_FTYPE_MOSTLY_Q5_0;    break;
@@ -4541,7 +4541,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_ALL_F32:         return "all F32";
         case LLAMA_FTYPE_MOSTLY_F16:      return "F16";
         case LLAMA_FTYPE_MOSTLY_BF16:     return "BF16";
-        case LLAMA_FTYPE_MOSTLY_BF16_R4:  return "BF16_R4";
+        case LLAMA_FTYPE_MOSTLY_BF16_R16: return "BF16_R16";
         case LLAMA_FTYPE_MOSTLY_Q4_0:     return "Q4_0";
         case LLAMA_FTYPE_MOSTLY_Q4_1:     return "Q4_1";
         case LLAMA_FTYPE_MOSTLY_Q5_0:     return "Q5_0";
@@ -15835,7 +15835,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             else if (new_type == GGML_TYPE_Q8_0_R4) {
                 new_type = GGML_TYPE_Q8_0;
             }
-            else if (new_type == GGML_TYPE_BF16_R4) {
+            else if (new_type == GGML_TYPE_BF16_R16) {
                 new_type = GGML_TYPE_BF16;
             }
         }
@@ -16233,7 +16233,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_Q8_0: default_type = GGML_TYPE_Q8_0; break;
         case LLAMA_FTYPE_MOSTLY_F16:  default_type = GGML_TYPE_F16;  break;
         case LLAMA_FTYPE_MOSTLY_BF16: default_type = GGML_TYPE_BF16; break;
-        case LLAMA_FTYPE_MOSTLY_BF16_R4: default_type = GGML_TYPE_BF16_R4; break;
+        case LLAMA_FTYPE_MOSTLY_BF16_R16: default_type = GGML_TYPE_BF16_R16; break;
         case LLAMA_FTYPE_ALL_F32:     default_type = GGML_TYPE_F32;  break;
 
         // K-quants
@@ -16526,7 +16526,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         if (quantize) {
             new_type = default_type;
-            if (new_type == GGML_TYPE_BF16_R4 && strcmp(tensor->name, "token_embd.weight") == 0) {
+            if (new_type == GGML_TYPE_BF16_R16 && strcmp(tensor->name, "token_embd.weight") == 0) {
                 new_type = GGML_TYPE_BF16;
             }
 
@@ -16689,7 +16689,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ4_K;
                 else chunk_size_multiplier = 4;
             }
-            else if (new_type == GGML_TYPE_BF16_R4) {
+            else if (new_type == GGML_TYPE_BF16_R16) {
                 if (tensor->ne[1] % 16 != 0) new_type = GGML_TYPE_BF16;
                 else chunk_size_multiplier = 16;
             }

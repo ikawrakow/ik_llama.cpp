@@ -184,7 +184,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_XS_R4:
             case GGML_TYPE_IQ2_BN_R4: return 4;
             case GGML_TYPE_Q8_K_R8: return 8;
-            case GGML_TYPE_BF16_R4: return 16;
+            case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
         }
     }
@@ -3884,7 +3884,7 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
 
 #ifdef __AVX512BF16__
 template <int nrc_y>
-static void mul_mat_bf16_r8_bf16(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_bf16_r16_bf16(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
     const ggml_bf16_t * y[nrc_y];
     for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const ggml_bf16_t *)info.src1_row(iy);
@@ -5994,24 +5994,16 @@ void set_mul_mat_bf16(MulMat& mm) {
     mm.funcs[3] = mul_mat_fX_fY_T<4>;
     mm.funcs[4] = mul_mat_fX_fY_T<5>;
 }
-void set_mul_mat_bf16_r4(MulMat& mm) {
+void set_mul_mat_bf16_r16(MulMat& mm) {
     for (auto& f : mm.funcs) f = nullptr;
-    mm.funcs[0] = mul_mat_bf16_r8_bf16<1>;
-    mm.funcs[1] = mul_mat_bf16_r8_bf16<2>;
-    mm.funcs[2] = mul_mat_bf16_r8_bf16<3>;
-    mm.funcs[3] = mul_mat_bf16_r8_bf16<4>;
-    mm.funcs[4] = mul_mat_bf16_r8_bf16<5>;
-    mm.funcs[5] = mul_mat_bf16_r8_bf16<6>;
-    mm.funcs[6] = mul_mat_bf16_r8_bf16<7>;
-    mm.funcs[7] = mul_mat_bf16_r8_bf16<8>;
-    //mm.funcs[0] = mul_mat_fX_fY_r4<1>;
-    //mm.funcs[1] = mul_mat_fX_fY_r4<2>;
-    //mm.funcs[2] = mul_mat_fX_fY_r4<3>;
-    //mm.funcs[3] = mul_mat_fX_fY_r4<4>;
-    ////mm.funcs[4] = mul_mat_fX_fY_r4<5>;
-    ////mm.funcs[5] = mul_mat_fX_fY_r4<6>;
-    ////mm.funcs[6] = mul_mat_fX_fY_r4<7>;
-    ////mm.funcs[7] = mul_mat_fX_fY_r4<8>;
+    mm.funcs[0] = mul_mat_bf16_r16_bf16<1>;
+    mm.funcs[1] = mul_mat_bf16_r16_bf16<2>;
+    mm.funcs[2] = mul_mat_bf16_r16_bf16<3>;
+    mm.funcs[3] = mul_mat_bf16_r16_bf16<4>;
+    mm.funcs[4] = mul_mat_bf16_r16_bf16<5>;
+    mm.funcs[5] = mul_mat_bf16_r16_bf16<6>;
+    mm.funcs[6] = mul_mat_bf16_r16_bf16<7>;
+    mm.funcs[7] = mul_mat_bf16_r16_bf16<8>;
 }
 #endif
 
@@ -6030,12 +6022,11 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         return true;
     }
 
-    if (typeA == GGML_TYPE_BF16_R4) {
-        //printf("%s: %s\n", __func__, ggml_type_name((ggml_type)typeB));
-        if (ne00 % 32) return false;
+    if (typeA == GGML_TYPE_BF16_R16) {
+        if (ne00 % 16) return false;
         switch (typeB) {
 #ifdef __AVX512BF16__
-            case GGML_TYPE_BF16: set_mul_mat_bf16_r4(mm); break;
+            case GGML_TYPE_BF16: set_mul_mat_bf16_r16(mm); break;
 #endif
             default: return false;
         }
