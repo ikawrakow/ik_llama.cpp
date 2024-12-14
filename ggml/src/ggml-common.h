@@ -382,6 +382,12 @@ typedef struct {
 } block_q8_K128;
 static_assert(sizeof(block_q8_K128) == sizeof(float) + 128, "wrong q8_K128 block size/padding");
 
+typedef struct {
+    ggml_half d[8];         // delta
+    int8_t    qs[8*QK_K];   // quants, stored as unsigned ints
+} block_q8_k_r8;
+static_assert(sizeof(block_q8_k_r8) == 8*sizeof(ggml_half) + 8*QK_K, "wrong q8_k_r8 block size/padding");
+
 // (Almost) "true" 2-bit quantization.
 // Due to the need to use blocks as per ggml design, it ends up using
 // 2.0625 bpw because of the 16-bit scale for each block of 256.
