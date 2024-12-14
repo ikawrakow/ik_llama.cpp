@@ -4771,18 +4771,18 @@ inline ggml_bf16_t to_bf16(const float& x) {
 inline ggml_bf16_t to_bf16(const ggml_bf16_t& x) { return x; }
 template <typename T>
 void repack_bf16(int nrows, int n_per_row, const T * x, ggml_bf16_t * y) {
-    GGML_ASSERT(nrows%8 == 0);
+    GGML_ASSERT(nrows%16 == 0);
     GGML_ASSERT(n_per_row%2 == 0);
-    for (int row = 0; row < nrows; row += 8) {
-        for (int k = 0; k < 8; ++k) {
+    for (int row = 0; row < nrows; row += 16) {
+        for (int k = 0; k < 16; ++k) {
             auto x8 = x + k*n_per_row;
             for (int ib = 0; ib < n_per_row/2; ++ib) {
-                y[16*ib + 2*k + 0] = to_bf16(x8[2*ib+0]);
-                y[16*ib + 2*k + 1] = to_bf16(x8[2*ib+1]);
+                y[32*ib + 2*k + 0] = to_bf16(x8[2*ib+0]);
+                y[32*ib + 2*k + 1] = to_bf16(x8[2*ib+1]);
             }
         }
-        x += 8*n_per_row;
-        y += 8*n_per_row;
+        x += 16*n_per_row;
+        y += 16*n_per_row;
     }
 }
 }
