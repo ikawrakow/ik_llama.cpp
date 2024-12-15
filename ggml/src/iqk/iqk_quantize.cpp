@@ -4708,7 +4708,7 @@ static void repack_q8_k(int nrows, int n_per_row, const block_q8_K * x, block_q8
                 }
             }
         }
-        x += 4*nblock;
+        x += 8*nblock;
         y += nblock;
     }
 }
@@ -4757,5 +4757,41 @@ void vec_dot_q8_k_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t b
     GGML_UNUSED(bs);
     GGML_UNUSED(bx);
     GGML_UNUSED(by);
+}
+
+//
+// ========================================= bf16_r4
+//
+namespace {
+inline ggml_bf16_t to_bf16(const float& x) {
+    union { float f; uint32_t u; } helper;
+    helper.f = x;
+    return ggml_bf16_t{(uint16_t)(helper.u >> 16)};
+}
+inline ggml_bf16_t to_bf16(const ggml_bf16_t& x) { return x; }
+template <typename T>
+void repack_bf16(int nrows, int n_per_row, const T * x, ggml_bf16_t * y) {
+    GGML_ASSERT(nrows%16 == 0);
+    GGML_ASSERT(n_per_row%2 == 0);
+    for (int row = 0; row < nrows; row += 16) {
+        for (int k = 0; k < 16; ++k) {
+            auto x8 = x + k*n_per_row;
+            for (int ib = 0; ib < n_per_row/2; ++ib) {
+                y[32*ib + 2*k + 0] = to_bf16(x8[2*ib+0]);
+                y[32*ib + 2*k + 1] = to_bf16(x8[2*ib+1]);
+            }
+        }
+        x += 16*n_per_row;
+        y += 16*n_per_row;
+    }
+}
+}
+
+void repack_f32_bf16_r16(const void * src, void * dst, int64_t nrows, int64_t n_per_row) {
+    repack_bf16(nrows, n_per_row, (const float *)src, (ggml_bf16_t *)dst);
+}
+
+void repack_bf16_bf16_r16(const void * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row) {
+    repack_bf16(nrows, n_per_row, (const ggml_bf16_t *)src, (ggml_bf16_t *)dst);
 }
 
