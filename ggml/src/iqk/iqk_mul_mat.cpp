@@ -9353,12 +9353,8 @@ void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& inf
             auto d4h = vcvt_f32_f16(vld1_f16((const float16_t *)iq8[ibl].d+4));
             int32x4_t isum[2*nrc_y] = {};
             for (int ib = 0; ib < QK_K/16; ++ib) {
-                auto q1 = vld1q_u8_x4(iq8[ibl].qs + 128*ib +  0);
-                auto q2 = vld1q_u8_x4(iq8[ibl].qs + 128*ib + 64);
-                for (int k = 0; k < 4; ++k) {
-                    q1.val[k] = veorq_u8(q1.val[k], vdupq_n_u8(0x80));
-                    q2.val[k] = veorq_u8(q2.val[k], vdupq_n_u8(0x80));
-                }
+                auto q1 = vld1q_s8_x4(iq8[ibl].qs + 128*ib +  0);
+                auto q2 = vld1q_s8_x4(iq8[ibl].qs + 128*ib + 64);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = vld1q_s8(q8.y[iy][ibl].qs+16*ib);
                     isum[2*iy+0] = vdotq_laneq_s32(isum[2*iy+0], q1.val[0], y, 0);
