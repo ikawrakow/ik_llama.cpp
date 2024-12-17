@@ -21,6 +21,9 @@
 #include <algorithm>
 #include <cstring>
 #include <mutex>
+#include <thread>
+#include <atomic>
+#include <unordered_map>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -5052,5 +5055,77 @@ void vec_dot_iq2_k_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t 
     GGML_UNUSED(bs);
     GGML_UNUSED(bx);
     GGML_UNUSED(by);
+}
+
+namespace {
+struct Repack {
+    using repack_func = void (*) (int nrows, int n_per_row, const char * src, char * dst);
+    ggml_type   new_type;
+    int         num_rows;
+    repack_func repack;
+};
+}
+
+void iqk_repack_tensor(struct ggml_tensor * tensor) {
+    constexpr int kChunk = 8;
+    if (!tensor) return;
+    if (!ggml_is_contiguous(tensor)) return;
+    if (strncmp(tensor->name, "token_embd.weight", GGML_MAX_NAME) == 0) return;
+    if (tensor->ne[1] % 4 || tensor->ne[2]*tensor->ne[3] > 1) return;
+    static const std::unordered_map<ggml_type, Repack> k_map = {
+        { GGML_TYPE_IQ2_K,  { GGML_TYPE_IQ2_K_R4,  4,  (Repack::repack_func)repack_iq2_k}   },
+        { GGML_TYPE_IQ3_K,  { GGML_TYPE_IQ3_K_R4,  4,  (Repack::repack_func)repack_iq3_k}   },
+        { GGML_TYPE_IQ4_K,  { GGML_TYPE_IQ4_K_R4,  4,  (Repack::repack_func)repack_iq4_k}   },
+        { GGML_TYPE_IQ4_XS, { GGML_TYPE_IQ4_XS_R4, 4,  (Repack::repack_func)repack_iq4_xs}  },
+        { GGML_TYPE_IQ4_NL, { GGML_TYPE_IQ4_NL_R4, 4,  (Repack::repack_func)repack_iq4_nl}  },
+        { GGML_TYPE_IQ2_BN, { GGML_TYPE_IQ2_BN_R4, 4,  (Repack::repack_func)repack_iq2_bn}  },
+        { GGML_TYPE_Q2_K,   { GGML_TYPE_Q2_K_R4,   4,  (Repack::repack_func)repack_q2_k}    },
+        { GGML_TYPE_Q3_K,   { GGML_TYPE_Q3_K_R4,   4,  (Repack::repack_func)repack_q3_k}    },
+        { GGML_TYPE_Q4_K,   { GGML_TYPE_Q4_K_R4,   4,  (Repack::repack_func)repack_q4_k}    },
+        { GGML_TYPE_Q5_K,   { GGML_TYPE_Q5_K_R4,   4,  (Repack::repack_func)repack_q5_k}    },
+        { GGML_TYPE_Q6_K,   { GGML_TYPE_Q6_K_R4,   4,  (Repack::repack_func)repack_q6_k}    },
+        { GGML_TYPE_Q4_0,   { GGML_TYPE_Q4_0_R4,   4,  (Repack::repack_func)repack_q4_0}    },
+        { GGML_TYPE_Q5_0,   { GGML_TYPE_Q5_0_R4,   4,  (Repack::repack_func)repack_q5_0}    },
+        { GGML_TYPE_Q6_0,   { GGML_TYPE_Q6_0_R4,   4,  (Repack::repack_func)repack_q6_0}    },
+        { GGML_TYPE_Q8_0,   { GGML_TYPE_Q8_0_R4,   4,  (Repack::repack_func)repack_q8_0}    },
+        { GGML_TYPE_Q8_K,   { GGML_TYPE_Q8_K_R8,   8,  (Repack::repack_func)repack_q8_k}    },
+    };
+
+    auto it = k_map.find(tensor->type);
+    if (it == k_map.end()) return;
+
+    auto& r = it->second;
+
+    int max_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
+    int num_chunks = (tensor->ne[1] + kChunk*r.num_rows - 1)/(kChunk*r.num_rows);
+    int nthread = std::min(num_chunks, max_thread);
+
+    //printf("%s(%s): %s -> %s. %d rows, %d chunks, %d threads\n", __func__, tensor->name, ggml_type_name(tensor->type), ggml_type_name(r.new_type),
+    //        int(tensor->ne[1]), num_chunks, nthread);
+
+    std::atomic<int> counter(0);;
+    auto compute = [&counter, &r, tensor, num_chunks] () {
+        int nrows = tensor->ne[1];
+        int n_per_row = tensor->ne[0];
+        auto row_size = ggml_row_size(tensor->type, n_per_row);
+        std::vector<char> qtmp(r.num_rows*row_size);
+        auto data = (char *)tensor->data;
+        while (true) {
+            int chunk = counter.fetch_add(1);
+            if (chunk >= num_chunks) break;
+            int first_row = chunk*kChunk*r.num_rows;
+            int last_row = std::min(first_row + kChunk*r.num_rows, nrows);
+            for (int row = first_row; row < last_row; row += r.num_rows) {
+                std::memcpy(qtmp.data(), data + row*row_size, r.num_rows*row_size);
+                r.repack(r.num_rows, n_per_row, qtmp.data(), data + row*row_size);
+            }
+        }
+    };
+    std::vector<std::thread> workers(nthread-1);
+    for (auto& w : workers) w = std::thread(compute);
+    compute();
+    for (auto& w : workers) w.join();
+
+    tensor->type = r.new_type;
 }
 
