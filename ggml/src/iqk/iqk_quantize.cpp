@@ -5096,6 +5096,7 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
 
     auto it = k_map.find(tensor->type);
     if (it == k_map.end()) return;
+    if (tensor->ne[1] % it->second.num_rows) return;
 
     auto& r = it->second;
 
