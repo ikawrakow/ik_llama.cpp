@@ -173,6 +173,8 @@ void quantize_row_q8_KR8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, 
 void repack_f32_bf16_r16 (const void * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row);
 void repack_bf16_bf16_r16(const void * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row);
 
+void iqk_repack_tensor(struct ggml_tensor * tensor);
+
 #ifdef __cplusplus
 }
 #endif
