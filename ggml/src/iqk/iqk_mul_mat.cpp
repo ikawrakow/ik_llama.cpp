@@ -9126,6 +9126,112 @@ inline void iq3_4_add_shift(int ibl, const Q8<nrc_y, block_q8_K>& q8, const int8
 }
 
 template <int nrc_y>
+void mul_mat_iq2_k_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<nrc_y, block_q8_K> q8(info);
+    auto m4 = vdupq_n_u8(0xf);
+    auto m03 = vdupq_n_u8(0x03);
+    //auto ms = nrc_y == 1 ? vdupq_n_u8(4) : vdupq_n_u8(8);
+    auto ms = vdupq_n_u8(4);
+    uint8x16x2_t shift_shuffle = {
+        vreinterpretq_u8_u64(uint64x2_t{0x0101010100000000, 0x0303030302020202}),
+        vreinterpretq_u8_u64(uint64x2_t{0x0505050504040404, 0x0707070706060606})
+    };
+    auto values8 = vld1_s8(iq2nl_values);
+    auto values = vcombine_s8(values8, values8);
+    int nbl = n / QK_K;
+    int8x16_t qx[4];
+    int8x16x4_t i8scales;
+    int16x8x4_t i16scales;
+    float32x4_t acc[nrc_y] = {};
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        const block_iq2_k_r4 * iq2 = (const block_iq2_k_r4 *)((const char *)vx + ix*bx);
+        for (int ibl = 0; ibl < nbl; ++ibl) {
+            auto d4 = vcvt_f32_f16(vld1_f16((const float16_t *)iq2[ibl].d));
+            auto extra8 = vld1_u8(iq2[ibl].extra);
+            uint8x16_t extra;
+            //if constexpr (nrc_y == 1) {
+                extra = vcombine_u8(extra8, vshr_n_u8(extra8,1));
+            //} else {
+            //    extra = vcombine_u8(extra8, extra8);
+            //}
+            auto sl = vld1q_u8_x2(iq2[ibl].scales);
+            i8scales.val[0] = vaddq_s8(vandq_u8(sl.val[0],  m4), vdupq_n_s8(-8));
+            i8scales.val[1] = vaddq_s8(vandq_u8(sl.val[1],  m4), vdupq_n_s8(-8));
+            i8scales.val[2] = vaddq_s8(vshrq_n_u8(sl.val[0], 4), vdupq_n_s8(-8));
+            i8scales.val[3] = vaddq_s8(vshrq_n_u8(sl.val[1], 4), vdupq_n_s8(-8));
+            int32x4_t isum[nrc_y] = {};
+            //if constexpr (nrc_y == 1) {
+            //    iq3_4_add_shift(ibl, q8, i8scales, extra, ms, isum);
+            //}
+            for (int is = 0; is < 2; ++is) {
+                i16scales.val[0] = vmovl_s8(vget_low_s8 (i8scales.val[2*is+0]));
+                i16scales.val[1] = vmovl_s8(vget_high_s8(i8scales.val[2*is+0]));
+                i16scales.val[2] = vmovl_s8(vget_low_s8 (i8scales.val[2*is+1]));
+                i16scales.val[3] = vmovl_s8(vget_high_s8(i8scales.val[2*is+1]));
+                for (int ib = 0; ib < 4; ++ib) {
+                    auto scales = vmovl_s16(vget_low_s16 (i16scales.val[ib]));
+                    auto bits = vld1q_u8_x2(iq2[ibl].qs + 128*is + 32*ib);
+                    qx[0] = vandq_u8(           bits.val[0],     m03);
+                    qx[1] = vandq_u8(vshrq_n_u8(bits.val[0], 2), m03);
+                    qx[2] = vandq_u8(vshrq_n_u8(bits.val[0], 4), m03);
+                    qx[3] = vandq_u8(vshrq_n_u8(bits.val[0], 6), m03);
+                    uint8x16_t shifts;
+                    //if constexpr (nrc_y == 1) {
+                    //    qx[0] = vqtbl1q_s8(values, qx[0]);  //  0...3 from the 4 rows
+                    //    qx[1] = vqtbl1q_s8(values, qx[1]);  //  4...7
+                    //    qx[2] = vqtbl1q_s8(values, qx[2]);  //  8..11
+                    //    qx[3] = vqtbl1q_s8(values, qx[3]);  // 12..15
+                    //} else {
+                        shifts = vandq_u8(ms, vshlq_n_u8(extra, 2));
+                        auto shift = vqtbl1q_u8(shifts, shift_shuffle.val[0]);
+                        extra = vshrq_n_u8(extra, 1);
+                        qx[0] = vqtbl1q_s8(values, vaddq_u8(shift, qx[0]));  //  0...3 from the 4 rows
+                        qx[1] = vqtbl1q_s8(values, vaddq_u8(shift, qx[1]));  //  4...7
+                        qx[2] = vqtbl1q_s8(values, vaddq_u8(shift, qx[2]));  //  8..11
+                        qx[3] = vqtbl1q_s8(values, vaddq_u8(shift, qx[3]));  // 12..15
+                    //}
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto y = vld1q_s8(q8.y[iy][ibl].qs+128*is+32*ib);
+                        auto sumi = interleaved_dotq(qx, y);
+                        isum[iy] = vmlaq_s32(isum[iy], scales, sumi);
+                    }
+                    qx[0] = vandq_u8(           bits.val[1],     m03);
+                    qx[1] = vandq_u8(vshrq_n_u8(bits.val[1], 2), m03);
+                    qx[2] = vandq_u8(vshrq_n_u8(bits.val[1], 4), m03);
+                    qx[3] = vandq_u8(vshrq_n_u8(bits.val[1], 6), m03);
+                    //if constexpr (nrc_y == 1) {
+                    //    qx[0] = vqtbl1q_s8(values, qx[0]);  //  0...3 from the 4 rows
+                    //    qx[1] = vqtbl1q_s8(values, qx[1]);  //  4...7
+                    //    qx[2] = vqtbl1q_s8(values, qx[2]);  //  8..11
+                    //    qx[3] = vqtbl1q_s8(values, qx[3]);  // 12..15
+                    //} else {
+                        shift = vqtbl1q_u8(shifts, shift_shuffle.val[1]);
+                        qx[0] = vqtbl1q_s8(values, vaddq_u8(shift, qx[0]));  //  0...3 from the 4 rows
+                        qx[1] = vqtbl1q_s8(values, vaddq_u8(shift, qx[1]));  //  4...7
+                        qx[2] = vqtbl1q_s8(values, vaddq_u8(shift, qx[2]));  //  8..11
+                        qx[3] = vqtbl1q_s8(values, vaddq_u8(shift, qx[3]));  // 12..15
+                    //}
+                    scales = vmovl_s16(vget_high_s16(i16scales.val[ib]));
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto y = vld1q_s8(q8.y[iy][ibl].qs+128*is+32*ib+16);
+                        auto sumi = interleaved_dotq(qx, y);
+                        isum[iy] = vmlaq_s32(isum[iy], scales, sumi);
+                    }
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                acc[iy] = vfmaq_f32(acc[iy], vmulq_f32(d4, vdupq_n_f32(q8.scale(iy, ibl))), vcvtq_f32_s32(isum[iy]));
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, acc[iy]);
+            acc[iy] = vdupq_n_f32(0.f);
+        }
+    }
+}
+
+template <int nrc_y>
 void mul_mat_iq3_k_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
@@ -10163,6 +10269,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_Q8_K_R8:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_q8_k_r8_q8_k);
             expected_Btype = GGML_TYPE_Q8_KR8;
+            break;
+        case GGML_TYPE_IQ2_K_R4:
+            SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq2_k_r4_q8_k);
+            expected_Btype = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_IQ3_K_R4:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq3_k_r4_q8_k);
