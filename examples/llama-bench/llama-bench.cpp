@@ -238,7 +238,7 @@ struct cmd_params {
     int reps;
     bool verbose;
     bool warmup;
-    bool repack;
+    bool repack = false;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -632,7 +632,7 @@ struct cmd_params_instance {
     std::vector<float> tensor_split;
     bool use_mmap;
     bool embeddings;
-    bool repack;
+    bool repack = false;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -811,7 +811,7 @@ struct test {
     std::vector<float> tensor_split;
     bool use_mmap;
     bool embeddings;
-    bool repack;
+    bool repack = false;
     int n_prompt;
     int n_gen;
     std::string test_time;
