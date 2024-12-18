@@ -4415,6 +4415,8 @@ static void mul_mat_iq5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataI
                 q5vl = _mm256_or_si256(qx[3], qh);
                 q5vh = _mm256_or_si256(qx[3], _mm256_xor_si256(qh, m128));
                 qx[3] = _mm256_or_si256(_mm256_shuffle_epi8(values[0], q5vl), _mm256_shuffle_epi8(values[1], q5vh));
+
+#ifdef HAVE_FANCY_SIMD
                 if constexpr (nrc_y == 1) {
                     auto shift = _mm256_and_si256(ms, _mm256_slli_epi16(extra, 1)); extra = _mm256_srli_epi16(extra, 1);
                     shift = _mm256_shuffle_epi8(shift, shift_shuffle);
@@ -4423,8 +4425,7 @@ static void mul_mat_iq5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataI
                     qx[2] = _mm256_add_epi8(qx[2], shift);
                     qx[3] = _mm256_add_epi8(qx[3], shift);
                 }
-
-#ifndef HAVE_FANCY_SIMD
+#else
                 auto shift = _mm256_and_si256(ms, _mm256_slli_epi16(extra, 1)); extra = _mm256_srli_epi16(extra, 1);
                 shift = _mm256_shuffle_epi8(shift, shift_shuffle);
                 qx[0] = _mm256_add_epi8(qx[0], shift);
