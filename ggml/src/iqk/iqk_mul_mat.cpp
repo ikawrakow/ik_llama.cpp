@@ -3148,12 +3148,14 @@ static void mul_mat_iq4_ks_r4_q8_k(int n, const void * vx, size_t bx, const Data
                 }
             }
 #else
-            h_shift.vec = _mm256_slli_epi16(_mm256_and_si256(scales, _mm256_set1_epi8(1)), 1);
+            //h_shift.vec = _mm256_slli_epi16(_mm256_and_si256(scales, _mm256_set1_epi8(1)), 1);
+            h_shift.vec = _mm256_add_epi8(_mm256_set1_epi8(-64), _mm256_slli_epi16(_mm256_and_si256(scales, _mm256_set1_epi8(1)), 1));
 #endif
             for (int ib = 0; ib < QK_K/32; ++ib) {
 #ifdef HAVE_FANCY_SIMD
                 auto iscales = _mm256_cvtepi8_epi32(_mm_set1_epi32(h.val[ib]));
-                auto ishifts = _mm256_add_epi32(_mm256_set1_epi32(-64), _mm256_cvtepi8_epi32(_mm_set1_epi32(h_shift.val[ib])));
+                //auto ishifts = _mm256_add_epi32(_mm256_set1_epi32(-64), _mm256_cvtepi8_epi32(_mm_set1_epi32(h_shift.val[ib])));
+                auto ishifts = _mm256_cvtepi8_epi32(_mm_set1_epi32(h_shift.val[ib]));
                 auto scales  = _mm256_cvtepi32_ps(iscales);
                 auto scales_m = _mm256_mul_ps(scales, _mm256_cvtepi32_ps(ishifts));
                 for (int iy = 0; iy < nrc_y; ++iy) {
