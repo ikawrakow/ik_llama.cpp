@@ -1576,7 +1576,7 @@ struct DequantizerQ4K final : public BaseDequantizer<block_q4_K> {
 };
 
 struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
-    DequantizerIQ4XS(const void * vx, size_t bx) :5BaseDequantizer(vx, bx), values(load_iq4nl_values_256()) {}
+    DequantizerIQ4XS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_256()) {}
     template <typename Q8>
     inline __m256i new_block(int i, const Q8& q8, __m256 * accd) {
         d = GGML_FP16_TO_FP32(x[i].d);
