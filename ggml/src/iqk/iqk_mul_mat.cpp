@@ -9400,6 +9400,79 @@ void mul_mat_iq4_xs_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& i
     }
 }
 
+template <int nrc_y>
+void mul_mat_iq4_ks_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<nrc_y, block_q8_K> q8(info);
+    auto m4 = vdupq_n_u8(0xf);
+    auto values = vld1q_s8(iq4k_values);
+    int nbl = n / QK_K;
+    int8x16_t qx[8];
+    int16x8x4_t iscales;
+    int32x4x4_t scales;
+    float32x4_t acc[nrc_y] = {};
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        auto dptr = (const float *)((const char *)vx + ix*bx);
+        auto d4 = vld1q_f32(dptr);
+        const block_iq4_ks_r4 * iq4 = (const block_iq4_ks_r4 *)(dptr + 4);
+        for (int ibl = 0; ibl < nbl; ++ibl) {
+            // TODO: shifts
+            auto sas = vld1q_u8_x2(iq4[ibl].scales);
+            auto scale = vandq_u8(sas.val[0], vdupq_n_u8(254));
+            iscales.val[0] = vaddq_s16(vreinterpretq_s16_u16(vmovl_u8(vget_low_u8 (scale))), vdupq_n_s16(-127));
+            iscales.val[1] = vaddq_s16(vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(scale))), vdupq_n_s16(-127));
+            scale = vandq_u8(sas.val[1], vdupq_n_u8(254));
+            iscales.val[2] = vaddq_s16(vreinterpretq_s16_u16(vmovl_u8(vget_low_u8 (scale))), vdupq_n_s16(-127));
+            iscales.val[3] = vaddq_s16(vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(scale))), vdupq_n_s16(-127));
+            sas.val[0] = vshlq_n_u8(vandq_u8(sas.val[0], vdupq_n_u8(1)), 2);
+            sas.val[1] = vshlq_n_u8(vandq_u8(sas.val[1], vdupq_n_u8(1)), 2);
+            int32x4_t isum[nrc_y] = {};
+            {
+                auto s16_1 = vmulq_s16(iscales.val[0], vmovl_u8(vget_low_u8 (sas.val[0])));
+                auto s16_2 = vmulq_s16(iscales.val[1], vmovl_u8(vget_high_u8(sas.val[0])));
+                auto s16_3 = vmulq_s16(iscales.val[2], vmovl_u8(vget_low_u8 (sas.val[1])));
+                auto s16_4 = vmulq_s16(iscales.val[3], vmovl_u8(vget_high_u8(sas.val[1])));
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto bsums = vld1q_s16_x2(q8.y[iy][ibl].bsums);
+                    auto bs = vpaddq_s16(bsums.val[0], bsums.val[1]);
+                    auto b8 = vget_low_s16(bs);
+                    isum[iy] = vmlal_lane_s16(isum[iy], vget_low_s16 (s16_1), b8, 0);
+                    isum[iy] = vmlal_lane_s16(isum[iy], vget_high_s16(s16_1), b8, 1);
+                    isum[iy] = vmlal_lane_s16(isum[iy], vget_low_s16 (s16_2), b8, 2);
+                    isum[iy] = vmlal_lane_s16(isum[iy], vget_high_s16(s16_2), b8, 3);
+                    b8 = vget_high_s16(bs);
+                    isum[iy] = vmlal_lane_s16(isum[iy], vget_low_s16 (s16_3), b8, 0);
+                    isum[iy] = vmlal_lane_s16(isum[iy], vget_high_s16(s16_3), b8, 1);
+                    isum[iy] = vmlal_lane_s16(isum[iy], vget_low_s16 (s16_4), b8, 2);
+                    isum[iy] = vmlal_lane_s16(isum[iy], vget_high_s16(s16_4), b8, 3);
+                }
+            }
+            for (int is = 0; is < 2; ++is) {
+                scales.val[0] = vmovl_s16(vget_low_s16 (iscales.val[2*is+0]));
+                scales.val[1] = vmovl_s16(vget_high_s16(iscales.val[2*is+0]));
+                scales.val[2] = vmovl_s16(vget_low_s16 (iscales.val[2*is+1]));
+                scales.val[3] = vmovl_s16(vget_high_s16(iscales.val[2*is+1]));
+                for (int ib = 0; ib < 4; ++ib) {
+                    auto bits = vld1q_u8_x4(iq4[ibl].qs + 256*is + 64*ib);
+                    prepare_iq4_nl_quants(values, m4, bits, qx);
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        auto y = vld1q_s8_x2(q8.y[iy][ibl].qs+128*is+32*ib);
+                        auto sumi = interleaved_dotq(qx, y);
+                        isum[iy] = vmlaq_s32(isum[iy], scales.val[ib], sumi);
+                    }
+                }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                acc[iy] = vfmaq_f32(acc[iy], vdupq_n_f32(q8.scale(iy, ibl)), vcvtq_f32_s32(isum[iy]));
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, vmulq_f32(d4, acc[iy]));
+            acc[iy] = vdupq_n_f32(0.f);
+        }
+    }
+}
+
 template <int nrc_y, int k_shift>
 inline void iq3_4_add_shift(int ibl, const Q8<nrc_y, block_q8_K>& q8, const int8x16x4_t& i8scales, uint8x16_t extra,
         int32x4_t * isum) {
@@ -10692,6 +10765,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_IQ4_XS_R4:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq4_xs_r4_q8_k);
             expected_Btype = GGML_TYPE_Q8_K32;
+            break;
+        case GGML_TYPE_IQ4_KS_R4:
+            SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq4_ks_r4_q8_k);
+            expected_Btype = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_Q2_K_R4:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_q2_k_r4_q8_k);
