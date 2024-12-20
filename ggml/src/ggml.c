@@ -13905,7 +13905,7 @@ UseGgmlGemm1:;
         char * wdata = (char *)params->wdata + params->wsize - params->qsize;
 
         if (strncmp(src1->name, wdata - GGML_MAX_NAME, GGML_MAX_NAME) == 0) {
-            goto AlreadyQunatized;
+            goto AlreadyQuantized;
         }
         wdata += GGML_MAX_NAME;
 
@@ -13953,7 +13953,7 @@ UseGgmlGemm1:;
             //atomic_store(&params->shared->current_chunk, nth);
         }
 
-AlreadyQunatized:;
+AlreadyQuantized:;
     }
 
     const void * wdata = (src1->type == vec_dot_type) ? src1->data
