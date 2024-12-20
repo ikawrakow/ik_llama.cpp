@@ -187,6 +187,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_K_R4:
             case GGML_TYPE_IQ5_K_R4:
             case GGML_TYPE_IQ4_KS_R4:
+            case GGML_TYPE_IQ2_XXS_R4:
             case GGML_TYPE_IQ3_XXS_R4:
             case GGML_TYPE_IQ2_BN_R4: return 4;
             case GGML_TYPE_Q8_K_R8: return 8;
