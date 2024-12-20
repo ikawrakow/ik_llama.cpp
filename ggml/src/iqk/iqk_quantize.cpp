@@ -5304,6 +5304,122 @@ struct Repack {
 }
 
 //
+// ========================================= iq2_xxs_r4
+//
+
+void quantize_row_iq2_xxs_r4_ref(const float * x, block_iq2_xxs_r4 * y, int64_t k) {
+    quantize_iq2_xxs_r4(x, (void *)y, 4, k/4, nullptr);
+}
+
+void quantize_row_iq2_xxs_r4(const float * x, void * y, int64_t k) {
+    quantize_iq2_xxs_r4(x, y, 4, k/4, nullptr);
+}
+
+namespace {
+inline uint8_t scrambled_sign(uint8_t s) {
+    static const uint8_t k_table[128] = {
+        0x00, 0x7f, 0x7e, 0x01, 0x7c, 0x03, 0x02, 0x7d, 0x78, 0x07, 0x06, 0x79, 0x04, 0x7b, 0x7a, 0x05,
+        0x70, 0x0f, 0x0e, 0x71, 0x0c, 0x73, 0x72, 0x0d, 0x08, 0x77, 0x76, 0x09, 0x74, 0x0b, 0x0a, 0x75,
+        0x60, 0x1f, 0x1e, 0x61, 0x1c, 0x63, 0x62, 0x1d, 0x18, 0x67, 0x66, 0x19, 0x64, 0x1b, 0x1a, 0x65,
+        0x10, 0x6f, 0x6e, 0x11, 0x6c, 0x13, 0x12, 0x6d, 0x68, 0x17, 0x16, 0x69, 0x14, 0x6b, 0x6a, 0x15,
+        0x40, 0x3f, 0x3e, 0x41, 0x3c, 0x43, 0x42, 0x3d, 0x38, 0x47, 0x46, 0x39, 0x44, 0x3b, 0x3a, 0x45,
+        0x30, 0x4f, 0x4e, 0x31, 0x4c, 0x33, 0x32, 0x4d, 0x48, 0x37, 0x36, 0x49, 0x34, 0x4b, 0x4a, 0x35,
+        0x20, 0x5f, 0x5e, 0x21, 0x5c, 0x23, 0x22, 0x5d, 0x58, 0x27, 0x26, 0x59, 0x24, 0x5b, 0x5a, 0x25,
+        0x50, 0x2f, 0x2e, 0x51, 0x2c, 0x53, 0x52, 0x2d, 0x28, 0x57, 0x56, 0x29, 0x54, 0x2b, 0x2a, 0x55,
+    };
+    return k_table[s];
+}
+}
+
+static void repack_iq2_xxs(int nrows, int n_per_row, const block_iq2_xxs * x, block_iq2_xxs_r4 * y) {
+    GGML_ASSERT(nrows%4 == 0);
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    int nblock = n_per_row/QK_K;
+    const block_iq2_xxs * x4[4];
+    uint32_t aux32[2];
+    const uint8_t * aux8 = (const uint8_t *)aux32;
+    for (int row = 0; row < nrows; row += 4) {
+        for (int k = 0; k < 4; ++k) x4[k] = x + nblock*k;
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+            auto ysas = (uint32_t *)y[ibl].sas;
+            for (int k = 0; k < 4; ++k) {
+                y[ibl].d[k] = x4[k][ibl].d;
+                for (int ib = 0; ib < QK_K/32; ++ib) {
+                    std::memcpy(aux32, x4[k][ibl].qs + 4*ib, 2*sizeof(uint32_t));
+                    for (int i = 0; i < 4; ++i) {
+                        y[ibl].qs[16*ib+4*k+i] = aux8[i];
+                    }
+                    uint8_t scale = aux32[1] >> 28;
+                    uint8_t s1 = (scrambled_sign((aux32[1] >>  0) & 127) << 1) | ((scale >> 0) & 1);
+                    uint8_t s2 = (scrambled_sign((aux32[1] >>  7) & 127) << 1) | ((scale >> 1) & 1);
+                    uint8_t s3 = (scrambled_sign((aux32[1] >> 14) & 127) << 1) | ((scale >> 2) & 1);
+                    uint8_t s4 = (scrambled_sign((aux32[1] >> 21) & 127) << 1) | ((scale >> 3) & 1);
+                    aux32[1] = uint32_t(s1) | (uint32_t(s2) << 8) | (uint32_t(s3) << 16) | (uint32_t(s4) << 24);
+                    ysas[4*ib+k] = aux32[1];
+                }
+            }
+        }
+        x += 4*nblock;
+        y += nblock;
+    }
+}
+
+size_t quantize_iq2_xxs_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    GGML_ASSERT(nrows%4 == 0);
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    char * qcur = (char *)dst;
+    auto row_size = ggml_row_size(GGML_TYPE_IQ2_XXS, n_per_row);
+    std::vector<char> qtmp(4*row_size);
+    for (int row = 0; row < nrows; row += 4) {
+        quantize_iq2_xxs(src, (void *)qtmp.data(), 4, n_per_row, imatrix);
+        repack_iq2_xxs(4, n_per_row, (const block_iq2_xxs *)qtmp.data(), (block_iq2_xxs_r4 *)qcur);
+        qcur += 4*row_size;
+        src += 4*n_per_row;
+    }
+    return nrows*row_size;
+}
+
+void dequantize_row_iq2_xxs_r4(const block_iq2_xxs_r4 * x, float * y, int64_t k) {
+    auto n_per_row = k/4;
+    float * y4[4] = {y, y + n_per_row, y + 2*n_per_row, y + 3*n_per_row};
+    int nblock = n_per_row/QK_K;
+    uint32_t s32;
+    const uint8_t * s8 = (const uint8_t *)&s32;
+    for (int ibl = 0; ibl < nblock; ++ibl) {
+        const uint32_t * sas = (const uint32_t *)x[ibl].sas;
+        for (int k = 0; k < 4; ++k) {
+            const float d = 0.125f*GGML_FP16_TO_FP32(x[ibl].d[k]);
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                uint32_t aux32 = sas[4*ib+k];
+                s32 = aux32 & 0x01010101;
+                uint8_t scale = s8[0] | (s8[1] << 1) | (s8[2] << 2) | (s8[3] << 3);
+                float dl = d*(2*scale+1);
+                aux32 &= 0xfefefefe;
+                aux32 ^= (aux32 >> 1);
+                for (int i = 0; i < 4; ++i) {
+                    auto val = (const int8_t *)(iq2xxs_grid + x[ibl].qs[16*ib+4*k+i]);
+                    for (int j = 0; j < 8; ++j) y4[k][QK_K*ibl+32*ib+8*i+j] = dl * val[j] * (aux32 & (1 << j) ? -1 : 1);
+                    aux32 >>= 8;
+                }
+            }
+        }
+    }
+}
+
+void vec_dot_iq2_xxs_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_XXS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK4_NL == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
+//
 // ========================================= iq3_xxs_r4
 //
 
@@ -5321,16 +5437,6 @@ namespace {
 static void repack_iq3_xxs(int nrows, int n_per_row, const block_iq3_xxs * x, block_iq3_xxs_r4 * y) {
     GGML_ASSERT(nrows%4 == 0);
     GGML_ASSERT(n_per_row%QK_K == 0);
-    static uint8_t k_table[128] = {
-        0x00, 0x7f, 0x7e, 0x01, 0x7c, 0x03, 0x02, 0x7d, 0x78, 0x07, 0x06, 0x79, 0x04, 0x7b, 0x7a, 0x05,
-        0x70, 0x0f, 0x0e, 0x71, 0x0c, 0x73, 0x72, 0x0d, 0x08, 0x77, 0x76, 0x09, 0x74, 0x0b, 0x0a, 0x75,
-        0x60, 0x1f, 0x1e, 0x61, 0x1c, 0x63, 0x62, 0x1d, 0x18, 0x67, 0x66, 0x19, 0x64, 0x1b, 0x1a, 0x65,
-        0x10, 0x6f, 0x6e, 0x11, 0x6c, 0x13, 0x12, 0x6d, 0x68, 0x17, 0x16, 0x69, 0x14, 0x6b, 0x6a, 0x15,
-        0x40, 0x3f, 0x3e, 0x41, 0x3c, 0x43, 0x42, 0x3d, 0x38, 0x47, 0x46, 0x39, 0x44, 0x3b, 0x3a, 0x45,
-        0x30, 0x4f, 0x4e, 0x31, 0x4c, 0x33, 0x32, 0x4d, 0x48, 0x37, 0x36, 0x49, 0x34, 0x4b, 0x4a, 0x35,
-        0x20, 0x5f, 0x5e, 0x21, 0x5c, 0x23, 0x22, 0x5d, 0x58, 0x27, 0x26, 0x59, 0x24, 0x5b, 0x5a, 0x25,
-        0x50, 0x2f, 0x2e, 0x51, 0x2c, 0x53, 0x52, 0x2d, 0x28, 0x57, 0x56, 0x29, 0x54, 0x2b, 0x2a, 0x55,
-    };
     int nblock = n_per_row/QK_K;
     const block_iq3_xxs * x4[4];
     uint32_t aux32;
@@ -5347,10 +5453,10 @@ static void repack_iq3_xxs(int nrows, int n_per_row, const block_iq3_xxs * x, bl
                     }
                     std::memcpy(&aux32, xsas + 4*ib, 4);
                     uint8_t scale = aux32 >> 28;
-                    uint8_t s1 = (k_table[(aux32 >>  0) & 127] << 1) | ((scale >> 0) & 1);
-                    uint8_t s2 = (k_table[(aux32 >>  7) & 127] << 1) | ((scale >> 1) & 1);
-                    uint8_t s3 = (k_table[(aux32 >> 14) & 127] << 1) | ((scale >> 2) & 1);
-                    uint8_t s4 = (k_table[(aux32 >> 21) & 127] << 1) | ((scale >> 3) & 1);
+                    uint8_t s1 = (scrambled_sign((aux32 >>  0) & 127) << 1) | ((scale >> 0) & 1);
+                    uint8_t s2 = (scrambled_sign((aux32 >>  7) & 127) << 1) | ((scale >> 1) & 1);
+                    uint8_t s3 = (scrambled_sign((aux32 >> 14) & 127) << 1) | ((scale >> 2) & 1);
+                    uint8_t s4 = (scrambled_sign((aux32 >> 21) & 127) << 1) | ((scale >> 3) & 1);
                     aux32 = uint32_t(s1) | (uint32_t(s2) << 8) | (uint32_t(s3) << 16) | (uint32_t(s4) << 24);
                     ysas[4*ib+k] = aux32;
                 }
