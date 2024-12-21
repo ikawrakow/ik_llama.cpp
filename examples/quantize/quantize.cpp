@@ -24,6 +24,7 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "IQ2_XXS",  LLAMA_FTYPE_MOSTLY_IQ2_XXS,  " 2.06 bpw quantization",            },
     { "IQ2_XXS_R4",LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4,"IQ2_XXS repacked",            },
     { "IQ2_XS",   LLAMA_FTYPE_MOSTLY_IQ2_XS,   " 2.31 bpw quantization",            },
+    { "IQ2_XS_R4",LLAMA_FTYPE_MOSTLY_IQ2_XS_R4,"IQ2_XS repacked",            },
     { "IQ2_S",    LLAMA_FTYPE_MOSTLY_IQ2_S,    " 2.5  bpw quantization",            },
     { "IQ2_M",    LLAMA_FTYPE_MOSTLY_IQ2_M,    " 2.7  bpw quantization",            },
     { "IQ1_S",    LLAMA_FTYPE_MOSTLY_IQ1_S,    " 1.56 bpw quantization",            },
@@ -505,7 +506,7 @@ int main(int argc, char ** argv) {
     if (!params.ignore_imatrix_rules && imatrix_data.empty() &&
         (params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S  || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4 ||
-         params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S ||
+         params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS_R4 ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S  ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M)) {
         fprintf(stderr, "\n==========================================================================================================\n");
