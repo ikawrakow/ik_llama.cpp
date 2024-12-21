@@ -412,6 +412,13 @@ typedef struct {
 } block_iq2_xs;
 static_assert(sizeof(block_iq2_xs) == sizeof(ggml_half) + QK_K/8*sizeof(uint16_t) + QK_K/32, "wrong iq2_xs block size/padding");
 
+typedef struct {
+    ggml_half d[4];
+    uint16_t qs[QK_K/2];
+    uint8_t  scales[QK_K/8];
+} block_iq2_xs_r4;
+static_assert(sizeof(block_iq2_xs_r4) == 4*sizeof(block_iq2_xs), "wrong iq2_xs_r4 block size/padding");
+
 // 2.5625 bpw quants
 typedef struct {
     ggml_half d;
