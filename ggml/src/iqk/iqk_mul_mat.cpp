@@ -11659,6 +11659,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_IQ2_S_R4:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq2_s_r4_q8_k);
+            m.func16 = mul_mat_iq2_s_r4_q8_k<16>;
             expected_Btype = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_IQ3_XXS_R4:
