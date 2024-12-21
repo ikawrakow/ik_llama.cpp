@@ -3426,6 +3426,129 @@ static void mul_mat_iq2_xs_r4_q8_k(int n, const void * vx, size_t bx, const Data
 }
 
 template <int nrc_y>
+static void mul_mat_iq2_s_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<nrc_y, block_q8_K> q8(info);
+    int nbl = n / QK_K;
+#ifndef HAVE_FANCY_SIMD
+    auto smask = _mm256_set1_epi64x(0x8040201008040201);
+    auto sign_shuffle = _mm256_set_epi64x(0x0303030303030303, 0x0202020202020202, 0x0101010101010101, 0x0000000000000000);
+    auto m4 = _mm256_set1_epi8(4);
+#endif
+    __m256  acc[nrc_y] = {};
+#ifdef HAVE_FANCY_SIMD
+    __m256i shuffles[2] = {
+        _mm256_set_epi64x(0x0706070607060706, 0x0302030203020302, 0x0504050405040504, 0x0100010001000100),
+        _mm256_set_epi64x(0x0f0e0f0e0f0e0f0e, 0x0b0a0b0a0b0a0b0a, 0x0d0c0d0c0d0c0d0c, 0x0908090809080908)
+    };
+    __m256i isum[2*nrc_y] = {};
+#else
+    __m256i shuffles[4] = {
+        MM256_SET_M128I(_mm_set1_epi16(0x0302), _mm_set1_epi16(0x0100)),
+        MM256_SET_M128I(_mm_set1_epi16(0x0706), _mm_set1_epi16(0x0504)),
+        MM256_SET_M128I(_mm_set1_epi16(0x0b0a), _mm_set1_epi16(0x0908)),
+        MM256_SET_M128I(_mm_set1_epi16(0x0f0e), _mm_set1_epi16(0x0d0c)),
+    };
+    __m256i isum[nrc_y == 1 ? 4 : nrc_y] = {};
+#endif
+    __m256i qx[4];
+    auto grid = iq2s_grid;
+    //union { __m256i vec; uint16_t val[16]; } helper;
+    for (int ix = 0; ix < nrc_x; ix += 4) {
+        auto iq2 = (const block_iq2_s_r4 *)((const char *)vx + (ix+0)*bx);
+        for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
+            auto dl = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)iq2[ibl].d));
+            auto d4 = _mm256_set_m128(dl, dl);
+            auto s32 = (const uint32_t *)iq2[ibl].scales;
+            auto ql = iq2[ibl].qs;
+            auto qh = iq2[ibl].qh;
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                qx[0] = _mm256_set_epi64x(grid[ql[ 3] | ((qh[0] << 2) & 0x300)], grid[ql[ 2] | ((qh[0] << 4) & 0x300)], grid[ql[ 1] | ((qh[0] << 6) & 0x300)], grid[ql[ 0] | ((qh[0] << 8) & 0x300)]);
+                qx[1] = _mm256_set_epi64x(grid[ql[ 7] | ((qh[1] << 2) & 0x300)], grid[ql[ 6] | ((qh[1] << 4) & 0x300)], grid[ql[ 5] | ((qh[1] << 6) & 0x300)], grid[ql[ 4] | ((qh[1] << 8) & 0x300)]);
+                qx[2] = _mm256_set_epi64x(grid[ql[11] | ((qh[2] << 2) & 0x300)], grid[ql[10] | ((qh[2] << 4) & 0x300)], grid[ql[ 9] | ((qh[2] << 6) & 0x300)], grid[ql[ 8] | ((qh[2] << 8) & 0x300)]);
+                qx[3] = _mm256_set_epi64x(grid[ql[15] | ((qh[3] << 2) & 0x300)], grid[ql[14] | ((qh[3] << 4) & 0x300)], grid[ql[13] | ((qh[3] << 6) & 0x300)], grid[ql[12] | ((qh[3] << 8) & 0x300)]);
+                ql += 16; qh += 4;
+                auto signs128 = _mm_loadu_si128((const __m128i*)iq2[ibl].signs + ib);
+                auto scales = _mm_set1_epi32(s32[ib]);
+                scales = _mm_and_si128(_mm_unpacklo_epi8(scales, _mm_srli_epi16(scales, 4)), _mm_set1_epi8(0xf));
+                scales = _mm_or_si128(_mm_slli_epi16(scales, 1), _mm_set1_epi8(1));
+                auto scales16 = _mm256_cvtepi8_epi16(scales);  // 0...7, 0...7
+#ifdef HAVE_FANCY_SIMD
+                __m256i scs[2] = { _mm256_shuffle_epi8(scales16, shuffles[0]), _mm256_shuffle_epi8(scales16, shuffles[1]) };
+                auto mask = (const __mmask32 *)&signs128;
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto y = _mm256_loadu_si256((const __m256i *)q8.y[iy][ibl].qs + ib);
+                    auto sumi1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[0], _mm256_mask_sub_epi8(y, mask[0], _mm256_setzero_si256(), y)); // blocks: 0,0,0,0,  1,1,1,1, row 0
+                    auto sumi2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[1], _mm256_mask_sub_epi8(y, mask[1], _mm256_setzero_si256(), y)); // blocks: 2,2,2,2,  3,3,3,3, row 1
+                    auto sumi3 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2], _mm256_mask_sub_epi8(y, mask[2], _mm256_setzero_si256(), y)); // blocks: 4,4,4,4,  5,5,5,5, row 2
+                    auto sumi4 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[3], _mm256_mask_sub_epi8(y, mask[3], _mm256_setzero_si256(), y)); // blocks: 6,6,6,6,  7,7,7,7, row 3
+                    auto s12 = _mm256_packs_epi32(sumi1, sumi2);  // 0,0,0,0, 2,2,2,2,  1,1,1,1, 3,3,3,3
+                    auto s34 = _mm256_packs_epi32(sumi3, sumi4);  // 4,4,4,4, 6,6,6,6,  5,5,5,5, 7,7,7,7
+                    isum[2*iy+0] = _mm256_add_epi32(isum[2*iy+0], _mm256_madd_epi16(scs[0], s12));
+                    isum[2*iy+1] = _mm256_add_epi32(isum[2*iy+1], _mm256_madd_epi16(scs[1], s34));
+                }
+#else
+                auto signs = MM256_SET_M128I(signs128, signs128);
+                auto shuffle = sign_shuffle;
+                auto s1 = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
+                shuffle = _mm256_add_epi8(shuffle, m4);
+                auto s2 = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
+                shuffle = _mm256_add_epi8(shuffle, m4);
+                auto s3 = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
+                shuffle = _mm256_add_epi8(shuffle, m4);
+                auto s4 = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(_mm256_shuffle_epi8(signs, shuffle), smask), smask), _mm256_set1_epi8(1));
+                __m256i scs[4] = {
+                    _mm256_shuffle_epi8(scales16, shuffles[0]), _mm256_shuffle_epi8(scales16, shuffles[1]),
+                    _mm256_shuffle_epi8(scales16, shuffles[2]), _mm256_shuffle_epi8(scales16, shuffles[3]),
+                };
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto y = _mm256_loadu_si256((const __m256i *)q8.y[iy][ibl].qs + ib);
+                    if constexpr (nrc_y == 1) {
+                        isum[0] = _mm256_add_epi32(isum[0], _mm256_madd_epi16(scs[0], _mm256_maddubs_epi16(qx[0], _mm256_sign_epi8(y, s1))));
+                        isum[1] = _mm256_add_epi32(isum[1], _mm256_madd_epi16(scs[1], _mm256_maddubs_epi16(qx[1], _mm256_sign_epi8(y, s2))));
+                        isum[2] = _mm256_add_epi32(isum[2], _mm256_madd_epi16(scs[2], _mm256_maddubs_epi16(qx[2], _mm256_sign_epi8(y, s3))));
+                        isum[3] = _mm256_add_epi32(isum[3], _mm256_madd_epi16(scs[3], _mm256_maddubs_epi16(qx[3], _mm256_sign_epi8(y, s4))));
+                    } else {
+                        auto sumi1 = _mm256_madd_epi16(scs[0], _mm256_maddubs_epi16(qx[0], _mm256_sign_epi8(y, s1))); // blocks 4x0, 4x1, row 0
+                        auto sumi2 = _mm256_madd_epi16(scs[1], _mm256_maddubs_epi16(qx[1], _mm256_sign_epi8(y, s2))); // blocks 4x2, 4x3, row 1
+                        auto sumi3 = _mm256_madd_epi16(scs[2], _mm256_maddubs_epi16(qx[2], _mm256_sign_epi8(y, s3))); // blocks 4x4, 4x5, row 2
+                        auto sumi4 = _mm256_madd_epi16(scs[3], _mm256_maddubs_epi16(qx[3], _mm256_sign_epi8(y, s4))); // blocks 4x6, 4x7, row 3
+                        auto s12 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi1, sumi2), _mm256_unpackhi_epi32(sumi1, sumi2)); // 0,1, 0,1, 0,1, 0,1
+                        auto s34 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi3, sumi4), _mm256_unpackhi_epi32(sumi3, sumi4)); // 2,3, 2,3, 2,3, 2,3
+                        auto sumi = _mm256_add_epi32(_mm256_unpacklo_epi64(s12, s34), _mm256_unpackhi_epi64(s12, s34)); // 0,1,2,3, 0,1,2,3
+                        isum[iy] = _mm256_add_epi32(isum[iy], sumi);
+                    }
+                }
+#endif
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+#ifdef HAVE_FANCY_SIMD
+                auto sumi = _mm256_hadd_epi32(isum[2*iy+0], isum[2*iy+1]);
+                acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl))), _mm256_cvtepi32_ps(sumi), acc[iy]);
+                isum[2*iy+0] = isum[2*iy+1] = _mm256_setzero_si256();
+#else
+                if constexpr (nrc_y == 1) {
+                    auto s12 = _mm256_add_epi32(_mm256_unpacklo_epi32(isum[0], isum[1]), _mm256_unpackhi_epi32(isum[0], isum[1]));
+                    auto s34 = _mm256_add_epi32(_mm256_unpacklo_epi32(isum[2], isum[3]), _mm256_unpackhi_epi32(isum[2], isum[3]));
+                    auto sumi = _mm256_add_epi32(_mm256_unpacklo_epi64(s12, s34), _mm256_unpackhi_epi64(s12, s34));
+                    acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl))), _mm256_cvtepi32_ps(sumi), acc[iy]);
+                    isum[0] = isum[1] = isum[2] = isum[3] = _mm256_setzero_si256();
+                } else {
+                    acc[iy] = _mm256_fmadd_ps(_mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl))), _mm256_cvtepi32_ps(isum[iy]), acc[iy]);
+                    isum[iy] = _mm256_setzero_si256();
+                }
+#endif
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto sum = _mm_add_ps(_mm256_castps256_ps128(acc[iy]), _mm256_extractf128_ps(acc[iy], 1));
+            info.store(ix, iy, _mm_mul_ps(_mm_set1_ps(0.125f), sum));
+            acc[iy] = _mm256_setzero_ps();
+        }
+    }
+}
+
+template <int nrc_y>
 static void mul_mat_iq3_xxs_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
@@ -6936,6 +7059,18 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_iq2_xs_r4_q8_k<6>;
             mm.funcs[6] = mul_mat_iq2_xs_r4_q8_k<7>;
             mm.funcs[7] = mul_mat_iq2_xs_r4_q8_k<8>;
+            expected_typeB = GGML_TYPE_Q8_K;
+            break;
+        case GGML_TYPE_IQ2_S_R4:
+            assert (ne00 % QK_K == 0);
+            mm.funcs[0] = mul_mat_iq2_s_r4_q8_k<1>;
+            mm.funcs[1] = mul_mat_iq2_s_r4_q8_k<2>;
+            mm.funcs[2] = mul_mat_iq2_s_r4_q8_k<3>;
+            mm.funcs[3] = mul_mat_iq2_s_r4_q8_k<4>;
+            mm.funcs[4] = mul_mat_iq2_s_r4_q8_k<5>;
+            mm.funcs[5] = mul_mat_iq2_s_r4_q8_k<6>;
+            mm.funcs[6] = mul_mat_iq2_s_r4_q8_k<7>;
+            mm.funcs[7] = mul_mat_iq2_s_r4_q8_k<8>;
             expected_typeB = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_IQ3_XXS_R4:
