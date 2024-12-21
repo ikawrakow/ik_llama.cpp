@@ -3453,7 +3453,6 @@ static void mul_mat_iq2_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
 #endif
     __m256i qx[4];
     auto grid = iq2s_grid;
-    //union { __m256i vec; uint16_t val[16]; } helper;
     for (int ix = 0; ix < nrc_x; ix += 4) {
         auto iq2 = (const block_iq2_s_r4 *)((const char *)vx + (ix+0)*bx);
         for (int ibl = 0; ibl < nbl; ++ibl) { // Block of 256
