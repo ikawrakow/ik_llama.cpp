@@ -204,6 +204,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_KS_R4:
             case GGML_TYPE_IQ2_XXS_R4:
             case GGML_TYPE_IQ3_XXS_R4:
+            case GGML_TYPE_IQ3_S_R4:
             case GGML_TYPE_IQ2_BN_R4: return 4;
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_BF16_R16: return 16;
@@ -3981,6 +3982,50 @@ static void mul_mat_iq3_xxs_r4_q8_k(int n, const void * vx, size_t bx, const Dat
     }
 }
 
+#ifdef HAVE_FANCY_SIMD
+// Strangely enough, the following implementation makes PP ~6% slower and TG ~6% faster
+// compared to the vanilla AVX2 version below.
+struct IndexHelperIQ3S {
+    union index_t {
+        __m256i  vec;
+        uint16_t val[16];
+    };
+    inline void make2(const uint8_t * qs, const uint8_t * qh, __m256i * values) const {
+        auto idx_l = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)qs));
+        const __mmask16 * m16 = (const __mmask16 *)qh;
+        index_t idx;
+        idx.vec = _mm256_mask_add_epi16(idx_l, m16[0], idx_l, offset);
+        values[0] = _mm256_set_epi32(iq3s_grid[idx.val[ 7]], iq3s_grid[idx.val[ 6]], iq3s_grid[idx.val[ 5]], iq3s_grid[idx.val[ 4]],
+                                     iq3s_grid[idx.val[ 3]], iq3s_grid[idx.val[ 2]], iq3s_grid[idx.val[ 1]], iq3s_grid[idx.val[ 0]]);
+        values[1] = _mm256_set_epi32(iq3s_grid[idx.val[15]], iq3s_grid[idx.val[14]], iq3s_grid[idx.val[13]], iq3s_grid[idx.val[12]],
+                                     iq3s_grid[idx.val[11]], iq3s_grid[idx.val[10]], iq3s_grid[idx.val[ 9]], iq3s_grid[idx.val[ 8]]);
+    }
+    const __m256i offset = _mm256_set1_epi16(256);
+};
+#else
+struct IndexHelperIQ3S {
+    union index_t {
+        __m256i  vec;
+        uint32_t val[8];
+    };
+    inline void make2(const uint8_t * qs, const uint8_t * qh, __m256i * values) const {
+        index_t idx;
+        auto idx_l = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)qs));
+        auto idx_h = _mm256_and_si256(_mm256_sllv_epi32(_mm256_set1_epi32(qh[0]), idx_shift), idx_mask);
+        idx.vec = _mm256_or_si256(idx_h, idx_l);
+        values[0] = _mm256_set_epi32(iq3s_grid[idx.val[7]], iq3s_grid[idx.val[6]], iq3s_grid[idx.val[5]], iq3s_grid[idx.val[4]],
+                                     iq3s_grid[idx.val[3]], iq3s_grid[idx.val[2]], iq3s_grid[idx.val[1]], iq3s_grid[idx.val[0]]);
+        idx_l = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(qs+8)));
+        idx_h = _mm256_and_si256(_mm256_sllv_epi32(_mm256_set1_epi32(qh[1]), idx_shift), idx_mask);
+        idx.vec = _mm256_or_si256(idx_h, idx_l);
+        values[1] = _mm256_set_epi32(iq3s_grid[idx.val[7]], iq3s_grid[idx.val[6]], iq3s_grid[idx.val[5]], iq3s_grid[idx.val[4]],
+                                     iq3s_grid[idx.val[3]], iq3s_grid[idx.val[2]], iq3s_grid[idx.val[1]], iq3s_grid[idx.val[0]]);
+    }
+    const __m256i idx_mask = _mm256_set1_epi32(256);
+    const __m256i idx_shift = _mm256_set_epi32(1, 2, 3, 4, 5, 6, 7, 8);
+};
+#endif
+
 template <int nrc_y>
 static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
@@ -3995,6 +4040,7 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
     union { __m256i vec; uint32_t val[8]; } helper;
     __m256  acc[nrc_y] = {};
     __m256i isum[nrc_y] = {};
+    IndexHelperIQ3S ih;
     __m256i qx[4];
     for (int ix = 0; ix < nrc_x; ix += 4) {
         auto iq3 = (const block_iq3_s_r4 *)((const char *)vx + (ix+0)*bx);
@@ -4008,24 +4054,11 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
             auto scales8 = MM256_SET_M128I(_mm_unpackhi_epi32(sb1, sb2), _mm_unpacklo_epi32(sb1, sb2));
             helper.vec = _mm256_or_si256(_mm256_slli_epi16(_mm256_and_si256(scales8, _mm256_set1_epi8(0xf)), 1), _mm256_set1_epi8(1));
             for (int ib = 0; ib < QK_K/32; ++ib) {
-                qx[0] = _mm256_set_epi32(iq3s_grid[qs[ 7] | ((qh[0] << 1) & 0x100)], iq3s_grid[qs[ 6] | ((qh[0] << 2) & 0x100)],
-                                         iq3s_grid[qs[ 5] | ((qh[0] << 3) & 0x100)], iq3s_grid[qs[ 4] | ((qh[0] << 4) & 0x100)],
-                                         iq3s_grid[qs[ 3] | ((qh[0] << 5) & 0x100)], iq3s_grid[qs[ 2] | ((qh[0] << 6) & 0x100)],
-                                         iq3s_grid[qs[ 1] | ((qh[0] << 7) & 0x100)], iq3s_grid[qs[ 0] | ((qh[0] << 8) & 0x100)]);
-                qx[1] = _mm256_set_epi32(iq3s_grid[qs[15] | ((qh[1] << 1) & 0x100)], iq3s_grid[qs[14] | ((qh[1] << 2) & 0x100)],
-                                         iq3s_grid[qs[13] | ((qh[1] << 3) & 0x100)], iq3s_grid[qs[12] | ((qh[1] << 4) & 0x100)],
-                                         iq3s_grid[qs[11] | ((qh[1] << 5) & 0x100)], iq3s_grid[qs[10] | ((qh[1] << 6) & 0x100)],
-                                         iq3s_grid[qs[ 9] | ((qh[1] << 7) & 0x100)], iq3s_grid[qs[ 8] | ((qh[1] << 8) & 0x100)]);
-                qx[2] = _mm256_set_epi32(iq3s_grid[qs[23] | ((qh[2] << 1) & 0x100)], iq3s_grid[qs[22] | ((qh[2] << 2) & 0x100)],
-                                         iq3s_grid[qs[21] | ((qh[2] << 3) & 0x100)], iq3s_grid[qs[20] | ((qh[2] << 4) & 0x100)],
-                                         iq3s_grid[qs[19] | ((qh[2] << 5) & 0x100)], iq3s_grid[qs[18] | ((qh[2] << 6) & 0x100)],
-                                         iq3s_grid[qs[17] | ((qh[2] << 7) & 0x100)], iq3s_grid[qs[16] | ((qh[2] << 8) & 0x100)]);
-                qx[3] = _mm256_set_epi32(iq3s_grid[qs[31] | ((qh[3] << 1) & 0x100)], iq3s_grid[qs[30] | ((qh[3] << 2) & 0x100)],
-                                         iq3s_grid[qs[29] | ((qh[3] << 3) & 0x100)], iq3s_grid[qs[28] | ((qh[3] << 4) & 0x100)],
-                                         iq3s_grid[qs[27] | ((qh[3] << 5) & 0x100)], iq3s_grid[qs[26] | ((qh[3] << 6) & 0x100)],
-                                         iq3s_grid[qs[25] | ((qh[3] << 7) & 0x100)], iq3s_grid[qs[24] | ((qh[3] << 8) & 0x100)]);
+                ih.make2(qs+ 0, qh+0, qx+0);
+                ih.make2(qs+16, qh+2, qx+2);
                 qs += 32; qh += 4;
-                auto scales = _mm256_cvtepi8_epi32(_mm_set1_epi32(helper.val[ib]));
+                auto sc16 = _mm_cvtepi8_epi16(_mm_set1_epi32(helper.val[ib]));
+                auto scales = MM256_SET_M128I(_mm_unpackhi_epi16(sc16, sc16), _mm_unpacklo_epi16(sc16, sc16));
 #ifdef HAVE_FANCY_SIMD
                 auto mask = (const __mmask32 *)(iq3[ibl].signs + 16*ib);
                 for (int iy = 0; iy < nrc_y; ++iy) {
@@ -4034,10 +4067,10 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
                     auto sumi2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[1], _mm256_mask_sub_epi8(y, mask[1], _mm256_setzero_si256(), y));
                     auto sumi3 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2], _mm256_mask_sub_epi8(y, mask[2], _mm256_setzero_si256(), y));
                     auto sumi4 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[3], _mm256_mask_sub_epi8(y, mask[3], _mm256_setzero_si256(), y));
-                    auto s12 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi1, sumi2), _mm256_unpackhi_epi32(sumi1, sumi2)); // 0,1, 0,1, 0,1, 0,1
-                    auto s34 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi3, sumi4), _mm256_unpackhi_epi32(sumi3, sumi4)); // 2,3, 2,3, 2,3, 2,3
-                    auto sumi = _mm256_add_epi32(_mm256_unpacklo_epi64(s12, s34), _mm256_unpackhi_epi64(s12, s34)); // 0,1,2,3, 0,1,2,3
-                    isum[iy] = _mm256_add_epi32(isum[iy], _mm256_mullo_epi32(scales, sumi));
+                    auto s12 = _mm256_add_epi32(_mm256_unpacklo_epi64(sumi1, sumi2), _mm256_unpackhi_epi64(sumi1, sumi2)); // 0,0, 1,1, 0,0, 1,1
+                    auto s34 = _mm256_add_epi32(_mm256_unpacklo_epi64(sumi3, sumi4), _mm256_unpackhi_epi64(sumi3, sumi4)); // 2,2, 3,3, 2,2, 3,3
+                    //auto x1234 = _mm256_packs_epi32(x12, x34);  // 0,0, 1,1, 2,2, 3,3, 0,0, 1,1, 2,2, 3,3
+                    isum[iy] = _mm256_dpwssd_epi32(isum[iy], scales, _mm256_packs_epi32(s12, s34));
                 }
 #else
                 auto signs128 = _mm_loadu_si128((const __m128i*)iq3[ibl].signs + ib);
@@ -5879,50 +5912,6 @@ static void mul_mat_qX_K_q8_K_IQ(int n, const void * vx, size_t bx, const DataIn
     mul_mat_qX_K_q8_K_IQ_N<Dequantizer, nrc_y>(n, vx, bx, info, nrc_x);
 #endif
 }
-
-//#ifdef HAVE_FANCY_SIMD
-// Strangely enough, the following implementation makes PP ~6% slower and TG ~6% faster
-// compared to the vanilla AVX2 version below.
-//struct IndexHelperIQ3S {
-//    union index_t {
-//        __m256i  vec;
-//        uint16_t val[16];
-//    };
-//    inline void make2(const uint8_t * qs, const uint8_t * qh, __m256i * values) const {
-//        auto idx_l = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)qs));
-//        const __mmask16 * m16 = (const __mmask16 *)qh;
-//        index_t idx;
-//        idx.vec = _mm256_mask_add_epi16(idx_l, m16[0], idx_l, offset);
-//        values[0] = _mm256_set_epi32(iq3s_grid[idx.val[ 7]], iq3s_grid[idx.val[ 6]], iq3s_grid[idx.val[ 5]], iq3s_grid[idx.val[ 4]],
-//                                     iq3s_grid[idx.val[ 3]], iq3s_grid[idx.val[ 2]], iq3s_grid[idx.val[ 1]], iq3s_grid[idx.val[ 0]]);
-//        values[1] = _mm256_set_epi32(iq3s_grid[idx.val[15]], iq3s_grid[idx.val[14]], iq3s_grid[idx.val[13]], iq3s_grid[idx.val[12]],
-//                                     iq3s_grid[idx.val[11]], iq3s_grid[idx.val[10]], iq3s_grid[idx.val[ 9]], iq3s_grid[idx.val[ 8]]);
-//    }
-//    const __m256i offset = _mm256_set1_epi16(256);
-//};
-//#else
-struct IndexHelperIQ3S {
-    union index_t {
-        __m256i  vec;
-        uint32_t val[8];
-    };
-    inline void make2(const uint8_t * qs, const uint8_t * qh, __m256i * values) const {
-        index_t idx;
-        auto idx_l = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)qs));
-        auto idx_h = _mm256_and_si256(_mm256_sllv_epi32(_mm256_set1_epi32(qh[0]), idx_shift), idx_mask);
-        idx.vec = _mm256_or_si256(idx_h, idx_l);
-        values[0] = _mm256_set_epi32(iq3s_grid[idx.val[7]], iq3s_grid[idx.val[6]], iq3s_grid[idx.val[5]], iq3s_grid[idx.val[4]],
-                                     iq3s_grid[idx.val[3]], iq3s_grid[idx.val[2]], iq3s_grid[idx.val[1]], iq3s_grid[idx.val[0]]);
-        idx_l = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(qs+8)));
-        idx_h = _mm256_and_si256(_mm256_sllv_epi32(_mm256_set1_epi32(qh[1]), idx_shift), idx_mask);
-        idx.vec = _mm256_or_si256(idx_h, idx_l);
-        values[1] = _mm256_set_epi32(iq3s_grid[idx.val[7]], iq3s_grid[idx.val[6]], iq3s_grid[idx.val[5]], iq3s_grid[idx.val[4]],
-                                     iq3s_grid[idx.val[3]], iq3s_grid[idx.val[2]], iq3s_grid[idx.val[1]], iq3s_grid[idx.val[0]]);
-    }
-    const __m256i idx_mask = _mm256_set1_epi32(256);
-    const __m256i idx_shift = _mm256_set_epi32(1, 2, 3, 4, 5, 6, 7, 8);
-};
-//#endif
 
 struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
     DequantizerIQ3S(const void * vx, size_t bx) : BaseDequantizer(vx, bx) {}
