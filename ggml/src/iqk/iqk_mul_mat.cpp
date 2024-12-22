@@ -7356,6 +7356,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_iq4_ks_r4_q8_k<6>;
             mm.funcs[6] = mul_mat_iq4_ks_r4_q8_k<7>;
             mm.funcs[7] = mul_mat_iq4_ks_r4_q8_k<8>;
+#ifndef HAVE_FANCY_SIMD
+            // For some reason Zen4 does not like this particular function
+            mm.func16 = mul_mat_iq4_ks_r4_q8_k<16>;
+#endif
             expected_typeB = GGML_TYPE_Q8_K32;
             break;
         case GGML_TYPE_IQ2_XXS_R4:
@@ -7381,7 +7385,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_iq2_xs_r4_q8_k<6>;
             mm.funcs[6] = mul_mat_iq2_xs_r4_q8_k<7>;
             mm.funcs[7] = mul_mat_iq2_xs_r4_q8_k<8>;
+#ifndef HAVE_FANCY_SIMD
+            // For some reason Zen4 does not like this particular function
             mm.func16 = mul_mat_iq2_xs_r4_q8_k_16;
+#endif
             expected_typeB = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_IQ2_S_R4:
@@ -7492,6 +7499,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_iq4_k_r4_q8_k<6>;
             mm.funcs[6] = mul_mat_iq4_k_r4_q8_k<7>;
             mm.funcs[7] = mul_mat_iq4_k_r4_q8_k<8>;
+            mm.func16  = mul_mat_iq4_k_r4_q8_k<16>;
             expected_typeB = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_IQ5_K_R4:
@@ -7504,6 +7512,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_iq5_k_r4_q8_k<6>;
             mm.funcs[6] = mul_mat_iq5_k_r4_q8_k<7>;
             mm.funcs[7] = mul_mat_iq5_k_r4_q8_k<8>;
+            mm.func16 = mul_mat_iq5_k_r4_q8_k<16>;
             expected_typeB = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_IQ2_K_R4:
@@ -7528,6 +7537,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_iq3_k_r4_q8_k<6>;
             mm.funcs[6] = mul_mat_iq3_k_r4_q8_k<7>;
             mm.funcs[7] = mul_mat_iq3_k_r4_q8_k<8>;
+#ifdef HAVE_FANCY_SIMD
+            mm.func16 = mul_mat_iq3_k_r4_q8_k<16>;
+#endif
             expected_typeB = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_Q4_0_R4:
