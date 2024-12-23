@@ -2609,10 +2609,10 @@ static void mul_mat_q5_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const D
                 auto bits2 = _mm256_loadu_si256((const __m256i *)iq5[4*ib4+k].qs+1);
                 auto hbits = _mm_loadu_si128((const __m128i *)iq5[4*ib4+k].qh);
                 auto hb = MM256_SET_M128I(_mm_srli_epi16(hbits, 1), hbits);
-                auto q1 = _mm256_and_si256(bits1, m4) | _mm256_and_si256(_mm256_slli_epi16(hb, 4), m5);
-                auto q2 = _mm256_and_si256(bits2, m4) | _mm256_and_si256(_mm256_slli_epi16(hb, 2), m5);
-                auto q3 = _mm256_and_si256(_mm256_srli_epi16(bits1, 4), m4) | _mm256_and_si256(hb, m5);
-                auto q4 = _mm256_and_si256(_mm256_srli_epi16(bits2, 4), m4) | _mm256_and_si256(_mm256_srli_epi16(hb, 2), m5);;
+                auto q1 = _mm256_or_si256(_mm256_and_si256(bits1, m4), _mm256_and_si256(_mm256_slli_epi16(hb, 4), m5));
+                auto q2 = _mm256_or_si256(_mm256_and_si256(bits2, m4), _mm256_and_si256(_mm256_slli_epi16(hb, 2), m5));
+                auto q3 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(bits1, 4), m4), _mm256_and_si256(hb, m5));
+                auto q4 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(bits2, 4), m4), _mm256_and_si256(_mm256_srli_epi16(hb, 2), m5));;
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i*)q8.y[iy][ib4].qs+k);
                     auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(q1, _mm256_shuffle_epi32(y, 0x00)),
@@ -2668,11 +2668,11 @@ static void mul_mat_q5_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
                 auto hb1 = MM256_SET_M128I(_mm_srli_epi16(hbits1, 1), hbits1);
                 auto hb2 = MM256_SET_M128I(_mm_srli_epi16(hbits2, 1), hbits2);
                 auto hb = _mm512_inserti32x8(_mm512_castsi256_si512(hb1), hb2, 1);
-                qx[0] = _mm512_and_si512(bits1, m4) | _mm512_and_si512(_mm512_slli_epi16(hb, 4), m5);
-                qx[1] = _mm512_and_si512(bits2, m4) | _mm512_and_si512(_mm512_slli_epi16(hb, 2), m5);;
+                qx[0] = _mm512_or_si512(_mm512_and_si512(bits1, m4), _mm512_and_si512(_mm512_slli_epi16(hb, 4), m5));
+                qx[1] = _mm512_or_si512(_mm512_and_si512(bits2, m4), _mm512_and_si512(_mm512_slli_epi16(hb, 2), m5));
                 //qx[2] = _mm512_and_si512(_mm512_srli_epi16(bits1, 4), m4) | _mm512_and_si512(_mm512_slli_epi16(hb, 2), m5);
-                qx[2] = _mm512_and_si512(_mm512_srli_epi16(bits1, 4), m4) | _mm512_and_si512(hb, m5);
-                qx[3] = _mm512_and_si512(_mm512_srli_epi16(bits2, 4), m4) | _mm512_and_si512(_mm512_srli_epi16(hb, 2), m5);
+                qx[2] = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(bits1, 4), m4), _mm512_and_si512(hb, m5));
+                qx[3] = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(bits2, 4), m4), _mm512_and_si512(_mm512_srli_epi16(hb, 2), m5));
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y8 = _mm256_loadu_si256((const __m256i*)q8.y[iy][ib4].qs+k);
                     auto y = _mm512_inserti32x8(_mm512_castsi256_si512(y8), y8, 1);
@@ -2732,10 +2732,10 @@ static void mul_mat_q6_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const D
                 auto bits1 = _mm256_loadu_si256((const __m256i *)iq6[4*ib4+k].qs+0);
                 auto bits2 = _mm256_loadu_si256((const __m256i *)iq6[4*ib4+k].qs+1);
                 auto hbits = _mm256_loadu_si256((const __m256i *)iq6[4*ib4+k].qh);
-                auto q1 = _mm256_and_si256(bits1, m4) | _mm256_and_si256(_mm256_slli_epi16(hbits, 4), m6);
-                auto q2 = _mm256_and_si256(bits2, m4) | _mm256_and_si256(_mm256_slli_epi16(hbits, 2), m6);
-                auto q3 = _mm256_and_si256(_mm256_srli_epi16(bits1, 4), m4) | _mm256_and_si256(hbits, m6);
-                auto q4 = _mm256_and_si256(_mm256_srli_epi16(bits2, 4), m4) | _mm256_and_si256(_mm256_srli_epi16(hbits, 2), m6);;
+                auto q1 = _mm256_or_si256(_mm256_and_si256(bits1, m4), _mm256_and_si256(_mm256_slli_epi16(hbits, 4), m6));
+                auto q2 = _mm256_or_si256(_mm256_and_si256(bits2, m4), _mm256_and_si256(_mm256_slli_epi16(hbits, 2), m6));
+                auto q3 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(bits1, 4), m4), _mm256_and_si256(hbits, m6));
+                auto q4 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(bits2, 4), m4), _mm256_and_si256(_mm256_srli_epi16(hbits, 2), m6));
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i*)q8.y[iy][ib4].qs+k);
 #ifdef HAVE_FANCY_SIMD
