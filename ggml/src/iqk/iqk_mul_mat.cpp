@@ -4031,10 +4031,6 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
     int nbl = n / QK_K;
-#ifndef HAVE_FANCY_SIMD
-    //auto smask = _mm256_set1_epi64x(0x8040201008040201);
-    //auto sign_shuffle = _mm256_set_epi64x(0x0303030303030303, 0x0202020202020202, 0x0101010101010101, 0x0000000000000000);
-#endif
     auto smask = _mm256_set1_epi8(1);
     union { __m256i vec; uint32_t val[8]; } helper;
     union { __m128i vec; uint16_t val[8]; } hidx;
@@ -10659,7 +10655,8 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
     float32x4_t acc[nrc_y] = {};
     int32x4_t   isum[nrc_y] = {};
     int8x16_t   qx[8];
-    SignHelper  sh;
+    auto m1 = vdupq_n_u8(1);
+    auto shuff = vreinterpretq_u8_u32(uint32x4_t{0xffffff00, 0xffffff01, 0xffffff02, 0xffffff03});
     uint32_t    stored_scales[8];
     for (int ix = 0; ix < nrc_x; ix += 4) {
         auto iq3 = (const block_iq3_s_r4 *)((const char *)vx + (ix+0)*bx);
@@ -10669,37 +10666,49 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
             auto qh = iq3[ibl].qh;
             auto scale_bits = vld1q_u8(iq3[ibl].scales);
             uint8x16x2_t scales8 = { vandq_u8(scale_bits, vdupq_n_u8(0xf)), vshrq_n_u8(scale_bits, 4) };
-            auto tmp = vzip1q_u32(scales8.val[0], scales8.val[1]);
-            scales8.val[1] = vzip2q_u32(scales8.val[0], scales8.val[1]);
-            scales8.val[0] = vorrq_u8(vshlq_n_u8(tmp, 1), vdupq_n_u8(1));
-            scales8.val[1] = vorrq_u8(vshlq_n_u8(scales8.val[1], 1), vdupq_n_u8(1));
+            scales8.val[0] = vorrq_u8(vshlq_n_u8(scales8.val[0], 1), m1);
+            scales8.val[1] = vorrq_u8(vshlq_n_u8(scales8.val[1], 1), m1);
             vst1q_u8_x2((uint8_t *)stored_scales, scales8);
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 auto signs128 = vld1q_u8(iq3[ibl].signs+16*ib);
-                sh.init();
-                for (int i = 0; i < 4; ++i) {
-                    qx[2*i+0] = vreinterpretq_s8_u32(uint32x4_t{iq3s_grid[qs[8*i+0] | ((qh[i] << 8) & 0x100)], iq3s_grid[qs[8*i+1] | ((qh[i] << 7) & 0x100)],
-                                                                iq3s_grid[qs[8*i+2] | ((qh[i] << 6) & 0x100)], iq3s_grid[qs[8*i+3] | ((qh[i] << 5) & 0x100)]});
-                    sh.apply_signs_1((uint8x16_t *)qx+2*i+0, signs128);
-                    qx[2*i+1] = vreinterpretq_s8_u32(uint32x4_t{iq3s_grid[qs[8*i+4] | ((qh[i] << 4) & 0x100)], iq3s_grid[qs[8*i+5] | ((qh[i] << 3) & 0x100)],
-                                                                iq3s_grid[qs[8*i+6] | ((qh[i] << 2) & 0x100)], iq3s_grid[qs[8*i+7] | ((qh[i] << 1) & 0x100)]});
-                    sh.apply_signs_1((uint8x16_t *)qx+2*i+1, signs128);
+                if constexpr (nrc_y == 1) {
+                    auto qh32 = (const uint32_t *)qh;
+                    auto idx_h = vreinterpretq_u16_u64(vshlq_u64(vreinterpretq_u64_u16(vmovl_u8(vreinterpret_u8_u32(vdup_n_u32(qh32[0])))), int64x2_t{8, 4}));
+                    union { uint16x8_t vec; uint16_t val[8]; } hidx;
+                    for (int i = 0; i < 4; ++i) {
+                        auto idx_l = vmovl_u8(vld1_u8(qs));
+                        hidx.vec = vorrq_u16(idx_l, vandq_u16(idx_h, vdupq_n_u16(0x100))); idx_h = vshrq_n_u16(idx_h, 1);
+                        qx[2*i+0] = vreinterpretq_s8_u32(uint32x4_t{iq3s_grid[hidx.val[0]], iq3s_grid[hidx.val[1]], iq3s_grid[hidx.val[2]], iq3s_grid[hidx.val[3]]});
+                        auto signs = vreinterpretq_s8_u8(vorrq_u8(vceqq_u8(vandq_u8(signs128, m1), m1), m1));
+                        qx[2*i+0] = vmulq_s8(qx[2*i+0], signs);
+                        qx[2*i+1] = vreinterpretq_s8_u32(uint32x4_t{iq3s_grid[hidx.val[4]], iq3s_grid[hidx.val[5]], iq3s_grid[hidx.val[6]], iq3s_grid[hidx.val[7]]});
+                        signs = vreinterpretq_s8_u8(vorrq_u8(vceqq_u8(vandq_u8(vshrq_n_u8(signs128, 4), m1), m1), m1));
+                        qx[2*i+1] = vmulq_s8(qx[2*i+1], signs);
+                        signs128 = vshrq_n_u8(signs128, 1);
+                        qs += 8;
+                    }
+                } else {
+                    for (int i = 0; i < 4; ++i) {
+                        qx[2*i+0] = vreinterpretq_s8_u32(uint32x4_t{iq3s_grid[qs[0] | ((qh[0] << (8-i)) & 0x100)], iq3s_grid[qs[1] | ((qh[1] << (8-i)) & 0x100)],
+                                                                    iq3s_grid[qs[2] | ((qh[2] << (8-i)) & 0x100)], iq3s_grid[qs[3] | ((qh[3] << (8-i)) & 0x100)]});
+                        auto signs = vreinterpretq_s8_u8(vorrq_u8(vceqq_u8(vandq_u8(signs128, m1), m1), m1));
+                        qx[2*i+0] = vmulq_s8(qx[2*i+0], signs);
+
+                        qx[2*i+1] = vreinterpretq_s8_u32(uint32x4_t{iq3s_grid[qs[4] | ((qh[0] << (4-i)) & 0x100)], iq3s_grid[qs[5] | ((qh[1] << (4-i)) & 0x100)],
+                                                                    iq3s_grid[qs[6] | ((qh[2] << (4-i)) & 0x100)], iq3s_grid[qs[7] | ((qh[3] << (4-i)) & 0x100)]});
+                        signs = vreinterpretq_s8_u8(vorrq_u8(vceqq_u8(vandq_u8(vshrq_n_u8(signs128, 4), m1), m1), m1));
+                        qx[2*i+1] = vmulq_s8(qx[2*i+1], signs);
+
+                        qs += 8;
+                        signs128 = vshrq_n_u8(signs128, 1);
+                    }
                 }
-                auto sc16 = vmovl_s8(vreinterpret_s8_u32(vdup_n_u32(stored_scales[ib])));
-                auto scales = vmovl_s16(vget_low_s16(sc16));
+                auto scales = vreinterpretq_s32_u8(vqtbl1q_u8(vreinterpretq_u8_u32(vdupq_n_u32(stored_scales[ib])), shuff));
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = vld1q_s8_x2(q8.y[iy][ibl].qs + 32*ib);
-                    //auto sumi = interleaved_dotq(qx, y);
-                    auto sumi1 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[0], y.val[0]), qx[1], y.val[1]);
-                    auto sumi2 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[2], y.val[0]), qx[3], y.val[1]);
-                    auto sumi3 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[4], y.val[0]), qx[5], y.val[1]);
-                    auto sumi4 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[6], y.val[0]), qx[7], y.val[1]);
-                    auto sumi12 = vpaddq_s32(sumi1, sumi2);
-                    auto sumi34 = vpaddq_s32(sumi3, sumi4);
-                    auto sumi = vpaddq_s32(sumi12, sumi34);
+                    auto sumi = interleaved_dotq(qx, y);
                     isum[iy] = vmlaq_s32(isum[iy], scales, sumi);
                 }
-                qs += 32;
                 qh += 4;
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
