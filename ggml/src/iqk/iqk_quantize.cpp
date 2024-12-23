@@ -5740,7 +5740,7 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
     //        int(tensor->ne[1]), num_chunks, nthread);
 
     std::atomic<int> counter(0);;
-    auto compute = [&counter, &r, tensor, num_chunks] () {
+    auto compute = [&counter, &r, tensor, num_chunks, chunkSize = kChunk] () {
         int nrows = tensor->ne[1];
         int n_per_row = tensor->ne[0];
         auto row_size = ggml_row_size(tensor->type, n_per_row);
@@ -5749,8 +5749,8 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
         while (true) {
             int chunk = counter.fetch_add(1);
             if (chunk >= num_chunks) break;
-            int first_row = chunk*kChunk*r.num_rows;
-            int last_row = std::min(first_row + kChunk*r.num_rows, nrows);
+            int first_row = chunk*chunkSize*r.num_rows;
+            int last_row = std::min(first_row + chunkSize*r.num_rows, nrows);
             for (int row = first_row; row < last_row; row += r.num_rows) {
                 std::memcpy(qtmp.data(), data + row*row_size, r.num_rows*row_size);
                 r.repack(r.num_rows, n_per_row, qtmp.data(), data + row*row_size);
