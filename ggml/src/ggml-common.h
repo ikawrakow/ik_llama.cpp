@@ -465,6 +465,15 @@ typedef struct {
 static_assert(sizeof(block_iq3_s) == sizeof(ggml_half) + 13*(QK_K/32) + IQ3S_N_SCALE, "wrong iq3_s block size/padding");
 
 typedef struct {
+    ggml_half d[4];
+    uint8_t qs[QK_K];
+    uint8_t qh[QK_K/8];
+    uint8_t signs[QK_K/2];
+    uint8_t scales[4*IQ3S_N_SCALE];
+} block_iq3_s_r4;
+static_assert(sizeof(block_iq3_s_r4) == 4*sizeof(block_iq3_s), "wrong iq3_s_r4 block size/padding");
+
+typedef struct {
     ggml_half d;
     uint8_t  qs[QK_K/8];
     uint16_t qh[QK_K/32];
