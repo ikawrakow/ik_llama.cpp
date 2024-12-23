@@ -5716,18 +5716,27 @@ static void repack_iq3_s(int nrows, int n_per_row, const block_iq3_s * x, block_
     for (int row = 0; row < nrows; row += 4) {
         for (int k = 0; k < 4; ++k) x4[k] = x + nblock*k;
         for (int ibl = 0; ibl < nblock; ++ibl) {
+            std::memset(y[ibl].scales, 0, QK_K/16);
+            std::memset(y[ibl].signs,  0, QK_K/2);
+            std::memset(y[ibl].qh,     0, QK_K/8);
             for (int k = 0; k < 4; ++k) {
                 y[ibl].d[k] = x4[k][ibl].d;
                 for (int ib = 0; ib < QK_K/64; ++ib) {
-                    y[ibl].scales[4*ib+k] = x4[k][ibl].scales[ib];
+                    int j = 8*ib + k;
+                    y[ibl].scales[(j+0)%16] |= ((x4[k][ibl].scales[ib] & 0xf) << 4*((j+0)/16));
+                    y[ibl].scales[(j+4)%16] |= ((x4[k][ibl].scales[ib] >>  4) << 4*((j+4)/16));
                 }
                 for (int ib = 0; ib < QK_K/32; ++ib) {
-                    y[ibl].qh[4*ib+k] = x4[k][ibl].qh[ib];
-                    for (int i = 0; i < 8; ++i) {
-                        y[ibl].qs[32*ib+8*k+i] = x4[k][ibl].qs[8*ib+i];
+                    y[ibl].qh[4*ib+k] = x4[k][ibl].qh[ib]; // leave ot like this?
+                    for (int i = 0; i < 4; ++i) {
+                        y[ibl].qs[32*ib+k+8*i+0] = x4[k][ibl].qs[8*ib+i+0];
+                        y[ibl].qs[32*ib+k+8*i+4] = x4[k][ibl].qs[8*ib+i+4];
                     }
                     for (int i = 0; i < 4; ++i) {
-                        y[ibl].signs[16*ib+4*k+i] = x4[k][ibl].signs[4*ib+i];
+                        y[ibl].signs[16*ib+4*k+i] = (((x4[k][ibl].signs[4*ib+0] >> i) & 1) << 0) | (((x4[k][ibl].signs[4*ib+0] >> (4+i)) & 1) << 1) |
+                                                    (((x4[k][ibl].signs[4*ib+1] >> i) & 1) << 2) | (((x4[k][ibl].signs[4*ib+1] >> (4+i)) & 1) << 3) |
+                                                    (((x4[k][ibl].signs[4*ib+2] >> i) & 1) << 4) | (((x4[k][ibl].signs[4*ib+2] >> (4+i)) & 1) << 5) |
+                                                    (((x4[k][ibl].signs[4*ib+3] >> i) & 1) << 6) | (((x4[k][ibl].signs[4*ib+3] >> (4+i)) & 1) << 7);
                     }
                 }
             }
@@ -5759,26 +5768,15 @@ void dequantize_row_iq3_s_r4(const block_iq3_s_r4 * x, float * y, int64_t k) {
     for (int ibl = 0; ibl < nblock; ++ibl) {
         for (int k = 0; k < 4; ++k) {
             const float d = GGML_FP16_TO_FP32(x[ibl].d[k]);
-            const uint8_t * qs = x[ibl].qs;
-            const uint8_t * qh = x[ibl].qh;
-            const uint8_t * signs = x[ibl].signs;
-            for (int ib = 0; ib < QK_K/64; ++ib) {
-                const float db1 = d * (1 + 2*(x[ibl].scales[4*ib+k] & 0xf));
-                const float db2 = d * (1 + 2*(x[ibl].scales[4*ib+k] >>  4));
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                int l = 4*ib + k;
+                float dl = d * (1 + 2*((x[ibl].scales[l%16] >> 4*(l/16)) & 0xf));
                 for (int i = 0; i < 4; ++i) {
-                    const uint8_t * grid1 = (const uint8_t *)(iq3s_grid + (qs[64*ib+8*k+2*i+0] | ((qh[8*ib+k+0] << (8-2*i)) & 256)));
-                    const uint8_t * grid2 = (const uint8_t *)(iq3s_grid + (qs[64*ib+8*k+2*i+1] | ((qh[8*ib+k+0] << (7-2*i)) & 256)));
+                    auto grid1 = (const uint8_t *)(iq3s_grid + x[ibl].qs[32*ib+k+8*i+0] + ((x[ibl].qh[4*ib+k] << (8-i)) & 0x100));
+                    auto grid2 = (const uint8_t *)(iq3s_grid + x[ibl].qs[32*ib+k+8*i+4] + ((x[ibl].qh[4*ib+k] << (4-i)) & 0x100));
                     for (int j = 0; j < 4; ++j) {
-                        y4[k][QK_K*ibl+64*ib+j+8*i+0] = db1 * grid1[j] * (signs[32*ib+4*k+i] & kmask_iq2xs[j+0] ? -1.f : 1.f);
-                        y4[k][QK_K*ibl+64*ib+j+8*i+4] = db1 * grid2[j] * (signs[32*ib+4*k+i] & kmask_iq2xs[j+4] ? -1.f : 1.f);
-                    }
-                }
-                for (int i = 0; i < 4; ++i) {
-                    const uint8_t * grid1 = (const uint8_t *)(iq3s_grid + (qs[64*ib+8*k+2*i+32] | ((qh[8*ib+k+4] << (8-2*i)) & 256)));
-                    const uint8_t * grid2 = (const uint8_t *)(iq3s_grid + (qs[64*ib+8*k+2*i+33] | ((qh[8*ib+k+4] << (7-2*i)) & 256)));
-                    for (int j = 0; j < 4; ++j) {
-                        y4[k][QK_K*ibl+64*ib+j+8*i+32] = db2 * grid1[j] * (signs[32*ib+4*k+i+16] & kmask_iq2xs[j+0] ? -1.f : 1.f);
-                        y4[k][QK_K*ibl+64*ib+j+8*i+36] = db2 * grid2[j] * (signs[32*ib+4*k+i+16] & kmask_iq2xs[j+4] ? -1.f : 1.f);
+                        y4[k][QK_K*ibl+32*ib+4*i+ 0+j] = dl * grid1[j] * (x[ibl].signs[16*ib+4*k+j] & (1 << (i+0)) ? -1 : 1);
+                        y4[k][QK_K*ibl+32*ib+4*i+16+j] = dl * grid2[j] * (x[ibl].signs[16*ib+4*k+j] & (1 << (i+4)) ? -1 : 1);
                     }
                 }
             }
