@@ -93,8 +93,76 @@ enum rpc_cmd {
     RPC_CMD_COPY_TENSOR,
     RPC_CMD_GRAPH_COMPUTE,
     RPC_CMD_GET_DEVICE_MEMORY,
+    RPC_CMD_INIT_TENSOR,
     RPC_CMD_COUNT,
 };
+
+struct rpc_msg_init_tensor_req {
+    rpc_tensor tensor;
+};
+
+struct rpc_msg_init_tensor_rsp {
+    uint8_t result; // success/failure
+};
+
+struct rpc_msg_alloc_buffer_req {
+    uint64_t size;
+};
+
+struct rpc_msg_alloc_buffer_rsp {
+    uint64_t remote_ptr;
+    uint64_t remote_size;
+};
+
+struct rpc_msg_get_alignment_rsp {
+    uint64_t alignment;
+};
+
+struct rpc_msg_get_max_size_rsp {
+    uint64_t max_size;
+};
+
+struct rpc_msg_buffer_get_base_req {
+    uint64_t remote_ptr;
+};
+
+struct rpc_msg_buffer_get_base_rsp {
+    uint64_t base_ptr;
+};
+
+struct rpc_msg_free_buffer_req {
+    uint64_t remote_ptr;
+};
+
+struct rpc_msg_buffer_clear_req {
+    uint64_t remote_ptr;
+    uint8_t value;
+};
+
+struct rpc_msg_get_tensor_req {
+    rpc_tensor tensor;
+    uint64_t offset;
+    uint64_t size;
+};
+
+struct rpc_msg_copy_tensor_req {
+    rpc_tensor src;
+    rpc_tensor dst;
+};
+
+struct rpc_msg_copy_tensor_rsp {
+    uint8_t result;
+};
+
+struct rpc_msg_graph_compute_rsp {
+    uint8_t result;
+};
+
+struct rpc_msg_get_device_memory_rsp {
+    uint64_t free_mem;
+    uint64_t total_mem;
+};
+#pragma pack(pop)
 
 // RPC data structures
 
@@ -389,10 +457,18 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
 }
 
 GGML_CALL static void ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-    UNUSED(buffer);
+    //UNUSED(buffer);
+    ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
+
     if (ggml_is_quantized(tensor->type)) {
         // TODO: this check is due to MATRIX_ROW_PADDING in CUDA and should be generalized
-        GGML_ASSERT(tensor->ne[0] % 512 == 0 && "unsupported quantized tensor");
+        //GGML_ASSERT(tensor->ne[0] % 512 == 0 && "unsupported quantized tensor");
+        rpc_msg_init_tensor_req request;
+        request.tensor = serialize_tensor(tensor);
+
+        //rpc_msg_init_tensor_rsp response;
+        bool status = send_rpc_cmd(ctx->sock, RPC_CMD_INIT_TENSOR, &request, sizeof(request), nullptr, 0);
+        GGML_ASSERT(status);
     }
 }
 
@@ -756,9 +832,10 @@ public:
     bool free_buffer(const std::vector<uint8_t> & input);
     bool buffer_clear(const std::vector<uint8_t> & input);
     bool set_tensor(const std::vector<uint8_t> & input);
-    bool get_tensor(const std::vector<uint8_t> & input, std::vector<uint8_t> & output);
-    bool copy_tensor(const std::vector<uint8_t> & input, std::vector<uint8_t> & output);
-    bool graph_compute(const std::vector<uint8_t> & input, std::vector<uint8_t> & output);
+    bool get_tensor(const rpc_msg_get_tensor_req & request, std::vector<uint8_t> & response);
+    bool copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_copy_tensor_rsp & response);
+    bool graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph_compute_rsp & response);
+    bool init_tensor(const rpc_msg_init_tensor_req & request);
 
 private:
     ggml_tensor * deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor);
@@ -943,17 +1020,36 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
     return true;
 }
 
-bool rpc_server::get_tensor(const std::vector<uint8_t> & input, std::vector<uint8_t> & output) {
-    // serialization format: | rpc_tensor | offset (8 bytes) | size (8 bytes) |
-    if (input.size() != sizeof(rpc_tensor) + 2*sizeof(uint64_t)) {
+bool rpc_server::init_tensor(const rpc_msg_init_tensor_req & request) {
+    struct ggml_init_params params {
+        /*.mem_size   =*/ ggml_tensor_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+    struct ggml_context * ctx = ggml_init(params);
+    ggml_tensor * tensor = deserialize_tensor(ctx, &request.tensor);
+    if (tensor == nullptr) {
+        printf("Null tensor\n");
+        ggml_free(ctx);
         return false;
     }
-    const rpc_tensor * in_tensor = (const rpc_tensor *)input.data();
-    uint64_t offset;
-    memcpy(&offset, input.data() + sizeof(rpc_tensor), sizeof(offset));
-    uint64_t size;
-    memcpy(&size, input.data() + sizeof(rpc_tensor) + sizeof(offset), sizeof(size));
 
+    printf("about to call buffer\n");
+
+    //ggml_backend_init_tensor
+
+    // Call the backend's buffer_init_tensor function
+    ggml_backend_buffer_t buffer = tensor->buffer;
+    if (buffer && buffer->iface.init_tensor) {
+        printf("Calling buffer iface function\n");
+        buffer->iface.init_tensor(buffer, tensor);
+    }
+
+    ggml_free(ctx);
+    return true;
+}
+
+bool rpc_server::get_tensor(const rpc_msg_get_tensor_req & request, std::vector<uint8_t> & response) {
     struct ggml_init_params params {
         /*.mem_size   =*/ ggml_tensor_overhead(),
         /*.mem_buffer =*/ NULL,
@@ -1147,6 +1243,19 @@ static void rpc_serve_client(ggml_backend_t backend, sockfd_t sockfd, size_t fre
             }
             case RPC_CMD_SET_TENSOR: {
                 ok = server.set_tensor(input);
+                break;
+            }
+            case RPC_CMD_INIT_TENSOR: {
+                rpc_msg_init_tensor_req request;
+                if (!recv_msg(sockfd, &request,sizeof(request))) {
+                    return;
+                }
+                if (!server.init_tensor(request)) {
+                    return;
+                }
+                if (!send_msg(sockfd, nullptr, 0)) {
+                    return;
+                }
                 break;
             }
             case RPC_CMD_GET_TENSOR: {
