@@ -15698,6 +15698,12 @@ static void llama_tensor_dequantize_internal(
         throw std::runtime_error(format("cannot dequantize/convert tensor type %s", ggml_type_name(tensor->type)));
     }
 
+    if (tensor->type == GGML_TYPE_I2_S) {
+        // we need to dequantize the entire tensor for I2_S
+        qtype.to_float(tensor->data, f32_output, nelements);
+        return;
+    }
+
     if (nthread < 2) {
         if (tensor->type == GGML_TYPE_F16) {
             ggml_fp16_to_fp32_row((ggml_fp16_t *)tensor->data, f32_output, nelements);
