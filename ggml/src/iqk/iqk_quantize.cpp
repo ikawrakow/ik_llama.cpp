@@ -553,7 +553,7 @@ void quantize_row_q8_K16(const float * x, void * vy, int64_t nk) {
     float * dptr = (float *)vy;
     int8_t * qy = (int8_t *)(dptr + 5);
     int n64 = nk / 64;
-#ifdef __AVX2__
+#ifdef z__AVX2__
     __m256 sign_bit = _mm256_set1_ps(-0.f);
     __m256 vmax[4] = {};
     __m256 vsum[4] = {};
@@ -594,7 +594,7 @@ void quantize_row_q8_K16(const float * x, void * vy, int64_t nk) {
             qy += 32;
         }
     }
-#elif defined __ARM_NEON
+#elif defined z__ARM_NEON
     static const uint8_t k_shuffle[16] = {0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60};
     auto shuffle = vld1q_u8(k_shuffle);
     float32x4_t vmax[4] = {};
@@ -640,16 +640,17 @@ void quantize_row_q8_K16(const float * x, void * vy, int64_t nk) {
         dptr[k] = amax[k]/127;
         amax[k] = dptr[k] > 0 ? 1/dptr[k] : 0.f;
     }
-    double sumf = 0;
+    int sumi[4] = {};
     for (int i64 = 0; i64 < n64; ++i64) {
         for (int k = 0; k < 4; ++k) {
             for (int j = 0; j < 16; ++j) {
-                sumf += x[64*i64 + 16*k + j];
-                qy[64*i64 + 16*k + j] = nearest_int(amax[k]*x[64*i64 + 16*k + j]);
+                int ix = nearest_int(amax[k]*x[64*i64 + 16*k + j]);
+                sumi[k] += ix;
+                qy[64*i64 + 16*k + j] = ix;
             }
         }
     }
-    dptr[4] = sumf;
+    dptr[4] = dptr[0]*sumi[0] + dptr[1]*sumi[1] + dptr[2]*sumi[2] + dptr[3]*sumi[3];
 #endif
 }
 
