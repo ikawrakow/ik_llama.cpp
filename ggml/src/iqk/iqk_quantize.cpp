@@ -5874,3 +5874,23 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
     tensor->type = r.new_type;
 }
 
+void dequantize_row_ms_i2s(const void * vx, float * y, int64_t k) {
+    constexpr int kBlockSize = 128;
+    constexpr int kGroupSize = kBlockSize/4;
+    GGML_ASSERT(k % kBlockSize == 0);
+    const uint8_t * x = (const uint8_t *)vx;
+    const float * dptr = (const float *)(x + k/4);
+    const float d = dptr[0];
+    int nb = k/kBlockSize;
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int ig = 0; ig < kBlockSize/kGroupSize; ++ig) {
+            int shift = 6 - 2*ig;
+            for (int j = 0; j < kGroupSize; ++j) {
+                y[j] = d * (((x[j] >> shift) & 3) - 1);
+            }
+            y += kGroupSize;
+        }
+        x += kGroupSize;
+    }
+}
+

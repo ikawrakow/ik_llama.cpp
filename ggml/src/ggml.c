@@ -1605,6 +1605,19 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_I2_S] = {
+        .type_name                = "i2_s",
+        .blck_size                = 1,
+        .type_size                = 1,
+        .is_quantized             = true,
+        .to_float                 = dequantize_row_ms_i2s,
+        .from_float               = NULL,
+        .from_float_ref           = NULL,
+        .vec_dot                  = NULL,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
 };
 
 // For internal test use
@@ -4129,6 +4142,10 @@ GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         nbytes = ggml_type_size(tensor->type);
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
+        }
+        // hack for I2_S
+        if(tensor->type == GGML_TYPE_I2_S) {
+            nbytes = nbytes / 4 + 32;
         }
     }
     else {
@@ -10825,6 +10842,7 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_Q4_0_R4:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
+        case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
@@ -11290,6 +11308,7 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_Q4_0_R4:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
+        case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
@@ -11452,6 +11471,7 @@ static void ggml_compute_forward_acc(
         case GGML_TYPE_Q4_0_R4:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
+        case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
@@ -14660,6 +14680,7 @@ static void ggml_compute_forward_out_prod(
         case GGML_TYPE_Q4_0_R4:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
+        case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
@@ -15062,6 +15083,7 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_Q4_0_R4:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
+        case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
@@ -15358,6 +15380,7 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q4_0_R4:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
+        case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
@@ -15983,6 +16006,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_Q4_0_R4:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
+        case GGML_TYPE_I2_S:
         case GGML_TYPE_Q8_0_R4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
