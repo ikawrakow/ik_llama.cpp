@@ -139,6 +139,8 @@ int main(int argc, char ** argv) {
                 const int n_ctx_req = is_pp_shared ? pp + pl*tg : pl*(pp + tg);
 
                 if (n_ctx_req > n_kv_max) {
+                    printf("n_ctx_req = %d is greater than n_kv_max = %d for pp = %d, tg = %d, pl = %d\n",
+                            n_ctx_req, n_kv_max, pp, tg, pl);
                     continue;
                 }
 
