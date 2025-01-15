@@ -7452,37 +7452,37 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q4_0:
             assert (ne00 % QK4_0 == 0);
             MulMat::set_functions<Q4_0_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q4_1:
             assert (ne00 % QK4_1 == 0);
             MulMat::set_functions<Q4_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q5_0:
             assert (ne00 % QK5_0 == 0);
             MulMat::set_functions<Q5_0_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q5_1:
             assert (ne00 % QK5_1 == 0);
             MulMat::set_functions<Q5_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q6_0:
             assert (ne00 % QK6_0 == 0);
             MulMat::set_functions<Q6_0_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q8_0:
             assert (ne00 % QK8_0 == 0);
             MulMat::set_functions<Q8_0_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_IQ4_NL:
             assert (ne00 % QK4_NL == 0);
             MulMat::set_functions<IQ4_NL_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_IQ4_NL_R4:
             assert (ne00 % QK4_NL == 0);
@@ -7494,7 +7494,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_iq4_nl_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_iq4_nl_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_iq4_nl_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_IQ4_XS_R4:
             assert (ne00 % QK_K == 0);
@@ -7727,7 +7727,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q4_0_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_q4_0_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_q4_0_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q5_0_R4:
             assert (ne00 % QK4_NL == 0);
@@ -7739,7 +7739,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q5_0_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_q5_0_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_q5_0_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q6_0_R4:
             assert (ne00 % QK4_NL == 0);
@@ -7751,7 +7751,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q6_0_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_q6_0_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_q6_0_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q8_0_R4:
             assert (ne00 % QK4_NL == 0);
@@ -7763,7 +7763,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q8_0_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_q8_0_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_q8_0_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
 
         default:
@@ -12445,256 +12445,6 @@ struct HelperF16 final : public BaseHelper<step> {
     }
 };
 
-void quantize_row_q8_0(const float * x, block_q8_0 * y, int k) {
-    const int nb = k / QK8_0;
-    const int nb4 = 4*(nb/4);
-
-#if defined(__aarch64__)
-    block_q8_0_x4 * y4 = (block_q8_0_x4 *)y;
-    for (int i = 0; i < nb; i++) {
-        int i4 = i/4, ir = i%4;
-        float32x4_t srcv [8];
-        float32x4_t asrcv[8];
-        float32x4_t amaxv[8];
-
-        for (int j = 0; j < 8; j++) srcv[j]  = vld1q_f32(x + i*32 + 4*j);
-        for (int j = 0; j < 8; j++) asrcv[j] = vabsq_f32(srcv[j]);
-
-        for (int j = 0; j < 4; j++) amaxv[2*j] = vmaxq_f32(asrcv[2*j], asrcv[2*j+1]);
-        for (int j = 0; j < 2; j++) amaxv[4*j] = vmaxq_f32(amaxv[4*j], amaxv[4*j+2]);
-        for (int j = 0; j < 1; j++) amaxv[8*j] = vmaxq_f32(amaxv[8*j], amaxv[8*j+4]);
-
-        const float amax = vmaxvq_f32(amaxv[0]);
-
-        const float d = amax / ((1 << 7) - 1);
-        const float id = d ? 1.0f/d : 0.0f;
-
-        if (i < nb4) {
-            y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
-        } else {
-            y[i].d = GGML_FP32_TO_FP16(d);
-        }
-
-        for (int j = 0; j < 8; j++) {
-            const float32x4_t v  = vmulq_n_f32(srcv[j], id);
-            const int32x4_t   vi = vcvtnq_s32_f32(v);
-
-            if (i < nb4) {
-                y4[i4].qs[32*ir + 4*j + 0] = vgetq_lane_s32(vi, 0);
-                y4[i4].qs[32*ir + 4*j + 1] = vgetq_lane_s32(vi, 1);
-                y4[i4].qs[32*ir + 4*j + 2] = vgetq_lane_s32(vi, 2);
-                y4[i4].qs[32*ir + 4*j + 3] = vgetq_lane_s32(vi, 3);
-            } else {
-                y[i].qs[4*j + 0] = vgetq_lane_s32(vi, 0);
-                y[i].qs[4*j + 1] = vgetq_lane_s32(vi, 1);
-                y[i].qs[4*j + 2] = vgetq_lane_s32(vi, 2);
-                y[i].qs[4*j + 3] = vgetq_lane_s32(vi, 3);
-            }
-        }
-    }
-#else
-    block_q8_0_x4 * y4 = (block_q8_0_x4 *)y;
-    for (int i = 0; i < nb; i++) {
-        int i4 = i/4, ir = i%4;
-        // Load elements into 4 AVX vectors
-        __m256 v0 = _mm256_loadu_ps( x );
-        __m256 v1 = _mm256_loadu_ps( x + 8 );
-        __m256 v2 = _mm256_loadu_ps( x + 16 );
-        __m256 v3 = _mm256_loadu_ps( x + 24 );
-        x += 32;
-
-        const __m256 signBit = _mm256_set1_ps( -0.0f );
-        __m256 maxAbs = _mm256_andnot_ps( signBit, v0 );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v1 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v2 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v3 ) );
-
-        __m128 max4 = _mm_max_ps( _mm256_extractf128_ps( maxAbs, 1 ), _mm256_castps256_ps128( maxAbs ) );
-        max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
-        max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
-        const float maxScalar = _mm_cvtss_f32( max4 );
-
-        const float d = maxScalar / 127.f;
-        if (i < nb4) {
-            y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
-        } else {
-            y[i].d = GGML_FP32_TO_FP16(d);
-        }
-        const float id = ( maxScalar != 0.0f ) ? 127.f / maxScalar : 0.0f;
-        const __m256 mul = _mm256_set1_ps( id );
-
-        v0 = _mm256_mul_ps( v0, mul );
-        v1 = _mm256_mul_ps( v1, mul );
-        v2 = _mm256_mul_ps( v2, mul );
-        v3 = _mm256_mul_ps( v3, mul );
-
-        v0 = _mm256_round_ps( v0, _MM_ROUND_NEAREST );
-        v1 = _mm256_round_ps( v1, _MM_ROUND_NEAREST );
-        v2 = _mm256_round_ps( v2, _MM_ROUND_NEAREST );
-        v3 = _mm256_round_ps( v3, _MM_ROUND_NEAREST );
-
-        __m256i i0 = _mm256_cvtps_epi32( v0 );
-        __m256i i1 = _mm256_cvtps_epi32( v1 );
-        __m256i i2 = _mm256_cvtps_epi32( v2 );
-        __m256i i3 = _mm256_cvtps_epi32( v3 );
-
-        // Convert int32 to int16
-        i0 = _mm256_packs_epi32( i0, i1 );	// 0, 1, 2, 3,  8, 9, 10, 11,  4, 5, 6, 7, 12, 13, 14, 15
-        i2 = _mm256_packs_epi32( i2, i3 );	// 16, 17, 18, 19,  24, 25, 26, 27,  20, 21, 22, 23, 28, 29, 30, 31
-                                            // Convert int16 to int8
-        i0 = _mm256_packs_epi16( i0, i2 );	// 0, 1, 2, 3,  8, 9, 10, 11,  16, 17, 18, 19,  24, 25, 26, 27,  4, 5, 6, 7, 12, 13, 14, 15, 20, 21, 22, 23, 28, 29, 30, 31
-
-        // We got our precious signed bytes, but the order is now wrong
-        // These AVX2 pack instructions process 16-byte pieces independently
-        // The following instruction is fixing the order
-        const __m256i perm = _mm256_setr_epi32( 0, 4, 1, 5, 2, 6, 3, 7 );
-        i0 = _mm256_permutevar8x32_epi32( i0, perm );
-
-        if (i < nb4) {
-            _mm256_storeu_si256((__m256i *)y4[i4].qs + ir, i0);
-        } else {
-            _mm256_storeu_si256((__m256i *)y[i].qs, i0);
-        }
-    }
-#endif
-}
-
-void quantize_row_q8_1(const float * x, block_q8_1 * y, int k) {
-    assert(k % QK8_1 == 0);
-    const int nb = k / QK8_1;
-
-    const int nb4 = 4*(nb/4);
-    block_q8_1_x4 * y4 = (block_q8_1_x4 *)y;
-#if defined(__aarch64__)
-    for (int i = 0; i < nb; i++) {
-        int i4 = i/4, ir = i%4;
-        float32x4_t srcv [8];
-        float32x4_t asrcv[8];
-        float32x4_t amaxv[8];
-
-        for (int j = 0; j < 8; j++) srcv[j]  = vld1q_f32(x + i*32 + 4*j);
-        for (int j = 0; j < 8; j++) asrcv[j] = vabsq_f32(srcv[j]);
-
-        for (int j = 0; j < 4; j++) amaxv[2*j] = vmaxq_f32(asrcv[2*j], asrcv[2*j+1]);
-        for (int j = 0; j < 2; j++) amaxv[4*j] = vmaxq_f32(amaxv[4*j], amaxv[4*j+2]);
-        for (int j = 0; j < 1; j++) amaxv[8*j] = vmaxq_f32(amaxv[8*j], amaxv[8*j+4]);
-
-        const float amax = vmaxvq_f32(amaxv[0]);
-
-        const float d = amax / ((1 << 7) - 1);
-        const float id = d ? 1.0f/d : 0.0f;
-
-        if (i < nb4) {
-            y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
-        } else {
-            y[i].d = GGML_FP32_TO_FP16(d);
-        }
-
-        int32x4_t accv = vdupq_n_s32(0);
-
-        for (int j = 0; j < 8; j++) {
-            const float32x4_t v  = vmulq_n_f32(srcv[j], id);
-            const int32x4_t   vi = vcvtnq_s32_f32(v);
-
-            if (i < nb4) {
-                y4[i4].qs[QK8_1*ir + 4*j + 0] = vgetq_lane_s32(vi, 0);
-                y4[i4].qs[QK8_1*ir + 4*j + 1] = vgetq_lane_s32(vi, 1);
-                y4[i4].qs[QK8_1*ir + 4*j + 2] = vgetq_lane_s32(vi, 2);
-                y4[i4].qs[QK8_1*ir + 4*j + 3] = vgetq_lane_s32(vi, 3);
-            } else {
-                y[i].qs[4*j + 0] = vgetq_lane_s32(vi, 0);
-                y[i].qs[4*j + 1] = vgetq_lane_s32(vi, 1);
-                y[i].qs[4*j + 2] = vgetq_lane_s32(vi, 2);
-                y[i].qs[4*j + 3] = vgetq_lane_s32(vi, 3);
-            }
-
-            accv = vaddq_s32(accv, vi);
-        }
-
-        if (i < nb4) {
-            y4[i4].d[ir+4] = GGML_FP32_TO_FP16(d * vaddvq_s32(accv));
-        } else {
-            y[i].s = GGML_FP32_TO_FP16(d * vaddvq_s32(accv));
-        }
-    }
-#else
-    for (int i = 0; i < nb; i++) {
-        int i4 = i/4, ir = i%4;
-        // Load elements into 4 AVX vectors
-        __m256 v0 = _mm256_loadu_ps( x );
-        __m256 v1 = _mm256_loadu_ps( x + 8 );
-        __m256 v2 = _mm256_loadu_ps( x + 16 );
-        __m256 v3 = _mm256_loadu_ps( x + 24 );
-        x += 32;
-
-        // Compute max(abs(e)) for the block
-        const __m256 signBit = _mm256_set1_ps( -0.0f );
-        __m256 maxAbs = _mm256_andnot_ps( signBit, v0 );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v1 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v2 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v3 ) );
-
-        __m128 max4 = _mm_max_ps( _mm256_extractf128_ps( maxAbs, 1 ), _mm256_castps256_ps128( maxAbs ) );
-        max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
-        max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
-        const float max_scalar = _mm_cvtss_f32( max4 );
-
-        // Quantize these floats
-        const float d = max_scalar / 127.f;
-        if (i < nb4) {
-            y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
-        } else {
-            y[i].d = GGML_FP32_TO_FP16(d);
-        }
-        const float id = ( max_scalar != 0.0f ) ? 127.f / max_scalar : 0.0f;
-        const __m256 mul = _mm256_set1_ps( id );
-
-        // Apply the multiplier
-        v0 = _mm256_mul_ps( v0, mul );
-        v1 = _mm256_mul_ps( v1, mul );
-        v2 = _mm256_mul_ps( v2, mul );
-        v3 = _mm256_mul_ps( v3, mul );
-
-        // Round to nearest integer
-        v0 = _mm256_round_ps( v0, _MM_ROUND_NEAREST );
-        v1 = _mm256_round_ps( v1, _MM_ROUND_NEAREST );
-        v2 = _mm256_round_ps( v2, _MM_ROUND_NEAREST );
-        v3 = _mm256_round_ps( v3, _MM_ROUND_NEAREST );
-
-        // Convert floats to integers
-        __m256i i0 = _mm256_cvtps_epi32( v0 );
-        __m256i i1 = _mm256_cvtps_epi32( v1 );
-        __m256i i2 = _mm256_cvtps_epi32( v2 );
-        __m256i i3 = _mm256_cvtps_epi32( v3 );
-
-        // Compute the sum of the quants and set y[i].s
-        if (i < nb4) {
-            y4[i4].d[ir+4] = GGML_FP32_TO_FP16(d * hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3))));
-        } else {
-            y[i].s = GGML_FP32_TO_FP16(d * hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3))));
-        }
-
-        // Convert int32 to int16
-        i0 = _mm256_packs_epi32( i0, i1 );  // 0, 1, 2, 3,  8, 9, 10, 11,  4, 5, 6, 7, 12, 13, 14, 15
-        i2 = _mm256_packs_epi32( i2, i3 );  // 16, 17, 18, 19,  24, 25, 26, 27,  20, 21, 22, 23, 28, 29, 30, 31
-                                            // Convert int16 to int8
-        i0 = _mm256_packs_epi16( i0, i2 );  // 0, 1, 2, 3,  8, 9, 10, 11,  16, 17, 18, 19,  24, 25, 26, 27,  4, 5, 6, 7, 12, 13, 14, 15, 20, 21, 22, 23, 28, 29, 30, 31
-
-        // We got our precious signed bytes, but the order is now wrong
-        // These AVX2 pack instructions process 16-byte pieces independently
-        // The following instruction is fixing the order
-        const __m256i perm = _mm256_setr_epi32( 0, 4, 1, 5, 2, 6, 3, 7 );
-        i0 = _mm256_permutevar8x32_epi32( i0, perm );
-
-        if (i < nb4) {
-            _mm256_storeu_si256((__m256i *)y4[i4].qs + ir, i0);
-        } else {
-            _mm256_storeu_si256((__m256i *)y[i].qs, i0);
-        }
-    }
-#endif
-}
-
 template <int D, int step>
 struct HelperQ80 final : public BaseHelper<step> {
     using Base = BaseHelper<step>;
@@ -12709,8 +12459,7 @@ struct HelperQ80 final : public BaseHelper<step> {
     // Needed for v * softmax(k * q)
     inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
         int j = F16::block_size*i;
-        auto dl = (const block_q8_0_x4 *)Base::lblock(l1) + j/(4*QK8_0);
-        int ii = (j/QK8_0)%4;
+        auto dl = (const block_q8_0 *)Base::lblock(l1) + j/QK8_0;
 #ifdef __aarch64__
         const float16_t * d = (const float16_t *)dl->d;
         auto vd = F16::set1(d[ii]);
@@ -12718,13 +12467,14 @@ struct HelperQ80 final : public BaseHelper<step> {
         v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[0])));
         v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[1])));
 #else
-        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d[ii]));
+        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
 #ifdef HAVE_FANCY_SIMD
-        v1 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+2*ii+0))));
-        v2 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+2*ii+1))));
+        v1 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+0))));
+        v2 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+1))));
 #else
-        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+32*ii+j%32)))));
-        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+32*ii+j%32+8)))));
+        int ii = j%QK8_0;
+        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+ii)+0))));
+        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+ii)+1))));
 #endif
 #endif
     }
@@ -12732,7 +12482,7 @@ struct HelperQ80 final : public BaseHelper<step> {
     static inline void convert(int nq, int stride_q, const float * q, block_q8_0 * y) {
         GGML_ASSERT(nq <= step);
         for (int i = 0; i < nq; ++i) {
-            quantize_row_q8_0(q, y, D);
+            quantize_row_q8_0_x4(q, y, D);
             q += stride_q;
             y += D/QK8_0;
         }
@@ -12741,7 +12491,7 @@ struct HelperQ80 final : public BaseHelper<step> {
     static inline void convert(int nq, int stride_q, const float * q, block_q8_1 * y) {
         GGML_ASSERT(nq <= step);
         for (int i = 0; i < nq; ++i) {
-            quantize_row_q8_1(q, y, D);
+            quantize_row_q8_1_x4(q, y, D);
             q += stride_q;
             y += D/QK8_1;
         }
@@ -13464,7 +13214,7 @@ struct FlashQKfp32 {
 #else
             if constexpr (D >= 128) {
 #ifdef HAVE_FANCY_SIMD
-                MAKE_FUNCS(mul_mat_qX_1_q8_1_T<Q8_0_x4_Unpacker, nq);
+                MAKE_FUNCS(mul_mat_qX_1_q8_1_T<Q8_0_1_Unpacker, nq);
 #else
                 MAKE_FUNCS(mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, nq);
 #endif
