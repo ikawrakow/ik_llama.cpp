@@ -6755,10 +6755,10 @@ struct Q_Unpacker {
     }
 };
 
-struct Q8_0_x4_Unpacker {
+struct Q8_0_x4_Unpacker_256 {
     using Sum4T = Sum4TypeQ80;
     inline static int block_size() { return QK8_0; }
-    Q8_0_x4_Unpacker(const void * vx, size_t bx) : cx_0((const char *)vx), x((const block_q8_0_x4 *)cx_0), bx(bx) {}
+    Q8_0_x4_Unpacker_256(const void * vx, size_t bx) : cx_0((const char *)vx), x((const block_q8_0_x4 *)cx_0), bx(bx) {}
 
     const char * cx_0;
     const block_q8_0_x4 * x;
@@ -6783,6 +6783,44 @@ struct Q8_0_x4_Unpacker {
         return GGML_FP16_TO_FP32(q8->d);
     }
 };
+
+#ifdef HAVE_FANCY_SIMD
+struct Q8_0_x4_Unpacker_512 {
+    using Sum4T = Sum4TypeQ81;
+    inline static int block_size() { return QK8_0; }
+    Q8_0_x4_Unpacker_512(const void * vx, size_t bx) : cx_0((const char *)vx), x((const block_q8_0_x4 *)cx_0), bx(bx) {}
+
+    const char * cx_0;
+    const block_q8_0_x4 * x;
+    size_t       bx;
+    const __m128 min = _mm_set1_ps(-128.f);
+
+    __m256i qx[4];
+
+    inline const __m256i* quants() const { return qx; }
+
+    inline void set_row(int ix) { x = (const block_q8_0_x4 *)(cx_0 + ix*bx); }
+
+    inline auto set_block_4(int i) {
+        auto scales = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)x[i].d));
+        for (int j = 0; j < 4; ++j) {
+            qx[j] = _mm256_loadu_si256((const __m256i *)x[i].qs + j);
+            qx[j] = _mm256_xor_si256(qx[j], _mm256_set1_epi8(0x80));
+        }
+        return _mm256_set_m128(_mm_mul_ps(scales, min), scales);
+    }
+    inline auto set_block(int i) {
+        auto q8 = (const block_q8_0 *)(x + i);
+        qx[0] = _mm256_loadu_si256((const __m256i *)q8->qs);
+        qx[0] = _mm256_xor_si256(qx[0], _mm256_set1_epi8(0x80));
+        float d = GGML_FP16_TO_FP32(q8->d);
+        return std::make_pair(d, -128.f*d);
+    }
+};
+using Q8_0_x4_Unpacker = Q8_0_x4_Unpacker_512;
+#else
+using Q8_0_x4_Unpacker = Q8_0_x4_Unpacker_256;
+#endif
 
 struct Q8_0_Unpacker final : public Q_Unpacker<block_q8_0, ScaleHelperQ_0, Q8_0_Dequantizer> {
     Q8_0_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
@@ -7414,37 +7452,42 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q4_0:
             assert (ne00 % QK4_0 == 0);
             MulMat::set_functions<Q4_0_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q4_1:
             assert (ne00 % QK4_1 == 0);
             MulMat::set_functions<Q4_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q5_0:
             assert (ne00 % QK5_0 == 0);
             MulMat::set_functions<Q5_0_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q5_1:
             assert (ne00 % QK5_1 == 0);
             MulMat::set_functions<Q5_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q6_0:
             assert (ne00 % QK6_0 == 0);
             MulMat::set_functions<Q6_0_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q8_0:
             assert (ne00 % QK8_0 == 0);
+#ifdef HAVE_FANCY_SIMD
             MulMat::set_functions<Q8_0_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
+#else
+            MulMat::set_functions<Q8_0_Unpacker>(mm);
+            expected_typeB = GGML_TYPE_Q8_0_X4;
+#endif
             break;
         case GGML_TYPE_IQ4_NL:
             assert (ne00 % QK4_NL == 0);
             MulMat::set_functions<IQ4_NL_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_IQ4_NL_R4:
             assert (ne00 % QK4_NL == 0);
@@ -7456,7 +7499,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_iq4_nl_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_iq4_nl_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_iq4_nl_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_IQ4_XS_R4:
             assert (ne00 % QK_K == 0);
@@ -7689,7 +7732,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q4_0_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_q4_0_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_q4_0_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q5_0_R4:
             assert (ne00 % QK4_NL == 0);
@@ -7701,7 +7744,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q5_0_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_q5_0_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_q5_0_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q6_0_R4:
             assert (ne00 % QK4_NL == 0);
@@ -7713,7 +7756,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q6_0_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_q6_0_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_q6_0_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q8_0_R4:
             assert (ne00 % QK4_NL == 0);
@@ -7725,7 +7768,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q8_0_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_q8_0_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_q8_0_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1;
+            expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
 
         default:
@@ -11998,35 +12041,35 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_Q4_0:
             MulMat::set_functions<DequantizerQ40>(m);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         case GGML_TYPE_Q4_1:
             MulMat::set_functions<DequantizerQ41>(m);
-            expected_Btype = GGML_TYPE_Q8_1;
+            expected_Btype = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q5_0:
             MulMat::set_functions<DequantizerQ50>(m);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         case GGML_TYPE_Q5_1:
             MulMat::set_functions<DequantizerQ51>(m);
-            expected_Btype = GGML_TYPE_Q8_1;
+            expected_Btype = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q6_0:
             MulMat::set_functions<DequantizerQ60>(m);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         case GGML_TYPE_Q8_0:
             MulMat::set_functions<DequantizerQ80>(m);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         case GGML_TYPE_IQ4_NL:
             MulMat::set_functions<DequantizerIQ4NL>(m);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         case GGML_TYPE_IQ4_NL_R4:
             SET_MUL_MAT_FUNCTIONS_T(m, mul_mat_qx_r4_q8_0, IQ4_NL_R4_Dequantizer);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         case GGML_TYPE_IQ4_XS_R4:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq4_xs_r4_q8_k);
@@ -12103,19 +12146,19 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             break;
         case GGML_TYPE_Q4_0_R4:
             SET_MUL_MAT_FUNCTIONS_T(m, mul_mat_qx_r4_q8_0, Q4_0_R4_Dequantizer);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         case GGML_TYPE_Q5_0_R4:
             SET_MUL_MAT_FUNCTIONS_T(m, mul_mat_qx_r4_q8_0, Q5_0_R4_Dequantizer);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         case GGML_TYPE_Q6_0_R4:
             SET_MUL_MAT_FUNCTIONS_T(m, mul_mat_qx_r4_q8_0, Q6_0_R4_Dequantizer);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         case GGML_TYPE_Q8_0_R4:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_q8_0_r4_q8_0);
-            expected_Btype = GGML_TYPE_Q8_0;
+            expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         default:
             return false;
@@ -12407,281 +12450,36 @@ struct HelperF16 final : public BaseHelper<step> {
     }
 };
 
-void quantize_row_q8_0(const float * x, block_q8_0 * y, int k) {
-    const int nb = k / QK8_0;
-    const int nb4 = 4*(nb/4);
-
-#if defined(__aarch64__)
-    block_q8_0_x4 * y4 = (block_q8_0_x4 *)y;
-    for (int i = 0; i < nb; i++) {
-        int i4 = i/4, ir = i%4;
-        float32x4_t srcv [8];
-        float32x4_t asrcv[8];
-        float32x4_t amaxv[8];
-
-        for (int j = 0; j < 8; j++) srcv[j]  = vld1q_f32(x + i*32 + 4*j);
-        for (int j = 0; j < 8; j++) asrcv[j] = vabsq_f32(srcv[j]);
-
-        for (int j = 0; j < 4; j++) amaxv[2*j] = vmaxq_f32(asrcv[2*j], asrcv[2*j+1]);
-        for (int j = 0; j < 2; j++) amaxv[4*j] = vmaxq_f32(amaxv[4*j], amaxv[4*j+2]);
-        for (int j = 0; j < 1; j++) amaxv[8*j] = vmaxq_f32(amaxv[8*j], amaxv[8*j+4]);
-
-        const float amax = vmaxvq_f32(amaxv[0]);
-
-        const float d = amax / ((1 << 7) - 1);
-        const float id = d ? 1.0f/d : 0.0f;
-
-        if (i < nb4) {
-            y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
-        } else {
-            y[i].d = GGML_FP32_TO_FP16(d);
-        }
-
-        for (int j = 0; j < 8; j++) {
-            const float32x4_t v  = vmulq_n_f32(srcv[j], id);
-            const int32x4_t   vi = vcvtnq_s32_f32(v);
-
-            if (i < nb4) {
-                y4[i4].qs[32*ir + 4*j + 0] = vgetq_lane_s32(vi, 0);
-                y4[i4].qs[32*ir + 4*j + 1] = vgetq_lane_s32(vi, 1);
-                y4[i4].qs[32*ir + 4*j + 2] = vgetq_lane_s32(vi, 2);
-                y4[i4].qs[32*ir + 4*j + 3] = vgetq_lane_s32(vi, 3);
-            } else {
-                y[i].qs[4*j + 0] = vgetq_lane_s32(vi, 0);
-                y[i].qs[4*j + 1] = vgetq_lane_s32(vi, 1);
-                y[i].qs[4*j + 2] = vgetq_lane_s32(vi, 2);
-                y[i].qs[4*j + 3] = vgetq_lane_s32(vi, 3);
-            }
-        }
-    }
-#else
-    block_q8_0_x4 * y4 = (block_q8_0_x4 *)y;
-    for (int i = 0; i < nb; i++) {
-        int i4 = i/4, ir = i%4;
-        // Load elements into 4 AVX vectors
-        __m256 v0 = _mm256_loadu_ps( x );
-        __m256 v1 = _mm256_loadu_ps( x + 8 );
-        __m256 v2 = _mm256_loadu_ps( x + 16 );
-        __m256 v3 = _mm256_loadu_ps( x + 24 );
-        x += 32;
-
-        const __m256 signBit = _mm256_set1_ps( -0.0f );
-        __m256 maxAbs = _mm256_andnot_ps( signBit, v0 );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v1 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v2 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v3 ) );
-
-        __m128 max4 = _mm_max_ps( _mm256_extractf128_ps( maxAbs, 1 ), _mm256_castps256_ps128( maxAbs ) );
-        max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
-        max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
-        const float maxScalar = _mm_cvtss_f32( max4 );
-
-        const float d = maxScalar / 127.f;
-        if (i < nb4) {
-            y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
-        } else {
-            y[i].d = GGML_FP32_TO_FP16(d);
-        }
-        const float id = ( maxScalar != 0.0f ) ? 127.f / maxScalar : 0.0f;
-        const __m256 mul = _mm256_set1_ps( id );
-
-        v0 = _mm256_mul_ps( v0, mul );
-        v1 = _mm256_mul_ps( v1, mul );
-        v2 = _mm256_mul_ps( v2, mul );
-        v3 = _mm256_mul_ps( v3, mul );
-
-        v0 = _mm256_round_ps( v0, _MM_ROUND_NEAREST );
-        v1 = _mm256_round_ps( v1, _MM_ROUND_NEAREST );
-        v2 = _mm256_round_ps( v2, _MM_ROUND_NEAREST );
-        v3 = _mm256_round_ps( v3, _MM_ROUND_NEAREST );
-
-        __m256i i0 = _mm256_cvtps_epi32( v0 );
-        __m256i i1 = _mm256_cvtps_epi32( v1 );
-        __m256i i2 = _mm256_cvtps_epi32( v2 );
-        __m256i i3 = _mm256_cvtps_epi32( v3 );
-
-        // Convert int32 to int16
-        i0 = _mm256_packs_epi32( i0, i1 );	// 0, 1, 2, 3,  8, 9, 10, 11,  4, 5, 6, 7, 12, 13, 14, 15
-        i2 = _mm256_packs_epi32( i2, i3 );	// 16, 17, 18, 19,  24, 25, 26, 27,  20, 21, 22, 23, 28, 29, 30, 31
-                                            // Convert int16 to int8
-        i0 = _mm256_packs_epi16( i0, i2 );	// 0, 1, 2, 3,  8, 9, 10, 11,  16, 17, 18, 19,  24, 25, 26, 27,  4, 5, 6, 7, 12, 13, 14, 15, 20, 21, 22, 23, 28, 29, 30, 31
-
-        // We got our precious signed bytes, but the order is now wrong
-        // These AVX2 pack instructions process 16-byte pieces independently
-        // The following instruction is fixing the order
-        const __m256i perm = _mm256_setr_epi32( 0, 4, 1, 5, 2, 6, 3, 7 );
-        i0 = _mm256_permutevar8x32_epi32( i0, perm );
-
-        if (i < nb4) {
-            _mm256_storeu_si256((__m256i *)y4[i4].qs + ir, i0);
-        } else {
-            _mm256_storeu_si256((__m256i *)y[i].qs, i0);
-        }
-    }
-#endif
-}
-
-void quantize_row_q8_1(const float * x, block_q8_1 * y, int k) {
-    assert(k % QK8_1 == 0);
-    const int nb = k / QK8_1;
-
-    const int nb4 = 4*(nb/4);
-    block_q8_1_x4 * y4 = (block_q8_1_x4 *)y;
-#if defined(__aarch64__)
-    for (int i = 0; i < nb; i++) {
-        int i4 = i/4, ir = i%4;
-        float32x4_t srcv [8];
-        float32x4_t asrcv[8];
-        float32x4_t amaxv[8];
-
-        for (int j = 0; j < 8; j++) srcv[j]  = vld1q_f32(x + i*32 + 4*j);
-        for (int j = 0; j < 8; j++) asrcv[j] = vabsq_f32(srcv[j]);
-
-        for (int j = 0; j < 4; j++) amaxv[2*j] = vmaxq_f32(asrcv[2*j], asrcv[2*j+1]);
-        for (int j = 0; j < 2; j++) amaxv[4*j] = vmaxq_f32(amaxv[4*j], amaxv[4*j+2]);
-        for (int j = 0; j < 1; j++) amaxv[8*j] = vmaxq_f32(amaxv[8*j], amaxv[8*j+4]);
-
-        const float amax = vmaxvq_f32(amaxv[0]);
-
-        const float d = amax / ((1 << 7) - 1);
-        const float id = d ? 1.0f/d : 0.0f;
-
-        if (i < nb4) {
-            y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
-        } else {
-            y[i].d = GGML_FP32_TO_FP16(d);
-        }
-
-        int32x4_t accv = vdupq_n_s32(0);
-
-        for (int j = 0; j < 8; j++) {
-            const float32x4_t v  = vmulq_n_f32(srcv[j], id);
-            const int32x4_t   vi = vcvtnq_s32_f32(v);
-
-            if (i < nb4) {
-                y4[i4].qs[QK8_1*ir + 4*j + 0] = vgetq_lane_s32(vi, 0);
-                y4[i4].qs[QK8_1*ir + 4*j + 1] = vgetq_lane_s32(vi, 1);
-                y4[i4].qs[QK8_1*ir + 4*j + 2] = vgetq_lane_s32(vi, 2);
-                y4[i4].qs[QK8_1*ir + 4*j + 3] = vgetq_lane_s32(vi, 3);
-            } else {
-                y[i].qs[4*j + 0] = vgetq_lane_s32(vi, 0);
-                y[i].qs[4*j + 1] = vgetq_lane_s32(vi, 1);
-                y[i].qs[4*j + 2] = vgetq_lane_s32(vi, 2);
-                y[i].qs[4*j + 3] = vgetq_lane_s32(vi, 3);
-            }
-
-            accv = vaddq_s32(accv, vi);
-        }
-
-        if (i < nb4) {
-            y4[i4].d[ir+4] = GGML_FP32_TO_FP16(d * vaddvq_s32(accv));
-        } else {
-            y[i].s = GGML_FP32_TO_FP16(d * vaddvq_s32(accv));
-        }
-    }
-#else
-    for (int i = 0; i < nb; i++) {
-        int i4 = i/4, ir = i%4;
-        // Load elements into 4 AVX vectors
-        __m256 v0 = _mm256_loadu_ps( x );
-        __m256 v1 = _mm256_loadu_ps( x + 8 );
-        __m256 v2 = _mm256_loadu_ps( x + 16 );
-        __m256 v3 = _mm256_loadu_ps( x + 24 );
-        x += 32;
-
-        // Compute max(abs(e)) for the block
-        const __m256 signBit = _mm256_set1_ps( -0.0f );
-        __m256 maxAbs = _mm256_andnot_ps( signBit, v0 );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v1 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v2 ) );
-        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps( signBit, v3 ) );
-
-        __m128 max4 = _mm_max_ps( _mm256_extractf128_ps( maxAbs, 1 ), _mm256_castps256_ps128( maxAbs ) );
-        max4 = _mm_max_ps( max4, _mm_movehl_ps( max4, max4 ) );
-        max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4 ) );
-        const float max_scalar = _mm_cvtss_f32( max4 );
-
-        // Quantize these floats
-        const float d = max_scalar / 127.f;
-        if (i < nb4) {
-            y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
-        } else {
-            y[i].d = GGML_FP32_TO_FP16(d);
-        }
-        const float id = ( max_scalar != 0.0f ) ? 127.f / max_scalar : 0.0f;
-        const __m256 mul = _mm256_set1_ps( id );
-
-        // Apply the multiplier
-        v0 = _mm256_mul_ps( v0, mul );
-        v1 = _mm256_mul_ps( v1, mul );
-        v2 = _mm256_mul_ps( v2, mul );
-        v3 = _mm256_mul_ps( v3, mul );
-
-        // Round to nearest integer
-        v0 = _mm256_round_ps( v0, _MM_ROUND_NEAREST );
-        v1 = _mm256_round_ps( v1, _MM_ROUND_NEAREST );
-        v2 = _mm256_round_ps( v2, _MM_ROUND_NEAREST );
-        v3 = _mm256_round_ps( v3, _MM_ROUND_NEAREST );
-
-        // Convert floats to integers
-        __m256i i0 = _mm256_cvtps_epi32( v0 );
-        __m256i i1 = _mm256_cvtps_epi32( v1 );
-        __m256i i2 = _mm256_cvtps_epi32( v2 );
-        __m256i i3 = _mm256_cvtps_epi32( v3 );
-
-        // Compute the sum of the quants and set y[i].s
-        if (i < nb4) {
-            y4[i4].d[ir+4] = GGML_FP32_TO_FP16(d * hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3))));
-        } else {
-            y[i].s = GGML_FP32_TO_FP16(d * hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3))));
-        }
-
-        // Convert int32 to int16
-        i0 = _mm256_packs_epi32( i0, i1 );  // 0, 1, 2, 3,  8, 9, 10, 11,  4, 5, 6, 7, 12, 13, 14, 15
-        i2 = _mm256_packs_epi32( i2, i3 );  // 16, 17, 18, 19,  24, 25, 26, 27,  20, 21, 22, 23, 28, 29, 30, 31
-                                            // Convert int16 to int8
-        i0 = _mm256_packs_epi16( i0, i2 );  // 0, 1, 2, 3,  8, 9, 10, 11,  16, 17, 18, 19,  24, 25, 26, 27,  4, 5, 6, 7, 12, 13, 14, 15, 20, 21, 22, 23, 28, 29, 30, 31
-
-        // We got our precious signed bytes, but the order is now wrong
-        // These AVX2 pack instructions process 16-byte pieces independently
-        // The following instruction is fixing the order
-        const __m256i perm = _mm256_setr_epi32( 0, 4, 1, 5, 2, 6, 3, 7 );
-        i0 = _mm256_permutevar8x32_epi32( i0, perm );
-
-        if (i < nb4) {
-            _mm256_storeu_si256((__m256i *)y4[i4].qs + ir, i0);
-        } else {
-            _mm256_storeu_si256((__m256i *)y[i].qs, i0);
-        }
-    }
-#endif
-}
-
 template <int D, int step>
 struct HelperQ80 final : public BaseHelper<step> {
     using Base = BaseHelper<step>;
+#ifdef HAVE_FANCY_SIMD
+    //using block_q8 = block_q8_1;
+    using block_q8 = block_q8_1;
+#else
     using block_q8 = block_q8_0;
+#endif
     HelperQ80(const char * data, int stride) : Base(data, stride) {}
 
     // Needed for v * softmax(k * q)
     inline void load(int l1, int i, F16::Data& v1, F16::Data& v2) const {
         int j = F16::block_size*i;
-        auto dl = (const block_q8_0_x4 *)Base::lblock(l1) + j/(4*QK8_0);
-        int ii = (j/QK8_0)%4;
+        auto dl = (const block_q8_0 *)Base::lblock(l1) + j/QK8_0;
 #ifdef __aarch64__
-        const float16_t * d = (const float16_t *)dl->d;
-        auto vd = F16::set1(d[ii]);
-        auto qs = vld1_s8_x2(dl->qs + 32*ii + j%32);
+        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
+        int ii = j%QK8_0;
+        auto qs = vld1_s8_x2(dl->qs + ii);
         v1 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[0])));
         v2 = vmulq_f16(vd, vcvtq_f16_s16(vmovl_s8(qs.val[1])));
 #else
-        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d[ii]));
+        auto vd = F16::set1(GGML_FP16_TO_FP32(dl->d));
 #ifdef HAVE_FANCY_SIMD
-        v1 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+2*ii+0))));
-        v2 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+2*ii+1))));
+        v1 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+0))));
+        v2 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+1))));
 #else
-        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+32*ii+j%32)))));
-        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+32*ii+j%32+8)))));
+        int ii = j%QK8_0;
+        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+ii)+0))));
+        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+ii)+1))));
 #endif
 #endif
     }
@@ -12689,7 +12487,7 @@ struct HelperQ80 final : public BaseHelper<step> {
     static inline void convert(int nq, int stride_q, const float * q, block_q8_0 * y) {
         GGML_ASSERT(nq <= step);
         for (int i = 0; i < nq; ++i) {
-            quantize_row_q8_0(q, y, D);
+            quantize_row_q8_0_x4(q, y, D);
             q += stride_q;
             y += D/QK8_0;
         }
@@ -12698,7 +12496,7 @@ struct HelperQ80 final : public BaseHelper<step> {
     static inline void convert(int nq, int stride_q, const float * q, block_q8_1 * y) {
         GGML_ASSERT(nq <= step);
         for (int i = 0; i < nq; ++i) {
-            quantize_row_q8_1(q, y, D);
+            quantize_row_q8_1_x4(q, y, D);
             q += stride_q;
             y += D/QK8_1;
         }
@@ -13144,13 +12942,15 @@ struct FlashQKV {
                     }
                 }
             }
-            F16::Data v1, v2;
-            for (int l1 = 0; l1 < k_step; ++l1) {
-                vh.load(l1, i, v1, v2);
+            F16::Data v1, v2, v3, v4;
+            for (int l1 = 0; l1 < k_step; l1 += 2) {
+                vh.load(l1+0, i, v1, v2);
+                vh.load(l1+1, i, v3, v4);
                 for (int j = 0; j < q_step; ++j) {
-                    auto vs = F16::set1(fms.cache[k_step*j + l1]);
-                    vk[2*j+0] = F16::fmadd(vk[2*j+0], v1, vs);
-                    vk[2*j+1] = F16::fmadd(vk[2*j+1], v2, vs);
+                    auto vs1 = F16::set1(fms.cache[k_step*j + l1+0]);
+                    auto vs2 = F16::set1(fms.cache[k_step*j + l1+1]);
+                    vk[2*j+0] = F16::fmadd(F16::fmadd(vk[2*j+0], v1, vs1), v3, vs2);
+                    vk[2*j+1] = F16::fmadd(F16::fmadd(vk[2*j+1], v2, vs1), v4, vs2);
                 }
             }
             for (int j = 0; j < q_step; ++j) {
@@ -13178,13 +12978,15 @@ struct FlashQKV {
                     }
                 }
             }
-            F16::Data v1, v2;
-            for (int l1 = 0; l1 < k_step; ++l1) {
-                vh.load(l1, i, v1, v2);
+            F16::Data v1, v2, v3, v4;
+            for (int l1 = 0; l1 < k_step; l1 += 2) {
+                vh.load(l1+0, i, v1, v2);
+                vh.load(l1+1, i, v3, v4);
                 for (int j = 0; j < nq1; ++j) {
-                    auto vs = F16::set1(fms.cache[k_step*j + l1]);
-                    vk[2*j+0] = F16::fmadd(vk[2*j+0], v1, vs);
-                    vk[2*j+1] = F16::fmadd(vk[2*j+1], v2, vs);
+                    auto vs1 = F16::set1(fms.cache[k_step*j + l1+0]);
+                    auto vs2 = F16::set1(fms.cache[k_step*j + l1+1]);
+                    vk[2*j+0] = F16::fmadd(F16::fmadd(vk[2*j+0], v1, vs1), v3, vs2);
+                    vk[2*j+1] = F16::fmadd(F16::fmadd(vk[2*j+1], v2, vs1), v4, vs2);
                 }
             }
             for (int j = 0; j < nq1; ++j) {
@@ -13388,56 +13190,82 @@ struct FlashQKfp32 {
     }
 #endif
 
-    template <typename KHelper, typename block_q8>
-    static inline void mul_mask_kq(const KHelper& kh, int stride_m,
-            const block_q8 * q, const char * mask, FlashMS<q_step, k_step>& fms) {
-        static_assert(q_step <= 8);
+    template <typename KHelper>
+    static inline std::pair<mul_mat_t, int> mul_mat_kernel(int nq) {
+        constexpr int kMaxQ = 8;
+#define MAKE_FUNCS(mul_mat, n) \
+        if (n >= kMaxQ) return std::make_pair(mul_mat, kMaxQ>, kMaxQ);\
+        else {\
+            switch (n) {\
+                case 1: return std::make_pair(mul_mat, 1>, 1);\
+                case 2: return std::make_pair(mul_mat, 2>, 2);\
+                case 3: return std::make_pair(mul_mat, 3>, 3);\
+                case 4: return std::make_pair(mul_mat, 4>, 4);\
+                case 5: return std::make_pair(mul_mat, 5>, 5);\
+                case 6: return std::make_pair(mul_mat, 6>, 6);\
+                case 7: return std::make_pair(mul_mat, 7>, 7);\
+            }\
+        }
         if constexpr (std::is_same_v<KHelper, HelperQ40<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_0)*sizeof(block_q8), 0, 1, nullptr};
 #ifdef __aarch64__
-            mul_mat_qX_0_q8_0<DequantizerQ40, q_step>(D, kh.block, kh.stride, info, k_step);
+            MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ40, nq);
 #else
-            mul_mat_qX_0_q8_0_T<Q4_0_Unpacker, q_step>(D, kh.block, kh.stride, info, k_step);
+            MAKE_FUNCS(mul_mat_qX_0_q8_0_T<Q4_0_Unpacker, nq);
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ80<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_0)*sizeof(block_q8), 0, 1, nullptr};
 #ifdef __aarch64__
-            mul_mat_qX_0_q8_0<DequantizerQ80_x4, q_step>(D, kh.block, kh.stride, info, k_step);
+            MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ80, nq);
 #else
             if constexpr (D >= 128) {
-                mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, q_step>(D, kh.block, kh.stride, info, k_step);
+#ifdef HAVE_FANCY_SIMD
+                MAKE_FUNCS(mul_mat_qX_1_q8_1_T<Q8_0_1_Unpacker, nq);
+#else
+                MAKE_FUNCS(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, nq);
+#endif
             } else {
-                mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, q_step>(D, kh.block, kh.stride, info, k_step);
+                // This does not actually work until we fix K-cache to be quantized to Q8_0_x4 only if D%128 == 0
+                MAKE_FUNCS(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, nq);
             }
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ41<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_1)*sizeof(block_q8), 0, 1, nullptr};
 #ifdef __aarch64__
-            mul_mat_qX_1_q8_1<DequantizerQ41, q_step>(D, kh.block, kh.stride, info, k_step);
+            MAKE_FUNCS(mul_mat_qX_1_q8_1<DequantizerQ41, nq);
 #else
-            mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, q_step>(D, kh.block, kh.stride, info, k_step);
+            MAKE_FUNCS(mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, nq);
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperIQ4nl<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_1)*sizeof(block_q8), 0, 1, nullptr};
 #ifdef __aarch64__
-            mul_mat_qX_0_q8_0<DequantizerIQ4NL, q_step>(D, kh.block, kh.stride, info, k_step);
+            MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerIQ4NL, nq);
 #else
-            mul_mat_qX_1_q8_1_T<IQ4_NL_Unpacker, q_step>(D, kh.block, kh.stride, info, k_step);
+            MAKE_FUNCS(mul_mat_qX_1_q8_1_T<IQ4_NL_Unpacker, nq);
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ60<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_1)*sizeof(block_q8), 0, 1, nullptr};
 #ifdef __aarch64__
-            mul_mat_qX_0_q8_0<DequantizerQ60, q_step>(D, kh.block, kh.stride, info, k_step);
+            MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ60, nq);
 #else
-            mul_mat_qX_1_q8_1_T<Q6_0_1_Unpacker, q_step>(D, kh.block, kh.stride, info, k_step);
+            MAKE_FUNCS(mul_mat_qX_1_q8_1_T<Q6_0_1_Unpacker, nq);
 #endif
         }
         else {
             GGML_ASSERT(false);
+        }
+        return std::make_pair<mul_mat_t, int>(nullptr, 0);
+    }
+
+    template <typename KHelper, typename block_q8>
+    static inline void mul_mask_kq(const KHelper& kh, int stride_m,
+            const block_q8 * q, const char * mask, FlashMS<q_step, k_step>& fms) {
+        constexpr int kMaxQ = 8;
+        static_assert(q_step < kMaxQ || q_step%kMaxQ == 0);
+        auto [mul_mat, nrc_q] = mul_mat_kernel<KHelper>(q_step);
+        DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_0)*sizeof(block_q8), 0, 1, nullptr};
+        for (int iq = 0; iq < q_step/nrc_q; ++iq) {
+            mul_mat(D, kh.block, kh.stride, info, k_step);
+            info.cur_y += nrc_q;
         }
 #ifdef __aarch64__
         float32x4_t vk[k_step/4];
@@ -13451,136 +13279,21 @@ struct FlashQKfp32 {
         }
 #endif
     }
+
     template <typename KHelper, typename block_q8>
     static inline void mul_mask_kq(int nq, const KHelper& kh, int stride_m,
             const block_q8 * q, const char * mask, FlashMS<q_step, k_step>& fms) {
-        GGML_ASSERT(nq < 8);
-        if constexpr (std::is_same_v<KHelper, HelperQ40<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_0)*sizeof(block_q8), 0, 1, nullptr};
-            switch (nq) {
-#ifdef __aarch64__
-                case 1: mul_mat_qX_0_q8_0<DequantizerQ40, 1>(D, kh.block, kh.stride, info, k_step); break;
-                case 2: mul_mat_qX_0_q8_0<DequantizerQ40, 2>(D, kh.block, kh.stride, info, k_step); break;
-                case 3: mul_mat_qX_0_q8_0<DequantizerQ40, 3>(D, kh.block, kh.stride, info, k_step); break;
-                case 4: mul_mat_qX_0_q8_0<DequantizerQ40, 4>(D, kh.block, kh.stride, info, k_step); break;
-                case 5: mul_mat_qX_0_q8_0<DequantizerQ40, 5>(D, kh.block, kh.stride, info, k_step); break;
-                case 6: mul_mat_qX_0_q8_0<DequantizerQ40, 6>(D, kh.block, kh.stride, info, k_step); break;
-                case 7: mul_mat_qX_0_q8_0<DequantizerQ40, 7>(D, kh.block, kh.stride, info, k_step); break;
-#else
-                case 1: mul_mat_qX_0_q8_0_T<Q4_0_Unpacker, 1>(D, kh.block, kh.stride, info, k_step); break;
-                case 2: mul_mat_qX_0_q8_0_T<Q4_0_Unpacker, 2>(D, kh.block, kh.stride, info, k_step); break;
-                case 3: mul_mat_qX_0_q8_0_T<Q4_0_Unpacker, 3>(D, kh.block, kh.stride, info, k_step); break;
-                case 4: mul_mat_qX_0_q8_0_T<Q4_0_Unpacker, 4>(D, kh.block, kh.stride, info, k_step); break;
-                case 5: mul_mat_qX_0_q8_0_T<Q4_0_Unpacker, 5>(D, kh.block, kh.stride, info, k_step); break;
-                case 6: mul_mat_qX_0_q8_0_T<Q4_0_Unpacker, 6>(D, kh.block, kh.stride, info, k_step); break;
-                case 7: mul_mat_qX_0_q8_0_T<Q4_0_Unpacker, 7>(D, kh.block, kh.stride, info, k_step); break;
-#endif
-            }
+        auto [mul_mat, nrc_q] = mul_mat_kernel<KHelper>(nq);
+        DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_0)*sizeof(block_q8), 0, 1, nullptr};
+        for (int iq = 0; iq < nq/nrc_q; ++iq) {
+            mul_mat(D, kh.block, kh.stride, info, k_step);
+            info.cur_y += nrc_q;
         }
-        else if constexpr (std::is_same_v<KHelper, HelperQ80<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_0)*sizeof(block_q8), 0, 1, nullptr};
-#ifdef __aarch64__
-            switch (nq) {
-                case 1: mul_mat_qX_0_q8_0<DequantizerQ80_x4, 1>(D, kh.block, kh.stride, info, k_step); break;
-                case 2: mul_mat_qX_0_q8_0<DequantizerQ80_x4, 2>(D, kh.block, kh.stride, info, k_step); break;
-                case 3: mul_mat_qX_0_q8_0<DequantizerQ80_x4, 3>(D, kh.block, kh.stride, info, k_step); break;
-                case 4: mul_mat_qX_0_q8_0<DequantizerQ80_x4, 4>(D, kh.block, kh.stride, info, k_step); break;
-                case 5: mul_mat_qX_0_q8_0<DequantizerQ80_x4, 5>(D, kh.block, kh.stride, info, k_step); break;
-                case 6: mul_mat_qX_0_q8_0<DequantizerQ80_x4, 6>(D, kh.block, kh.stride, info, k_step); break;
-                case 7: mul_mat_qX_0_q8_0<DequantizerQ80_x4, 7>(D, kh.block, kh.stride, info, k_step); break;
-            }
-#else
-            if constexpr (D >= 128) {
-                switch (nq) {
-                    case 1: mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, 1>(D, kh.block, kh.stride, info, k_step); break;
-                    case 2: mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, 2>(D, kh.block, kh.stride, info, k_step); break;
-                    case 3: mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, 3>(D, kh.block, kh.stride, info, k_step); break;
-                    case 4: mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, 4>(D, kh.block, kh.stride, info, k_step); break;
-                    case 5: mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, 5>(D, kh.block, kh.stride, info, k_step); break;
-                    case 6: mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, 6>(D, kh.block, kh.stride, info, k_step); break;
-                    case 7: mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, 7>(D, kh.block, kh.stride, info, k_step); break;
-                }
-            } else {
-                switch (nq) {
-                    case 1: mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 1>(D, kh.block, kh.stride, info, k_step); break;
-                    case 2: mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 2>(D, kh.block, kh.stride, info, k_step); break;
-                    case 3: mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 3>(D, kh.block, kh.stride, info, k_step); break;
-                    case 4: mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 4>(D, kh.block, kh.stride, info, k_step); break;
-                    case 5: mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 5>(D, kh.block, kh.stride, info, k_step); break;
-                    case 6: mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 6>(D, kh.block, kh.stride, info, k_step); break;
-                    case 7: mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 7>(D, kh.block, kh.stride, info, k_step); break;
-                }
-            }
-#endif
-        }
-        else if constexpr (std::is_same_v<KHelper, HelperQ41<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_1)*sizeof(block_q8), 0, 1, nullptr};
-            switch (nq) {
-#ifdef __aarch64__
-                case 1: mul_mat_qX_1_q8_1<DequantizerQ41, 1>(D, kh.block, kh.stride, info, k_step); break;
-                case 2: mul_mat_qX_1_q8_1<DequantizerQ41, 2>(D, kh.block, kh.stride, info, k_step); break;
-                case 3: mul_mat_qX_1_q8_1<DequantizerQ41, 3>(D, kh.block, kh.stride, info, k_step); break;
-                case 4: mul_mat_qX_1_q8_1<DequantizerQ41, 4>(D, kh.block, kh.stride, info, k_step); break;
-                case 5: mul_mat_qX_1_q8_1<DequantizerQ41, 5>(D, kh.block, kh.stride, info, k_step); break;
-                case 6: mul_mat_qX_1_q8_1<DequantizerQ41, 6>(D, kh.block, kh.stride, info, k_step); break;
-                case 7: mul_mat_qX_1_q8_1<DequantizerQ41, 7>(D, kh.block, kh.stride, info, k_step); break;
-#else
-                case 1: mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, 1>(D, kh.block, kh.stride, info, k_step); break;
-                case 2: mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, 2>(D, kh.block, kh.stride, info, k_step); break;
-                case 3: mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, 3>(D, kh.block, kh.stride, info, k_step); break;
-                case 4: mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, 4>(D, kh.block, kh.stride, info, k_step); break;
-                case 5: mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, 5>(D, kh.block, kh.stride, info, k_step); break;
-                case 6: mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, 6>(D, kh.block, kh.stride, info, k_step); break;
-                case 7: mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, 7>(D, kh.block, kh.stride, info, k_step); break;
-#endif
-            }
-        }
-        else if constexpr (std::is_same_v<KHelper, HelperIQ4nl<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_1)*sizeof(block_q8), 0, 1, nullptr};
-            switch (nq) {
-#ifdef __aarch64__
-                case 1: mul_mat_qX_0_q8_0<DequantizerIQ4NL, 1>(D, kh.block, kh.stride, info, k_step); break;
-                case 2: mul_mat_qX_0_q8_0<DequantizerIQ4NL, 2>(D, kh.block, kh.stride, info, k_step); break;
-                case 3: mul_mat_qX_0_q8_0<DequantizerIQ4NL, 3>(D, kh.block, kh.stride, info, k_step); break;
-                case 4: mul_mat_qX_0_q8_0<DequantizerIQ4NL, 4>(D, kh.block, kh.stride, info, k_step); break;
-                case 5: mul_mat_qX_0_q8_0<DequantizerIQ4NL, 5>(D, kh.block, kh.stride, info, k_step); break;
-                case 6: mul_mat_qX_0_q8_0<DequantizerIQ4NL, 6>(D, kh.block, kh.stride, info, k_step); break;
-                case 7: mul_mat_qX_0_q8_0<DequantizerIQ4NL, 7>(D, kh.block, kh.stride, info, k_step); break;
-#else
-                case 1: mul_mat_qX_1_q8_1_T<IQ4_NL_Unpacker, 1>(D, kh.block, kh.stride, info, k_step); break;
-                case 2: mul_mat_qX_1_q8_1_T<IQ4_NL_Unpacker, 2>(D, kh.block, kh.stride, info, k_step); break;
-                case 3: mul_mat_qX_1_q8_1_T<IQ4_NL_Unpacker, 3>(D, kh.block, kh.stride, info, k_step); break;
-                case 4: mul_mat_qX_1_q8_1_T<IQ4_NL_Unpacker, 4>(D, kh.block, kh.stride, info, k_step); break;
-                case 5: mul_mat_qX_1_q8_1_T<IQ4_NL_Unpacker, 5>(D, kh.block, kh.stride, info, k_step); break;
-                case 6: mul_mat_qX_1_q8_1_T<IQ4_NL_Unpacker, 6>(D, kh.block, kh.stride, info, k_step); break;
-                case 7: mul_mat_qX_1_q8_1_T<IQ4_NL_Unpacker, 7>(D, kh.block, kh.stride, info, k_step); break;
-#endif
-            }
-        }
-        else if constexpr (std::is_same_v<KHelper, HelperQ60<D, k_step>>) {
-            DataInfo info{fms.cache, (const char *)q, k_step, (D/QK8_1)*sizeof(block_q8), 0, 1, nullptr};
-            switch (nq) {
-#ifdef __aarch64__
-                case 1: mul_mat_qX_0_q8_0<DequantizerQ60, 1>(D, kh.block, kh.stride, info, k_step); break;
-                case 2: mul_mat_qX_0_q8_0<DequantizerQ60, 2>(D, kh.block, kh.stride, info, k_step); break;
-                case 3: mul_mat_qX_0_q8_0<DequantizerQ60, 3>(D, kh.block, kh.stride, info, k_step); break;
-                case 4: mul_mat_qX_0_q8_0<DequantizerQ60, 4>(D, kh.block, kh.stride, info, k_step); break;
-                case 5: mul_mat_qX_0_q8_0<DequantizerQ60, 5>(D, kh.block, kh.stride, info, k_step); break;
-                case 6: mul_mat_qX_0_q8_0<DequantizerQ60, 6>(D, kh.block, kh.stride, info, k_step); break;
-                case 7: mul_mat_qX_0_q8_0<DequantizerQ60, 7>(D, kh.block, kh.stride, info, k_step); break;
-#else
-                case 1: mul_mat_qX_1_q8_1_T<Q6_0_1_Unpacker, 1>(D, kh.block, kh.stride, info, k_step); break;
-                case 2: mul_mat_qX_1_q8_1_T<Q6_0_1_Unpacker, 2>(D, kh.block, kh.stride, info, k_step); break;
-                case 3: mul_mat_qX_1_q8_1_T<Q6_0_1_Unpacker, 3>(D, kh.block, kh.stride, info, k_step); break;
-                case 4: mul_mat_qX_1_q8_1_T<Q6_0_1_Unpacker, 4>(D, kh.block, kh.stride, info, k_step); break;
-                case 5: mul_mat_qX_1_q8_1_T<Q6_0_1_Unpacker, 5>(D, kh.block, kh.stride, info, k_step); break;
-                case 6: mul_mat_qX_1_q8_1_T<Q6_0_1_Unpacker, 6>(D, kh.block, kh.stride, info, k_step); break;
-                case 7: mul_mat_qX_1_q8_1_T<Q6_0_1_Unpacker, 7>(D, kh.block, kh.stride, info, k_step); break;
-#endif
-            }
-        }
-        else {
-            GGML_ASSERT(false);
+        int iq = nrc_q*(nq/nrc_q);
+        if (iq < nq) {
+            auto [mul_mat1, nrc_q1] = mul_mat_kernel<KHelper>(nq - iq);
+            GGML_ASSERT(nrc_q1 == nq - iq);
+            mul_mat1(D, kh.block, kh.stride, info, k_step);
         }
 #ifdef __aarch64__
         float32x4_t vk[k_step/4];
@@ -13864,6 +13577,11 @@ struct FlashQKbf16 {
         }
     }
 
+    static inline __m128 hsum_float_4x4(__m128 * a) {
+        for (int i = 0; i < 2; ++i) a[i] = _mm_add_ps(_mm_unpacklo_ps(a[i], a[i+2]), _mm_unpackhi_ps(a[i], a[i+2]));
+        return _mm_add_ps(_mm_unpacklo_ps(a[0], a[1]), _mm_unpackhi_ps(a[0], a[1]));
+    }
+
     template <typename KHelper>
     static inline void multiply_mask_kq(const KHelper& kh, int stride_q, int stride_m, const float * q,
             const char * mask, FlashMS<q_step, k_step>& fms) {
@@ -13893,6 +13611,34 @@ struct FlashQKbf16 {
         }
     }
 
+    static inline void mult_mask_kq_4(int l1, int m1, const ggml_bf16_t * q,
+            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step>& fms) {
+        auto qr = q + m1*D;
+        for (int i = 0; i < D/32; ++i) qv[i] = __m512bh(_mm512_loadu_si512((const __m512i *)qr + i));
+        __m128 sum[4];
+        for (int k = 0; k < 4; ++k) {
+            auto vsum = _mm512_setzero_ps();
+            for (int i = 0; i < D/32; ++i) vsum = _mm512_dpbf16_ps(vsum, vkh[i+k*(D/32)], qv[i]);
+            auto aux = _mm256_add_ps(_mm512_castps512_ps256(vsum), _mm512_extractf32x8_ps(vsum, 1));
+            sum[k] = _mm_add_ps(_mm256_castps256_ps128(aux), _mm256_extractf128_ps(aux, 1));
+        }
+        //auto sum4 = _mm_mask_blend_ps(m8, hsum_float_4x4(sum), _mm_set1_ps(-INFINITY));
+        //_mm_storeu_ps(fms.cache + k_step*m1 + l1, sum4);
+        _mm_storeu_ps(fms.cache + k_step*m1 + l1, hsum_float_4x4(sum));
+    }
+
+    static inline void mult_mask_kq_one(int l1, int m1, const ggml_bf16_t * q,
+            __m512bh * qv, const __m512bh * vkh, FlashMS<q_step, k_step>& fms) {
+        auto qr = q + m1*D;
+        for (int i = 0; i < D/32; ++i) qv[i] = __m512bh(_mm512_loadu_si512((const __m512i*)qr + i));
+        auto vsum = _mm512_setzero_ps();
+        for (int i = 0; i < D/32; ++i) vsum = _mm512_dpbf16_ps(vsum, vkh[i], qv[i]);
+        fms.cache[k_step*m1 + l1 + 0] = _mm512_reduce_add_ps(vsum);
+        vsum = _mm512_setzero_ps();
+        for (int i = 0; i < D/32; ++i) vsum = _mm512_dpbf16_ps(vsum, vkh[i+D/32], qv[i]);
+        fms.cache[k_step*m1 + l1 + 1] = _mm512_reduce_add_ps(vsum);
+    }
+
     template <typename KHelper>
     static inline void multiply_mask_kq(const KHelper& kh, int stride_m, const ggml_bf16_t * q,
             const char * mask, FlashMS<q_step, k_step>& fms) {
@@ -13902,23 +13648,44 @@ struct FlashQKbf16 {
                 __m512bh vkh[D/8];
                 for (int l1 = 0; l1 < k_step; l1 += 4) {
                     kh.load_4(l1, vkh);
-                    for (int j = 0; j < q_step; ++j) {
-                        mult_mask_kq_4(l1, j, stride_m, q, mask, qv, vkh, fms);
-                    }
+                    for (int j = 0; j < q_step; ++j) mult_mask_kq_4(l1, j, q, qv, vkh, fms);
                 }
             } else {
                 __m512bh vkh[D/16];
                 for (int l1 = 0; l1 < k_step; l1 += 2) {
                     kh.load_2(l1, vkh);
-                    for (int j = 0; j < q_step; ++j) {
-                        mult_mask_kq_one(l1, j, stride_m, q, mask, qv, vkh, fms);
-                    }
+                    for (int j = 0; j < q_step; ++j) mult_mask_kq_one(l1, j, q, qv, vkh, fms);
                 }
             }
         }
-        __m512 vk[k_step/16];
+        F16::Data vk[k_step/16];
         for (int j = 0; j < q_step; ++j) {
-            fms.update_M_S(j, vk);
+            fms.update_M_S(j, vk, mask + stride_m*j);
+        }
+    }
+
+    template <typename KHelper>
+    static inline void multiply_mask_kq(int nq, const KHelper& kh, int stride_m, const ggml_bf16_t * q,
+            const char * mask, FlashMS<q_step, k_step>& fms) {
+        {
+            __m512bh qv[D/32];
+            if constexpr (D <= 128) {
+                __m512bh vkh[D/8];
+                for (int l1 = 0; l1 < k_step; l1 += 4) {
+                    kh.load_4(l1, vkh);
+                    for (int j = 0; j < nq; ++j) mult_mask_kq_4(l1, j, q, qv, vkh, fms);
+                }
+            } else {
+                __m512bh vkh[D/16];
+                for (int l1 = 0; l1 < k_step; l1 += 2) {
+                    kh.load_2(l1, vkh);
+                    for (int j = 0; j < nq; ++j) mult_mask_kq_one(l1, j, q, qv, vkh, fms);
+                }
+            }
+        }
+        F16::Data vk[k_step/16];
+        for (int j = 0; j < nq; ++j) {
+            fms.update_M_S(j, vk, mask + stride_m*j);
         }
     }
 
@@ -13944,6 +13711,19 @@ struct FlashQKbf16 {
     static inline void convert(int stride_q, const float * q, ggml_bf16_t * bf16) {
         auto qr = q;
         for (int j = 0; j < q_step; ++j) {
+            for (int i = 0; i < D/32; ++i) {
+                auto val1 = _mm512_loadu_ps(qr + 32*i);
+                auto val2 = _mm512_loadu_ps(qr + 32*i + 16);
+                _mm512_storeu_si512((__m512i *)bf16 + i, (__m512i)_mm512_cvtne2ps_pbh(val2, val1));
+            }
+            qr   += stride_q;
+            bf16 += D;
+        }
+    }
+
+    static inline void convert(int nq, int stride_q, const float * q, ggml_bf16_t * bf16) {
+        auto qr = q;
+        for (int j = 0; j < nq; ++j) {
             for (int i = 0; i < D/32; ++i) {
                 auto val1 = _mm512_loadu_ps(qr + 32*i);
                 auto val2 = _mm512_loadu_ps(qr + 32*i + 16);
@@ -13991,9 +13771,10 @@ struct FlashAttnBF16 {
             fms.init_qstep();
             kh.reset_block();
             vh.reset_block();
+            FlashQKbf16<D, q_step, k_step>::convert(n_left, stride_q, q, q_bf16);
             auto mr = mask;
             for (int k1 = 0; k1 < nk1/k_step; ++k1) {
-                FlashQKbf16<D, q_step, k_step>::multiply_mask_kq(n_left, kh, stride_q, stride_m, q, mr, fms);
+                FlashQKbf16<D, q_step, k_step>::multiply_mask_kq(n_left, kh, stride_m, q_bf16, mr, fms);
                 fqkv.accumulate_qkv(n_left, vh, fms);
                 kh.next_block();
                 vh.next_block();
@@ -14008,28 +13789,59 @@ struct FlashAttnBF16 {
 };
 #endif
 
-template <int D, int q_step, int k_step, typename KHelper, typename VHelper>
+template <int D, int k_step, typename KHelper, typename VHelper>
 inline void iqk_flash_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
                         const float * q, const char * mask, float scale, float softcap, float * qkv) {
 
-    if (nq1 >= q_step) {
-        FlashAttn<D, q_step, k_step> fa(scale, softcap);
+#if defined __AVX2__
+    constexpr bool kUseLargeStepsQ = !std::is_same_v<KHelper, HelperF16<D, k_step>>;
+#else
+    constexpr bool kUseLargeStepsQ = true;
+#endif
+    if constexpr (kUseLargeStepsQ) {
+        if (nk1 >= 4096) {
+            if (nq1 >= 32) {
+                FlashAttn<D, 32, k_step> fa(scale, softcap);
+                fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+                return;
+            }
+            else if (nq1 >= 8) {
+                FlashAttn<D, 8, k_step> fa(scale, softcap);
+                fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+                return;
+            }
+        }
+    }
+    if (nq1 >= 8) {
+        FlashAttn<D, 8, k_step> fa(scale, softcap);
         fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-    } else {
+    }
+    else {
         FlashAttn<D, 1, k_step> fa(scale, softcap);
         fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
     }
 }
 
 #ifdef __AVX512BF16__
-template <int D, int q_step, int k_step>
+template <int D, int k_step>
 inline void iqk_flash_helper_T(int nq1, int nk1, int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * k, const char * v, const char * mask,
                         float scale, float softcap, float * qkv) {
     HelperBF16<D, k_step> kh(k, stride_k);
     HelperBF16<D, k_step> vh(v, stride_v);
-    if (nq1 >= q_step) {
-        FlashAttnBF16<D, q_step, k_step> fa(scale, softcap);
+    if (nk1 >= 4096) {
+        if (nq1 >= 64) {
+            FlashAttnBF16<D, 64, k_step> fa(scale, softcap);
+            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+        }
+        else if (nq1 >= 16) {
+            FlashAttnBF16<D, 16, k_step> fa(scale, softcap);
+            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+        }
+        return;
+    }
+    if (nq1 >= 8) {
+        FlashAttnBF16<D, 8, k_step> fa(scale, softcap);
         fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
     } else {
         FlashAttnBF16<D, 1, k_step> fa(scale, softcap);
@@ -14038,7 +13850,7 @@ inline void iqk_flash_helper_T(int nq1, int nk1, int stride_q, int stride_k, int
 }
 #endif
 
-template <int D, int q_step, int k_step, typename KHelper>
+template <int D, int k_step, typename KHelper>
 inline void iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
                         int nq1, int nk1, int stride_q, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * v, const char * mask,
@@ -14047,33 +13859,39 @@ inline void iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
     switch (type_v) {
         case GGML_TYPE_F16: {
             HelperF16<D, k_step> vh(v, stride_v);
-            iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
+            iqk_flash_helper<D, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
+#ifdef HAVE_FANCY_SIMD
+        case GGML_TYPE_BF16: {
+            HelperBF16<D, k_step> vh(v, stride_v);
+            iqk_flash_helper<D, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
+        } break;
+#endif
         case GGML_TYPE_Q8_0: {
             HelperQ80<D, k_step> vh(v, stride_v);
-            iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
+            iqk_flash_helper<D, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
         case GGML_TYPE_Q4_0: {
             HelperQ40<D, k_step> vh(v, stride_v);
-            iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
+            iqk_flash_helper<D, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
         case GGML_TYPE_Q4_1: {
             HelperQ41<D, k_step> vh(v, stride_v);
-            iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
+            iqk_flash_helper<D, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
         case GGML_TYPE_IQ4_NL: {
             HelperIQ4nl<D, k_step> vh(v, stride_v);
-            iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
+            iqk_flash_helper<D, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
         case GGML_TYPE_Q6_0: {
             HelperQ60<D, k_step> vh(v, stride_v);
-            iqk_flash_helper<D, q_step, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
+            iqk_flash_helper<D, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
         default: break;
     }
 }
 
-template <int D, int q_step, int k_step>
+template <int D, int k_step>
 inline void iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
                         int nq1, int nk1, int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * k, const char * v, const char * mask,
@@ -14082,27 +13900,27 @@ inline void iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
     switch (type_k) {
         case GGML_TYPE_F16: {
             HelperF16<D, k_step> kh(k, stride_k);
-            iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
+            iqk_flash_helper_T<D, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
         } break;
         case GGML_TYPE_Q8_0: {
             HelperQ80<D, k_step> kh(k, stride_k);
-            iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
+            iqk_flash_helper_T<D, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
         } break;
         case GGML_TYPE_Q4_0: {
             HelperQ40<D, k_step> kh(k, stride_k);
-            iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
+            iqk_flash_helper_T<D, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
         } break;
         case GGML_TYPE_Q4_1: {
             HelperQ41<D, k_step> kh(k, stride_k);
-            iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
+            iqk_flash_helper_T<D, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
         } break;
         case GGML_TYPE_IQ4_NL: {
             HelperIQ4nl<D, k_step> kh(k, stride_k);
-            iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
+            iqk_flash_helper_T<D, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
         } break;
         case GGML_TYPE_Q6_0: {
             HelperQ60<D, k_step> kh(k, stride_k);
-            iqk_flash_helper_T<D, q_step, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
+            iqk_flash_helper_T<D, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv);
         } break;
         default: break;
     }
@@ -14149,17 +13967,17 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
     stride_q /= sizeof(float); // q stride as float
 
 #ifdef __AVX512BF16__
-    if (type_k == GGML_TYPE_BF16 || type_v == GGML_TYPE_BF16) {
-        if (type_k != GGML_TYPE_BF16 || type_v != GGML_TYPE_BF16) return false; // we do not support mixing bf16 with other types
+    if (type_k == GGML_TYPE_BF16) {
+        if (type_v != GGML_TYPE_BF16) return false; // we do not support mixing bf16 k-cache with other types
         switch (D) {
             case 64:
-                iqk_flash_helper_T< 64, 8, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+                iqk_flash_helper_T< 64, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
             case 96:
-                iqk_flash_helper_T< 96, 8, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+                iqk_flash_helper_T< 96, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
             case 128:
-                iqk_flash_helper_T<128, 8, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+                iqk_flash_helper_T<128, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
             case 256:
-                iqk_flash_helper_T<256, 8, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+                iqk_flash_helper_T<256, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
             default:
                 return false;
         }
@@ -14168,21 +13986,42 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
     }
 #endif
 
+    if (nk1%64 == 0) {
+        switch (D) {
+            case 64:
+                iqk_flash_helper_T< 64, 64>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+                // Disable until we fix accumulate_qkv for odd D/16
+                //case 80:
+                //    iqk_flash_helper_T< 80, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            case 96:
+                iqk_flash_helper_T< 96, 64>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+                // Disable until we fix accumulate_qkv for odd D/16
+                //case 112:
+                //    iqk_flash_helper_T<112, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            case 128:
+                iqk_flash_helper_T<128, 64>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            case 256:
+                iqk_flash_helper_T<256, 64>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            default:
+                return false;
+        }
+        return true;
+    }
     switch (D) {
         case 64:
-            iqk_flash_helper_T< 64, F16::q_step, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            iqk_flash_helper_T< 64, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         // Disable until we fix accumulate_qkv for odd D/16
         //case 80:
-        //    iqk_flash_helper_T< 80, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+        //    iqk_flash_helper_T< 80, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 96:
-            iqk_flash_helper_T< 96, F16::q_step, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            iqk_flash_helper_T< 96, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         // Disable until we fix accumulate_qkv for odd D/16
         //case 112:
-        //    iqk_flash_helper_T<112, 4, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+        //    iqk_flash_helper_T<112, 32>(nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 128:
-            iqk_flash_helper_T<128, F16::q_step, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            iqk_flash_helper_T<128, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         case 256:
-            iqk_flash_helper_T<256, F16::q_step, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
+            iqk_flash_helper_T<256, 32>(type_k, type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv, q, ck, cv, cm, scale, softcap, qkv); break;
         default:
             return false;
     }
