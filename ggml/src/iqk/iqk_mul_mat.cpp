@@ -7476,8 +7476,13 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_Q8_0:
             assert (ne00 % QK8_0 == 0);
+#ifdef HAVE_FANCY_SIMD
             MulMat::set_functions<Q8_0_1_Unpacker>(mm);
             expected_typeB = GGML_TYPE_Q8_1_X4;
+#else
+            MulMat::set_functions<Q8_0_Unpacker>(mm);
+            expected_typeB = GGML_TYPE_Q8_0_X4;
+#endif
             break;
         case GGML_TYPE_IQ4_NL:
             assert (ne00 % QK4_NL == 0);
@@ -13216,7 +13221,7 @@ struct FlashQKfp32 {
 #ifdef HAVE_FANCY_SIMD
                 MAKE_FUNCS(mul_mat_qX_1_q8_1_T<Q8_0_1_Unpacker, nq);
 #else
-                MAKE_FUNCS(mul_mat_qX_0_q8_0_T<Q8_0_x4_Unpacker, nq);
+                MAKE_FUNCS(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, nq);
 #endif
             } else {
                 // This does not actually work until we fix K-cache to be quantized to Q8_0_x4 only if D%128 == 0
