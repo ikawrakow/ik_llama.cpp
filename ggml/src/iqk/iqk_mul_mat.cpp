@@ -13029,41 +13029,6 @@ struct FlashQKV {
             }
         }
     }
-    //template <typename VHelper, int Nq = q_step, class = std::enable_if<Nq >= 2>>
-    //inline void accumulate_qkv(int nq1, const VHelper& vh, const FlashMS<q_step, k_step>& fms) {
-    //    F16::Data vk[2*q_step];
-    //    for (int i = 0; i < D/F16::block_size; i += 2) {
-    //        for (int j = 0; j < nq1; ++j) {
-    //            if (fms.need_scaling[j] == 2) {
-    //                vk[2*j+0] = vk[2*j+1] = F16::zero();
-    //            } else {
-    //                auto R = qkv_cache + D*j;
-    //                vk[2*j+0] = F16::load(R + F16::block_size*i);
-    //                vk[2*j+1] = F16::load(R + F16::block_size*(i + 1));
-    //                if (fms.need_scaling[j] == 1) {
-    //                    vk[2*j+0] = F16::mul(vk[2*j+0], fms.vms[j]);
-    //                    vk[2*j+1] = F16::mul(vk[2*j+1], fms.vms[j]);
-    //                }
-    //            }
-    //        }
-    //        F16::Data v1, v2, v3, v4;
-    //        for (int l1 = 0; l1 < k_step; l1 += 2) {
-    //            vh.load(l1+0, i, v1, v2);
-    //            vh.load(l1+1, i, v3, v4);
-    //            for (int j = 0; j < nq1; ++j) {
-    //                auto vs1 = F16::set1(fms.cache[k_step*j + l1+0]);
-    //                auto vs2 = F16::set1(fms.cache[k_step*j + l1+1]);
-    //                vk[2*j+0] = F16::fmadd(F16::fmadd(vk[2*j+0], v1, vs1), v3, vs2);
-    //                vk[2*j+1] = F16::fmadd(F16::fmadd(vk[2*j+1], v2, vs1), v4, vs2);
-    //            }
-    //        }
-    //        for (int j = 0; j < nq1; ++j) {
-    //            auto R = qkv_cache + D*j;
-    //            F16::store(R + F16::block_size*(i + 0), vk[2*j+0]);
-    //            F16::store(R + F16::block_size*(i + 1), vk[2*j+1]);
-    //        }
-    //    }
-    //}
 
     inline void normalize_and_store(const FlashMS<q_step, k_step>& fms, int j, const qkv_cache_t * R, float * qkv) const {
         GGML_ASSERT(fms.S[j] > 0);
