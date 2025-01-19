@@ -12663,8 +12663,8 @@ struct HelperQ80 final : public BaseHelper<step> {
         v2 = _mm512_mul_ps(vd, _mm512_cvtepi32_ps(_mm512_cvtepi8_epi32(_mm_loadu_si128((const __m128i *)dl->qs+1))));
 #else
         int ii = j%QK8_0;
-        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+ii)+0))));
-        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+ii)+1))));
+        v1 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+ii+0)))));
+        v2 = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(_mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *)(dl->qs+ii+8)))));
 #endif
 #endif
     }
@@ -12691,11 +12691,11 @@ struct HelperQ80 final : public BaseHelper<step> {
 template <int D, int step>
 struct HelperQ80R4 : public BaseHelper<step> {
     using Base = BaseHelper<step>;
-#ifdef HAVE_FANCY_SIMD
+//#ifdef HAVE_FANCY_SIMD
     using block_q8 = block_q8_1;
-#else
-    using block_q8 = block_q8_0;
-#endif
+//#else
+//    using block_q8 = block_q8_0;
+//#endif
     HelperQ80R4(int nk, const HelperQ80<D, step>& q8) : Base(q8.data, q8.stride) {
         r4 = repack(nk, q8);
         Base::data = (const char *)r4.data();
