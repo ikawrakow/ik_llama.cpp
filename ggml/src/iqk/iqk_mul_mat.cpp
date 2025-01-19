@@ -48,7 +48,7 @@
 // For fp16/fp32 matri multiplications tiling is used to improve
 // performance.
 
-#define FA_TIMING 1
+#define FA_TIMING 0
 
 #include <utility>
 #include <array>
