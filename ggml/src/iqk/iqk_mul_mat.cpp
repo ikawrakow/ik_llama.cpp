@@ -12730,8 +12730,28 @@ struct HelperQ80R4 : public BaseHelper<step> {
                 _mm256_storeu_si256((__m256i *)y[ib].qs + 1, m1);
                 _mm256_storeu_si256((__m256i *)y[ib].qs + 2, m2);
                 _mm256_storeu_si256((__m256i *)y[ib].qs + 3, m3);
+#elif defined __ARM_NEON
+                auto m0 = vld1q_s8_x2(x4[0][ib].qs);
+                auto m1 = vld1q_s8_x2(x4[1][ib].qs);
+                auto m2 = vld1q_s8_x2(x4[2][ib].qs);
+                auto m3 = vld1q_s8_x2(x4[3][ib].qs);
+                auto row01 = vtrnq_s32(vreinterpretq_s32_s8(m0.val[0]), vreinterpretq_s32_s8(m1.val[0]));
+                auto row23 = vtrnq_s32(vreinterpretq_s32_s8(m2.val[0]), vreinterpretq_s32_s8(m3.val[0]));
+                m0.val[0] = vreinterpretq_s8_s64(vtrn1q_s64(vreinterpretq_s64_s32(row01.val[0]), vreinterpretq_s64_s32(row23.val[0])));
+                m1.val[0] = vreinterpretq_s8_s64(vtrn1q_s64(vreinterpretq_s64_s32(row01.val[1]), vreinterpretq_s64_s32(row23.val[1])));
+                m2.val[0] = vreinterpretq_s8_s64(vtrn2q_s64(vreinterpretq_s64_s32(row01.val[0]), vreinterpretq_s64_s32(row23.val[0])));
+                m3.val[0] = vreinterpretq_s8_s64(vtrn2q_s64(vreinterpretq_s64_s32(row01.val[1]), vreinterpretq_s64_s32(row23.val[1])));
+                row01 = vtrnq_s32(vreinterpretq_s32_s8(m0.val[1]), vreinterpretq_s32_s8(m1.val[1]));
+                row23 = vtrnq_s32(vreinterpretq_s32_s8(m2.val[1]), vreinterpretq_s32_s8(m3.val[1]));
+                m0.val[1] = vreinterpretq_s8_s64(vtrn1q_s64(vreinterpretq_s64_s32(row01.val[0]), vreinterpretq_s64_s32(row23.val[0])));
+                m1.val[1] = vreinterpretq_s8_s64(vtrn1q_s64(vreinterpretq_s64_s32(row01.val[1]), vreinterpretq_s64_s32(row23.val[1])));
+                m2.val[1] = vreinterpretq_s8_s64(vtrn2q_s64(vreinterpretq_s64_s32(row01.val[0]), vreinterpretq_s64_s32(row23.val[0])));
+                m3.val[1] = vreinterpretq_s8_s64(vtrn2q_s64(vreinterpretq_s64_s32(row01.val[1]), vreinterpretq_s64_s32(row23.val[1])));
+                vst1q_s8_x2(y[ib].qs +  0, m0);
+                vst1q_s8_x2(y[ib].qs + 32, m1);
+                vst1q_s8_x2(y[ib].qs + 64, m2);
+                vst1q_s8_x2(y[ib].qs + 96, m3);
 #else
-                // TODO: optimize
                 for (int l = 0; l < 4; ++l) {
                     for (int k = 0; k < 4; ++k) for (int i = 0; i < 4; ++i) {
                         y[ib].qs[32*l+4*k+i+ 0] = x4[k][ib].qs[i+4*l+ 0];
