@@ -17,6 +17,7 @@
 
 #include <cstring>
 #include <type_traits>
+#include <vector>
 
 #if defined IQK_IMPLEMENT
 
@@ -12639,7 +12640,6 @@ template <int D, int step>
 struct HelperQ80 final : public BaseHelper<step> {
     using Base = BaseHelper<step>;
 #ifdef HAVE_FANCY_SIMD
-    //using block_q8 = block_q8_1;
     using block_q8 = block_q8_1;
 #else
     using block_q8 = block_q8_0;
@@ -12670,7 +12670,7 @@ struct HelperQ80 final : public BaseHelper<step> {
     }
 
     static inline void convert(int nq, int stride_q, const float * q, block_q8_0 * y) {
-        GGML_ASSERT(nq <= step);
+        //GGML_ASSERT(nq <= step); Why did I have this assert?
         for (int i = 0; i < nq; ++i) {
             quantize_row_q8_0_x4(q, y, D);
             q += stride_q;
@@ -12679,13 +12679,73 @@ struct HelperQ80 final : public BaseHelper<step> {
     }
 
     static inline void convert(int nq, int stride_q, const float * q, block_q8_1 * y) {
-        GGML_ASSERT(nq <= step);
+        //GGML_ASSERT(nq <= step); Why did I have this assert?
         for (int i = 0; i < nq; ++i) {
             quantize_row_q8_1_x4(q, y, D);
             q += stride_q;
             y += D/QK8_1;
         }
     }
+};
+
+template <int D, int step>
+struct HelperQ80R4 : public BaseHelper<step> {
+    using Base = BaseHelper<step>;
+#ifdef HAVE_FANCY_SIMD
+    using block_q8 = block_q8_1;
+#else
+    using block_q8 = block_q8_0;
+#endif
+    HelperQ80R4(int nk, const HelperQ80<D, step>& q8) : Base(q8.data, q8.stride) {
+        r4 = repack(nk, q8);
+        Base::data = (const char *)r4.data();
+        Base::stride = (D/QK8_0)*sizeof(block_q8_0);
+    }
+
+    static std::vector<block_q8_0_x4> repack(int nk, const HelperQ80<D, step> q8) {
+        static_assert(D%QK8_0 == 0);
+        GGML_ASSERT(nk%4 == 0);
+        constexpr int nblock = D/QK8_0;
+        std::vector<block_q8_0_x4> result(nblock * nk/4);
+        auto y = result.data();
+        const block_q8_0 * x4[4];
+        for (int row = 0; row < nk; row += 4) {
+            for (int k = 0; k < 4; ++k) x4[k] = (const block_q8_0 *)(q8.data + (row + k)*q8.stride);
+            for (int ib = 0; ib < nblock; ++ib) {
+                for (int k = 0; k < 4; ++k) y[ib].d[k] = x4[k][ib].d;
+#ifdef __AVX2__
+                auto m0 = _mm256_loadu_si256((const __m256i *)x4[0][ib].qs);
+                auto m1 = _mm256_loadu_si256((const __m256i *)x4[1][ib].qs);
+                auto m2 = _mm256_loadu_si256((const __m256i *)x4[2][ib].qs);
+                auto m3 = _mm256_loadu_si256((const __m256i *)x4[3][ib].qs);
+                auto t0 = _mm256_unpacklo_epi32(m0, m1);
+                auto t1 = _mm256_unpacklo_epi32(m2, m3);
+                auto t2 = _mm256_unpackhi_epi32(m0, m1);
+                auto t3 = _mm256_unpackhi_epi32(m2, m3);
+                m0 = _mm256_unpacklo_epi64(t0, t1);
+                m1 = _mm256_unpackhi_epi64(t0, t1);
+                m2 = _mm256_unpacklo_epi64(t2, t3);
+                m3 = _mm256_unpackhi_epi64(t2, t3);
+                _mm256_storeu_si256((__m256i *)y[ib].qs + 0, m0);
+                _mm256_storeu_si256((__m256i *)y[ib].qs + 1, m1);
+                _mm256_storeu_si256((__m256i *)y[ib].qs + 2, m2);
+                _mm256_storeu_si256((__m256i *)y[ib].qs + 3, m3);
+#else
+                // TODO: optimize
+                for (int l = 0; l < 4; ++l) {
+                    for (int k = 0; k < 4; ++k) for (int i = 0; i < 4; ++i) {
+                        y[ib].qs[32*l+4*k+i+ 0] = x4[k][ib].qs[i+4*l+ 0];
+                        y[ib].qs[32*l+4*k+i+16] = x4[k][ib].qs[i+4*l+16];
+                    }
+                }
+#endif
+            }
+            y += nblock;
+        }
+        return result;
+    }
+
+    std::vector<block_q8_0_x4> r4;
 };
 
 template <int D, int step>
@@ -13195,6 +13255,7 @@ struct FlashQKV {
     inline void normalize_and_store(const FlashMS<q_step, k_step>& fms, int j, const qkv_cache_t * R, float * qkv) const {
         GGML_ASSERT(fms.S[j] > 0);
         auto norm = F16::set1(1/fms.S[j]);
+        //auto norm = F16::set1(fms.S[j] > 0 ? 1/fms.S[j] : 0.f);
         for (int i = 0; i < D/F16::block_size; ++i) {
             auto r = F16::load(R + F16::block_size*i);
             F16::store(qkv + F16::block_size*i, F16::mul(norm, r));
@@ -13219,8 +13280,86 @@ struct FlashQKV {
         }
     }
 
-    qkv_cache_t qkv_cache[D*q_step];
+    // qkv_cache_t qkv_cache[D*q_step];
+    // The initializer is not actually required. But the compiler cannot figure out that when qkv_cache is
+    // first used for q_step rows, fms.need_scaling[j] is always 2, which zeroes the content of qkv_cache.
+    // As a result, we get an infinite stream of warnings about uninitialized variable use (one for each
+    // combination of D, q_step, k_step), which is extremely annoying. Hence, I succumb to the trend of
+    // constantly being saved by others (the compiler in this case), and add this 100% unnecessary initialization.
+    qkv_cache_t qkv_cache[D*q_step] = {};
 };
+
+#ifdef HAVE_FANCY_SIMD
+template <int nrc_y>
+static void mul_mat_q8_0_r4_q8_1_128([[maybe_unused]] int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%8 == 0);
+    GGML_ASSERT(n == 128);
+    //Q8<nrc_y, block_q8_1_x4> q8(info);
+    __m512i qx[16];
+    __m512  scales[4];
+    __m512  scales_m[4];
+    __m512  dy[4];
+    auto m127 = _mm512_set1_epi8(127);
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        const block_q8_0_x4 * q8l = (const block_q8_0_x4 *)((const char *)vx + (ix+0)*bx);
+        const block_q8_0_x4 * q8h = (const block_q8_0_x4 *)((const char *)vx + (ix+4)*bx);
+        for (int k = 0; k < 4; ++k) {
+            auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)q8l[k].d));
+            auto scales1 = _mm256_set_m128(scales128, scales128);
+            scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)q8h[k].d));
+            auto scales2 = _mm256_set_m128(scales128, scales128);
+            scales[k] = _mm512_insertf32x8(_mm512_castps256_ps512(scales1), scales2, 1);
+            scales_m[k] = _mm512_mul_ps(scales[k], _mm512_set1_ps(-63.5f));
+            qx[4*k+0] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[k].qs+0)),
+                                                                  _mm256_loadu_si256((const __m256i *)q8h[k].qs+0), 1);
+            qx[4*k+1] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[k].qs+1)),
+                                                                  _mm256_loadu_si256((const __m256i *)q8h[k].qs+1), 1);
+            qx[4*k+2] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[k].qs+2)),
+                                                                  _mm256_loadu_si256((const __m256i *)q8h[k].qs+2), 1);
+            qx[4*k+3] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[k].qs+3)),
+                                                                  _mm256_loadu_si256((const __m256i *)q8h[k].qs+3), 1);
+            qx[4*k+0] = _mm512_add_epi8(qx[4*k+0], m127);
+            qx[4*k+1] = _mm512_add_epi8(qx[4*k+1], m127);
+            qx[4*k+2] = _mm512_add_epi8(qx[4*k+2], m127);
+            qx[4*k+3] = _mm512_add_epi8(qx[4*k+3], m127);
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto by = (const block_q8_1_x4 *)info.src1_row(iy);
+            //auto dall = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[iy][0].d));
+            auto dall = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)by->d));
+            auto d128 = _mm256_castps256_ps128(dall);
+            auto m128 = _mm256_extractf128_ps(dall, 1);
+            auto m256 = _mm256_set_m128(m128, m128);
+            auto m512 = _mm512_insertf32x8(_mm512_castps256_ps512(m256), m256, 1);
+            auto sumf = _mm512_mul_ps(scales_m[0], _mm512_shuffle_ps(m512, m512, 0x00));
+            sumf = _mm512_fmadd_ps(scales_m[1], _mm512_shuffle_ps(m512, m512, 0x55), sumf);
+            sumf = _mm512_fmadd_ps(scales_m[2], _mm512_shuffle_ps(m512, m512, 0xaa), sumf);
+            sumf = _mm512_fmadd_ps(scales_m[3], _mm512_shuffle_ps(m512, m512, 0xff), sumf);
+            auto d256 = _mm256_set_m128(d128, d128);
+            auto d512 = _mm512_insertf32x8(_mm512_castps256_ps512(d256), d256, 1);
+            dy[0] = _mm512_mul_ps(scales[0], _mm512_shuffle_ps(d512, d512, 0x00));
+            dy[1] = _mm512_mul_ps(scales[1], _mm512_shuffle_ps(d512, d512, 0x55));
+            dy[2] = _mm512_mul_ps(scales[2], _mm512_shuffle_ps(d512, d512, 0xaa));
+            dy[3] = _mm512_mul_ps(scales[3], _mm512_shuffle_ps(d512, d512, 0xff));
+            for (int k = 0; k < 4; ++k) {
+                //auto y8 = _mm256_loadu_si256((const __m256i*)q8.y[iy][0].qs+k);
+                auto y8 = _mm256_loadu_si256((const __m256i*)by->qs+k);
+                auto y = _mm512_inserti32x8(_mm512_castsi256_si512(y8), y8, 1);
+                auto sumi = _mm512_setzero_si512();
+                sumi = _mm512_dpbusd_epi32(sumi, qx[4*k+0], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x00)));
+                sumi = _mm512_dpbusd_epi32(sumi, qx[4*k+1], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x55)));
+                sumi = _mm512_dpbusd_epi32(sumi, qx[4*k+2], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xaa)));
+                sumi = _mm512_dpbusd_epi32(sumi, qx[4*k+3], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xff)));
+                sumf = _mm512_fmadd_ps(dy[k], _mm512_cvtepi32_ps(sumi), sumf);
+            }
+            auto sum1 = _mm_add_ps(_mm512_extractf32x4_ps(sumf, 0), _mm512_extractf32x4_ps(sumf, 1));
+            auto sum2 = _mm_add_ps(_mm512_extractf32x4_ps(sumf, 2), _mm512_extractf32x4_ps(sumf, 3));
+            info.store(ix+0, iy, sum1);
+            info.store(ix+4, iy, sum2);
+        }
+    }
+}
+#endif
 
 template <int D, int q_step, int k_step>
 struct FlashQKfp32 {
@@ -13448,6 +13587,19 @@ struct FlashQKfp32 {
                 case 7: return std::make_pair(mul_mat, 7>, 7);\
             }\
         }
+#define MAKE_FUNCS_ONLY_NRC(mul_mat, n) \
+        if (n >= kMaxQ) return std::make_pair(mul_mat<kMaxQ>, kMaxQ);\
+        else {\
+            switch (n) {\
+                case 1: return std::make_pair(mul_mat<1>, 1);\
+                case 2: return std::make_pair(mul_mat<2>, 2);\
+                case 3: return std::make_pair(mul_mat<3>, 3);\
+                case 4: return std::make_pair(mul_mat<4>, 4);\
+                case 5: return std::make_pair(mul_mat<5>, 5);\
+                case 6: return std::make_pair(mul_mat<6>, 6);\
+                case 7: return std::make_pair(mul_mat<7>, 7);\
+            }\
+        }
         if constexpr (std::is_same_v<KHelper, HelperQ40<D, k_step>>) {
 #ifdef __aarch64__
             MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ40, nq);
@@ -13469,6 +13621,32 @@ struct FlashQKfp32 {
                 // This does not actually work until we fix K-cache to be quantized to Q8_0_x4 only if D%128 == 0
                 MAKE_FUNCS(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, nq);
             }
+#endif
+        }
+        else if constexpr (std::is_same_v<KHelper, HelperQ80R4<D, k_step>>) {
+#ifdef __aarch64__
+            MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_0, nq);
+#else
+#ifdef HAVE_FANCY_SIMD
+            if constexpr (D == 128) {
+                if (q_step >= 64 && nq >= 64) {
+                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<64>, 64);
+                }
+                else if (q_step >= 32 && nq >= 32) {
+                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<32>, 32);
+                }
+                else if (q_step >= 16 && nq >= 16) {
+                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<16>, 16);
+                }
+                else {
+                    MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1_128, nq);
+                }
+            } else {
+                MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1, nq);
+            }
+#else
+            MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1, nq);
+#endif
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ41<D, k_step>>) {
@@ -13615,20 +13793,44 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
         FlashQKV<D, q_step, k_step>& fqkv,
         const float * q, const char * mask, float * qkv) {
     typename KHelper::block_q8 q8[q_step*(D/QK8_0)];
+#if FA_TIMING
+    Perf perf(false);
+#endif
     for (int i1 = 0; i1 < nq1/q_step; ++i1) {
+#if FA_TIMING
+        auto t1 = Perf::cur_time();
+#endif
         fms.init_qstep();
         kh.reset_block();
         vh.reset_block();
         HelperQ80<D, QK8_0>::convert(q_step, stride_q, q, q8);
+#if FA_TIMING
+        perf.accum_nolock(0, t1);
+#endif
         auto mr = mask;
         for (int k1 = 0; k1 < nk1/k_step; ++k1) {
+#if FA_TIMING
+            t1 = Perf::cur_time();
+            KQHelper::mul_mask_kq(kh, stride_m, q8, mr, fms);
+            perf.accum_nolock(1, t1);
+            t1 = Perf::cur_time();
+            fqkv.accumulate_qkv(vh, fms);
+            perf.accum_nolock(2, t1);
+#else
             KQHelper::mul_mask_kq(kh, stride_m, q8, mr, fms);
             fqkv.accumulate_qkv(vh, fms);
+#endif
             kh.next_block();
             vh.next_block();
             mr += k_step*sizeof(ggml_half);
         }
+#if FA_TIMING
+        t1 = Perf::cur_time();
         fqkv.normalize_and_store(fms, stride_qkv, qkv);
+        perf.accum_nolock(3, t1);
+#else
+        fqkv.normalize_and_store(fms, stride_qkv, qkv);
+#endif
 
         q    += q_step*stride_q;
         mask += q_step*stride_m;
@@ -13650,6 +13852,9 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
         }
         fqkv.normalize_and_store(fms, n_left, stride_qkv, qkv);
     }
+#if FA_TIMING
+    Perf::instance().add(perf);
+#endif
 }
 
 // Some of the methods in FlashAttn have two identical implementations that only differ by
@@ -13673,11 +13878,38 @@ struct FlashAttn {
     template <typename KHelper, typename VHelper>
     void compute(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
             const float * q, const char * mask, float * qkv) {
+//        if constexpr (std::is_same_v<KHelper, HelperQ40<D, k_step>> || std::is_same_v<KHelper, HelperQ41<D, k_step>> ||
+//                      std::is_same_v<KHelper, HelperIQ4nl<D, k_step>> ||
+//                      std::is_same_v<KHelper, HelperQ80<D, k_step>> ||
+//                      std::is_same_v<KHelper, HelperQ80R4<D, k_step>> ||
+//                      std::is_same_v<KHelper, HelperQ60<D, k_step>>) {
+//            compute_helper_q<D, q_step, k_step, KHelper, VHelper, FlashQKfp32<D, q_step, k_step>>(
+//                    kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv);
+//        } else {
+//            compute_helper<D, q_step, k_step, KHelper, VHelper, FlashQKfp32<D, q_step, k_step>>(
+//                    kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv);
+//        }
         if constexpr (std::is_same_v<KHelper, HelperQ40<D, k_step>> || std::is_same_v<KHelper, HelperQ41<D, k_step>> ||
-                      std::is_same_v<KHelper, HelperQ80<D, k_step>> || std::is_same_v<KHelper, HelperIQ4nl<D, k_step>> ||
+                      std::is_same_v<KHelper, HelperIQ4nl<D, k_step>> ||
                       std::is_same_v<KHelper, HelperQ60<D, k_step>>) {
             compute_helper_q<D, q_step, k_step, KHelper, VHelper, FlashQKfp32<D, q_step, k_step>>(
                     kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv);
+        }
+        else if constexpr (std::is_same_v<KHelper, HelperQ80<D, k_step>>) {
+            if (nq1 >= 8) {
+#if FA_TIMING
+                auto t1 = Perf::cur_time();
+                HelperQ80R4<D, k_step> khr4(nk1, kh);
+                Perf::instance().accum(4, t1);
+#else
+                HelperQ80R4<D, k_step> khr4(nk1, kh);
+#endif
+                compute_helper_q<D, q_step, k_step, HelperQ80R4<D, k_step>, VHelper, FlashQKfp32<D, q_step, k_step>>(
+                        khr4, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv);
+            } else{
+                compute_helper_q<D, q_step, k_step, KHelper, VHelper, FlashQKfp32<D, q_step, k_step>>(
+                        kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv);
+            }
         } else {
             compute_helper<D, q_step, k_step, KHelper, VHelper, FlashQKfp32<D, q_step, k_step>>(
                     kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv);
@@ -14103,23 +14335,21 @@ template <int D, int k_step, typename KHelper, typename VHelper>
 inline void iqk_flash_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
                         const float * q, const char * mask, float scale, float softcap, float * qkv) {
 
-#if defined __AVX2__
-    constexpr bool kUseLargeStepsQ = true; //!std::is_same_v<KHelper, HelperF16<D, k_step>>;
-#else
-    constexpr bool kUseLargeStepsQ = true;
-#endif
-    if constexpr (kUseLargeStepsQ) {
-        if (nk1 >= 4096) {
-            if (nq1 >= 32) {
-                FlashAttn<D, 32, k_step> fa(scale, softcap);
-                fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                return;
-            }
-            else if (nq1 >= 8) {
-                FlashAttn<D, 8, k_step> fa(scale, softcap);
-                fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                return;
-            }
+    if (nk1 >= 256) { //4096) {
+        if (nq1 >= 64) {
+            FlashAttn<D, 64, k_step> fa(scale, softcap);
+            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+            return;
+        }
+        if (nq1 >= 32) {
+            FlashAttn<D, 32, k_step> fa(scale, softcap);
+            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+            return;
+        }
+        if (nq1 >= 16) {
+            FlashAttn<D, 16, k_step> fa(scale, softcap);
+            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+            return;
         }
     }
     if (nq1 >= 8) {
