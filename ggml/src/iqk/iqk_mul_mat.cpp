@@ -12691,11 +12691,11 @@ struct HelperQ80 final : public BaseHelper<step> {
 template <int D, int step>
 struct HelperQ80R4 : public BaseHelper<step> {
     using Base = BaseHelper<step>;
-//#ifdef HAVE_FANCY_SIMD
+#ifdef __AVX2__
     using block_q8 = block_q8_1;
-//#else
-//    using block_q8 = block_q8_0;
-//#endif
+#else
+    using block_q8 = block_q8_0;
+#endif
     HelperQ80R4(int nk, const HelperQ80<D, step>& q8) : Base(q8.data, q8.stride) {
         r4 = repack(nk, q8);
         Base::data = (const char *)r4.data();
