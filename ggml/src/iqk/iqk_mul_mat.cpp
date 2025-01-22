@@ -6970,6 +6970,9 @@ struct QFBase {
     using Acc  = __m256;
     static inline Data load(const ggml_half * x) { return _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)x)); }
     static inline Data load(const float * x) { return _mm256_loadu_ps(x); }
+    static inline Data load(const ggml_bf16_t * x) {
+        return _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i*)x)), 16));
+    }
     static inline Acc acc(Acc prev, const Data& y, const Data& x) {
         return _mm256_fmadd_ps(y, x, prev);
     }
@@ -7003,6 +7006,9 @@ struct QFBase {
 #endif
     static inline __m128 load128(const ggml_half * x) { return _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)x)); }
     static inline __m128 load128(const float * x) { return _mm_loadu_ps(x); }
+    static inline __m128 load128(const ggml_bf16_t * x) {
+        return _mm_castsi128_ps(_mm_slli_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i*)x)), 16));
+    }
 };
 template <typename Float, int nrc_in> struct QFT final : public QFBase {
     constexpr static int nrc = nrc_in;
@@ -7456,6 +7462,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         switch (typeB) {
 #ifdef __AVX512BF16__
             case GGML_TYPE_BF16: set_mul_mat_bf16(mm); break;
+#else
+            case GGML_TYPE_BF16: set_mul_mat_f<ggml_bf16_t, ggml_bf16_t>(mm); break;
+            case GGML_TYPE_F32:  set_mul_mat_f<ggml_bf16_t, float>(mm);       break;
 #endif
             default: return false;
         }
