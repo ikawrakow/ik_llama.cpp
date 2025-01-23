@@ -93,6 +93,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_TEKKEN         = 20,
         LLAMA_VOCAB_PRE_TYPE_SMOLLM         = 21,
         LLAMA_VOCAB_PRE_TYPE_CODESHELL      = 22,
+        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 23, //llama.cpp lists this as 28
     };
 
     // note: these values should be synchronized with ggml_rope
