@@ -20042,6 +20042,7 @@ static int32_t llama_chat_apply_template_internal(
         }
         if (add_ass) {
             ss << LU8("<｜Assistant｜>");
+        }
     } else if (tmpl == LLM_CHAT_TEMPLATE_EXAONE_3) {
         // ref: https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct/discussions/8#66bae61b1893d14ee8ed85bb
         // EXAONE-3.0-7.8B-Instruct
@@ -20116,7 +20117,6 @@ static int32_t llama_chat_apply_template_internal(
 
         if (add_ass) {
             ss << "<|role_start|>assistant<|role_end|>";
->>>>>>> c9d1a3eb (Adopting chat template stuff from llama.cpp)
         }
     } else {
         // template not supported
