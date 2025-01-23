@@ -7112,6 +7112,7 @@ IQK_NOINLINE void mul_mat_Qx_Qy_MxN(int n, const char * cx, size_t bx, int ix0, 
     for (int iy = 0; iy < Qy::nrc; ++iy) for (int ix = 0; ix < Qx::nrc; ++ix) info.store(ix0+ix, iy, QFBase::hsum(acc[Qx::nrc*iy+ix]));
 }
 
+#ifdef __AVX512F__
 template <typename Qy, typename Qx>
 void mul_mat_Qx_Qy_Mx1(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
     static_assert(Qy::nrc == 1);
@@ -7143,6 +7144,7 @@ void mul_mat_Qx_Qy_Mx1(int n, const char * cx, size_t bx, int ix0, const DataInf
     acc[0] = QFBase::add(acc[0], acc[2]);
     info.store(ix0, 0, QFBase::hsum(acc[0]));
 }
+#endif
 
 template <typename Qy, typename Qx>
 inline void mul_mat_Qx_Qy_MxN_fa(int n, const char * cx, size_t bx, int ix0, const DataInfo& info) {
@@ -7200,12 +7202,12 @@ inline void mul_mat_Qx_Qy_MxN_fa4(int D, const char * cx, size_t bx, int ix0, co
 template <int nrc_y, typename FloatX, typename FloatY>
 void mul_mat_fX_fY_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     const char * cx = (const char *)vx;
+#ifdef __AVX512F__
     if constexpr (nrc_y == 1) {
         for (int ix = 0; ix < nrc_x; ++ix) {
             mul_mat_Qx_Qy_Mx1<QFT<FloatY, 1>, QFT<FloatX, 1>>(n, cx, bx, ix, info);
         }
     } else {
-#ifdef __AVX512F__
     constexpr int k_nx = 5;
 #else
     constexpr int k_nx = 2;
@@ -7215,16 +7217,18 @@ void mul_mat_fX_fY_T(int n, const void * vx, size_t bx, const DataInfo& info, in
     }
     int last_x = k_nx*(nrc_x/k_nx);
     if (last_x == nrc_x) return;
+#ifdef __AVX512F__
     int nx = nrc_x - last_x;
     switch (nx) {
         case 1: mul_mat_Qx_Qy_MxN<QFT<FloatY, nrc_y>, QFT<FloatX, 1>>(n, cx, bx, last_x, info); break;
-#ifdef __AVX512F__
         case 2: mul_mat_Qx_Qy_MxN<QFT<FloatY, nrc_y>, QFT<FloatX, 2>>(n, cx, bx, last_x, info); break;
         case 3: mul_mat_Qx_Qy_MxN<QFT<FloatY, nrc_y>, QFT<FloatX, 3>>(n, cx, bx, last_x, info); break;
         case 4: mul_mat_Qx_Qy_MxN<QFT<FloatY, nrc_y>, QFT<FloatX, 4>>(n, cx, bx, last_x, info); break;
+    }
+    }
+#else
+    mul_mat_Qx_Qy_MxN<QFT<FloatY, nrc_y>, QFT<FloatX, 1>>(n, cx, bx, last_x, info);
 #endif
-    }
-    }
 }
 
 #ifdef __AVX512BF16__
