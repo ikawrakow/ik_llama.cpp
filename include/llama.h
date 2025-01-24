@@ -1046,6 +1046,8 @@ extern "C" {
                                   bool   add_ass,
                                   char * buf,
                                int32_t   length);
+    // Get list of built-in chat templates
+    LLAMA_API int32_t llama_chat_builtin_templates(const char ** output, size_t len);
 
     //
     // Grammar
