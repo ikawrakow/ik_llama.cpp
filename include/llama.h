@@ -93,6 +93,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_TEKKEN         = 20,
         LLAMA_VOCAB_PRE_TYPE_SMOLLM         = 21,
         LLAMA_VOCAB_PRE_TYPE_CODESHELL      = 22,
+        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 23, //llama.cpp lists this as 28
     };
 
     // note: these values should be synchronized with ggml_rope
@@ -182,6 +183,31 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ2_KT        = 149, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ3_KT        = 150, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KT        = 151, // except 1d tensors
+                                                //
+        LLAMA_FTYPE_MOSTLY_Q4_0_R4       = 202, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q8_0_R4       = 207, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q5_0_R4       = 208, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q2_K_R4       = 210, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q3_K_R4       = 211, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q4_K_R4       = 214, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q5_K_R4       = 216, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q6_K_R4       = 218, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4    = 219, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_XS_R4     = 220, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ3_XXS_R4    = 223, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ4_NL_R4     = 225, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ3_S_R4      = 226, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_M_R4      = 229, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ4_XS_R4     = 230, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q6_0_R4       = 335, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_BF16_R16      = 232, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_BN_R4     = 337, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_K_R4      = 338, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ3_K_R4      = 339, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ4_K_R4      = 340, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ5_K_R4      = 341, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ4_KS_R4     = 345, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q8_K_R8       = 399, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
@@ -310,6 +336,7 @@ extern "C" {
         bool use_mmap;      // use mmap if possible
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
+        bool repack_tensors;// repack if available
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -1022,6 +1049,8 @@ extern "C" {
                                   bool   add_ass,
                                   char * buf,
                                int32_t   length);
+    // Get list of built-in chat templates
+    LLAMA_API int32_t llama_chat_builtin_templates(const char ** output, size_t len);
 
     //
     // Grammar
