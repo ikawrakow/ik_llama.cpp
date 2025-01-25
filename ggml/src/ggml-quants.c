@@ -936,7 +936,6 @@ void quantize_row_q8_0(const float * restrict x, void * restrict vy, int64_t k) 
 
 #if defined(__ARM_NEON)
     for (int i = 0; i < nb; i++) {
-        int i4 = i/4, ir = i%4;
         float32x4_t srcv [8];
         float32x4_t asrcv[8];
         float32x4_t amaxv[8];
