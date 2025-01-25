@@ -16906,8 +16906,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 else chunk_size_multiplier = 4;
             }
             else if (new_type == GGML_TYPE_IQ4_XS_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ4_XS;
-                else chunk_size_multiplier = 4;
+                if (tensor->ne[1] % 8 != 0) new_type = GGML_TYPE_IQ4_XS;
+                else chunk_size_multiplier = 8;
             }
             else if (new_type == GGML_TYPE_Q4_0_R4) {
                 if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q4_0;
