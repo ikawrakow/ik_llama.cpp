@@ -236,6 +236,11 @@ typedef struct {
     int8_t qs[4*QK8_0];
 } block_q8_0_x4;
 static_assert(sizeof(block_q8_0_x4) == 4*sizeof(block_q8_0), "wrong q8_0_x4 block size/padding");
+typedef struct {
+    ggml_half d[8];
+    int8_t qs[8*QK8_0];
+} block_q8_0_r8;
+static_assert(sizeof(block_q8_0_r8) == 8*sizeof(block_q8_0), "wrong q8_0_r8 block size/padding");
 
 typedef struct {
     ggml_half d[4];        // deltas for 4 q4_0 blocks
