@@ -12907,22 +12907,22 @@ struct HelperQ80R4 : public BaseHelper<step> {
         Base::stride = (D/QK8_0)*sizeof(block_q8_0);
     }
 
-    static std::vector<block_q8_0_x4> repack(int nk, const HelperQ80<D, step> q8) {
+    static std::vector<block_q8_0_r8> repack(int nk, const HelperQ80<D, step> q8) {
         static_assert(D%QK8_0 == 0);
-        GGML_ASSERT(nk%4 == 0);
+        GGML_ASSERT(nk%8 == 0);
         constexpr int nblock = D/QK8_0;
-        std::vector<block_q8_0_x4> result(nblock * nk/4);
+        std::vector<block_q8_0_r8> result(nblock * nk/8);
         auto y = result.data();
-        const block_q8_0 * x4[4];
-        for (int row = 0; row < nk; row += 4) {
-            for (int k = 0; k < 4; ++k) x4[k] = (const block_q8_0 *)(q8.data + (row + k)*q8.stride);
+        const block_q8_0 * x8[8];
+        for (int row = 0; row < nk; row += 8) {
+            for (int k = 0; k < 8; ++k) x8[k] = (const block_q8_0 *)(q8.data + (row + k)*q8.stride);
             for (int ib = 0; ib < nblock; ++ib) {
-                for (int k = 0; k < 4; ++k) y[ib].d[k] = x4[k][ib].d;
+                for (int k = 0; k < 8; ++k) y[ib].d[k] = x8[k][ib].d;
 #ifdef __AVX2__
-                auto m0 = _mm256_loadu_si256((const __m256i *)x4[0][ib].qs);
-                auto m1 = _mm256_loadu_si256((const __m256i *)x4[1][ib].qs);
-                auto m2 = _mm256_loadu_si256((const __m256i *)x4[2][ib].qs);
-                auto m3 = _mm256_loadu_si256((const __m256i *)x4[3][ib].qs);
+                auto m0 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[4][ib].qs), _mm_loadu_si128((const __m128i *)x8[0][ib].qs));
+                auto m1 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[5][ib].qs), _mm_loadu_si128((const __m128i *)x8[1][ib].qs));
+                auto m2 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[6][ib].qs), _mm_loadu_si128((const __m128i *)x8[2][ib].qs));
+                auto m3 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[7][ib].qs), _mm_loadu_si128((const __m128i *)x8[3][ib].qs));
                 auto t0 = _mm256_unpacklo_epi32(m0, m1);
                 auto t1 = _mm256_unpacklo_epi32(m2, m3);
                 auto t2 = _mm256_unpackhi_epi32(m0, m1);
@@ -12935,6 +12935,22 @@ struct HelperQ80R4 : public BaseHelper<step> {
                 _mm256_storeu_si256((__m256i *)y[ib].qs + 1, m1);
                 _mm256_storeu_si256((__m256i *)y[ib].qs + 2, m2);
                 _mm256_storeu_si256((__m256i *)y[ib].qs + 3, m3);
+                m0 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[4][ib].qs+1), _mm_loadu_si128((const __m128i *)x8[0][ib].qs+1));
+                m1 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[5][ib].qs+1), _mm_loadu_si128((const __m128i *)x8[1][ib].qs+1));
+                m2 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[6][ib].qs+1), _mm_loadu_si128((const __m128i *)x8[2][ib].qs+1));
+                m3 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[7][ib].qs+1), _mm_loadu_si128((const __m128i *)x8[3][ib].qs+1));
+                t0 = _mm256_unpacklo_epi32(m0, m1);
+                t1 = _mm256_unpacklo_epi32(m2, m3);
+                t2 = _mm256_unpackhi_epi32(m0, m1);
+                t3 = _mm256_unpackhi_epi32(m2, m3);
+                m0 = _mm256_unpacklo_epi64(t0, t1);
+                m1 = _mm256_unpackhi_epi64(t0, t1);
+                m2 = _mm256_unpacklo_epi64(t2, t3);
+                m3 = _mm256_unpackhi_epi64(t2, t3);
+                _mm256_storeu_si256((__m256i *)y[ib].qs + 4, m0);
+                _mm256_storeu_si256((__m256i *)y[ib].qs + 5, m1);
+                _mm256_storeu_si256((__m256i *)y[ib].qs + 6, m2);
+                _mm256_storeu_si256((__m256i *)y[ib].qs + 7, m3);
 #elif defined __ARM_NEON
                 auto m0 = vld1q_s8_x2(x4[0][ib].qs);
                 auto m1 = vld1q_s8_x2(x4[1][ib].qs);
@@ -12970,7 +12986,7 @@ struct HelperQ80R4 : public BaseHelper<step> {
         return result;
     }
 
-    std::vector<block_q8_0_x4> r4;
+    std::vector<block_q8_0_r8> r4;
 };
 
 template <int D, int step>
@@ -13868,26 +13884,26 @@ struct FlashQKfp32 {
             }
             //MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_0, nq);
 #else
-#ifdef HAVE_FANCY_SIMD
-            if constexpr (D == 128) {
-                if (q_step >= 64 && nq >= 64) {
-                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<64>, 64);
-                }
-                else if (q_step >= 32 && nq >= 32) {
-                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<32>, 32);
-                }
-                else if (q_step >= 16 && nq >= 16) {
-                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<16>, 16);
-                }
-                else {
-                    MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1_128, nq);
-                }
-            } else {
-                MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1, nq);
-            }
-#else
+//#ifdef HAVE_FANCY_SIMD
+//            if constexpr (D == 128) {
+//                if (q_step >= 64 && nq >= 64) {
+//                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<64>, 64);
+//                }
+//                else if (q_step >= 32 && nq >= 32) {
+//                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<32>, 32);
+//                }
+//                else if (q_step >= 16 && nq >= 16) {
+//                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<16>, 16);
+//                }
+//                else {
+//                    MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1_128, nq);
+//                }
+//            } else {
+//                MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1, nq);
+//            }
+//#else
             MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1, nq);
-#endif
+//#endif
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ41<D, k_step>>) {
