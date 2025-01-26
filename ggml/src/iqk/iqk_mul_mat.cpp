@@ -13530,78 +13530,6 @@ struct FlashQKV {
     qkv_cache_t qkv_cache[D*q_step] = {};
 };
 
-#ifdef HAVE_FANCY_SIMD
-template <int nrc_y>
-static void mul_mat_q8_0_r4_q8_1_128([[maybe_unused]] int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    GGML_ASSERT(nrc_x%8 == 0);
-    GGML_ASSERT(n == 128);
-    //Q8<nrc_y, block_q8_1_x4> q8(info);
-    __m512i qx[16];
-    __m512  scales[4];
-    __m512  scales_m[4];
-    __m512  dy[4];
-    auto m127 = _mm512_set1_epi8(127);
-    for (int ix = 0; ix < nrc_x; ix += 8) {
-        const block_q8_0_x4 * q8l = (const block_q8_0_x4 *)((const char *)vx + (ix+0)*bx);
-        const block_q8_0_x4 * q8h = (const block_q8_0_x4 *)((const char *)vx + (ix+4)*bx);
-        for (int k = 0; k < 4; ++k) {
-            auto scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)q8l[k].d));
-            auto scales1 = _mm256_set_m128(scales128, scales128);
-            scales128 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)q8h[k].d));
-            auto scales2 = _mm256_set_m128(scales128, scales128);
-            scales[k] = _mm512_insertf32x8(_mm512_castps256_ps512(scales1), scales2, 1);
-            scales_m[k] = _mm512_mul_ps(scales[k], _mm512_set1_ps(-63.5f));
-            qx[4*k+0] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[k].qs+0)),
-                                                                  _mm256_loadu_si256((const __m256i *)q8h[k].qs+0), 1);
-            qx[4*k+1] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[k].qs+1)),
-                                                                  _mm256_loadu_si256((const __m256i *)q8h[k].qs+1), 1);
-            qx[4*k+2] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[k].qs+2)),
-                                                                  _mm256_loadu_si256((const __m256i *)q8h[k].qs+2), 1);
-            qx[4*k+3] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[k].qs+3)),
-                                                                  _mm256_loadu_si256((const __m256i *)q8h[k].qs+3), 1);
-            qx[4*k+0] = _mm512_add_epi8(qx[4*k+0], m127);
-            qx[4*k+1] = _mm512_add_epi8(qx[4*k+1], m127);
-            qx[4*k+2] = _mm512_add_epi8(qx[4*k+2], m127);
-            qx[4*k+3] = _mm512_add_epi8(qx[4*k+3], m127);
-        }
-        for (int iy = 0; iy < nrc_y; ++iy) {
-            auto by = (const block_q8_1_x4 *)info.src1_row(iy);
-            //auto dall = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[iy][0].d));
-            auto dall = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)by->d));
-            auto d128 = _mm256_castps256_ps128(dall);
-            auto m128 = _mm256_extractf128_ps(dall, 1);
-            auto m256 = _mm256_set_m128(m128, m128);
-            auto m512 = _mm512_insertf32x8(_mm512_castps256_ps512(m256), m256, 1);
-            auto sumf = _mm512_mul_ps(scales_m[0], _mm512_shuffle_ps(m512, m512, 0x00));
-            sumf = _mm512_fmadd_ps(scales_m[1], _mm512_shuffle_ps(m512, m512, 0x55), sumf);
-            sumf = _mm512_fmadd_ps(scales_m[2], _mm512_shuffle_ps(m512, m512, 0xaa), sumf);
-            sumf = _mm512_fmadd_ps(scales_m[3], _mm512_shuffle_ps(m512, m512, 0xff), sumf);
-            auto d256 = _mm256_set_m128(d128, d128);
-            auto d512 = _mm512_insertf32x8(_mm512_castps256_ps512(d256), d256, 1);
-            dy[0] = _mm512_mul_ps(scales[0], _mm512_shuffle_ps(d512, d512, 0x00));
-            dy[1] = _mm512_mul_ps(scales[1], _mm512_shuffle_ps(d512, d512, 0x55));
-            dy[2] = _mm512_mul_ps(scales[2], _mm512_shuffle_ps(d512, d512, 0xaa));
-            dy[3] = _mm512_mul_ps(scales[3], _mm512_shuffle_ps(d512, d512, 0xff));
-            for (int k = 0; k < 4; ++k) {
-                //auto y8 = _mm256_loadu_si256((const __m256i*)q8.y[iy][0].qs+k);
-                auto y8 = _mm256_loadu_si256((const __m256i*)by->qs+k);
-                auto y = _mm512_inserti32x8(_mm512_castsi256_si512(y8), y8, 1);
-                auto sumi = _mm512_setzero_si512();
-                sumi = _mm512_dpbusd_epi32(sumi, qx[4*k+0], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x00)));
-                sumi = _mm512_dpbusd_epi32(sumi, qx[4*k+1], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0x55)));
-                sumi = _mm512_dpbusd_epi32(sumi, qx[4*k+2], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xaa)));
-                sumi = _mm512_dpbusd_epi32(sumi, qx[4*k+3], _mm512_shuffle_epi32(y, _MM_PERM_ENUM(0xff)));
-                sumf = _mm512_fmadd_ps(dy[k], _mm512_cvtepi32_ps(sumi), sumf);
-            }
-            auto sum1 = _mm_add_ps(_mm512_extractf32x4_ps(sumf, 0), _mm512_extractf32x4_ps(sumf, 1));
-            auto sum2 = _mm_add_ps(_mm512_extractf32x4_ps(sumf, 2), _mm512_extractf32x4_ps(sumf, 3));
-            info.store(ix+0, iy, sum1);
-            info.store(ix+4, iy, sum2);
-        }
-    }
-}
-#endif
-
 template <int D, int q_step, int k_step>
 struct FlashQKfp32 {
     static_assert(D%F16::block_size == 0 && D <= 256);
@@ -13884,26 +13812,7 @@ struct FlashQKfp32 {
             }
             //MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_0, nq);
 #else
-//#ifdef HAVE_FANCY_SIMD
-//            if constexpr (D == 128) {
-//                if (q_step >= 64 && nq >= 64) {
-//                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<64>, 64);
-//                }
-//                else if (q_step >= 32 && nq >= 32) {
-//                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<32>, 32);
-//                }
-//                else if (q_step >= 16 && nq >= 16) {
-//                    return std::make_pair(mul_mat_q8_0_r4_q8_1_128<16>, 16);
-//                }
-//                else {
-//                    MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1_128, nq);
-//                }
-//            } else {
-//                MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1, nq);
-//            }
-//#else
             MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1, nq);
-//#endif
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ41<D, k_step>>) {
