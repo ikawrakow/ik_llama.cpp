@@ -43,6 +43,15 @@ constexpr int popcount(uint32_t x) { return __builtin_popcount(x); }
 constexpr int popcount(uint64_t x) { return __builtin_popcountll(x); }
 #endif
 
+#if defined __x86_64__
+#if defined HAVE_FANCY_SIMD
+    #undef HAVE_FANCY_SIMD
+#endif
+#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
+    #define HAVE_FANCY_SIMD
+#endif
+#endif
+
 namespace {
 
 inline int nearest_int(float fval) {
@@ -3746,11 +3755,32 @@ static void repack_q8_0(int nrows, int n_per_row, const block_q8_0 * x, block_q8
                     y[ib].qs[32*l+4*k+i+128] = x8[k][ib].qs[i+4*l+16];
                 }
             }
+#ifdef HAVE_FANCY_SIMD
+            if (online) {
+                for (int l = 0; l < 4; ++l) {
+                    auto v = _mm512_add_epi8(_mm512_loadu_si512((const __m512i *)y[ib].qs + l), _mm512_set1_epi8(127));
+                    _mm512_storeu_si512((__m512i *)y[ib].qs + l, v);
+                }
+            }
+#endif
         }
         x += 8*nblock;
         y += nblock;
     }
 }
+
+#ifdef HAVE_FANCY_SIMD
+static void modify_q8_0_r4(int64_t k, char * cy) {
+    auto y = (block_iq4_nl_r8 *)cy;
+    int nb = k/(32*8);
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int l = 0; l < 4; ++l) {
+            auto v = _mm512_add_epi8(_mm512_loadu_si512((const __m512i *)y[ib].qs + l), _mm512_set1_epi8(127));
+            _mm512_storeu_si512((__m512i *)y[ib].qs + l, v);
+        }
+    }
+}
+#endif
 
 size_t quantize_q8_0_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     GGML_ASSERT(nrows%8 == 0);
@@ -5195,11 +5225,31 @@ static void repack_q8_k(int nrows, int n_per_row, const block_q8_K * x, block_q8
                     for (int i = 0; i < 4; ++i) y[ibl].qs[32*ib + 4*k + i] = x8[k][ibl].qs[4*ib+i];
                 }
             }
+#ifdef HAVE_FANCY_SIMD
+            if (online) {
+                for (int l = 0; l < 32; ++l) {
+                    auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[ibl].qs + l), _mm512_set1_epi8(-128));
+                    _mm512_storeu_si512((__m512i *)y[ibl].qs + l, v);
+                }
+            }
+#endif
         }
         x += 8*nblock;
         y += nblock;
     }
 }
+#ifdef HAVE_FANCY_SIMD
+static void modify_q8_k_r8(int64_t k, char * cy) {
+    auto y = (block_q8_k_r8 *)cy;
+    int nb = k/(256*8);
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int l = 0; l < 32; ++l) {
+            auto v = _mm512_xor_si512(_mm512_loadu_si512((const __m512i *)y[ib].qs + l), _mm512_set1_epi8(-128));
+            _mm512_storeu_si512((__m512i *)y[ib].qs + l, v);
+        }
+    }
+}
+#endif
 
 size_t quantize_q8_k_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, [[maybe_unused]] const float * imatrix) {
     GGML_ASSERT(nrows%8 == 0);
@@ -6057,6 +6107,10 @@ bool iqk_modify_tensor(struct ggml_tensor * tensor) {
     static const std::unordered_map<ggml_type, Modify> k_mod_map = {
 #ifdef __ARM_NEON
         { GGML_TYPE_Q4_0_R4, {modify_q4_0_r4, 8} },
+#endif
+#ifdef HAVE_FANCY_SIMD
+        { GGML_TYPE_Q8_0_R4, {modify_q8_0_r4, 8} },
+        { GGML_TYPE_Q8_K_R8, {modify_q8_k_r8, 8} },
 #endif
     };
     auto it = k_mod_map.find(tensor->type);
