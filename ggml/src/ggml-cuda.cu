@@ -1943,6 +1943,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
         && src0->ne[0] % (GGML_CUDA_DMMV_X*2) == 0 && src1->ne[1] == 1;
     bool          use_mul_mat_vec_q =  ggml_is_quantized(src0->type)
+        && ggml_cuda_mmvq_type_supported(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
         && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
     bool              use_mul_mat_q =  ggml_is_quantized(src0->type)
@@ -2847,6 +2848,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_IQ4_KSS:
                     case GGML_TYPE_IQ2_K:
                     case GGML_TYPE_IQ2_KS:
+                    case GGML_TYPE_IQ2_KT:
+                    case GGML_TYPE_IQ3_KT:
+                    case GGML_TYPE_IQ4_KT:
                     case GGML_TYPE_IQ3_K:
                     case GGML_TYPE_IQ4_K:
                     case GGML_TYPE_IQ5_K:
