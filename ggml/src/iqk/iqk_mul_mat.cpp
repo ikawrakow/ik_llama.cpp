@@ -12238,8 +12238,8 @@ struct Q4_0_R8_Dequantizer {
         float32x4x2_t scales = { vcvt_f32_f16(vget_low_f16(scales16)), vcvt_f32_f16(vget_high_f16(scales16)) };
         for (int j = 0; j < 4; ++j) {
             auto bits = vld1q_u8_x2(iq4[4*ib4+k].qs + 32*j);
-            bits.val[0] = veorq_u8(m88, bits.val[0]);
-            bits.val[1] = veorq_u8(m88, bits.val[1]);
+            //bits.val[0] = veorq_u8(m88, bits.val[0]);
+            //bits.val[1] = veorq_u8(m88, bits.val[1]);
             qx[2*j+0] = vshlq_n_u8(bits.val[0], 4);
             qx[2*j+1] = vandq_u8(bits.val[0], m4);
             qx[2*j+8] = vshlq_n_u8(bits.val[1], 4);

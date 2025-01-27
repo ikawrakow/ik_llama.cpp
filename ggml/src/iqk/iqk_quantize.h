@@ -218,6 +218,7 @@ void repack_f32_bf16_r16 (const void * GGML_RESTRICT src, void * GGML_RESTRICT d
 void repack_bf16_bf16_r16(const void * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row);
 
 void iqk_repack_tensor(struct ggml_tensor * tensor);
+bool iqk_modify_tensor(struct ggml_tensor * tensor);
 
 // So we can re-pack Microsoft's BitNet I2_S quants
 void dequantize_row_ms_i2s(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);

@@ -8014,6 +8014,16 @@ static bool llm_load_tensors(
         }
     }
 
+    if (!ml.use_mmap) {
+        int n_modified = 0;
+        for (auto& it : model.tensors_by_name) {
+            if (ggml_backend_buffer_is_host(it.second->buffer)) {
+                if (iqk_modify_tensor(it.second)) ++n_modified;
+            }
+        }
+        if (n_modified > 0) printf("============ Modified %d tensors\n", n_modified);
+    }
+
     if (!ml.use_mmap && ml.repack_tensors) {
         int n_repacked = 0;
         for (auto& it : model.tensors_by_name) {
