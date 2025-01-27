@@ -7650,7 +7650,7 @@ static bool llm_load_tensors(
                             layer.ffn_up   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
                         } else {
                             layer.ffn_gate_inp = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
-                            layer.ffn_exp_probs_b = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert} );
+                            layer.ffn_exp_probs_b = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, 1);
 
                             GGML_ASSERT(n_expert      > 0);
                             GGML_ASSERT(n_expert_used > 0);
@@ -8012,6 +8012,16 @@ static bool llm_load_tensors(
         for (auto & mapping : ml.mappings) {
             model.mappings.emplace_back(std::move(mapping));
         }
+    }
+
+    if (!ml.use_mmap) {
+        int n_modified = 0;
+        for (auto& it : model.tensors_by_name) {
+            if (ggml_backend_buffer_is_host(it.second->buffer)) {
+                if (iqk_modify_tensor(it.second)) ++n_modified;
+            }
+        }
+        if (n_modified > 0) printf("============ Modified %d tensors\n", n_modified);
     }
 
     if (!ml.use_mmap && ml.repack_tensors) {
@@ -16910,8 +16920,8 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 else chunk_size_multiplier = 8;
             }
             else if (new_type == GGML_TYPE_Q4_0_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q4_0;
-                else chunk_size_multiplier = 4;
+                if (tensor->ne[1] % 8 != 0) new_type = GGML_TYPE_Q4_0;
+                else chunk_size_multiplier = 8;
             }
             else if (new_type == GGML_TYPE_Q5_0_R4) {
                 if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q5_0;
