@@ -2679,7 +2679,6 @@ static void mul_mat_q4_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
                 auto scales1 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4l[4*ib4+k].d));
                 auto scales2 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4h[4*ib4+k].d));
                 auto scales = _mm512_insertf32x8(_mm512_castps256_ps512(scales1), scales2, 1);
-                //auto scales_m = _mm512_mul_ps(scales, _mm512_set1_ps(-8.f));
                 auto bits1 = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)iq4l[4*ib4+k].qs+0)),
                                                                        _mm256_loadu_si256((const __m256i *)iq4h[4*ib4+k].qs+0), 1);
                 auto bits2 = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)iq4l[4*ib4+k].qs+1)),
@@ -2720,7 +2719,6 @@ static void mul_mat_q4_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
             auto sum = _mm512_fmadd_ps(_mm512_set1_ps(-8.f), acc[2*iy+1], acc[2*iy+0]);
-            //auto sum = _mm512_add_ps(acc[2*iy+0], acc[2*iy+1]);
             acc[2*iy+0] = acc[2*iy+1] = _mm512_setzero_ps();
             info.store(ix, iy, sum);
         }
@@ -3000,7 +2998,6 @@ static void mul_mat_q8_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
                 _mm256_storeu_ps(d8, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[0][ib4].d)));
                 for (int k = 0; k < 4; ++k) {
                     auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq8[4*ib4+k].d));
-                    auto scales_m = _mm256_mul_ps(scales, _mm256_set1_ps(-127.f));
                     qx[0] = _mm256_add_epi8(_mm256_loadu_si256((const __m256i *)iq8[4*ib4+k].qs+0), m127);
                     qx[1] = _mm256_add_epi8(_mm256_loadu_si256((const __m256i *)iq8[4*ib4+k].qs+1), m127);
                     qx[2] = _mm256_add_epi8(_mm256_loadu_si256((const __m256i *)iq8[4*ib4+k].qs+2), m127);
@@ -3024,10 +3021,10 @@ static void mul_mat_q8_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
                     sumi = _mm256_dpbusd_epi32(sumi, qx[7], _mm256_shuffle_epi32(yh, 0xff));
                     auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8[k]));
                     acc[0] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[0]);
-                    acc[1] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(d8[k+4]), acc[1]);
+                    acc[1] = _mm256_fmadd_ps(scales, _mm256_set1_ps(d8[k+4]), acc[1]);
                 }
             }
-            info.store(ix, 0, _mm256_add_ps(acc[0], acc[1]));
+            info.store(ix, 0, _mm256_fmadd_ps(_mm256_set1_ps(-127.f), acc[1], acc[0]));
             acc[0] = acc[1] = _mm256_setzero_ps();
         }
     } else {
@@ -3046,7 +3043,6 @@ static void mul_mat_q8_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
                     auto scales1  = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8l[4*ib4+k].d));
                     auto scales2  = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8h[4*ib4+k].d));
                     auto scales   = _mm512_insertf32x8(_mm512_castps256_ps512(scales1), scales2, 1);
-                    auto scales_m = _mm512_mul_ps(scales, _mm512_set1_ps(-127.f));
                     for (int j = 0; j < 8; ++j) {
                         qx[j] = _mm512_inserti32x8(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *)q8l[4*ib4+k].qs+j)),
                                                                           _mm256_loadu_si256((const __m256i *)q8h[4*ib4+k].qs+j), 1);
@@ -3070,18 +3066,14 @@ static void mul_mat_q8_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
                         sumi = _mm512_dpbusd_epi32(sumi, qx[7], _mm512_shuffle_epi32(yh, _MM_PERM_ENUM(0xff)));
                         auto dy = _mm512_set1_ps(d8[8*iy+k]);
                         acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-                        acc[2*iy+1] = _mm512_fmadd_ps(scales_m, _mm512_set1_ps(d8[8*iy+k+4]), acc[2*iy+1]);
+                        acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(d8[8*iy+k+4]), acc[2*iy+1]);
                     }
                 }
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto sum512 = _mm512_add_ps(acc[2*iy+0], acc[2*iy+1]);
+                auto sum512 = _mm512_fmadd_ps(_mm512_set1_ps(-127.f), acc[2*iy+1], acc[2*iy+0]);
                 info.store(ix, iy, sum512);
                 acc[2*iy+0] = acc[2*iy+1] = _mm512_setzero_ps();
-                //auto sum1 = _mm_add_ps(_mm512_extractf32x4_ps(sum512, 0), _mm512_extractf32x4_ps(sum512, 1));
-                //auto sum2 = _mm_add_ps(_mm512_extractf32x4_ps(sum512, 2), _mm512_extractf32x4_ps(sum512, 3));
-                //info.store(ix+0, iy, sum1);
-                //info.store(ix+4, iy, sum2);
             }
         }
     }
@@ -8072,6 +8064,9 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q4_0_r4_q8_1<6>;
             mm.funcs[6] = mul_mat_q4_0_r4_q8_1<7>;
             mm.funcs[7] = mul_mat_q4_0_r4_q8_1<8>;
+#ifdef HAVE_FANCY_SIMD
+            mm.func16 = mul_mat_q4_0_r4_q8_1<16>;
+#endif
             expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_Q5_0_R4:
