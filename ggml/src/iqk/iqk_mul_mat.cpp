@@ -2640,6 +2640,15 @@ static void mul_mat_q4_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const D
                     acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(helper.val[k+4]), acc2);
                 }
             }
+            for (int ib = 4*(nb/4); ib < nb; ++ib) {
+                auto qy = (const block_q8_1 *)q8.y[0];
+                auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[ib].d));
+                prepare_q4_0_quants_avx2(iq4[ib].qs, v, m4);
+                auto sumi = accum_q4_0_quants(v, qy[ib].qs);
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_FP16_TO_FP32(qy[ib].d)));
+                acc1 = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc1);
+                acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(GGML_FP16_TO_FP32(qy[ib].s)), acc2);
+            }
             acc1 = _mm256_fmadd_ps(acc2, _mm256_set1_ps(-8.f), acc1);
             info.store(ix, 0, acc1);
         }
@@ -2675,6 +2684,18 @@ static void mul_mat_q4_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const D
                     auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8[8*iy+k]));
                     acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
                 }
+            }
+        }
+        for (int ib = 4*(nb/4); ib < nb; ++ib) {
+            auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[ib].d));
+            auto scales_m = _mm256_mul_ps(scales, _mm256_set1_ps(-8.f));
+            prepare_q4_0_quants_avx2(iq4[ib].qs, v, m4);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto qy = (const block_q8_1 *)q8.y[iy];
+                auto sumi = accum_q4_0_quants(v, qy[ib].qs);
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_FP16_TO_FP32(qy[ib].d)));
+                acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(GGML_FP16_TO_FP32(qy[ib].s)), acc[iy]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
