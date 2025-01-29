@@ -12302,7 +12302,6 @@ void mul_mat_qx_r8_q8_0(int n, const void * vx, size_t bx, const DataInfo& info,
     Q8<nrc_y, block_q8_0_x4> q8(info);
     Dequantizer deq(vx, bx);
     int nb = n / QK4_NL;
-    GGML_ASSERT(nb%4 == 0);
     int8x16_t qx[16];
     float d8[4*nrc_y];
     float32x4_t acc[2*nrc_y] = {};
@@ -12322,6 +12321,18 @@ void mul_mat_qx_r8_q8_0(int n, const void * vx, size_t bx, const DataInfo& info,
                     acc[2*iy+0] = vfmaq_f32(acc[2*iy+0], vmulq_f32(scales.val[0], dy), vcvtq_f32_s32(sumi1));
                     acc[2*iy+1] = vfmaq_f32(acc[2*iy+1], vmulq_f32(scales.val[1], dy), vcvtq_f32_s32(sumi2));
                 }
+            }
+        }
+        for (int ib = 4*(nb/4); ib < nb; ++ib) {
+            auto scales = deq.prepare(ib, 0, qx);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto qy = (const block_q8_0 *)q8.y[iy];
+                auto y = vld1q_s8_x2(qy[ib].qs);
+                auto sumi1 = interleaved_dotq(qx+0, y);
+                auto sumi2 = interleaved_dotq(qx+8, y);
+                auto dy = vdupq_n_f32(GGML_FP16_TO_FP32(qy[ib].d));
+                acc[2*iy+0] = vfmaq_f32(acc[2*iy+0], vmulq_f32(scales.val[0], dy), vcvtq_f32_s32(sumi1));
+                acc[2*iy+1] = vfmaq_f32(acc[2*iy+1], vmulq_f32(scales.val[1], dy), vcvtq_f32_s32(sumi2));
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
