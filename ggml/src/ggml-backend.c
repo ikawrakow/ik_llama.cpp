@@ -944,22 +944,29 @@ GGML_CALL ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, siz
 
 GGML_CALL static void ggml_backend_numa_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     if (munmap((char *) buffer->context, buffer->size)) {
-        GGML_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));
+        //GGML_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));
     }
 }
 
 GGML_CALL static void ggml_backend_numa_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     if (posix_madvise(buffer->context, buffer->size, POSIX_MADV_DONTNEED)) {
-        GGML_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_DONTNEED) failed: %s\n",
-                strerror(errno));
+        //GGML_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_DONTNEED) failed: %s\n",
+        //        strerror(errno));
     }
 }
 
+GGML_CALL static const char * ggml_backend_numa_buffer_name(ggml_backend_buffer_t buffer) {
+    return "CPU NUMA";
+
+    GGML_UNUSED(buffer);
+}
+
 static const struct ggml_backend_buffer_i ggml_backend_numa_buffer_i = {
+    /* .get_name        = */ ggml_backend_numa_buffer_name,
     /* .free_buffer     = */ ggml_backend_numa_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
     /* .init_tensor     = */ NULL, // no initialization required
-    /* .memset_tensor   = */ ggml_backend_cpu_buffer_memset_tensor,
+//    / .memset_tensor   = / ggml_backend_cpu_buffer_memset_tensor,
     /* .set_tensor      = */ ggml_backend_cpu_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_cpu_buffer_get_tensor,
     /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
@@ -979,12 +986,12 @@ GGML_CALL static ggml_backend_buffer_t ggml_backend_numa_buffer_type_alloc_buffe
     int flags = MAP_SHARED | MAP_ANONYMOUS;
     void * data = mmap(NULL, size, PROT_READ|PROT_WRITE, flags, -1, 0);
     if (data == MAP_FAILED) {
-        GGML_LOG_ERROR("%s: failed to allocate buffer of size %zu\n", __func__, size);
+        //GGML_LOG_ERROR("%s: failed to allocate buffer of size %zu\n", __func__, size);
         return NULL;
     }
     if (posix_madvise(data, size, POSIX_MADV_RANDOM)) {
-        GGML_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_RANDOM) failed: %s\n",
-                strerror(errno));
+        //GGML_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_RANDOM) failed: %s\n",
+        //        strerror(errno));
     }
 
     return ggml_backend_buffer_init(buft, ggml_backend_numa_buffer_i, data, size);
@@ -1012,7 +1019,6 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_numa_buffer_type(void) {
             /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
             /* .is_host          = */ ggml_backend_numa_buffer_type_is_host,
         },
-        /* .device  = */ NULL, // FIXME ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ NULL,
     };
 

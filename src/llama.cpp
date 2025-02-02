@@ -2260,7 +2260,7 @@ static ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer
 #endif
 
     if (buft == nullptr) {
-        buft = ggml_backend_cpu_buffer_type();
+        buft = ggml_backend_numa_buffer_type();
     }
     return buft;
 
@@ -3249,10 +3249,10 @@ static bool llama_kv_cache_init(
 
     bool warn = true;
     int n_mla = 0;
-    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU));
-    auto * is_numa_fn = (decltype(ggml_is_numa) *) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_is_numa");
-    bool is_numa = is_numa_fn();
-    if (!offload && is_numa) {
+    //auto * reg = ggml_backend_dev_backend_reg(ggml_backend_dev_by_type(GGML_BACKEND_TYPE_CPU));
+    //auto * is_numa_fn = (decltype(ggml_is_numa) *) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_is_numa");
+    //bool is_numa = is_numa_fn();
+    if (!offload) {
         LLAMA_LOG_INFO("%s: NUMA usage detected, using NUMA-aware buffer for KV cache\n", __func__);
     }
 
@@ -3265,8 +3265,6 @@ static bool llama_kv_cache_init(
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k;
 
-
-<<<<<<< HEAD
         struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k;
         ggml_tensor * v;
@@ -3300,6 +3298,22 @@ static bool llama_kv_cache_init(
             ggml_format_name(v, "cache_v_l%d", i);
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
+	//Commented out old method
+        struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+
+        //ggml_backend_buffer_type_t buft;
+        //ggml_context * ctx;
+
+        //if (offload) {
+        //    ctx = ctx_map.at(model.buft_layer[i].buft);
+        //} else {
+        //    buft = ggml_backend_numa_buffer_type();
+	//    ctx = get_ctx_for_buft(buft);
+        //}
+
+        if (!ctx) {
+            LLAMA_LOG_ERROR("%s: failed to create ggml context for kv cache\n", __func__);
+            return false;
         }
     }
     if (cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
