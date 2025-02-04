@@ -259,6 +259,7 @@ struct MulMat {
             case GGML_TYPE_IQ2_XS_R4:
             case GGML_TYPE_IQ2_S_R4:
             case GGML_TYPE_IQ3_XXS_R4:
+            case GGML_TYPE_IQ1_S_R4:
             case GGML_TYPE_IQ3_S_R4: return 4;
             case GGML_TYPE_IQ4_NL_R4:
             case GGML_TYPE_Q5_0_R4:
@@ -293,6 +294,7 @@ struct MulMat {
             case GGML_TYPE_IQ2_S_R4:
             case GGML_TYPE_IQ3_XXS_R4:
             case GGML_TYPE_IQ3_S_R4:
+            case GGML_TYPE_IQ1_S_R4:
             case GGML_TYPE_IQ2_BN_R4: return 4;
             case GGML_TYPE_IQ4_XS_R4:
             case GGML_TYPE_Q4_0_R4:
