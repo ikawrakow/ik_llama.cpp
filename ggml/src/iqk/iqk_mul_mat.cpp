@@ -3314,12 +3314,10 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
 #ifdef HAVE_FANCY_SIMD
                     // 0,0, 1,1, 0,0, 1,1 as int32_t
                     auto sumi1 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
-                                m0, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x44), qx[0])),
-                                m0, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xee), qx[1]));
+                                qx[0], _mm256_shuffle_epi32(y, 0x44)), qx[1], _mm256_shuffle_epi32(y, 0xee));
                     // 2,2, 3,3, 2,2, 3,3 as int32_t
                     auto sumi2 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
-                                m0, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x44), qx[2])),
-                                m0, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xee), qx[3]));
+                                qx[2], _mm256_shuffle_epi32(y, 0x44)), qx[3], _mm256_shuffle_epi32(y, 0xee));
                     auto sumi = _mm256_packs_epi32(sumi1, sumi2);
 #else
                     // 4 x row 0, 4 x row 1, 4 x row 0, 4 x row 1
