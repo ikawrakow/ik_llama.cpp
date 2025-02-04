@@ -7042,14 +7042,14 @@ struct Q8_0_x4_Unpacker_512 {
         auto scales = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)x[i].d));
         for (int j = 0; j < 4; ++j) {
             qx[j] = _mm256_loadu_si256((const __m256i *)x[i].qs + j);
-            qx[j] = _mm256_xor_si256(qx[j], _mm256_set1_epi8(0x80));
+            qx[j] = _mm256_xor_si256(qx[j], _mm256_set1_epi8(-128));
         }
         return _mm256_set_m128(_mm_mul_ps(scales, min), scales);
     }
     inline auto set_block(int i) {
         auto q8 = (const block_q8_0 *)(x + i);
         qx[0] = _mm256_loadu_si256((const __m256i *)q8->qs);
-        qx[0] = _mm256_xor_si256(qx[0], _mm256_set1_epi8(0x80));
+        qx[0] = _mm256_xor_si256(qx[0], _mm256_set1_epi8(-128));
         float d = GGML_FP16_TO_FP32(q8->d);
         return std::make_pair(d, -128.f*d);
     }

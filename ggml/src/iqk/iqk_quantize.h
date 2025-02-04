@@ -199,6 +199,12 @@ size_t quantize_iq3_s_r4(const float * GGML_RESTRICT src, void * GGML_RESTRICT d
 void   dequantize_row_iq3_s_r4(const block_iq3_s_r4  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 void   vec_dot_iq3_s_r4_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
+void   quantize_row_iq1_s_r4_ref(const float * GGML_RESTRICT x, block_iq1_s_r4  * GGML_RESTRICT y, int64_t k);
+void   quantize_row_iq1_s_r4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+size_t quantize_iq1_s_r4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+void   dequantize_row_iq1_s_r4(const block_iq1_s_r4  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+void   vec_dot_iq1_s_r4_q8_k(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+
 void   quantize_row_q8_k_r8_ref(const float * GGML_RESTRICT x, block_q8_k_r8  * GGML_RESTRICT y, int64_t k);
 void   quantize_row_q8_k_r8(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 size_t quantize_q8_k_r8(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
