@@ -11696,6 +11696,79 @@ static void mul_mat_iq2_xs_r4_q8_k(int n, const void * vx, size_t bx, const Data
 }
 
 template <int nrc_y>
+static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<nrc_y, block_q8_1_x4> q8(info);
+    int nb = n / 32;
+    GGML_ASSERT(nb%4 == 0);
+    int8x16_t qx[8];
+    int32x4_t acc[nrc_y] = {};
+    auto ms = vdup_n_u16(0x8000);
+    float d8[8*nrc_y];
+    for (int ix= 0; ix < nrc_x; ix += 4) {
+        auto dptr = (const ggml_half *)((const char *)vx + ix*bx);
+        auto d1 = vcvt_f32_f16(vld1_f16((const float16_t *)dptr));
+        auto x = (const block_iq1_s_r4 *)(dptr + 4);
+        for (int ib = 0; ib < nb/4; ++ib) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto scales = vld1q_f16((const float16_t *)q8.y[iy][ib].d);
+                vst1q_f32(d8+8*iy+0, vcvt_f32_f16(vget_low_f16(scales)));
+                vst1q_f32(d8+8*iy+4, vcvt_f32_f16(vget_high_f16(scales)));
+            }
+            for (int k = 0; k < 4; ++k) {
+                const uint64_t * s64 = (const uint64_t *)x[4*ib+k].qh;
+                auto sas = vdup_n_u64(s64[0]);
+                auto scales4 = vand_u16(vshr_n_u16(sas, 12), vdup_n_u16(7));
+                scales4 = vorr_u16(vshl_n_u16(scales4, 1), vdup_n_u16(1));
+                auto signs = vorr_u16(vceq_u16(vand_u16(sas, ms), ms), vdup_n_u16(1));
+                auto delta4 = vmulq_f32(vdupq_n_f32(IQ1S_DELTA), vcvtq_f32_s32(vmull_s16(signs, scales4)));
+                qx[0] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[x[4*ib+k].qs[ 0] | ((x[4*ib+k].qh[0] << 8) & 0x0700)],
+                                                        iq1s_grid[x[4*ib+k].qs[ 1] | ((x[4*ib+k].qh[1] << 8) & 0x0700)]});
+                qx[1] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[x[4*ib+k].qs[ 8] | ((x[4*ib+k].qh[0] << 2) & 0x0700)],
+                                                        iq1s_grid[x[4*ib+k].qs[ 9] | ((x[4*ib+k].qh[1] << 2) & 0x0700)]});
+                qx[2] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[x[4*ib+k].qs[ 4] | ((x[4*ib+k].qh[0] << 5) & 0x0700)],
+                                                        iq1s_grid[x[4*ib+k].qs[ 5] | ((x[4*ib+k].qh[1] << 5) & 0x0700)]});
+                qx[3] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[x[4*ib+k].qs[12] | ((x[4*ib+k].qh[0] >> 1) & 0x0700)],
+                                                        iq1s_grid[x[4*ib+k].qs[13] | ((x[4*ib+k].qh[1] >> 1) & 0x0700)]});
+                qx[4] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[x[4*ib+k].qs[ 2] | ((x[4*ib+k].qh[2] << 8) & 0x0700)],
+                                                        iq1s_grid[x[4*ib+k].qs[ 3] | ((x[4*ib+k].qh[3] << 8) & 0x0700)]});
+                qx[5] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[x[4*ib+k].qs[10] | ((x[4*ib+k].qh[2] << 2) & 0x0700)],
+                                                        iq1s_grid[x[4*ib+k].qs[11] | ((x[4*ib+k].qh[3] << 2) & 0x0700)]});
+                qx[6] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[x[4*ib+k].qs[ 6] | ((x[4*ib+k].qh[2] << 5) & 0x0700)],
+                                                        iq1s_grid[x[4*ib+k].qs[ 7] | ((x[4*ib+k].qh[3] << 5) & 0x0700)]});
+                qx[7] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[x[4*ib+k].qs[14] | ((x[4*ib+k].qh[2] >> 1) & 0x0700)],
+                                                        iq1s_grid[x[4*ib+k].qs[15] | ((x[4*ib+k].qh[3] >> 1) & 0x0700)]});
+                auto scales = vmovl_u16(scales4);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto sumi1 = vdupq_n_s32(0);
+                    auto sumi2 = vdupq_n_s32(0);
+                    auto y = vld1_s8_x4(q8.y[iy][ib].qs + 32*k);
+                    auto y1 = vcombine_s8(y.val[0], y.val[0]);
+                    auto y2 = vcombine_s8(y.val[1], y.val[1]);
+                    sumi1 = ggml_vdotq_s32(sumi1, qx[0], y1);
+                    sumi2 = ggml_vdotq_s32(sumi2, qx[4], y1);
+                    sumi1 = ggml_vdotq_s32(sumi1, qx[2], y2);
+                    sumi2 = ggml_vdotq_s32(sumi2, qx[6], y2);
+                    y1 = vcombine_s8(y.val[2], y.val[2]);
+                    y2 = vcombine_s8(y.val[3], y.val[3]);
+                    sumi1 = ggml_vdotq_s32(sumi1, qx[1], y1);
+                    sumi2 = ggml_vdotq_s32(sumi2, qx[5], y1);
+                    sumi1 = ggml_vdotq_s32(sumi1, qx[3], y2);
+                    sumi2 = ggml_vdotq_s32(sumi2, qx[7], y2);
+                    auto sumi = vmulq_s32(scales, vpaddq_s32(sumi1, sumi2));
+                    acc[iy] = vfmaq_f32(acc[iy], vdupq_n_f32(d8[8*iy+k+0]), vcvtq_f32_s32(sumi));
+                    acc[iy] = vfmaq_f32(acc[iy], vdupq_n_f32(d8[8*iy+k+4]), delta4);
+                }
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, vmulq_f32(d1, acc[iy]));
+            acc[iy] = vdupq_n_f32(0.f);
+        }
+    }
+}
+
+template <int nrc_y>
 static void mul_mat_iq2_s_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
@@ -13313,6 +13386,11 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq2_s_r4_q8_k);
             m.func16 = mul_mat_iq2_s_r4_q8_k<16>;
             expected_Btype = GGML_TYPE_Q8_K;
+            break;
+        case GGML_TYPE_IQ1_S_R4:
+            SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq1_s_r4_q8_1);
+            m.func16 = mul_mat_iq1_s_r4_q8_1<16>;
+            expected_Btype = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_IQ3_XXS_R4:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq3_xxs_r4_q8_k);
