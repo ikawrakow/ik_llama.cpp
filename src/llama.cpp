@@ -16078,11 +16078,19 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         else if (qs.model.hparams.n_expert >= 8 && name.find("attn_k") != std::string::npos) {
             new_type = GGML_TYPE_Q4_K_R4;
         }
+        else if (qs.model.hparams.n_expert >= 8 && (name.find("blk.0.ffn_down") != std::string::npos ||
+                                                    name.find("blk.0.ffn_gate") != std::string::npos ||
+                                                    name.find("blk.0.ffn_up") != std::string::npos)) {
+            new_type = GGML_TYPE_IQ3_K_R4;
+        }
         else if (qs.model.hparams.n_expert >= 8 && name.find("attn_q") != std::string::npos) {
             new_type = GGML_TYPE_Q4_K_R4;
         }
         else if (name.find("attn_qkv.weight") != std::string::npos) {
             new_type = GGML_TYPE_IQ2_K_R4;
+        }
+        else if (name.find("_shexp.weight") != std::string::npos) {
+            new_type = GGML_TYPE_IQ4_K_R4;
         }
         else if (name.find("ffn_down") != std::string::npos) {
             auto [i_layer, n_layer] = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
