@@ -6141,8 +6141,7 @@ size_t quantize_iq1_s_r4(const float * src, void * dst, int64_t nrows, int64_t n
             }
         }
         for (int k = 0; k < 4; ++k) {
-            //dptr[k] = GGML_FP32_TO_FP16(1.125f*max[k]/15);;
-            dptr[k] = GGML_FP32_TO_FP16(max[k]/15);;
+            dptr[k] = GGML_FP32_TO_FP16(1.0625f*max[k]/15);;
             invd[k] = max[k] ? 15/max[k] : 0.f;
         }
         for (int ibl = 0; ibl < nblock; ++ibl) {
