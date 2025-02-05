@@ -16098,6 +16098,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             else if (i_layer < n_layer/8) {
                 new_type = GGML_TYPE_Q2_K_R4;
             }
+            ++qs.i_ffn_down;
         }
         else if (name.find("attn_output.weight") != std::string::npos) {
             new_type = qs.model.hparams.n_expert >= 4 ? GGML_TYPE_Q5_K_R4 : GGML_TYPE_IQ2_K_R4;
