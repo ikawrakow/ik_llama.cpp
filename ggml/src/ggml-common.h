@@ -485,6 +485,12 @@ typedef struct {
 } block_iq1_s;
 static_assert(sizeof(block_iq1_s) == sizeof(ggml_half) + QK_K/8 + QK_K/16, "wrong iq1_s block size/padding");
 
+typedef struct {
+    uint8_t  qs[16];
+    uint16_t qh[4];
+} block_iq1_s_r4;
+static_assert(sizeof(block_iq1_s_r4) == 24, "wrong iq1_s_r4 block size/padding");
+
 // 1.75 bpw
 typedef struct {
     uint8_t  qs[QK_K/8];      // grid index, low 8 bits

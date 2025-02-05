@@ -42,6 +42,7 @@ void quantize_row_iq4_xs_ref (const float * GGML_RESTRICT x, block_iq4_xs  * GGM
 void quantize_row_iq3_s_ref  (const float * GGML_RESTRICT x, block_iq3_s   * GGML_RESTRICT y, int64_t k);
 void quantize_row_iq2_s_ref  (const float * GGML_RESTRICT x, block_iq2_s   * GGML_RESTRICT y, int64_t k);
 void quantize_row_iq1_bn_ref (const float * GGML_RESTRICT x, block_iq1_bn  * GGML_RESTRICT y, int64_t k);
+void quantize_row_iq1_s_ref  (const float * GGML_RESTRICT x, block_iq1_s   * GGML_RESTRICT y, int64_t k);
 
 void quantize_row_q4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_q4_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
@@ -66,6 +67,7 @@ void quantize_row_iq4_xs (const float * GGML_RESTRICT x, void * GGML_RESTRICT y,
 void quantize_row_iq3_s  (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_iq2_s  (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_iq1_bn (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+void quantize_row_iq1_s  (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 
 // Dequantization
 void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
@@ -147,6 +149,9 @@ void iq2xs_init_impl(enum ggml_type type);
 void iq2xs_free_impl(enum ggml_type type);
 void iq3xs_init_impl(int grid_size);
 void iq3xs_free_impl(int grid_size);
+
+void iq1s_process_1block(int block_size, const float * xb, const float * weight, int8_t * L,
+        float * the_scale, uint16_t * the_index, int * the_shift, float * pairs, float * sumx, float * sumw);
 
 #if defined(__ARM_FEATURE_SVE)
 extern int ggml_sve_cnt_b;
