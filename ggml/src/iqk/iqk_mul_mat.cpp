@@ -377,6 +377,7 @@ inline void make_q4_scales(const uint8_t * scales8, uint32_t * aux32) {
     aux32[0] = a0 & 0x3f3f3f3f;
 }
 
+#ifdef __AVX2__
 static const uint64_t iq1s_grid_us[2048] = {
     0x0000000000000000, 0x0000000000000002, 0x0000000000000101, 0x0000000000000200,
     0x0000000000000202, 0x0000000000010001, 0x0000000000010101, 0x0000000000020000,
@@ -891,6 +892,7 @@ static const uint64_t iq1s_grid_us[2048] = {
     0x0202020202000002, 0x0202020202000200, 0x0202020202000202, 0x0202020202010101,
     0x0202020202020000, 0x0202020202020002, 0x0202020202020200, 0x0202020202020202,
 };
+#endif
 
 #ifndef HAVE_FANCY_SIMD
 const uint64_t keven_signs[128] = {
@@ -11717,8 +11719,7 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                 vst1q_f32(d8+8*iy+4, vcvt_f32_f16(vget_high_f16(scales)));
             }
             for (int k = 0; k < 4; ++k) {
-                const uint64_t * s64 = (const uint64_t *)x[4*ib+k].qh;
-                auto sas = vdup_n_u64(s64[0]);
+                auto sas = vld1_u16(x[4*ib+k].qh);
                 auto scales4 = vand_u16(vshr_n_u16(sas, 12), vdup_n_u16(7));
                 scales4 = vorr_u16(vshl_n_u16(scales4, 1), vdup_n_u16(1));
                 auto signs = vorr_u16(vceq_u16(vand_u16(sas, ms), ms), vdup_n_u16(1));
@@ -13691,7 +13692,7 @@ struct F16 {
     using Data = float16x8_t;
     constexpr static int block_size = 8;
     //constexpr static int num_registers = 32;
-    constexpr static int q_step = 8;
+    //constexpr static int q_step = 8;
     static inline Data zero() { return vdupq_n_f16(0); }
     static inline Data load(const char * ptr, int i) { return vld1q_f16((const float16_t *)ptr + block_size*i); }
     static inline Data load(const float16_t * ptr, int i) { return vld1q_f16(ptr + block_size*i); }
