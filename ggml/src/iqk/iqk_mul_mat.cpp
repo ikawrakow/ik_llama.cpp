@@ -260,6 +260,7 @@ struct MulMat {
             case GGML_TYPE_IQ2_S_R4:
             case GGML_TYPE_IQ3_XXS_R4:
             case GGML_TYPE_IQ1_S_R4:
+            case GGML_TYPE_IQ1_M_R4:
             case GGML_TYPE_IQ3_S_R4: return 4;
             case GGML_TYPE_IQ4_NL_R4:
             case GGML_TYPE_Q5_0_R4:
@@ -295,6 +296,7 @@ struct MulMat {
             case GGML_TYPE_IQ3_XXS_R4:
             case GGML_TYPE_IQ3_S_R4:
             case GGML_TYPE_IQ1_S_R4:
+            case GGML_TYPE_IQ1_M_R4:
             case GGML_TYPE_IQ2_BN_R4: return 4;
             case GGML_TYPE_IQ4_XS_R4:
             case GGML_TYPE_Q4_0_R4:
@@ -3598,6 +3600,106 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                     sumi = _mm256_madd_epi16(scales, sumi);
                     acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d8[8*iy+k+0]), _mm256_cvtepi32_ps(sumi), acc[iy]);
                     acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d8[8*iy+k+4]), delta, acc[iy]);
+                }
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto sumf = _mm_add_ps(_mm256_castps256_ps128(acc[iy]), _mm256_extractf128_ps(acc[iy], 1));
+            info.store(ix, iy, _mm_mul_ps(d1, sumf));
+            acc[iy] = _mm256_setzero_ps();
+        }
+    }
+}
+
+template <int nrc_y>
+static void mul_mat_iq1_m_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%4 == 0);
+    Q8<nrc_y, block_q8_1_x4> q8(info);
+    int nb = n / 32;
+    GGML_ASSERT(nb%4 == 0);
+    auto shuffle0 = _mm256_set_epi64x(0x0909090909090909, 0x0808080808080808, 0x0101010101010101, 0x0000000000000000);
+    auto step = _mm256_set1_epi8(2);
+#ifndef HAVE_FANCY_SIMD
+    auto m1 = _mm256_set1_epi16(1);
+#endif
+    __m256i qx[4];
+    __m256  acc[nrc_y] = {};
+    auto ms = _mm_set1_epi8(0x08);
+    float d8[8*nrc_y];
+    union { __m256i vec; uint16_t val[16]; } helper;
+    for (int ix= 0; ix < nrc_x; ix += 4) {
+        auto dptr = (const ggml_half *)((const char *)vx + ix*bx);
+        auto d1 = _mm_mul_ps(_mm_set1_ps(0.125f), _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)dptr)));
+        auto x = (const block_iq1_m_r4 *)(dptr + 4);
+        for (int ib = 0; ib < nb/4; ++ib) {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                _mm256_storeu_ps(d8 + 8*iy, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[iy][ib].d)));
+            }
+            for (int k = 0; k < 4; ++k) {
+                auto qh = (const uint32_t *)x[4*ib+k].qh;
+                auto idxh = _mm_set_epi32(qh[1] >> 4, qh[1], qh[0] >> 4, qh[0]);
+                auto scales4 = _mm_set1_epi32(((const uint32_t *)x[4*ib+k].scales)[0]);
+                // r0s0, r1s0, r2s0, r3s0, r0s1, r1s1, r2s1, r3s1, r0s0, r1s0, r2s0, r3s0, r0s1, r1s1, r2s1, r3s1
+                scales4 = _mm_and_si128(_mm_srlv_epi32(scales4, _mm_set_epi32(4, 0, 4, 0)), _mm_set1_epi8(0xf));
+                scales4 = _mm_or_si128(_mm_slli_epi16(scales4, 1), _mm_set1_epi8(1));
+                // r0s0, r0s0, r1s0, r1s0, r2s0, r2s0, r3s0, r3s0, r0s1, r0s1, r1s1, r1s1, r2s1, r2s1, r3s1, r3s1,
+                //scales4 = _mm_unpacklo_epi8(scales4, scales4);
+                scales4 = _mm_cvtepu8_epi16(scales4);
+                auto scales = MM256_SET_M128I(_mm_unpackhi_epi16(scales4, scales4), _mm_unpacklo_epi16(scales4, scales4));
+
+                auto signs128 = _mm_or_si128(_mm_cmpeq_epi8(_mm_and_si128(idxh, ms), ms), _mm_set1_epi8(1));
+                signs128 = _mm_add_epi8(_mm_set1_epi8(-8), signs128);
+                auto signs = MM256_SET_M128I(signs128, signs128);
+                auto idxl = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)x[4*ib+k].qs));
+                idxh = _mm_and_si128(idxh, _mm_set1_epi8(0x07));
+                helper.vec = _mm256_or_si256(idxl, _mm256_slli_epi16(_mm256_cvtepu8_epi16(idxh), 8));
+                qx[0] = _mm256_set_epi64x(iq1s_grid_us[helper.val[ 9]], iq1s_grid_us[helper.val[ 8]],
+                                          iq1s_grid_us[helper.val[ 1]], iq1s_grid_us[helper.val[ 0]]);
+                qx[1] = _mm256_set_epi64x(iq1s_grid_us[helper.val[13]], iq1s_grid_us[helper.val[12]],
+                                          iq1s_grid_us[helper.val[ 5]], iq1s_grid_us[helper.val[ 4]]);
+                qx[2] = _mm256_set_epi64x(iq1s_grid_us[helper.val[11]], iq1s_grid_us[helper.val[10]],
+                                          iq1s_grid_us[helper.val[ 3]], iq1s_grid_us[helper.val[ 2]]);
+                qx[3] = _mm256_set_epi64x(iq1s_grid_us[helper.val[15]], iq1s_grid_us[helper.val[14]],
+                                          iq1s_grid_us[helper.val[ 7]], iq1s_grid_us[helper.val[ 6]]);
+                qx[0] = _mm256_add_epi8(_mm256_slli_epi16(qx[0], 3), _mm256_shuffle_epi8(signs, shuffle0));
+                auto shuffle = _mm256_add_epi8(shuffle0, step);
+                qx[2] = _mm256_add_epi8(_mm256_slli_epi16(qx[2], 3), _mm256_shuffle_epi8(signs, shuffle));
+                shuffle = _mm256_add_epi8(shuffle, step);
+                qx[1] = _mm256_add_epi8(_mm256_slli_epi16(qx[1], 3), _mm256_shuffle_epi8(signs, shuffle));
+                shuffle = _mm256_add_epi8(shuffle, step);
+                qx[3] = _mm256_add_epi8(_mm256_slli_epi16(qx[3], 3), _mm256_shuffle_epi8(signs, shuffle));
+                auto s0 = _mm256_sign_epi8(qx[0], qx[0]);
+                auto s1 = _mm256_sign_epi8(qx[1], qx[1]);
+                auto s2 = _mm256_sign_epi8(qx[2], qx[2]);
+                auto s3 = _mm256_sign_epi8(qx[3], qx[3]);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto y = _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + k);
+                    auto y1 = _mm256_shuffle_epi32(y, 0x44);
+                    auto y2 = _mm256_shuffle_epi32(y, 0xee);
+#ifdef HAVE_FANCY_SIMD
+                    // 0,0, 1,1, 0,0, 1,1 as int32_t
+                    auto sumi1 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
+                                s0, _mm256_sign_epi8(y1, qx[0])), s1, _mm256_sign_epi8(y2, qx[1]));
+                    // 2,2, 3,3, 2,2, 3,3 as int32_t
+                    auto sumi2 = _mm256_dpbusd_epi32(_mm256_dpbusd_epi32(_mm256_setzero_si256(),
+                                s2, _mm256_sign_epi8(y1, qx[2])), s3, _mm256_sign_epi8(y2, qx[3]));
+                    auto sumi = _mm256_packs_epi32(sumi1, sumi2);
+#else
+                    // 4 x row 0, 4 x row 1, 4 x row 0, 4 x row 1
+                    auto sumi1 = _mm256_add_epi16(_mm256_maddubs_epi16(s0, _mm256_sign_epi8(y1, qx[0])),
+                                                  _mm256_maddubs_epi16(s1, _mm256_sign_epi8(y2, qx[1])));
+                    // 4 x row 2, 4 x row 3, 4 x row 2, 4 x row 3
+                    auto sumi2 = _mm256_add_epi16(_mm256_maddubs_epi16(s2, _mm256_sign_epi8(y1, qx[2])),
+                                                  _mm256_maddubs_epi16(s3, _mm256_sign_epi8(y2, qx[3])));
+                    // 0,0, 1,1, 0,0, 1,1  as int32_t
+                    sumi1 = _mm256_madd_epi16(m1, sumi1);
+                    // 2,2, 3,3, 2,2, 3,3  as int32_t
+                    sumi2 = _mm256_madd_epi16(m1, sumi2);
+                    // 0,0, 1,1, 2,2, 3,3, 0,0, 1,1, 2,2, 3,3 as int16_t
+                    auto sumi = _mm256_packs_epi32(sumi1, sumi2);
+#endif
+                    sumi = _mm256_madd_epi16(scales, sumi);
+                    acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d8[8*iy+k+0]), _mm256_cvtepi32_ps(sumi), acc[iy]);
                 }
             }
         }
@@ -9078,6 +9180,21 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[7] = mul_mat_iq1_s_r4_q8_1<8>;
 #ifdef HAVE_FANCY_SIMD
             mm.func16 = mul_mat_iq1_s_r4_q8_1<16>;
+#endif
+            expected_typeB = GGML_TYPE_Q8_1_X4;
+            break;
+        case GGML_TYPE_IQ1_M_R4:
+            assert (ne00 % QK4_NL == 0);
+            mm.funcs[0] = mul_mat_iq1_m_r4_q8_1<1>;
+            mm.funcs[1] = mul_mat_iq1_m_r4_q8_1<2>;
+            mm.funcs[2] = mul_mat_iq1_m_r4_q8_1<3>;
+            mm.funcs[3] = mul_mat_iq1_m_r4_q8_1<4>;
+            mm.funcs[4] = mul_mat_iq1_m_r4_q8_1<5>;
+            mm.funcs[5] = mul_mat_iq1_m_r4_q8_1<6>;
+            mm.funcs[6] = mul_mat_iq1_m_r4_q8_1<7>;
+            mm.funcs[7] = mul_mat_iq1_m_r4_q8_1<8>;
+#ifdef HAVE_FANCY_SIMD
+            mm.func16 = mul_mat_iq1_m_r4_q8_1<16>;
 #endif
             expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
