@@ -6193,6 +6193,124 @@ void vec_dot_iq1_s_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t 
     GGML_UNUSED(by);
 }
 
+void quantize_row_iq1_m_r4_ref(const float * x, block_iq1_m_r4  * y, int64_t k) {
+    quantize_iq1_m_r4(x, y, 4, k/4, nullptr);
+}
+
+void quantize_row_iq1_m_r4(const float * x, void * y, int64_t k) {
+    quantize_iq1_m_r4(x, y, 4, k/4, nullptr);
+}
+
+size_t quantize_iq1_m_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    constexpr int kBlockSize = 32;
+    GGML_ASSERT(nrows%4 == 0);
+    GGML_ASSERT(n_per_row%kBlockSize == 0);
+    int nblock = n_per_row/kBlockSize;
+    float weight[kBlockSize];
+    int8_t L[kBlockSize];
+    float pairs[2*kBlockSize];
+    float max[4];
+    uint16_t index[4];
+    int shift1, shift2;
+    float invd[4];
+    const uint8_t masks[4] = {0x00, 0x80, 0x08, 0x88};
+    std::vector<float> scales(8*nblock);
+    auto row_size = ggml_row_size(GGML_TYPE_IQ1_M_R4, n_per_row);
+    char * cy = (char *)dst;
+    for (int row = 0; row < nrows; row += 4) {
+        ggml_half * dptr = (ggml_half *)cy;
+        auto y = (block_iq1_m_r4 *)(dptr + 4);
+        for (int k = 0; k < 4; ++k) max[k] = 0;
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+            for (int k = 0; k < 4; ++k) {
+                auto xb = src + k*n_per_row + kBlockSize*ibl;
+                float sumx2 = 0;
+                for (int j = 0; j < kBlockSize; ++j) sumx2 += xb[j]*xb[j];
+                if (!sumx2) {
+                    scales[8*ibl+2*k+0] = scales[8*ibl+2*k+1] = 0;
+                    continue;
+                }
+                float sigma2 = 1.5f*sumx2/kBlockSize;
+                if (imatrix) {
+                    for (int j = 0; j < kBlockSize; ++j) weight[j] = imatrix[kBlockSize*ibl + j]*sqrt(sigma2 + xb[j]*xb[j]);
+                } else {
+                    for (int j = 0; j < kBlockSize; ++j) weight[j] = sqrt(sigma2 + xb[j]*xb[j]);
+                }
+                iq1m_process_1block(xb+ 0, weight+ 0, L, scales.data() + 8*ibl + 2*k+0, index+0, &shift1, pairs);
+                iq1m_process_1block(xb+16, weight+16, L, scales.data() + 8*ibl + 2*k+1, index+2, &shift2, pairs);
+                max[k] = std::max(max[k], std::max(scales[8*ibl+2*k+0], scales[8*ibl+2*k+1]));
+                for (int i = 0; i < 4; ++i) {
+                    y[ibl].qs[4*i + k] = index[i] & 255;
+                }
+                for (int i = 0; i < 2; ++i) {
+                    y[ibl].qh[4*i+k] = (index[2*i+0] >> 8) | ((index[2*i+1] >> 8) << 4);
+                }
+                y[ibl].qh[0+k] |= masks[shift1];
+                y[ibl].qh[4+k] |= masks[shift2];
+            }
+        }
+        for (int k = 0; k < 4; ++k) {
+            //dptr[k] = GGML_FP32_TO_FP16(1.0625f*max[k]/31);;
+            dptr[k] = GGML_FP32_TO_FP16(max[k]/31);;
+            invd[k] = max[k] ? 31/max[k] : 0.f;
+        }
+        for (int ibl = 0; ibl < nblock; ++ibl) {
+            for (int k = 0; k < 4; ++k) {
+                int ls1 = nearest_int(0.5f*(scales[8*ibl+2*k+0]*invd[k] - 1));
+                int ls2 = nearest_int(0.5f*(scales[8*ibl+2*k+1]*invd[k] - 1));
+                ls1 = std::max(0, std::min(15, ls1));
+                ls2 = std::max(0, std::min(15, ls2));
+                y[ibl].scales[k] = ls1 | (ls2 << 4);
+            }
+        }
+        cy  += 4*row_size;
+        src += 4*n_per_row;
+    }
+    return nrows*row_size;
+}
+
+void dequantize_row_iq1_m_r4(const block_iq1_m_r4  * x, float * y, int64_t n) {
+    auto dptr = (const ggml_half *)x;
+    x = (const block_iq1_m_r4 *)(dptr + 4);
+    float d[4];
+    for (int k = 0; k < 4; ++k) d[k] = GGML_FP16_TO_FP32(dptr[k]);
+    int n_per_row = n/4;
+    GGML_ASSERT(n_per_row%32 == 0);
+    int nblock = n_per_row/32;
+    float dl[2];
+    float * yk[4];
+    for (int k = 0; k < 4; ++k) yk[k] = y + k*n_per_row;
+    for (int ib = 0; ib < nblock; ++ib) {
+        for (int k = 0; k < 4; ++k) {
+            dl[0] = d[k]*(2*(x[ib].scales[k] & 0xf) + 1);
+            dl[1] = d[k]*(2*(x[ib].scales[k] >>  4) + 1);
+            for (int i = 0; i < 2; ++i) {
+                auto idx1 = x[ib].qs[8*i+k+0] | ((x[ib].qh[4*i+k] & 0x07) << 8);
+                auto idx2 = x[ib].qs[8*i+k+4] | ((x[ib].qh[4*i+k] & 0x70) << 4);
+                auto grid1 = (const int8_t *)(iq1s_grid + idx1);
+                auto grid2 = (const int8_t *)(iq1s_grid + idx2);
+                auto delta1 = x[ib].qh[4*i+k] & 0x08 ? -IQ1M_DELTA : IQ1M_DELTA;
+                auto delta2 = x[ib].qh[4*i+k] & 0x80 ? -IQ1M_DELTA : IQ1M_DELTA;
+                for (int j = 0; j < 8; ++j) yk[k][32*ib + 16*i + j + 0] = dl[i]*(grid1[j] + delta1);
+                for (int j = 0; j < 8; ++j) yk[k][32*ib + 16*i + j + 8] = dl[i]*(grid2[j] + delta2);
+            }
+        }
+    }
+}
+
+void vec_dot_iq1_m_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ1_M_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK4_NL == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
 //================================================
 
 namespace {
