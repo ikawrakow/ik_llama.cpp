@@ -2507,6 +2507,7 @@ struct llama_cparams {
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;
+    bool mla_attn;
 
     enum llama_pooling_type pooling_type;
 
@@ -7678,8 +7679,8 @@ static bool llm_load_tensors(
 
                         layer.wkv_a_mqa = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + (n_embd_head_qk_rope)});
                         layer.wkv_b     = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)});
-                        layer.wk_b      = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, 0);
-                        layer.wv_b      = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B,      "weight", i), {kv_lora_rank, n_head * n_embd_head_v}, 0);
+                        layer.wk_b      = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, 1);
+                        layer.wv_b      = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B,      "weight", i), {kv_lora_rank, n_head * n_embd_head_v}, 1);
                         layer.wo        = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT,      "weight", i), {              n_head * (                      n_embd_head_v), n_embd});
 
                         layer.ffn_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
@@ -8851,6 +8852,7 @@ struct llm_build_context {
     const int32_t n_ctx_orig;
 
     const bool flash_attn;
+    const bool mla_attn;
 
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
@@ -8900,6 +8902,7 @@ struct llm_build_context {
         kv_head          (worst_case ? (kv_self.recurrent ? 0 : kv_self.size - n_tokens) : kv_self.head),
         n_ctx_orig       (cparams.n_ctx_orig_yarn),
         flash_attn       (cparams.flash_attn),
+        mla_attn         (cparams.mla_attn),
         pooling_type     (cparams.pooling_type),
         rope_type        (hparams.rope_type),
         cb               (cb),
@@ -13419,130 +13422,203 @@ struct llm_build_context {
                         0);
                 cb(kv_compressed, "kv_compressed", il);
 
-                // and {n_embd_head_qk_rope, n_tokens}
-                struct ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_pe_compresseed, n_embd_head_qk_rope, 1, n_tokens,
-                        kv_pe_compresseed->nb[1],
-                        kv_pe_compresseed->nb[1],
-                        ggml_row_size(kv_pe_compresseed->type, kv_lora_rank));
-                cb(k_pe, "k_pe", il);
+                if (lctx.cparams.mla_attn && model.layers[il].wk_b && model.layers[il].wv_b) {
 
-                //kv_compressed = ggml_cont(ctx0, kv_compressed); // TODO: the CUDA backend does not support non-contiguous norm
-                kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams,
-                        model.layers[il].attn_kv_a_norm, NULL,
-                        LLM_NORM_RMS, cb, il);
-                cb(kv_compressed, "kv_compressed", il);
+                    // and {n_embd_head_qk_rope, n_tokens}
+                    struct ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_pe_compresseed, n_embd_head_qk_rope, 1, n_tokens,
+                            kv_pe_compresseed->nb[1],
+                            kv_pe_compresseed->nb[1],
+                            ggml_row_size(kv_pe_compresseed->type, kv_lora_rank));
+                    cb(k_pe, "k_pe", il);
 
-                struct ggml_tensor * kv_cache_view = ggml_view_1d(ctx0, kv_self.kv_l[il], n_tokens*kv_lora_rank, ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank)*kv_head);
-                cb(kv_cache_view, "kv_cache_view", il);
+                    //kv_compressed = ggml_cont(ctx0, kv_compressed); // TODO: the CUDA backend does not support non-contiguous norm
+                    kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams,
+                            model.layers[il].attn_kv_a_norm, NULL,
+                            LLM_NORM_RMS, cb, il);
+                    cb(kv_compressed, "kv_compressed", il);
 
-                // note: storing c^KV in the KV cache
-                ggml_build_forward_expand(gf, ggml_cpy(ctx0, kv_compressed, kv_cache_view));
+                    struct ggml_tensor * kv_cache_view = ggml_view_1d(ctx0, kv_self.kv_l[il], n_tokens*kv_lora_rank, ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank)*kv_head);
+                    cb(kv_cache_view, "kv_cache_view", il);
 
-                struct ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.kvt_l[il], n_tokens, kv_lora_rank, ggml_row_size(kv_self.kv_l[il]->type, kv_self.size), ggml_row_size(kv_self.kv_l[il]->type, kv_head));
-                cb(kv_cache_trans_view, "kv_cache_trans_view", il);
+                    // note: storing c^KV in the KV cache
+                    ggml_build_forward_expand(gf, ggml_cpy(ctx0, kv_compressed, kv_cache_view));
 
-                // note: storing transposed c^KV in the transposed KV cache
-                ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_transpose(ctx0, kv_compressed), kv_cache_trans_view));
+                    struct ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.kvt_l[il], n_tokens, kv_lora_rank, ggml_row_size(kv_self.kv_l[il]->type, kv_self.size), ggml_row_size(kv_self.kv_l[il]->type, kv_head));
+                    cb(kv_cache_trans_view, "kv_cache_trans_view", il);
 
-                struct ggml_tensor * kv_cache =
-                    ggml_view_2d(ctx0, kv_self.kv_l[il],
-                            kv_lora_rank, n_kv,
-                            ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank),
+                    // note: storing transposed c^KV in the transposed KV cache
+                    ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_transpose(ctx0, kv_compressed), kv_cache_trans_view));
+
+                    struct ggml_tensor * kv_cache =
+                        ggml_view_2d(ctx0, kv_self.kv_l[il],
+                                kv_lora_rank, n_kv,
+                                ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank),
+                                0);
+                    cb(kv_cache, "kv_cache", il);
+
+                    struct ggml_tensor * kv_cache_trans =
+                        ggml_view_2d(ctx0, kv_self.kvt_l[il],
+                                n_kv, kv_lora_rank,
+                                ggml_row_size(kv_self.kv_l[il]->type, kv_self.size),
+                                0);
+                    cb(kv_cache_trans, "kv_cache_trans", il);
+
+                    q_pe = ggml_cont(ctx0, q_pe); // TODO: the CUDA backend does not support non-contiguous RoPE
+                    q_pe = ggml_rope_ext(
+                            ctx0, q_pe, inp_pos, nullptr,
+                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor_scaled, beta_fast, beta_slow
+                            );
+                    cb(q_pe, "q_pe", il);
+
+                    // shared RoPE key
+                    k_pe = ggml_cont(ctx0, k_pe); // TODO: the CUDA backend does not support non-contiguous RoPE
+                    k_pe = ggml_rope_ext(
+                            ctx0, k_pe, inp_pos, nullptr,
+                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor_scaled, beta_fast, beta_slow
+                            );
+                    cb(k_pe, "k_pe", il);
+
+                    struct ggml_tensor * kr_cache_view = ggml_view_1d(ctx0, kv_self.kr_l[il], n_tokens*n_embd_head_qk_rope, ggml_row_size(kv_self.kr_l[il]->type, n_embd_head_qk_rope)*kv_head);
+                    cb(kr_cache_view, "kr_cache_view", il);
+
+                    // note: storing RoPE-ed version of K^R in the KV cache
+                    ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_pe, kr_cache_view));
+
+                    struct ggml_tensor * kr_cache =
+                        ggml_view_2d(ctx0, kv_self.kr_l[il],
+                                n_embd_head_qk_rope, n_kv,
+                                ggml_row_size(kv_self.kr_l[il]->type, n_embd_head_qk_rope),
+                                0);
+                    cb(kr_cache, "kr_cache", il);
+
+                    struct ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head, ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope), ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank * n_embd_head_qk_nope), 0);
+                    cb(wk_b, "wk_b", il);
+
+                    struct ggml_tensor * q_nope_perm = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+                    cb(q_nope_perm, "q_nope_perm", il);
+
+                    struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope_perm);
+                    cb(q_nope2, "q_nope2", il);
+
+                    struct ggml_tensor * q_nope2_perm = ggml_permute(ctx0, q_nope2, 0, 2, 1, 3);
+                    cb(q_nope2_perm, "q_nope2_perm", il);
+
+                    struct ggml_tensor * kq_nope = ggml_mul_mat(ctx0, kv_cache, q_nope2_perm);
+                    cb(kq_nope, "kq_nope", il);
+
+                    struct ggml_tensor * q_pe_perm = ggml_permute(ctx0, q_pe, 0, 3, 2, 1);
+                    cb(q_pe_perm, "q_pe_perm", il);
+
+                    struct ggml_tensor * kq_pe = ggml_mul_mat(ctx0, kr_cache, q_pe);
+                    cb(kq_pe, "kq_pe", il);
+
+                    struct ggml_tensor * kq = ggml_add(ctx0, kq_nope, kq_pe);
+                    cb(kq, "kq", il);
+
+                    kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3));
+                    cb(kq, "kq_perm", il);
+
+                    kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
+                    cb(kq, "kq_soft_max_ext", il);
+
+                    struct ggml_tensor * kq_perm = ggml_permute(ctx0, kq, 0, 2, 1, 3);
+                    cb(kq_perm, "kq_soft_max_ext_perm", il);
+
+                    struct ggml_tensor * kqv_compressed = ggml_mul_mat(ctx0, kv_cache_trans, kq_perm);
+                    cb(kqv_compressed, "kqv_compressed", il);
+
+                    kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
+                    cb(kqv_compressed, "kqv_compressed_perm", il);
+
+                    struct ggml_tensor * wv_b = ggml_view_3d(ctx0, model.layers[il].wv_b, kv_lora_rank, n_embd_head_v, n_head, ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank), ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank * n_embd_head_v), 0);
+                    cb(wv_b, "wv_b", il);
+
+                    struct ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
+                    cb(kqv, "kqv", il);
+
+                    kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
+                    cb(kqv, "kqv_perm", il);
+
+                    cur = ggml_view_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens, ggml_row_size(kqv->type, n_embd_head_v*n_head), 0);
+                    cb(cur, "kqv_2d", il);
+
+                    ggml_build_forward_expand(gf, cur);
+
+                    cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
+                    cb(cur, "kqv_out", il);
+
+                }
+                else {
+
+                    // and {n_embd_head_qk_rope, n_tokens}
+                    struct ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_pe_compresseed, n_embd_head_qk_rope, 1, n_tokens,
+                            kv_pe_compresseed->nb[1],
+                            kv_pe_compresseed->nb[1],
+                            ggml_row_size(kv_pe_compresseed->type, kv_lora_rank));
+                    cb(k_pe, "k_pe", il);
+
+                    //kv_compressed = ggml_cont(ctx0, kv_compressed); // TODO: the CUDA backend does not support non-contiguous norm
+                    kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams,
+                            model.layers[il].attn_kv_a_norm, NULL,
+                            LLM_NORM_RMS, cb, il);
+                    cb(kv_compressed, "kv_compressed", il);
+
+                    // {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)} * {kv_lora_rank, n_tokens} -> {n_head * (n_embd_head_qk_nope + n_embd_head_v), n_tokens}
+                    struct ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_compressed);
+                    cb(kv, "kv", il);
+
+                    // split into {n_head * n_embd_head_qk_nope, n_tokens}
+                    struct ggml_tensor * k_nope = ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head, n_tokens,
+                            ggml_row_size(kv->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
+                            ggml_row_size(kv->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
                             0);
-                cb(kv_cache, "kv_cache", il);
+                    cb(k_nope, "k_nope", il);
 
-                struct ggml_tensor * kv_cache_trans =
-                    ggml_view_2d(ctx0, kv_self.kvt_l[il],
-                            n_kv, kv_lora_rank,
-                            ggml_row_size(kv_self.kv_l[il]->type, kv_self.size),
+                    // and {n_head * n_embd_head_v, n_tokens}
+                    struct ggml_tensor * v_states = ggml_view_3d(ctx0, kv, hparams.n_embd_head_v, n_head, n_tokens,
+                            ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                            ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v)*n_head),
+                            ggml_row_size(kv->type, (n_embd_head_qk_nope)));
+                    cb(v_states, "v_states", il);
+
+                    v_states = ggml_cont(ctx0, v_states);
+                    cb(v_states, "v_states", il);
+
+                    v_states = ggml_view_2d(ctx0, v_states, hparams.n_embd_head_v * n_head, n_tokens,
+                            ggml_row_size(kv->type, hparams.n_embd_head_v * n_head),
                             0);
-                cb(kv_cache_trans, "kv_cache_trans", il);
+                    cb(v_states, "v_states", il);
 
-                //q_pe = ggml_cont(ctx0, q_pe); // TODO: the CUDA backend does not support non-contiguous RoPE
-                q_pe = ggml_rope_ext(
-                    ctx0, q_pe, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow
-                );
-                cb(q_pe, "q_pe", il);
+                    //q_pe = ggml_cont(ctx0, q_pe); // TODO: the CUDA backend does not support non-contiguous RoPE
+                    q_pe = ggml_rope_ext(
+                            ctx0, q_pe, inp_pos, nullptr,
+                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor_scaled, beta_fast, beta_slow
+                            );
+                    cb(q_pe, "q_pe", il);
 
-                // shared RoPE key
-                //k_pe = ggml_cont(ctx0, k_pe); // TODO: the CUDA backend does not support non-contiguous RoPE
-                k_pe = ggml_rope_ext(
-                    ctx0, k_pe, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow
-                );
-                cb(k_pe, "k_pe", il);
+                    // shared RoPE key
+                    //k_pe = ggml_cont(ctx0, k_pe); // TODO: the CUDA backend does not support non-contiguous RoPE
+                    k_pe = ggml_rope_ext(
+                            ctx0, k_pe, inp_pos, nullptr,
+                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor_scaled, beta_fast, beta_slow
+                            );
+                    cb(k_pe, "k_pe", il);
 
-                struct ggml_tensor * kr_cache_view = ggml_view_1d(ctx0, kv_self.kr_l[il], n_tokens*n_embd_head_qk_rope, ggml_row_size(kv_self.kr_l[il]->type, n_embd_head_qk_rope)*kv_head);
-                cb(kr_cache_view, "kr_cache_view", il);
+                    struct ggml_tensor * q_states = ggml_concat(ctx0, q_nope, q_pe, 0);
+                    cb(q_states, "q_states", il);
 
-                // note: storing RoPE-ed version of K^R in the KV cache
-                ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_pe, kr_cache_view));
+                    struct ggml_tensor * k_states = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
+                    cb(k_states, "k_states", il);
 
-                struct ggml_tensor * kr_cache =
-                    ggml_view_2d(ctx0, kv_self.kr_l[il],
-                            n_embd_head_qk_rope, n_kv,
-                            ggml_row_size(kv_self.kr_l[il]->type, n_embd_head_qk_rope),
-                            0);
-                cb(kr_cache, "kr_cache", il);
+                    cur = llm_build_kv(ctx0, lctx, kv_self, gf,
+                            model.layers[il].wo, NULL,
+                            k_states, v_states, q_states, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
 
-                struct ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head, ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope), ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank * n_embd_head_qk_nope), 0);
-                cb(wk_b, "wk_b", il);
-
-                struct ggml_tensor * q_nope_perm = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
-                cb(q_nope_perm, "q_nope_perm", il);
-
-                struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope_perm);
-                cb(q_nope2, "q_nope2", il);
-
-                struct ggml_tensor * q_nope2_perm = ggml_permute(ctx0, q_nope2, 0, 2, 1, 3);
-                cb(q_nope2_perm, "q_nope2_perm", il);
-
-                struct ggml_tensor * kq_nope = ggml_mul_mat(ctx0, kv_cache, q_nope2_perm);
-                cb(kq_nope, "kq_nope", il);
-
-                struct ggml_tensor * q_pe_perm = ggml_permute(ctx0, q_pe, 0, 3, 2, 1);
-                cb(q_pe_perm, "q_pe_perm", il);
-
-                struct ggml_tensor * kq_pe = ggml_mul_mat(ctx0, kr_cache, q_pe);
-                cb(kq_pe, "kq_pe", il);
-
-                struct ggml_tensor * kq = ggml_add(ctx0, kq_nope, kq_pe);
-                cb(kq, "kq", il);
-
-                kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3));
-                cb(kq, "kq_perm", il);
-
-                kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
-                cb(kq, "kq_soft_max_ext", il);
-
-                struct ggml_tensor * kq_perm = ggml_permute(ctx0, kq, 0, 2, 1, 3);
-                cb(kq_perm, "kq_soft_max_ext_perm", il);
-
-                struct ggml_tensor * kqv_compressed = ggml_mul_mat(ctx0, kv_cache_trans, kq_perm);
-                cb(kqv_compressed, "kqv_compressed", il);
-
-                kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
-                cb(kqv_compressed, "kqv_compressed_perm", il);
-
-                struct ggml_tensor * wv_b = ggml_view_3d(ctx0, model.layers[il].wv_b, kv_lora_rank, n_embd_head_v, n_head, ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank), ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank * n_embd_head_v), 0);
-                cb(wv_b, "wv_b", il);
-
-                struct ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
-                cb(kqv, "kqv", il);
-
-                kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
-                cb(kqv, "kqv_perm", il);
-
-                cur = ggml_view_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens, ggml_row_size(kqv->type, n_embd_head_v*n_head), 0);
-                cb(cur, "kqv_2d", il);
-
-                ggml_build_forward_expand(gf, cur);
-
-                cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
-                cb(cur, "kqv_out", il);
+                }
             }
 
             if (il == n_layer - 1) {
@@ -17486,6 +17562,7 @@ struct llama_context_params llama_context_default_params() {
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ false,
+        /*.mla_attn                    =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
     };
@@ -17684,6 +17761,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
+    cparams.mla_attn         = params.mla_attn;
     cparams.pooling_type     = params.pooling_type;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
@@ -17750,6 +17828,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: n_batch    = %u\n",     __func__, cparams.n_batch);
     LLAMA_LOG_INFO("%s: n_ubatch   = %u\n",     __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: flash_attn = %d\n",     __func__, cparams.flash_attn);
+    LLAMA_LOG_INFO("%s: mla_attn   = %d\n",     __func__, cparams.mla_attn);
     LLAMA_LOG_INFO("%s: freq_base  = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale = %g\n",     __func__, cparams.rope_freq_scale);
 
