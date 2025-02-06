@@ -271,7 +271,7 @@ struct MulMat {
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
-            case GGML_TYPE_Q8_0_R4:
+            case GGML_TYPE_Q8_0_R8:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
         }
@@ -300,7 +300,7 @@ struct MulMat {
             case GGML_TYPE_IQ2_BN_R4: return 4;
             case GGML_TYPE_IQ4_XS_R4:
             case GGML_TYPE_Q4_0_R8:
-            case GGML_TYPE_Q8_0_R4:
+            case GGML_TYPE_Q8_0_R8:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
@@ -4177,7 +4177,7 @@ inline __m256i q8_0_r8_dot_product(const uint8_t * x, const int8_t * y, __m256i 
     return qx_r8_q8_dot_product(qx, y);
 }
 template <int nrc_y>
-static void mul_mat_q8_0_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_q8_0_r8_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%16 == 0);
     Q8<nrc_y, block_q8_1_x4> q8(info);
     int nb = n / QK8_0;
@@ -4263,7 +4263,7 @@ static void mul_mat_q8_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
 }
 #else
 template <int nrc_y>
-static void mul_mat_q8_0_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_q8_0_r8_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_1_x4> q8(info);
     auto m1 = _mm256_set1_epi16(1);
@@ -9152,16 +9152,16 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[7] = mul_mat_q6_0_r4_q8_1<8>;
             expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
-        case GGML_TYPE_Q8_0_R4:
+        case GGML_TYPE_Q8_0_R8:
             assert (ne00 % QK4_NL == 0);
-            mm.funcs[0] = mul_mat_q8_0_r4_q8_1<1>;
-            mm.funcs[1] = mul_mat_q8_0_r4_q8_1<2>;
-            mm.funcs[2] = mul_mat_q8_0_r4_q8_1<3>;
-            mm.funcs[3] = mul_mat_q8_0_r4_q8_1<4>;
-            mm.funcs[4] = mul_mat_q8_0_r4_q8_1<5>;
-            mm.funcs[5] = mul_mat_q8_0_r4_q8_1<6>;
-            mm.funcs[6] = mul_mat_q8_0_r4_q8_1<7>;
-            mm.funcs[7] = mul_mat_q8_0_r4_q8_1<8>;
+            mm.funcs[0] = mul_mat_q8_0_r8_q8_1<1>;
+            mm.funcs[1] = mul_mat_q8_0_r8_q8_1<2>;
+            mm.funcs[2] = mul_mat_q8_0_r8_q8_1<3>;
+            mm.funcs[3] = mul_mat_q8_0_r8_q8_1<4>;
+            mm.funcs[4] = mul_mat_q8_0_r8_q8_1<5>;
+            mm.funcs[5] = mul_mat_q8_0_r8_q8_1<6>;
+            mm.funcs[6] = mul_mat_q8_0_r8_q8_1<7>;
+            mm.funcs[7] = mul_mat_q8_0_r8_q8_1<8>;
             expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
         case GGML_TYPE_IQ1_S_R4:
@@ -13662,7 +13662,7 @@ inline void qx_0_q8_0_dot(const int8x16_t * qx, const int8_t * qy, int32x4_t& su
 }
 
 template <int nrc_y>
-void mul_mat_q8_0_r4_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+void mul_mat_q8_0_r8_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_0_x4> q8(info);
     int nb = n / QK8_0;
@@ -13976,8 +13976,8 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             SET_MUL_MAT_FUNCTIONS_T(m, mul_mat_qx_r4_q8_0, Q6_0_R4_Dequantizer);
             expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
-        case GGML_TYPE_Q8_0_R4:
-            SET_MUL_MAT_FUNCTIONS(m, mul_mat_q8_0_r4_q8_0);
+        case GGML_TYPE_Q8_0_R8:
+            SET_MUL_MAT_FUNCTIONS(m, mul_mat_q8_0_r8_q8_0);
             expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
         default:
@@ -15260,9 +15260,9 @@ struct FlashQKfp32 {
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ80R4<D, k_step>>) {
 #ifdef __aarch64__
-            MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_0, nq);
+            MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r8_q8_0, nq);
 #else
-            MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r4_q8_1, nq);
+            MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r8_q8_1, nq);
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ41<D, k_step>>) {

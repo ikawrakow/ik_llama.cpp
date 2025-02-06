@@ -3728,16 +3728,16 @@ void vec_dot_q4_0_r8_q8_0(int n, float * s, size_t bs, const void * vx, size_t b
 
 
 //
-// ========================================= q8_0_r4
+// ========================================= q8_0_r8
 //
-void quantize_row_q8_0_r4_ref(const float * x, block_q8_0_r8  * y, int64_t k) {
+void quantize_row_q8_0_r8_ref(const float * x, block_q8_0_r8  * y, int64_t k) {
     // we assume we are called with 4 rows
-    quantize_q8_0_r4(x, (void *)y, 8, k/8, nullptr);
+    quantize_q8_0_r8(x, (void *)y, 8, k/8, nullptr);
 }
 
-void quantize_row_q8_0_r4(const float * x, void * y, int64_t k) {
+void quantize_row_q8_0_r8(const float * x, void * y, int64_t k) {
     // we assume we are called with 4 rows
-    quantize_q8_0_r4(x, y, 8, k/8, nullptr);
+    quantize_q8_0_r8(x, y, 8, k/8, nullptr);
 }
 
 static void repack_q8_0(int nrows, int n_per_row, const block_q8_0 * x, block_q8_0_r8 * y, [[maybe_unused]] bool online) {
@@ -3770,7 +3770,7 @@ static void repack_q8_0(int nrows, int n_per_row, const block_q8_0 * x, block_q8
 }
 
 #ifdef HAVE_FANCY_SIMD
-static void modify_q8_0_r4(int64_t k, char * cy) {
+static void modify_q8_0_r8(int64_t k, char * cy) {
     auto y = (block_iq4_nl_r8 *)cy;
     int nb = k/(32*8);
     for (int ib = 0; ib < nb; ++ib) {
@@ -3782,7 +3782,7 @@ static void modify_q8_0_r4(int64_t k, char * cy) {
 }
 #endif
 
-size_t quantize_q8_0_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+size_t quantize_q8_0_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     GGML_ASSERT(nrows%8 == 0);
     auto row_size_0 = ggml_row_size(GGML_TYPE_Q8_0, n_per_row);
     std::vector<char> qtmp(8*row_size_0);
@@ -3796,7 +3796,7 @@ size_t quantize_q8_0_r4(const float * src, void * dst, int64_t nrows, int64_t n_
     return nrows*row_size_0;
 }
 
-void dequantize_row_q8_0_r4(const block_q8_0_r8 * x, float * y, int64_t k) {
+void dequantize_row_q8_0_r8(const block_q8_0_r8 * x, float * y, int64_t k) {
     // we assume we are called with 4 rows
     int n_per_row = k/8;
     int nb = n_per_row/QK8_0;
@@ -3813,9 +3813,9 @@ void dequantize_row_q8_0_r4(const block_q8_0_r8 * x, float * y, int64_t k) {
     }
 }
 
-void vec_dot_q8_0_r4_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+void vec_dot_q8_0_r8_q8_0(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_0_R4, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_0_R8, vx, 0, GGML_TYPE_Q8_0, vy, 0, s, 0, 0, 1)) {
         return;
     }
 #endif
@@ -6332,7 +6332,7 @@ bool iqk_modify_tensor(struct ggml_tensor * tensor) {
         { GGML_TYPE_Q4_0_R8, {modify_q4_0_r8, 8} },
 #endif
 #ifdef HAVE_FANCY_SIMD
-        { GGML_TYPE_Q8_0_R4, {modify_q8_0_r4, 8} },
+        { GGML_TYPE_Q8_0_R8, {modify_q8_0_r8, 8} },
         { GGML_TYPE_Q8_K_R8, {modify_q8_k_r8, 8} },
 #endif
     };
@@ -6390,7 +6390,7 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
         { GGML_TYPE_Q4_0,   { GGML_TYPE_Q4_0_R8,   8,  (Repack::repack_func)repack_q4_0}    },
         { GGML_TYPE_Q5_0,   { GGML_TYPE_Q5_0_R4,   4,  (Repack::repack_func)repack_q5_0}    },
         { GGML_TYPE_Q6_0,   { GGML_TYPE_Q6_0_R4,   4,  (Repack::repack_func)repack_q6_0}    },
-        { GGML_TYPE_Q8_0,   { GGML_TYPE_Q8_0_R4,   8,  (Repack::repack_func)repack_q8_0}    },
+        { GGML_TYPE_Q8_0,   { GGML_TYPE_Q8_0_R8,   8,  (Repack::repack_func)repack_q8_0}    },
         { GGML_TYPE_Q8_K,   { GGML_TYPE_Q8_K_R8,   8,  (Repack::repack_func)repack_q8_k}    },
 #ifdef __AVX512BF16__
         { GGML_TYPE_BF16,   { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_bf16_t>}},
