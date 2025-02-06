@@ -6250,14 +6250,13 @@ size_t quantize_iq1_m_r4(const float * src, void * dst, int64_t nrows, int64_t n
             }
         }
         for (int k = 0; k < 4; ++k) {
-            //dptr[k] = GGML_FP32_TO_FP16(1.0625f*max[k]/31);;
-            dptr[k] = GGML_FP32_TO_FP16(max[k]/31);;
-            invd[k] = max[k] ? 31/max[k] : 0.f;
+            dptr[k] = GGML_FP32_TO_FP16(1.0625f*max[k]/15);;
+            invd[k] = max[k] ? 15/max[k] : 0.f;
         }
         for (int ibl = 0; ibl < nblock; ++ibl) {
             for (int k = 0; k < 4; ++k) {
-                int ls1 = nearest_int(0.5f*(scales[8*ibl+2*k+0]*invd[k] - 1));
-                int ls2 = nearest_int(0.5f*(scales[8*ibl+2*k+1]*invd[k] - 1));
+                int ls1 = nearest_int(scales[8*ibl+2*k+0]*invd[k]);
+                int ls2 = nearest_int(scales[8*ibl+2*k+1]*invd[k]);
                 ls1 = std::max(0, std::min(15, ls1));
                 ls2 = std::max(0, std::min(15, ls2));
                 y[ibl].scales[k] = ls1 | (ls2 << 4);
@@ -6282,8 +6281,8 @@ void dequantize_row_iq1_m_r4(const block_iq1_m_r4  * x, float * y, int64_t n) {
     for (int k = 0; k < 4; ++k) yk[k] = y + k*n_per_row;
     for (int ib = 0; ib < nblock; ++ib) {
         for (int k = 0; k < 4; ++k) {
-            dl[0] = d[k]*(2*(x[ib].scales[k] & 0xf) + 1);
-            dl[1] = d[k]*(2*(x[ib].scales[k] >>  4) + 1);
+            dl[0] = d[k]*(x[ib].scales[k] & 0xf);
+            dl[1] = d[k]*(x[ib].scales[k] >>  4);
             for (int i = 0; i < 2; ++i) {
                 auto idx1 = x[ib].qs[8*i+k+0] | ((x[ib].qh[4*i+k] & 0x07) << 8);
                 auto idx2 = x[ib].qs[8*i+k+4] | ((x[ib].qh[4*i+k] & 0x70) << 4);
