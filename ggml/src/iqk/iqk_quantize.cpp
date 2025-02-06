@@ -4025,18 +4025,18 @@ void vec_dot_q6_0_r4_q8_0(int n, float * s, size_t bs, const void * vx, size_t b
 }
 
 //
-// ========================================= iq4_xs_r4
+// ========================================= iq4_xs_r8
 //
 
-void quantize_row_iq4_xs_r4_ref(const float * x, block_iq4_xs_r4 * y, int64_t k) {
-    quantize_iq4_xs_r4(x, (void *)y, 8, k/8, nullptr);
+void quantize_row_iq4_xs_r8_ref(const float * x, block_iq4_xs_r8 * y, int64_t k) {
+    quantize_iq4_xs_r8(x, (void *)y, 8, k/8, nullptr);
 }
 
-void quantize_row_iq4_xs_r4(const float * x, void * y, int64_t k) {
-    quantize_iq4_xs_r4(x, y, 8, k/8, nullptr);
+void quantize_row_iq4_xs_r8(const float * x, void * y, int64_t k) {
+    quantize_iq4_xs_r8(x, y, 8, k/8, nullptr);
 }
 
-static void repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r4 * y, [[maybe_unused]] bool online) {
+static void repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, block_iq4_xs_r8 * y, [[maybe_unused]] bool online) {
     GGML_ASSERT(nrows%8 == 0);
     GGML_ASSERT(n_per_row%QK_K == 0);
     int nblock = n_per_row/QK_K;
@@ -4068,7 +4068,7 @@ static void repack_iq4_xs(int nrows, int n_per_row, const block_iq4_xs * x, bloc
     }
 }
 
-size_t quantize_iq4_xs_r4(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+size_t quantize_iq4_xs_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     GGML_ASSERT(nrows%8 == 0);
     GGML_ASSERT(n_per_row%QK_K == 0);
     char * qcur = (char *)dst;
@@ -4076,14 +4076,14 @@ size_t quantize_iq4_xs_r4(const float * src, void * dst, int64_t nrows, int64_t 
     std::vector<char> qtmp(8*row_size);
     for (int row = 0; row < nrows; row += 8) {
         quantize_iq4_xs(src, (void *)qtmp.data(), 8, n_per_row, imatrix);
-        repack_iq4_xs(8, n_per_row, (const block_iq4_xs *)qtmp.data(), (block_iq4_xs_r4 *)qcur, false);
+        repack_iq4_xs(8, n_per_row, (const block_iq4_xs *)qtmp.data(), (block_iq4_xs_r8 *)qcur, false);
         qcur += 8*row_size;
         src  += 8*n_per_row;
     }
     return nrows*row_size;
 }
 
-void dequantize_row_iq4_xs_r4(const block_iq4_xs_r4 * x, float * y, int64_t k) {
+void dequantize_row_iq4_xs_r8(const block_iq4_xs_r8 * x, float * y, int64_t k) {
     auto n_per_row = k/8;
     float * y8[8];
     for (int k = 0; k < 8; ++k) y8[k] = y + n_per_row*k;
@@ -4103,9 +4103,9 @@ void dequantize_row_iq4_xs_r4(const block_iq4_xs_r4 * x, float * y, int64_t k) {
     }
 }
 
-void vec_dot_iq4_xs_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+void vec_dot_iq4_xs_r8_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_XS_R4, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ4_XS_R8, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
         return;
     }
 #endif
@@ -6373,7 +6373,7 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
         { GGML_TYPE_IQ3_K,  { GGML_TYPE_IQ3_K_R4,  4,  (Repack::repack_func)repack_iq3_k}   },
         { GGML_TYPE_IQ4_K,  { GGML_TYPE_IQ4_K_R4,  4,  (Repack::repack_func)repack_iq4_k}   },
         { GGML_TYPE_IQ5_K,  { GGML_TYPE_IQ5_K_R4,  4,  (Repack::repack_func)repack_iq5_k}   },
-        { GGML_TYPE_IQ4_XS, { GGML_TYPE_IQ4_XS_R4, 8,  (Repack::repack_func)repack_iq4_xs}  },
+        { GGML_TYPE_IQ4_XS, { GGML_TYPE_IQ4_XS_R8, 8,  (Repack::repack_func)repack_iq4_xs}  },
         { GGML_TYPE_IQ4_KS, { GGML_TYPE_IQ4_KS_R4, 4,  (Repack::repack_func)repack_iq4_ks}  },
         { GGML_TYPE_IQ4_NL, { GGML_TYPE_IQ4_NL_R4, 4,  (Repack::repack_func)repack_iq4_nl}  },
         { GGML_TYPE_IQ2_BN, { GGML_TYPE_IQ2_BN_R4, 4,  (Repack::repack_func)repack_iq2_bn}  },

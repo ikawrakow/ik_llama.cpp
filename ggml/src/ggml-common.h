@@ -562,8 +562,8 @@ typedef struct {
     uint8_t scales_h[QK_K/16];
     uint8_t scales_l[QK_K/ 8];
     uint8_t qs[QK_K*4];
-} block_iq4_xs_r4;
-static_assert(sizeof(block_iq4_xs_r4) == 8*sizeof(block_iq4_xs), "wrong iq4_xs_rs block size/padding");
+} block_iq4_xs_r8;
+static_assert(sizeof(block_iq4_xs_r8) == 8*sizeof(block_iq4_xs), "wrong iq4_xs_rs block size/padding");
 
 typedef struct {
     uint8_t  scales[QK_K/32];
