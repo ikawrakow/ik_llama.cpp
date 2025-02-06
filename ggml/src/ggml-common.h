@@ -499,6 +499,14 @@ typedef struct {
 } block_iq1_m;
 static_assert(sizeof(block_iq1_m) == QK_K/8 + QK_K/16 + QK_K/32, "wrong iq1_m block size/padding");
 
+// 1.75 bpw - blocks of 32 with 4 interleaved rows = 128 quants
+typedef struct {
+    uint8_t  qs[16];     // grid index, low 8 bits
+    uint8_t  qh[ 8];     // grid index, high 3 bits + grid shift bits (for two groups of 8)
+    uint8_t  scales[4];  // 4-bit block scales
+} block_iq1_m_r4;
+static_assert(sizeof(block_iq1_m_r4) == 28, "wrong iq1_m_r4 block size/padding");
+
 //
 // Bitnet and TriLM - implemented as 1.625 bpw
 //
