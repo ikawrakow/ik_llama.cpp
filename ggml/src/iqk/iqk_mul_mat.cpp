@@ -270,7 +270,7 @@ struct MulMat {
             case GGML_TYPE_Q4_K_R4:
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q8_K_R8: return 8;
-            case GGML_TYPE_Q4_0_R4:
+            case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R4:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
@@ -299,7 +299,7 @@ struct MulMat {
             case GGML_TYPE_IQ1_M_R4:
             case GGML_TYPE_IQ2_BN_R4: return 4;
             case GGML_TYPE_IQ4_XS_R4:
-            case GGML_TYPE_Q4_0_R4:
+            case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R4:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_BF16_R16: return 16;
@@ -3435,7 +3435,7 @@ inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
 }
 
 template <int nrc_y>
-static void mul_mat_q4_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_q4_0_r8_q8_1_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_1_x4> q8(info);
     auto m4 = _mm256_set1_epi8(0xf);
@@ -3709,9 +3709,9 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
 
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
-static void mul_mat_q4_0_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_q4_0_r8_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     if constexpr (nrc_y == 1) {
-        mul_mat_q4_0_r4_q8_1_avx2<1>(n, vx, bx, info, nrc_x);
+        mul_mat_q4_0_r8_q8_1_avx2<1>(n, vx, bx, info, nrc_x);
         return;
     }
     GGML_ASSERT(nrc_x%16 == 0);
@@ -3787,8 +3787,8 @@ static void mul_mat_q4_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
 }
 #else
 template <int nrc_y>
-static void mul_mat_q4_0_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    mul_mat_q4_0_r4_q8_1_avx2<nrc_y>(n, vx, bx, info, nrc_x);
+static void mul_mat_q4_0_r8_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    mul_mat_q4_0_r8_q8_1_avx2<nrc_y>(n, vx, bx, info, nrc_x);
 }
 #endif
 
@@ -9113,18 +9113,18 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
 #endif
             expected_typeB = GGML_TYPE_Q8_K;
             break;
-        case GGML_TYPE_Q4_0_R4:
+        case GGML_TYPE_Q4_0_R8:
             assert (ne00 % QK4_NL == 0);
-            mm.funcs[0] = mul_mat_q4_0_r4_q8_1<1>;
-            mm.funcs[1] = mul_mat_q4_0_r4_q8_1<2>;
-            mm.funcs[2] = mul_mat_q4_0_r4_q8_1<3>;
-            mm.funcs[3] = mul_mat_q4_0_r4_q8_1<4>;
-            mm.funcs[4] = mul_mat_q4_0_r4_q8_1<5>;
-            mm.funcs[5] = mul_mat_q4_0_r4_q8_1<6>;
-            mm.funcs[6] = mul_mat_q4_0_r4_q8_1<7>;
-            mm.funcs[7] = mul_mat_q4_0_r4_q8_1<8>;
+            mm.funcs[0] = mul_mat_q4_0_r8_q8_1<1>;
+            mm.funcs[1] = mul_mat_q4_0_r8_q8_1<2>;
+            mm.funcs[2] = mul_mat_q4_0_r8_q8_1<3>;
+            mm.funcs[3] = mul_mat_q4_0_r8_q8_1<4>;
+            mm.funcs[4] = mul_mat_q4_0_r8_q8_1<5>;
+            mm.funcs[5] = mul_mat_q4_0_r8_q8_1<6>;
+            mm.funcs[6] = mul_mat_q4_0_r8_q8_1<7>;
+            mm.funcs[7] = mul_mat_q4_0_r8_q8_1<8>;
 #ifdef HAVE_FANCY_SIMD
-            mm.func16 = mul_mat_q4_0_r4_q8_1<16>;
+            mm.func16 = mul_mat_q4_0_r8_q8_1<16>;
 #endif
             expected_typeB = GGML_TYPE_Q8_1_X4;
             break;
@@ -13964,7 +13964,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq5_k_r4_q8_k);
             expected_Btype = GGML_TYPE_Q8_K;
             break;
-        case GGML_TYPE_Q4_0_R4:
+        case GGML_TYPE_Q4_0_R8:
             SET_MUL_MAT_FUNCTIONS_T(m, mul_mat_qx_r8_q8_0, Q4_0_R8_Dequantizer);
             expected_Btype = GGML_TYPE_Q8_0_X4;
             break;
