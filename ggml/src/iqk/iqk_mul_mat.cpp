@@ -3612,7 +3612,7 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
 }
 
 template <int nrc_y>
-static void mul_mat_iq1_m_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_0_x4> q8(info);
     int nb = n / 32;
@@ -9181,16 +9181,16 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_IQ1_M_R4:
             assert (ne00 % QK4_NL == 0);
-            mm.funcs[0] = mul_mat_iq1_m_r4_q8_1<1>;
-            mm.funcs[1] = mul_mat_iq1_m_r4_q8_1<2>;
-            mm.funcs[2] = mul_mat_iq1_m_r4_q8_1<3>;
-            mm.funcs[3] = mul_mat_iq1_m_r4_q8_1<4>;
-            mm.funcs[4] = mul_mat_iq1_m_r4_q8_1<5>;
-            mm.funcs[5] = mul_mat_iq1_m_r4_q8_1<6>;
-            mm.funcs[6] = mul_mat_iq1_m_r4_q8_1<7>;
-            mm.funcs[7] = mul_mat_iq1_m_r4_q8_1<8>;
+            mm.funcs[0] = mul_mat_iq1_m_r4_q8_0<1>;
+            mm.funcs[1] = mul_mat_iq1_m_r4_q8_0<2>;
+            mm.funcs[2] = mul_mat_iq1_m_r4_q8_0<3>;
+            mm.funcs[3] = mul_mat_iq1_m_r4_q8_0<4>;
+            mm.funcs[4] = mul_mat_iq1_m_r4_q8_0<5>;
+            mm.funcs[5] = mul_mat_iq1_m_r4_q8_0<6>;
+            mm.funcs[6] = mul_mat_iq1_m_r4_q8_0<7>;
+            mm.funcs[7] = mul_mat_iq1_m_r4_q8_0<8>;
 #ifdef HAVE_FANCY_SIMD
-            mm.func16 = mul_mat_iq1_m_r4_q8_1<16>;
+            mm.func16 = mul_mat_iq1_m_r4_q8_0<16>;
 #endif
             expected_typeB = GGML_TYPE_Q8_0_X4;
             break;
