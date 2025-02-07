@@ -6116,23 +6116,48 @@ size_t quantize_iq1_s_r4(const float * src, void * dst, int64_t nrows, int64_t n
         auto y = (block_iq1_s_r4 *)(dptr + 4);
         for (int k = 0; k < 4; ++k) max[k] = 0;
         for (int ibl = 0; ibl < nblock; ++ibl) {
-            if (imatrix) {
-                for (int j = 0; j < kBlockSize; ++j) weight[j] = imatrix[kBlockSize*ibl + j];
-            }
             for (int k = 0; k < 4; ++k) {
                 auto xb = src + k*n_per_row + kBlockSize*ibl;
                 float sumx2 = 0;
                 for (int j = 0; j < kBlockSize; ++j) sumx2 += xb[j]*xb[j];
+                if (!sumx2) {
+                    printf("Found block with all zeros\n");
+                    // all zero
+                    int ind = 1029; // this is the grid entry with all zeros
+                    scales[4*ibl+k] = 0;
+                    uint16_t h = 0;
+                    for (int i = 0; i < 4; ++i) {
+                        y[ibl].qs[4*i + k] = ind & 255;
+                        h |= (ind >> 8) << 3*i;
+                    }
+                    y[ibl].qh[k] = h;
+                    continue;
+                }
                 float sigma2 = 1.5f*sumx2/kBlockSize;
+                bool have_imatrix = false;
                 if (imatrix) {
-                    for (int j = 0; j < kBlockSize; ++j) weight[j] = imatrix[kBlockSize*ibl + j]*sqrt(sigma2 + xb[j]*xb[j]);
-                } else {
+                    have_imatrix = true;
+                    float sumwx = 0;
+                    for (int j = 0; j < kBlockSize; ++j) {
+                        weight[j] = imatrix[kBlockSize*ibl + j]*sqrt(sigma2 + xb[j]*xb[j]);
+                        sumwx += weight[j]*std::abs(xb[j]);
+                    }
+                    if (!sumwx) {
+                        printf("Found block with mismatching importance/model weights\n");
+                        // Either all weights are zero, or xb is zero where weight is not zero.
+                        // In both of these cases it is better to simply ignore the imatrix
+                        have_imatrix = false;
+                    }
+                }
+                if (!have_imatrix) {
                     for (int j = 0; j < kBlockSize; ++j) weight[j] = sqrt(sigma2 + xb[j]*xb[j]);
                 }
                 iq1s_process_1block(kBlockSize, xb, weight, L, scales.data() + 4*ibl + k, index, &shift, pairs, sumx, sumw);
+                GGML_ASSERT(scales[4*ibl+k] >= 0);
                 max[k] = std::max(max[k], scales[4*ibl+k]);
                 uint16_t h = 0;
                 for (int i = 0; i < 4; ++i) {
+                    GGML_ASSERT(index[i] >= 0 && index[i] < 2048);
                     y[ibl].qs[4*i + k] = index[i] & 255;
                     h |= (index[i] >> 8) << 3*i;
                 }
