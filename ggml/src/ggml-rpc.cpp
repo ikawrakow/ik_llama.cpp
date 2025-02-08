@@ -626,7 +626,6 @@ GGML_CALL static size_t ggml_backend_rpc_get_max_size(ggml_backend_buffer_type_t
 }
 
 GGML_CALL static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-=======
     // See comments in init_tensor.
     if (ggml_is_quantized(tensor->type) && (tensor->ne[0] % 512 != 0) && (tensor->view_src == nullptr)) {
         ggml_backend_rpc_buffer_type_context * buft_ctx = (ggml_backend_rpc_buffer_type_context *)buft->context;
