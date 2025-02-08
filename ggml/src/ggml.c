@@ -1192,7 +1192,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq1_s_r4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq1_s_r4_ref,
         .vec_dot                  = vec_dot_iq1_s_r4_q8_k,
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_K128,
         .nrows                    = 1,
         .row_meta_size            = 2,
     },
@@ -1218,7 +1218,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq1_m_r4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq1_m_r4_ref,
         .vec_dot                  = vec_dot_iq1_m_r4_q8_k,
-        .vec_dot_type             = GGML_TYPE_Q8_0_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_K128,
         .nrows                    = 1,
         .row_meta_size            = 2,
     },
@@ -1352,6 +1352,14 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .type_size                = sizeof(block_q8_K64),
         .is_quantized             = true,
         .from_float               = quantize_row_q8_K64,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_Q8_K128] = {
+        .type_name                = "q8_K128",
+        .blck_size                = 128,
+        .type_size                = sizeof(block_q8_K128),
+        .is_quantized             = true,
+        .from_float               = quantize_row_q8_K128,
         .row_meta_size            = 0,
     },
     [GGML_TYPE_Q8_K16] = {
@@ -16161,6 +16169,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_IQ1_M_R4:
         case GGML_TYPE_Q8_K:
         case GGML_TYPE_Q8_K64:
+        case GGML_TYPE_Q8_K128:
         case GGML_TYPE_Q8_K16:
         case GGML_TYPE_Q8_K32:
         case GGML_TYPE_Q4_0_4_4:

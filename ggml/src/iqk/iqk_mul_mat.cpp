@@ -3528,26 +3528,27 @@ static void mul_mat_q4_0_r8_q8_1_avx2(int n, const void * vx, size_t bx, const D
 template <int nrc_y>
 static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
-    Q8<nrc_y, block_q8_1_x4> q8(info);
+    Q8<nrc_y, block_q8_K128> q8(info);
     int nb = n / 32;
     GGML_ASSERT(nb%4 == 0);
     __m256i qx[4];
     __m256  acc[nrc_y] = {};
     auto m1 = _mm256_set1_epi16(1);
     auto ms = _mm_set1_epi16(-32768);
-    float d8[8*nrc_y];
+    float d8[4*nrc_y];
     union { __m256i vec; uint16_t val[16]; } helper;
     struct aux_iq1_s_r4 {
         uint8_t  qs[16];
         uint64_t qh;
     };
-    for (int ix= 0; ix < nrc_x; ix += 4) {
+    for (int ix = 0; ix < nrc_x; ix += 4) {
         auto dptr = (const ggml_half *)((const char *)vx + ix*bx);
         auto d1 = _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)dptr));
         auto x = (const aux_iq1_s_r4 *)(dptr + 4);
         for (int ib = 0; ib < nb/4; ++ib) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                _mm256_storeu_ps(d8 + 8*iy, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[iy][ib].d)));
+                auto bsums = _mm_cvtepi16_epi32(_mm_loadl_epi64((const __m128i *)q8.y[iy][ib].bsums));
+                _mm_storeu_ps(d8 + 4*iy, _mm_mul_ps(_mm_set1_ps(q8.y[iy][ib].d), _mm_cvtepi32_ps(bsums)));
             }
             for (int k = 0; k < 4; ++k) {
                 auto idxh = _mm256_set1_epi64x(x[4*ib+k].qh);
@@ -3556,8 +3557,8 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                 scales4 = _mm_or_si128(_mm_slli_epi16(scales4, 1), _mm_set1_epi16(1));
                 auto signs = _mm_or_si128(_mm_cmpeq_epi16(_mm_and_si128(sas, ms), ms), _mm256_castsi256_si128(m1));
                 signs = _mm_add_epi16(_mm_set1_epi16(-8), signs);
-                auto delta4 = _mm_mul_ps(_mm_set1_ps(0.0625f), _mm_cvtepi32_ps(_mm_cvtepi16_epi32(
-                                _mm_mullo_epi16(scales4, signs))));
+                signs = _mm_mullo_epi16(signs, scales4);
+                auto delta4 = _mm_mul_ps(_mm_set1_ps(0.0625f), _mm_cvtepi32_ps(_mm_cvtepi16_epi32(signs)));
                 auto delta = _mm256_set_m128(delta4, delta4);
                 scales4 = _mm_unpacklo_epi16(scales4, scales4); // 0,0, 1,1, 2,2, 3,3
                 auto scales = MM256_SET_M128I(scales4, scales4);
@@ -3573,6 +3574,10 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                                           iq1s_grid_us[helper.val[ 3]], iq1s_grid_us[helper.val[ 2]]);
                 qx[3] = _mm256_set_epi64x(iq1s_grid_us[helper.val[15]], iq1s_grid_us[helper.val[14]],
                                           iq1s_grid_us[helper.val[ 7]], iq1s_grid_us[helper.val[ 6]]);
+                //qx[0] = _mm256_slli_epi16(qx[0], 3);
+                //qx[1] = _mm256_slli_epi16(qx[1], 3);
+                //qx[2] = _mm256_slli_epi16(qx[2], 3);
+                //qx[3] = _mm256_slli_epi16(qx[3], 3);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + k);
 #ifdef HAVE_FANCY_SIMD
@@ -3598,8 +3603,8 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                     auto sumi = _mm256_packs_epi32(sumi1, sumi2);
 #endif
                     sumi = _mm256_madd_epi16(scales, sumi);
-                    acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d8[8*iy+k+0]), _mm256_cvtepi32_ps(sumi), acc[iy]);
-                    acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d8[8*iy+k+4]), delta, acc[iy]);
+                    acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(q8.y[iy][ib].d), _mm256_cvtepi32_ps(sumi), acc[iy]);
+                    acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d8[4*iy+k]), delta, acc[iy]);
                 }
             }
         }
@@ -9177,7 +9182,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
 #ifdef HAVE_FANCY_SIMD
             mm.func16 = mul_mat_iq1_s_r4_q8_1<16>;
 #endif
-            expected_typeB = GGML_TYPE_Q8_1_X4;
+            expected_typeB = GGML_TYPE_Q8_K128;
             break;
         case GGML_TYPE_IQ1_M_R4:
             assert (ne00 % QK4_NL == 0);
@@ -9192,7 +9197,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
 #ifdef HAVE_FANCY_SIMD
             mm.func16 = mul_mat_iq1_m_r4_q8_0<16>;
 #endif
-            expected_typeB = GGML_TYPE_Q8_0_X4;
+            expected_typeB = GGML_TYPE_Q8_K128;
             break;
 
         default:
