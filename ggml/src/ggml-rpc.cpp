@@ -98,6 +98,21 @@ enum rpc_cmd {
 };
 
 #pragma pack(1)
+struct rpc_msg_get_alloc_size_req {
+    rpc_tensor tensor;
+};
+
+#pragma pack(1)
+struct rpc_msg_get_alloc_size_rsp {
+    uint64_t alloc_size;
+};
+
+#pragma pack(1)
+struct rpc_msg_init_tensor_req {
+    rpc_tensor tensor;
+};
+
+#pragma pack(1)
 struct rpc_msg_alloc_buffer_req {
     uint64_t size;
 };
@@ -153,7 +168,6 @@ struct rpc_msg_copy_tensor_req {
 };
 
 #pragma pack(1)
->>>>>>> 98f4e5d9 (rpc : refactor backend)
 struct rpc_msg_copy_tensor_rsp {
     uint8_t result;
 };
@@ -852,7 +866,7 @@ bool rpc_server::get_alloc_size(const rpc_msg_get_alloc_size_req & request, rpc_
     ggml_tensor * tensor = deserialize_tensor(ctx, &request.tensor);
 
     if (tensor == nullptr) {
-        GGML_LOG_ERROR("Null tensor pointer passed to server get_alloc_size function.\n");
+        GGML_PRINT_DEBUG("Null tensor pointer passed to server get_alloc_size function.\n");
         ggml_free(ctx);
         return false;
     }
@@ -1012,7 +1026,7 @@ bool rpc_server::init_tensor(const rpc_msg_init_tensor_req & request) {
     struct ggml_context * ctx = ggml_init(params);
     ggml_tensor * tensor = deserialize_tensor(ctx, &request.tensor);
     if (tensor == nullptr) {
-        GGML_LOG_ERROR("Null tensor pointer passed to server init_tensor function.\n");
+        GGML_PRINT_DEBUG("Null tensor pointer passed to server init_tensor function.\n");
         ggml_free(ctx);
         return false;
     }
@@ -1022,13 +1036,13 @@ bool rpc_server::init_tensor(const rpc_msg_init_tensor_req & request) {
     if (buffer && buffer->iface.init_tensor) {
         buffer->iface.init_tensor(buffer, tensor);
     } else {
-        GGML_LOG_ERROR("Null buffer for tensor passed to init_tensor function\n");
+        GGML_PRINT_DEBUG("Null buffer for tensor passed to init_tensor function\n");
     }
 
     if (tensor->extra != nullptr) {
         // This pointer can either be passed around client/server, or probably better stored server-side and kept track of.
         // Currently unimplemented.
-        GGML_LOG_ERROR("tensor->extra populated by the backend, this is currently unsupported.\n");
+        GGML_PRINT_DEBUG("tensor->extra populated by the backend, this is currently unsupported.\n");
         ggml_free(ctx);
         return false;
     }
