@@ -3619,7 +3619,7 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
 template <int nrc_y>
 static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
-    Q8<nrc_y, block_q8_0_x4> q8(info);
+    Q8<nrc_y, block_q8_K128> q8(info);
     int nb = n / 32;
     GGML_ASSERT(nb%4 == 0);
     auto shuffle0 = _mm256_set_epi64x(0x0909090909090909, 0x0808080808080808, 0x0101010101010101, 0x0000000000000000);
@@ -3629,17 +3629,14 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
 #endif
     __m256i qx[4];
     __m256  acc[nrc_y] = {};
+    __m256i isum[nrc_y] = {};
     auto ms = _mm_set1_epi8(0x08);
-    float d8[4*nrc_y];
     union { __m256i vec; uint16_t val[16]; } helper;
     for (int ix= 0; ix < nrc_x; ix += 4) {
         auto dptr = (const ggml_half *)((const char *)vx + ix*bx);
         auto d1 = _mm_mul_ps(_mm_set1_ps(0.125f), _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)dptr)));
         auto x = (const block_iq1_m_r4 *)(dptr + 4);
         for (int ib = 0; ib < nb/4; ++ib) {
-            for (int iy = 0; iy < nrc_y; ++iy) {
-                _mm_storeu_ps(d8 + 4*iy, _mm_cvtph_ps(_mm_loadl_epi64((const __m128i *)q8.y[iy][ib].d)));
-            }
             for (int k = 0; k < 4; ++k) {
                 auto qh = (const uint32_t *)x[4*ib+k].qh;
                 auto idxh = _mm_set_epi32(qh[1] >> 4, qh[1], qh[0] >> 4, qh[0]);
@@ -3699,9 +3696,14 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
                     // 0,0, 1,1, 2,2, 3,3, 0,0, 1,1, 2,2, 3,3 as int16_t
                     auto sumi = _mm256_packs_epi32(sumi1, sumi2);
 #endif
-                    sumi = _mm256_madd_epi16(scales, sumi);
-                    acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d8[4*iy+k]), _mm256_cvtepi32_ps(sumi), acc[iy]);
+                    isum[iy] = _mm256_add_epi32(isum[iy], _mm256_madd_epi16(scales, sumi));
+                    //sumi = _mm256_madd_epi16(scales, sumi);
+                    //acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(q8.y[iy][ib].d), _mm256_cvtepi32_ps(sumi), acc[iy]);
                 }
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(q8.y[iy][ib].d), _mm256_cvtepi32_ps(isum[iy]), acc[iy]);
+                isum[iy] = _mm256_setzero_si256();
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
