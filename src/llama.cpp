@@ -3175,7 +3175,7 @@ static bool llama_kv_cache_init(
         struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k;
         ggml_tensor * v;
-        if (cparams.mla_attn) {
+        if (cparams.mla_attn && model.layers[i].wk_b && model.layers[i].wv_b) {
                k = ggml_new_tensor_1d(ctx, type_k, 1);
                v = ggml_new_tensor_1d(ctx, type_v, 1);
         }
