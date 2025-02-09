@@ -415,13 +415,14 @@ extern "C" {
         GGML_TYPE_Q8_K16  = 147,
         GGML_TYPE_Q8_K32  = 148,
         GGML_TYPE_Q8_KR8  = 149,
-        GGML_TYPE_IQ2_KT  = 150,
-        GGML_TYPE_IQ3_KT  = 151,
-        GGML_TYPE_IQ4_KT  = 152,
+        GGML_TYPE_Q8_K128 = 150,
+        GGML_TYPE_IQ2_KT  = 151,
+        GGML_TYPE_IQ3_KT  = 152,
+        GGML_TYPE_IQ4_KT  = 153,
 
-        GGML_TYPE_Q4_0_R4   = 202,
+        GGML_TYPE_Q4_0_R8   = 202,
         GGML_TYPE_Q5_0_R4   = 206,
-        GGML_TYPE_Q8_0_R4   = 208,
+        GGML_TYPE_Q8_0_R8   = 208,
         GGML_TYPE_Q2_K_R4   = 210,
         GGML_TYPE_Q3_K_R4   = 211,
         GGML_TYPE_Q4_K_R4   = 212,
@@ -430,10 +431,12 @@ extern "C" {
         GGML_TYPE_IQ2_XXS_R4= 216,
         GGML_TYPE_IQ2_XS_R4 = 217,
         GGML_TYPE_IQ3_XXS_R4= 218,
+        GGML_TYPE_IQ1_S_R4  = 219,
         GGML_TYPE_IQ4_NL_R4 = 220,
         GGML_TYPE_IQ3_S_R4  = 221,
         GGML_TYPE_IQ2_S_R4  = 222,
-        GGML_TYPE_IQ4_XS_R4 = 223,
+        GGML_TYPE_IQ4_XS_R8 = 223,
+        GGML_TYPE_IQ1_M_R4  = 229,
         GGML_TYPE_BF16_R16  = 230,
         GGML_TYPE_Q6_0_R4   = 233,
         GGML_TYPE_IQ2_BN_R4 = 335,
@@ -505,8 +508,8 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ3_KT  = 141, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_KT  = 142, // except 1d tensors
                                          //
-        GGML_FTYPE_MOSTLY_Q4_0_R4   = 202, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q8_0_R4   = 207, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q4_0_R8   = 202, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q8_0_R8   = 207, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q5_0_R4   = 208, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q2_K_R4   = 210, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q3_K_R4   = 211, // except 1d tensors
@@ -516,10 +519,12 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ2_XXS_R4= 215, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_XS_R4 = 216, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ3_XXS_R4= 217, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ1_S_R4  = 218, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_NL_R4 = 219, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ3_S_R4  = 220, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_S_R4  = 221, // except 1d tensors
-        GGML_FTYPE_MOSTLY_IQ4_XS_R4 = 222, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ4_XS_R8 = 222, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ1_M_R4  = 223, // except 1d tensors
         GGML_FTYPE_MOSTLY_BF16_R16  = 224, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q6_0_R4   = 227, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ2_BN_R4 = 329, // except 1d tensors
@@ -726,7 +731,6 @@ extern "C" {
     // since https://github.com/ggerganov/ggml/issues/287
     struct ggml_cplan {
         size_t    work_size; // size of work buffer, calculated by `ggml_graph_plan()`
-        size_t    q_size;
         uint8_t * work_data; // work buffer, to be allocated by caller before calling to `ggml_graph_compute()`
 
         int n_threads;

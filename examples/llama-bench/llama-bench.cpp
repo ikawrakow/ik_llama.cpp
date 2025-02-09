@@ -220,6 +220,7 @@ struct cmd_params {
     std::vector<int> n_prompt;
     std::vector<int> n_gen;
     std::vector<std::pair<int, int>> n_pg;
+    std::vector<std::pair<int, int>> n_gp;
     std::vector<int> n_batch;
     std::vector<int> n_ubatch;
     std::vector<ggml_type> type_k;
@@ -248,6 +249,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_prompt             */ {512},
     /* n_gen                */ {128},
     /* n_pg                 */ {},
+    /* n_gp                 */ {},
     /* n_batch              */ {2048},
     /* n_ubatch             */ {512},
     /* type_k               */ {GGML_TYPE_F16},
@@ -280,6 +282,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -p, --n-prompt <n>                  (default: %s)\n", join(cmd_params_defaults.n_prompt, ",").c_str());
     printf("  -n, --n-gen <n>                     (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
     printf("  -pg <pp,tg>                         (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
+    printf("  -gp <pp,tg>                         (default: %s)\n", join(transform_to_str(cmd_params_defaults.n_gp, pair_str), ",").c_str());
     printf("  -b, --batch-size <n>                (default: %s)\n", join(cmd_params_defaults.n_batch, ",").c_str());
     printf("  -ub, --ubatch-size <n>              (default: %s)\n", join(cmd_params_defaults.n_ubatch, ",").c_str());
     printf("  -ctk, --cache-type-k <t>            (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
@@ -393,6 +396,17 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.n_pg.push_back({std::stoi(p[0]), std::stoi(p[1])});
+        } else if (arg == "-gp") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto p = string_split<std::string>(argv[i], ',');
+            if (p.size() != 2) {
+                invalid_param = true;
+                break;
+            }
+            params.n_gp.push_back({ std::stoi(p[0]), std::stoi(p[1]) });
         } else if (arg == "-b" || arg == "--batch-size") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -596,6 +610,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_prompt.empty())     { params.n_prompt = cmd_params_defaults.n_prompt; }
     if (params.n_gen.empty())        { params.n_gen = cmd_params_defaults.n_gen; }
     if (params.n_pg.empty())         { params.n_pg = cmd_params_defaults.n_pg; }
+    if (params.n_gp.empty())         { params.n_gp = cmd_params_defaults.n_gp; }
     if (params.n_batch.empty())      { params.n_batch = cmd_params_defaults.n_batch; }
     if (params.n_ubatch.empty())     { params.n_ubatch = cmd_params_defaults.n_ubatch; }
     if (params.type_k.empty())       { params.type_k = cmd_params_defaults.type_k; }
@@ -614,7 +629,19 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     return params;
 }
 
+enum test_kind_type {
+    // measure mean prompt processing rate without token generation
+    TEST_KIND_PP,
+    // measure mean token generation rate without prompt processing
+    TEST_KIND_TG,
+    // measure mean prompt processing and token generation rate
+    TEST_KIND_PG,
+    // measure mean token generation rate after processing prompt of given length
+    TEST_KIND_GP,
+};
+
 struct cmd_params_instance {
+    test_kind_type test_kind;
     std::string model;
     int n_prompt;
     int n_gen;
@@ -701,6 +728,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
+                /* .test_kind    = */ TEST_KIND_PP,
                 /* .model        = */ m,
                 /* .n_prompt     = */ n_prompt,
                 /* .n_gen        = */ 0,
@@ -728,6 +756,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
+                /* .test_kind    = */ TEST_KIND_TG,
                 /* .model        = */ m,
                 /* .n_prompt     = */ 0,
                 /* .n_gen        = */ n_gen,
@@ -755,9 +784,38 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 continue;
             }
             cmd_params_instance instance = {
+                /* .test_kind    = */ TEST_KIND_PG,
                 /* .model        = */ m,
                 /* .n_prompt     = */ n_pg.first,
                 /* .n_gen        = */ n_pg.second,
+                /* .n_batch      = */ nb,
+                /* .n_ubatch     = */ nub,
+                /* .type_k       = */ tk,
+                /* .type_v       = */ tv,
+                /* .n_threads    = */ nt,
+                /* .n_gpu_layers = */ nl,
+                /* .rpc_servers  = */ rpc,
+                /* .split_mode   = */ sm,
+                /* .main_gpu     = */ mg,
+                /* .no_kv_offload= */ nkvo,
+                /* .flash_attn   = */ fa,
+                /* .tensor_split = */ ts,
+                /* .use_mmap     = */ mmp,
+                /* .embeddings   = */ embd,
+                /* .repack       = */ params.repack,
+            };
+            instances.push_back(instance);
+        }
+
+        for (const auto & n_gp : params.n_gp) {
+            if (n_gp.first == 0 && n_gp.second == 0) {
+                continue;
+            }
+            cmd_params_instance instance = {
+                /* .test_kind    = */ TEST_KIND_GP,
+                /* .model        = */ m,
+                /* .n_prompt     = */ n_gp.first,
+                /* .n_gen        = */ n_gp.second,
                 /* .n_batch      = */ nb,
                 /* .n_ubatch     = */ nub,
                 /* .type_k       = */ tk,
@@ -816,6 +874,8 @@ struct test {
     int n_gen;
     std::string test_time;
     std::vector<uint64_t> samples_ns;
+    test_kind_type  test_kind;
+    std::string     test_label;
 
     test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) {
         model_filename = inst.model;
@@ -841,10 +901,31 @@ struct test {
         repack = inst.repack;
         n_prompt = inst.n_prompt;
         n_gen = inst.n_gen;
+        test_kind = inst.test_kind;
         // RFC 3339 date-time format
         time_t t = time(NULL);
         std::strftime(buf, sizeof(buf), "%FT%TZ", gmtime(&t));
         test_time = buf;
+
+        // prepare test label for printing
+        switch (test_kind) {
+            case TEST_KIND_PP:
+                snprintf(buf, sizeof(buf), "pp%d", n_prompt);
+                break;
+            case TEST_KIND_TG:
+                snprintf(buf, sizeof(buf), "tg%d", n_gen);
+                break;
+            case TEST_KIND_PG:
+                snprintf(buf, sizeof(buf), "pp%d+tg%d", n_prompt, n_gen);
+                break;
+            case TEST_KIND_GP:
+                snprintf(buf, sizeof(buf), "tg%d@pp%d", n_gen, n_prompt);
+                break;
+            default:
+                snprintf(buf, sizeof(buf), "unknown");
+                break;
+        }
+        test_label = buf;
 
         (void) ctx;
     }
@@ -858,7 +939,7 @@ struct test {
     }
 
     std::vector<double> get_ts() const {
-        int n_tokens = n_prompt + n_gen;
+        int n_tokens = (test_kind == TEST_KIND_GP ? 0 : n_prompt) + n_gen;
         std::vector<double> ts;
         std::transform(samples_ns.begin(), samples_ns.end(), std::back_inserter(ts), [n_tokens](uint64_t t) { return 1e9 * n_tokens / t; });
         return ts;
@@ -911,7 +992,7 @@ struct test {
             "tensor_split", "use_mmap", "embeddings", "repack",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
-            "avg_ts", "stddev_ts"
+            "avg_ts", "stddev_ts", "test",
         };
         return fields;
     }
@@ -967,7 +1048,8 @@ struct test {
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings), std::to_string(repack),
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
-            std::to_string(avg_ts()), std::to_string(stdev_ts())
+            std::to_string(avg_ts()), std::to_string(stdev_ts()),
+            test_label
         };
         return values;
     }
@@ -1269,14 +1351,15 @@ struct markdown_printer : public printer {
                     value += "+RPC";
                 }
             } else if (field == "test") {
-                if (t.n_prompt > 0 && t.n_gen == 0) {
-                    snprintf(buf, sizeof(buf), "pp%d", t.n_prompt);
-                } else if (t.n_gen > 0 && t.n_prompt == 0) {
-                    snprintf(buf, sizeof(buf), "tg%d", t.n_gen);
-                } else {
-                    snprintf(buf, sizeof(buf), "pp%d+tg%d", t.n_prompt, t.n_gen);
-                }
-                value = buf;
+                //if (t.n_prompt > 0 && t.n_gen == 0) {
+                //    snprintf(buf, sizeof(buf), "pp%d", t.n_prompt);
+                //} else if (t.n_gen > 0 && t.n_prompt == 0) {
+                //    snprintf(buf, sizeof(buf), "tg%d", t.n_gen);
+                //} else {
+                //    snprintf(buf, sizeof(buf), "pp%d+tg%d", t.n_prompt, t.n_gen);
+                //}
+                //value = buf;
+                value = t.test_label;
             } else if (field == "t/s") {
                 snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
                 value = buf;
@@ -1489,6 +1572,7 @@ int main(int argc, char ** argv) {
             if (t.n_prompt > 0) {
                 test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
             }
+            if (t.test_kind == TEST_KIND_GP) t_start = get_time_ns();
             if (t.n_gen > 0) {
                 test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
             }

@@ -1176,12 +1176,25 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .type_size                = sizeof(block_iq1_s),
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_iq1_s,
-        .from_float               = NULL,
-        .from_float_ref           = NULL,
+        .from_float               = quantize_row_iq1_s,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_iq1_s_ref,
         .vec_dot                  = ggml_vec_dot_iq1_s_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
         .row_meta_size            = 0,
+    },
+    [GGML_TYPE_IQ1_S_R4] = {
+        .type_name                = "iq1_s_r4",
+        .blck_size                = 32,
+        .type_size                = sizeof(block_iq1_s_r4)/4,
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_iq1_s_r4,
+        .from_float               = quantize_row_iq1_s_r4,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_iq1_s_r4_ref,
+        .vec_dot                  = vec_dot_iq1_s_r4_q8_k,
+        .vec_dot_type             = GGML_TYPE_Q8_K128,
+        .nrows                    = 1,
+        .row_meta_size            = 2,
     },
     [GGML_TYPE_IQ1_M] = {
         .type_name                = "iq1_m",
@@ -1189,12 +1202,25 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .type_size                = sizeof(block_iq1_m),
         .is_quantized             = true,
         .to_float                 = (ggml_to_float_t) dequantize_row_iq1_m,
-        .from_float               = NULL,
-        .from_float_ref           = NULL,
+        .from_float               = quantize_row_iq1_m,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_iq1_m_ref,
         .vec_dot                  = ggml_vec_dot_iq1_m_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
         .row_meta_size            = 0,
+    },
+    [GGML_TYPE_IQ1_M_R4] = {
+        .type_name                = "iq1_m_r4",
+        .blck_size                = 32,
+        .type_size                = sizeof(block_iq1_m_r4)/4,
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_iq1_m_r4,
+        .from_float               = quantize_row_iq1_m_r4,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_iq1_m_r4_ref,
+        .vec_dot                  = vec_dot_iq1_m_r4_q8_k,
+        .vec_dot_type             = GGML_TYPE_Q8_K128,
+        .nrows                    = 1,
+        .row_meta_size            = 2,
     },
     [GGML_TYPE_IQ1_BN] = {
         .type_name                = "iq1_bn",
@@ -1326,6 +1352,14 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .type_size                = sizeof(block_q8_K64),
         .is_quantized             = true,
         .from_float               = quantize_row_q8_K64,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_Q8_K128] = {
+        .type_name                = "q8_K128",
+        .blck_size                = 128,
+        .type_size                = sizeof(block_q8_K128),
+        .is_quantized             = true,
+        .from_float               = quantize_row_q8_K128,
         .row_meta_size            = 0,
     },
     [GGML_TYPE_Q8_K16] = {
@@ -1619,28 +1653,28 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
-    [GGML_TYPE_IQ4_XS_R4] = {
-        .type_name                = "iq4_xs_r4",
+    [GGML_TYPE_IQ4_XS_R8] = {
+        .type_name                = "iq4_xs_r8",
         .blck_size                = QK_K,
         .type_size                = sizeof(block_iq4_xs),
         .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_iq4_xs_r4,
-        .from_float               = quantize_row_iq4_xs_r4,
-        .from_float_ref           = (ggml_from_float_t)quantize_row_iq4_xs_r4_ref,
-        .vec_dot                  = vec_dot_iq4_xs_r4_q8_k,
+        .to_float                 = (ggml_to_float_t) dequantize_row_iq4_xs_r8,
+        .from_float               = quantize_row_iq4_xs_r8,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_iq4_xs_r8_ref,
+        .vec_dot                  = vec_dot_iq4_xs_r8_q8_k,
         .vec_dot_type             = GGML_TYPE_Q8_K32,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
-    [GGML_TYPE_Q4_0_R4] = {
-        .type_name                = "q4_0_r4",
+    [GGML_TYPE_Q4_0_R8] = {
+        .type_name                = "q4_0_r8",
         .blck_size                = QK4_NL,
         .type_size                = sizeof(block_iq4_nl),
         .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_q4_0_r4,
-        .from_float               = quantize_row_q4_0_r4,
-        .from_float_ref           = (ggml_from_float_t)quantize_row_q4_0_r4_ref,
-        .vec_dot                  = vec_dot_q4_0_r4_q8_0,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q4_0_r8,
+        .from_float               = quantize_row_q4_0_r8,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_q4_0_r8_ref,
+        .vec_dot                  = vec_dot_q4_0_r8_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_1_X4,
@@ -1653,15 +1687,15 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
-    [GGML_TYPE_Q8_0_R4] = {
-        .type_name                = "q8_0_r4",
+    [GGML_TYPE_Q8_0_R8] = {
+        .type_name                = "q8_0_r8",
         .blck_size                = QK8_0,
         .type_size                = sizeof(block_q8_0),
         .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_q8_0_r4,
-        .from_float               = quantize_row_q8_0_r4,
-        .from_float_ref           = (ggml_from_float_t)quantize_row_q8_0_r4_ref,
-        .vec_dot                  = vec_dot_q8_0_r4_q8_0,
+        .to_float                 = (ggml_to_float_t) dequantize_row_q8_0_r8,
+        .from_float               = quantize_row_q8_0_r8,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_q8_0_r8_ref,
+        .vec_dot                  = vec_dot_q8_0_r8_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_1_X4,
@@ -2599,7 +2633,6 @@ struct ggml_compute_params {
 
     // work buffer for all threads
     size_t wsize;
-    size_t qsize;
     void * wdata;
 
     struct ggml_compute_state_shared * shared;
@@ -4403,11 +4436,11 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_IQ2_BN_R4:     wtype = GGML_TYPE_IQ2_BN_R4;break;
         case GGML_FTYPE_MOSTLY_IQ4_NL:        wtype = GGML_TYPE_IQ4_NL;   break;
         case GGML_FTYPE_MOSTLY_IQ4_NL_R4:     wtype = GGML_TYPE_IQ4_NL_R4;break;
-        case GGML_FTYPE_MOSTLY_IQ4_XS_R4:     wtype = GGML_TYPE_IQ4_XS_R4;break;
-        case GGML_FTYPE_MOSTLY_Q4_0_R4:       wtype = GGML_TYPE_Q4_0_R4;  break;
+        case GGML_FTYPE_MOSTLY_IQ4_XS_R8:     wtype = GGML_TYPE_IQ4_XS_R8;break;
+        case GGML_FTYPE_MOSTLY_Q4_0_R8:       wtype = GGML_TYPE_Q4_0_R8;  break;
         case GGML_FTYPE_MOSTLY_Q5_0_R4:       wtype = GGML_TYPE_Q5_0_R4;  break;
         case GGML_FTYPE_MOSTLY_Q6_0_R4:       wtype = GGML_TYPE_Q6_0_R4;  break;
-        case GGML_FTYPE_MOSTLY_Q8_0_R4:       wtype = GGML_TYPE_Q8_0_R4;  break;
+        case GGML_FTYPE_MOSTLY_Q8_0_R8:       wtype = GGML_TYPE_Q8_0_R8;  break;
         case GGML_FTYPE_MOSTLY_IQ4_XS:        wtype = GGML_TYPE_IQ4_XS;   break;
         case GGML_FTYPE_MOSTLY_IQ4_KS:        wtype = GGML_TYPE_IQ4_KS;   break;
         case GGML_FTYPE_MOSTLY_IQ4_KS_R4:     wtype = GGML_TYPE_IQ4_KS_R4;break;
@@ -4429,6 +4462,8 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_IQ3_S_R4:      wtype = GGML_TYPE_IQ3_S_R4; break;
         case GGML_FTYPE_MOSTLY_IQ2_S:         wtype = GGML_TYPE_IQ2_S;    break;
         case GGML_FTYPE_MOSTLY_IQ2_S_R4:      wtype = GGML_TYPE_IQ2_S_R4; break;
+        case GGML_FTYPE_MOSTLY_IQ1_S_R4:      wtype = GGML_TYPE_IQ1_S_R4; break;
+        case GGML_FTYPE_MOSTLY_IQ1_M_R4:      wtype = GGML_TYPE_IQ1_M_R4; break;
         case GGML_FTYPE_MOSTLY_Q4_0_4_4:      wtype = GGML_TYPE_Q4_0_4_4; break;
         case GGML_FTYPE_MOSTLY_Q4_0_4_8:      wtype = GGML_TYPE_Q4_0_4_8; break;
         case GGML_FTYPE_MOSTLY_Q4_0_8_8:      wtype = GGML_TYPE_Q4_0_8_8; break;
@@ -10952,12 +10987,12 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_IQ2_BN_R4:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_NL_R4:
-        case GGML_TYPE_IQ4_XS_R4:
-        case GGML_TYPE_Q4_0_R4:
+        case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_Q4_0_R8:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
         case GGML_TYPE_I2_S:
-        case GGML_TYPE_Q8_0_R4:
+        case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -10979,6 +11014,8 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_IQ3_S_R4:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ2_S_R4:
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4:
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
@@ -11423,12 +11460,12 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_IQ2_BN_R4:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_NL_R4:
-        case GGML_TYPE_IQ4_XS_R4:
-        case GGML_TYPE_Q4_0_R4:
+        case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_Q4_0_R8:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
         case GGML_TYPE_I2_S:
-        case GGML_TYPE_Q8_0_R4:
+        case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -11450,6 +11487,8 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_IQ3_S_R4:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ2_S_R4:
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4:
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
@@ -11591,12 +11630,12 @@ static void ggml_compute_forward_acc(
         case GGML_TYPE_IQ2_BN_R4:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_NL_R4:
-        case GGML_TYPE_IQ4_XS_R4:
-        case GGML_TYPE_Q4_0_R4:
+        case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_Q4_0_R8:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
         case GGML_TYPE_I2_S:
-        case GGML_TYPE_Q8_0_R4:
+        case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -11618,6 +11657,8 @@ static void ggml_compute_forward_acc(
         case GGML_TYPE_IQ3_S_R4:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ2_S_R4:
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4:
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
@@ -13957,7 +13998,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
         return;
     }
 
-    const void * wdata = (src1->type == vec_dot_type) ? src1->data : (char *)params->wdata + params->wsize - params->qsize + GGML_MAX_NAME;
+    const void * wdata = (src1->type == vec_dot_type) ? src1->data : (char *)params->wdata;
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
     assert(ne12 % ne02 == 0);
@@ -14127,12 +14168,7 @@ UseGgmlGemm1:;
 #endif
 
     if (src1->type != vec_dot_type) {
-        char * wdata = (char *)params->wdata + params->wsize - params->qsize;
-
-        if (strncmp(src1->name, wdata - GGML_MAX_NAME, GGML_MAX_NAME) == 0) {
-            goto AlreadyQuantized;
-        }
-        wdata += GGML_MAX_NAME;
+        char * wdata = params->wdata;
 
 #if IK_PRINT_TIMING
         int64_t t1 = ggml_time_us();
@@ -14142,7 +14178,7 @@ UseGgmlGemm1:;
         const size_t nbw2 = nbw1*ne11;
         const size_t nbw3 = nbw2*ne12;
 
-        assert(params->qsize >= ne13*nbw3);
+        assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
@@ -14174,17 +14210,14 @@ UseGgmlGemm1:;
 #endif
 
         if (ith == 0) {
-            wdata -= GGML_MAX_NAME;
-            memcpy(wdata, src1->name, GGML_MAX_NAME);
             // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
             //atomic_store(&params->shared->current_chunk, nth);
         }
 
-AlreadyQuantized:;
+        ggml_barrier(params->shared);
     }
 
-    const void * wdata = (src1->type == vec_dot_type) ? src1->data
-                       : (const void *)((const char *)params->wdata + params->wsize - params->qsize + GGML_MAX_NAME);
+    const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
 
 #if GGML_USE_IQK_MULMAT
     if (src1->type != vec_dot_type && dst->type == GGML_TYPE_F32) {
@@ -14371,10 +14404,9 @@ static void ggml_compute_forward_mul_mat_id(
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
 
-    char * qdata = (char *)params->wdata + params->wsize - params->qsize;
-
-    char * wdata_src1_end = (src1->type == vec_dot_type) ?  qdata :
-            qdata + GGML_PAD(GGML_MAX_NAME + ggml_row_size(vec_dot_type, ggml_nelements(src1)), sizeof(int64_t));
+    char * wdata_src1_end = (src1->type == vec_dot_type) ?
+            (char *) params->wdata :
+            (char *) params->wdata + GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(src1)), sizeof(int64_t));
 
     struct mmid_row_mapping {
         int32_t i1;
@@ -14384,19 +14416,14 @@ static void ggml_compute_forward_mul_mat_id(
     int64_t * matrix_row_counts = (int64_t *) (wdata_src1_end); // [n_as]
     struct mmid_row_mapping * matrix_rows = (struct mmid_row_mapping *)(matrix_row_counts + n_as); // [n_as][ne11]
 
-    bool store_name = false;
     if (src1->type != vec_dot_type) {
-        if (strncmp(src1->name, qdata, GGML_MAX_NAME) == 0) {
-            goto QuantizationAlreadyDone;
-        }
-        store_name = true;
-        char * wdata = qdata + GGML_MAX_NAME;
+        char * wdata = params->wdata;
 
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1*ne11;
         const size_t nbw3 = nbw2*ne12;
 
-        assert(params->qsize >= ne13*nbw3);
+        assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
@@ -14412,12 +14439,7 @@ static void ggml_compute_forward_mul_mat_id(
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
 
-QuantizationAlreadyDone:;
     if (ith == 0) {
-        if (store_name) {
-            memcpy(qdata, src1->name, GGML_MAX_NAME);
-        }
-
         // initialize matrix_row_counts
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
 
@@ -14446,7 +14468,7 @@ QuantizationAlreadyDone:;
 
         const char * src0_cur = (const char *) src0->data + cur_a*nb02;
 
-        const void * wdata    = (src1->type == vec_dot_type) ? src1->data : qdata + GGML_MAX_NAME;
+        const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
         const int64_t nr0 = ne01; // src0 rows
@@ -14832,12 +14854,12 @@ static void ggml_compute_forward_out_prod(
         case GGML_TYPE_IQ2_BN_R4:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_NL_R4:
-        case GGML_TYPE_IQ4_XS_R4:
-        case GGML_TYPE_Q4_0_R4:
+        case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_Q4_0_R8:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
         case GGML_TYPE_I2_S:
-        case GGML_TYPE_Q8_0_R4:
+        case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -14859,6 +14881,8 @@ static void ggml_compute_forward_out_prod(
         case GGML_TYPE_IQ3_S_R4:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ2_S_R4:
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4:
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
@@ -15240,12 +15264,12 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_IQ2_BN_R4:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_NL_R4:
-        case GGML_TYPE_IQ4_XS_R4:
-        case GGML_TYPE_Q4_0_R4:
+        case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_Q4_0_R8:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
         case GGML_TYPE_I2_S:
-        case GGML_TYPE_Q8_0_R4:
+        case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -15267,6 +15291,8 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_IQ3_S_R4:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ2_S_R4:
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4:
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
@@ -15542,12 +15568,12 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_IQ2_BN_R4:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_NL_R4:
-        case GGML_TYPE_IQ4_XS_R4:
-        case GGML_TYPE_Q4_0_R4:
+        case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_Q4_0_R8:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
         case GGML_TYPE_I2_S:
-        case GGML_TYPE_Q8_0_R4:
+        case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -15569,6 +15595,8 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_IQ3_S_R4:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ2_S_R4:
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4:
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
@@ -16173,12 +16201,12 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_IQ2_BN_R4:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_IQ4_NL_R4:
-        case GGML_TYPE_IQ4_XS_R4:
-        case GGML_TYPE_Q4_0_R4:
+        case GGML_TYPE_IQ4_XS_R8:
+        case GGML_TYPE_Q4_0_R8:
         case GGML_TYPE_Q5_0_R4:
         case GGML_TYPE_Q6_0_R4:
         case GGML_TYPE_I2_S:
-        case GGML_TYPE_Q8_0_R4:
+        case GGML_TYPE_Q8_0_R8:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
@@ -16200,8 +16228,11 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_IQ3_S_R4:
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ2_S_R4:
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4:
         case GGML_TYPE_Q8_K:
         case GGML_TYPE_Q8_K64:
+        case GGML_TYPE_Q8_K128:
         case GGML_TYPE_Q8_K16:
         case GGML_TYPE_Q8_K32:
         case GGML_TYPE_Q4_0_4_4:
@@ -21038,7 +21069,6 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
     }
 
     size_t work_size = 0;
-    size_t q_size = 0;
 
     struct ggml_cplan cplan;
     memset(&cplan, 0, sizeof(struct ggml_cplan));
@@ -21054,7 +21084,6 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
         max_tasks = MAX(max_tasks, n_tasks);
 
         size_t cur = 0;
-        size_t cur_q = 0;
 
         switch (node->op) {
             case GGML_OP_CPY:
@@ -21085,8 +21114,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const enum ggml_type vec_dot_type = type_traits[node->src[0]->type].vec_dot_type;
 
                     if (node->src[1]->type != vec_dot_type) {
-                        cur_q = ggml_row_size(vec_dot_type, node->src[1]->ne[0]) * ggml_nrows(node->src[1]);
-                        //cur_q = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
+                        cur = ggml_row_size(vec_dot_type, node->src[1]->ne[0]) * ggml_nrows(node->src[1]);
                     }
                 } break;
             case GGML_OP_MUL_MAT_ID:
@@ -21096,13 +21124,12 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const struct ggml_tensor * src1 = node->src[1];
                     const enum ggml_type vec_dot_type = type_traits[src0->type].vec_dot_type;
                     if (src1->type != vec_dot_type) {
-                        cur_q += ggml_row_size(vec_dot_type, node->src[1]->ne[0]) * ggml_nrows(node->src[1]);
-                        //cur_q += ggml_row_size(vec_dot_type, ggml_nelements(src1));
+                        cur += ggml_row_size(vec_dot_type, node->src[1]->ne[0]) * ggml_nrows(node->src[1]);
                     }
                     const int n_as = src0->ne[2];
-                    cur_q += GGML_PAD(cur, sizeof(int64_t));       // align
-                    cur_q += n_as * sizeof(int64_t);               // matrix_row_counts
-                    cur_q += n_as * src1->ne[2] * sizeof(int64_t); // matrix_rows
+                    cur += GGML_PAD(cur, sizeof(int64_t));       // align
+                    cur += n_as * sizeof(int64_t);               // matrix_row_counts
+                    cur += n_as * src1->ne[2] * sizeof(int64_t); // matrix_rows
                 } break;
             case GGML_OP_OUT_PROD:
                 {
@@ -21191,20 +21218,14 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
         }
 
         work_size = MAX(work_size, cur);
-        q_size    = MAX(q_size, cur_q);
     }
 
     if (work_size > 0) {
         work_size += CACHE_LINE_SIZE*(n_threads - 1);
     }
-    if (q_size > 0) {
-        q_size += GGML_MAX_NAME;
-    }
-    work_size += q_size;
 
     cplan.n_threads = MIN(max_tasks, n_threads);
     cplan.work_size = work_size;
-    cplan.q_size    = q_size;
     cplan.work_data = NULL;
 
     return cplan;
@@ -21222,7 +21243,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         /*.ith   =*/ state->ith,
         /*.nth   =*/ state->shared->n_threads,
         /*.wsize =*/ cplan->work_size,
-        /*.qsize =*/ cplan->q_size,
         /*.wdata =*/ cplan->work_data,
         /*.shared=*/ state->shared,
     };
@@ -22956,6 +22976,8 @@ void ggml_quantize_init(enum ggml_type type) {
         case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_M:   iq2xs_init_impl(type); break;
+        case GGML_TYPE_IQ1_M_R4:iq2xs_init_impl(GGML_TYPE_IQ1_M); break;
+        case GGML_TYPE_IQ1_S_R4:iq2xs_init_impl(GGML_TYPE_IQ1_S); break;
         case GGML_TYPE_IQ3_XXS_R4:
         case GGML_TYPE_IQ3_XXS: iq3xs_init_impl(256); break;
         case GGML_TYPE_IQ3_S_R4:
@@ -23038,6 +23060,8 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ3_S_R4:result = quantize_iq3_s_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ2_S:   result = quantize_iq2_s  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ2_S_R4:result = quantize_iq2_s_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ1_S_R4:result = quantize_iq1_s_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ1_M_R4:result = quantize_iq1_m_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ1_S:   result = quantize_iq1_s  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ1_M:   result = quantize_iq1_m  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ1_BN:  result = quantize_iq1_bn (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
@@ -23045,11 +23069,11 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ2_BN_R4:result = quantize_iq2_bn_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_NL:  result = quantize_iq4_nl (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_NL_R4: result = quantize_iq4_nl_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_IQ4_XS_R4: result = quantize_iq4_xs_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_Q4_0_R4: result = quantize_q4_0_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ4_XS_R8: result = quantize_iq4_xs_r8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q4_0_R8: result = quantize_q4_0_r8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_0_R4: result = quantize_q5_0_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q6_0_R4: result = quantize_q6_0_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_Q8_0_R4: result = quantize_q8_0_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q8_0_R8: result = quantize_q8_0_r8(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_XS:  result = quantize_iq4_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_KS:  result = quantize_iq4_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_KS_R4:result = quantize_iq4_ks_r4(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

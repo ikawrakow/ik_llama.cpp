@@ -29,6 +29,8 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "IQ2_M",    LLAMA_FTYPE_MOSTLY_IQ2_M,    " 2.7  bpw quantization",            },
     { "IQ2_M_R4", LLAMA_FTYPE_MOSTLY_IQ2_M_R4, " 2.7  bpw quantization",            },
     { "IQ1_S",    LLAMA_FTYPE_MOSTLY_IQ1_S,    " 1.56 bpw quantization",            },
+    { "IQ1_S_R4", LLAMA_FTYPE_MOSTLY_IQ1_S_R4, " 1.5 bpw quantization",             },
+    { "IQ1_M_R4", LLAMA_FTYPE_MOSTLY_IQ1_M_R4, " 1.75 bpw quantization",            },
     { "IQ1_M",    LLAMA_FTYPE_MOSTLY_IQ1_M,    " 1.75 bpw quantization",            },
     { "IQ1_BN",   LLAMA_FTYPE_MOSTLY_IQ1_BN,   " 1.62 bpw quantization (Bitnet)",   },
     { "IQ2_BN",   LLAMA_FTYPE_MOSTLY_IQ2_BN,   " 2.00 bpw quantization (Bitnet)",   },
@@ -51,11 +53,11 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "Q3_K_L",   LLAMA_FTYPE_MOSTLY_Q3_K_L,   " 3.35G, +0.1764 ppl @ LLaMA-v1-7B", },
     { "IQ4_NL",   LLAMA_FTYPE_MOSTLY_IQ4_NL,   " 4.50 bpw non-linear quantization", },
     { "IQ4_NL_R4",LLAMA_FTYPE_MOSTLY_IQ4_NL_R4," 4.50 bpw non-linear quantization", },
-    { "IQ4_XS_R4",LLAMA_FTYPE_MOSTLY_IQ4_XS_R4," 4.25 bpw non-linear quantization", },
-    { "Q4_0_R4",  LLAMA_FTYPE_MOSTLY_Q4_0_R4,  " 4.50 bpw quantization",            },
+    { "IQ4_XS_R8",LLAMA_FTYPE_MOSTLY_IQ4_XS_R8," 4.25 bpw non-linear quantization", },
+    { "Q4_0_R8",  LLAMA_FTYPE_MOSTLY_Q4_0_R8,  " 4.50 bpw quantization",            },
     { "Q5_0_R4",  LLAMA_FTYPE_MOSTLY_Q5_0_R4,  " 5.50 bpw quantization",            },
     { "Q6_0_R4",  LLAMA_FTYPE_MOSTLY_Q6_0_R4,  " 6.50 bpw quantization",            },
-    { "Q8_0_R4",  LLAMA_FTYPE_MOSTLY_Q8_0_R4,  " 8.50 bpw quantization",            },
+    { "Q8_0_R8",  LLAMA_FTYPE_MOSTLY_Q8_0_R8,  " 8.50 bpw quantization",            },
     { "IQ4_XS",   LLAMA_FTYPE_MOSTLY_IQ4_XS,   " 4.25 bpw non-linear quantization", },
     { "IQ4_KS",   LLAMA_FTYPE_MOSTLY_IQ4_KS,   " 4.25 bpw non-linear quantization", },
     { "IQ4_KS_R4",LLAMA_FTYPE_MOSTLY_IQ4_KS_R4,"IQ4_KS repacked", },
@@ -513,6 +515,8 @@ int main(int argc, char ** argv) {
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S  || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4 ||
          params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS_R4 ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S  ||
+         params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S_R4 ||
+         params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M_R4 ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M)) {
         fprintf(stderr, "\n==========================================================================================================\n");
         fprintf(stderr, "Please do not use IQ1_S, IQ1_M, IQ2_S, IQ2_XXS, IQ2_XS or Q2_K_S quantization without an importance matrix\n");
