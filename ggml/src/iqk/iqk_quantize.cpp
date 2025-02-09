@@ -2866,7 +2866,7 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
     assert(k % kBlockSize == 0);
     const int nb = k / kBlockSize;
     auto y = (block_q8_K128 *)vy;
-#ifdef z__AVX2__
+#ifdef __AVX2__
     const __m256 signBit = _mm256_set1_ps(-0.0f);
     const __m256i perm = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
     for (int i = 0; i < nb; i++) {
@@ -2904,6 +2904,35 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
             i0 = _mm256_permutevar8x32_epi32( i0, perm );
             _mm256_storeu_si256((__m256i *)q8, i0);
             q8 += 32;
+        }
+    }
+#elif defined __ARM_NEON
+    int32x4_t ival[8];
+    for (int i = 0; i < nb; i++) {
+        const float * xb = x + i*kBlockSize;
+        auto vmax = vdupq_n_f32(0.f);
+        for (int j = 0; j < kBlockSize; j += 4) {
+            vmax = vmaxq_f32(vmax, vabsq_f32(vld1q_f32(xb + j)));
+        }
+        auto smax = vmaxvq_f32(vmax);
+        if (!smax) {
+            std::memset(&y[i], 0, sizeof(y[i]));
+            continue;
+        }
+        y[i].d = smax/127;
+        auto vid = vdupq_n_f32(127/smax);
+        for (int ib = 0; ib < kBlockSize/32; ++ib) {
+            auto isum = vdupq_n_s32(0);
+            for (int k = 0; k < 8; ++k) {
+                auto val = vld1q_f32(xb + 32*ib + 4*k);
+                ival[k] = vcvtnq_s32_f32(vmulq_f32(val, vid));
+                isum = vaddq_s32(isum, ival[k]);
+            }
+            y[i].bsums[ib] = vaddvq_s32(isum);
+            for (int k = 0; k < 4; ++k) {
+                auto i16 = vcombine_s16(vmovn_s32(ival[2*k+0]), vmovn_s32(ival[2*k+1]));
+                vst1_s8(y[i].qs + 32*ib + 8*k, vmovn_s16(i16));
+            }
         }
     }
 #else
