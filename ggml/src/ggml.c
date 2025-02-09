@@ -14064,29 +14064,20 @@ static void ggml_compute_forward_mul_mat(
 #endif
 
 #if GGML_USE_IQK_MULMAT
-    if (dst->type == GGML_TYPE_F32 && (ne12*ne13)%nth == 0) {
+    if (dst->type == GGML_TYPE_F32) {
+        int gcd = simple_gcd(ne12*ne13, nth);
         int counter = 0;
         for (int64_t i13 = 0; i13 < ne13; i13++) {
             for (int64_t i12 = 0; i12 < ne12; i12++) {
-                if (counter++ % nth == ith) {
+                if ((counter++ % gcd) == (ith%gcd)) {
                     if (!iqk_mul_mat(ne01, ne11, ne00,
                                 src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01, ///ggml_type_size(src0->type),
                                 src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11, ///ggml_type_size(src1->type),
                                 (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                                0, 1)) goto IQK_MulMat_Not_Available1;
+                                ith/gcd, nth/gcd)) goto IQK_MulMat_Not_Available1;
                 }
             }
         }
-        return;
-    }
-    if (dst->type == GGML_TYPE_F32) {
-        for (int64_t i13 = 0; i13 < ne13; i13++)
-            for (int64_t i12 = 0; i12 < ne12; i12++)
-                if (!iqk_mul_mat(ne01, ne11, ne00,
-                            src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01, ///ggml_type_size(src0->type),
-                            src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11, ///ggml_type_size(src1->type),
-                            (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                            ith, nth)) goto IQK_MulMat_Not_Available1;
         return;
     }
 IQK_MulMat_Not_Available1:;
