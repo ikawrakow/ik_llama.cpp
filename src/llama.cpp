@@ -3119,8 +3119,10 @@ static bool llama_kv_cache_init(
     cache.size = kv_size;
     cache.used = 0;
 
-    cache.type_k = type_k;
-    cache.type_v = type_v;
+    cache.type_k  = type_k;
+    cache.type_v  = type_v;
+    cache.type_kr = type_k;
+    cache.type_kv = type_v;
 
     cache.cells.clear();
     cache.cells.resize(kv_size);
@@ -13545,7 +13547,7 @@ struct llm_build_context {
                     kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
                     cb(kq, "kq_soft_max_ext", il);
 
-		    if (!pp_opt) {
+		            if (!pp_opt) {
                         kq = ggml_permute(ctx0, kq, 0, 2, 1, 3);
                         cb(kq, "kq_soft_max_ext_perm", il);
                     }
