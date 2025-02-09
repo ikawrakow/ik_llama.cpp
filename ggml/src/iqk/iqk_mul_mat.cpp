@@ -3574,10 +3574,6 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
                                           iq1s_grid_us[helper.val[ 3]], iq1s_grid_us[helper.val[ 2]]);
                 qx[3] = _mm256_set_epi64x(iq1s_grid_us[helper.val[15]], iq1s_grid_us[helper.val[14]],
                                           iq1s_grid_us[helper.val[ 7]], iq1s_grid_us[helper.val[ 6]]);
-                //qx[0] = _mm256_slli_epi16(qx[0], 3);
-                //qx[1] = _mm256_slli_epi16(qx[1], 3);
-                //qx[2] = _mm256_slli_epi16(qx[2], 3);
-                //qx[3] = _mm256_slli_epi16(qx[3], 3);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     auto y = _mm256_loadu_si256((const __m256i *)q8.y[iy][ib].qs + k);
 #ifdef HAVE_FANCY_SIMD
@@ -3697,8 +3693,6 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
                     auto sumi = _mm256_packs_epi32(sumi1, sumi2);
 #endif
                     isum[iy] = _mm256_add_epi32(isum[iy], _mm256_madd_epi16(scales, sumi));
-                    //sumi = _mm256_madd_epi16(scales, sumi);
-                    //acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(q8.y[iy][ib].d), _mm256_cvtepi32_ps(sumi), acc[iy]);
                 }
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
