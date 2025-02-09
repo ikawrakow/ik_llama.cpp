@@ -2169,8 +2169,10 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         if (bos != -1) {
             tmp.push_back(bos);
         }
-        tmp.push_back(eos);
-
+	else
+	{
+	    tmp.push_back(eos);
+	}
         if (llama_model_has_encoder(model)) {
             llama_encode(lctx, llama_batch_get_one(tmp.data(), tmp.size(), 0, 0));
             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
