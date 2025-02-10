@@ -1586,7 +1586,7 @@ int main(int argc, char ** argv) {
         if (params.warmup) {
             if (t.n_prompt > 0) {
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+                test_prompt(ctx, 1, 0, t.n_batch, t.n_threads);
             }
             if (t.n_gen > 0) {
                 test_gen(ctx, 1, 0, t.n_threads);
