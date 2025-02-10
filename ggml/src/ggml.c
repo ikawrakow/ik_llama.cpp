@@ -17497,7 +17497,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     }
 
 #if GGML_USE_IQK_MULMAT
-    if (Dk == Dv && max_bias <= 0.0f && q->type == GGML_TYPE_F32 && mask && mask->type == GGML_TYPE_F16) {
+    if (max_bias <= 0.0f && q->type == GGML_TYPE_F32 && mask && mask->type == GGML_TYPE_F16) {
         // I keep changing my mind what is the best strategy to split the threads when processing
         // multiple heads. This is my current thinking, the commented out code below was the previous.
         int ntg = nth/simple_gcd(neq2*neq3, nth);
@@ -17521,7 +17521,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                     int iq1 = (ith%ntg)*neq1g;
                     int this_neq1 = MIN(neq1g, neq1-iq1);
                     if (!iqk_flash_attn_noalibi(k->type, v->type,
-                            Dk, this_neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1], ne1*nb1/sizeof(float),
+                            Dk, Dv, this_neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1], ne1*nb1/sizeof(float),
                             (const float *)((const char *)q->data + iq2*q->nb[2] + iq3*q->nb[3] + iq1*q->nb[1]),
                             (const void  *)((const char *)k->data + iq2/rk2*k->nb[2] + iq3/rk3*k->nb[3]),
                             (const void  *)((const char *)v->data + iq2/rv2*v->nb[2] + iq3/rv3*v->nb[3]),
