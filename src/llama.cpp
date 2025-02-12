@@ -3178,33 +3178,30 @@ static bool llama_kv_cache_init(
         ggml_tensor * k;
         ggml_tensor * v;
         if (cparams.mla_attn && model.layers[i].wk_b && model.layers[i].wv_b) {
-               k = ggml_new_tensor_1d(ctx, type_k, 1);
-               v = ggml_new_tensor_1d(ctx, type_v, 1);
+            // DeepSeek MLA
+            //k = ggml_new_tensor_1d(ctx, type_k, 1);
+            //v = ggml_new_tensor_1d(ctx, type_v, 1);
+            const uint32_t n_embd_head_qk_rope = hparams.n_rot;
+            const uint32_t kv_lora_rank = hparams.n_lora_kv;
+            LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
+            ggml_tensor * kr = ggml_new_tensor_1d(ctx, cache.type_kr, n_embd_head_qk_rope*kv_size);
+            ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_kv, kv_lora_rank*kv_size);
+            ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_kv, kv_lora_rank*kv_size);
+            ggml_format_name(kr, "cache_kr_l%d", i);
+            ggml_format_name(kv, "cache_kv_l%d", i);
+            ggml_format_name(kvt, "cache_kvt_l%d", i);
+            cache.kr_l.push_back(kr);
+            cache.kv_l.push_back(kv);
+            cache.kvt_l.push_back(kvt);
         }
         else {
-               k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
-               v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
-       }
-
-        ggml_format_name(k, "cache_k_l%d", i);
-        ggml_format_name(v, "cache_v_l%d", i);
-        cache.k_l.push_back(k);
-        cache.v_l.push_back(v);
-
-
-        // DeepSeek MLA
-        const uint32_t n_embd_head_qk_rope = hparams.n_rot;
-        const uint32_t kv_lora_rank = hparams.n_lora_kv;
-        LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
-        ggml_tensor * kr = ggml_new_tensor_1d(ctx, cache.type_kr, n_embd_head_qk_rope*kv_size);
-        ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_kv, kv_lora_rank*kv_size);
-        ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_kv, kv_lora_rank*kv_size);
-        ggml_format_name(kr, "cache_kr_l%d", i);
-        ggml_format_name(kv, "cache_kv_l%d", i);
-        ggml_format_name(kvt, "cache_kvt_l%d", i);
-        cache.kr_l.push_back(kr);
-        cache.kv_l.push_back(kv);
-        cache.kvt_l.push_back(kvt);
+            k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
+            v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
+            ggml_format_name(k, "cache_k_l%d", i);
+            ggml_format_name(v, "cache_v_l%d", i);
+            cache.k_l.push_back(k);
+            cache.v_l.push_back(v);
+        }
     }
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
@@ -18054,15 +18051,18 @@ struct llama_context * llama_new_context_with_model(
                 memory_size_v += ggml_nbytes(v);
             }
 
-            LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
-                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
-                ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
-                ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+            if (memory_size_k + memory_size_v > 0) {
+                LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
+                        (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
+                        ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
+                        ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+            }
         }
 
-	{
+	    {
             size_t memory_size_kr = 0;
             size_t memory_size_kv = 0;
+            size_t memory_size_kvt = 0;
 
             for (auto & kr : ctx->kv_self.kr_l) {
                 memory_size_kr += ggml_nbytes(kr);
@@ -18072,10 +18072,17 @@ struct llama_context * llama_new_context_with_model(
                 memory_size_kv += ggml_nbytes(kv);
             }
 
-            LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K^R (%s): %7.2f MiB, c^KV (%s): %7.2f MiB\n", __func__,
-                      (float)(memory_size_kr + memory_size_kv) / (1024.0f * 1024.0f),
-                ggml_type_name(type_k), (float)memory_size_kr / (1024.0f * 1024.0f),
-                ggml_type_name(type_k), (float)memory_size_kv / (1024.0f * 1024.0f));
+            for (auto & kvt : ctx->kv_self.kvt_l) {
+                memory_size_kvt += ggml_nbytes(kvt);
+            }
+
+            if (memory_size_kr + memory_size_kv + memory_size_kvt > 0) {
+                LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K^R (%s): %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T (%s): %7.2f MiB\n", __func__,
+                        (float)(memory_size_kr + memory_size_kv + memory_size_kvt) / (1024.0f * 1024.0f),
+                        ggml_type_name(type_k), (float)memory_size_kr / (1024.0f * 1024.0f),
+                        ggml_type_name(type_v), (float)memory_size_kv / (1024.0f * 1024.0f),
+                        ggml_type_name(type_v), (float)memory_size_kvt / (1024.0f * 1024.0f));
+            }
         }
 
         // graph outputs buffer
