@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2024 The ggml authors
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "dmmv.cuh"
 #include "dequantize.cuh"
 #include "convert.cuh"
@@ -7,6 +14,246 @@
 #else
 static_assert(K_QUANTS_PER_ITERATION == 1 || K_QUANTS_PER_ITERATION == 2, "K_QUANTS_PER_ITERATION must be 1 or 2");
 #endif
+
+static __device__ __forceinline__ uint32_t trellis_next(uint32_t& val) {
+    constexpr uint32_t ka = 89226354;
+    constexpr uint32_t kb = 64248484;
+    constexpr uint32_t kmask = 0x8fff8fff;
+    constexpr uint32_t km32 = 0x3b603b60;
+    val = ka*val + kb;
+    return (val & kmask) ^ km32;
+}
+
+static __device__ __forceinline__ void trellis_accum(uint32_t& val1, uint32_t& val2, uint32_t* s, const dfloat2* y, dfloat2& bdot1, dfloat2& bdot2) {
+    const half * h = (const half *)s;
+    s[0] = trellis_next(val1);
+    s[1] = trellis_next(val1);
+    s[2] = trellis_next(val2);
+    s[3] = trellis_next(val2);
+#ifdef GGML_CUDA_F16
+    bdot1 = __hfma2(y[ 0], {h[0]+h[1], h[2]+h[3]}, bdot1);
+    bdot2 = __hfma2(y[64], {h[4]+h[5], h[6]+h[7]}, bdot2);
+#else
+    bdot1.x += y[ 0].x * (float)(h[0] + h[1]);
+    bdot1.y += y[ 0].y * (float)(h[2] + h[3]);
+    bdot2.x += y[64].x * (float)(h[4] + h[5]);
+    bdot2.y += y[64].y * (float)(h[6] + h[7]);
+#endif
+}
+
+//static __device__ __forceinline__ void trellis_accum(uint32_t& val1, uint32_t& val2, uint32_t* s, const dfloat2* y, dfloat2& bdot1, dfloat2& bdot2) {
+//    const half * h = (const half *)s;
+//    s[0] = trellis_next(val1);
+//    s[1] = trellis_next(val1);
+//    s[2] = trellis_next(val1);
+//    s[3] = trellis_next(val1);
+//#ifdef GGML_CUDA_F16
+//    bdot1 = __hfma2(y[ 0], {h[0]+h[1]+h[2]+h[3], h[4]+h[5]+h[6]+h[7]}, bdot1);
+//#else
+//    bdot1.x += y[ 0].x * (float)(h[0] + h[1] + h[2] + h[3]);
+//    bdot1.y += y[ 0].y * (float)(h[4] + h[5] + h[6] + h[7]);
+//#endif
+//    s[0] = trellis_next(val2);
+//    s[1] = trellis_next(val2);
+//    s[2] = trellis_next(val2);
+//    s[3] = trellis_next(val2);
+//#ifdef GGML_CUDA_F16
+//    bdot2 = __hfma2(y[64], {h[0]+h[1]+h[2]+h[3], h[4]+h[5]+h[6]+h[7]}, bdot2);
+//#else
+//    bdot2.x += y[64].x * (float)(h[0] + h[1] + h[2] + h[3]);
+//    bdot2.y += y[64].y * (float)(h[4] + h[5] + h[6] + h[7]);
+//#endif
+//}
+
+static __device__ __forceinline__ void trellis_accum_abs(uint8_t signs1, uint8_t signs2, uint8_t mask1, uint8_t mask2,
+        uint32_t& val1, uint32_t& val2, uint32_t* s, const dfloat2* y, dfloat2& bdot1, dfloat2& bdot2) {
+    const half * h = (const half *)s;
+    s[0] = trellis_next(val1);
+    s[1] = trellis_next(val1);
+    s[2] = trellis_next(val2);
+    s[3] = trellis_next(val2);
+#ifdef GGML_CUDA_F16
+    half h00 = __habs(h[0]+h[1]), h01 = __habs(h[2]+h[3]);
+    half h10 = __habs(h[4]+h[5]), h11 = __habs(h[6]+h[7]);
+    half2 h1 = {signs1 & mask1 ? -h00 : h00, signs2 & mask1 ? -h01 : h01};
+    half2 h2 = {signs1 & mask2 ? -h10 : h10, signs2 & mask2 ? -h11 : h11};
+    //half2 h1 = __hmul2(__habs2({h[0]+h[1], h[2]+h[3]}), {signs1 & mask1 ? -1 : 1, signs2 & mask1 ? -1 : 1});
+    //half2 h2 = __hmul2(__habs2({h[4]+h[5], h[6]+h[7]}), {signs1 & mask2 ? -1 : 1, signs2 & mask2 ? -1 : 1});
+    bdot1 = __hfma2(y[ 0], h1, bdot1);
+    bdot2 = __hfma2(y[64], h2, bdot2);
+#else
+    bdot1.x += y[ 0].x * fabsf((float)(h[0] + h[1])) * (signs1 & mask1 ? -1 : 1);
+    bdot1.y += y[ 0].y * fabsf((float)(h[2] + h[3])) * (signs2 & mask1 ? -1 : 1);
+    bdot2.x += y[64].x * fabsf((float)(h[4] + h[5])) * (signs1 & mask2 ? -1 : 1);
+    bdot2.y += y[64].y * fabsf((float)(h[6] + h[7])) * (signs2 & mask2 ? -1 : 1);
+#endif
+}
+
+static __device__ __forceinline__ void trellis_accum(const dfloat2& dl1, const dfloat2& dl2, const dfloat2& bdot1, const dfloat2& bdot2, dfloat2& tmp) {
+#ifdef GGML_CUDA_F16
+        tmp = __hfma2(dl1, bdot1, tmp);
+        tmp = __hfma2(dl2, bdot2, tmp);
+#else
+        tmp.x += dl1.x * bdot1.x + dl2.x * bdot2.x;
+        tmp.y += dl1.y * bdot1.y + dl2.y * bdot2.y;
+#endif
+}
+
+static __global__ void dequantize_mul_mat_vec_iq2_kt(const void * __restrict__ vx, const dfloat * __restrict__ yy, float * __restrict__ dst,
+        const int ncols, int nrows, int64_t row_size) {
+
+    const int row = blockIdx.x*blockDim.y + threadIdx.y;
+    if (row > nrows) return;
+
+    const float * dptr = (const float *)((const char *)vx + row*row_size);
+    const float d = *dptr * 31.75f * 1.05f;
+    const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
+
+    const int num_blocks_per_row = ncols / QK_K;
+
+    dfloat2 tmp = {};
+
+    const int it = threadIdx.x/2;
+    const int ix = threadIdx.x%2;
+
+    uint32_t s[4];
+
+    for (int i = ix; i < num_blocks_per_row; i += 2) {
+        const dfloat2 * y = (const dfloat2 *)(yy + i * QK_K + 8*it);
+        const uint16_t * ql = (const uint16_t *)x[i].ql;
+        const dfloat scale1 = iq4k_values[x[i].scales[it/4] & 0xf];
+        const dfloat scale2 = iq4k_values[x[i].scales[it/4] >>  4];
+        const dfloat2 dl1 = {scale1, scale1};
+        const dfloat2 dl2 = {scale2, scale2};
+        dfloat2 bdot1 = {0, 0};
+        dfloat2 bdot2 = {0, 0};
+        uint32_t val1 = ql[it+ 0] + 4096;
+        uint32_t val2 = ql[it+16] + 4096;
+        for (int k = 0; k < 4; ++k) {
+            trellis_accum(val1, val2, s, y+k, bdot1, bdot2);
+        }
+        trellis_accum(dl1, dl2, bdot1, bdot2, tmp);
+    }
+
+    // sum up partial sums and write back result
+    tmp = warp_reduce_sum(tmp);
+
+    if (threadIdx.x == 0) {
+        dst[row] = d * (float)(tmp.x + tmp.y);
+    }
+}
+
+static __global__ void dequantize_mul_mat_vec_iq3_kt(const void * __restrict__ vx, const dfloat * __restrict__ yy, float * __restrict__ dst,
+        const int ncols, int nrows, int64_t row_size) {
+
+    const int row = blockIdx.x*blockDim.y + threadIdx.y;
+    if (row > nrows) return;
+
+    const float * dptr = (const float *)((const char *)vx + row*row_size);
+    const float d = *dptr * 31.75f * 1.015f;
+    const block_iq3_kt * x = (const block_iq3_kt *)(dptr + 1);
+
+    const int num_blocks_per_row = ncols / QK_K;
+
+    dfloat2 tmp = {};
+
+    const int it = threadIdx.x/2;
+    const int ix = threadIdx.x%2;
+
+    uint32_t s[4];
+
+    uint8_t mask1 = 1 << (it/4);
+    uint8_t mask2 = mask1 << 4;
+
+    for (int i = ix; i < num_blocks_per_row; i += 2) {
+        const dfloat2 * y = (const dfloat2 *)(yy + i * QK_K + 8*it);
+        const uint16_t * ql = (const uint16_t *)x[i].ql;
+        const uint8_t  * qh = x[i].qh;
+        const dfloat scale1 = (x[i].scales[it/4] & 0xf);
+        const dfloat scale2 = (x[i].scales[it/4] >>  4);
+        const dfloat2 dl1 = {scale1, scale1};
+        const dfloat2 dl2 = {scale2, scale2};
+        dfloat2 bdot1 = {0, 0};
+        dfloat2 bdot2 = {0, 0};
+        uint32_t val1 = ql[it+ 0] + 4096;
+        uint32_t val2 = ql[it+16] + 4096;
+        for (int k = 0; k < 4; ++k) {
+            trellis_accum_abs(qh[(8*it+2*k+0)%32], qh[(8*it+2*k+1)%32], mask1, mask2, val1, val2, s, y+k, bdot1, bdot2);
+        }
+        trellis_accum(dl1, dl2, bdot1, bdot2, tmp);
+    }
+
+    // sum up partial sums and write back result
+    tmp = warp_reduce_sum(tmp);
+
+    if (threadIdx.x == 0) {
+        dst[row] = d * (float)(tmp.x + tmp.y);
+    }
+}
+
+static __global__ void dequantize_mul_mat_vec_iq4_kt(const void * __restrict__ vx, const dfloat * __restrict__ yy, float * __restrict__ dst,
+        const int ncols, int nrows, int64_t row_size) {
+
+    constexpr int kNumGroups = 64;
+
+    const int row = blockIdx.x*blockDim.y + threadIdx.y;
+    if (row > nrows) return;
+
+    const float * dptr = (const float *)((const char *)vx + row*row_size);
+    const float d = dptr[0] * 31.75f * 1.01f;
+    const float row_av = dptr[1];
+    const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 2);
+
+    const int num_blocks_per_row = ncols / QK_K;
+
+    dfloat2 tmp1 = {};
+    dfloat2 tmp2 = {};
+
+    const int it = threadIdx.x/2; // 0...15
+    const int ix = threadIdx.x%2; // 0 or 1
+
+    uint32_t s[4];
+
+    for (int i = ix; i < num_blocks_per_row; i += 2) {
+        const dfloat2 * y = (const dfloat2 *)(yy + i * QK_K + 8*it);
+        const uint32_t * shb = x[i].qs;
+        const uint8_t * ql = (const uint8_t *)(shb + 8);
+        const uint8_t * qh = ql + kNumGroups;
+        const uint32_t offset1 = 4096 + ((shb[it/4+0] & 1) << 15);
+        const uint32_t offset2 = 4096 + ((shb[it/4+4] & 1) << 15);
+        const dfloat scale1 = (int)((shb[it/4+0] & 0xff) >> 1) - 64;
+        const dfloat scale2 = (int)((shb[it/4+4] & 0xff) >> 1) - 64;
+        const dfloat2 dl1 = {scale1, scale1};
+        const dfloat2 dl2 = {scale2, scale2};
+        const uint32_t sh1 = shb[it/4+0] >> (8 + 6*(it%4));
+        const uint32_t sh2 = shb[it/4+4] >> (8 + 6*(it%4));
+        dfloat2 bdot1 = {0, 0};
+        dfloat2 bdot2 = {0, 0};
+        uint32_t val1 = ql[2*it+ 0] + ((qh[2*it+0] << 8) & 0xf00) + ((sh1 & 7) << 12) + offset1;
+        uint32_t val2 = ql[2*it+32] + ((qh[2*it+0] << 4) & 0xf00) + ((sh2 & 7) << 12) + offset2;
+        uint32_t val3 = ql[2*it+ 1] + ((qh[2*it+1] << 8) & 0xf00) + ((sh1 & 56) << 9) + offset1;
+        uint32_t val4 = ql[2*it+33] + ((qh[2*it+1] << 4) & 0xf00) + ((sh2 & 56) << 9) + offset2;
+        for (int k = 0; k < 2; ++k) {
+            trellis_accum(val1, val2, s, y+k+0, bdot1, bdot2);
+            trellis_accum(val3, val4, s, y+k+2, bdot1, bdot2);
+#ifdef GGML_CUDA_F16
+            tmp2 += y[k] + y[k+2] + y[k+64] + y[k+66];
+#else
+            tmp2.x += y[k].x + y[k+2].x + y[k+64].x + y[k+66].x;
+            tmp2.y += y[k].y + y[k+2].y + y[k+64].y + y[k+66].y;
+#endif
+        }
+        trellis_accum(dl1, dl2, bdot1, bdot2, tmp1);
+    }
+
+    // sum up partial sums and write back result
+    float tmp = d * (float)(tmp1.x + tmp1.y) + row_av * (float)(tmp2.x + tmp2.y);
+    tmp = warp_reduce_sum(tmp);
+
+    if (threadIdx.x == 0) {
+        dst[row] = tmp;
+    }
+}
 
 static __global__ void dequantize_mul_mat_vec_q2_k(const void * __restrict__ vx, const float * __restrict__ yy, float * __restrict__ dst, const int ncols, int nrows) {
 
@@ -554,6 +801,36 @@ static void dequantize_mul_mat_vec_q2_K_cuda(const void * vx, const float * y, f
     dequantize_mul_mat_vec_q2_k<<<block_nums, block_dims, 0, stream>>>(vx, y, dst, ncols, nrows);
 }
 
+static void dequantize_mul_mat_vec_iq2_kt_cuda(const void * vx, const dfloat * y, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    constexpr int ny = 2;
+    const int block_num_y = (nrows + ny - 1) / ny;
+    const dim3 block_nums(block_num_y, 1, 1);
+    const dim3 block_dims(32, ny, 1);
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ2_KT, ncols);
+    dequantize_mul_mat_vec_iq2_kt<<<block_nums, block_dims, 0, stream>>>(vx, y, dst, ncols, nrows, row_size);
+}
+
+static void dequantize_mul_mat_vec_iq3_kt_cuda(const void * vx, const dfloat * y, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    constexpr int ny = 2;
+    const int block_num_y = (nrows + ny - 1) / ny;
+    const dim3 block_nums(block_num_y, 1, 1);
+    const dim3 block_dims(32, ny, 1);
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ3_KT, ncols);
+    dequantize_mul_mat_vec_iq3_kt<<<block_nums, block_dims, 0, stream>>>(vx, y, dst, ncols, nrows, row_size);
+}
+
+static void dequantize_mul_mat_vec_iq4_kt_cuda(const void * vx, const dfloat * y, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    constexpr int ny = 2;
+    const int block_num_y = (nrows + ny - 1) / ny;
+    const dim3 block_nums(block_num_y, 1, 1);
+    const dim3 block_dims(32, ny, 1);
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ4_KT, ncols);
+    dequantize_mul_mat_vec_iq4_kt<<<block_nums, block_dims, 0, stream>>>(vx, y, dst, ncols, nrows, row_size);
+}
+
 static void dequantize_mul_mat_vec_q3_K_cuda(const void * vx, const float * y, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
@@ -615,7 +892,8 @@ void ggml_cuda_op_dequantize_mul_mat_vec(
     bool src1_convert_f16 =
         src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_1 ||
         src0->type == GGML_TYPE_Q5_0 || src0->type == GGML_TYPE_Q5_1 ||
-        src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_F16;
+        src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_F16  ||
+        src0->type == GGML_TYPE_IQ2_KT || src0->type == GGML_TYPE_IQ3_KT || src0->type == GGML_TYPE_IQ4_KT;
 
     if (src1_convert_f16) {
         src1_dfloat = src1_dfloat_a.alloc(ne00);
@@ -645,6 +923,15 @@ void ggml_cuda_op_dequantize_mul_mat_vec(
             break;
         case GGML_TYPE_Q2_K:
             dequantize_mul_mat_vec_q2_K_cuda(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_IQ2_KT:
+            dequantize_mul_mat_vec_iq2_kt_cuda(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_IQ3_KT:
+            dequantize_mul_mat_vec_iq3_kt_cuda(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_IQ4_KT:
+            dequantize_mul_mat_vec_iq4_kt_cuda(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
         case GGML_TYPE_Q3_K:
             dequantize_mul_mat_vec_q3_K_cuda(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
@@ -679,5 +966,6 @@ bool ggml_cuda_dmmv_type_supported(ggml_type src0_type) {
         src0_type == GGML_TYPE_Q8_0 || src0_type == GGML_TYPE_Q2_K ||
         src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q4_K ||
         src0_type == GGML_TYPE_Q5_K || src0_type == GGML_TYPE_Q6_K ||
+        src0_type == GGML_TYPE_IQ2_KT || src0_type == GGML_TYPE_IQ3_KT || src0_type == GGML_TYPE_IQ4_KT ||
         src0_type == GGML_TYPE_F16;
 }
