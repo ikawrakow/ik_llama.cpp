@@ -13465,13 +13465,15 @@ struct llm_build_context {
 
                 if (lctx.cparams.mla_attn && model.layers[il].wk_b && model.layers[il].wv_b) {
 
-                    struct ggml_tensor * kv_cache_view = ggml_view_1d(ctx0, kv_self.kv_l[il], n_tokens*kv_lora_rank, ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank)*kv_head);
+                    struct ggml_tensor * kv_cache_view = ggml_view_1d(ctx0, kv_self.kv_l[il], n_tokens*kv_lora_rank,
+                            ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank)*kv_head);
                     cb(kv_cache_view, "kv_cache_view", il);
 
                     // note: storing c^KV in the KV cache
                     ggml_build_forward_expand(gf, ggml_cpy(ctx0, kv_compressed, kv_cache_view));
 
-                    struct ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.kvt_l[il], n_tokens, kv_lora_rank, ggml_row_size(kv_self.kv_l[il]->type, kv_self.size), ggml_row_size(kv_self.kv_l[il]->type, kv_head));
+                    struct ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.kvt_l[il], n_tokens, kv_lora_rank,
+                            ggml_row_size(kv_self.kv_l[il]->type, kv_self.size), ggml_row_size(kv_self.kv_l[il]->type, kv_head));
                     cb(kv_cache_trans_view, "kv_cache_trans_view", il);
 
                     // note: storing transposed c^KV in the transposed KV cache
@@ -13491,7 +13493,8 @@ struct llm_build_context {
                                 0);
                     cb(kv_cache_trans, "kv_cache_trans", il);
 
-                    struct ggml_tensor * kr_cache_view = ggml_view_1d(ctx0, kv_self.kr_l[il], n_tokens*n_embd_head_qk_rope, ggml_row_size(kv_self.kr_l[il]->type, n_embd_head_qk_rope)*kv_head);
+                    struct ggml_tensor * kr_cache_view = ggml_view_1d(ctx0, kv_self.kr_l[il], n_tokens*n_embd_head_qk_rope,
+                            ggml_row_size(kv_self.kr_l[il]->type, n_embd_head_qk_rope)*kv_head);
                     cb(kr_cache_view, "kr_cache_view", il);
 
                     // note: storing RoPE-ed version of K^R in the KV cache
@@ -13504,16 +13507,13 @@ struct llm_build_context {
                                 0);
                     cb(kr_cache, "kr_cache", il);
 
-                    struct ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head, ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope), ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank) * n_embd_head_qk_nope, 0);
+                    struct ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head,
+                            ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope),
+                            ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank)*n_embd_head_qk_nope, 0);
                     cb(wk_b, "wk_b", il);
 
                     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
                     cb(q_nope, "q_nope_perm", il);
-
-                    //ggml_tensor * wkv_b = ggml_view_2d(ctx0, model.layers[il].wkv_b, kv_lora_rank, n_embd_head_qk_nope*n_head,
-                    //        ggml_row_size(model.layers[il].wkv_b->type, kv_lora_rank), 0);
-                    //ggml_tensor * ik1 = ggml_mul_mat(ctx0, wkv_b, kv_cache);
-                    //ggml_tensor * ik2 = ggml_view_3d(ctx0, ik1, n_embd_head_qk_nope,
 
                     struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope);
                     cb(q_nope2, "q_nope2", il);
@@ -13524,10 +13524,6 @@ struct llm_build_context {
                     }
                     struct ggml_tensor * kq_nope = ggml_mul_mat(ctx0, kv_cache, q_nope2);
                     cb(kq_nope, "kq_nope", il);
-                    //printf("kq_nope = kv_cache(%d x %d x %d x %d) * [wk_b (%d x %d x %d x %d) * q_nope (%d x %d x %d x %d)]\n",
-                    //        (int)kv_cache->ne[0], (int)kv_cache->ne[1], (int)kv_cache->ne[2], (int)kv_cache->ne[3],
-                    //        (int)wk_b->ne[0], (int)wk_b->ne[1], (int)wk_b->ne[2], (int)wk_b->ne[3],
-                    //        (int)q_nope->ne[0], (int)q_nope->ne[1], (int)q_nope->ne[2], (int)q_nope->ne[3]);
 
                     if (!pp_opt) {
                         kq_nope = ggml_permute(ctx0, kq_nope, 0, 2, 1, 3);
