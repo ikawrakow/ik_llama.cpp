@@ -16082,7 +16082,7 @@ inline void iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
             HelperF16<Dv, k_step> vh(v, stride_v);
             iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         } break;
-#ifdef HAVE_FANCY_SIMD
+#ifdef __AVX512BF16__
         case GGML_TYPE_BF16: {
             HelperBF16<Dv, k_step> vh(v, stride_v);
             iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
