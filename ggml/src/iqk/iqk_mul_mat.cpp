@@ -8082,6 +8082,9 @@ struct QFBase {
     using Acc  = __m512;
     static inline Data load(const ggml_half * x) { return _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)x)); }
     static inline Data load(const float * x) { return _mm512_loadu_ps(x); }
+    static inline Data load(const ggml_bf16_t * x) {
+        return _mm512_castsi512_ps(_mm512_slli_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i*)x)), 16));
+    }
     static inline Acc acc(Acc prev, const Data& y, const Data& x) {
         return _mm512_fmadd_ps(y, x, prev);
     }
