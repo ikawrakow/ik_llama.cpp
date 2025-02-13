@@ -109,6 +109,14 @@
 #define LLAMA_MAX_EXPERTS 256  // DeepSeekV2
 
 //
+// === MLA cache
+// If tou are desperate to reduce KV cache size, set MLA_USE_TRANSPOSED_CACHE to 0.
+// TG perfornce will be slower (similar to no-MLA), but KV cache size will be cut to ~half.
+// PP performance will be about the same as with MLA_USE_TRANSPOSED_CACHE = 1.
+//
+#define MLA_USE_TRANSPOSED_CACHE 1
+
+//
 // helpers
 //
 
@@ -2676,9 +2684,6 @@ struct llama_kv_cache {
     ggml_type type_k = GGML_TYPE_F16;
     ggml_type type_v = GGML_TYPE_F16;
 
-    ggml_type type_kr = GGML_TYPE_F16;
-    ggml_type type_kv = GGML_TYPE_F16;
-
     std::vector<llama_kv_cell> cells;
 
     std::vector<struct ggml_tensor *> k_l; // per layer
@@ -2686,7 +2691,9 @@ struct llama_kv_cache {
 
     // DeepSeek MLA
     std::vector<struct ggml_tensor *> kv_l;
+#if MLA_USE_TRANSPOSED_CACHE
     std::vector<struct ggml_tensor *> kvt_l;
+#endif
 
     std::vector<struct ggml_context *> ctxs;
     std::vector<ggml_backend_buffer_t> bufs;
@@ -3120,8 +3127,6 @@ static bool llama_kv_cache_init(
 
     cache.type_k  = type_k;
     cache.type_v  = type_v;
-    cache.type_kr = type_k;
-    cache.type_kv = type_v;
 
     cache.cells.clear();
     cache.cells.resize(kv_size);
@@ -3166,7 +3171,9 @@ static bool llama_kv_cache_init(
 
     // DeepSeek MLA
     cache.kv_l.reserve(n_layer);
+#if MLA_USE_TRANSPOSED_CACHE
     cache.kvt_l.reserve(n_layer);
+#endif
 
     bool warn = true;
     int n_mla = 0;
@@ -3193,12 +3200,22 @@ static bool llama_kv_cache_init(
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
-            ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_kv, (kv_lora_rank + n_embd_head_qk_rope)*kv_size);
-            ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_kv, kv_lora_rank*kv_size);
+#if MLA_USE_TRANSPOSED_CACHE
+            // TODO: The k-cache is contiguous and not permuted, so strictly speaking, it should be possible to quantize it.
+            //       Sadly, at this point something goes wrong with quantized k-cache, so for now we set the k-cache
+            //       type to type_v, which is guaranteed to be f16 or bf16 without FA.
+            //ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_k, (kv_lora_rank + n_embd_head_qk_rope)*kv_size);
+            ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_v, (kv_lora_rank + n_embd_head_qk_rope)*kv_size);
+#else
+            ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_v, (kv_lora_rank + n_embd_head_qk_rope)*kv_size);
+#endif
             ggml_format_name(kv, "cache_kv_l%d", i);
-            ggml_format_name(kvt, "cache_kvt_l%d", i);
             cache.kv_l.push_back(kv);
+#if MLA_USE_TRANSPOSED_CACHE
+            ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
+            ggml_format_name(kvt, "cache_kvt_l%d", i);
             cache.kvt_l.push_back(kvt);
+#endif
             n_mla++;
         }
         else {
@@ -13476,19 +13493,20 @@ struct llm_build_context {
 
                 if (lctx.cparams.mla_attn && model.layers[il].wk_b && model.layers[il].wv_b) {
 
-                    struct ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.kvt_l[il], n_tokens, kv_lora_rank,
-                            ggml_row_size(kv_self.kv_l[il]->type, kv_self.size), ggml_row_size(kv_self.kv_l[il]->type, kv_head));
+#if MLA_USE_TRANSPOSED_CACHE
+                    ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.kvt_l[il], n_tokens, kv_lora_rank,
+                                    ggml_row_size(kv_self.kv_l[il]->type, kv_self.size), ggml_row_size(kv_self.kv_l[il]->type, kv_head));
                     cb(kv_cache_trans_view, "kv_cache_trans_view", il);
 
                     // note: storing transposed c^KV in the transposed KV cache
                     ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_transpose(ctx0, kv_compressed), kv_cache_trans_view));
 
-                    struct ggml_tensor * kv_cache_trans =
-                        ggml_view_2d(ctx0, kv_self.kvt_l[il],
-                                n_kv, kv_lora_rank,
-                                ggml_row_size(kv_self.kv_l[il]->type, kv_self.size),
-                                0);
+                    ggml_tensor * kv_cache_trans = ggml_view_2d(ctx0, kv_self.kvt_l[il],
+                                    n_kv, kv_lora_rank,
+                                    ggml_row_size(kv_self.kv_l[il]->type, kv_self.size),
+                                    0);
                     cb(kv_cache_trans, "kv_cache_trans", il);
+#endif
 
                     ggml_tensor * kvr = ggml_concat(ctx0, kv_compressed, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), 0);
                     cb(kvr, "kvr", il);
@@ -13533,6 +13551,16 @@ struct llm_build_context {
                         kq = ggml_permute(ctx0, kq, 0, 2, 1, 3);
                         cb(kq, "kq_soft_max_ext_perm", il);
                     }
+
+#if !MLA_USE_TRANSPOSED_CACHE
+                    ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.kv_l[il],
+                            kv_lora_rank, n_kv,
+                            ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
+                    cb(kv_cache, "kv_cache_lora", il);
+
+                    ggml_tensor * kv_cache_trans = ggml_cont(ctx0, ggml_transpose(ctx0, kv_cache_lora));
+                    cb(kv_cache_trans, "kv_cache_trans", il);
+#endif
 
                     struct ggml_tensor * kqv_compressed = ggml_mul_mat(ctx0, kv_cache_trans, kq);
                     cb(kqv_compressed, "kqv_compressed", il);
@@ -18023,9 +18051,11 @@ struct llama_context * llama_new_context_with_model(
                 memory_size_kv += ggml_nbytes(kv);
             }
 
+#if MLA_USE_TRANSPOSED_CACHE
             for (auto & kvt : ctx->kv_self.kvt_l) {
                 memory_size_kvt += ggml_nbytes(kvt);
             }
+#endif
 
             if (memory_size_kv + memory_size_kvt > 0) {
                 LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T (%s): %7.2f MiB\n", __func__,
