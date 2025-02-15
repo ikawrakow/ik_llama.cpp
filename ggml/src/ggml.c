@@ -14115,28 +14115,28 @@ UseGgmlGemm1:;
         assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
-#ifdef GGML_USE_IQK_MULMAT
-        int ts = type_traits[vec_dot_type].type_size;
-        int bs = type_traits[vec_dot_type].blck_size;
-        int64_t blocks_per_row = ne10/bs;
-        int64_t num_blocks = ne11*ne12*ne13*blocks_per_row;
-        int gcd = simple_gcd(128, ts); // 128 is to cover cache line sizes for common architectures without getting involved
-                                       // with trying to get it from ggml
-        int64_t num_blocks_gcd = (num_blocks + gcd - 1)/gcd;
-        int64_t block_per_thread = ((num_blocks_gcd + nth - 1)/nth)*gcd;
-        int64_t first_block = ith*block_per_thread;
-        int64_t last_block = MIN(num_blocks, first_block + block_per_thread);
-        while (first_block < last_block) {
-            int64_t i13 = first_block/(ne11*ne12*blocks_per_row);
-            int64_t i12 = (first_block - i13*ne11*ne12*blocks_per_row)/(ne11*blocks_per_row);
-            int64_t i11 = (first_block - (i13*ne12 + i12)*ne11*blocks_per_row)/blocks_per_row;
-            int64_t i10 = first_block % blocks_per_row;
-            int64_t blocks_to_do = MIN(blocks_per_row - i10, last_block - first_block);
-            from_float((float *)((char *)src1->data + i13*nb13 + i12*nb12 + i11*nb11) + i10*bs,
-                    (void *)(wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + i10*ts), blocks_to_do*bs);
-            first_block += blocks_to_do;
-        }
-#else
+//#ifdef GGML_USE_IQK_MULMAT
+//        int ts = type_traits[vec_dot_type].type_size;
+//        int bs = type_traits[vec_dot_type].blck_size;
+//        int64_t blocks_per_row = ne10/bs;
+//        int64_t num_blocks = ne11*ne12*ne13*blocks_per_row;
+//        int gcd = simple_gcd(128, ts); // 128 is to cover cache line sizes for common architectures without getting involved
+//                                       // with trying to get it from ggml
+//        int64_t num_blocks_gcd = (num_blocks + gcd - 1)/gcd;
+//        int64_t block_per_thread = ((num_blocks_gcd + nth - 1)/nth)*gcd;
+//        int64_t first_block = ith*block_per_thread;
+//        int64_t last_block = MIN(num_blocks, first_block + block_per_thread);
+//        while (first_block < last_block) {
+//            int64_t i13 = first_block/(ne11*ne12*blocks_per_row);
+//            int64_t i12 = (first_block - i13*ne11*ne12*blocks_per_row)/(ne11*blocks_per_row);
+//            int64_t i11 = (first_block - (i13*ne12 + i12)*ne11*blocks_per_row)/blocks_per_row;
+//            int64_t i10 = first_block % blocks_per_row;
+//            int64_t blocks_to_do = MIN(blocks_per_row - i10, last_block - first_block);
+//            from_float((float *)((char *)src1->data + i13*nb13 + i12*nb12 + i11*nb11) + i10*bs,
+//                    (void *)(wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + i10*ts), blocks_to_do*bs);
+//            first_block += blocks_to_do;
+//        }
+//#else
 
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
             for (int64_t i12 = 0; i12 < ne12; ++i12) {
@@ -14158,7 +14158,7 @@ UseGgmlGemm1:;
                 }
             }
         }
-#endif
+//#endif
 
         ggml_barrier(params->shared);
 
