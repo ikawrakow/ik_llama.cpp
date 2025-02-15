@@ -14069,22 +14069,12 @@ static void ggml_compute_forward_mul_mat(
 
 #if GGML_USE_IQK_MULMAT
     if (dst->type == GGML_TYPE_F32) {
-        int gcd = simple_gcd(ne12*ne13, nth);
-        int counter = 0;
-        for (int64_t i13 = 0; i13 < ne13; i13++) {
-            for (int64_t i12 = 0; i12 < ne12; i12++) {
-                if ((counter++ % gcd) == (ith%gcd)) {
-                    if (!iqk_mul_mat(ne01, ne11, ne00,
-                                src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01, ///ggml_type_size(src0->type),
-                                src1->type, (const char *)src1->data + i12*nb12 + i13*nb13, nb11, ///ggml_type_size(src1->type),
-                                (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                                ith/gcd, nth/gcd)) goto IQK_MulMat_Not_Available1;
-                }
-            }
-        }
-        return;
+        if (iqk_mul_mat_4d(ne01, ne11, ne00,
+                    ne02, ne03, ne12, ne13, nb02, nb03, nb12, nb13, nb2/sizeof(float), nb3/sizeof(float),
+                    src0->type, src0->data, nb01,
+                    src1->type, src1->data, nb11,
+                    (float *)dst->data, nb1/sizeof(float), ith, nth)) return;
     }
-IQK_MulMat_Not_Available1:;
 #endif
 
 #if GGML_USE_LLAMAFILE
@@ -14125,6 +14115,29 @@ UseGgmlGemm1:;
         assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
+#ifdef GGML_USE_IQK_MULMAT
+        int ts = type_traits[vec_dot_type].type_size;
+        int bs = type_traits[vec_dot_type].blck_size;
+        int64_t blocks_per_row = ne10/bs;
+        int64_t num_blocks = ne11*ne12*ne13*blocks_per_row;
+        int gcd = simple_gcd(128, ts); // 128 is to cover cache line sizes for common architectures without getting involved
+                                       // with trying to get it from ggml
+        int64_t num_blocks_gcd = (num_blocks + gcd - 1)/gcd;
+        int64_t block_per_thread = ((num_blocks_gcd + nth - 1)/nth)*gcd;
+        int64_t first_block = ith*block_per_thread;
+        int64_t last_block = MIN(num_blocks, first_block + block_per_thread);
+        while (first_block < last_block) {
+            int64_t i13 = first_block/(ne11*ne12*blocks_per_row);
+            int64_t i12 = (first_block - i13*ne11*ne12*blocks_per_row)/(ne11*blocks_per_row);
+            int64_t i11 = (first_block - (i13*ne12 + i12)*ne11*blocks_per_row)/blocks_per_row;
+            int64_t i10 = first_block % blocks_per_row;
+            int64_t blocks_to_do = MIN(blocks_per_row - i10, last_block - first_block);
+            from_float((float *)((char *)src1->data + i13*nb13 + i12*nb12 + i11*nb11) + i10*bs,
+                    (void *)(wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + i10*ts), blocks_to_do*bs);
+            first_block += blocks_to_do;
+        }
+#else
+
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
             for (int64_t i12 = 0; i12 < ne12; ++i12) {
                 int64_t i11_processed = 0;
@@ -14145,6 +14158,7 @@ UseGgmlGemm1:;
                 }
             }
         }
+#endif
 
         ggml_barrier(params->shared);
 
@@ -14165,34 +14179,14 @@ UseGgmlGemm1:;
 
 #if GGML_USE_IQK_MULMAT
     if (src1->type != vec_dot_type && dst->type == GGML_TYPE_F32) {
-        // When K*Q and V*softmax(K*Q) (so ne12*ne13 > 1), it is better (faster) to have fewer threads processing
-        // one matrix multiplication, but work on several heads at once.
-        // Hence, we find the GCD(n12*ne13, nth) and have nth/GCD(n12*ne13, nth) threads per head.
-        // Leaving the previous version commented out for now just in case.
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
-        int ntg = simple_gcd(ne12*ne13, nth);
-        int counter = 0;
-        for (int64_t i13 = 0; i13 < ne13; i13++) {
-            for (int64_t i12 = 0; i12 < ne12; i12++) {
-                if (counter++ % ntg == ith%ntg) {
-                    if (!iqk_mul_mat(ne01, ne11, ne00,
-                                src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01, ///ggml_type_size(src0->type),
-                                vec_dot_type, (const char *)wdata + (i12*ne11 + i13*ne12*ne11)*row_size, row_size, ///ggml_type_size(vec_dot_type),
-                                (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-                                ith/ntg, nth/ntg)) goto IQK_MulMat_Not_Available2;
-                }
-            }
-        }
-        //for (int64_t i13 = 0; i13 < ne13; i13++)
-        //    for (int64_t i12 = 0; i12 < ne12; i12++)
-        //        if (!iqk_mul_mat(ne01, ne11, ne00,
-        //                    src0->type, (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03, nb01, ///ggml_type_size(src0->type),
-        //                    vec_dot_type, (const char *)wdata + (i12*ne11 + i13*ne12*ne11)*row_size, row_size, ///ggml_type_size(vec_dot_type),
-        //                    (float *)((char *)dst->data + i12*nb2 + i13*nb3), nb1/ggml_type_size(dst->type),
-        //                    ith, nth)) goto IQK_MulMat_Not_Available2;
-        return;
+        if (iqk_mul_mat_4d(ne01, ne11, ne00,
+                    ne02, ne03, ne12, ne13, nb02, nb03, row_size*ne11, row_size*ne11*ne12,
+                    nb2/sizeof(float), nb3/sizeof(float),
+                    src0->type, src0->data, nb01,
+                    vec_dot_type, wdata, row_size,
+                    (float *)dst->data, nb1/sizeof(float), ith, nth)) return;
     }
-IQK_MulMat_Not_Available2:;
 #endif
 
 #if GGML_USE_LLAMAFILE
