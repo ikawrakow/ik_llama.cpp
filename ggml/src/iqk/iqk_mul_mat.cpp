@@ -269,6 +269,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_XS_R8:
             case GGML_TYPE_Q4_K_R4:
             case GGML_TYPE_Q5_K_R4:
+            case GGML_TYPE_Q8_KV:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
@@ -301,6 +302,7 @@ struct MulMat {
             case GGML_TYPE_IQ4_XS_R8:
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
+            case GGML_TYPE_Q8_KV:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
@@ -6107,7 +6109,7 @@ static void mul_mat_q6_k_r4_q8_k(int n, const void * vx, size_t bx, const DataIn
 // The HAVE_FANCY_SIMD should only be #if defined(__AVX512_VNNI__ && defined(__AVX512VL__)
 template <int nrc_y>
 static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    GGML_ASSERT(nrc_x%4 == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_K> q8(info);
 #ifndef HAVE_FANCY_SIMD
     auto m1 = _mm256_set1_epi16(1);
@@ -6165,6 +6167,111 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
         for (int iy = 0; iy < nrc_y; ++iy) {
             info.store(ix, iy, acc[iy]);
             acc[iy] = _mm256_setzero_ps();
+        }
+    }
+}
+
+template <int nrc_y>
+static void mul_mat_q8_KV_q8_KV(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%8 == 0);
+    GGML_ASSERT(n%128 == 0);
+    __m256i qx[4];
+    __m256i sx[4];
+    __m256i acc[nrc_y] = {};
+    float dy[2*nrc_y];
+    const int8_t * q8y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        auto dptr = (const float *)info.src1_row(iy);
+        dy[2*iy+0] = dptr[0];
+        dy[2*iy+1] = 127*dptr[1];
+        q8y[iy] = (const int8_t *)(dptr + 2);
+    }
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        auto dx  = (const float *)((const char *)vx + ix*bx);
+        auto q8x = (const int8_t *)(dx + 2);
+        //for (int i = 0; i < n/32; ++i) {
+        //    //auto qx = _mm256_add_epi8(_mm256_loadu_si256((const __m256i *)q8x + i), _mm256_set1_epi8(127));
+        //    auto qx = _mm256_loadu_si256((const __m256i *)q8x + i);
+        //    auto sx = _mm256_sign_epi8(qx, qx);
+        //    for (int iy = 0; iy < nrc_y; ++iy) {
+        //        //acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx, _mm256_loadu_si256((const __m256i *)q8y[iy] + i));
+        //        acc[iy] = _mm256_dpbusd_epi32(acc[iy], sx, _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)q8y[iy] + i), qx));
+        //    }
+        //}
+        ////for (int iy = 0; iy < nrc_y; ++iy) {
+        ////    int sumi = 0;
+        ////    for (int j = 0; j < n; ++j) sumi += q8x[j]*q8y[iy][j];
+        ////    info.store(ix, iy, dx[0]*dy[2*iy+0]*sumi);
+        ////}
+        //for (int i = 0; i < n/128; ++i) {
+        //    for (int j = 0; j < 4; ++j) {
+        //        qx[j] = _mm256_loadu_si256((const __m256i *)q8x + 4*i + j);
+        //        qx[j] = _mm256_add_epi8(qx[j], _mm256_set1_epi8(127));
+        //    }
+        //    for (int iy = 0; iy < nrc_y; ++iy) {
+        //        for (int j = 0; j < 4; ++j) {
+        //            acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[j], _mm256_loadu_si256((const __m256i *)q8y[iy] + 4*i + j));
+        //        }
+        //    }
+        //}
+        ////for (int i = 2*(n/128); i < n/64; ++i) {
+        ////    for (int j = 0; j < 2; ++j) {
+        ////        qx[j] = _mm256_loadu_si256((const __m256i *)q8x + 2*i + j);
+        ////        qx[j] = _mm256_add_epi8(qx[j], _mm256_set1_epi8(127));
+        ////    }
+        ////    for (int iy = 0; iy < nrc_y; ++iy) {
+        ////        for (int j = 0; j < 2; ++j) {
+        ////            acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[j], _mm256_loadu_si256((const __m256i *)q8y[iy] + 2*i + j));
+        ////        }
+        ////    }
+        ////}
+        ////if (int i = 2*(n/64); i < n/32) {
+        ////    qx[0] = _mm256_loadu_si256((const __m256i *)q8x + i);
+        ////    qx[0] = _mm256_add_epi8(qx[0], _mm256_set1_epi8(127));
+        ////    for (int iy = 0; iy < nrc_y; ++iy) {
+        ////        acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[0], _mm256_loadu_si256((const __m256i *)q8y[iy] + i));
+        ////    }
+        ////}
+        //// sum [dx * (qx_i - 128) * dy * qy_i] = dx*(dy*sum[qx_i * qy_i] - 128*dy*[sum qy_i]
+        //for (int iy = 0; iy < nrc_y; ++iy) {
+        //    auto sumi = hsum_i32_8(acc[iy]);
+        //    //info.store(ix, iy, dx[0]*(dy[2*iy+0]*sumi - dy[2*iy+1]));
+        //    info.store(ix, iy, dx[0]*dy[2*iy+0]*sumi);
+        //    acc[iy] = _mm256_setzero_si256();
+        //}
+        for (int i = 0; i < n/128; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                qx[j] = _mm256_loadu_si256((const __m256i *)q8x + 4*i + j);
+                sx[j] = _mm256_sign_epi8(qx[j], qx[j]);
+            }
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                for (int j = 0; j < 4; ++j) {
+                    acc[iy] = _mm256_dpbusd_epi32(acc[iy], sx[j], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)q8y[iy] + 4*i + j), qx[j]));
+                }
+            }
+        }
+        //for (int i = 2*(n/128); i < n/64; ++i) {
+        //    for (int j = 0; j < 2; ++j) {
+        //        qx[j] = _mm256_loadu_si256((const __m256i *)q8x + 2*i + j);
+        //        sx[j] = _mm256_sign_epi8(qx[j], qx[j]);
+        //    }
+        //    for (int iy = 0; iy < nrc_y; ++iy) {
+        //        for (int j = 0; j < 2; ++j) {
+        //            acc[iy] = _mm256_dpbusd_epi32(acc[iy], sx[j], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)q8y[iy] + 2*i + j), qx[j]));
+        //        }
+        //    }
+        //}
+        //if (int i = 2*(n/64); i < n/32) {
+        //    qx[0] = _mm256_loadu_si256((const __m256i *)q8x + i);
+        //    sx[0] = _mm256_sign_epi8(qx[0], qx[0]);
+        //    for (int iy = 0; iy < nrc_y; ++iy) {
+        //        acc[iy] = _mm256_dpbusd_epi32(acc[iy], sx[0], _mm256_sign_epi8(_mm256_loadu_si256((const __m256i *)q8y[iy] + i), qx[0]));
+        //    }
+        //}
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto sumi = hsum_i32_8(acc[iy]);
+            info.store(ix, iy, dx[0]*dy[2*iy+0]*sumi);
+            acc[iy] = _mm256_setzero_si256();
         }
     }
 }
@@ -9113,6 +9220,21 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.func16 = mul_mat_q8_k_r8_q8_k<16>;
 #endif
             expected_typeB = GGML_TYPE_Q8_KR8;
+            break;
+        case GGML_TYPE_Q8_KV:
+            assert (ne00 % 32 == 0);
+            mm.funcs[0] = mul_mat_q8_KV_q8_KV<1>;
+            mm.funcs[1] = mul_mat_q8_KV_q8_KV<2>;
+            mm.funcs[2] = mul_mat_q8_KV_q8_KV<3>;
+            mm.funcs[3] = mul_mat_q8_KV_q8_KV<4>;
+            mm.funcs[4] = mul_mat_q8_KV_q8_KV<5>;
+            mm.funcs[5] = mul_mat_q8_KV_q8_KV<6>;
+            mm.funcs[6] = mul_mat_q8_KV_q8_KV<7>;
+            mm.funcs[7] = mul_mat_q8_KV_q8_KV<8>;
+#ifdef HAVE_FANCY_SIMD
+            mm.func16 = mul_mat_q8_KV_q8_KV<16>;
+#endif
+            expected_typeB = GGML_TYPE_Q8_KV;
             break;
         case GGML_TYPE_IQ4_K_R4:
             assert (ne00 % QK_K == 0);
