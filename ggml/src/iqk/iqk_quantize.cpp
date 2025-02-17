@@ -2969,7 +2969,7 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
 }
 // TODO: merge this with the above template
 void iqk_quantize_row_q8_KV(const float * x, void * vy, int64_t k) {
-    assert(k % kBlockSize == 0);
+    assert(k % 32 == 0);
     auto dptr = (float *)vy;
     auto q8 = (int8_t *)(dptr + 2);
 #ifdef __AVX2__
