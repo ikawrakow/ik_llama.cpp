@@ -3010,7 +3010,8 @@ void iqk_quantize_row_q8_KV(const float * x, void * vy, int64_t k) {
         _mm256_storeu_si256((__m256i *)q8, i0);
         q8 += 32;
     }
-    dptr[1] = dptr[0] * hsum_i32_8(isum);
+    auto iptr = (int32_t *)(dptr + 1);
+    iptr[0] = hsum_i32_8(isum);
 #elif defined __ARM_NEON
     int32x4_t ival[8];
     auto vmax = vdupq_n_f32(0.f);
@@ -3037,7 +3038,8 @@ void iqk_quantize_row_q8_KV(const float * x, void * vy, int64_t k) {
             q8 += 8;
         }
     }
-    dptr[1] = dptr[0] * vaddvq_s32(isum);
+    auto iptr = (int32_t *)(dptr + 1);
+    iptr[0] = vaddvq_s32(isum);
 #else
     float amax = 0;
     for (int j = 0; j < k; ++j) {
@@ -3056,7 +3058,8 @@ void iqk_quantize_row_q8_KV(const float * x, void * vy, int64_t k) {
         q8[i] = nearest_int(id*x[i]);
         isum += q8[i];
     }
-    dptr[1] = dptr[0]*isum;
+    auto iptr = (int32_t *)(dptr + 1);
+    iptr[0] = isum;
 #endif
 }
 }
