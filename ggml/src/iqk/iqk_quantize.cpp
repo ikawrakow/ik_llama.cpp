@@ -2967,6 +2967,98 @@ void iqk_quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
     }
 #endif
 }
+// TODO: merge this with the above template
+void iqk_quantize_row_q8_KV(const float * x, void * vy, int64_t k) {
+    assert(k % kBlockSize == 0);
+    auto dptr = (float *)vy;
+    auto q8 = (int8_t *)(dptr + 2);
+#ifdef __AVX2__
+    const __m256 signBit = _mm256_set1_ps(-0.0f);
+    const __m256i perm = _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7);
+    __m256 maxAbs = _mm256_setzero_ps();
+    for (int ib = 0; ib < k/8; ++ib) {
+        const __m256 v = _mm256_loadu_ps(x + 8*ib);
+        maxAbs = _mm256_max_ps( maxAbs, _mm256_andnot_ps(signBit, v));
+    }
+    const float maxScalar = hmax_f32_8(maxAbs);
+    if (!maxScalar) {
+        dptr[0] = dptr[1] = 0;
+        std::memset(q8, 0, k*sizeof(int8_t));
+        return;
+    }
+    dptr[0] = maxScalar / 127.f;
+    auto mul = _mm256_set1_ps(1/dptr[0]);
+    auto isum = _mm256_setzero_si256();
+    for (int i = 0; i < k/32; i++) {
+        __m256 v0 = _mm256_mul_ps(mul, _mm256_loadu_ps(x + 32*i +  0));
+        __m256 v1 = _mm256_mul_ps(mul, _mm256_loadu_ps(x + 32*i +  8));
+        __m256 v2 = _mm256_mul_ps(mul, _mm256_loadu_ps(x + 32*i + 16));
+        __m256 v3 = _mm256_mul_ps(mul, _mm256_loadu_ps(x + 32*i + 24));
+        v0 = _mm256_round_ps(v0, _MM_ROUND_NEAREST);
+        v1 = _mm256_round_ps(v1, _MM_ROUND_NEAREST);
+        v2 = _mm256_round_ps(v2, _MM_ROUND_NEAREST);
+        v3 = _mm256_round_ps(v3, _MM_ROUND_NEAREST);
+        __m256i i0 = _mm256_cvtps_epi32(v0);
+        __m256i i1 = _mm256_cvtps_epi32(v1);
+        __m256i i2 = _mm256_cvtps_epi32(v2);
+        __m256i i3 = _mm256_cvtps_epi32(v3);
+        isum = _mm256_add_epi32(isum, _mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)));
+        i0 = _mm256_packs_epi32( i0, i1 );
+        i2 = _mm256_packs_epi32( i2, i3 );
+        i0 = _mm256_packs_epi16( i0, i2 );
+        i0 = _mm256_permutevar8x32_epi32( i0, perm );
+        _mm256_storeu_si256((__m256i *)q8, i0);
+        q8 += 32;
+    }
+    dptr[1] = dptr[0] * hsum_i32_8(isum);
+#elif defined __ARM_NEON
+    int32x4_t ival[8];
+    auto vmax = vdupq_n_f32(0.f);
+    for (int j = 0; j < k; j += 4) {
+        vmax = vmaxq_f32(vmax, vabsq_f32(vld1q_f32(xb + j)));
+    }
+    auto smax = vmaxvq_f32(vmax);
+    if (!smax) {
+        dptr[0] = dptr[1] = 0;
+        std::memset(q8, 0, k*sizeof(int8_t));
+        return;
+    }
+    auto vid = vdupq_n_f32(127/smax);
+    auto isum = vdupq_n_s32(0);
+    for (int ib = 0; ib < k/32; ++ib) {
+        for (int k = 0; k < 8; ++k) {
+            auto val = vld1q_f32(xb + 32*ib + 4*k);
+            ival[k] = vcvtnq_s32_f32(vmulq_f32(val, vid));
+            isum = vaddq_s32(isum, ival[k]);
+        }
+        for (int k = 0; k < 4; ++k) {
+            auto i16 = vcombine_s16(vmovn_s32(ival[2*k+0]), vmovn_s32(ival[2*k+1]));
+            vst1_s8(q8, vmovn_s16(i16));
+            q8 += 8;
+        }
+    }
+    dptr[1] = dptr[0] * vaddvq_s32(isum);
+#else
+    float amax = 0;
+    for (int j = 0; j < k; ++j) {
+        float ax = std::abs(x[j]);
+        amax = std::max(amax, ax);
+    }
+    if (!amax) {
+        dptr[0] = dptr[1] = 0;
+        std::memset(q8, 0, k*sizeof(int8_t));
+        return;
+    }
+    dptr[0] = amax/127;
+    float id = 1/dptr[0];
+    int isum = 0;
+    for (int i = 0; i < k; i++) {
+        q8[i] = nearest_int(id*x[i]);
+        isum += q8[i];
+    }
+    dptr[1] = dptr[0]*isum;
+#endif
+}
 }
 
 void quantize_row_q8_K128(const float * x, void * vy, int64_t k) {
@@ -6449,6 +6541,47 @@ void vec_dot_iq1_m_r4_q8_k(int n, float * s, size_t bs, const void * vx, size_t 
     GGML_UNUSED(bx);
     GGML_UNUSED(by);
 }
+
+void quantize_row_q8_KV(const float * x, void * vy, int64_t k) {
+    iqk_quantize_row_q8_KV(x, vy, k);
+}
+
+void   quantize_row_q8_KV_ref(const float * x, void * y, int64_t k) {
+    quantize_row_q8_KV(x, y, k);
+}
+
+size_t quantize_q8_KV(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    (void)imatrix;
+    auto row_size = ggml_row_size(GGML_TYPE_Q8_KV, n_per_row);
+    auto q = (char *)dst;
+    for (int row = 0; row < nrows; ++row) {
+        quantize_row_q8_KV(src, q, n_per_row);
+        src += n_per_row;
+        q += row_size;
+    }
+    return row_size*nrows;
+}
+
+void dequantize_row_q8_KV(const void * x, float * y, int64_t k) {
+    auto dptr = (const float *)x;
+    float d = dptr[0];
+    auto q8 = (const int8_t *)(dptr + 2);
+    for (int j = 0; j < k; ++j) y[j] = d * q8[j];
+}
+
+void vec_dot_q8_KV_q8_KV(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_Q8_KV, vx, 0, GGML_TYPE_Q8_KV, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+    GGML_ASSERT(n%QK4_NL == 0);
+    GGML_ASSERT(nrc == 1);
+    GGML_UNUSED(bs);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+}
+
 
 //================================================
 
