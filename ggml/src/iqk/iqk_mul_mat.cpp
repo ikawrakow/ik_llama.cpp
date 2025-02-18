@@ -9367,9 +9367,6 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             mm.funcs[5] = mul_mat_q8_KV_r8_q8_KV<6>;
             mm.funcs[6] = mul_mat_q8_KV_r8_q8_KV<7>;
             mm.funcs[7] = mul_mat_q8_KV_r8_q8_KV<8>;
-//#ifdef HAVE_FANCY_SIMD
-//            mm.func16 = mul_mat_q8_KV_r8_q8_KV<16>;
-//#endif
             expected_typeB = GGML_TYPE_Q8_KV;
             break;
         case GGML_TYPE_IQ4_K_R4:
@@ -15909,9 +15906,6 @@ struct FlashQKfp32 {
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ8KVR8<D, k_step>>) {
-#ifdef HAVE_FANCY_SIMD
-            if (nq%16 == 0) return std::make_pair(mul_mat_q8_KV_r8_q8_KV<16>, 16);
-#endif
             MAKE_FUNCS_ONLY_NRC(mul_mat_q8_KV_r8_q8_KV, nq);
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ60<D, k_step>>) {
