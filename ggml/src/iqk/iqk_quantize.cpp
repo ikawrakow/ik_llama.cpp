@@ -3016,7 +3016,7 @@ void iqk_quantize_row_q8_KV(const float * x, void * vy, int64_t k) {
     int32x4_t ival[8];
     auto vmax = vdupq_n_f32(0.f);
     for (int j = 0; j < k; j += 4) {
-        vmax = vmaxq_f32(vmax, vabsq_f32(vld1q_f32(xb + j)));
+        vmax = vmaxq_f32(vmax, vabsq_f32(vld1q_f32(x + j)));
     }
     auto smax = vmaxvq_f32(vmax);
     if (!smax) {
@@ -3024,11 +3024,13 @@ void iqk_quantize_row_q8_KV(const float * x, void * vy, int64_t k) {
         std::memset(q8, 0, k*sizeof(int8_t));
         return;
     }
-    auto vid = vdupq_n_f32(127/smax);
+    dptr[0] = smax/127;
+    auto vid = vdupq_n_f32(1/dptr[0]);
     auto isum = vdupq_n_s32(0);
     for (int ib = 0; ib < k/32; ++ib) {
+        auto xb = x + 32*ib;
         for (int k = 0; k < 8; ++k) {
-            auto val = vld1q_f32(xb + 32*ib + 4*k);
+            auto val = vld1q_f32(xb + 4*k);
             ival[k] = vcvtnq_s32_f32(vmulq_f32(val, vid));
             isum = vaddq_s32(isum, ival[k]);
         }
@@ -6549,7 +6551,7 @@ void quantize_row_q8_KV(const float * x, void * vy, int64_t k) {
     iqk_quantize_row_q8_KV(x, vy, k);
 }
 
-void   quantize_row_q8_KV_ref(const float * x, void * y, int64_t k) {
+void quantize_row_q8_KV_ref(const float * x, void * y, int64_t k) {
     quantize_row_q8_KV(x, y, k);
 }
 
