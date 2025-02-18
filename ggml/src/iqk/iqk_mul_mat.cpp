@@ -270,6 +270,7 @@ struct MulMat {
             case GGML_TYPE_Q4_K_R4:
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q8_KV:
+            case GGML_TYPE_Q8_KV_R8:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
@@ -303,6 +304,7 @@ struct MulMat {
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
             case GGML_TYPE_Q8_KV:
+            case GGML_TYPE_Q8_KV_R8:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
@@ -9355,6 +9357,21 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
 #endif
             expected_typeB = GGML_TYPE_Q8_KV;
             break;
+        case GGML_TYPE_Q8_KV_R8:
+            assert (ne00 % 32 == 0);
+            mm.funcs[0] = mul_mat_q8_KV_r8_q8_KV<1>;
+            mm.funcs[1] = mul_mat_q8_KV_r8_q8_KV<2>;
+            mm.funcs[2] = mul_mat_q8_KV_r8_q8_KV<3>;
+            mm.funcs[3] = mul_mat_q8_KV_r8_q8_KV<4>;
+            mm.funcs[4] = mul_mat_q8_KV_r8_q8_KV<5>;
+            mm.funcs[5] = mul_mat_q8_KV_r8_q8_KV<6>;
+            mm.funcs[6] = mul_mat_q8_KV_r8_q8_KV<7>;
+            mm.funcs[7] = mul_mat_q8_KV_r8_q8_KV<8>;
+#ifdef HAVE_FANCY_SIMD
+            mm.func16 = mul_mat_q8_KV_r8_q8_KV<16>;
+#endif
+            expected_typeB = GGML_TYPE_Q8_KV;
+            break;
         case GGML_TYPE_IQ4_K_R4:
             assert (ne00 % QK_K == 0);
             mm.funcs[0] = mul_mat_iq4_k_r4_q8_k<1>;
@@ -14362,6 +14379,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_q8_KV_q8_KV);
             m.funcs[0] = mul_mat_q8_KV_q8_KV_1;
             m.func16 = mul_mat_q8_KV_q8_KV<16>;
+            expected_Btype = GGML_TYPE_Q8_KV;
+            break;
+        case GGML_TYPE_Q8_KV_R8:
+            SET_MUL_MAT_FUNCTIONS(m, mul_mat_q8_KV_r8_q8_KV);
             expected_Btype = GGML_TYPE_Q8_KV;
             break;
         case GGML_TYPE_IQ2_K_R4:
