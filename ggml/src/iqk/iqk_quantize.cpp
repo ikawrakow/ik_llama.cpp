@@ -3983,7 +3983,7 @@ static void repack_q8_0(int nrows, int n_per_row, const block_q8_0 * x, block_q8
 
 #ifdef HAVE_FANCY_SIMD
 static void modify_q8_0_r8(int64_t k, char * cy) {
-    auto y = (block_iq4_nl_r8 *)cy;
+    auto y = (block_q8_0_r8 *)cy;
     int nb = k/(32*8);
     for (int ib = 0; ib < nb; ++ib) {
         for (int l = 0; l < 4; ++l) {
