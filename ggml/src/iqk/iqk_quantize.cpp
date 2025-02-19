@@ -6507,7 +6507,7 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
     if (!tensor) return;
     if (!ggml_is_contiguous(tensor)) return;
     if (strncmp(tensor->name, "token_embd.weight", GGML_MAX_NAME) == 0) return;
-    if (tensor->ne[1] % 4 || tensor->ne[2]*tensor->ne[3] > 1) return;
+    if (tensor->ne[1] % 4) return;
     static const std::unordered_map<ggml_type, Repack> k_map = {
         { GGML_TYPE_IQ2_K,  { GGML_TYPE_IQ2_K_R4,  4,  (Repack::repack_func)repack_iq2_k}   },
         { GGML_TYPE_IQ3_K,  { GGML_TYPE_IQ3_K_R4,  4,  (Repack::repack_func)repack_iq3_k}   },
@@ -6544,8 +6544,10 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
 
     auto& r = it->second;
 
+    auto nrows = ggml_nrows(tensor);
+
     int max_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
-    int num_chunks = (tensor->ne[1] + kChunk*r.num_rows - 1)/(kChunk*r.num_rows);
+    int num_chunks = (nrows + kChunk*r.num_rows - 1)/(kChunk*r.num_rows);
     int nthread = std::min(num_chunks, max_thread);
 
     //printf("%s(%s): %s -> %s. %d rows, %d chunks, %d threads\n", __func__, tensor->name, ggml_type_name(tensor->type), ggml_type_name(r.new_type),
@@ -6553,7 +6555,7 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
 
     std::atomic<int> counter(0);;
     auto compute = [&counter, &r, tensor, num_chunks, chunkSize = kChunk] () {
-        int nrows = tensor->ne[1];
+        int nrows = ggml_nrows(tensor);
         int n_per_row = tensor->ne[0];
         auto row_size = ggml_row_size(tensor->type, n_per_row);
         std::vector<char> qtmp(r.num_rows*row_size);
