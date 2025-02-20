@@ -12607,6 +12607,68 @@ static void mul_mat_iq1_s_r4_q8_1(int n, const void * vx, size_t bx, const DataI
 }
 
 template <int nrc_y>
+static void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    Q8<nrc_y, block_q8_K> q8(info);
+    int8x16_t qx[16];
+    int32x4_t scales[2];
+    int16x4_t deltas[2];
+    float32x4_t acc[nrc_y] = {};
+    auto delta_mask = vdupq_n_u16(0x8000);
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        auto iq1s = (const block_iq1_s *)((const char *)vx + ix*bx);
+        for (int ibl = 0; ibl < n/QK_K; ++ibl) {
+            float d = GGML_FP16_TO_FP32(iq1s[ibl].d);
+            auto qhb = vld1q_u16(iq1s[ibl].qh);
+            auto scales128 = vandq_u16(vshrq_n_u16(qhb, 12), vdupq_n_u16(7));
+            scales128 = vaddq_u16(vshlq_n_u16(scales128, 1), vdupq_n_u16(1));
+            auto mask = vceqq_u16(vandq_u16(qhb, delta_mask), delta_mask);
+            // Note: we explicitely assume IQ1S_DELTA = 0.125
+            auto deltas128 = vsubq_s16(vbicq_s16(scales128, mask), vandq_s16(scales128, mask));
+            //auto deltas128 = vorrq_s16(vandq_s16(vdupq_n_s16(-1), mask), vbicq_s16(vdupq_n_s16(1), mask));
+            //deltas128 = vmulq_s16(scales128, deltas128);
+            scales128 = vshlq_n_u16(scales128, 3);
+            auto qs = iq1s[ibl].qs;
+            auto qh = iq1s[ibl].qh;
+            for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
+                qx[4*ib64+0] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[qs[0] | ((qh[2*ib64+0] << 8) & 0x700)], iq1s_grid[qs[1] | ((qh[2*ib64+0] << 5) & 0x700)]});
+                qx[4*ib64+1] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[qs[2] | ((qh[2*ib64+0] << 2) & 0x700)], iq1s_grid[qs[3] | ((qh[2*ib64+0] >> 1) & 0x700)]});
+                qx[4*ib64+2] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[qs[4] | ((qh[2*ib64+1] << 8) & 0x700)], iq1s_grid[qs[5] | ((qh[2*ib64+1] << 5) & 0x700)]});
+                qx[4*ib64+3] = vreinterpretq_s8_u64(uint64x2_t{iq1s_grid[qs[6] | ((qh[2*ib64+1] << 2) & 0x700)], iq1s_grid[qs[7] | ((qh[2*ib64+1] >> 1) & 0x700)]});
+                qs += 8;
+            }
+            scales[0] = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16 (scales128)));
+            scales[1] = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(scales128)));
+            deltas[0] = vget_low_s16 (deltas128);
+            deltas[1] = vget_high_s16(deltas128);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto bsums = q8.load_bsums8(iy, ibl);
+                auto sumi = vdupq_n_s32(0);
+                sumi = vmlal_s16(sumi, deltas[0], vget_low_s16 (bsums));
+                sumi = vmlal_s16(sumi, deltas[1], vget_high_s16(bsums));
+                for (int k = 0; k < QK_K/128; ++k) {
+                    auto qy = q8.load_quants_64(iy, ibl, 2*k+0);
+                    auto dot1 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[8*k+0], qy.val[0]), qx[8*k+1], qy.val[1]);
+                    auto dot2 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[8*k+2], qy.val[2]), qx[8*k+3], qy.val[3]);
+                    auto dot12 = vpaddq_s32(dot1, dot2);
+                    qy = q8.load_quants_64(iy, ibl, 2*k+1);
+                    auto dot3 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[8*k+4], qy.val[0]), qx[8*k+5], qy.val[1]);
+                    auto dot4 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), qx[8*k+6], qy.val[2]), qx[8*k+7], qy.val[3]);
+                    auto dot34 = vpaddq_s32(dot3, dot4);
+                    auto dot = vpaddq_s32(dot12, dot34);
+                    sumi = vmlaq_s32(sumi, dot, scales[k]);
+                }
+                acc[iy] = vfmaq_f32(acc[iy], vdupq_n_f32(d*q8.scale(iy, ibl)), vcvtq_f32_s32(sumi));
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, 0.125f*vaddvq_f32(acc[iy]));
+            acc[iy] = vdupq_n_f32(0);
+        }
+    }
+}
+
+template <int nrc_y>
 static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_K128> q8(info);
@@ -14418,6 +14480,11 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_IQ2_S_R4:
             SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq2_s_r4_q8_k);
             m.func16 = mul_mat_iq2_s_r4_q8_k<16>;
+            expected_Btype = GGML_TYPE_Q8_K;
+            break;
+        case GGML_TYPE_IQ1_S:
+            SET_MUL_MAT_FUNCTIONS(m, mul_mat_iq1_s_q8_K);
+            m.func16 = mul_mat_iq1_s_q8_K<16>;
             expected_Btype = GGML_TYPE_Q8_K;
             break;
         case GGML_TYPE_IQ1_S_R4:
