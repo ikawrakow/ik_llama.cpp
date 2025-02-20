@@ -3675,6 +3675,7 @@ static void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo
     GGML_ASSERT(n%QK_K == 0);
     Q8<nrc_y, block_q8_K> q8(info);
     __m256i qx[8];
+    __m256i scales[4];
     __m256  acc[nrc_y] = {};
     auto delta_mask = _mm_set1_epi16(-32768); // to avoid stupid overflow warnings when using 0x8000
     __m256i shuffle0 = _mm256_set_epi64x(0x0302030203020302, 0x0100010001000100, 0x0302030203020302, 0x0100010001000100);
@@ -3692,7 +3693,12 @@ static void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo
             auto deltas_l = _mm_unpacklo_epi16(deltas128, deltas128);
             auto deltas_h = _mm_unpackhi_epi16(deltas128, deltas128);
             auto deltas = MM256_SET_M128I(deltas_h, deltas_l); // blocks 0,0, 1,1, 2,2, ..., 7,7
-            auto scales = MM256_SET_M128I(scales128, scales128);
+            auto all_scales = MM256_SET_M128I(scales128, scales128);
+            auto shuffle = shuffle0;
+            for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
+                scales[ib64] = _mm256_shuffle_epi8(all_scales, shuffle);
+                shuffle = _mm256_add_epi8(shuffle, _mm256_set1_epi8(4));
+            }
             const uint8_t  * qs = iq1s[ibl].qs;
             const uint16_t * qh = iq1s[ibl].qh;
             for (int ib = 0; ib < QK_K/32; ib += 2) {
@@ -3704,15 +3710,13 @@ static void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto bsums = q8.load_bsums(iy, ibl);
-                auto shuffle = shuffle0;
                 auto sumi = _mm256_setzero_si256();
-                for (int ib = 0; ib < QK_K/32; ib += 2) {
-                    auto qy1 = q8.load_quants(iy, ibl, ib+0);
-                    auto qy2 = q8.load_quants(iy, ibl, ib+1);
-                    auto dot1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[ib+0], qy1);
-                    auto dot2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[ib+1], qy2);
-                    sumi = _mm256_dpwssd_epi32(sumi, _mm256_shuffle_epi8(scales, shuffle), _mm256_packs_epi32(dot1, dot2));
-                    shuffle = _mm256_add_epi8(shuffle, _mm256_set1_epi8(4));
+                for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
+                    auto qy1 = q8.load_quants(iy, ibl, 2*ib64+0);
+                    auto qy2 = q8.load_quants(iy, ibl, 2*ib64+1);
+                    auto dot1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2*ib64+0], qy1);
+                    auto dot2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2*ib64+1], qy2);
+                    sumi = _mm256_dpwssd_epi32(sumi, scales[ib64], _mm256_packs_epi32(dot1, dot2));
                 }
                 sumi = _mm256_dpwssd_epi32(sumi, bsums, deltas);
                 acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d*q8.scale(iy, ibl)), _mm256_cvtepi32_ps(sumi), acc[iy]);
