@@ -11310,9 +11310,9 @@ inline void mul_mat_qX_Y_q8_Y(int n, Dequantizer& deq, Q8& q8, const DataInfo& i
             q8.process_scales(i, deq, sc16, acc);
             sum_4(i, deq, q8, sc16, acc);
         }
-        //for (int i = 4*(nb/4); i < nb; ++i) {
-        //    q8.process_1_block(i, deq, acc);
-        //}
+        for (int i = 4*(nb/4); i < nb; ++i) {
+            q8.process_1_block(i, deq, acc);
+        }
 
         for (int iy = 0; iy < Q8::nrc_y; ++iy) {
             info.store(ix, iy, vaddvq_f32(acc[iy]));
@@ -11387,15 +11387,13 @@ static void mul_mat_qX_1_q8_1(int n, const void * vx, size_t bx, const DataInfo&
         Dequantizer deq1(vx, bx), deq2(vx, bx);
         mul_mat_qX_Y_q8_Y_1(n, deq1, deq2, q8, info, nrc_x);
     } else {
-        if (nrc_x%2 == 0) {
+        if (nrc_x%2 == 0 && n%128 == 0) {
             Dequantizer deq1(vx, bx), deq2(vx, bx);
             mul_mat_qX_Y_q8_Y_IK(n, deq1, deq2, q8, info, nrc_x);
         } else {
             Dequantizer deq(vx, bx);
             mul_mat_qX_Y_q8_Y(n, deq, q8, info, nrc_x);
         }
-        //Dequantizer deq(vx, bx);
-        //mul_mat_qX_Y_q8_Y(n, deq, q8, info, nrc_x);
     }
 }
 
@@ -11406,7 +11404,7 @@ static void mul_mat_qX_0_q8_0(int n, const void * vx, size_t bx, const DataInfo&
         Dequantizer deq1(vx, bx), deq2(vx, bx);
         mul_mat_qX_Y_q8_Y_1(n, deq1, deq2, q8, info, nrc_x);
     } else {
-        if (nrc_x%2 == 0) {
+        if (nrc_x%2 == 0 && n%128 == 0) {
             Dequantizer deq1(vx, bx), deq2(vx, bx);
             mul_mat_qX_Y_q8_Y_IK(n, deq1, deq2, q8, info, nrc_x);
         } else {
