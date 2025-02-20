@@ -3686,8 +3686,13 @@ static void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo
             auto qhb = _mm_loadu_si128((const __m128i *)iq1s[ibl].qh);
             auto scales128 = _mm_and_si128(_mm_srli_epi16(qhb, 12), _mm_set1_epi16(7));
             scales128 = _mm_add_epi16(_mm_slli_epi16(scales128, 1), _mm_set1_epi16(1));
+#ifdef HAVE_FANCY_SIMD
             auto mask = _mm_cmpeq_epi16_mask(_mm_and_si128(qhb, delta_mask), delta_mask);
             auto deltas128 = _mm_mask_blend_epi16(mask, _mm_set1_epi16(-7), _mm_set1_epi16(-9));
+#else
+            auto mask = _mm_cmpeq_epi16(_mm_and_si128(qhb, delta_mask), delta_mask);
+            auto deltas128 = _mm_or_si128(_mm_and_si128(mask, _mm_set1_epi16(-9)), _mm_andnot_si128(mask, _mm_set1_epi16(-7)));
+#endif
             deltas128 = _mm_mullo_epi16(scales128, deltas128);
             scales128 = _mm_slli_epi16(scales128, 3);
             auto deltas_l = _mm_unpacklo_epi16(deltas128, deltas128);
@@ -3714,11 +3719,22 @@ static void mul_mat_iq1_s_q8_K(int n, const void * vx, size_t bx, const DataInfo
                 for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
                     auto qy1 = q8.load_quants(iy, ibl, 2*ib64+0);
                     auto qy2 = q8.load_quants(iy, ibl, 2*ib64+1);
+#ifdef HAVE_FANCY_SIMD
                     auto dot1 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2*ib64+0], qy1);
                     auto dot2 = _mm256_dpbusd_epi32(_mm256_setzero_si256(), qx[2*ib64+1], qy2);
                     sumi = _mm256_dpwssd_epi32(sumi, scales[ib64], _mm256_packs_epi32(dot1, dot2));
+#else
+                    auto dot1 = _mm256_maddubs_epi16(qx[2*ib64+0], qy1);
+                    auto dot2 = _mm256_maddubs_epi16(qx[2*ib64+1], qy2);
+                    auto dot  = _mm256_add_epi16(_mm256_unpacklo_epi64(dot1, dot2), _mm256_unpackhi_epi64(dot1, dot2));
+                    sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(scales[ib64], dot));
+#endif
                 }
+#ifdef HAVE_FANCY_SIMD
                 sumi = _mm256_dpwssd_epi32(sumi, bsums, deltas);
+#else
+                sumi = _mm256_add_epi32(sumi, _mm256_madd_epi16(bsums, deltas));
+#endif
                 acc[iy] = _mm256_fmadd_ps(_mm256_set1_ps(d*q8.scale(iy, ibl)), _mm256_cvtepi32_ps(sumi), acc[iy]);
             }
         }
