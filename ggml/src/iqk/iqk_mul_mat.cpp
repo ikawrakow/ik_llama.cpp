@@ -8537,7 +8537,7 @@ template <typename Float, int nrc_in> struct QFT final : public QFBase {
         xv[1] = load1(ix+1, i);
         xv[2] = load1(ix+2, i);
         xv[3] = load1(ix+3, i);
-#ifdef HAVE_FANCY_SIMD
+#ifdef __AVX512F__
         auto t0 = _mm512_unpacklo_ps(xv[0], xv[1]);
         auto t1 = _mm512_unpacklo_ps(xv[2], xv[3]);
         auto t2 = _mm512_unpackhi_ps(xv[0], xv[1]);
