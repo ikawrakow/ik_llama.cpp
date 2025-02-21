@@ -12,6 +12,7 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 #include "iqk_quantize.h"
+#include "iqk_config.h"
 
 #include <vector>
 #include <utility>
@@ -41,15 +42,6 @@ constexpr int popcount(uint8_t x) { return __builtin_popcount(x); }
 constexpr int popcount(uint16_t x) { return __builtin_popcount(x); }
 constexpr int popcount(uint32_t x) { return __builtin_popcount(x); }
 constexpr int popcount(uint64_t x) { return __builtin_popcountll(x); }
-#endif
-
-#if defined __x86_64__
-#if defined HAVE_FANCY_SIMD
-    #undef HAVE_FANCY_SIMD
-#endif
-#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512BW__) && defined(__AVX512DQ__)
-    #define HAVE_FANCY_SIMD
-#endif
 #endif
 
 namespace {
