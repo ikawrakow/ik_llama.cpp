@@ -217,6 +217,118 @@ struct MulMat {
             funcs[n_left-1](n, vx, bx, info, nrc_x);
         }
     }
+    inline void gelu(int n, const float * src, float * dst);
+    inline void relu(int n, const float * src, float * dst);
+    inline void silu(int n, const float * src, float * dst);
+    inline void activate(ggml_unary_op op, int n, const float * src, float * dst) {
+        if      (op == GGML_UNARY_OP_GELU) gelu(n, src, dst);
+        else if (op == GGML_UNARY_OP_RELU) relu(n, src, dst);
+        else if (op == GGML_UNARY_OP_SILU) silu(n, src, dst);
+        else GGML_ABORT("fatal error");
+    }
+    inline void mul_mat_up_gate_NxM(int n, const void * vx_up, const void * vx_gate, size_t bx, DataInfo& info, int nrc_x, int nrc_y, int unary_op) {
+#ifdef __aarch64__
+        constexpr int k_x_step = 64; //8192; // Tiling does not seem to help on my M2 Max (but difference to tiling is small)
+#else
+        constexpr int k_x_step = 64; // This works best on my Ryzen-7950X (but differences to other tile size are small)
+#endif
+        auto op = ggml_unary_op(unary_op);
+        float tmp[k_x_step*16];
+        if (func16 && nrc_y >= 16) {
+            int n_step = (nrc_y - info.cur_y)/16;
+            for (int ix = 0; ix < nrc_x; ix += k_x_step) {
+                auto this_info = info;
+                this_info.s += ix;
+                int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
+                for (int iy = 0; iy < n_step; ++iy) {
+                    func16(n, (const void *)((const char *)vx_gate + ix*bx), bx, this_info, this_nrc_x);
+                    for (int ky = 0; ky < 16; ++ky) {
+                        activate(op, this_nrc_x, this_info.dst_row(ky), tmp + ky*k_x_step);
+                    }
+                    func16(n, (const void *)((const char *)vx_up + ix*bx), bx, this_info, this_nrc_x);
+                    for (int ky = 0; ky < 16; ++ky) {
+                        auto result = this_info.dst_row(ky);
+                        for (int j = 0; j < this_nrc_x; ++j) result[j] *= tmp[ky*k_x_step + j];
+                    }
+                    this_info.cur_y += 16;
+                }
+            }
+            info.cur_y += 16 * n_step;
+            if (info.cur_y == nrc_y) return;
+        }
+        int ny = funcs.size();
+        while (!funcs[ny-1] && ny > 0) --ny;
+        int n_left = nrc_y - info.cur_y;
+        int n_step = n_left/ny;
+        if (n_step > 0) {
+            if (n_step*ny != n_left) {
+                ++n_step;
+                int ny1 = n_left/n_step;
+                int ny2 = ny1 + 1;
+                int my1 = n_step*ny2 - n_left;
+                int my2 = n_step - my1;
+                for (int ix = 0; ix < nrc_x; ix += k_x_step) {
+                    auto this_info = info;
+                    this_info.s += ix;
+                    int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
+                    for (int iy = 0; iy < my1; ++iy) {
+                        funcs[ny1-1](n, (const void *)((const char *)vx_gate + ix*bx), bx, this_info, this_nrc_x);
+                        for (int ky = 0; ky < ny1; ++ky) activate(op, this_nrc_x, this_info.dst_row(ky), tmp + ky*k_x_step);
+                        funcs[ny1-1](n, (const void *)((const char *)vx_up + ix*bx), bx, this_info, this_nrc_x);
+                        for (int ky = 0; ky < ny1; ++ky) {
+                            auto result = this_info.dst_row(ky);
+                            for (int j = 0; j < this_nrc_x; ++j) result[j] *= tmp[ky*k_x_step + j];
+                        }
+                        this_info.cur_y += ny1;
+                    }
+                    for (int iy = 0; iy < my2; ++iy) {
+                        funcs[ny2-1](n, (const void *)((const char *)vx_gate + ix*bx), bx, this_info, this_nrc_x);
+                        for (int ky = 0; ky < ny2; ++ky) activate(op, this_nrc_x, this_info.dst_row(ky), tmp + ky*k_x_step);
+                        funcs[ny2-1](n, (const void *)((const char *)vx_up + ix*bx), bx, this_info, this_nrc_x);
+                        for (int ky = 0; ky < ny2; ++ky) {
+                            auto result = this_info.dst_row(ky);
+                            for (int j = 0; j < this_nrc_x; ++j) result[j] *= tmp[ky*k_x_step + j];
+                        }
+                        this_info.cur_y += ny2;
+                    }
+                }
+                info.cur_y += n_left;
+            }
+            else {
+                for (int ix = 0; ix < nrc_x; ix += k_x_step) {
+                    auto this_info = info;
+                    this_info.s += ix;
+                    int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
+                    for (int iy = 0; iy < n_step; ++iy) {
+                        funcs[ny-1](n, (const void *)((const char *)vx_gate + ix*bx), bx, this_info, this_nrc_x);
+                        for (int ky = 0; ky < ny; ++ky) activate(op, this_nrc_x, this_info.dst_row(ky), tmp + ky*k_x_step);
+                        funcs[ny-1](n, (const void *)((const char *)vx_up + ix*bx), bx, this_info, this_nrc_x);
+                        for (int ky = 0; ky < ny; ++ky) {
+                            auto result = this_info.dst_row(ky);
+                            for (int j = 0; j < this_nrc_x; ++j) result[j] *= tmp[ky*k_x_step + j];
+                        }
+                        this_info.cur_y += ny;
+                    }
+                }
+                info.cur_y += ny * n_step;
+            }
+        }
+        n_left = nrc_y - info.cur_y;
+        if (n_left > 0) {
+            for (int ix = 0; ix < nrc_x; ix += k_x_step) {
+                auto this_info = info;
+                this_info.s += ix;
+                int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
+                funcs[n_left-1](n, (const void *)((const char *)vx_gate + ix*bx), bx, this_info, this_nrc_x);
+                for (int ky = 0; ky < n_left; ++ky) activate(op, this_nrc_x, this_info.dst_row(ky), tmp + ky*k_x_step);
+                funcs[n_left-1](n, (const void *)((const char *)vx_up + ix*bx), bx, this_info, this_nrc_x);
+                for (int ky = 0; ky < n_left; ++ky) {
+                    auto result = this_info.dst_row(ky);
+                    for (int j = 0; j < this_nrc_x; ++j) result[j] *= tmp[ky*k_x_step + j];
+                }
+            }
+        }
+    }
     static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
     static inline int num_rows(ggml_type type) {
 #ifdef HAVE_FANCY_SIMD
@@ -413,6 +525,34 @@ bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
     mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny);
     return true;
 }
+
+bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int unary_op,
+        int typeA, const void * Aup, const void * Agate, long strideA,
+        int typeB, const void * B, long strideB,
+        float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth) {
+
+    const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
+    assert(row_mapping != nullptr);
+
+    MulMat mm;
+    if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
+        return false;
+    }
+    size_t row_size_qx = strideA;
+    size_t row_size_qy = strideB;
+    auto num_rows = MulMat::num_rows(ggml_type(typeA));
+    GGML_ASSERT(Nx%num_rows == 0);
+    auto nrc_x = (Nx/num_rows + nth - 1)/nth;
+    auto first_x = ith*nrc_x;
+    if (first_x + nrc_x > Nx/num_rows) nrc_x = Nx/num_rows - first_x;
+    first_x *= num_rows;
+    nrc_x *= num_rows;
+    DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float),
+        row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
+    mm.mul_mat_up_gate_NxM(ne00, (const char *)Aup + row_size_qx*first_x, (const char *)Agate + row_size_qx*first_x, row_size_qx, info, nrc_x, Ny, unary_op);
+    return true;
+}
+
 
 namespace {
 
@@ -14702,6 +14842,24 @@ inline __m512 v_tanh(__m512 x) {
     const __m512 res = _mm512_div_ps(_mm512_sub_ps(exp_two_x, one), _mm512_add_ps(exp_two_x, one));
     return _mm512_mask_blend_ps(mask, res, one);
 }
+inline __m512 v_gelu(__m512 x, __m512 c1, __m512 c2) {
+    const __m512 one = _mm512_set1_ps(1.0f);
+    __m512 arg = _mm512_fmadd_ps(x, _mm512_mul_ps(c1, x), one);
+    //__m512 arg = _mm512_add_ps(one, _mm512_mul_ps(_mm512_mul_ps(x, x), c1));
+    arg = _mm512_mul_ps(arg, _mm512_mul_ps(c2, x));
+    const __mmask16 mask = _mm512_cmp_ps_mask(arg, _mm512_set1_ps(30.f), _CMP_GT_OQ);
+    const __m512 exp_arg = v_expf(arg);
+    const __m512 ratio = _mm512_div_ps(exp_arg, _mm512_add_ps(exp_arg, one));
+    return _mm512_mul_ps(x, _mm512_mask_blend_ps(mask, ratio, one));
+}
+inline static __m512 v_silu(__m512 x) {
+    const __m512 one = _mm512_set1_ps(1);
+    const __m512 zero = _mm512_setzero_ps();
+    const __m512 neg_x = _mm512_sub_ps(zero, x);
+    const __m512 exp_neg_x = v_expf(neg_x);
+    const __m512 one_plus_exp_neg_x = _mm512_add_ps(one, exp_neg_x);
+    return _mm512_div_ps(x, one_plus_exp_neg_x);
+}
 #endif
 
 #if defined(__AVX2__) && defined(__FMA__)
@@ -14754,6 +14912,61 @@ inline __m256 v_tanh(__m256 x) {
     const __m256 res = _mm256_div_ps(_mm256_sub_ps(exp_two_x, one), _mm256_add_ps(exp_two_x, one));
     const __m256 mask = _mm256_cmp_ps(x, _mm256_set1_ps(10.f), _CMP_GT_OQ);
     return _mm256_or_ps(_mm256_and_ps(mask, one), _mm256_andnot_ps(mask, res));
+}
+inline static __m256 v_gelu(__m256 x, __m256 c1, __m256 c2) {
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 mask = _mm256_cmp_ps(x, _mm256_set1_ps(10.f), _CMP_GT_OQ);
+    __m256 arg = _mm256_add_ps(one, _mm256_mul_ps(_mm256_mul_ps(x, x), c1));
+    arg = _mm256_mul_ps(arg, _mm256_mul_ps(x, c2));
+    __m256 exp_arg = v_expf(arg);
+    __m256 gelu = _mm256_mul_ps(x, _mm256_div_ps(exp_arg, _mm256_add_ps(exp_arg, one)));
+    return _mm256_or_ps(_mm256_and_ps(mask, x), _mm256_andnot_ps(mask, gelu));
+}
+inline static __m256 v_silu(__m256 x) {
+    const __m256 one = _mm256_set1_ps(1);
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256 neg_x = _mm256_sub_ps(zero, x);
+    const __m256 exp_neg_x = v_expf(neg_x);
+    const __m256 one_plus_exp_neg_x = _mm256_add_ps(one, exp_neg_x);
+    return _mm256_div_ps(x, one_plus_exp_neg_x);
+}
+
+void MulMat::gelu(int n, const float * x, float * y) {
+    constexpr float GELU_COEF_A = 0.044715f;
+    constexpr float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
+    //GGML_ASSERT(n%8 == 0);
+    int i = 0;
+#if defined __AVX512F__ && defined __AVX512DQ__
+    {
+        __m512 c1 = _mm512_set1_ps(GELU_COEF_A);
+        __m512 c2 = _mm512_set1_ps(2.f*SQRT_2_OVER_PI);
+        for (; i + 15 < n; i += 16) _mm512_storeu_ps(y + i, v_gelu(_mm512_loadu_ps(x + i), c1, c2));
+    }
+#endif
+#if defined __AVX2__ && defined __FMA__
+    if (i + 7 < n) {
+        __m256 c1 = _mm256_set1_ps(GELU_COEF_A);
+        __m256 c2 = _mm256_set1_ps(2.f*SQRT_2_OVER_PI);
+        for (; i + 7 < n; i += 8) _mm256_storeu_ps(y + i, v_gelu(_mm256_loadu_ps(x + i), c1, c2));
+
+    }
+#endif
+    for (; i < n; ++i) y[i] = 0.5f*x[i]*(1.0f + tanhf(SQRT_2_OVER_PI*x[i]*(1.0f + GELU_COEF_A*x[i]*x[i])));
+}
+
+void MulMat::silu(int n, const float * x, float * y) {
+    int i = 0;
+#if defined __AVX512F__ && defined __AVX512DQ__
+    for (; i + 15 < n; i += 16) _mm512_storeu_ps(y + i, v_silu(_mm512_loadu_ps(x + i)));
+#endif
+#if defined __AVX2__ && defined __FMA__
+    for (; i + 7 < n; i += 8) _mm256_storeu_ps(y + i, v_silu(_mm256_loadu_ps(x + i)));
+#endif
+    for (; i < n; ++i) y[i] = x[i]/(1.0f + expf(-x[i]));
+}
+
+void MulMat::relu(int n, const float * x, float * y) {
+    for (int j = 0; j < n; ++j) y[j] = x[j] > 0 ? x[j] : 0;
 }
 
 #endif
@@ -17106,6 +17319,14 @@ bool iqk_mul_mat_moe(long, long, long, int, int, const void *, long, int, const 
         const void *, int, int) {
     return false;
 }
+
+bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*ne00*/, int /*ne11*/, int /*unary_op*/,
+        int /*typeA*/, const void * /*Aup*/, const void * /*Agate*/, long /*strideA*/,
+        int /*typeB*/, const void * /*B*/, long /*strideB*/,
+        float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, int /*ith*/, int /*nth*/) {
+    return false;
+}
+
 
 bool iqk_flash_attn_noalibi([[maybe_unused]] int int_type_k,         // type of k
                             [[maybe_unused]] int int_type_v,         // type of v

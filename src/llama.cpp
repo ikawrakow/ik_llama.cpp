@@ -8628,30 +8628,33 @@ llm_expert_gating_func_type   gating_op,
     }
 
     cur = ggml_reshape_3d(ctx, cur, n_embd, 1, n_tokens);
-    ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
-    cb(up, "ffn_moe_up", il);
 
-    ggml_tensor * gate = llm_build_lora_mm_id(lctx, ctx, gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
-    cb(gate, "ffn_moe_gate", il);
+    ggml_tensor * par = ggml_moe_up_gate(ctx, up_exps, gate_exps, cur, selected_experts, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
 
-    // This is equivalent to the commented out code below
-    ggml_tensor * par = ggml_fused_mul_unary(ctx, gate, up, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+    //ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+    //cb(up, "ffn_moe_up", il);
 
-    //switch (type_op) {
-    //    case LLM_FFN_SILU:
-    //        {
-    //            gate = ggml_silu(ctx, gate);
-    //            cb(gate, "ffn_moe_silu", il);
-    //        } break;
-    //    case LLM_FFN_GELU:
-    //        {
-    //            gate = ggml_gelu(ctx, gate);
-    //            cb(gate, "ffn_moe_gelu", il);
-    //        } break;
-    //    default:
-    //        GGML_ABORT("fatal error");
-    //}
-    //ggml_tensor * par = ggml_mul(ctx, up, gate); // [n_ff, n_expert_used, n_tokens]
+    //ggml_tensor * gate = llm_build_lora_mm_id(lctx, ctx, gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+    //cb(gate, "ffn_moe_gate", il);
+
+    //// This is equivalent to the commented out code below
+    //ggml_tensor * par = ggml_fused_mul_unary(ctx, gate, up, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+
+    ////switch (type_op) {
+    ////    case LLM_FFN_SILU:
+    ////        {
+    ////            gate = ggml_silu(ctx, gate);
+    ////            cb(gate, "ffn_moe_silu", il);
+    ////        } break;
+    ////    case LLM_FFN_GELU:
+    ////        {
+    ////            gate = ggml_gelu(ctx, gate);
+    ////            cb(gate, "ffn_moe_gelu", il);
+    ////        } break;
+    ////    default:
+    ////        GGML_ABORT("fatal error");
+    ////}
+    ////ggml_tensor * par = ggml_mul(ctx, up, gate); // [n_ff, n_expert_used, n_tokens]
     cb(par, "ffn_moe_gate_par", il);
 
     ggml_tensor * experts = llm_build_lora_mm_id(lctx, ctx, down_exps, par, selected_experts); // [n_embd, n_expert_used, n_tokens]
