@@ -15841,22 +15841,17 @@ struct FlashQKfp32 {
 #endif
         constexpr int qrem = q_step - nrc_q*(q_step/nrc_q);
         constexpr int krem = k_step - nrc_k*(k_step/nrc_k);
+        static_assert(krem == 0);
         DataInfo info{fms.cache, (const char *)q, k_step, stride_q*sizeof(q_float), 0, 1, nullptr};
         for (int iq = 0; iq < q_step/nrc_q; ++iq) {
             for (int ik = 0; ik < k_step/nrc_k; ++ik) {
                 mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, nrc_q>, QFT<ggml_half, nrc_k>>(D, kh.block, kh.stride, ik*nrc_k, info);
-            }
-            if constexpr (krem > 0) {
-                mul_mat_Qx_Qy_MxN_fa<QFT<q_float, nrc_q>, QFT<ggml_half, krem>>(D, kh.block, kh.stride, k_step - krem, info);
             }
             info.cur_y += nrc_q;
         }
         if constexpr (qrem > 0) {
             for (int ik = 0; ik < k_step/nrc_k; ++ik) {
                 mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, qrem>, QFT<ggml_half, nrc_k>>(D, kh.block, kh.stride, ik*nrc_k, info);
-            }
-            if constexpr (krem > 0) {
-                mul_mat_Qx_Qy_MxN_fa<QFT<q_float, qrem>, QFT<ggml_half, krem>>(D, kh.block, kh.stride, k_step - krem, info);
             }
         }
         F16::Data vk[k_step/F16::block_size];
@@ -15910,7 +15905,7 @@ struct FlashQKfp32 {
         constexpr int nrc_k = 8;
 #endif
         static_assert(k_step%nrc_k == 0);
-        int qrem = q_step - nrc_q*(q_step/nrc_q);
+        int qrem = nq - nrc_q*(nq/nrc_q);
         DataInfo info{fms.cache, (const char *)q, k_step, stride_q*sizeof(q_float), 0, 1, nullptr};
         for (int iq = 0; iq < nq/nrc_q; ++iq) {
             for (int ik = 0; ik < k_step/nrc_k; ++ik) {
@@ -15960,7 +15955,7 @@ struct FlashQKfp32 {
             }
         }
         F16::Data vk[k_step/F16::block_size];
-        for (int j = 0; j < q_step; ++j) {
+        for (int j = 0; j < nq; ++j) {
             fms.update_M_S(j, vk, mask + stride_m*j);
         }
     }
@@ -16830,6 +16825,14 @@ inline void iqk_flash_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int str
     }
     if (nq1 >= 8) {
         FlashAttn<Dk, Dv, 8, k_step> fa(scale, softcap);
+        fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+    }
+    if (nq1 >= 4) {
+        FlashAttn<Dk, Dv, 4, k_step> fa(scale, softcap);
+        fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+    }
+    if (nq1 >= 2) {
+        FlashAttn<Dk, Dv, 2, k_step> fa(scale, softcap);
         fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
     }
     else {
