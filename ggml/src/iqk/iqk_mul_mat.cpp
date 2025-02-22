@@ -6351,22 +6351,6 @@ static void mul_mat_q8_KV_q8_KV_1(int n, const void * vx, size_t bx, const DataI
         }
         info.store(0, 0, dx[0]*dy[0]*hsum_i32_8(isum));
 #endif
-        //auto isum1 = _mm256_setzero_si256();
-        //auto isum2 = _mm256_setzero_si256();
-        //for (int i = 0; i < n/64; ++i) {
-        //    auto qx1 = _mm256_loadu_si256((const __m256i *)x + 2*i+0);
-        //    auto qx2 = _mm256_loadu_si256((const __m256i *)x + 2*i+1);
-        //    auto qy1 = _mm256_loadu_si256((const __m256i *)y + 2*i+0);
-        //    auto qy2 = _mm256_loadu_si256((const __m256i *)y + 2*i+1);
-        //    isum1 = _mm256_dpbusd_epi32(isum1, _mm256_add_epi8(qx1, _mm256_set1_epi8(127)), qy1);
-        //    isum2 = _mm256_dpbusd_epi32(isum1, _mm256_add_epi8(qx2, _mm256_set1_epi8(127)), qy2);
-        //}
-        //for (int i = 2*(n/64); i < n/32; ++i) {
-        //    auto qx1 = _mm256_loadu_si256((const __m256i *)x + i);
-        //    auto qy1 = _mm256_loadu_si256((const __m256i *)y + i);
-        //    isum1 = _mm256_dpbusd_epi32(isum1, _mm256_add_epi8(qx1, _mm256_set1_epi8(127)), qy1);
-        //}
-        //info.store(0, 0, dx[0]*dy[0]*(hsum_i32_8(_mm256_add_epi32(isum1, isum2)) - 127*sy[0]));
         return;
     }
     GGML_ASSERT(nrc_x%8 == 0);
