@@ -567,6 +567,7 @@ extern "C" {
         GGML_OP_MUL_MAT,
         GGML_OP_MUL_MAT_ID,
         GGML_OP_OUT_PROD,
+        GGML_OP_MOE_FUSED_UP_GATE,
 
         GGML_OP_SCALE,
         GGML_OP_SET,
@@ -1319,6 +1320,15 @@ extern "C" {
             struct ggml_tensor  * as,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
+
+    // MoE up + gate + unary
+    GGML_API struct ggml_tensor * ggml_moe_up_gate(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * as_up,
+            struct ggml_tensor  * as_gate,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            enum ggml_unary_op    op);
 
     // A: m columns, n rows,
     // B: p columns, n rows,

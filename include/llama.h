@@ -377,6 +377,7 @@ extern "C" {
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
         bool mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
+        bool fused_moe_up_gate; // whether to use fused MoE up/down op [EXPERIMENTAL]
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted

@@ -36,5 +36,7 @@ void ggml_cuda_op_sqrt(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 void ggml_cuda_op_swiglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_cuda_op_fused_mul_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+void ggml_fused_mul_unary(ggml_backend_cuda_context & ctx, ggml_unary_op op,
+        int64_t nelements, const float * x, const float * y, float * z);
 
 void ggml_cuda_op_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
