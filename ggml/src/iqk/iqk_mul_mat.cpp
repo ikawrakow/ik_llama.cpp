@@ -15315,9 +15315,11 @@ struct HelperIQ4nl final : public BaseHelper<step> {
 #ifdef __aarch64__
     using block_q8 = block_q8_0;
     HelperIQ4nl(const char * data, int stride) : Base(data, stride), values(vld1q_s8(iq4k_values)) {}
+    constexpr static int block_size_q = QK8_0;
 #else
     HelperIQ4nl(const char * data, int stride) : Base(data, stride) {}
     using block_q8 = block_q8_1;
+    constexpr static int block_size_q = QK8_1;
 #endif
 
     // Needed for v * softmax(k * q)
