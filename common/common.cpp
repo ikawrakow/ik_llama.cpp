@@ -1360,6 +1360,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.warmup = false;
         return true;
     }
+    if (arg == "--output-format") {
+        CHECK_ARG
+        std::string value(argv[i]);
+        /**/ if (value == "jsonl") { params.sweep_bench_output_jsonl = true; }
+        else if (value == "md") { params.sweep_bench_output_jsonl = false; }
+        else { invalid_param = true; }
+        return true;
+    }
+
 #ifndef LOG_DISABLE_LOGS
     // Parse args for logging parameters
     if (log_param_single_parse(argv[i])) {
