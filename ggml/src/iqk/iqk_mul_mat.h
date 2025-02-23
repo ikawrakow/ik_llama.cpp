@@ -28,6 +28,11 @@ bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         int typeB, const void * B, long strideB,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
 
+bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int unary_op,
+        int typeA, const void * Aup, const void * Agate, long strideA,
+        int typeB, const void * B, long strideB,
+        float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
+
 bool iqk_flash_attn_noalibi(int type_k,             // type of k
                             int type_v,             // type of v
                             int Dk,                 // K head size

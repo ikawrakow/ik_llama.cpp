@@ -175,6 +175,7 @@ struct gpt_params {
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
     bool flash_attn        = false; // flash attention
     bool mla_attn          = false; // MLA
+    bool fused_moe_up_gate = false; // fused up*unary(gate) op for MoE models
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool ignore_eos        = false; // ignore generated EOS tokens
