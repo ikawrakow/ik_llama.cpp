@@ -19205,6 +19205,7 @@ static void ggml_compute_forward_cross_entropy_loss_back(
 
 static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor, struct ggml_tensor * next) {
     GGML_ASSERT(params);
+    GGML_UNUSED(next);
 
     if (tensor->op == GGML_OP_NONE || ggml_is_empty(tensor)) {
         return false;
@@ -19322,14 +19323,6 @@ static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
-//#if GGML_USE_IQK_MULMAT
-//                if (next && next->op == GGML_OP_MUL_MAT_ID && tensor->src[1] == next->src[1] &&
-//                    tensor->src[0]->type == next->src[0]->type) {
-//                    ggml_compute_forward_mul_mat_id_up_gate(params, tensor, next);
-//                    skip_next = true;
-//                    break;
-//                }
-//#endif
                 ggml_compute_forward_mul_mat_id(params, tensor);
             } break;
         case GGML_OP_MOE_FUSED_UP_GATE:
