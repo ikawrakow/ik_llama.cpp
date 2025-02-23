@@ -269,6 +269,8 @@ struct gpt_params {
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
 
     std::string lora_outfile = "ggml-lora-merged-f16.gguf";
+
+    bool sweep_bench_output_jsonl = false;
 };
 
 void gpt_params_handle_hf_token(gpt_params & params);
