@@ -1,6 +1,6 @@
-# llama.cpp/example/sweep-bench
+# ik_llama.cpp/example/sweep-bench
 
-Benchmark the prompt processing and token generation performance of `llama.cpp`
+Benchmark the prompt processing and token generation performance of `ik_llama.cpp`
 by doing a sweep over a whole context size and gathering performance metrics
 in each ubatch-sized window. Only a single token sequence is used.
 
