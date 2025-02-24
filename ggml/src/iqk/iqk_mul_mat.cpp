@@ -4062,7 +4062,7 @@ static void mul_mat_q4_0_r8_q8_1(int n, const void * vx, size_t bx, const DataIn
 
 template <int nrc_y>
 static void mul_mat_q5_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    GGML_ASSERT(nrc_x%8 == 0);
+    GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_1_x4> q8(info);
     auto m4 = _mm256_set1_epi8(0xf);
     auto m5 = _mm256_set1_epi8(0x10);
@@ -4232,7 +4232,7 @@ static void mul_mat_q5_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
 
 template <int nrc_y>
 static void mul_mat_q6_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    GGML_ASSERT(nrc_x%8 == 0);
+    GGML_ASSERT(nrc_x%4 == 0);
     Q8<nrc_y, block_q8_1_x4> q8(info);
     auto m4 = _mm256_set1_epi8(0xf);
     auto m6 = _mm256_set1_epi8(0x30);
@@ -6493,7 +6493,6 @@ static void mul_mat_q8_KV_q8_KV_1(int n, const void * vx, size_t bx, const DataI
 #endif
         return;
     }
-    GGML_ASSERT(nrc_x%8 == 0);
     __m256i qx[2];
     __m256i acc[2*nrc_y] = {};
     float   dy[nrc_y];
@@ -6566,7 +6565,7 @@ static void mul_mat_q8_KV_q8_KV_1(int n, const void * vx, size_t bx, const DataI
 
 template <int nrc_y>
 static void mul_mat_q8_KV_q8_KV(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    GGML_ASSERT(nrc_x%8 == 0);
+    GGML_ASSERT(nrc_x%4 == 0);
     GGML_ASSERT(n%32 == 0);
     __m256i qx[4];
 #ifndef HAVE_FANCY_SIMD
