@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define IK_PRINT_TIMING 0
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
@@ -229,7 +230,17 @@ GGML_CALL void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void *
         return;
     }
 
+
+#if IK_PRINT_TIMING
+    int64_t tim1 = ggml_time_us();
+#endif
     buf->iface.set_tensor(buf, tensor, data, offset, size);
+#if IK_PRINT_TIMING
+    int64_t tim2 = ggml_time_us();
+    //printf("%s(%s) %zu %d us\n", __func__, tensor->name, size, (int)(tim2-tim1));
+    printf("%s(%s): %d us\n", __func__, tensor->name, (int)(tim2-tim1));
+#endif
+
 }
 
 GGML_CALL void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -243,7 +254,15 @@ GGML_CALL void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void *
         return;
     }
 
+#if IK_PRINT_TIMING
+    int64_t tim1 = ggml_time_us();
+#endif
     buf->iface.get_tensor(buf, tensor, data, offset, size);
+#if IK_PRINT_TIMING
+    int64_t tim2 = ggml_time_us();
+    //printf("%s(%s) %zu %d us\n", __func__, tensor->name, size, (int)(tim2-tim1));
+    printf("%s(%s): %d us\n", __func__, tensor->name, (int)(tim2-tim1));
+#endif
 }
 
 void ggml_backend_synchronize(ggml_backend_t backend) {
@@ -1751,7 +1770,11 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     struct ggml_backend_sched_split * splits = sched->splits;
 
+
     for (int i = 0; i < sched->n_splits; i++) {
+#if IK_PRINT_TIMING
+        int64_t tim1 = ggml_time_us();
+#endif
         struct ggml_backend_sched_split * split = &splits[i];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
@@ -1792,6 +1815,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!sched->callback_eval) {
+#if IK_PRINT_TIMING
+            int64_t tim2 = ggml_time_us();
+            printf("%s(.1.): %d us\n", __func__, (int)(tim2-tim1));
+#endif
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
@@ -1813,6 +1840,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
 
                 struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1 + 1);
+
+#if IK_PRINT_TIMING
+                int64_t tim2 = ggml_time_us();
+                printf("%s(.2.): %d us\n", __func__, (int)(tim2-tim1));
+#endif
 
                 enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
                 if (ec != GGML_STATUS_SUCCESS) {

@@ -4267,6 +4267,9 @@ GGML_CALL int64_t ggml_blck_size(enum ggml_type type) {
 }
 
 GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (tensor->ne[i] <= 0) return 0;
+    }
     size_t nbytes;
     size_t blck_size = ggml_blck_size(tensor->type);
     if (blck_size == 1) {
@@ -21480,6 +21483,9 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
 #ifdef GGML_USE_OPENMP
     if (n_threads > 1) {
+//#if IK_PRINT_TIMING
+//        int64_t tim1 = ggml_time_us();
+//#endif
         #pragma omp parallel num_threads(n_threads)
         {
             #pragma omp single
@@ -21496,6 +21502,10 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
             };
             ggml_graph_compute_thread(&worker);
         }
+//#if IK_PRINT_TIMING
+//        int64_t tim2 = ggml_time_us();
+//        printf("%s(...): %d us\n", __func__, (int)(tim2-tim1));
+//#endif
     } else {
         struct ggml_compute_state worker = {
             .thrd   = 0,

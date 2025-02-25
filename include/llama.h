@@ -305,6 +305,11 @@ extern "C" {
         };
     };
 
+    struct llama_model_tensor_buft_override {
+        const char * pattern;
+        ggml_backend_buffer_type_t buft;
+    };
+
     struct llama_model_params {
         int32_t n_gpu_layers; // number of layers to store in VRAM
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
@@ -331,6 +336,8 @@ extern "C" {
 
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
+
+        const struct llama_model_tensor_buft_override * tensor_buft_overrides;
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights
