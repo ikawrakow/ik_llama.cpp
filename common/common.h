@@ -175,6 +175,7 @@ struct gpt_params {
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
     bool flash_attn        = false; // flash attention
     bool mla_attn          = false; // MLA
+    bool fused_moe_up_gate = false; // fused up*unary(gate) op for MoE models
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool ignore_eos        = false; // ignore generated EOS tokens
@@ -269,6 +270,8 @@ struct gpt_params {
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
 
     std::string lora_outfile = "ggml-lora-merged-f16.gguf";
+
+    bool sweep_bench_output_jsonl = false;
 };
 
 void gpt_params_handle_hf_token(gpt_params & params);
