@@ -6398,10 +6398,6 @@ static bool llm_load_tensors(
         buft_layer_count[model.buft_layer[i].buft]++;
         buft_layer_count[model.buft_layer[i].buft_matrix]++;
     }
-    {
-        auto cpu_buft = ggml_backend_cpu_buffer_type();
-        if (auto [it, emplaced] = buft_layer_count.emplace(cpu_buft, 0); emplaced) it->second = 1;
-    }
 
     // create one context per buffer type
     size_t ctx_size = ggml_tensor_overhead()*(ml.n_tensors + 1); // +1 for models where tok_embd is duplicated as output
@@ -6423,6 +6419,26 @@ static bool llm_load_tensors(
         ctx_map[it.first] = ctx;
         model.ctxs.push_back(ctx);
     }
+
+    auto ctx_for_buft = [&model, &ctx_map, ctx_size](ggml_backend_buffer_type_t buft) -> ggml_context * {
+        if (auto it = ctx_map.find(buft); it != ctx_map.end()) return it->second;
+
+        ggml_init_params params = {
+            /*.mem_size   =*/ ctx_size,
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ true,
+        };
+
+        ggml_context * ctx = ggml_init(params);
+        if (!ctx) {
+            throw std::runtime_error(format("failed to create ggml context"));
+        }
+
+        ctx_map[buft] = ctx;
+        model.ctxs.emplace_back(ctx);
+
+        return ctx;
+    };
 
     LLAMA_LOG_INFO("%s: ggml ctx size = %7.2f MiB\n", __func__, model.ctxs.size()*ctx_size/1024.0/1024.0);
 
@@ -6457,36 +6473,14 @@ static bool llm_load_tensors(
 
         model.layers.resize(n_layer);
 
-        auto create_tensor = [&ml, &ctx_map] (ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags = 0) {
-            ggml_backend_buffer_type_t buft = nullptr;
-            for (auto& entry : ctx_map) {
-                if (entry.second == ctx) {
-                    buft = entry.first;
-                    break;
-                }
-            }
-            if (!buft) throw std::runtime_error(std::string{"Failed to find context for "} + name);
+        auto create_tensor = [&ml, &ctx_map, &ctx_for_buft] (ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags = 0) {
             if (ml.tensor_buft_overrides) {
                 for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
                     std::regex pattern(overrides->pattern);
                     if (std::regex_search(name, pattern)) {
-                        buft = overrides->buft;
-                        //printf("Found override for %s: %p  %s\n", name.c_str(), buft, ggml_backend_buft_name(buft));
-                        //printf("    input context is %p\n", (void *)ctx);
-                        if (auto it = ctx_map.find(buft); it != ctx_map.end()) {
-                            if (it->second != ctx) {
-                                LLAMA_LOG_INFO("Tensor %s buffer type overriden to %s\n", name.c_str(), ggml_backend_buft_name(overrides->buft));
-                                ctx = it->second;
-                            }
-                            break;
-                        } else {
-                            printf("Oops\n");
-                            for (auto& entry : ctx_map) {
-                                printf("  first: %p (%s), second: %p\n", entry.first, ggml_backend_buft_name(entry.first), entry.second);
-                            }
-                            printf("CPU: %p %s\n", ggml_backend_cpu_buffer_type(), ggml_backend_buft_name(ggml_backend_cpu_buffer_type()));
-                            throw std::runtime_error(std::string{"Failed to map back context for "} + name);
-                        }
+                        LLAMA_LOG_INFO("Tensor %s buffer type overriden to %s\n", name.c_str(), ggml_backend_buft_name(overrides->buft));
+                        ctx = ctx_for_buft(overrides->buft);
+                        break;
                     }
                 }
             }

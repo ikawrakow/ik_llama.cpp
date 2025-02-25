@@ -4267,6 +4267,9 @@ GGML_CALL int64_t ggml_blck_size(enum ggml_type type) {
 }
 
 GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (tensor->ne[i] <= 0) return 0;
+    }
     size_t nbytes;
     size_t blck_size = ggml_blck_size(tensor->type);
     if (blck_size == 1) {
