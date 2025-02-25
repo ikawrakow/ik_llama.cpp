@@ -109,6 +109,14 @@
 #define LLAMA_MAX_EXPERTS 256  // DeepSeekV2
 
 //
+// === MLA cache
+// If tou are desperate to reduce KV cache size, set MLA_USE_TRANSPOSED_CACHE to 0.
+// TG perfornce will be slower (similar to no-MLA), but KV cache size will be cut to ~half.
+// PP performance will be about the same as with MLA_USE_TRANSPOSED_CACHE = 1.
+//
+#define MLA_USE_TRANSPOSED_CACHE 1
+
+//
 // helpers
 //
 
@@ -539,6 +547,8 @@ enum llm_tensor {
     LLM_TENSOR_ATTN_Q_B,
     LLM_TENSOR_ATTN_KV_A_MQA,
     LLM_TENSOR_ATTN_KV_B,
+    LLM_TENSOR_ATTN_K_B,
+    LLM_TENSOR_ATTN_V_B,
     LLM_TENSOR_ATTN_Q_A_NORM,
     LLM_TENSOR_ATTN_KV_A_NORM,
     LLM_TENSOR_ATTN_SUB_NORM,
@@ -1203,6 +1213,8 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_ATTN_Q_B,           "blk.%d.attn_q_b" },
             { LLM_TENSOR_ATTN_KV_A_MQA,      "blk.%d.attn_kv_a_mqa" },
             { LLM_TENSOR_ATTN_KV_B,          "blk.%d.attn_kv_b" },
+            { LLM_TENSOR_ATTN_K_B,           "blk.%d.attn_k_b" },
+            { LLM_TENSOR_ATTN_V_B,           "blk.%d.attn_v_b" },
             { LLM_TENSOR_ATTN_OUT,           "blk.%d.attn_output" },
             { LLM_TENSOR_FFN_NORM,           "blk.%d.ffn_norm" },
             { LLM_TENSOR_FFN_GATE,           "blk.%d.ffn_gate" },
@@ -2503,6 +2515,7 @@ struct llama_cparams {
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;
+    bool mla_attn;
 
     enum llama_pooling_type pooling_type;
 
@@ -2541,6 +2554,8 @@ struct llama_layer {
     struct ggml_tensor * wq_b;
     struct ggml_tensor * wkv_a_mqa;
     struct ggml_tensor * wkv_b;
+    struct ggml_tensor * wk_b;
+    struct ggml_tensor * wv_b;
     struct ggml_tensor * wq_cross;
     struct ggml_tensor * wk_cross;
     struct ggml_tensor * wv_cross;
@@ -2673,6 +2688,12 @@ struct llama_kv_cache {
 
     std::vector<struct ggml_tensor *> k_l; // per layer
     std::vector<struct ggml_tensor *> v_l;
+
+    // DeepSeek MLA
+    std::vector<struct ggml_tensor *> kv_l;
+#if MLA_USE_TRANSPOSED_CACHE
+    std::vector<struct ggml_tensor *> kvt_l;
+#endif
 
     std::vector<struct ggml_context *> ctxs;
     std::vector<ggml_backend_buffer_t> bufs;
@@ -3104,8 +3125,8 @@ static bool llama_kv_cache_init(
     cache.size = kv_size;
     cache.used = 0;
 
-    cache.type_k = type_k;
-    cache.type_v = type_v;
+    cache.type_k  = type_k;
+    cache.type_v  = type_v;
 
     cache.cells.clear();
     cache.cells.resize(kv_size);
@@ -3132,7 +3153,7 @@ static bool llama_kv_cache_init(
     for (auto & it : buft_layer_count) {
         int n_layers = it.second;
         struct ggml_init_params params = {
-            /*.mem_size   =*/ 2u*n_layers*ggml_tensor_overhead(),
+            /*.mem_size   =*/ 5u*n_layers*ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc   =*/ true,
         };
@@ -3148,17 +3169,72 @@ static bool llama_kv_cache_init(
     cache.k_l.reserve(n_layer);
     cache.v_l.reserve(n_layer);
 
+    // DeepSeek MLA
+    cache.kv_l.reserve(n_layer);
+#if MLA_USE_TRANSPOSED_CACHE
+    cache.kvt_l.reserve(n_layer);
+#endif
+
+    bool warn = true;
+    int n_mla = 0;
     for (int i = 0; i < (int) n_layer; i++) {
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
+        const uint32_t n_head       = hparams.n_head(i);
+        const uint32_t n_head_kv    = hparams.n_head_kv(i);
+        const uint32_t n_embd_head_k= hparams.n_embd_head_k;
+
 
         struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-        ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
-        ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
-        ggml_format_name(k, "cache_k_l%d", i);
-        ggml_format_name(v, "cache_v_l%d", i);
-        cache.k_l.push_back(k);
-        cache.v_l.push_back(v);
+        ggml_tensor * k;
+        ggml_tensor * v;
+        if (cparams.mla_attn) {
+            if (!model.layers[i].wk_b || !model.layers[i].wv_b) {
+                if (warn) {
+                    LLAMA_LOG_WARN("=======================================================================================\n");
+                    LLAMA_LOG_WARN("%s: missing MLA tensors => disabling MLA\n", __func__);
+                    LLAMA_LOG_WARN("%s: you need to reconvert your model in order to use MLA\n", __func__);
+                    LLAMA_LOG_WARN("=======================================================================================\n");
+                    warn = false;
+                }
+            }
+        }
+        if (cparams.mla_attn && model.layers[i].wk_b && model.layers[i].wv_b) {
+            // DeepSeek MLA
+            const uint32_t n_embd_head_qk_rope = hparams.n_rot;
+            const uint32_t kv_lora_rank = hparams.n_lora_kv;
+            LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
+#if MLA_USE_TRANSPOSED_CACHE
+            ggml_tensor * kv = ggml_new_tensor_2d(ctx, cache.type_k, kv_lora_rank + n_embd_head_qk_rope, kv_size);
+            //ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_k, (kv_lora_rank + n_embd_head_qk_rope)*kv_size);
+#else
+            ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_v, (kv_lora_rank + n_embd_head_qk_rope)*kv_size);
+#endif
+            ggml_format_name(kv, "cache_kv_l%d", i);
+            cache.kv_l.push_back(kv);
+#if MLA_USE_TRANSPOSED_CACHE
+            ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
+            ggml_format_name(kvt, "cache_kvt_l%d", i);
+            cache.kvt_l.push_back(kvt);
+#endif
+            n_mla++;
+        }
+        else {
+            //printf("Creating cache tensors:\n");
+            //printf("n_embd_k_gqa = %d, kv_size = %d, n_head = %d, n_head_kv = %d, n_embd_head_k = %d\n", (int)n_embd_k_gqa, (int)kv_size, (int)n_head, (int)n_head_kv, (int)n_embd_head_k);
+            //k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
+            k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
+            v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
+            ggml_format_name(k, "cache_k_l%d", i);
+            ggml_format_name(v, "cache_v_l%d", i);
+            cache.k_l.push_back(k);
+            cache.v_l.push_back(v);
+        }
+    }
+    if (cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
+        LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
+        LLAMA_LOG_ERROR("%s: bailing out\n", __func__);
+        GGML_ABORT("fatal error");
     }
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
@@ -3738,7 +3814,7 @@ static size_t llama_model_max_nodes(const llama_model & /*model*/) {
     //    return 32768;
     //}
 
-    return 8192;
+    return 65536;
 }
 
 struct llama_model_loader {
@@ -3934,6 +4010,7 @@ struct llama_model_loader {
                 case GGML_TYPE_Q5_1:    ftype = LLAMA_FTYPE_MOSTLY_Q5_1;    break;
                 case GGML_TYPE_Q6_0:    ftype = LLAMA_FTYPE_MOSTLY_Q6_0;    break;
                 case GGML_TYPE_Q8_0:    ftype = LLAMA_FTYPE_MOSTLY_Q8_0;    break;
+                case GGML_TYPE_Q8_KV:   ftype = LLAMA_FTYPE_MOSTLY_Q8_KV;   break;
                 case GGML_TYPE_Q2_K:    ftype = LLAMA_FTYPE_MOSTLY_Q2_K;    break;
                 case GGML_TYPE_Q3_K:    ftype = LLAMA_FTYPE_MOSTLY_Q3_K_M;  break;
                 case GGML_TYPE_Q3_K_R4: ftype = LLAMA_FTYPE_MOSTLY_Q3_K_R4; break;
@@ -3944,6 +4021,7 @@ struct llama_model_loader {
                 case GGML_TYPE_Q6_K:    ftype = LLAMA_FTYPE_MOSTLY_Q6_K;    break;
                 case GGML_TYPE_Q6_K_R4: ftype = LLAMA_FTYPE_MOSTLY_Q6_K_R4; break;
                 case GGML_TYPE_Q8_K_R8: ftype = LLAMA_FTYPE_MOSTLY_Q8_K_R8; break;
+                case GGML_TYPE_Q8_KV_R8: ftype = LLAMA_FTYPE_MOSTLY_Q8_KV_R8; break;
                 case GGML_TYPE_IQ2_XXS: ftype = LLAMA_FTYPE_MOSTLY_IQ2_XXS; break;
                 case GGML_TYPE_IQ2_XXS_R4:ftype = LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4; break;
                 case GGML_TYPE_IQ2_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ2_XS;  break;
@@ -4662,6 +4740,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q5_1:     return "Q5_1";
         case LLAMA_FTYPE_MOSTLY_Q6_0:     return "Q6_0";
         case LLAMA_FTYPE_MOSTLY_Q8_0:     return "Q8_0";
+        case LLAMA_FTYPE_MOSTLY_Q8_KV:    return "Q8_KV";
         case LLAMA_FTYPE_MOSTLY_Q2_K:     return "Q2_K - Medium";
         case LLAMA_FTYPE_MOSTLY_Q2_K_R4:  return "Q2_K_R4";
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:   return "Q2_K - Small";
@@ -4678,6 +4757,7 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q6_K:     return "Q6_K";
         case LLAMA_FTYPE_MOSTLY_Q6_K_R4:  return "Q6_K_R4";
         case LLAMA_FTYPE_MOSTLY_Q8_K_R8:  return "Q8_K_R8";
+        case LLAMA_FTYPE_MOSTLY_Q8_KV_R8: return "Q8_KV_R8";
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS:  return "IQ2_XXS - 2.0625 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4:return "IQ2_XXS_R4 - 2.0625 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_XS:   return "IQ2_XS - 2.3125 bpw";
@@ -7644,6 +7724,8 @@ static bool llm_load_tensors(
 
                         layer.wkv_a_mqa = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + (n_embd_head_qk_rope)});
                         layer.wkv_b     = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)});
+                        layer.wk_b      = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, 1);
+                        layer.wv_b      = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B,      "weight", i), {kv_lora_rank, n_head * n_embd_head_v}, 1);
                         layer.wo        = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT,      "weight", i), {              n_head * (                      n_embd_head_v), n_embd});
 
                         layer.ffn_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
@@ -8213,11 +8295,20 @@ static void llm_build_kv_store(
     const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
     const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
+    const int64_t n_head        = hparams.n_head(il);
+    const int64_t n_head_kv     = hparams.n_head_kv(il);
+    const int64_t n_embd_head_k = hparams.n_embd_head_k;
+    const int64_t n_embd_head_v = hparams.n_embd_head_v;
+
     GGML_ASSERT(kv.size == n_ctx);
 
-    struct ggml_tensor * k_cache_view = ggml_view_1d(ctx, kv.k_l[il], n_tokens*n_embd_k_gqa,
-            (ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa))*kv_head);
-    cb(k_cache_view, "k_cache_view", il);
+    //struct ggml_tensor * k_cache_view = ggml_view_1d(ctx, kv.k_l[il], n_tokens*n_embd_k_gqa,
+    //        (ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa))*kv_head);
+    //cb(k_cache_view, "k_cache_view", il);
+
+    auto k_row_size = ggml_row_size(kv.k_l[il]->type, n_embd_head_k);
+    ggml_tensor * k_cache_view = ggml_view_2d(ctx, kv.k_l[il], n_embd_head_k, n_tokens*n_head_kv,
+            k_row_size, k_row_size*n_head_kv*kv_head);
 
     // note: storing RoPE-ed version of K in the KV cache
     ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur, k_cache_view));
@@ -8636,7 +8727,7 @@ static struct ggml_tensor * llm_build_kqv(
     struct ggml_tensor * k =
         ggml_view_3d(ctx, kv.k_l[il],
                 n_embd_head_k, n_kv, n_head_kv,
-                ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa),
+                ggml_row_size(kv.k_l[il]->type, n_embd_head_k)*n_head_kv, //n_embd_k_gqa),
                 ggml_row_size(kv.k_l[il]->type, n_embd_head_k),
                 0);
     cb(k, "k", il);
@@ -8815,6 +8906,7 @@ struct llm_build_context {
     const int32_t n_ctx_orig;
 
     const bool flash_attn;
+    const bool mla_attn;
 
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
@@ -8830,7 +8922,8 @@ struct llm_build_context {
         llama_context  & lctx,
     const llama_batch  & batch,
     const llm_build_cb & cb,
-                  bool   worst_case) :
+    bool   worst_case,
+    bool   warmup) :
         model            (lctx.model),
         lctx             (lctx),
         hparams          (model.hparams),
@@ -8848,7 +8941,7 @@ struct llm_build_context {
         n_embd_head_v    (hparams.n_embd_head_v),
         n_embd_v_gqa     (hparams.n_embd_v_gqa()),
         n_expert         (hparams.n_expert),
-        n_expert_used    (hparams.n_expert_used),
+        n_expert_used    (warmup ? hparams.n_expert : hparams.n_expert_used),
         freq_base        (cparams.rope_freq_base),
         freq_scale       (cparams.rope_freq_scale),
         ext_factor       (cparams.yarn_ext_factor),
@@ -8864,6 +8957,7 @@ struct llm_build_context {
         kv_head          (worst_case ? (kv_self.recurrent ? 0 : kv_self.size - n_tokens) : kv_self.head),
         n_ctx_orig       (cparams.n_ctx_orig_yarn),
         flash_attn       (cparams.flash_attn),
+        mla_attn         (cparams.mla_attn),
         pooling_type     (cparams.pooling_type),
         rope_type        (hparams.rope_type),
         cb               (cb),
@@ -13329,6 +13423,10 @@ struct llm_build_context {
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
         struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
+        // whether to use n_tokens as the matrix dimension during multiplication or n_head
+        // n_tokens is higher during prompt processing, this allows to optimize for this case
+        bool pp_opt = n_tokens > n_head;
+
         for (int il = 0; il < n_layer; ++il) {
             struct ggml_tensor * inpSA = inpL;
 
@@ -13367,87 +13465,188 @@ struct llm_build_context {
                 cb(q_nope, "q_nope", il);
 
                 // and {n_head * n_embd_head_qk_rope, n_tokens}
-                struct ggml_tensor * q_pe = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
+                struct ggml_tensor * q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
                         ggml_row_size(q->type, hparams.n_embd_head_k),
                         ggml_row_size(q->type, hparams.n_embd_head_k * n_head),
                         ggml_row_size(q->type, n_embd_head_qk_nope));
-                cb(q_pe, "q_pe", il);
+                cb(q_rope, "q_rope", il);
+
+                q_rope = ggml_rope_ext(
+                        ctx0, q_rope, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor_scaled, beta_fast, beta_slow
+                        );
+                cb(q_rope, "q_rope", il);
 
                 // {n_embd, kv_lora_rank + n_embd_head_qk_rope} * {n_embd, n_tokens} -> {kv_lora_rank + n_embd_head_qk_rope, n_tokens}
-                struct ggml_tensor * kv_pe_compresseed = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
-                cb(kv_pe_compresseed, "kv_pe_compresseed", il);
+                struct ggml_tensor * kv_rope_compresseed = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
+                cb(kv_rope_compresseed, "kv_rope_compresseed", il);
+
+                // and {n_embd_head_qk_rope, n_tokens}
+                struct ggml_tensor * k_rope = ggml_view_3d(ctx0, kv_rope_compresseed, n_embd_head_qk_rope, 1, n_tokens,
+                        kv_rope_compresseed->nb[1],
+                        kv_rope_compresseed->nb[1],
+                        ggml_row_size(kv_rope_compresseed->type, kv_lora_rank));
+                cb(k_rope, "k_rope", il);
+
+                // shared RoPE key
+                k_rope = ggml_rope_ext(
+                        ctx0, k_rope, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor_scaled, beta_fast, beta_slow
+                        );
+                cb(k_rope, "k_rope", il);
 
                 // split into {kv_lora_rank, n_tokens}
-                struct ggml_tensor * kv_compressed = ggml_view_2d(ctx0, kv_pe_compresseed, kv_lora_rank, n_tokens,
-                        kv_pe_compresseed->nb[1],
+                struct ggml_tensor * kv_compressed = ggml_view_2d(ctx0, kv_rope_compresseed, kv_lora_rank, n_tokens,
+                        kv_rope_compresseed->nb[1],
                         0);
                 cb(kv_compressed, "kv_compressed", il);
 
-                // and {n_embd_head_qk_rope, n_tokens}
-                struct ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_pe_compresseed, n_embd_head_qk_rope, 1, n_tokens,
-                        kv_pe_compresseed->nb[1],
-                        kv_pe_compresseed->nb[1],
-                        ggml_row_size(kv_pe_compresseed->type, kv_lora_rank));
-                cb(k_pe, "k_pe", il);
-
-                //kv_compressed = ggml_cont(ctx0, kv_compressed); // TODO: the CUDA backend does not support non-contiguous norm
                 kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams,
                         model.layers[il].attn_kv_a_norm, NULL,
                         LLM_NORM_RMS, cb, il);
                 cb(kv_compressed, "kv_compressed", il);
 
-                // {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)} * {kv_lora_rank, n_tokens} -> {n_head * (n_embd_head_qk_nope + n_embd_head_v), n_tokens}
-                struct ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_compressed);
-                cb(kv, "kv", il);
+                if (lctx.cparams.mla_attn && model.layers[il].wk_b && model.layers[il].wv_b) {
 
-                // split into {n_head * n_embd_head_qk_nope, n_tokens}
-                struct ggml_tensor * k_nope = ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head, n_tokens,
-                        ggml_row_size(kv->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
-                        ggml_row_size(kv->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
-                        0);
-                cb(k_nope, "k_nope", il);
+#if MLA_USE_TRANSPOSED_CACHE
+                    ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.kvt_l[il], n_tokens, kv_lora_rank,
+                                    ggml_row_size(kv_self.kvt_l[il]->type, kv_self.size), ggml_row_size(kv_self.kvt_l[il]->type, kv_head));
+                    cb(kv_cache_trans_view, "kv_cache_trans_view", il);
 
-                // and {n_head * n_embd_head_v, n_tokens}
-                struct ggml_tensor * v_states = ggml_view_3d(ctx0, kv, hparams.n_embd_head_v, n_head, n_tokens,
-                        ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v)),
-                        ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v)*n_head),
-                        ggml_row_size(kv->type, (n_embd_head_qk_nope)));
-                cb(v_states, "v_states", il);
+                    // note: storing transposed c^KV in the transposed KV cache
+                    ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_transpose(ctx0, kv_compressed), kv_cache_trans_view));
 
-                v_states = ggml_cont(ctx0, v_states);
-                cb(v_states, "v_states", il);
+                    ggml_tensor * kv_cache_trans = ggml_view_2d(ctx0, kv_self.kvt_l[il],
+                                    n_kv, kv_lora_rank,
+                                    ggml_row_size(kv_self.kvt_l[il]->type, kv_self.size),
+                                    0);
+                    cb(kv_cache_trans, "kv_cache_trans", il);
+#endif
 
-                v_states = ggml_view_2d(ctx0, v_states, hparams.n_embd_head_v * n_head, n_tokens,
-                    ggml_row_size(kv->type, hparams.n_embd_head_v * n_head),
-                    0);
-                cb(v_states, "v_states", il);
+                    ggml_tensor * kvr = ggml_concat(ctx0, kv_compressed, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), 0);
+                    cb(kvr, "kvr", il);
 
-                //q_pe = ggml_cont(ctx0, q_pe); // TODO: the CUDA backend does not support non-contiguous RoPE
-                q_pe = ggml_rope_ext(
-                    ctx0, q_pe, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow
-                );
-                cb(q_pe, "q_pe", il);
+                    auto row_size = ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope);
+                    ggml_tensor * kv_cache_view = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_self.kv_l[il]->ne[0], n_tokens,
+                            row_size, row_size*kv_head);
+                    ggml_build_forward_expand(gf, ggml_cpy(ctx0, kvr, kv_cache_view));
+                    ggml_tensor * kv_cache = ggml_view_2d(ctx0, kv_self.kv_l[il],
+                            kv_lora_rank + n_embd_head_qk_rope, n_kv,
+                            ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
+                    cb(kv_cache, "kv_cache", il);
 
-                // shared RoPE key
-                //k_pe = ggml_cont(ctx0, k_pe); // TODO: the CUDA backend does not support non-contiguous RoPE
-                k_pe = ggml_rope_ext(
-                    ctx0, k_pe, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow
-                );
-                cb(k_pe, "k_pe", il);
+                    struct ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head,
+                            ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope),
+                            ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank)*n_embd_head_qk_nope, 0);
+                    cb(wk_b, "wk_b", il);
 
-                struct ggml_tensor * q_states = ggml_concat(ctx0, q_nope, q_pe, 0);
-                cb(q_states, "q_states", il);
+                    q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+                    cb(q_nope, "q_nope_perm", il);
 
-                struct ggml_tensor * k_states = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
-                cb(k_states, "k_states", il);
+                    struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope);
+                    cb(q_nope2, "q_nope2", il);
 
-                cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                        model.layers[il].wo, NULL,
-                        k_states, v_states, q_states, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
+                    ggml_tensor * q = ggml_concat(ctx0, q_nope2, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), 0);
+                    cb(q, "q", il);
+                    if (!pp_opt) {
+                        q = ggml_permute(ctx0, q, 0, 2, 1, 3);
+                        cb(q, "q_perm", il);
+                    }
+                    ggml_tensor * kq = ggml_mul_mat(ctx0, kv_cache, q);
+                    cb(kq, "kq", il);
+
+		            if (!pp_opt) {
+                        kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3));
+                        cb(kq, "kq_perm", il);
+                    }
+
+                    kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
+                    cb(kq, "kq_soft_max_ext", il);
+
+		            if (!pp_opt) {
+                        kq = ggml_permute(ctx0, kq, 0, 2, 1, 3);
+                        cb(kq, "kq_soft_max_ext_perm", il);
+                    }
+
+#if !MLA_USE_TRANSPOSED_CACHE
+                    ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.kv_l[il],
+                            kv_lora_rank, n_kv,
+                            ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
+                    cb(kv_cache, "kv_cache_lora", il);
+
+                    ggml_tensor * kv_cache_trans = ggml_cont(ctx0, ggml_transpose(ctx0, kv_cache_lora));
+                    cb(kv_cache_trans, "kv_cache_trans", il);
+#endif
+
+                    struct ggml_tensor * kqv_compressed = ggml_mul_mat(ctx0, kv_cache_trans, kq);
+                    cb(kqv_compressed, "kqv_compressed", il);
+
+                    if (!pp_opt) {
+                        kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
+                        cb(kqv_compressed, "kqv_compressed_perm", il);
+                    }
+
+                    struct ggml_tensor * wv_b = ggml_view_3d(ctx0, model.layers[il].wv_b, kv_lora_rank, n_embd_head_v, n_head,
+                            ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank),
+                            ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank)*n_embd_head_v, 0);
+                    cb(wv_b, "wv_b", il);
+
+                    struct ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
+                    cb(kqv, "kqv", il);
+
+                    kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
+                    cb(kqv, "kqv_perm", il);
+
+                    cur = ggml_view_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens, ggml_row_size(kqv->type, n_embd_head_v*n_head), 0);
+                    cb(cur, "kqv_2d", il);
+
+                    ggml_build_forward_expand(gf, cur);
+
+                    cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
+                    cb(cur, "kqv_out", il);
+
+                }
+                else {
+
+                    // {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)} * {kv_lora_rank, n_tokens} -> {n_head * (n_embd_head_qk_nope + n_embd_head_v), n_tokens}
+                    struct ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_compressed);
+                    cb(kv, "kv", il);
+
+                    // split into {n_head * n_embd_head_qk_nope, n_tokens}
+                    struct ggml_tensor * k_nope = ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head, n_tokens,
+                            ggml_row_size(kv->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
+                            ggml_row_size(kv->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                            0);
+                    cb(k_nope, "k_nope", il);
+
+                    // and {n_head * n_embd_head_v, n_tokens}
+                    struct ggml_tensor * v_states = ggml_view_3d(ctx0, kv, hparams.n_embd_head_v, n_head, n_tokens,
+                            ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                            ggml_row_size(kv->type, (n_embd_head_qk_nope + hparams.n_embd_head_v)*n_head),
+                            ggml_row_size(kv->type, (n_embd_head_qk_nope)));
+                    cb(v_states, "v_states", il);
+
+                    v_states = ggml_cont(ctx0, v_states);
+                    cb(v_states, "v_states", il);
+
+                    v_states = ggml_view_2d(ctx0, v_states, hparams.n_embd_head_v * n_head, n_tokens,
+                            ggml_row_size(kv->type, hparams.n_embd_head_v * n_head),
+                            0);
+                    cb(v_states, "v_states", il);
+
+                    struct ggml_tensor * q_states = ggml_concat(ctx0, q_nope, q_rope, 0);
+                    cb(q_states, "q_states", il);
+
+                    struct ggml_tensor * k_states = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_rope, q_rope), 0);
+                    cb(k_states, "k_states", il);
+
+                    cur = llm_build_kv(ctx0, lctx, kv_self, gf,
+                            model.layers[il].wo, NULL,
+                            k_states, v_states, q_states, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
+
+                }
             }
 
             if (il == n_layer - 1) {
@@ -14234,7 +14433,7 @@ static struct ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const
 
     llm_build_cb cb = [&](struct ggml_tensor * , const char * , int ) { };
 
-    struct llm_build_context llm(lctx, dummy, cb, false);
+    struct llm_build_context llm(lctx, dummy, cb, false, false);
 
     llm.init();
 
@@ -14251,7 +14450,7 @@ static struct ggml_cgraph * llama_build_graph_k_shift(llama_context & lctx) {
 
     llm_build_cb cb = [&](struct ggml_tensor * , const char * , int ) { };
 
-    struct llm_build_context llm(lctx, dummy, cb, false);
+    struct llm_build_context llm(lctx, dummy, cb, false, false);
 
     llm.init();
 
@@ -14268,7 +14467,7 @@ static struct ggml_cgraph * llama_build_graph_s_copy(llama_context & lctx) {
 
     llm_build_cb cb = [&](struct ggml_tensor * , const char * , int ) { };
 
-    struct llm_build_context llm(lctx, dummy, cb, false);
+    struct llm_build_context llm(lctx, dummy, cb, false, false);
 
     llm.init();
 
@@ -14318,7 +14517,11 @@ static struct ggml_cgraph * llama_build_graph(
 
     struct ggml_cgraph * result = NULL;
 
-    struct llm_build_context llm(lctx, batch, cb, worst_case);
+    const llama_vocab * vocab = llama_get_vocab(&lctx);
+    llama_token bos = llama_token_bos_impl(*vocab);
+    llama_token eos = llama_token_eos_impl(*vocab);
+    bool is_warming_up = (batch.n_tokens == 1 && batch.token[0] == bos);
+    struct llm_build_context llm(lctx, batch, cb, worst_case, is_warming_up);
 
     llm.init();
 
@@ -15983,7 +16186,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                 new_type = GGML_TYPE_IQ5_K;
             }
             else if (new_type != GGML_TYPE_Q8_0 && new_type != GGML_TYPE_Q8_0_R8 && new_type != GGML_TYPE_IQ6_K && new_type != GGML_TYPE_Q6_K_R4 &&
-                     new_type != GGML_TYPE_Q8_K_R8) {
+                     new_type != GGML_TYPE_Q8_K_R8 && new_type != GGML_TYPE_Q8_KV && new_type != GGML_TYPE_Q8_KV_R8) {
                 new_type = GGML_TYPE_Q6_K;
             }
         }
@@ -16035,6 +16238,9 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                 new_type = GGML_TYPE_Q6_K;
             }
             else if (new_type == GGML_TYPE_Q8_K_R8) {
+                new_type = GGML_TYPE_Q8_0;
+            }
+            else if (new_type == GGML_TYPE_Q8_KV_R8) {
                 new_type = GGML_TYPE_Q8_0;
             }
             else if (new_type == GGML_TYPE_IQ2_K_R4) {
@@ -16133,7 +16339,8 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             ++qs.i_ffn_down;
         }
         else if (name.find("attn_output.weight") != std::string::npos) {
-            if (qs.model.hparams.n_expert >= 4) {
+            if (qs.params->attn_output_type < GGML_TYPE_COUNT) new_type = qs.params->attn_output_type;
+            else if (qs.model.hparams.n_expert >= 4) {
                 new_type = GGML_TYPE_Q5_K;
             } else {
                 if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_S || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) new_type = GGML_TYPE_IQ2_K;
@@ -16547,6 +16754,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_Q5_1: default_type = GGML_TYPE_Q5_1; break;
         case LLAMA_FTYPE_MOSTLY_Q6_0: default_type = GGML_TYPE_Q6_0; break;
         case LLAMA_FTYPE_MOSTLY_Q8_0: default_type = GGML_TYPE_Q8_0; break;
+        case LLAMA_FTYPE_MOSTLY_Q8_KV:default_type = GGML_TYPE_Q8_KV;break;
         case LLAMA_FTYPE_MOSTLY_F16:  default_type = GGML_TYPE_F16;  break;
         case LLAMA_FTYPE_MOSTLY_BF16: default_type = GGML_TYPE_BF16; break;
         case LLAMA_FTYPE_MOSTLY_BF16_R16: default_type = GGML_TYPE_BF16_R16; break;
@@ -16570,6 +16778,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_Q6_K:    default_type = GGML_TYPE_Q6_K;    break;
         case LLAMA_FTYPE_MOSTLY_Q6_K_R4: default_type = GGML_TYPE_Q6_K_R4; break;
         case LLAMA_FTYPE_MOSTLY_Q8_K_R8: default_type = GGML_TYPE_Q8_K_R8; break;
+        case LLAMA_FTYPE_MOSTLY_Q8_KV_R8: default_type = GGML_TYPE_Q8_KV_R8; break;
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS: default_type = GGML_TYPE_IQ2_XXS; break;
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4:default_type = GGML_TYPE_IQ2_XXS_R4; break;
         case LLAMA_FTYPE_MOSTLY_IQ2_XS:  default_type = GGML_TYPE_IQ2_XS;  break;
@@ -17013,6 +17222,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
                 if (tensor->ne[1] % 8 != 0) new_type = GGML_TYPE_Q8_0;
                 else chunk_size_multiplier = 8;
             }
+            else if (new_type == GGML_TYPE_Q8_KV_R8) {
+                if (tensor->ne[1] % 8 != 0) new_type = GGML_TYPE_Q8_0;
+                else chunk_size_multiplier = 8;
+            }
             else if (new_type == GGML_TYPE_IQ2_BN_R4) {
                 if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ2_BN;
                 else chunk_size_multiplier = 4;
@@ -17391,6 +17604,7 @@ struct llama_context_params llama_context_default_params() {
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ false,
+        /*.mla_attn                    =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
     };
@@ -17563,10 +17777,10 @@ struct llama_context * llama_new_context_with_model(
         params.flash_attn = false;
     }
 
-    if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {
-        LLAMA_LOG_WARN("%s: flash_attn requires n_embd_head_k == n_embd_head_v - forcing off\n", __func__);
-        params.flash_attn = false;
-    }
+    //if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {
+    //    LLAMA_LOG_WARN("%s: flash_attn requires n_embd_head_k == n_embd_head_v - forcing off\n", __func__);
+    //    params.flash_attn = false;
+    //}
 
     if (params.type_v != GGML_TYPE_F16 && params.type_v != GGML_TYPE_BF16 && !params.flash_attn) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
@@ -17589,6 +17803,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
+    cparams.mla_attn         = params.mla_attn;
     cparams.pooling_type     = params.pooling_type;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
@@ -17655,6 +17870,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: n_batch    = %u\n",     __func__, cparams.n_batch);
     LLAMA_LOG_INFO("%s: n_ubatch   = %u\n",     __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: flash_attn = %d\n",     __func__, cparams.flash_attn);
+    LLAMA_LOG_INFO("%s: mla_attn   = %d\n",     __func__, cparams.mla_attn);
     LLAMA_LOG_INFO("%s: freq_base  = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale = %g\n",     __func__, cparams.rope_freq_scale);
 
@@ -17847,10 +18063,39 @@ struct llama_context * llama_new_context_with_model(
                 memory_size_v += ggml_nbytes(v);
             }
 
-            LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
-                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
-                ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
-                ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+            if (memory_size_k + memory_size_v > 0) {
+                LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
+                        (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
+                        ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
+                        ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+            }
+        }
+
+	    {
+            size_t memory_size_kv = 0;
+            size_t memory_size_kvt = 0;
+
+            ggml_type kv_type = GGML_TYPE_COUNT;
+            ggml_type kvt_type = GGML_TYPE_COUNT;
+
+            for (auto & kv : ctx->kv_self.kv_l) {
+                memory_size_kv += ggml_nbytes(kv);
+                kv_type = kv->type;
+            }
+
+#if MLA_USE_TRANSPOSED_CACHE
+            for (auto & kvt : ctx->kv_self.kvt_l) {
+                memory_size_kvt += ggml_nbytes(kvt);
+                kvt_type = kvt->type;
+            }
+#endif
+
+            if (memory_size_kv + memory_size_kvt > 0) {
+                LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T (%s): %7.2f MiB\n", __func__,
+                        (float)(memory_size_kv + memory_size_kvt) / (1024.0f * 1024.0f),
+                        ggml_type_name(kv_type), (float)memory_size_kv / (1024.0f * 1024.0f),
+                        ggml_type_name(kvt_type), (float)memory_size_kvt / (1024.0f * 1024.0f));
+            }
         }
 
         // graph outputs buffer
