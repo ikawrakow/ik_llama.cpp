@@ -50,6 +50,8 @@
 #include <string>
 #include <vector>
 
+#define IK_PRINT_TIMING 0
+
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 static void ggml_cuda_default_log_callback(enum ggml_log_level level, const char * msg, void * user_data) {
@@ -2446,6 +2448,10 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         ggml_cuda_set_peer_access(dst->src[1]->ne[1], ctx.device);
     }
 
+#if IK_PRINT_TIMING
+    int64_t tim1 = ggml_time_us();
+#endif
+
     switch (dst->op) {
         case GGML_OP_REPEAT:
             ggml_cuda_op_repeat(ctx, dst);
@@ -2617,6 +2623,11 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         GGML_CUDA_LOG_ERROR("%s: %s failed\n", __func__, ggml_op_desc(dst));
         CUDA_CHECK(err);
     }
+
+#if IK_PRINT_TIMING
+    int64_t tim2 = ggml_time_us();
+    printf("%s(%s): %d us\n", ggml_op_name(dst->op), dst->name, (int)(tim2 - tim1));
+#endif
 
     return true;
 }
