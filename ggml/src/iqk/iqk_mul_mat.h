@@ -11,22 +11,22 @@
 extern "C" {
 #endif
 
-bool iqk_mul_mat(long Nx, long Ny, long ne00,
-        int typeA, const void * A, long strideA,
-        int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth);
+bool iqk_mul_mat(long long Nx, long long Ny, long long ne00,
+        int typeA, const void * A, long long strideA,
+        int typeB, const void * B, long long strideB,
+        float * C, long long stride_C, int ith, int nth);
 
-bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
-        long ne02, long ne03, long ne12, long ne13,
-        long nb02, long nb03, long nb12, long nb13, long nb2, long nb3,
-        int typeA, const void * A, long strideA,
-        int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth);
+bool iqk_mul_mat_4d(long long Nx, long long Ny, long long ne00,
+        long long ne02, long long ne03, long long ne12, long long ne13,
+        long long nb02, long long nb03, long long nb12, long long nb13, long long nb2, long long nb3,
+        int typeA, const void * A, long long strideA,
+        int typeB, const void * B, long long strideB,
+        float * C, long long stride_C, int ith, int nth);
 
-bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
-        int typeA, const void * A, long strideA,
-        int typeB, const void * B, long strideB,
-        float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
+bool iqk_mul_mat_moe(long long Nx, long long Ny, long long ne00, int ne11,
+        int typeA, const void * A, long long strideA,
+        int typeB, const void * B, long long strideB,
+        float * C, long long nb1, long long nb2, const void * vrow_mapping, int ith, int nth);
 
 bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int unary_op,
         int typeA, const void * Aup, const void * Agate, long strideA,
