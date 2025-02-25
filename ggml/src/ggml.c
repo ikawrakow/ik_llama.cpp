@@ -21483,6 +21483,9 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
 #ifdef GGML_USE_OPENMP
     if (n_threads > 1) {
+//#if IK_PRINT_TIMING
+//        int64_t tim1 = ggml_time_us();
+//#endif
         #pragma omp parallel num_threads(n_threads)
         {
             #pragma omp single
@@ -21499,6 +21502,10 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
             };
             ggml_graph_compute_thread(&worker);
         }
+//#if IK_PRINT_TIMING
+//        int64_t tim2 = ggml_time_us();
+//        printf("%s(...): %d us\n", __func__, (int)(tim2-tim1));
+//#endif
     } else {
         struct ggml_compute_state worker = {
             .thrd   = 0,

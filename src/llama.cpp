@@ -12,6 +12,8 @@
 // TODO: fix this include
 #include "iqk/iqk_quantize.h"
 
+#define IK_PRINT_TIMING 0
+
 #ifdef GGML_USE_RPC
 #  include "ggml-rpc.h"
 #endif
@@ -14518,6 +14520,10 @@ static struct ggml_cgraph * llama_build_graph(
                   bool   worst_case) {
     const auto & model = lctx.model;
 
+#if IK_PRINT_TIMING
+    auto tim1 = ggml_time_us();
+#endif
+
     // this callback allows us to apply custom logic to each tensor (e.g. ggml-alloc, offloading, etc.)
     llm_build_cb cb = [&](struct ggml_tensor * cur, const char * name, int il) {
         if (il >= 0) {
@@ -14731,6 +14737,11 @@ static struct ggml_cgraph * llama_build_graph(
 
     llm.free();
 
+#if IK_PRINT_TIMING
+    auto tim2 = ggml_time_us();
+    printf("%s(...): %d us\n", __func__, int(tim2-tim1));
+#endif
+
     return result;
 }
 
@@ -14787,6 +14798,9 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
     // set input data
     //
 
+#if IK_PRINT_TIMING
+    auto tim1 = ggml_time_us();
+#endif
     const auto & hparams = lctx.model.hparams;
     const auto & cparams = lctx.cparams;
     const auto & kv_self = lctx.kv_self;
@@ -15146,6 +15160,10 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             }
         }
     }
+#if IK_PRINT_TIMING
+    auto tim2 = ggml_time_us();
+    printf("%s(...): %d us\n", __func__, int(tim2-tim1));
+#endif
 }
 
 // Make sure enough space is available for outputs.
