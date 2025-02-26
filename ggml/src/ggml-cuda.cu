@@ -18,6 +18,7 @@
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvq.cuh"
+#include "ggml-cuda/mmvq_mha.cuh"
 #include "ggml-cuda/norm.cuh"
 #include "ggml-cuda/pad.cuh"
 #include "ggml-cuda/pool2d.cuh"
@@ -1591,6 +1592,20 @@ static void ggml_cuda_op_mul_mat(
     }
 
     const int64_t src1_col_stride = split && used_devices > 1 ? MUL_MAT_SRC1_COL_STRIDE : ne11;
+    if (!(split && used_devices > 1) && quantization_done && ne11 == 1 && ne12 > 1 && ne13 == 1) {
+        //printf("invoking fast path for %s x %s\n", src0->name, src1->name);
+        int id = ctx.device;
+        char  *  src0_dd_i =  dev[id].src0_dd;
+        float * src1_ddf_i = dev[id].src1_ddf;
+        char  * src1_ddq_i = dev[id].src1_ddq;
+        float *   dst_dd_i =   dev[id].dst_dd;
+        cudaStream_t stream = ctx.stream(id, 0);
+        ggml_cuda_op_mul_mat_vec_q_mha(ctx, src0, src1, dst, src0_dd_i, src1_ddf_i, src1_ddq_i, dst_dd_i,
+                dev[id].row_low, dev[id].row_high, ne11, src1_padded_col_size, stream);
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    }
+
     for (int64_t src1_col_0 = 0; src1_col_0 < ne11; src1_col_0 += src1_col_stride) {
         const int64_t is = split ? (src1_col_0/src1_col_stride) % GGML_CUDA_MAX_STREAMS : 0;
         const int64_t src1_ncols = src1_col_0 + src1_col_stride > ne11 ? ne11 - src1_col_0 : src1_col_stride;
