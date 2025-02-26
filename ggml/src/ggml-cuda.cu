@@ -1518,6 +1518,8 @@ static void ggml_cuda_op_mul_mat(
         }
     }
 
+    bool quantization_done = false;
+
     for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
         if ((!split && id != ctx.device) || dev[id].row_low == dev[id].row_high) {
             continue;
@@ -1561,9 +1563,15 @@ static void ggml_cuda_op_mul_mat(
             }
             dev[id].src1_ddq = dev[id].src1_ddq_alloc.alloc(ctx.pool(id), src_1_ddq_size);
 
-            if (src1_on_device && src1_is_contiguous) {
-                quantize_src1(dev[id].src1_ddf, dev[id].src1_ddq, ne10, ne11, ne12*ne13, src1_padded_col_size, src0->type, stream);
+            if (src1_on_device && (src1_is_contiguous || (src1->ne[1] == 1 && src1->ne[3] == 1 && src1->nb[0] == sizeof(float)))) {
+                if (src1_is_contiguous) {
+                    quantize_src1(dev[id].src1_ddf, dev[id].src1_ddq, ne10, ne11, ne12*ne13, src1_padded_col_size, src0->type, stream);
+                } else {
+                    //printf("Calling quantize_tensor_q8_1_cuda for %s\n", src0->name);
+                    quantize_tensor_q8_1_cuda(src1, dev[id].src1_ddq, src0->type, stream);
+                }
                 CUDA_CHECK(cudaGetLastError());
+                quantization_done = true;
             }
         }
 
@@ -1649,13 +1657,17 @@ static void ggml_cuda_op_mul_mat(
                         }
                     }
                 } else if (src1_on_device && !src1_is_contiguous) {
-                    CUDA_CHECK(ggml_cuda_cpy_tensor_2d(
-                                src1_ddf_i, src1, i03, i02, src1_col_0, src1_col_0+src1_ncols, stream));
+                    if (!quantization_done) {
+                        //printf("Copying %s\n", src1->name);
+                        CUDA_CHECK(ggml_cuda_cpy_tensor_2d(
+                                    src1_ddf_i, src1, i03, i02, src1_col_0, src1_col_0+src1_ncols, stream));
+                    }
                 } else {
                     GGML_ABORT("fatal error");
                 }
 
-                if (quantize_src1 && !src1_is_contiguous) {
+                if (quantize_src1 && !src1_is_contiguous && !quantization_done) {
+                    //printf("Quantizing %s\n", src1->name);
                     quantize_src1(src1_ddf_i, src1_ddq_i, ne10, src1_ncols, 1, src1_padded_col_size, src0->type, stream);
                     CUDA_CHECK(cudaGetLastError());
                 }

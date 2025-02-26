@@ -13579,7 +13579,7 @@ struct llm_build_context {
                     cb(wk_b, "wk_b", il);
 
                     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
-                    if (q_nope->ne[1] <= 32) q_nope = ggml_cont(ctx0, q_nope);
+                    //if (q_nope->ne[1] <= 32) q_nope = ggml_cont(ctx0, q_nope);
                     cb(q_nope, "q_nope_perm", il);
 
                     struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope);
