@@ -1649,19 +1649,13 @@ static void ggml_cuda_op_mul_mat(
                         }
                     }
                 } else if (src1_on_device && !src1_is_contiguous) {
-                    if (ne11 == 1) {
-                        const float * data = (const float *)((const char *)src1->data + i03*src1->nb[3] + i02*src1->nb[2]) + src1_col_0;
-                        quantize_src1(data, src1_ddq_i, ne10, src1_ncols, 1, src1_padded_col_size, src0->type, stream);
-                        CUDA_CHECK(cudaGetLastError());
-                    } else {
-                        CUDA_CHECK(ggml_cuda_cpy_tensor_2d(
-                                    src1_ddf_i, src1, i03, i02, src1_col_0, src1_col_0+src1_ncols, stream));
-                    }
+                    CUDA_CHECK(ggml_cuda_cpy_tensor_2d(
+                                src1_ddf_i, src1, i03, i02, src1_col_0, src1_col_0+src1_ncols, stream));
                 } else {
                     GGML_ABORT("fatal error");
                 }
 
-                if (quantize_src1 && !src1_is_contiguous && ne11 > 1) {
+                if (quantize_src1 && !src1_is_contiguous) {
                     quantize_src1(src1_ddf_i, src1_ddq_i, ne10, src1_ncols, 1, src1_padded_col_size, src0->type, stream);
                     CUDA_CHECK(cudaGetLastError());
                 }
