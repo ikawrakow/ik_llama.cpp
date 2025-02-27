@@ -403,10 +403,10 @@ private:
 
 }
 
-bool iqk_mul_mat(long Nx, long Ny, long ne00,
-        int typeA, const void * A, long strideA,
-        int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth) {
+bool iqk_mul_mat(long long Nx, long long Ny, long long ne00,
+        int typeA, const void * A, long long strideA,
+        int typeB, const void * B, long long strideB,
+        float * C, long long stride_C, int ith, int nth) {
 
     MulMat mm;
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
@@ -440,12 +440,12 @@ inline uint32_t simple_gcd(uint32_t a, uint32_t b) {
 }
 }
 
-bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
-        long ne02, long ne03, long ne12, long ne13,
-        long nb02, long nb03, long nb12, long nb13, long nb2, long nb3,
-        int typeA, const void * A, long strideA,
-        int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth) {
+bool iqk_mul_mat_4d(long long Nx, long long Ny, long long ne00,
+        long long ne02, long long ne03, long long ne12, long long ne13,
+        long long nb02, long long nb03, long long nb12, long long nb13, long long nb2, long long nb3,
+        int typeA, const void * A, long long strideA,
+        int typeB, const void * B, long long strideB,
+        float * C, long long stride_C, int ith, int nth) {
 
     auto r2 = ne12 / ne02;
     auto r3 = ne13 / ne03;
@@ -500,10 +500,10 @@ bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
     return true;
 }
 
-bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
-        int typeA, const void * A, long strideA,
-        int typeB, const void * B, long strideB,
-        float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth) {
+bool iqk_mul_mat_moe(long long Nx, long long Ny, long long ne00, int ne11,
+        int typeA, const void * A, long long strideA,
+        int typeB, const void * B, long long strideB,
+        float * C, long long nb1, long long nb2, const void * vrow_mapping, int ith, int nth) {
     const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
     assert(row_mapping != nullptr);
 
@@ -17340,20 +17340,20 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
 
 #else  // IQK_IMPLEMENT
 
-bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
+bool iqk_mul_mat(int, long long, long long, long long, int, const void *, long long, int, const void *, long long, float *, long long, int, int) {
     return false;
 }
 
-bool iqk_mul_mat_4d(long /*Nx*/, long /*Ny*/, long /*ne00*/,
-        long /*ne02*/, long /*ne03*/, long /*ne12*/, long /*ne13*/,
-        long /*nb02*/, long /*nb03*/, long /*nb12*/, long /*nb13*/, long /*nb2*/, long /*nb3*/,
-        int /*typeA*/, const void * /*A*/, long /*strideA*/,
-        int /*typeB*/, const void * /*B*/, long /*strideB*/,
-        float * /*C*/, long /*stride_C*/, int /*ith*/, int /*nth*/) {
+bool iqk_mul_mat_4d(long long /*Nx*/, long long /*Ny*/, long long /*ne00*/,
+        long long /*ne02*/, long long /*ne03*/, long long /*ne12*/, long long /*ne13*/,
+        long long /*nb02*/, long long /*nb03*/, long long /*nb12*/, long long /*nb13*/, long long /*nb2*/, long long /*nb3*/,
+        int /*typeA*/, const void * /*A*/, long long /*strideA*/,
+        int /*typeB*/, const void * /*B*/, long long /*strideB*/,
+        float * /*C*/, long long /*stride_C*/, int /*ith*/, int /*nth*/) {
     return false;
 }
 
-bool iqk_mul_mat_moe(long, long, long, int, int, const void *, long, int, const void *, long, float *, long, long,
+bool iqk_mul_mat_moe(long long, long long, long long, int, int, const void *, long long, int, const void *, long long, float *, long long, long long,
         const void *, int, int) {
     return false;
 }
