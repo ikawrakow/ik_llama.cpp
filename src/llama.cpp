@@ -3212,7 +3212,7 @@ static bool llama_kv_cache_init(
             ggml_tensor * kv = ggml_new_tensor_2d(ctx, cache.type_k, kv_lora_rank + n_embd_head_qk_rope, kv_size);
             //ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_k, (kv_lora_rank + n_embd_head_qk_rope)*kv_size);
 #else
-            ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_v, (kv_lora_rank + n_embd_head_qk_rope)*kv_size);
+            ggml_tensor * kv = ggml_new_tensor_2d(ctx, cache.type_v, kv_lora_rank + n_embd_head_qk_rope, kv_size);
 #endif
             ggml_format_name(kv, "cache_kv_l%d", i);
             cache.kv_l.push_back(kv);
@@ -13579,6 +13579,7 @@ struct llm_build_context {
                     cb(wk_b, "wk_b", il);
 
                     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+                    //if (q_nope->ne[1] <= 32) q_nope = ggml_cont(ctx0, q_nope);
                     cb(q_nope, "q_nope_perm", il);
 
                     struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope);

@@ -1518,6 +1518,8 @@ static void ggml_cuda_op_mul_mat(
         }
     }
 
+    bool quantization_done = false;
+
     for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
         if ((!split && id != ctx.device) || dev[id].row_low == dev[id].row_high) {
             continue;
@@ -1561,9 +1563,15 @@ static void ggml_cuda_op_mul_mat(
             }
             dev[id].src1_ddq = dev[id].src1_ddq_alloc.alloc(ctx.pool(id), src_1_ddq_size);
 
-            if (src1_on_device && src1_is_contiguous) {
-                quantize_src1(dev[id].src1_ddf, dev[id].src1_ddq, ne10, ne11, ne12*ne13, src1_padded_col_size, src0->type, stream);
+            if (src1_on_device && (src1_is_contiguous || (src1->ne[1] == 1 && src1->ne[3] == 1 && src1->nb[0] == sizeof(float)))) {
+                if (src1_is_contiguous) {
+                    quantize_src1(dev[id].src1_ddf, dev[id].src1_ddq, ne10, ne11, ne12*ne13, src1_padded_col_size, src0->type, stream);
+                } else {
+                    //printf("Calling quantize_tensor_q8_1_cuda for %s\n", src0->name);
+                    quantize_tensor_q8_1_cuda(src1, dev[id].src1_ddq, src0->type, stream);
+                }
                 CUDA_CHECK(cudaGetLastError());
+                quantization_done = true;
             }
         }
 
@@ -1583,6 +1591,20 @@ static void ggml_cuda_op_mul_mat(
     }
 
     const int64_t src1_col_stride = split && used_devices > 1 ? MUL_MAT_SRC1_COL_STRIDE : ne11;
+    if (!(split && used_devices > 1) && quantization_done && ne11 == 1 && ne12 > 1 && ne13 == 1) {
+        //printf("invoking fast path for %s x %s\n", src0->name, src1->name);
+        int id = ctx.device;
+        char  *  src0_dd_i =  dev[id].src0_dd;
+        float * src1_ddf_i = dev[id].src1_ddf;
+        char  * src1_ddq_i = dev[id].src1_ddq;
+        float *   dst_dd_i =   dev[id].dst_dd;
+        cudaStream_t stream = ctx.stream(id, 0);
+        ggml_cuda_op_mul_mat_vec_q_3D(ctx, src0, src1, dst, src0_dd_i, src1_ddf_i, src1_ddq_i, dst_dd_i,
+                dev[id].row_low, dev[id].row_high, ne11, src1_padded_col_size, stream);
+        CUDA_CHECK(cudaGetLastError());
+        return;
+    }
+
     for (int64_t src1_col_0 = 0; src1_col_0 < ne11; src1_col_0 += src1_col_stride) {
         const int64_t is = split ? (src1_col_0/src1_col_stride) % GGML_CUDA_MAX_STREAMS : 0;
         const int64_t src1_ncols = src1_col_0 + src1_col_stride > ne11 ? ne11 - src1_col_0 : src1_col_stride;
@@ -1649,13 +1671,17 @@ static void ggml_cuda_op_mul_mat(
                         }
                     }
                 } else if (src1_on_device && !src1_is_contiguous) {
-                    CUDA_CHECK(ggml_cuda_cpy_tensor_2d(
-                                src1_ddf_i, src1, i03, i02, src1_col_0, src1_col_0+src1_ncols, stream));
+                    if (!quantization_done) {
+                        //printf("Copying %s\n", src1->name);
+                        CUDA_CHECK(ggml_cuda_cpy_tensor_2d(
+                                    src1_ddf_i, src1, i03, i02, src1_col_0, src1_col_0+src1_ncols, stream));
+                    }
                 } else {
                     GGML_ABORT("fatal error");
                 }
 
-                if (quantize_src1 && !src1_is_contiguous) {
+                if (quantize_src1 && !src1_is_contiguous && !quantization_done) {
+                    //printf("Quantizing %s\n", src1->name);
                     quantize_src1(src1_ddf_i, src1_ddq_i, ne10, src1_ncols, 1, src1_padded_col_size, src0->type, stream);
                     CUDA_CHECK(cudaGetLastError());
                 }

@@ -37,6 +37,42 @@ static __global__ void quantize_q8_1(const float * __restrict__ x, void * __rest
     reinterpret_cast<half&>(y[ib].ds.y) = sum;
 }
 
+static __global__ void quantize_q8_1(const float * __restrict__ x, void * __restrict__ vy, const int64_t kx, const int64_t kx0_padded, const uint64_t stride) {
+    const int64_t ix0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (ix0 >= kx0_padded) {
+        return;
+    }
+
+    const int64_t ix1 = blockIdx.y;
+
+    const int64_t i_padded = ix1*kx0_padded + ix0;
+
+    block_q8_1 * y = (block_q8_1 *) vy;
+
+    const int64_t ib = i_padded / QK8_1; // block index
+    const int64_t iqs = i_padded % QK8_1; // quant index
+
+    const float xi = ix0 < kx ? x[ix1*stride + ix0] : 0.0f;
+    float amax = fabsf(xi);
+    float sum = xi;
+
+    amax = warp_reduce_max(amax);
+    sum = warp_reduce_sum(sum);
+
+    const float d = amax / 127;
+    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+    y[ib].qs[iqs] = q;
+
+    if (iqs > 0) {
+        return;
+    }
+
+    reinterpret_cast<half&>(y[ib].ds.x) = d;
+    reinterpret_cast<half&>(y[ib].ds.y) = sum;
+}
+
 template <mmq_q8_1_ds_layout ds_layout>
 static __global__ void quantize_mmq_q8_1(
     const float * __restrict__ x, void * __restrict__ vy, const int64_t kx0, const int64_t kx1, const int64_t kx0_padded) {
@@ -163,4 +199,20 @@ void quantize_mmq_q8_1_cuda(
             GGML_ABORT("fatal error");
             break;
     }
+}
+
+void quantize_tensor_q8_1_cuda(const struct ggml_tensor * src, void * vy, const enum ggml_type type, cudaStream_t stream) {
+    GGML_ASSERT(src->ne[1] == 1 && src->ne[3] == 1);
+    GGML_ASSERT(src->type == GGML_TYPE_F32);
+    const int64_t src_padded_col_size = GGML_PAD(src->ne[0], MATRIX_ROW_PADDING);
+    GGML_ASSERT(src_padded_col_size % QK8_1 == 0);
+    if (src->ne[2] == 1 || ggml_is_contiguous(src)) {
+        quantize_row_q8_1_cuda((const float *)src->data, vy, src->ne[0], 1, 1, src_padded_col_size, type, stream);
+        return;
+    }
+    const int64_t block_num_x = (src_padded_col_size + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+    const dim3 num_blocks(block_num_x, src->ne[2]*src->ne[3], 1);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
+    const uint64_t stride = src->nb[2]/sizeof(float);
+    quantize_q8_1<<<num_blocks, block_size, 0, stream>>>((const float *)src->data, vy, src->ne[0], src_padded_col_size, stride);
 }
