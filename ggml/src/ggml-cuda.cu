@@ -18,7 +18,6 @@
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvq.cuh"
-#include "ggml-cuda/mmvq_mha.cuh"
 #include "ggml-cuda/norm.cuh"
 #include "ggml-cuda/pad.cuh"
 #include "ggml-cuda/pool2d.cuh"
@@ -1600,7 +1599,7 @@ static void ggml_cuda_op_mul_mat(
         char  * src1_ddq_i = dev[id].src1_ddq;
         float *   dst_dd_i =   dev[id].dst_dd;
         cudaStream_t stream = ctx.stream(id, 0);
-        ggml_cuda_op_mul_mat_vec_q_mha(ctx, src0, src1, dst, src0_dd_i, src1_ddf_i, src1_ddq_i, dst_dd_i,
+        ggml_cuda_op_mul_mat_vec_q_3D(ctx, src0, src1, dst, src0_dd_i, src1_ddf_i, src1_ddq_i, dst_dd_i,
                 dev[id].row_low, dev[id].row_high, ne11, src1_padded_col_size, stream);
         CUDA_CHECK(cudaGetLastError());
         return;
