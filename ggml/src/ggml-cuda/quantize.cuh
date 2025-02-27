@@ -22,3 +22,6 @@ void quantize_row_q8_1_cuda(
 void quantize_mmq_q8_1_cuda(
     const float * x, void * vy, const int64_t kx0, const int64_t kx1, const int64_t channels, const int64_t kx0_padded,
     const ggml_type type_x, cudaStream_t stream);
+
+// For now only applicable for tensors with ne[1] = 1, ne[3] = 1, and useful if ne[2] > 1
+void quantize_tensor_q8_1_cuda(const struct ggml_tensor * src, void * vy, const enum ggml_type type, cudaStream_t stream);
