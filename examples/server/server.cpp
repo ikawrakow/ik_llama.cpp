@@ -33,6 +33,8 @@
 #include "prompt-formats.js.hpp"
 #include "json-schema-to-grammar.mjs.hpp"
 
+#include "atomic_hash_map.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -546,10 +548,10 @@ struct server_response {
     callback_multitask_t callback_update_multitask;
 
     // for keeping track of all tasks waiting for the result
-    std::set<int> waiting_task_ids;
+    atomic::hash_map<int, int> waiting_task_ids = {10000};
 
-    // the main result queue
-    std::vector<server_task_result> queue_results;
+    // the main result queue (using ptr for polymorphism)
+    atomic::hash_map<int, server_task_result> queue_results = {10000};
 
     std::mutex mutex_results;
     std::condition_variable condition_results;
@@ -557,35 +559,31 @@ struct server_response {
     // add the id_task to the list of tasks waiting for response
     void add_waiting_task_id(int id_task) {
         LOG_VERBOSE("waiting for task id", {{"id_task", id_task}});
-
-        std::unique_lock<std::mutex> lock(mutex_results);
-        waiting_task_ids.insert(id_task);
+        waiting_task_ids.insert(id_task, 0);
     }
 
     // when the request is finished, we can remove task associated with it
     void remove_waiting_task_id(int id_task) {
         LOG_VERBOSE("remove waiting for task id", {{"id_task", id_task}});
-
-        std::unique_lock<std::mutex> lock(mutex_results);
         waiting_task_ids.erase(id_task);
+        // make sure to clean up all pending results
+        queue_results.erase(id_task);
     }
 
-    // This function blocks the thread until there is a response for this id_task
+    // This function blocks the thread until there is a response for one of the id_tasks
     server_task_result recv(int id_task) {
         while (true) {
+            auto iter = queue_results.find(id_task);
+            if (iter != queue_results.cend()) {
+                server_task_result res = iter->second;
+                queue_results.erase(id_task);
+                return res;
+            }
+
             std::unique_lock<std::mutex> lock(mutex_results);
             condition_results.wait(lock, [&]{
-                return !queue_results.empty();
+                return queue_results.cbegin() != queue_results.cend();
             });
-
-            for (int i = 0; i < (int) queue_results.size(); i++) {
-                if (queue_results[i].id == id_task) {
-                    assert(queue_results[i].id_multi == -1);
-                    server_task_result res = queue_results[i];
-                    queue_results.erase(queue_results.begin() + i);
-                    return res;
-                }
-            }
         }
 
         // should never reach here
@@ -600,22 +598,15 @@ struct server_response {
     void send(server_task_result result) {
         LOG_VERBOSE("send new result", {{"id_task", result.id}});
 
-        std::unique_lock<std::mutex> lock(mutex_results);
-        for (const auto & id_task : waiting_task_ids) {
-            // LOG_TEE("waiting task id %i \n", id_task);
-            // for now, tasks that have associated parent multitasks just get erased once multitask picks up the result
-            if (result.id_multi == id_task) {
-                LOG_VERBOSE("callback_update_multitask", {{"id_task", id_task}});
-                callback_update_multitask(id_task, result.id, result);
-                continue;
-            }
+        if (waiting_task_ids.find(result.id_multi) != waiting_task_ids.cend()) {
+            LOG_VERBOSE("callback_update_multitask", {{"id_task", result.id_multi}});
+            callback_update_multitask(result.id_multi, result.id, result);
+        }
 
-            if (result.id == id_task) {
-                LOG_VERBOSE("queue_results.push_back", {{"id_task", id_task}});
-                queue_results.push_back(result);
-                condition_results.notify_all();
-                return;
-            }
+        if (waiting_task_ids.find(result.id) != waiting_task_ids.cend()) {
+            LOG_VERBOSE("queue_results.push_back", {{"id_task", result.id}});
+            queue_results.insert(result.id, std::move(result));
+            condition_results.notify_all();
         }
     }
 };
