@@ -175,7 +175,7 @@ struct gpt_params {
     bool simple_io         = false; // improves compatibility with subprocesses and limited consoles
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
     bool flash_attn        = false; // flash attention
-    bool mla_attn          = false; // MLA
+    int  mla_attn          = false; // MLA 0: standard attention, 1: MLA with K and transposed V cache, 2: MLA with just K cache
     bool fused_moe_up_gate = false; // fused up*unary(gate) op for MoE models
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix

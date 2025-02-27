@@ -158,11 +158,6 @@ static void mul_mat_vec_q_cuda(
     int64_t nwarps = 1;
     int64_t rows_per_cuda_block = 1;
 
-    //if (ne2 > 1) {
-    //    printf("%s: ncols_x = %d, nrows_x = %d, nrows_y = %d, ncols_y = %d nrows_dst = %d, ne2 = %d nb02 = %zu, nb12 = %zu, nb2 = %zu\n", __func__,
-    //        ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2);
-    //}
-
     if (ggml_cuda_info().devices[id].cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
         switch(ncols_y) {
             case 1:
@@ -382,9 +377,8 @@ static void mul_mat_vec_iq3_s_q8_1_cuda(
     mul_mat_vec_q_cuda<GGML_TYPE_IQ3_S>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, stream);
 }
 
-namespace {
-void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggml_type type,
-        const int64_t ne00, const int64_t ne10, const int64_t ne0, const int64_t ne2,
+static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggml_type type,
+        const int64_t ne00, const int64_t ne0, const int64_t ne2,
         const int64_t nb02, const int64_t nb12, const int64_t nb2,
         const char * src0_dd_i, const char * src1_ddq_i, float * dst_dd_i,
         const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
@@ -496,7 +490,6 @@ void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggml_type 
     }
 
 }
-}
 
 void ggml_cuda_op_mul_mat_vec_q_3D(
     ggml_backend_cuda_context & ctx,
@@ -505,8 +498,6 @@ void ggml_cuda_op_mul_mat_vec_q_3D(
     const int64_t src1_padded_row_size, cudaStream_t stream) {
 
     const int64_t ne00 = src0->ne[0];
-    const int64_t row_diff = row_high - row_low;
-
     const int64_t ne10 = src1->ne[0];
     GGML_ASSERT(ne10 % QK8_1 == 0);
     GGML_ASSERT(src0->ne[3] == 1 && src1->ne[3] == 1 && dst->ne[3] == 1);
@@ -516,13 +507,10 @@ void ggml_cuda_op_mul_mat_vec_q_3D(
 
     int id = ggml_cuda_get_device();
 
-    // the main device has a larger memory buffer to hold the results from all GPUs
-    // nrows_dst == nrows of the matrix that the kernel writes into
-    const int64_t nrows_dst = id == ctx.device ? ne0 : row_diff;
     const int64_t src1_row_size = ggml_row_size(GGML_TYPE_Q8_1, src1_padded_row_size);
 
     ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
-        ne00, ne10, ne0, dst->ne[2],
+        ne00, ne0, dst->ne[2],
         src0->nb[2], src1_row_size, dst->nb[2],
         src0_dd_i, src1_ddq_i, dst_dd_i,
         row_low, row_high, src1_ncols,
@@ -538,8 +526,6 @@ void ggml_cuda_op_mul_mat_vec_q(
     const int64_t src1_padded_row_size, cudaStream_t stream) {
 
     const int64_t ne00 = src0->ne[0];
-    const int64_t row_diff = row_high - row_low;
-
     const int64_t ne10 = src1->ne[0];
     GGML_ASSERT(ne10 % QK8_1 == 0);
 
@@ -547,12 +533,8 @@ void ggml_cuda_op_mul_mat_vec_q(
 
     int id = ggml_cuda_get_device();
 
-    // the main device has a larger memory buffer to hold the results from all GPUs
-    // nrows_dst == nrows of the matrix that the kernel writes into
-    const int64_t nrows_dst = id == ctx.device ? ne0 : row_diff;
-
     ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
-        ne00, ne10, ne0, 1, 0, 0, 0,
+        ne00, ne0, 1, 0, 0, 0,
         src0_dd_i, src1_ddq_i, dst_dd_i,
         row_low, row_high, src1_ncols,
         src1_padded_row_size, stream);
