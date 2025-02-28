@@ -108,8 +108,9 @@ struct server_task_result {
 struct server_task_multi {
     int id = -1;
 
-    lock_free::hash_map<int, int> subtasks_remaining;
-    lock_free::linked_list<server_task_result> results;
+    std::mutex mutex_tasks;
+    std::set<int> subtasks_remaining;
+    std::vector<server_task_result> results;
 };
 
 struct slot_params {
@@ -480,7 +481,8 @@ struct server_queue {
 
             // check if we have any finished multitasks
             queue_multitasks.sweep([&](server_task_multi && multitask) {
-                if (multitask.subtasks_remaining.cbegin() == multitask.subtasks_remaining.cend()) {
+                std::unique_lock<std::mutex> lock(multitask.mutex_tasks);
+                if (multitask.subtasks_remaining.empty()) {
                     // all subtasks done == multitask is done
                     callback_finish_multitask(multitask);
                 } else {
@@ -513,7 +515,7 @@ struct server_queue {
 
     // add a multitask by specifying the id of all subtask (subtask is a server_task)
     void add_multitask(int id_multi, std::vector<int> & sub_ids) {
-        server_task_multi multi = {id_multi};
+        server_task_multi multi = {id_multi, {}, {}, {}};
         for (auto & id : sub_ids) {
             multi.subtasks_remaining.insert(id, 0);
         }
@@ -524,8 +526,9 @@ struct server_queue {
     void update_multitask(int id_multi, int id_sub, server_task_result & result) {
         queue_multitasks.sweep([&](server_task_multi && multitask) {
             if (multitask.id == id_multi) {
+                std::unique_lock<std::mutex> lock(multitask.mutex_tasks);
                 multitask.subtasks_remaining.erase(id_sub);
-                multitask.results.insertHead(std::move(result));
+                multitask.results.push_back(std::move(result));
             }
             queue_multitasks.insertHead(std::move(multitask));
         });
@@ -1846,7 +1849,7 @@ struct server_context {
         }
     }
 
-    void on_finish_multitask(server_task_multi & multitask) {
+    void on_finish_multitask(const server_task_multi & multitask) {
         // all subtasks done == multitask is done
         server_task_result result;
         result.id    = multitask.id;
@@ -1855,11 +1858,13 @@ struct server_context {
 
         // collect json results into one json result
         std::vector<json> result_jsons;
-        multitask.results.sweep([&](server_task_result && subres) {
-            result_jsons.push_back(subres.data);
-            result.error = result.error && subres.error;
-            multitask.results.insertHead(std::move(subres));
-        });
+        {
+            std::unique_lock<std::mutex> lock(multitask.mutex_tasks);
+            for (auto & subtask : multitask.results) {
+                result_jsons.push_back(subtask.data);
+                result.error = result.error && subtask.error;
+            }
+        }
         result.data = json {
             { "results", result_jsons }
         };
