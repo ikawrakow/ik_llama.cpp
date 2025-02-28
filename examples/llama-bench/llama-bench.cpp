@@ -233,6 +233,7 @@ struct cmd_params {
     std::vector<bool> no_kv_offload;
     std::vector<bool> flash_attn;
     std::vector<int> mla_attn;
+    std::vector<int> attn_max_batch;
     std::vector<std::vector<float>> tensor_split;
     std::vector<bool> use_mmap;
     std::vector<bool> embeddings;
@@ -265,6 +266,7 @@ static const cmd_params cmd_params_defaults = {
     /* no_kv_offload        */ {false},
     /* flash_attn           */ {false},
     /* mla_attn             */ {0},
+    /* attn_max_batch       */ {0},
     /* tensor_split         */ {std::vector<float>(llama_max_devices(), 0.0f)},
     /* use_mmap             */ {true},
     /* embeddings           */ {false},
@@ -301,6 +303,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -nkvo, --no-kv-offload <0|1>        (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>             (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
     printf("  -mla, --mla-attn <0|1|2>            (default: %s)\n", join(cmd_params_defaults.mla_attn, ",").c_str());
+    printf("  -amb, --attn-max-batch <i>          (default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
     printf("  -mmp, --mmap <0|1>                  (default: %s)\n", join(cmd_params_defaults.use_mmap, ",").c_str());
     printf("  --numa <distribute|isolate|numactl> (default: disabled)\n");
     printf("  -embd, --embeddings <0|1>           (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
@@ -578,6 +581,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             auto p = string_split<int>(argv[i], split_delim);
             params.mla_attn.insert(params.mla_attn.end(), p.begin(), p.end());
+        } else if (arg == "-amb" || arg == "--attn-max-batch") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto p = string_split<int>(argv[i], split_delim);
+            params.attn_max_batch.insert(params.attn_max_batch.end(), p.begin(), p.end());
         } else if (arg == "-mmp" || arg == "--mmap") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -690,6 +700,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_kv_offload.empty()){ params.no_kv_offload = cmd_params_defaults.no_kv_offload; }
     if (params.flash_attn.empty())   { params.flash_attn = cmd_params_defaults.flash_attn; }
     if (params.mla_attn.empty())     { params.mla_attn = cmd_params_defaults.mla_attn; }
+    if (params.attn_max_batch.empty()){ params.attn_max_batch = cmd_params_defaults.attn_max_batch; }
     if (params.tensor_split.empty()) { params.tensor_split = cmd_params_defaults.tensor_split; }
     if (params.use_mmap.empty())     { params.use_mmap = cmd_params_defaults.use_mmap; }
     if (params.embeddings.empty())   { params.embeddings = cmd_params_defaults.embeddings; }
@@ -727,6 +738,7 @@ struct cmd_params_instance {
     bool no_kv_offload;
     bool flash_attn;
     int  mla_attn;
+    int  attn_max_batch;
     std::vector<float> tensor_split;
     bool use_mmap;
     bool embeddings;
@@ -773,6 +785,7 @@ struct cmd_params_instance {
         cparams.offload_kqv = !no_kv_offload;
         cparams.flash_attn = flash_attn;
         cparams.mla_attn = mla_attn;
+        cparams.attn_max_batch = attn_max_batch;
         cparams.fused_moe_up_gate = fmoe;
         cparams.embeddings = embeddings;
 
@@ -799,6 +812,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nkvo : params.no_kv_offload)
     for (const auto & fa : params.flash_attn)
     for (const auto & mla : params.mla_attn)
+    for (const auto & amb : params.attn_max_batch)
     for (const auto & nt : params.n_threads) {
         for (const auto & n_prompt : params.n_prompt) {
             if (n_prompt == 0) {
@@ -821,6 +835,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
                 /* .mla_attn     = */ mla,
+                /* .attn_max_b   = */ amb,
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
@@ -852,6 +867,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
                 /* .mla_attn     = */ mla,
+                /* .attn_max_b   = */ amb,
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
@@ -883,6 +899,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
                 /* .mla_attn     = */ mla,
+                /* .attn_max_b   = */ amb,
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
@@ -914,6 +931,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
                 /* .mla_attn     = */ mla,
+                /* .attn_max_b   = */ amb,
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
@@ -956,6 +974,7 @@ struct test {
     bool no_kv_offload;
     bool flash_attn;
     int  mla_attn;
+    int  attn_max_batch;
     std::vector<float> tensor_split;
     bool use_mmap;
     bool embeddings;
@@ -987,6 +1006,7 @@ struct test {
         no_kv_offload = inst.no_kv_offload;
         flash_attn = inst.flash_attn;
         mla_attn = inst.mla_attn;
+        attn_max_batch = inst.attn_max_batch;
         tensor_split = inst.tensor_split;
         use_mmap = inst.use_mmap;
         embeddings = inst.embeddings;
@@ -1081,7 +1101,7 @@ struct test {
             "n_batch", "n_ubatch",
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
-            "main_gpu", "no_kv_offload", "flash_attn", "mla_attn",
+            "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch",
             "tensor_split", "use_mmap", "embeddings", "repack", "fused_moe",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
@@ -1097,7 +1117,7 @@ struct test {
             field == "n_threads" ||
             field == "model_size" || field == "model_n_params" ||
             field == "n_gpu_layers" || field == "main_gpu" ||
-            field == "n_prompt" || field == "n_gen" || field == "mla_attn" ||
+            field == "n_prompt" || field == "n_gen" || field == "mla_attn" || field == "attn_max_batch" ||
             field == "avg_ns" || field == "stddev_ns") {
             return INT;
         }
@@ -1138,7 +1158,7 @@ struct test {
             std::to_string(n_batch), std::to_string(n_ubatch),
             std::to_string(n_threads), ggml_type_name(type_k), ggml_type_name(type_v),
             std::to_string(n_gpu_layers), split_mode_str(split_mode),
-            std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn), std::to_string(mla_attn),
+            std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn), std::to_string(mla_attn), std::to_string(attn_max_batch),
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings), std::to_string(repack), std::to_string(fmoe),
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
@@ -1305,6 +1325,9 @@ struct markdown_printer : public printer {
         if (field == "mla_attn") {
             return 3;
         }
+        if (field == "attn_max_batch") {
+            return 5;
+        }
         if (field == "use_mmap") {
             return 4;
         }
@@ -1344,6 +1367,9 @@ struct markdown_printer : public printer {
         }
         if (field == "mla_attn") {
             return "mla";
+        }
+        if (field == "attn_max_batch") {
+            return "amb";
         }
         if (field == "use_mmap") {
             return "mmap";
@@ -1402,6 +1428,9 @@ struct markdown_printer : public printer {
         }
         if (params.mla_attn.size() > 1 || params.mla_attn != cmd_params_defaults.mla_attn) {
             fields.emplace_back("mla_attn");
+        }
+        if (params.attn_max_batch.size() > 1 || params.attn_max_batch != cmd_params_defaults.mla_attn) {
+            fields.emplace_back("attn_max_batch");
         }
         if (params.tensor_split.size() > 1 || params.tensor_split != cmd_params_defaults.tensor_split) {
             fields.emplace_back("tensor_split");
