@@ -12627,6 +12627,26 @@ static void ggml_compute_forward_concat_f32(
 
     GGML_ASSERT(dim >= 0 && dim < 4);
 
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
+       (dim == 3 || (dim == 2 && dst->ne[3] == 1) || (dim == 1 && dst->ne[2]*dst->ne[3] == 1))) {
+        // simply copy the data
+        const int64_t size_src_0 = ggml_nbytes(src0);
+        const int64_t size_src_1 = ggml_nbytes(src1);
+        const int64_t block_size = 4096;
+        const int64_t num_blocks = (size_src_0 + size_src_1 + block_size - 1)/block_size;
+        for (int64_t i_block = ith; i_block < num_blocks; i_block += nth) {
+            const int64_t start = i_block*block_size;
+            if (start < size_src_0) {
+                int64_t copy_size = MIN(block_size, size_src_0 - start);
+                memcpy((char *)dst->data + start, (char *)src0->data + start, copy_size);
+            } else {
+                int64_t copy_size = MIN(block_size, size_src_0 + size_src_1 - start);
+                memcpy((char *)dst->data + start, (char *)src1->data + start - size_src_0, copy_size);
+            }
+        }
+        return;
+    }
+
     int64_t o[4] = {0, 0, 0, 0};
     o[dim] = src0->ne[dim];
 
