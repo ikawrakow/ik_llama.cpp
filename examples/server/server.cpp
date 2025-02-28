@@ -33,7 +33,7 @@
 #include "prompt-formats.js.hpp"
 #include "json-schema-to-grammar.mjs.hpp"
 
-#include "atomic_hash_map.hpp"
+#include "lock-free.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -108,8 +108,8 @@ struct server_task_result {
 struct server_task_multi {
     int id = -1;
 
-    std::set<int> subtasks_remaining;
-    std::vector<server_task_result> results;
+    lock_free::hash_map<int, int> subtasks_remaining;
+    lock_free::linked_list<server_task_result> results;
 };
 
 struct slot_params {
@@ -380,14 +380,15 @@ struct server_metrics {
 };
 
 struct server_queue {
-    int id = 0;
+    std::atomic<int> id = 0;
     bool running;
 
     // queues
-    std::vector<server_task> queue_tasks;
-    std::vector<server_task> queue_tasks_deferred;
+    lock_free::linked_list<server_task> queue_tasks;
+    lock_free::linked_list<server_task> queue_tasks_deferred;
+    std::atomic<int> n_queue_tasks_deferred = 0;
 
-    std::vector<server_task_multi> queue_multitasks;
+    lock_free::linked_list<server_task_multi> queue_multitasks;
 
     std::mutex mutex_tasks;
     std::condition_variable condition_tasks;
@@ -399,25 +400,23 @@ struct server_queue {
 
     // Add a new task to the end of the queue
     int post(server_task task) {
-        std::unique_lock<std::mutex> lock(mutex_tasks);
         if (task.id == -1) {
             task.id = id++;
             LOG_VERBOSE("new task id", {{"new_id", task.id}});
         }
-        queue_tasks.push_back(std::move(task));
+        queue_tasks.insertHead(std::move(task));
         condition_tasks.notify_one();
         return task.id;
     }
 
     // Add a new task, but defer until one slot is available
     void defer(server_task task) {
-        std::unique_lock<std::mutex> lock(mutex_tasks);
-        queue_tasks_deferred.push_back(std::move(task));
+        queue_tasks_deferred.insertHead(std::move(task));
+        n_queue_tasks_deferred++;
     }
 
     // Get the next id for creating anew task
     int get_new_id() {
-        std::unique_lock<std::mutex> lock(mutex_tasks);
         int new_id = id++;
         LOG_VERBOSE("new task id", {{"new_id", new_id}});
         return new_id;
@@ -441,16 +440,14 @@ struct server_queue {
     // Call when the state of one slot is changed
     void notify_slot_changed() {
         // move deferred tasks back to main loop
-        std::unique_lock<std::mutex> lock(mutex_tasks);
-        for (auto & task : queue_tasks_deferred) {
-            queue_tasks.push_back(std::move(task));
-        }
-        queue_tasks_deferred.clear();
+        queue_tasks_deferred.sweep([&](server_task && task) {
+            queue_tasks.insertHead(std::move(task));
+        });
+        n_queue_tasks_deferred = 0;
     }
 
     // end the start_loop routine
     void terminate() {
-        std::unique_lock<std::mutex> lock(mutex_tasks);
         running = false;
         condition_tasks.notify_all();
     }
@@ -469,33 +466,27 @@ struct server_queue {
             LOG_VERBOSE("new task may arrive", {});
 
             while (true) {
-                std::unique_lock<std::mutex> lock(mutex_tasks);
                 if (queue_tasks.empty()) {
-                    lock.unlock();
                     break;
                 }
-                server_task task = queue_tasks.front();
-                queue_tasks.erase(queue_tasks.begin());
-                lock.unlock();
-                LOG_VERBOSE("callback_new_task", {{"id_task", task.id}});
-                callback_new_task(task);
+
+                queue_tasks.sweepOnce([&](server_task && task) {
+                    LOG_VERBOSE("callback_new_task", {{"id_task", task.id}});
+                    callback_new_task(task);
+                });
             }
 
             LOG_VERBOSE("update_multitasks", {});
 
             // check if we have any finished multitasks
-            auto queue_iterator = queue_multitasks.begin();
-            while (queue_iterator != queue_multitasks.end()) {
-                if (queue_iterator->subtasks_remaining.empty()) {
+            queue_multitasks.sweep([&](server_task_multi && multitask) {
+                if (multitask.subtasks_remaining.empty()) {
                     // all subtasks done == multitask is done
-                    server_task_multi current_multitask = *queue_iterator;
-                    callback_finish_multitask(current_multitask);
-                    // remove this multitask
-                    queue_iterator = queue_multitasks.erase(queue_iterator);
+                    callback_finish_multitask(multitask);
                 } else {
-                    ++queue_iterator;
+                    queue_multitasks.insertHead(std::move(multitask));
                 }
-            }
+            });
 
             // all tasks in the current loop is processed, slots data is now ready
             LOG_VERBOSE("callback_update_slots", {});
@@ -503,17 +494,15 @@ struct server_queue {
             callback_update_slots();
 
             LOG_VERBOSE("wait for new task", {});
-            {
-                std::unique_lock<std::mutex> lock(mutex_tasks);
-                if (queue_tasks.empty()) {
-                    if (!running) {
-                        LOG_VERBOSE("ending start_loop", {});
-                        return;
-                    }
-                    condition_tasks.wait(lock, [&]{
-                        return (!queue_tasks.empty() || !running);
-                    });
+            if (queue_tasks.empty()) {
+                if (!running) {
+                    LOG_VERBOSE("ending start_loop", {});
+                    return;
                 }
+                std::unique_lock<std::mutex> lock(mutex_tasks);
+                condition_tasks.wait(lock, [&]{
+                    return (!queue_tasks.empty() || !running);
+                });
             }
         }
     }
@@ -524,22 +513,21 @@ struct server_queue {
 
     // add a multitask by specifying the id of all subtask (subtask is a server_task)
     void add_multitask(int id_multi, std::vector<int> & sub_ids) {
-        std::lock_guard<std::mutex> lock(mutex_tasks);
         server_task_multi multi;
         multi.id = id_multi;
         std::copy(sub_ids.begin(), sub_ids.end(), std::inserter(multi.subtasks_remaining, multi.subtasks_remaining.end()));
-        queue_multitasks.push_back(multi);
+        queue_multitasks.insertHead(std::move(multitask));
     }
 
     // updatethe remaining subtasks, while appending results to multitask
     void update_multitask(int id_multi, int id_sub, server_task_result & result) {
-        std::lock_guard<std::mutex> lock(mutex_tasks);
-        for (auto & multitask : queue_multitasks) {
+        queue_multitasks.sweep([&](server_task_multi && multitask) {
             if (multitask.id == id_multi) {
                 multitask.subtasks_remaining.erase(id_sub);
-                multitask.results.push_back(result);
+                multitask.results.insertHead(std::move(result));
             }
-        }
+            queue_multitasks.insertHead(std::move(multitask));
+        });
     }
 };
 
@@ -548,10 +536,10 @@ struct server_response {
     callback_multitask_t callback_update_multitask;
 
     // for keeping track of all tasks waiting for the result
-    atomic::hash_map<int, int> waiting_task_ids = {10000};
+    lock_free::hash_map<int, int> waiting_task_ids = {10000};
 
     // the main result queue (using ptr for polymorphism)
-    atomic::hash_map<int, server_task_result> queue_results = {10000};
+    lock_free::hash_map<int, server_task_result> queue_results = {10000};
 
     std::mutex mutex_results;
     std::condition_variable condition_results;
@@ -1703,7 +1691,7 @@ struct server_context {
                     res.data     = {
                         { "idle",                            n_idle_slots       },
                         { "processing",                      n_processing_slots },
-                        { "deferred",                        queue_tasks.queue_tasks_deferred.size() },
+                        { "deferred",                        queue_tasks.n_queue_tasks_deferred },
                         { "t_start",                         metrics.t_start},
 
                         { "n_prompt_tokens_processed_total", metrics.n_prompt_tokens_processed_total},
@@ -1866,10 +1854,11 @@ struct server_context {
 
         // collect json results into one json result
         std::vector<json> result_jsons;
-        for (const auto & subres : multitask.results) {
+        multitask.results.sweep([&](server_task_result && subres) {
             result_jsons.push_back(subres.data);
             result.error = result.error && subres.error;
-        }
+            multitask.results.insertHead(std::move(subres));
+        });
         result.data = json {
             { "results", result_jsons }
         };
