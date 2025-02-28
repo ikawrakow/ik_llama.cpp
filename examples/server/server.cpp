@@ -480,7 +480,7 @@ struct server_queue {
 
             // check if we have any finished multitasks
             queue_multitasks.sweep([&](server_task_multi && multitask) {
-                if (multitask.subtasks_remaining.empty()) {
+                if (multitask.subtasks_remaining.cbegin() == multitask.subtasks_remaining.cend()) {
                     // all subtasks done == multitask is done
                     callback_finish_multitask(multitask);
                 } else {
@@ -513,10 +513,11 @@ struct server_queue {
 
     // add a multitask by specifying the id of all subtask (subtask is a server_task)
     void add_multitask(int id_multi, std::vector<int> & sub_ids) {
-        server_task_multi multi;
-        multi.id = id_multi;
-        std::copy(sub_ids.begin(), sub_ids.end(), std::inserter(multi.subtasks_remaining, multi.subtasks_remaining.end()));
-        queue_multitasks.insertHead(std::move(multitask));
+        server_task_multi multi = {id_multi};
+        for (auto & id : sub_ids) {
+            multi.subtasks_remaining.insert(id, 0);
+        }
+        queue_multitasks.insertHead(std::move(multi));
     }
 
     // updatethe remaining subtasks, while appending results to multitask
@@ -1691,7 +1692,7 @@ struct server_context {
                     res.data     = {
                         { "idle",                            n_idle_slots       },
                         { "processing",                      n_processing_slots },
-                        { "deferred",                        queue_tasks.n_queue_tasks_deferred },
+                        { "deferred",                        queue_tasks.n_queue_tasks_deferred.load() },
                         { "t_start",                         metrics.t_start},
 
                         { "n_prompt_tokens_processed_total", metrics.n_prompt_tokens_processed_total},
@@ -1845,7 +1846,7 @@ struct server_context {
         }
     }
 
-    void on_finish_multitask(const server_task_multi & multitask) {
+    void on_finish_multitask(server_task_multi & multitask) {
         // all subtasks done == multitask is done
         server_task_result result;
         result.id    = multitask.id;
