@@ -8775,45 +8775,8 @@ static struct ggml_tensor * llm_build_kqv(
 
         cur = ggml_reshape_2d(ctx, cur, n_embd_head_v*n_head, n_tokens);
     } else {
-        struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
-        cb(kq, "kq", il);
 
-        //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-
-        if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2) {
-            // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
-            // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
-            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-        }
-
-        if (model.arch == LLM_ARCH_GROK) {
-            // need to do the following:
-            // multiply by attn_output_multiplyer of 0.08838834764831845
-            // and then :
-            // kq = 30 * tanh(kq / 30)
-            // before the softmax below
-
-            //try from phi2
-            //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-
-            //kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
-            //kq = ggml_scale(ctx, kq, 30);
-
-            kq = ggml_softcap(ctx, kq, 0.08838834764831845f/30.0f, 30.f);
-        }
-
-        if (hparams.attn_soft_cap) {
-            //kq = ggml_softcap(ctx, kq, 1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
-            kq = ggml_softcap_max(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias,
-                    1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
-        } else {
-            kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
-        }
-        cb(kq, "kq_soft_max_ext", il);
-
-        GGML_ASSERT(kv.size == n_ctx);
-
-        // split cached v into n_head heads
+            // split cached v into n_head heads
         struct ggml_tensor * v =
             ggml_view_3d(ctx, kv.v_l[il],
                     n_kv, n_embd_head_v, n_head_kv,
@@ -8822,14 +8785,89 @@ static struct ggml_tensor * llm_build_kqv(
                     0);
         cb(v, "v", il);
 
-        struct ggml_tensor * kqv = ggml_mul_mat(ctx, v, kq);
-        cb(kqv, "kqv", il);
+        if (cparams.attn_max_batch == 0 || cparams.attn_max_batch >= k->ne[1] || q->ne[2] == 1) {
+            struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
+            cb(kq, "kq", il);
 
-        struct ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
-        cb(kqv_merged, "kqv_merged", il);
+            //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
 
-        cur = ggml_cont_2d(ctx, kqv_merged, n_embd_head_v*n_head, n_tokens);
-        cb(cur, "kqv_merged_cont", il);
+            if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2) {
+                // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
+                // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
+                ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+            }
+
+            if (model.arch == LLM_ARCH_GROK) {
+                // need to do the following:
+                // multiply by attn_output_multiplyer of 0.08838834764831845
+                // and then :
+                // kq = 30 * tanh(kq / 30)
+                // before the softmax below
+
+                //try from phi2
+                //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+
+                //kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
+                //kq = ggml_scale(ctx, kq, 30);
+
+                kq = ggml_softcap(ctx, kq, 0.08838834764831845f/30.0f, 30.f);
+            }
+
+            if (hparams.attn_soft_cap) {
+                //kq = ggml_softcap(ctx, kq, 1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
+                kq = ggml_softcap_max(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                        1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
+            } else {
+                kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+            }
+            cb(kq, "kq_soft_max_ext", il);
+
+            GGML_ASSERT(kv.size == n_ctx);
+
+            struct ggml_tensor * kqv = ggml_mul_mat(ctx, v, kq);
+            cb(kqv, "kqv", il);
+
+            struct ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
+            cb(kqv_merged, "kqv_merged", il);
+
+            cur = ggml_cont_2d(ctx, kqv_merged, n_embd_head_v*n_head, n_tokens);
+            cb(cur, "kqv_merged_cont", il);
+        }
+        else {
+            auto r2k = q->ne[2] / k->ne[2];
+            auto r2v = q->ne[2] / n_head_kv;
+            ggml_tensor * kqv;
+            for (int i12 = 0; i12 < q->ne[2]; ++i12) {
+                int i02 = i12/r2k;
+                auto k_i = ggml_view_2d(ctx, k, k->ne[0], k->ne[1], k->nb[1], k->nb[2]*i02);
+                auto q_i = ggml_view_2d(ctx, q, q->ne[0], q->ne[1], q->nb[1], q->nb[2]*i12);
+                auto kq_i = ggml_mul_mat(ctx, k_i, q_i);
+                if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2) {
+                    ggml_mul_mat_set_prec(kq_i, GGML_PREC_F32);
+                }
+                if (model.arch == LLM_ARCH_GROK) {
+                    kq_i = ggml_softcap(ctx, kq_i, 0.08838834764831845f/30.0f, 30.f);
+                }
+                if (hparams.attn_soft_cap) {
+                    kq_i = ggml_softcap_max(ctx, kq_i, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                            1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
+                } else {
+                    kq_i = ggml_soft_max_ext(ctx, kq_i, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+                }
+                i02 = i12 / r2v;
+                auto v_i = ggml_view_2d(ctx, v, v->ne[0], v->ne[1], v->nb[1], v->nb[2]*i02);
+                auto kqv_i = ggml_mul_mat(ctx, v_i, kq_i);
+                if (i12 == 0) {
+                    kqv = kqv_i;
+                } else {
+                    kqv = ggml_concat(ctx, kqv, kqv_i, 2);
+                }
+            }
+            ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
+            cb(kqv_merged, "kqv_merged", il);
+            cur = ggml_cont_2d(ctx, kqv_merged, n_embd_head_v*n_head, n_tokens);
+            cb(cur, "kqv_merged_cont", il);
+        }
     }
 
     ggml_build_forward_expand(graph, cur);
