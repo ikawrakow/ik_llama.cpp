@@ -397,6 +397,14 @@ namespace lock_free {
     return ConstIterator(*this, 0);
   }
 
+  const_iterator begin() const {
+    return this->cbegin();
+  }
+
+  const_iterator end() const {
+    return this->cend();
+  }
+
   // Add by orca.zhang@yahoo.com
   void clear() {
     for (size_t i = 1; i < numSlots_; ++i) {
