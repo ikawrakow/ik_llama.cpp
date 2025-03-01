@@ -21459,14 +21459,26 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         /*.shared=*/ state->shared,
     };
 
+#if IK_PRINT_TIMING
+    int64_t t_start = ggml_time_us();
+    int64_t t_eval  = 0;
+#endif
+
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
         if (ggml_is_noop(node)) continue;
 
+#if IK_PRINT_TIMING
+        int64_t tim1 = ggml_time_us();
+#endif
         if (ggml_compute_forward(&params, node, node_n < cgraph->n_nodes-1 ? cgraph->nodes[node_n+1] : NULL)) {
             ++node_n;
         }
+#if IK_PRINT_TIMING
+        int64_t tim2 = ggml_time_us();
+        t_eval += tim2 - tim1;
+#endif
 
         if (state->ith == 0 && cplan->abort_callback && cplan->abort_callback(cplan->abort_callback_data)) {
             state->shared->ec = GGML_STATUS_ABORTED;
@@ -21478,6 +21490,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             break;
         }
     }
+#if IK_PRINT_TIMING
+    int64_t t_end = ggml_time_us();
+    if (state->ith == 0) printf("ggml_barrier(...): %d us\n", (int)(t_end - t_start - t_eval));
+#endif
 
     return 0;
 }
