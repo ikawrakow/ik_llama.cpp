@@ -384,6 +384,7 @@ extern "C" {
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
         int  mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
+        int  attn_max_batch;    // maximum batch size for attention computations [EXPERIMENTAL]
         bool fused_moe_up_gate; // whether to use fused MoE up/down op [EXPERIMENTAL]
 
         // Abort callback
