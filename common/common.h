@@ -178,6 +178,8 @@ struct gpt_params {
     int  mla_attn          = 0;     // MLA 0: standard attention, 1: MLA with K and transposed V cache, 2: MLA with just K cache
     int  attn_max_batch    = 0;     // Max batch size to use when computing attention (only applicable if flash_attn = false)
     bool fused_moe_up_gate = false; // fused up*unary(gate) op for MoE models
+    int  min_experts       = -1;
+    float thresh_experts   = 0;
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool ignore_eos        = false; // ignore generated EOS tokens
