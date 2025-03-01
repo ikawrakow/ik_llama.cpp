@@ -383,7 +383,7 @@ extern "C" {
         bool embeddings;  // if true, extract embeddings (together with logits)
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
-        bool mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
+        int  mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
         bool fused_moe_up_gate; // whether to use fused MoE up/down op [EXPERIMENTAL]
 
         // Abort callback
