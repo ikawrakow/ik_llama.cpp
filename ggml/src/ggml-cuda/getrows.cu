@@ -4,7 +4,7 @@
 template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static __global__ void k_get_rows(
             const void * src0, const int32_t * src1, dst_t * dst,
-            int64_t ne00, /*int64_t ne01, int64_t ne02, int64_t ne03,*/
+            int64_t ne00, int64_t ne01, /*int64_t ne02, int64_t ne03,*/
             /*int64_t ne10, int64_t ne11,*/ int64_t ne12, /*int64_t ne13,*/
             /*size_t s0,*/ size_t s1, size_t s2, size_t s3,
             /*size_t nb00,*/ size_t nb01, size_t nb02, size_t nb03,
@@ -31,7 +31,11 @@ static __global__ void k_get_rows(
 
     // dequantize
     dfloat2 v;
-    dequantize_kernel(src0_row, ib, iqs, v);
+    if (i01 >= 0 && i01 < ne01) {
+        dequantize_kernel(src0_row, ib, iqs, v);
+    } else {
+        v.x = v.y = 0;
+    }
 
     dst_row[iybs + iqs + 0]        = v.x;
     dst_row[iybs + iqs + y_offset] = v.y;
@@ -40,7 +44,7 @@ static __global__ void k_get_rows(
 template<typename src0_t, typename dst_t>
 static __global__ void k_get_rows_float(
             const src0_t * src0, const int32_t * src1, dst_t * dst,
-            int64_t ne00, /*int64_t ne01, int64_t ne02, int64_t ne03,*/
+            int64_t ne00, int64_t ne01, /*int64_t ne02, int64_t ne03,*/
             /*int64_t ne10, int64_t ne11,*/ int64_t ne12, /*int64_t ne13,*/
             /*size_t s0,*/ size_t s1, size_t s2, size_t s3,
             /*size_t nb00,*/ size_t nb01, size_t nb02, size_t nb03,
@@ -56,11 +60,10 @@ static __global__ void k_get_rows_float(
     }
 
     const int i01 = src1[i10*s10 + i11*s11 + i12*s12];
-
     dst_t * dst_row = dst + i10*s1 + i11*s2 + i12*s3;
     const src0_t * src0_row = (const src0_t *)((const char *)src0 + i01*nb01 + i11*nb02 + i12*nb03);
 
-    dst_row[i00] = src0_row[i00];
+    dst_row[i00] = i01 >= 0 && i01 < ne01 ? dst_t(src0_row[i00]) : dst_t(0);
 }
 
 template<int qk, int qr, dequantize_kernel_t dq>
@@ -88,7 +91,7 @@ static void get_rows_cuda(const ggml_tensor * src0, const ggml_tensor * src1, gg
 
     k_get_rows<qk, qr, dq><<<block_nums, block_dims, 0, stream>>>(
             src0_dd, src1_dd, dst_dd,
-            ne00, /*ne01, ne02, ne03,*/
+            ne00, ne01, /*ne02, ne03,*/
             /*ne10, ne11,*/ ne12, /*ne13,*/
             /* s0,*/ s1, s2, s3,
             /* nb00,*/ nb01, nb02, nb03,
@@ -120,7 +123,7 @@ static void get_rows_cuda_float(const ggml_tensor * src0, const ggml_tensor * sr
 
     k_get_rows_float<<<block_nums, block_dims, 0, stream>>>(
             src0_dd, src1_dd, dst_dd,
-            ne00, /*ne01, ne02, ne03,*/
+            ne00, ne01, /*ne02, ne03,*/
             /*ne10, ne11,*/ ne12, /*ne13,*/
             /* s0,*/ s1, s2, s3,
             /* nb00,*/ nb01, nb02, nb03,

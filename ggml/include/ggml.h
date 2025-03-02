@@ -597,6 +597,7 @@ extern "C" {
         GGML_OP_ARANGE,
         GGML_OP_TIMESTEP_EMBEDDING,
         GGML_OP_ARGSORT,
+        GGML_OP_ARGSORT_THRESH,
         GGML_OP_LEAKY_RELU,
         GGML_OP_SOFTCAP,
         GGML_OP_SOFT_CAP_MAX,
@@ -1913,6 +1914,12 @@ extern "C" {
             struct ggml_tensor  * a,
             enum ggml_sort_order  order);
 
+    GGML_API struct ggml_tensor * ggml_argsort_thresh(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   min_entries,
+            float                 threshold);
+
     GGML_API struct ggml_tensor * ggml_arange(
             struct ggml_context * ctx,
             float                 start,
@@ -1924,6 +1931,12 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   k);
+    GGML_API struct ggml_tensor * ggml_top_k_thresh(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   k,
+            int                   min_entries,
+            float                 thresh);
 
 #define GGML_KQ_MASK_PAD 32
 

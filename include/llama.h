@@ -386,6 +386,8 @@ extern "C" {
         int  mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
         int  attn_max_batch;    // maximum batch size for attention computations [EXPERIMENTAL]
         bool fused_moe_up_gate; // whether to use fused MoE up/down op [EXPERIMENTAL]
+        int  min_experts;
+        float thresh_experts;
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
