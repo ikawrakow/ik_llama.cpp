@@ -16076,7 +16076,7 @@ struct FlashQKV {
 
 template <int D, int q_step, int k_step>
 struct FlashQKfp32 {
-    static_assert(D%F16::block_size == 0 && D <= 256);
+    static_assert(D%F16::block_size == 0 && D <= 576);
     static_assert(k_step%F16::block_size == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
@@ -16571,8 +16571,8 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
 // q_step-1 versions of these functions for us, which I though was too much with q_step = 8.
 template <int Dk, int Dv, int q_step, int k_step>
 struct FlashAttn {
-    static_assert(Dk%F16::block_size == 0 && Dk <= 256);
-    static_assert(Dv%F16::block_size == 0 && Dv <= 256);
+    static_assert(Dk%F16::block_size == 0 && Dk <= 576);
+    static_assert(Dv%F16::block_size == 0 && Dv <= 512);
     static_assert(k_step%F16::block_size == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
@@ -17239,6 +17239,21 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
 
     auto type_k = ggml_type(int_type_k);
     auto type_v = ggml_type(int_type_v);
+
+    if (type_k == GGML_TYPE_Q8_0 && type_v == GGML_TYPE_Q8_0 && Dk == 576 && Dv == 512) {
+        //printf("Using DeepSeek FA with nq1 = %d, nk1 = %d\n", (int)nq1, (int)nk1);
+        HelperQ80<576, 32> kh((const char *)k, stride_k);
+        HelperQ80<512, 32> vh((const char *)v, stride_v);
+        if (nq1 % 8 == 0) {
+            FlashAttn<576, 512, 8, 32> fa(scale, softcap);
+            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+        } else {
+            FlashAttn<576, 512, 1, 32> fa(scale, softcap);
+            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+        }
+        return true;
+    }
+
     if (!flash_attn_is_supported(type_k) || !flash_attn_is_supported(type_v)) return false;
     if (!mask || nk1%32 != 0) return false; // the implementation assumes mask is not null and nk is a multiple of 32
     if (Dk != Dv && Dk != 192 && Dv != 128) return false;
