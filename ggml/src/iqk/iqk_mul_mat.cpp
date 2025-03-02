@@ -17242,7 +17242,8 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
     auto type_k = ggml_type(int_type_k);
     auto type_v = ggml_type(int_type_v);
 
-    if (type_k == GGML_TYPE_Q8_0 && type_v == GGML_TYPE_Q8_0 && Dk == 576 && Dv == 512) {
+    if (Dk == 576 && Dv == 512) {
+    //if (type_k == GGML_TYPE_Q8_0 && type_v == GGML_TYPE_Q8_0 && Dk == 576 && Dv == 512) {
         // This is a DeepSeek model with MLA. In that case we only have one cache (and k and v are different views of the cache),
         // so type_k must be the same as type_v
         GGML_ASSERT(type_k == type_v);
@@ -17250,13 +17251,13 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
             case GGML_TYPE_Q8_0: {
                 HelperQ80<576, 32> kh((const char *)k, stride_k);
                 HelperQ80<512, 32> vh((const char *)v, stride_v);
-                if (nq1 % 8 == 0) {
-                    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
-                    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                } else {
+                //if (nq1 % 8 == 0) {
+                //    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
+                //    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+                //} else {
                     FlashAttn<576, 512, 1, 32> fa(scale, softcap);
                     fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                }
+                //}
                 return true;
             } break;
             // Something is wrong with Q8_KV in this case.
@@ -17275,26 +17276,26 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
             case GGML_TYPE_F16: {
                 HelperF16<576, 32> kh((const char *)k, stride_k);
                 HelperF16<512, 32> vh((const char *)v, stride_v);
-                if (nq1 % 8 == 0) {
-                    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
-                    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                } else {
+                //if (nq1 % 8 == 0) {
+                //    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
+                //    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+                //} else {
                     FlashAttn<576, 512, 1, 32> fa(scale, softcap);
                     fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                }
+                //}
                 return true;
             } break;
 #ifdef __AVX512BF16__
             case GGML_TYPE_BF16: {
                 HelperBF16<576, 32> kh((const char *)k, stride_k);
                 HelperBF16<512, 32> vh((const char *)v, stride_v);
-                if (nq1 % 8 == 0) {
-                    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
-                    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                } else {
+                //if (nq1 % 8 == 0) {
+                //    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
+                //    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+                //} else {
                     FlashAttn<576, 512, 1, 32> fa(scale, softcap);
                     fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                }
+                //}
                 return true;
             } break;
 #endif
