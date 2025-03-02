@@ -17249,15 +17249,16 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
         GGML_ASSERT(type_k == type_v);
         switch (type_k) {
             case GGML_TYPE_Q8_0: {
+                //printf("%s: nk1 = %d, nq1 = %d, k = %p, v = %p, stride_k = %d stride_v = %d, stride_m = %d\n", __func__, nk1, nq1, k, v, stride_k, stride_v, stride_m);
                 HelperQ80<576, 32> kh((const char *)k, stride_k);
                 HelperQ80<512, 32> vh((const char *)v, stride_v);
-                //if (nq1 % 8 == 0) {
-                //    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
-                //    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                //} else {
+                if (nq1 % 8 == 0) {
+                    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
+                    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+                } else {
                     FlashAttn<576, 512, 1, 32> fa(scale, softcap);
                     fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                //}
+                }
                 return true;
             } break;
             // Something is wrong with Q8_KV in this case.
@@ -17276,26 +17277,26 @@ bool iqk_flash_attn_noalibi(int int_type_k,         // type of k
             case GGML_TYPE_F16: {
                 HelperF16<576, 32> kh((const char *)k, stride_k);
                 HelperF16<512, 32> vh((const char *)v, stride_v);
-                //if (nq1 % 8 == 0) {
-                //    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
-                //    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                //} else {
+                if (nq1 % 8 == 0) {
+                    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
+                    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+                } else {
                     FlashAttn<576, 512, 1, 32> fa(scale, softcap);
                     fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                //}
+                }
                 return true;
             } break;
 #ifdef __AVX512BF16__
             case GGML_TYPE_BF16: {
                 HelperBF16<576, 32> kh((const char *)k, stride_k);
                 HelperBF16<512, 32> vh((const char *)v, stride_v);
-                //if (nq1 % 8 == 0) {
-                //    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
-                //    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                //} else {
+                if (nq1 % 8 == 0) {
+                    FlashAttn<576, 512, 8, 32> fa(scale, softcap);
+                    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
+                } else {
                     FlashAttn<576, 512, 1, 32> fa(scale, softcap);
                     fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-                //}
+                }
                 return true;
             } break;
 #endif
