@@ -10451,7 +10451,7 @@ static void ggml_compute_forward_dup_bytes(
         ne00 == ne0 &&
         nb00 == type_size && nb0 == type_size) {
         // copy by rows
-        const size_t rs = ne00 * type_size;
+        const size_t rs = ggml_row_size(src0->type, ne00); //ne00 * type_size;
         for (int64_t i03 = 0; i03 < ne03; i03++) {
             for (int64_t i02 = 0; i02 < ne02; i02++) {
                 for (int64_t i01 = ir0; i01 < ir1; i01++) {
@@ -17908,7 +17908,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         }
         return;
 IQK_Flash_Attn_NotAvailable:;
-        //printf("iqk_flash was rejected\n");
+        printf("iqk_flash was rejected\n");
     }
 #endif
 

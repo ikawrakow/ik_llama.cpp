@@ -13644,6 +13644,9 @@ struct llm_build_context {
                                 ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
                         cb(kv_cache_lora, "kv_cache_lora", il);
 
+                        //ggml_tensor * v = ggml_cont(ctx0, kv_cache_lora);
+                        //kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, v, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
+
                         kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, kv_cache_lora, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
                         cb(kqv_compressed, "kqv_compressed", il);
 
