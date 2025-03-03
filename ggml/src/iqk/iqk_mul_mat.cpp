@@ -17220,6 +17220,19 @@ inline bool flash_attn_is_supported(ggml_type type) {
     return false;
 }
 
+template <int step_k, typename KHelper, typename VHelper>
+inline void iqk_deepseek_helper(KHelper& kh, VHelper& vh,
+                        int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
+                        const float * q, const char * mask, float scale, float softcap, float * qkv) {
+    if (nq1 % 8 == 0) {
+        FlashAttn<576, 512, 8, step_k> fa(scale, softcap);
+        fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv);
+    } else {
+        FlashAttn<576, 512, 1, step_k> fa(scale, softcap);
+        fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv);
+    }
+}
+
 template <int step_k>
 inline bool iqk_deepseek_helper(ggml_type type_k,
                         int nq1, int nk1, int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,
@@ -17228,49 +17241,25 @@ inline bool iqk_deepseek_helper(ggml_type type_k,
     if (type_k == GGML_TYPE_Q8_0) {
         HelperQ80<576, step_k> kh((const char *)k, stride_k);
         HelperQ80<512, step_k> vh((const char *)v, stride_v);
-        if (nq1 % 8 == 0) {
-            FlashAttn<576, 512, 8, step_k> fa(scale, softcap);
-            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-        } else {
-            FlashAttn<576, 512, 1, step_k> fa(scale, softcap);
-            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-        }
+        iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         return true;
     }
     if (type_k == GGML_TYPE_Q6_0) {
         HelperQ60<576, step_k> kh((const char *)k, stride_k);
         HelperQ60<512, step_k> vh((const char *)v, stride_v);
-        if (nq1 % 8 == 0) {
-            FlashAttn<576, 512, 8, step_k> fa(scale, softcap);
-            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-        } else {
-            FlashAttn<576, 512, 1, step_k> fa(scale, softcap);
-            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-        }
+        iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         return true;
     }
     if (type_k == GGML_TYPE_Q8_KV) {
         HelperQ8KV<576, step_k> kh((const char *)k, stride_k);
         HelperQ8KV<512, step_k> vh((const char *)v, stride_v);
-        if (nq1 % 8 == 0) {
-            FlashAttn<576, 512, 8, step_k> fa(scale, softcap);
-            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-        } else {
-            FlashAttn<576, 512, 1, step_k> fa(scale, softcap);
-            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-        }
+        iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         return true;
     }
     if (type_k == GGML_TYPE_F16) {
         HelperF16<576, step_k> kh((const char *)k, stride_k);
         HelperF16<512, step_k> vh((const char *)v, stride_v);
-        if (nq1 % 8 == 0) {
-            FlashAttn<576, 512, 8, step_k> fa(scale, softcap);
-            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-        } else {
-            FlashAttn<576, 512, 1, step_k> fa(scale, softcap);
-            fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv);
-        }
+        iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv);
         return true;
     }
 #ifdef __AVX512BF16__
