@@ -11,6 +11,7 @@
 #include "ggml-quants.h"
 #include "ggml-impl.h"
 #if GGML_USE_IQK_MULMAT
+#include "iqk/iqk_config.h"
 #include "iqk/iqk_mul_mat.h"
 #include "iqk/iqk_quantize.h"
 #endif
@@ -5449,7 +5450,12 @@ void ggml_vec_dot_q6_0_q8_0(int n, float * restrict s, size_t bs, const void * r
 
 void ggml_vec_dot_q8_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
 #if GGML_USE_IQK_MULMAT
-    if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q8_0, vx, bx, GGML_TYPE_Q8_0, vy, by, s, bs, 0, 1)) {
+#ifdef HAVE_FANCY_SIMD
+    enum ggml_type dot_type = GGML_TYPE_Q8_1_X4;
+#else
+    enum ggml_type dot_type = GGML_TYPE_Q8_0_X4;
+#endif
+    if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q8_0, vx, bx, dot_type, vy, by, s, bs, 0, 1)) {
         return;
     }
 #endif

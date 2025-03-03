@@ -10451,7 +10451,7 @@ static void ggml_compute_forward_dup_bytes(
         ne00 == ne0 &&
         nb00 == type_size && nb0 == type_size) {
         // copy by rows
-        const size_t rs = ne00 * type_size;
+        const size_t rs = ggml_row_size(src0->type, ne00); //ne00 * type_size;
         for (int64_t i03 = 0; i03 < ne03; i03++) {
             for (int64_t i02 = 0; i02 < ne02; i02++) {
                 for (int64_t i01 = ir0; i01 < ir1; i01++) {
@@ -17871,6 +17871,8 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
 #if GGML_USE_IQK_MULMAT
     if (max_bias <= 0.0f && q->type == GGML_TYPE_F32 && mask && mask->type == GGML_TYPE_F16) {
+        //if (ith == 0) printf("k: %ld x %ld x %ld, q: %ld x %ld x %ld, v: %ld x %ld x %ld mask: %ld x %ld x %ld\n",
+        //        k->ne[0], k->ne[1], k->ne[2], q->ne[0], q->ne[1], q->ne[2], v->ne[0], v->ne[1], v->ne[2], mask->ne[0], mask->ne[1], mask->ne[2]);
         // I keep changing my mind what is the best strategy to split the threads when processing
         // multiple heads. This is my current thinking, the commented out code below was the previous.
         int ntg = nth/simple_gcd(neq2*neq3, nth);
@@ -17906,8 +17908,8 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         }
         return;
 IQK_Flash_Attn_NotAvailable:;
+        printf("iqk_flash was rejected\n");
     }
-
 #endif
 
     const uint32_t n_head      = neq2;
