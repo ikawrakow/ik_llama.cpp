@@ -8777,7 +8777,11 @@ static struct ggml_tensor * llm_build_kqv(
         cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
 
-        if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX) {
+        // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
+        // For DeepSeek-2, it is perfectly fine with fp16 for PP, but I get gibberish when uding fp16 for TG.
+        // Not sure if it is really a matter of insufficient precision, or I have made a mistake in the fattn-vec-f16 kernel.
+        if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX ||
+            (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8)) {
             ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
         }
         //ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
