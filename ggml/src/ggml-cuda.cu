@@ -3275,6 +3275,10 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             if (op->src[0]->ne[0] == 128) {
                 return true;
             }
+            if (op->src[1]->ne[0] == 192 && op->src[2]->ne[0] == 128) {
+                return (op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16) ||
+                       (op->src[1]->type == GGML_TYPE_Q8_0 && op->src[2]->type == GGML_TYPE_Q8_0);
+            }
             if (op->src[0]->ne[0] ==  64 && op->src[1]->type == GGML_TYPE_F16) {
                 return true;
             }
