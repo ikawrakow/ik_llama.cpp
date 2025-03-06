@@ -418,6 +418,7 @@ extern "C" {
         bool ignore_imatrix_rules;           // If set to true, the built-in rules for refusing to quantize into certain quants without imatrix are ignored
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
+        void * custom_quants;                // pointer to vector containing custom quantization rules
     } llama_model_quantize_params;
 
     // grammar types
