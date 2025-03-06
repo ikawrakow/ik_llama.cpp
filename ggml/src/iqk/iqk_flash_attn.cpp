@@ -87,7 +87,7 @@ bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
                 // => (Dv + 2)*rk2/nth_k*sizeof(float). We use (Dv + 16) instead to make sure threads are not
                 // writing onto the same cache line.
                 auto size_thread = (Dv + 16)*rk2/nth_k*sizeof(float);
-                auto result_buffer = work + rk2/nth_k*Dk*sizeof(uint16_t);
+                auto result_buffer = work;
                 auto work_this_thread = (float *)(result_buffer + ith*size_thread);
                 //printf("Thread %d: computing k,v = %d, q = %d...%d\n", ith, ith_k*(nek1/gcd_k), ith_q*(rk2/nth_k), ith_q*(rk2/nth_k)+rk2/nth_k-1);
                 if (!iqk_flash_attn_impl(int_type_k, int_type_v,

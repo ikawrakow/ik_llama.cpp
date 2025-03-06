@@ -21555,8 +21555,12 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                             int nth_k = n_tasks/gcd_k;
                             int rk2 = q->ne[2]/k->ne[2];
                             if (rk2%nth_k == 0) {
-                                size_t size = Dk*sizeof(ggml_half)*rk2/nth_k;
-                                size += (Dv + 16)*rk2/nth_k*sizeof(float)*n_tasks;
+                                size_t size = (Dv + 16)*rk2/nth_k*sizeof(float)*n_tasks;
+                                if (ggml_is_quantized(k->type)) {
+                                    enum ggml_type vec_dot_type = type_traits[k->type].vec_dot_type;
+                                    size_t row_size = ggml_row_size(vec_dot_type, q->ne[0]);
+                                    size += q->ne[2]*row_size;
+                                }
                                 cur = MAX(cur, size);
                             }
                         }
