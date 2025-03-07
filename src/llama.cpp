@@ -16283,6 +16283,19 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         return i_layer < n_layers/8 || i_layer >= 7*n_layers/8 || (i_layer - n_layers/8)%3 == 2;
     };
 
+    auto custom_type = GGML_TYPE_COUNT;
+    if (qs.params->custom_quants) {
+        using CustomQ = std::pair<std::string, ggml_type>;
+        auto& q_rules = *static_cast<const std::vector<CustomQ>*>(qs.params->custom_quants);
+        for (auto& rule : q_rules) {
+            std::regex pattern(rule.first);
+            if (std::regex_search(name, pattern)) {
+                custom_type = rule.second;
+                break;
+            }
+        }
+    }
+
     //auto get_layer = [] (const char * name) {
     //    int il;
     //    if (sscanf(name, "blk.%d.", &il) == 1) return il;
@@ -16750,6 +16763,11 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             new_type = GGML_TYPE_IQ4_KS;
         }
         ++qs.i_ffn_up;
+    }
+
+    if (custom_type < GGML_TYPE_COUNT) {
+        new_type = custom_type;
+        LLAMA_LOG_INFO("Using custom type %s for tensor %s\n", ggml_type_name(new_type), name.c_str());
     }
 
     //    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
@@ -17791,6 +17809,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.ignore_imatrix_rules        =*/ false,
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
+        /*.custom_quants               =*/ nullptr,
     };
 
     return result;
