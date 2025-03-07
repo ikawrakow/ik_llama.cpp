@@ -144,6 +144,7 @@ static void usage(const char * executable) {
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token_embd.weight tensor.\n\n");
+    printf("  --custom-q regex1=type1,regex2=type2...: use this to specify custom quantization type rules.\n\n");
     printf("Additional specific tensor quantization types used in the custom quant scheme 'CQS (default is Q2_K):\n");
     printf("      --attn-q-type ggml_type: use this ggml_type for the attn_q.weight tensor.\n");
     printf("      --attn-k-type ggml_type: use this ggml_type for the attn_k.weight tensor.\n");
@@ -290,6 +291,28 @@ static ggml_type parse_ggml_type(const char * arg) {
     return result;
 }
 
+using CustomQ = std::pair<std::string, ggml_type>;
+
+static bool parse_custom_quants(const std::string& arg, std::vector<CustomQ>& custom_quants) {
+    for (const auto & item : string_split<std::string>(arg, ',')) {
+        auto pos = item.find('=');
+        if (pos == std::string::npos) {
+            fprintf(stderr, "Invalid custom quantization input %s\n", arg.c_str());
+            return false;
+        }
+        auto pattern = item.substr(0, pos);
+        auto type_as_string = item.substr(pos + 1);
+        auto type = parse_ggml_type(type_as_string.c_str());
+        if (type == GGML_TYPE_COUNT) {
+            fprintf(stderr, "Invalid quantization type '%s' in custom quantization input %s\n", type_as_string.c_str(), item.c_str());
+            return false;
+        }
+        printf("Adding custom rule %s -> %s\n", pattern.c_str(), ggml_type_name(type));
+        custom_quants.emplace_back(std::move(pattern), type);
+    }
+    return true;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 3) {
         usage(argv[0]);
@@ -301,6 +324,7 @@ int main(int argc, char ** argv) {
     std::string imatrix_file;
     std::vector<std::string> included_weights, excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
+    std::vector<CustomQ> custom_quants;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -369,6 +393,10 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--override-kv") == 0) {
             if (arg_idx == argc-1 || !string_parse_kv_override(argv[++arg_idx], kv_overrides)) {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--custom-q") == 0) {
+            if (arg_idx == argc-1 || !parse_custom_quants(argv[++arg_idx], custom_quants)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--allow-requantize") == 0) {
@@ -450,6 +478,9 @@ int main(int argc, char ** argv) {
         kv_overrides.emplace_back();
         kv_overrides.back().key[0] = 0;
         params.kv_overrides = &kv_overrides;
+    }
+    if (!custom_quants.empty()) {
+        params.custom_quants = &custom_quants;
     }
 
     llama_backend_init();
