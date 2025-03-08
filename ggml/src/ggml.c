@@ -10565,6 +10565,42 @@ static void ggml_compute_forward_dup_bytes(
     }
 }
 
+static void ggml_compute_forward_dup_q(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    struct ggml_tensor * src0 = dst->src[0];
+    GGML_ASSERT(src0->ne[0] == dst->ne[0] && src0->nb[0] == ggml_type_size(src0->type));
+
+    ggml_to_float_t to_float = type_traits[src0->type].to_float;
+    GGML_ASSERT(to_float != NULL);
+
+    int64_t nrows = ggml_nrows(dst);
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int64_t n_per_thread = (nrows + nth - 1)/nth;
+    int64_t first_row = ith*n_per_thread;
+    if (first_row >= nrows) return;
+    int64_t last_row = MIN(first_row + n_per_thread, nrows);
+
+    for (int64_t ir = first_row; ir < last_row; ++ir) {
+        int64_t i03 = ir/(src0->ne[1]*src0->ne[2]);
+        int64_t i02 = (ir - i03*src0->ne[1]*src0->ne[2])/src0->ne[1];
+        int64_t i01 = ir - i03*src0->ne[1]*src0->ne[2] - i02*src0->ne[1];
+        int64_t i3  = ir/(dst->ne[1]*dst->ne[2]);
+        int64_t i2  = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+        int64_t i1  = ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+
+        const char * q = (const char *)src0->data + i03*src0->nb[3] + i02*src0->nb[2] + i01*src0->nb[1];
+              char * f = (      char *)dst->data  +  i3* dst->nb[3] +  i2* dst->nb[2] +  i1* dst->nb[1];
+
+        to_float((const void *)q, (float *)f, src0->ne[0]);
+    }
+
+}
+
 static void ggml_compute_forward_dup(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
@@ -10573,6 +10609,11 @@ static void ggml_compute_forward_dup(
 
     if (src0->type == dst->type) {
         ggml_compute_forward_dup_bytes(params, dst);
+        return;
+    }
+
+    if (ggml_is_quantized(src0->type)) {
+        ggml_compute_forward_dup_q(params, dst);
         return;
     }
 
