@@ -3216,22 +3216,20 @@ static bool llama_kv_cache_init(
                             //(n_embd_head_qk_nope + hparams.n_embd_head_v)*n_head, kv_size);
                     ggml_format_name(cache.kv_aux_f32, "kv_aux_f32%d", 0);
 
-                    cache.k_aux = ggml_new_tensor_2d(ctx, cache.type_k,
-                            hparams.n_embd_head_k*n_head, kv_size);
+                    cache.k_aux = ggml_new_tensor_3d(ctx, cache.type_k, hparams.n_embd_head_k, n_head, kv_size);
                     ggml_format_name(cache.k_aux, "k_aux%d", 0);
 
-                    cache.v_aux = ggml_new_tensor_2d(ctx, cache.type_k,
-                            hparams.n_embd_head_v*n_head, kv_size);
+                    cache.v_aux = ggml_new_tensor_3d(ctx, cache.type_k, hparams.n_embd_head_v, n_head, kv_size);
                     ggml_format_name(cache.v_aux, "v_aux%d", 0);
 
                     //cache.kv_aux_2   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
                     //        (hparams.n_embd_head_k + hparams.n_embd_head_v)*n_head, kv_size);
                     //ggml_format_name(cache.kv_aux, "kv_aux%d", 0);
                     //ggml_format_name(cache.kv_aux_2, "kv_aux%d", 2);
-                    LLAMA_LOG_INFO("%s: allocated kv auxilary tensors as %ld x %ld, %ld x %ld, %ld x %ld\n", __func__,
+                    LLAMA_LOG_INFO("%s: allocated kv auxilary tensors as %ld x %ld, %ld x %ld x %ld, %ld x %ld x %ld\n", __func__,
                             cache.kv_aux_f32->ne[0], cache.kv_aux_f32->ne[1],
-                            cache.k_aux->ne[0], cache.k_aux->ne[1],
-                            cache.v_aux->ne[0], cache.v_aux->ne[1]);
+                            cache.k_aux->ne[0], cache.k_aux->ne[1], cache.k_aux->ne[2],
+                            cache.v_aux->ne[0], cache.v_aux->ne[1], cache.v_aux->ne[2]);
                 }
             } else {
                 auto kv_type = cparams.mla_attn == 1 ? cache.type_k : cache.type_v;
