@@ -556,7 +556,7 @@ void ggml_cuda_op_mul_mat_vec_q_id(
 
     ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
         ne00, ne0, dst->ne[2],
-        src0->nb[2], 0, dst->nb[2], ids->nb[0],
+        src0->nb[2], src1->nb[2], dst->nb[2], ids->nb[0],
         src0_dd_i, src1_ddq_i, dst_dd_i, (const char *)ids->data,
         row_low, row_high, src1_ncols,
         src1_padded_row_size, stream);
