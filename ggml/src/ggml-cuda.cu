@@ -2177,6 +2177,52 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
 
+    if (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
+        ggml_is_quantized(src0->type) &&
+        ggml_backend_buffer_is_cuda(src0->buffer) &&
+        ggml_backend_buffer_is_cuda(src1->buffer) &&
+        ggml_backend_buffer_is_cuda(dst->buffer) &&
+        !ggml_backend_buffer_is_cuda_split(src0->buffer) &&
+        src1->type == GGML_TYPE_F32) {
+        int device_id = ctx.device;
+        ggml_backend_cuda_buffer_context * src0_ctx = (ggml_backend_cuda_buffer_context *) src0->buffer->context;
+        ggml_backend_cuda_buffer_context * src1_ctx = (ggml_backend_cuda_buffer_context *) src1->buffer->context;
+        ggml_backend_cuda_buffer_context * dst_ctx  = (ggml_backend_cuda_buffer_context *) dst->buffer->context;
+        if (src0_ctx->device == device_id &&
+            src1_ctx->device == device_id &&
+            dst_ctx->device  == device_id) {
+            GGML_ASSERT(src1->ne[0] % QK8_1 == 0);
+            // Fast TG path
+            const int64_t n_ids = ids->ne[0];
+            auto stream = ctx.stream(device_id, 0);
+
+            auto local_dst = *dst;
+            local_dst.ne[2] = n_ids;
+            local_dst.ne[1] = local_dst.ne[3] = 1;
+            local_dst.nb[2] = local_dst.nb[1];
+
+            auto local_src1 = *src1;
+            local_src1.nb[2] = local_src1.nb[3] = 0;
+
+            const int64_t src1_padded_col_size = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
+            ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool());
+            auto src_1_ddq_size = src1_padded_col_size*sizeof(block_q8_1)/QK8_1;
+            local_src1.data = src1_quantized.alloc(src_1_ddq_size);
+            quantize_row_q8_1_cuda((const float *)src1->data, (void *)src1_quantized.get(), src1->ne[0], 1, 1, src1_padded_col_size,
+                        src0->type, stream);
+            CUDA_CHECK(cudaGetLastError());
+
+            local_src1.nb[1] = src_1_ddq_size;
+
+            ggml_cuda_op_mul_mat_vec_q_id(ctx, src0, &local_src1, ids, &local_dst,
+                (const char *)src0->data, nullptr, src1_quantized.get(), (float *)dst->data,
+                0, src0->ne[1], 1, src1_padded_col_size, stream);
+            CUDA_CHECK(cudaGetLastError());
+
+            return;
+        }
+    }
+
     GGML_TENSOR_BINARY_OP_LOCALS
 
     GGML_ASSERT(!ggml_backend_buffer_is_cuda_split(src0->buffer) && "mul_mat_id does not support split buffers");
