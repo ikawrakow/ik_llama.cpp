@@ -13734,6 +13734,9 @@ struct llm_build_context {
                                 }
 
                                 ggml_tensor * kq = ggml_mul_mat(ctx0, kv_cache, q);
+                                if (kv_cache->ne[1] < 256) {
+                                    ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+                                }
                                 cb(kq, "kq", il);
 
                                 if (!pp_opt) {
