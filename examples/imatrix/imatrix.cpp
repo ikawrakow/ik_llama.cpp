@@ -195,7 +195,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         if (m_params.verbosity > 1) {
             printf("%s[%d]: %32s, %s, %5d x %5d, %d\n", __func__, m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->type);
         }
-        for (int row = 0; row < (int)src1->ne[1]; ++row) {
+        for (int row = 0; row < (int)(src1->ne[1]*src1->ne[2]); ++row) {
             const float * x = data + row * src1->ne[0];
             for (int j = 0; j < (int)src1->ne[0]; ++j) {
                 e.values[j] += x[j]*x[j];
