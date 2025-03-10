@@ -556,7 +556,7 @@ void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_Q6_0) {
             return (void*) cpy_f32_q<cpy_blck_f32_q6_0, QK6_0>;
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16) {
-            return (void*) cpy_f32_f16<cpy_1_f32_f16>;
+            return (void*) cpy_f32_f16<cpy_1_f16_f16>;
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32) {
             return (void*) cpy_f32_f16<cpy_1_f16_f32>;
     } else {

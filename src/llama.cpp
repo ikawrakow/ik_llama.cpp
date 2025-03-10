@@ -13787,6 +13787,7 @@ struct llm_build_context {
                                 ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank),
                                 ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank)*n_embd_head_v, 0);
                         cb(wv_b, "wv_b", il);
+                        std::memcpy(wv_b->name, model.layers[il].wv_b->name, GGML_MAX_NAME);
 
                         kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
                         cb(kqv, "kqv", il);
@@ -17347,6 +17348,23 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             const float * imatrix = nullptr;
             if (imatrix_data) {
                 auto it = imatrix_data->find(tensor->name);
+                if (it == imatrix_data->end()) {
+                    // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
+                    //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
+                    //           required by MLA. But the *.attn_v_b.weight tensors "see" the exact same activations as the
+                    //           *.attn_kv_b.weight tensors used in standard attention. Hence, if we find imatrix data for
+                    //           *.attn_kv_b.weight we can use it for *.attn_v_b.weight and vice versa.
+                    std::string name{tensor->name};
+                    static std::array<std::string, 2> alternatives{".attn_v_b.weight", ".attn_kv_b.weight"};
+                    for (int j = 0; j < int(alternatives.size()); ++j) {
+                        if (auto pos = name.find(alternatives[j]); pos != std::string::npos) {
+                            int j1 = (j + 1) % alternatives.size();
+                            auto alternative_name = name.substr(0, pos) + alternatives[j1];
+                            it = imatrix_data->find(alternative_name);
+                            break;
+                        }
+                    }
+                }
                 if (it == imatrix_data->end()) {
                     LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
                 } else {
