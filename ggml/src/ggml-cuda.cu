@@ -2296,9 +2296,6 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                 for (int64_t id = 0; id < n_ids; id++) {
                     const int32_t row_id_i = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
 
-                    if (i02 < 0 || i02 >= n_as) continue;
-                    //GGML_ASSERT(row_id_i >= 0 && row_id_i < n_as);
-
                     if (row_id_i != i02) {
                         continue;
                     }
@@ -3456,6 +3453,14 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     return true;
                 }
                 if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
+                    return true;
+                }
+                if (ggml_is_contiguous(op->src[0]) && ggml_are_same_shape(op->src[0], op->src[1])) {
+                    if (src1_type == GGML_TYPE_F16 || src1_type == GGML_TYPE_BF16 || src1_type == GGML_TYPE_F32) {
+                        return true;
+                    }
+                }
+                if (ggml_are_same_shape(op->src[0], op->src[1]) && op->src[0]->type == GGML_TYPE_Q8_0 && op->src[1]->type == GGML_TYPE_Q8_0) {
                     return true;
                 }
                 return false;
