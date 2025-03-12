@@ -13630,78 +13630,92 @@ struct llm_build_context {
 
                     if (lctx.cparams.mla_attn > 1 && lctx.cparams.flash_attn && (pp_opt || lctx.cparams.mla_attn > 2)) {
 
-                        GGML_ASSERT(hparams.n_embd_head_v == n_embd_head_qk_nope);
 
-                        auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_lora_rank, n_kv, kv_self.kv_l[il]->nb[1], 0);
-                        auto kv_f32 = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cache_nope);
-                        cb(kv_f32, "kv_f32", il);
+                        ggml_tensor * k;
+                        ggml_tensor * v;
 
-                        auto v_f32 = ggml_view_3d(ctx0, kv_f32, hparams.n_embd_head_v, n_kv, n_head,
-                                ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
-                                ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
-                                ggml_row_size(kv_f32->type, n_embd_head_qk_nope));
-                        cb(v_f32, "v_f32", il);
+                        // For now this only works in the CPU implementation, so we only use it if there is just the CPU backend.
+                        // If the code was compiled with CUDA (and/or Metal, Vulkan, whatever) support, this branch will not
+                        // be taken even if no layers were offloaded to the GPU.
+                        if (lctx.backends.size() == 1 && lctx.backends.front() == lctx.backend_cpu) {
 
-                        auto v = ggml_cast(ctx0, v_f32, kv_self.kv_l[il]->type);
-                        cb(v, "v", il);
+                            auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_lora_rank, n_kv, kv_self.kv_l[il]->nb[1], 0);
 
-                        auto k_nope_f32 = ggml_view_3d(ctx0, kv_f32, n_embd_head_qk_nope, n_kv, n_head,
-                                ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
-                                ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v), 0);
-                        cb(k_nope_f32, "k_nope_f32", il);
+                            auto kv_f32 = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cache_nope);
+                            cb(kv_f32, "kv_f32", il);
 
-                        auto k_nope = ggml_cast(ctx0, k_nope_f32, kv_self.kv_l[il]->type);
-                        cb(k_nope, "k_nope", il);
+                            auto v_f32 = ggml_view_3d(ctx0, kv_f32, hparams.n_embd_head_v, n_kv, n_head,
+                                    ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope));
+                            cb(v_f32, "v_f32", il);
 
-                        auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.kv_l[il], n_embd_head_qk_rope, n_kv, 1,
-                                kv_self.kv_l[il]->nb[1], kv_self.kv_l[il]->nb[2], ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank));
-                        ggml_tensor repeater;
-                        repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_kv; repeater.ne[2] = n_head; repeater.ne[3] = 1;
-                        auto k_rope = ggml_repeat(ctx0, kv_cache_rope, &repeater);
-                        cb(k_rope, "k_rope", il);
+                            v = ggml_cast(ctx0, v_f32, kv_self.kv_l[il]->type);
+                            cb(v, "v", il);
 
-                        auto k = ggml_concat(ctx0, k_nope, k_rope, 0);
-                        cb(k, "k", il);
+                            auto k_nope_f32 = ggml_view_3d(ctx0, kv_f32, n_embd_head_qk_nope, n_kv, n_head,
+                                    ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v), 0);
+                            cb(k_nope_f32, "k_nope_f32", il);
 
-                        //// Hahaha, we need to convert the KV cache for this layer to f32 because the general purpose ML library ggml does not
-                        //// provide ops on (almost) anything other than f32. In this case, the cache will be the second operand to a matrix
-                        //// multiplication, which *must* be f32.
-                        //auto kv_cache_view = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_self.kv_l[il]->ne[0], n_kv, kv_self.kv_l[il]->nb[1], 0);
-                        //auto kv_cache_view_f32 = ggml_cast(ctx0, kv_cache_view, GGML_TYPE_F32);
-                        //cb(kv_cache_view_f32, "kv_cache_view_f32", il);
+                            auto k_nope = ggml_cast(ctx0, k_nope_f32, kv_self.kv_l[il]->type);
+                            cb(k_nope, "k_nope", il);
 
-                        //// The no- and rotational position encoding portions of the KV cache
-                        //auto kv_cache_nope = ggml_view_2d(ctx0, kv_cache_view_f32, kv_lora_rank, n_kv, kv_cache_view_f32->nb[1], 0);
-                        //auto kv_cache_rope = ggml_view_3d(ctx0, kv_cache_view_f32, n_embd_head_qk_rope, 1, n_kv,
-                        //        kv_cache_view_f32->nb[1], kv_cache_view_f32->nb[1], ggml_row_size(kv_cache_view_f32->type, kv_lora_rank));
+                            auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.kv_l[il], n_embd_head_qk_rope, n_kv, 1,
+                                    kv_self.kv_l[il]->nb[1], kv_self.kv_l[il]->nb[2], ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank));
 
-                        //auto kv_f32 = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cache_nope);
-                        //cb(kv_f32, "kv_f32", il);
+                            ggml_tensor repeater;
+                            repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_kv; repeater.ne[2] = n_head; repeater.ne[3] = 1;
+                            auto k_rope = ggml_repeat(ctx0, kv_cache_rope, &repeater);
+                            cb(k_rope, "k_rope", il);
 
-                        //auto k_nope_f32 = ggml_view_3d(ctx0, kv_f32, n_embd_head_qk_nope, n_kv, n_head,
-                        //        ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
-                        //        ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v), 0);
-                        //cb(k_nope_f32, "k_nope_f32", il);
+                            k = ggml_concat(ctx0, k_nope, k_rope, 0);
+                            cb(k, "k", il);
 
-                        //ggml_tensor repeater;
-                        //repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_head; repeater.ne[2] = n_kv; repeater.ne[3] = 1;
-                        //auto k_rope_f32 = ggml_permute(ctx0, ggml_repeat(ctx0, kv_cache_rope, &repeater), 0, 2, 1, 3);
-                        //cb(k_rope_f32, "k_rope_f32", il);
+                            ggml_build_forward_expand(gf, k);
+                            ggml_build_forward_expand(gf, v);
+                        }
+                        else {
+                            // Hahaha, we need to convert the KV cache for this layer to f32 because the general purpose ML library ggml does not
+                            // provide ops on (almost) anything other than f32. In this case, the cache will be the second operand to a matrix
+                            // multiplication, which *must* be f32.
+                            auto kv_cache_view = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_self.kv_l[il]->ne[0], n_kv, kv_self.kv_l[il]->nb[1], 0);
+                            auto kv_cache_view_f32 = ggml_cast(ctx0, kv_cache_view, GGML_TYPE_F32);
+                            cb(kv_cache_view_f32, "kv_cache_view_f32", il);
 
-                        //auto k_f32 = ggml_concat(ctx0, k_nope_f32, k_rope_f32, 0);
-                        //cb(k_f32, "k_f32", il);
+                            // The no- and rotational position encoding portions of the KV cache
+                            auto kv_cache_nope = ggml_view_2d(ctx0, kv_cache_view_f32, kv_lora_rank, n_kv, kv_cache_view_f32->nb[1], 0);
+                            auto kv_cache_rope = ggml_view_3d(ctx0, kv_cache_view_f32, n_embd_head_qk_rope, 1, n_kv,
+                                    kv_cache_view_f32->nb[1], kv_cache_view_f32->nb[1], ggml_row_size(kv_cache_view_f32->type, kv_lora_rank));
 
-                        //auto k = ggml_cast(ctx0, k_f32, kv_self.kv_l[il]->type);
-                        //cb(k, "k", il);
+                            auto kv_f32 = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cache_nope);
+                            cb(kv_f32, "kv_f32", il);
 
-                        //auto v_f32 = ggml_view_3d(ctx0, kv_f32, hparams.n_embd_head_v, n_kv, n_head,
-                        //        ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
-                        //        ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
-                        //        ggml_row_size(kv_f32->type, n_embd_head_qk_nope));
-                        //cb(v_f32, "v_f32", il);
+                            auto k_nope_f32 = ggml_view_3d(ctx0, kv_f32, n_embd_head_qk_nope, n_kv, n_head,
+                                    ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v), 0);
+                            cb(k_nope_f32, "k_nope_f32", il);
 
-                        //auto v = ggml_cast(ctx0, v_f32, kv_self.kv_l[il]->type);
-                        //cb(v, "v", il);
+                            ggml_tensor repeater;
+                            repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_head; repeater.ne[2] = n_kv; repeater.ne[3] = 1;
+                            auto k_rope_f32 = ggml_permute(ctx0, ggml_repeat(ctx0, kv_cache_rope, &repeater), 0, 2, 1, 3);
+                            cb(k_rope_f32, "k_rope_f32", il);
+
+                            auto k_f32 = ggml_concat(ctx0, k_nope_f32, k_rope_f32, 0);
+                            cb(k_f32, "k_f32", il);
+
+                            k = ggml_cast(ctx0, k_f32, kv_self.kv_l[il]->type);
+                            cb(k, "k", il);
+
+                            auto v_f32 = ggml_view_3d(ctx0, kv_f32, hparams.n_embd_head_v, n_kv, n_head,
+                                    ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope));
+                            cb(v_f32, "v_f32", il);
+
+                            v = ggml_cast(ctx0, v_f32, kv_self.kv_l[il]->type);
+                            cb(v, "v", il);
+                        }
 
                         auto q = ggml_concat(ctx0, q_nope, q_rope, 0);
                         q = ggml_permute(ctx0, q, 0, 2, 1, 3);
