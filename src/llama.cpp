@@ -13661,6 +13661,9 @@ struct llm_build_context {
                             auto k_nope = ggml_cast(ctx0, k_nope_f32, kv_self.kv_l[il]->type);
                             cb(k_nope, "k_nope", il);
 
+                            ggml_build_forward_expand(gf, k_nope);
+                            ggml_build_forward_expand(gf, v);
+
                             auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.kv_l[il], n_embd_head_qk_rope, n_kv, 1,
                                     kv_self.kv_l[il]->nb[1], kv_self.kv_l[il]->nb[2], ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank));
 
@@ -13673,7 +13676,6 @@ struct llm_build_context {
                             cb(k, "k", il);
 
                             ggml_build_forward_expand(gf, k);
-                            ggml_build_forward_expand(gf, v);
                         }
                         else {
                             // Hahaha, we need to convert the KV cache for this layer to f32 because the general purpose ML library ggml does not
