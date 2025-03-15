@@ -2640,6 +2640,8 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_scale;
     struct ggml_tensor * ffn_up_scale;
     struct ggml_tensor * ffn_down_scale;
+
+    std::unique_ptr<ggml_tensor> computed_wk_b;
 };
 
 struct llama_kv_cell {
@@ -3186,17 +3188,6 @@ static bool llama_kv_cache_init(
         ggml_tensor * k;
         ggml_tensor * v;
         if (cparams.mla_attn) {
-            if (!model.layers[i].wk_b || !model.layers[i].wv_b) {
-                if (warn) {
-                    LLAMA_LOG_WARN("=======================================================================================\n");
-                    LLAMA_LOG_WARN("%s: missing MLA tensors => disabling MLA\n", __func__);
-                    LLAMA_LOG_WARN("%s: you need to reconvert your model in order to use MLA\n", __func__);
-                    LLAMA_LOG_WARN("=======================================================================================\n");
-                    warn = false;
-                }
-            }
-        }
-        if (cparams.mla_attn && model.layers[i].wk_b && model.layers[i].wv_b) {
             // DeepSeek MLA
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
@@ -8127,6 +8118,91 @@ static bool llm_load_tensors(
         auto & bufs = it.second;
         if (!ml.load_all_data(ctx, bufs, use_mlock ? &model.mlock_mmaps : NULL, progress_callback, progress_callback_user_data)) {
             return false;
+        }
+    }
+
+    if (model.arch == LLM_ARCH_DEEPSEEK2) {
+        int n_to_compute = 0;
+        for (auto& l : model.layers) {
+            if (!l.wk_b) ++n_to_compute;
+        }
+        if (n_to_compute > 0) {
+            const uint32_t n_embd_head_qk_rope = hparams.n_rot;
+            const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
+            const uint32_t kv_lora_rank = hparams.n_lora_kv;
+            const int32_t n_embd_head_v = hparams.n_embd_head_v;
+            const int32_t n_head        = hparams.n_head(0);
+            std::vector<uint8_t> work_data;
+            LLAMA_LOG_INFO("============ %s: need to compute %d wk_b tensors\n", __func__, n_to_compute);
+            for (int il = 1; il < n_layer; ++il) {
+                if (hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
+            }
+            auto total_size_wkb = 0;
+            size_t max_wkv_size = 0;
+            size_t max_wk_size = 0;
+            for (auto& l : model.layers) {
+                if (!l.wk_b) {
+                    auto size = ggml_row_size(l.wkv_b->type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
+                    max_wk_size = std::max(max_wk_size, size);
+                    if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
+                        max_wkv_size = std::max(max_wkv_size, ggml_nbytes(l.wkv_b));
+                    }
+                }
+            }
+            auto context_size = max_wk_size + 2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float);
+            context_size *= 2; // just in case;
+            std::vector<uint8_t> wkv_buffer;
+            if (max_wkv_size > 0) wkv_buffer.resize(max_wkv_size);
+            ggml_init_params params{context_size, nullptr, true};
+            auto ctx = ggml_init(params);
+            auto graph = ggml_new_graph_custom(ctx, 8, false);
+            std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + max_wk_size);
+            for (int il = 0; il < n_layer; ++il) {
+                auto& l = model.layers[il];
+                if (l.wk_b) continue;
+                auto wkv_b = *l.wkv_b;
+                if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
+                    ggml_backend_tensor_get(l.wkv_b, wkv_buffer.data(), 0, ggml_nbytes(l.wkv_b));
+                    wkv_b.data = wkv_buffer.data();
+                }
+                auto wk_b_view = ggml_view_3d(ctx, &wkv_b, kv_lora_rank, n_embd_head_qk_nope, n_head,
+                        l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), 0);
+                auto wk_b_f32 = ggml_cast(ctx, wk_b_view, GGML_TYPE_F32);
+                wk_b_f32->data = tensor_data.data();
+                auto wk_b_f32_tview = ggml_transpose(ctx, wk_b_f32);
+                auto wk_b_f32_t = ggml_cont(ctx, wk_b_f32_tview);
+                wk_b_f32_t->data = (char *)wk_b_f32->data + ggml_nbytes(wk_b_f32);
+
+                auto new_type = ggml_is_quantized(wkv_b.type) ? GGML_TYPE_Q8_0 : wkv_b.type;
+                auto wk_b = ggml_cast(ctx, wk_b_f32_t, new_type);
+                wk_b->data = (char *)wk_b_f32_t->data + ggml_nbytes(wk_b_f32_t);
+
+                ggml_build_forward_expand(graph, wk_b);
+
+                auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+                if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+                plan.work_data = work_data.data();
+
+                auto status = ggml_graph_compute(graph, &plan);
+                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wk_b");
+
+                auto name = std::string{"blk."} + std::to_string(il) + ".attn_k_b.weight";
+                printf("Computed %s as %ld x %ld x %ld\n", name.c_str(), wk_b->ne[0], wk_b->ne[1], wk_b->ne[2]);
+
+                l.computed_wk_b = std::make_unique<ggml_tensor>(*wk_b);
+                l.computed_wk_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wk_b));
+                l.computed_wk_b->data   = ggml_backend_buffer_get_base(l.computed_wk_b->buffer);
+                l.computed_wk_b->op = GGML_OP_NONE;
+                for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wk_b->src[j] = nullptr;
+                ggml_set_name(l.computed_wk_b.get(), name.c_str());
+                ggml_backend_buffer_set_usage(l.computed_wk_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ggml_backend_tensor_set(l.computed_wk_b.get(), wk_b->data, 0, ggml_nbytes(wk_b));
+
+                l.wk_b = l.computed_wk_b.get();
+
+                ggml_graph_clear(graph);
+            }
+            ggml_free(ctx);
         }
     }
 
@@ -13595,7 +13671,7 @@ struct llm_build_context {
                         LLM_NORM_RMS, cb, il);
                 cb(kv_compressed, "kv_compressed", il);
 
-                if (lctx.cparams.mla_attn && model.layers[il].wk_b && model.layers[il].wv_b) {
+                if (lctx.cparams.mla_attn) {
 
                     ggml_tensor * kv_cache_trans;
 
@@ -13738,10 +13814,9 @@ struct llm_build_context {
 
                         ggml_tensor * kqv_compressed;
 
-                        struct ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head,
-                                ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope),
-                                ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank)*n_embd_head_qk_nope, 0);
-                        cb(wk_b, "wk_b", il);
+                        auto wkv_b = model.layers[il].wkv_b;
+                        auto wk_b = model.layers[il].wk_b->ne[1] == kv_lora_rank ? model.layers[il].wk_b
+                                  : ggml_reshape_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head);
 
                         q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
                         cb(q_nope, "q_nope_perm", il);
@@ -13832,11 +13907,10 @@ struct llm_build_context {
                             }
                         }
 
-                        struct ggml_tensor * wv_b = ggml_view_3d(ctx0, model.layers[il].wv_b, kv_lora_rank, n_embd_head_v, n_head,
-                                ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank),
-                                ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank)*n_embd_head_v, 0);
+                        auto wv_b = ggml_view_3d(ctx0, wkv_b, kv_lora_rank, n_embd_head_v, n_head,
+                                wkv_b->nb[1], wkv_b->nb[1]*(n_embd_head_v + n_embd_head_qk_nope),
+                                wkv_b->nb[1]*n_embd_head_qk_nope);
                         cb(wv_b, "wv_b", il);
-                        std::memcpy(wv_b->name, model.layers[il].wv_b->name, GGML_MAX_NAME);
 
                         kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
                         cb(kqv, "kqv", il);
