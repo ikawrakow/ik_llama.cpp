@@ -8127,6 +8127,18 @@ static bool llm_load_tensors(
             if (!l.wk_b) ++n_to_compute;
         }
         if (n_to_compute > 0) {
+            // Prepare wk_b tensors to enable MLA usage also for model files that do not include
+            // the wk_b tensors (because, e.g., they were converted using mainline llama.cpp)
+            // We do it here because otherwise wkv_b may get run-time-repacked, which will make
+            // preparation of wk_b impossible. It also has the benefit that wk_b will get automatically
+            // run-time repacked if the rtr option is set. The downside is that we will prepare wk_b
+            // even if it is not needed (because MLA is not being used). If we wanted to avoid
+            // computing wk_b from wkv_b if not needed, we would need to propagate the context parameters
+            // to the model loading function. On the other hand, in some hypothetical bright future,
+            // where we are able to use the optimum settings for the computation, which for DeepSeekV3/R1/Lite
+            // is no MLA + FA for prompt processing, and MLA + FA for token generation, it would be useful
+            // to change the MLA setting on the fly, depending on context. In that case, having prepared
+            // the MLA tensors here is the right ting to do^TM.
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
@@ -8135,6 +8147,9 @@ static bool llm_load_tensors(
             std::vector<uint8_t> work_data;
             LLAMA_LOG_INFO("============ %s: need to compute %d wk_b tensors\n", __func__, n_to_compute);
             for (int il = 1; il < n_layer; ++il) {
+                // Somehow the number of heads is being defined as being per layer. Not sure why this is the
+                // case, but for now we do not support strange models that have different numbers of heads
+                // in different model layers.
                 if (hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
             }
             auto total_size_wkb = 0;
@@ -8153,6 +8168,10 @@ static bool llm_load_tensors(
             context_size *= 2; // just in case;
             std::vector<uint8_t> wkv_buffer;
             if (max_wkv_size > 0) wkv_buffer.resize(max_wkv_size);
+            // So, transposing tensors and then making them contiguous as needed for wk_b may or may not
+            // be supported on all backends. Hence, to be sure that the preparation of wk_b will
+            // work correctly, we do it on the CPU backend. We then copy the resulting tensor data to
+            // the bacikend where wkv_b is stored.
             ggml_init_params params{context_size, nullptr, true};
             auto ctx = ggml_init(params);
             auto graph = ggml_new_graph_custom(ctx, 8, false);
@@ -8192,7 +8211,8 @@ static bool llm_load_tensors(
                 l.computed_wk_b = std::make_unique<ggml_tensor>(*wk_b);
                 l.computed_wk_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wk_b));
                 l.computed_wk_b->data   = ggml_backend_buffer_get_base(l.computed_wk_b->buffer);
-                l.computed_wk_b->op = GGML_OP_NONE;
+                l.computed_wk_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
+                                                    // of wk_b, which no longer exist, and will therefore crash.
                 for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wk_b->src[j] = nullptr;
                 ggml_set_name(l.computed_wk_b.get(), name.c_str());
                 ggml_backend_buffer_set_usage(l.computed_wk_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
