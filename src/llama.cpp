@@ -8157,7 +8157,8 @@ static bool llm_load_tensors(
             size_t max_wk_size = 0;
             for (auto& l : model.layers) {
                 if (!l.wk_b) {
-                    auto size = ggml_row_size(l.wkv_b->type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
+                    auto new_type = ggml_is_quantized(l.wkv_b->type) ? GGML_TYPE_Q8_0 : l.wkv_b->type;
+                    auto size = ggml_row_size(new_type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
                     max_wk_size = std::max(max_wk_size, size);
                     if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
                         max_wkv_size = std::max(max_wkv_size, ggml_nbytes(l.wkv_b));
