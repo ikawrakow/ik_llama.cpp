@@ -2642,6 +2642,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_scale;
 
     std::unique_ptr<ggml_tensor> computed_wk_b;
+    std::unique_ptr<ggml_tensor> computed_wv_b;
 };
 
 struct llama_kv_cell {
@@ -8207,7 +8208,6 @@ static bool llm_load_tensors(
                 if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wk_b");
 
                 auto name = std::string{"blk."} + std::to_string(il) + ".attn_k_b.weight";
-                printf("Computed %s as %ld x %ld x %ld\n", name.c_str(), wk_b->ne[0], wk_b->ne[1], wk_b->ne[2]);
 
                 l.computed_wk_b = std::make_unique<ggml_tensor>(*wk_b);
                 l.computed_wk_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wk_b));
@@ -8220,6 +8220,34 @@ static bool llm_load_tensors(
                 ggml_backend_tensor_set(l.computed_wk_b.get(), wk_b->data, 0, ggml_nbytes(wk_b));
 
                 l.wk_b = l.computed_wk_b.get();
+
+                ggml_graph_clear(graph);
+                auto wv_b = ggml_cont(ctx, ggml_view_3d(ctx, &wkv_b, kv_lora_rank, n_embd_head_v, n_head,
+                            l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), l.wkv_b->nb[1]*n_embd_head_qk_nope));
+                wv_b->data = tensor_data.data();
+                ggml_build_forward_expand(graph, wv_b);
+                plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+                if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+                plan.work_data = work_data.data();
+                status = ggml_graph_compute(graph, &plan);
+                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wv_b");
+
+                name = std::string{"blk."} + std::to_string(il) + ".attn_v_b.weight";
+
+                l.computed_wv_b = std::make_unique<ggml_tensor>(*wv_b);
+                l.computed_wv_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wv_b));
+                l.computed_wv_b->data   = ggml_backend_buffer_get_base(l.computed_wv_b->buffer);
+                l.computed_wv_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
+                                                    // of wk_b, which no longer exist, and will therefore crash.
+                for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wv_b->src[j] = nullptr;
+                ggml_set_name(l.computed_wv_b.get(), name.c_str());
+                ggml_backend_buffer_set_usage(l.computed_wv_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ggml_backend_tensor_set(l.computed_wv_b.get(), wv_b->data, 0, ggml_nbytes(wv_b));
+
+                l.wv_b = l.computed_wv_b.get();
+
+                printf("Computed %s as %ld x %ld x %ld and stored in buffer %s\n", name.c_str(), wk_b->ne[0], wk_b->ne[1], wk_b->ne[2],
+                        ggml_backend_buffer_name(l.computed_wk_b->buffer));
 
                 ggml_graph_clear(graph);
             }
@@ -13928,10 +13956,18 @@ struct llm_build_context {
                             }
                         }
 
-                        auto wv_b = ggml_view_3d(ctx0, wkv_b, kv_lora_rank, n_embd_head_v, n_head,
-                                wkv_b->nb[1], wkv_b->nb[1]*(n_embd_head_v + n_embd_head_qk_nope),
-                                wkv_b->nb[1]*n_embd_head_qk_nope);
-                        cb(wv_b, "wv_b", il);
+                        auto wv_b = model.layers[il].wv_b;
+                        if (wv_b->ne[1] != n_embd_head_v) {
+                            wv_b = ggml_reshape_3d(ctx0, wv_b, kv_lora_rank, n_embd_head_v, n_head);
+                            cb(wv_b, "wv_b", il);
+                        }
+                        // There is an issue with quantized GEMV on CUDA when the left operand (the matrix) is
+                        // not contiguous. So, for now, we create wv_b during model loading and use that
+                        // instead of the commented out 3D view below.
+                        //auto wv_b = ggml_view_3d(ctx0, wkv_b, kv_lora_rank, n_embd_head_v, n_head,
+                        //        wkv_b->nb[1], wkv_b->nb[1]*(n_embd_head_v + n_embd_head_qk_nope),
+                        //        wkv_b->nb[1]*n_embd_head_qk_nope);
+                        //cb(wv_b, "wv_b", il);
 
                         kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
                         cb(kqv, "kqv", il);
