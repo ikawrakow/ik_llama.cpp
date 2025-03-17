@@ -362,6 +362,10 @@ if (GGML_CUDA)
             add_compile_definitions(GGML_CUDA_FORCE_MMQ)
         endif()
 
+        if (GGML_CUDA_IQK_FORCE_BF16)
+            add_compile_definitions(GGML_CUDA_IQK_FORCE_BF16)
+        endif()
+
         if (GGML_CUDA_FORCE_CUBLAS)
             add_compile_definitions(GGML_CUDA_FORCE_CUBLAS)
         endif()
