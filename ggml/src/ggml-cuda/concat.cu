@@ -81,6 +81,19 @@ static __global__ void concat_f32_dim2(const float * x, const float * y, float *
 
 static void concat_f32_cuda(const float * x, const float * y, float * dst, int ne00, int ne01, int ne02, int ne0, int ne1, int ne2, int dim, cudaStream_t stream) {
     int num_blocks = (ne0 + CUDA_CONCAT_BLOCK_SIZE - 1) / CUDA_CONCAT_BLOCK_SIZE;
+    if (dim == 0 && ne1 >= 65536) {
+        int64_t nstep = (ne1 + 32767)/32768;
+        for (int64_t istep = 0; istep < nstep; ++istep) {
+            int64_t i1 = 32768*istep;
+            int64_t n1 = i1 + 32768 <= ne1 ? 32768 : ne1 - i1;
+            dim3 gridDim(num_blocks, n1, ne2);
+            const float * xi = x + i1*ne00;
+            const float * yi = y + i1*(ne0 - ne00);
+            float * dst_i = dst + i1*ne0;
+            concat_f32_dim0<<<gridDim, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(xi, yi, dst_i, ne0, ne00);
+        }
+        return;
+    }
     dim3 gridDim(num_blocks, ne1, ne2);
     if (dim == 0) {
         concat_f32_dim0<<<gridDim, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(x, y, dst, ne0, ne00);
@@ -168,6 +181,10 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     if (dim == 0 && src0->nb[0] == ggml_type_size(src0->type) && src1->nb[0] == ggml_type_size(src1->type) &&
             src0->nb[1] % sizeof(float) == 0 && src1->nb[1] % sizeof(float) == 0) {
         if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+            //if (dst->ne[1] >= 65536 || dst->ne[2] >= 65536) {
+            //    fprintf(stderr, "%s: ne1 = %ld, ne2 = %ld exceed max. blocks when computing %s\n", __func__, dst->ne[1], dst->ne[2], dst->name);
+            //    GGML_ABORT("fatal error");
+            //}
             const float * src0_d = (const float *)src0->data;
             const float * src1_d = (const float *)src1->data;
             float * dst_d = (float *)dst->data;
@@ -200,6 +217,10 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
 
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        //if (dst->ne[1] >= 65536 || dst->ne[2] >= 65536) {
+        //    fprintf(stderr, "%s: ne1 = %ld, ne2 = %ld exceed max. blocks when computing %s\n", __func__, dst->ne[1], dst->ne[2], dst->name);
+        //    GGML_ABORT("fatal error");
+        //}
         const float * src0_d = (const float *)src0->data;
         const float * src1_d = (const float *)src1->data;
 
