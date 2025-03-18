@@ -3354,7 +3354,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 if (op->op == GGML_OP_MOE_FUSED_UP_GATE && a->type != op->src[1]->type) {
                     return false;
                 }
-                if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16) {
+                if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16 && !ggml_is_quantized(a->type)) {
                     return false;
                 }
                 if (op->op == GGML_OP_MUL_MAT && a->ne[3] != b->ne[3]) {
