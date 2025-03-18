@@ -10569,16 +10569,64 @@ static void ggml_compute_forward_dup_q(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
 
+    int64_t nrows = ggml_nrows(dst);
+    int ith = params->ith;
+    int nth = params->nth;
+
+    if (dst->type == GGML_TYPE_Q8_0 && dst->src[0]->type == GGML_TYPE_Q8_0 &&
+            ggml_are_same_shape(dst, dst->src[0])) {
+
+        // we assume src is transposed and that's why we are here
+
+        GGML_ASSERT(dst->ne[0] % QK8_0 == 0);
+
+        struct ggml_tensor * const src = dst->src[0];
+        GGML_ASSERT(src->nb[1] == sizeof(block_q8_0));
+
+        float aux[QK8_0];
+
+        int64_t n_per_thread = (nrows + nth - 1)/nth;
+        int64_t first_row = ith*n_per_thread;
+        if (first_row >= nrows) return;
+        int64_t last_row = MIN(first_row + n_per_thread, nrows);
+
+        int64_t nblock = dst->ne[0] / QK8_0;
+        for (int64_t ir = first_row; ir < last_row; ++ir) {
+            int64_t i3  = ir/(dst->ne[1]*dst->ne[2]);
+            int64_t i2  = (ir - i3*dst->ne[1]*dst->ne[2])/dst->ne[1];
+            int64_t i1  = ir - i3*dst->ne[1]*dst->ne[2] - i2*dst->ne[1];
+            int ib0 = i1/QK8_0;
+            int iq0 = i1%QK8_0;
+            for (int ib = 0; ib < nblock; ++ib) {
+                block_q8_0 * dst_q8 = (block_q8_0 *)((char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
+                float amax = 0;
+                for (int j = 0; j < QK8_0; ++j) {
+                    int64_t i0 = ib*QK8_0 + j;
+                    const block_q8_0 * src_q8 = (const block_q8_0 *)((const char *)src->data + i0*src->nb[0] + i2*src->nb[2] + i3*src->nb[3]);
+                    float xi = GGML_FP16_TO_FP32(src_q8[ib0].d) * src_q8[ib0].qs[iq0];
+                    aux[j] = xi;
+                    xi = fabsf(xi);
+                    amax = MAX(amax, xi);
+                }
+                float d = amax/127;
+                dst_q8[ib].d = GGML_FP32_TO_FP16(d);
+                if (d > 0) {
+                    float id = 1/d;
+                    for (int j = 0; j < QK8_0; ++j) dst_q8[ib].qs[j] = roundf(id*aux[j]);
+                } else {
+                    memset(dst_q8[ib].qs, 0, QK8_0);
+                }
+            }
+        }
+        return;
+    }
+
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
     struct ggml_tensor * src0 = dst->src[0];
     GGML_ASSERT(src0->ne[0] == dst->ne[0] && src0->nb[0] == ggml_type_size(src0->type));
 
     ggml_to_float_t to_float = type_traits[src0->type].to_float;
     GGML_ASSERT(to_float != NULL);
-
-    int64_t nrows = ggml_nrows(dst);
-    int ith = params->ith;
-    int nth = params->nth;
 
     int64_t n_per_thread = (nrows + nth - 1)/nth;
     int64_t first_row = ith*n_per_thread;
@@ -10607,13 +10655,13 @@ static void ggml_compute_forward_dup(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    if (src0->type == dst->type) {
-        ggml_compute_forward_dup_bytes(params, dst);
+    if (ggml_is_quantized(src0->type)) {
+        ggml_compute_forward_dup_q(params, dst);
         return;
     }
 
-    if (ggml_is_quantized(src0->type)) {
-        ggml_compute_forward_dup_q(params, dst);
+    if (src0->type == dst->type) {
+        ggml_compute_forward_dup_bytes(params, dst);
         return;
     }
 
