@@ -3395,6 +3395,11 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 if (op->op == GGML_OP_MOE_FUSED_UP_GATE && a->type != op->src[1]->type) {
                     return false;
                 }
+                //==================================================================
+                //if (ggml_is_quantized(a->type) && ggml_is_quantized(b->type)) {
+                //    return false;
+                //}
+                //==================================================================
                 if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16 && !ggml_is_quantized(a->type)) {
                     return false;
                 }
@@ -3494,6 +3499,9 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     return true;
                 }
                 if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
+                    return true;
+                }
+                if (ggml_is_quantized(src0_type) && (src1_type == GGML_TYPE_F16 || src1_type == GGML_TYPE_F32)) {
                     return true;
                 }
                 if (ggml_is_contiguous(op->src[0]) && ggml_are_same_shape(op->src[0], op->src[1])) {
