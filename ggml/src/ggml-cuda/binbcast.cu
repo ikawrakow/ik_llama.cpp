@@ -282,7 +282,28 @@ static void ggml_cuda_op_bin_bcast(
 }
 
 void ggml_cuda_op_repeat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(dst, dst->src[0], dst, nullptr, dst->src[0]->data, dst->data, ctx.stream());
+    GGML_ASSERT(dst->type == dst->src[0]->type);
+    if (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16) {
+        ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(dst, dst->src[0], dst, nullptr, dst->src[0]->data, dst->data, ctx.stream());
+        return;
+    }
+    auto src = dst->src[0];
+    auto bs = ggml_blck_size(src->type);
+    auto ts = ggml_type_size(src->type);
+    if (src->nb[0] != ts || ts*(src->ne[0]/bs) % 2 != 0) {
+        fprintf(stderr, "%s: unsupported case type = %s, nb[0] = %zu, type_size = %zu\n", __func__, ggml_type_name(src->type), src->nb[0], ts);
+        GGML_ABORT("fatal error");
+    }
+    auto aux_src = *src;
+    aux_src.type = GGML_TYPE_F16;
+    aux_src.ne[0] = ts*(src->ne[0]/bs)/2;
+    aux_src.nb[0] = 2;
+    auto aux_dst = *dst;
+    aux_dst.type = GGML_TYPE_F16;
+    aux_dst.ne[0] = ts*(dst->ne[0]/bs)/2;
+    aux_dst.nb[0] = 2;
+    aux_dst.src[0] = &aux_src;
+    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(&aux_dst, &aux_src, &aux_dst, nullptr, dst->src[0]->data, dst->data, ctx.stream());
 }
 
 void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
