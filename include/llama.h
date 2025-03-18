@@ -384,7 +384,10 @@ extern "C" {
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
         int  mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
+        int  attn_max_batch;    // maximum batch size for attention computations [EXPERIMENTAL]
         bool fused_moe_up_gate; // whether to use fused MoE up/down op [EXPERIMENTAL]
+        int  min_experts;
+        float thresh_experts;
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -415,6 +418,7 @@ extern "C" {
         bool ignore_imatrix_rules;           // If set to true, the built-in rules for refusing to quantize into certain quants without imatrix are ignored
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
+        void * custom_quants;                // pointer to vector containing custom quantization rules
     } llama_model_quantize_params;
 
     // grammar types

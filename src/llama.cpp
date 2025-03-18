@@ -2511,7 +2511,10 @@ struct llama_cparams {
     bool offload_kqv;
     bool flash_attn;
     int  mla_attn;
+    int  attn_max_batch;
     bool fused_moe_up_gate;
+    int  min_experts;
+    float thresh_experts;
 
     enum llama_pooling_type pooling_type;
 
@@ -2637,6 +2640,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_scale;
     struct ggml_tensor * ffn_up_scale;
     struct ggml_tensor * ffn_down_scale;
+
+    std::unique_ptr<ggml_tensor> computed_wk_b;
+    std::unique_ptr<ggml_tensor> computed_wv_b;
 };
 
 struct llama_kv_cell {
@@ -3165,7 +3171,7 @@ static bool llama_kv_cache_init(
 
     // DeepSeek MLA
     cache.kv_l.reserve(n_layer);
-    if (cparams.mla_attn == 1) {
+    if (cparams.mla_attn == 1 && !cparams.flash_attn) {
         cache.kvt_l.reserve(n_layer);
     }
 
@@ -3183,29 +3189,25 @@ static bool llama_kv_cache_init(
         ggml_tensor * k;
         ggml_tensor * v;
         if (cparams.mla_attn) {
-            if (!model.layers[i].wk_b || !model.layers[i].wv_b) {
-                if (warn) {
-                    LLAMA_LOG_WARN("=======================================================================================\n");
-                    LLAMA_LOG_WARN("%s: missing MLA tensors => disabling MLA\n", __func__);
-                    LLAMA_LOG_WARN("%s: you need to reconvert your model in order to use MLA\n", __func__);
-                    LLAMA_LOG_WARN("=======================================================================================\n");
-                    warn = false;
-                }
-            }
-        }
-        if (cparams.mla_attn && model.layers[i].wk_b && model.layers[i].wv_b) {
             // DeepSeek MLA
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
+            const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
-            auto kv_type = cparams.mla_attn == 1 ? cache.type_k : cache.type_v;
-            ggml_tensor * kv = ggml_new_tensor_2d(ctx, kv_type, kv_lora_rank + n_embd_head_qk_rope, kv_size);
-            ggml_format_name(kv, "cache_kv_l%d", i);
-            cache.kv_l.push_back(kv);
-            if (cparams.mla_attn == 1) {
-                ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
-                ggml_format_name(kvt, "cache_kvt_l%d", i);
-                cache.kvt_l.push_back(kvt);
+            if (cparams.flash_attn) {
+                ggml_tensor * kv = ggml_new_tensor_2d(ctx, cache.type_k, kv_lora_rank + n_embd_head_qk_rope, kv_size);
+                ggml_format_name(kv, "cache_kv_l%d", i);
+                cache.kv_l.push_back(kv);
+            } else {
+                auto kv_type = cparams.mla_attn == 1 ? cache.type_k : cache.type_v;
+                ggml_tensor * kv = ggml_new_tensor_2d(ctx, kv_type, kv_lora_rank + n_embd_head_qk_rope, kv_size);
+                ggml_format_name(kv, "cache_kv_l%d", i);
+                cache.kv_l.push_back(kv);
+                if (cparams.mla_attn == 1) {
+                    ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
+                    ggml_format_name(kvt, "cache_kvt_l%d", i);
+                    cache.kvt_l.push_back(kvt);
+                }
             }
             n_mla++;
         }
@@ -8120,6 +8122,139 @@ static bool llm_load_tensors(
         }
     }
 
+    if (model.arch == LLM_ARCH_DEEPSEEK2) {
+        int n_to_compute = 0;
+        for (auto& l : model.layers) {
+            if (!l.wk_b) ++n_to_compute;
+        }
+        if (n_to_compute > 0) {
+            // Prepare wk_b tensors to enable MLA usage also for model files that do not include
+            // the wk_b tensors (because, e.g., they were converted using mainline llama.cpp)
+            // We do it here because otherwise wkv_b may get run-time-repacked, which will make
+            // preparation of wk_b impossible. It also has the benefit that wk_b will get automatically
+            // run-time repacked if the rtr option is set. The downside is that we will prepare wk_b
+            // even if it is not needed (because MLA is not being used). If we wanted to avoid
+            // computing wk_b from wkv_b if not needed, we would need to propagate the context parameters
+            // to the model loading function. On the other hand, in some hypothetical bright future,
+            // where we are able to use the optimum settings for the computation, which for DeepSeekV3/R1/Lite
+            // is no MLA + FA for prompt processing, and MLA + FA for token generation, it would be useful
+            // to change the MLA setting on the fly, depending on context. In that case, having prepared
+            // the MLA tensors here is the right ting to do^TM.
+            const uint32_t n_embd_head_qk_rope = hparams.n_rot;
+            const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
+            const uint32_t kv_lora_rank = hparams.n_lora_kv;
+            const int32_t n_embd_head_v = hparams.n_embd_head_v;
+            const int32_t n_head        = hparams.n_head(0);
+            std::vector<uint8_t> work_data;
+            LLAMA_LOG_INFO("============ %s: need to compute %d wk_b tensors\n", __func__, n_to_compute);
+            for (int il = 1; il < n_layer; ++il) {
+                // Somehow the number of heads is being defined as being per layer. Not sure why this is the
+                // case, but for now we do not support strange models that have different numbers of heads
+                // in different model layers.
+                if (hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
+            }
+            auto total_size_wkb = 0;
+            size_t max_wkv_size = 0;
+            size_t max_wk_size = 0;
+            for (auto& l : model.layers) {
+                if (!l.wk_b) {
+                    auto new_type = ggml_is_quantized(l.wkv_b->type) ? GGML_TYPE_Q8_0 : l.wkv_b->type;
+                    auto size = ggml_row_size(new_type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
+                    max_wk_size = std::max(max_wk_size, size);
+                    if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
+                        max_wkv_size = std::max(max_wkv_size, ggml_nbytes(l.wkv_b));
+                    }
+                }
+            }
+            auto context_size = max_wk_size + 2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float);
+            context_size *= 2; // just in case;
+            std::vector<uint8_t> wkv_buffer;
+            if (max_wkv_size > 0) wkv_buffer.resize(max_wkv_size);
+            // So, transposing tensors and then making them contiguous as needed for wk_b may or may not
+            // be supported on all backends. Hence, to be sure that the preparation of wk_b will
+            // work correctly, we do it on the CPU backend. We then copy the resulting tensor data to
+            // the bacikend where wkv_b is stored.
+            ggml_init_params params{context_size, nullptr, true};
+            auto ctx = ggml_init(params);
+            auto graph = ggml_new_graph_custom(ctx, 8, false);
+            std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + max_wk_size);
+            for (int il = 0; il < n_layer; ++il) {
+                auto& l = model.layers[il];
+                if (l.wk_b) continue;
+                auto wkv_b = *l.wkv_b;
+                if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
+                    ggml_backend_tensor_get(l.wkv_b, wkv_buffer.data(), 0, ggml_nbytes(l.wkv_b));
+                    wkv_b.data = wkv_buffer.data();
+                }
+                auto wk_b_view = ggml_view_3d(ctx, &wkv_b, kv_lora_rank, n_embd_head_qk_nope, n_head,
+                        l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), 0);
+                auto wk_b_f32 = ggml_cast(ctx, wk_b_view, GGML_TYPE_F32);
+                wk_b_f32->data = tensor_data.data();
+                auto wk_b_f32_tview = ggml_transpose(ctx, wk_b_f32);
+                auto wk_b_f32_t = ggml_cont(ctx, wk_b_f32_tview);
+                wk_b_f32_t->data = (char *)wk_b_f32->data + ggml_nbytes(wk_b_f32);
+
+                auto new_type = ggml_is_quantized(wkv_b.type) ? GGML_TYPE_Q8_0 : wkv_b.type;
+                auto wk_b = ggml_cast(ctx, wk_b_f32_t, new_type);
+                wk_b->data = (char *)wk_b_f32_t->data + ggml_nbytes(wk_b_f32_t);
+
+                ggml_build_forward_expand(graph, wk_b);
+
+                auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+                if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+                plan.work_data = work_data.data();
+
+                auto status = ggml_graph_compute(graph, &plan);
+                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wk_b");
+
+                auto name = std::string{"blk."} + std::to_string(il) + ".attn_k_b.weight";
+
+                l.computed_wk_b = std::make_unique<ggml_tensor>(*wk_b);
+                l.computed_wk_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wk_b));
+                l.computed_wk_b->data   = ggml_backend_buffer_get_base(l.computed_wk_b->buffer);
+                l.computed_wk_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
+                                                    // of wk_b, which no longer exist, and will therefore crash.
+                for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wk_b->src[j] = nullptr;
+                ggml_set_name(l.computed_wk_b.get(), name.c_str());
+                ggml_backend_buffer_set_usage(l.computed_wk_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ggml_backend_tensor_set(l.computed_wk_b.get(), wk_b->data, 0, ggml_nbytes(wk_b));
+
+                l.wk_b = l.computed_wk_b.get();
+
+                ggml_graph_clear(graph);
+                auto wv_b = ggml_cont(ctx, ggml_view_3d(ctx, &wkv_b, kv_lora_rank, n_embd_head_v, n_head,
+                            l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), l.wkv_b->nb[1]*n_embd_head_qk_nope));
+                wv_b->data = tensor_data.data();
+                ggml_build_forward_expand(graph, wv_b);
+                plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+                if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+                plan.work_data = work_data.data();
+                status = ggml_graph_compute(graph, &plan);
+                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wv_b");
+
+                name = std::string{"blk."} + std::to_string(il) + ".attn_v_b.weight";
+
+                l.computed_wv_b = std::make_unique<ggml_tensor>(*wv_b);
+                l.computed_wv_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wv_b));
+                l.computed_wv_b->data   = ggml_backend_buffer_get_base(l.computed_wv_b->buffer);
+                l.computed_wv_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
+                                                    // of wk_b, which no longer exist, and will therefore crash.
+                for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wv_b->src[j] = nullptr;
+                ggml_set_name(l.computed_wv_b.get(), name.c_str());
+                ggml_backend_buffer_set_usage(l.computed_wv_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ggml_backend_tensor_set(l.computed_wv_b.get(), wv_b->data, 0, ggml_nbytes(wv_b));
+
+                l.wv_b = l.computed_wv_b.get();
+
+                printf("Computed %s as %ld x %ld x %ld and stored in buffer %s\n", name.c_str(), wk_b->ne[0], wk_b->ne[1], wk_b->ne[2],
+                        ggml_backend_buffer_name(l.computed_wk_b->buffer));
+
+                ggml_graph_clear(graph);
+            }
+            ggml_free(ctx);
+        }
+    }
+
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
             model.mappings.emplace_back(std::move(mapping));
@@ -8630,7 +8765,8 @@ llm_expert_gating_func_type   gating_op,
     }
 
     // select experts
-    ggml_tensor * selected_experts = ggml_top_k(ctx, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
+    ggml_tensor * selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
+            lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
     cb(selected_experts->src[0], "ffn_moe_argsort", il);
     cb(selected_experts, "ffn_moe_topk", il);
 
@@ -8767,52 +8903,19 @@ static struct ggml_tensor * llm_build_kqv(
         cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
 
-        if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX) {
+        // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
+        // For DeepSeek-2, it is perfectly fine with fp16 for PP, but I get gibberish when uding fp16 for TG.
+        // Not sure if it is really a matter of insufficient precision, or I have made a mistake in the fattn-vec-f16 kernel.
+        if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX ||
+            (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8)) {
             ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
         }
         //ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
 
         cur = ggml_reshape_2d(ctx, cur, n_embd_head_v*n_head, n_tokens);
     } else {
-        struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
-        cb(kq, "kq", il);
 
-        //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-
-        if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2) {
-            // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
-            // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
-            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-        }
-
-        if (model.arch == LLM_ARCH_GROK) {
-            // need to do the following:
-            // multiply by attn_output_multiplyer of 0.08838834764831845
-            // and then :
-            // kq = 30 * tanh(kq / 30)
-            // before the softmax below
-
-            //try from phi2
-            //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-
-            //kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
-            //kq = ggml_scale(ctx, kq, 30);
-
-            kq = ggml_softcap(ctx, kq, 0.08838834764831845f/30.0f, 30.f);
-        }
-
-        if (hparams.attn_soft_cap) {
-            //kq = ggml_softcap(ctx, kq, 1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
-            kq = ggml_softcap_max(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias,
-                    1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
-        } else {
-            kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
-        }
-        cb(kq, "kq_soft_max_ext", il);
-
-        GGML_ASSERT(kv.size == n_ctx);
-
-        // split cached v into n_head heads
+            // split cached v into n_head heads
         struct ggml_tensor * v =
             ggml_view_3d(ctx, kv.v_l[il],
                     n_kv, n_embd_head_v, n_head_kv,
@@ -8821,14 +8924,98 @@ static struct ggml_tensor * llm_build_kqv(
                     0);
         cb(v, "v", il);
 
-        struct ggml_tensor * kqv = ggml_mul_mat(ctx, v, kq);
-        cb(kqv, "kqv", il);
+        auto kq_size = k->ne[1]*q->ne[1]*q->ne[2]*sizeof(float)/(1024*1024);
+        if (cparams.attn_max_batch == 0 || cparams.attn_max_batch >= kq_size || k->ne[2] != q->ne[2] || v->ne[2] != q->ne[2]) {
+            struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
+            cb(kq, "kq", il);
 
-        struct ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
-        cb(kqv_merged, "kqv_merged", il);
+            //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
 
-        cur = ggml_cont_2d(ctx, kqv_merged, n_embd_head_v*n_head, n_tokens);
-        cb(cur, "kqv_merged_cont", il);
+            if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2) {
+                // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
+                // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
+                ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+            }
+
+            if (model.arch == LLM_ARCH_GROK) {
+                // need to do the following:
+                // multiply by attn_output_multiplyer of 0.08838834764831845
+                // and then :
+                // kq = 30 * tanh(kq / 30)
+                // before the softmax below
+
+                //try from phi2
+                //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+
+                //kq = ggml_tanh(ctx, ggml_scale(ctx, kq, 0.08838834764831845f/30.0f));
+                //kq = ggml_scale(ctx, kq, 30);
+
+                kq = ggml_softcap(ctx, kq, 0.08838834764831845f/30.0f, 30.f);
+            }
+
+            if (hparams.attn_soft_cap) {
+                //kq = ggml_softcap(ctx, kq, 1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
+                kq = ggml_softcap_max(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                        1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
+            } else {
+                kq = ggml_soft_max_ext(ctx, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+            }
+            cb(kq, "kq_soft_max_ext", il);
+
+            GGML_ASSERT(kv.size == n_ctx);
+
+            struct ggml_tensor * kqv = ggml_mul_mat(ctx, v, kq);
+            cb(kqv, "kqv", il);
+
+            struct ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
+            cb(kqv_merged, "kqv_merged", il);
+
+            cur = ggml_cont_2d(ctx, kqv_merged, n_embd_head_v*n_head, n_tokens);
+            cb(cur, "kqv_merged_cont", il);
+        }
+        else {
+            // For now we will not support this option if k->ne[2] != q->ne[2] || v->ne[2] != q->ne[2];
+            GGML_ASSERT(k->ne[2] == v->ne[2] && k->ne[2] == q->ne[2]);
+            int n_step = (kq_size + cparams.attn_max_batch - 1)/cparams.attn_max_batch;
+            n_step = std::min(n_step, int(k->ne[2]));
+            int n_per_step = (q->ne[2] + n_step - 1)/n_step;
+            auto r2k = q->ne[2] / k->ne[2];
+            auto r2v = q->ne[2] / v->ne[2];
+            n_step = q->ne[2];
+            n_per_step = 1;
+            ggml_tensor * kqv;
+            for (int i12 = 0; i12 < q->ne[2]; i12 += n_per_step) {
+                int this_ne12 = i12 + n_per_step <= q->ne[2] ? n_per_step : q->ne[2] - i12;
+                int i02 = i12/r2k;
+                auto k_i = ggml_view_3d(ctx, k, k->ne[0], k->ne[1], this_ne12, k->nb[1], k->nb[2], k->nb[2]*i02);
+                auto q_i = ggml_view_3d(ctx, q, q->ne[0], q->ne[1], this_ne12, q->nb[1], q->nb[2], q->nb[2]*i12);
+                auto kq_i = ggml_mul_mat(ctx, k_i, q_i);
+                if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2) {
+                    ggml_mul_mat_set_prec(kq_i, GGML_PREC_F32);
+                }
+                if (model.arch == LLM_ARCH_GROK) {
+                    kq_i = ggml_softcap(ctx, kq_i, 0.08838834764831845f/30.0f, 30.f);
+                }
+                if (hparams.attn_soft_cap) {
+                    kq_i = ggml_softcap_max(ctx, kq_i, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                            1.0f / hparams.f_attn_logit_softcapping, hparams.f_attn_logit_softcapping);
+                } else {
+                    kq_i = ggml_soft_max_ext(ctx, kq_i, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+                }
+                i02 = i12 / r2v;
+                auto v_i = ggml_view_3d(ctx, v, v->ne[0], v->ne[1], this_ne12, v->nb[1], v->nb[2], v->nb[2]*i02);
+                auto kqv_i = ggml_mul_mat(ctx, v_i, kq_i);
+                if (i12 == 0) {
+                    kqv = kqv_i;
+                } else {
+                    kqv = ggml_concat(ctx, kqv, kqv_i, 2);
+                }
+            }
+            ggml_tensor * kqv_merged = ggml_permute(ctx, kqv, 0, 2, 1, 3);
+            cb(kqv_merged, "kqv_merged", il);
+            cur = ggml_cont_2d(ctx, kqv_merged, n_embd_head_v*n_head, n_tokens);
+            cb(cur, "kqv_merged_cont", il);
+        }
     }
 
     ggml_build_forward_expand(graph, cur);
@@ -8924,7 +9111,10 @@ struct llm_build_context {
 
     const bool flash_attn;
     const int  mla_attn;
+    const int  attn_max_batch;
     const bool fused_moe_up_gate;
+    const int  min_experts;
+    const float thresh_experts;
 
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
@@ -8976,7 +9166,10 @@ struct llm_build_context {
         n_ctx_orig       (cparams.n_ctx_orig_yarn),
         flash_attn       (cparams.flash_attn),
         mla_attn         (cparams.mla_attn),
+        attn_max_batch   (cparams.attn_max_batch),
         fused_moe_up_gate(cparams.fused_moe_up_gate),
+        min_experts      (cparams.min_experts),
+        thresh_experts   (cparams.thresh_experts),
         pooling_type     (cparams.pooling_type),
         rope_type        (hparams.rope_type),
         cb               (cb),
@@ -13527,11 +13720,11 @@ struct llm_build_context {
                         LLM_NORM_RMS, cb, il);
                 cb(kv_compressed, "kv_compressed", il);
 
-                if (lctx.cparams.mla_attn && model.layers[il].wk_b && model.layers[il].wv_b) {
+                if (lctx.cparams.mla_attn) {
 
                     ggml_tensor * kv_cache_trans;
 
-                    if (lctx.cparams.mla_attn == 1) {
+                    if (lctx.cparams.mla_attn == 1 && !lctx.cparams.flash_attn) {
                         ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.kvt_l[il], n_tokens, kv_lora_rank,
                                 ggml_row_size(kv_self.kvt_l[il]->type, kv_self.size), ggml_row_size(kv_self.kvt_l[il]->type, kv_head));
                         cb(kv_cache_trans_view, "kv_cache_trans_view", il);
@@ -13558,71 +13751,233 @@ struct llm_build_context {
                             ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
                     cb(kv_cache, "kv_cache", il);
 
-                    struct ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head,
-                            ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope),
-                            ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank)*n_embd_head_qk_nope, 0);
-                    cb(wk_b, "wk_b", il);
+                    ggml_tensor * kqv;
 
-                    q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
-                    //if (q_nope->ne[1] <= 32) q_nope = ggml_cont(ctx0, q_nope);
-                    cb(q_nope, "q_nope_perm", il);
+                    if (lctx.cparams.mla_attn > 1 && lctx.cparams.flash_attn && (pp_opt || lctx.cparams.mla_attn > 2)) {
 
-                    struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope);
-                    cb(q_nope2, "q_nope2", il);
 
-                    ggml_tensor * q = ggml_concat(ctx0, q_nope2, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), 0);
-                    cb(q, "q", il);
-                    if (!pp_opt) {
+                        ggml_tensor * k;
+                        ggml_tensor * v;
+
+                        // For now this only works in the CPU implementation, so we only use it if there is just the CPU backend.
+                        // If the code was compiled with CUDA (and/or Metal, Vulkan, whatever) support, this branch will not
+                        // be taken even if no layers were offloaded to the GPU.
+                        if (lctx.backends.size() == 1 && lctx.backends.front() == lctx.backend_cpu) {
+
+                            auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_lora_rank, n_kv, kv_self.kv_l[il]->nb[1], 0);
+
+                            auto kv_f32 = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cache_nope);
+                            cb(kv_f32, "kv_f32", il);
+
+                            auto v_f32 = ggml_view_3d(ctx0, kv_f32, hparams.n_embd_head_v, n_kv, n_head,
+                                    ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope));
+                            cb(v_f32, "v_f32", il);
+
+                            v = ggml_cast(ctx0, v_f32, kv_self.kv_l[il]->type);
+                            cb(v, "v", il);
+
+                            auto k_nope_f32 = ggml_view_3d(ctx0, kv_f32, n_embd_head_qk_nope, n_kv, n_head,
+                                    ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v), 0);
+                            cb(k_nope_f32, "k_nope_f32", il);
+
+                            auto k_nope = ggml_cast(ctx0, k_nope_f32, kv_self.kv_l[il]->type);
+                            cb(k_nope, "k_nope", il);
+
+                            ggml_build_forward_expand(gf, k_nope);
+                            ggml_build_forward_expand(gf, v);
+
+                            auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.kv_l[il], n_embd_head_qk_rope, n_kv, 1,
+                                    kv_self.kv_l[il]->nb[1], kv_self.kv_l[il]->nb[2], ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank));
+
+                            ggml_tensor repeater;
+                            repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_kv; repeater.ne[2] = n_head; repeater.ne[3] = 1;
+                            auto k_rope = ggml_repeat(ctx0, kv_cache_rope, &repeater);
+                            cb(k_rope, "k_rope", il);
+
+                            k = ggml_concat(ctx0, k_nope, k_rope, 0);
+                            cb(k, "k", il);
+
+                            ggml_build_forward_expand(gf, k);
+                        }
+                        else {
+                            // Hahaha, we need to convert the KV cache for this layer to f32 because the general purpose ML library ggml does not
+                            // provide ops on (almost) anything other than f32. In this case, the cache will be the second operand to a matrix
+                            // multiplication, which *must* be f32.
+                            auto kv_cache_view = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_self.kv_l[il]->ne[0], n_kv, kv_self.kv_l[il]->nb[1], 0);
+                            auto kv_cache_view_f32 = ggml_cast(ctx0, kv_cache_view, GGML_TYPE_F32);
+                            cb(kv_cache_view_f32, "kv_cache_view_f32", il);
+
+                            // The no- and rotational position encoding portions of the KV cache
+                            auto kv_cache_nope = ggml_view_2d(ctx0, kv_cache_view_f32, kv_lora_rank, n_kv, kv_cache_view_f32->nb[1], 0);
+                            auto kv_cache_rope = ggml_view_3d(ctx0, kv_cache_view_f32, n_embd_head_qk_rope, 1, n_kv,
+                                    kv_cache_view_f32->nb[1], kv_cache_view_f32->nb[1], ggml_row_size(kv_cache_view_f32->type, kv_lora_rank));
+
+                            auto kv_f32 = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cache_nope);
+                            cb(kv_f32, "kv_f32", il);
+
+                            auto k_nope_f32 = ggml_view_3d(ctx0, kv_f32, n_embd_head_qk_nope, n_kv, n_head,
+                                    ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v), 0);
+                            cb(k_nope_f32, "k_nope_f32", il);
+
+                            ggml_tensor repeater;
+                            repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_head; repeater.ne[2] = n_kv; repeater.ne[3] = 1;
+                            auto k_rope_f32 = ggml_permute(ctx0, ggml_repeat(ctx0, kv_cache_rope, &repeater), 0, 2, 1, 3);
+                            cb(k_rope_f32, "k_rope_f32", il);
+
+                            auto k_f32 = ggml_concat(ctx0, k_nope_f32, k_rope_f32, 0);
+                            cb(k_f32, "k_f32", il);
+
+                            k = ggml_cast(ctx0, k_f32, kv_self.kv_l[il]->type);
+                            cb(k, "k", il);
+
+                            auto v_f32 = ggml_view_3d(ctx0, kv_f32, hparams.n_embd_head_v, n_kv, n_head,
+                                    ggml_row_size(kv_f32->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope));
+                            cb(v_f32, "v_f32", il);
+
+                            v = ggml_cast(ctx0, v_f32, kv_self.kv_l[il]->type);
+                            cb(v, "v", il);
+                        }
+
+                        auto q = ggml_concat(ctx0, q_nope, q_rope, 0);
                         q = ggml_permute(ctx0, q, 0, 2, 1, 3);
-                        cb(q, "q_perm", il);
+                        cb(q, "q_concat", il);
+
+                        ggml_build_forward_expand(gf, q);
+
+                        kqv = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
+                        if (q->ne[1] <= 8) {
+                            ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
+                        }
+                        cb(kqv, "kqv", il);
+
+                        cur = ggml_reshape_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens);
+
                     }
-                    ggml_tensor * kq = ggml_mul_mat(ctx0, kv_cache, q);
-                    cb(kq, "kq", il);
+                    else {
 
-		            if (!pp_opt) {
-                        kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3));
-                        cb(kq, "kq_perm", il);
+                        ggml_tensor * kqv_compressed;
+
+                        auto wkv_b = model.layers[il].wkv_b;
+                        auto wk_b = model.layers[il].wk_b->ne[1] == kv_lora_rank ? model.layers[il].wk_b
+                                  : ggml_reshape_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head);
+
+                        q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+                        cb(q_nope, "q_nope_perm", il);
+
+                        struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope);
+                        cb(q_nope2, "q_nope2", il);
+
+                        ggml_tensor * q = ggml_concat(ctx0, q_nope2, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), 0);
+                        cb(q, "q", il);
+
+                        if (lctx.cparams.flash_attn && lctx.cparams.mla_attn == 1) {
+                            ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.kv_l[il],
+                                    kv_lora_rank, n_kv,
+                                    ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
+                            cb(kv_cache_lora, "kv_cache_lora", il);
+
+                            kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, kv_cache_lora, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
+                            cb(kqv_compressed, "kqv_compressed", il);
+
+                            kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
+                            cb(kqv_compressed, "kqv_compressed_perm", il);
+                        }
+                        else {
+                            if (lctx.cparams.mla_attn > 1) {
+                                ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.kv_l[il],
+                                        kv_lora_rank, n_kv,
+                                        ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
+                                cb(kv_cache, "kv_cache_lora", il);
+
+                                kv_cache_trans = ggml_cont(ctx0, ggml_transpose(ctx0, kv_cache_lora));
+                                cb(kv_cache_trans, "kv_cache_trans", il);
+                            }
+
+                            auto kq_size = kv_cache->ne[1]*q->ne[1]*q->ne[2]*sizeof(float)/(1024*1024); // K*Q in MiB
+                            if (lctx.cparams.attn_max_batch <= 0 || lctx.cparams.attn_max_batch >= kq_size) {
+                                if (!pp_opt) {
+                                    q = ggml_permute(ctx0, q, 0, 2, 1, 3);
+                                    cb(q, "q_perm", il);
+                                }
+
+                                ggml_tensor * kq = ggml_mul_mat(ctx0, kv_cache, q);
+                                if (kv_cache->ne[1] < 256) {
+                                    ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+                                }
+                                cb(kq, "kq", il);
+
+                                if (!pp_opt) {
+                                    kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 0, 2, 1, 3));
+                                    cb(kq, "kq_perm", il);
+                                }
+
+                                kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
+                                cb(kq, "kq_soft_max_ext", il);
+
+                                if (!pp_opt) {
+                                    kq = ggml_permute(ctx0, kq, 0, 2, 1, 3);
+                                    cb(kq, "kq_soft_max_ext_perm", il);
+                                }
+
+                                kqv_compressed = ggml_mul_mat(ctx0, kv_cache_trans, kq);
+                                cb(kqv_compressed, "kqv_compressed", il);
+
+                                if (!pp_opt) {
+                                    kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
+                                    cb(kqv_compressed, "kqv_compressed_perm", il);
+                                }
+
+                            } else {
+
+                                int n_step = (kq_size + lctx.cparams.attn_max_batch - 1)/lctx.cparams.attn_max_batch;
+                                n_step = std::min(n_step, int(q->ne[2]));
+                                int n_per_step = (q->ne[2] + n_step - 1)/n_step;
+
+                                for (int i_head = 0; i_head < q->ne[2]; i_head += n_per_step) {
+                                    int this_ne12 = i_head + n_per_step <= q->ne[2] ? n_per_step : q->ne[2] - i_head;
+                                    ggml_tensor * q_i = ggml_view_3d(ctx0, q, q->ne[0], q->ne[1], this_ne12, q->nb[1], q->nb[2], q->nb[2]*i_head);
+                                    ggml_tensor * kq_i = ggml_mul_mat(ctx0, kv_cache, q_i);
+                                    kq_i = ggml_soft_max_ext(ctx0, kq_i, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
+                                    ggml_tensor * kqv_i = ggml_mul_mat(ctx0, kv_cache_trans, kq_i);
+                                    if (i_head == 0) {
+                                        kqv_compressed = kqv_i;
+                                    } else {
+                                        kqv_compressed = ggml_concat(ctx0, kqv_compressed, kqv_i, 2);
+                                    }
+                                    ggml_build_forward_expand(gf, kqv_compressed);
+                                }
+                                cb(kqv_compressed, "kqv_compressed", il);
+                            }
+                        }
+
+                        auto wv_b = model.layers[il].wv_b;
+                        if (wv_b->ne[1] != n_embd_head_v) {
+                            wv_b = ggml_reshape_3d(ctx0, wv_b, kv_lora_rank, n_embd_head_v, n_head);
+                            cb(wv_b, "wv_b", il);
+                        }
+                        // There is an issue with quantized GEMV on CUDA when the left operand (the matrix) is
+                        // not contiguous. So, for now, we create wv_b during model loading and use that
+                        // instead of the commented out 3D view below.
+                        //auto wv_b = ggml_view_3d(ctx0, wkv_b, kv_lora_rank, n_embd_head_v, n_head,
+                        //        wkv_b->nb[1], wkv_b->nb[1]*(n_embd_head_v + n_embd_head_qk_nope),
+                        //        wkv_b->nb[1]*n_embd_head_qk_nope);
+                        //cb(wv_b, "wv_b", il);
+
+                        kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
+                        cb(kqv, "kqv", il);
+
+                        kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
+                        cb(kqv, "kqv_perm", il);
+
+                        cur = ggml_view_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens, ggml_row_size(kqv->type, n_embd_head_v*n_head), 0);
+                        cb(cur, "kqv_2d", il);
                     }
-
-                    kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, kq_scale, hparams.f_max_alibi_bias);
-                    cb(kq, "kq_soft_max_ext", il);
-
-		            if (!pp_opt) {
-                        kq = ggml_permute(ctx0, kq, 0, 2, 1, 3);
-                        cb(kq, "kq_soft_max_ext_perm", il);
-                    }
-
-                    if (lctx.cparams.mla_attn > 1) {
-                        ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.kv_l[il],
-                                kv_lora_rank, n_kv,
-                                ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
-                        cb(kv_cache, "kv_cache_lora", il);
-
-                        kv_cache_trans = ggml_cont(ctx0, ggml_transpose(ctx0, kv_cache_lora));
-                        cb(kv_cache_trans, "kv_cache_trans", il);
-                    }
-
-                    struct ggml_tensor * kqv_compressed = ggml_mul_mat(ctx0, kv_cache_trans, kq);
-                    cb(kqv_compressed, "kqv_compressed", il);
-
-                    if (!pp_opt) {
-                        kqv_compressed = ggml_permute(ctx0, kqv_compressed, 0, 2, 1, 3);
-                        cb(kqv_compressed, "kqv_compressed_perm", il);
-                    }
-
-                    struct ggml_tensor * wv_b = ggml_view_3d(ctx0, model.layers[il].wv_b, kv_lora_rank, n_embd_head_v, n_head,
-                            ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank),
-                            ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank)*n_embd_head_v, 0);
-                    cb(wv_b, "wv_b", il);
-
-                    struct ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
-                    cb(kqv, "kqv", il);
-
-                    kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
-                    cb(kqv, "kqv_perm", il);
-
-                    cur = ggml_view_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens, ggml_row_size(kqv->type, n_embd_head_v*n_head), 0);
-                    cb(cur, "kqv_2d", il);
 
                     ggml_build_forward_expand(gf, cur);
 
@@ -16169,6 +16524,19 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         return i_layer < n_layers/8 || i_layer >= 7*n_layers/8 || (i_layer - n_layers/8)%3 == 2;
     };
 
+    auto custom_type = GGML_TYPE_COUNT;
+    if (qs.params->custom_quants) {
+        using CustomQ = std::pair<std::string, ggml_type>;
+        auto& q_rules = *static_cast<const std::vector<CustomQ>*>(qs.params->custom_quants);
+        for (auto& rule : q_rules) {
+            std::regex pattern(rule.first);
+            if (std::regex_search(name, pattern)) {
+                custom_type = rule.second;
+                break;
+            }
+        }
+    }
+
     //auto get_layer = [] (const char * name) {
     //    int il;
     //    if (sscanf(name, "blk.%d.", &il) == 1) return il;
@@ -16636,6 +17004,11 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             new_type = GGML_TYPE_IQ4_KS;
         }
         ++qs.i_ffn_up;
+    }
+
+    if (custom_type < GGML_TYPE_COUNT) {
+        new_type = custom_type;
+        LLAMA_LOG_INFO("Using custom type %s for tensor %s\n", ggml_type_name(new_type), name.c_str());
     }
 
     //    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
@@ -17156,6 +17529,23 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             if (imatrix_data) {
                 auto it = imatrix_data->find(tensor->name);
                 if (it == imatrix_data->end()) {
+                    // MLA hack: most imatrix files floating around the Internet have been computed with standard attention.
+                    //           This means that the imatrix file does not contain data for the *.attn_k_b.weight and *.attn_v_b.weight
+                    //           required by MLA. But the *.attn_v_b.weight tensors "see" the exact same activations as the
+                    //           *.attn_kv_b.weight tensors used in standard attention. Hence, if we find imatrix data for
+                    //           *.attn_kv_b.weight we can use it for *.attn_v_b.weight and vice versa.
+                    std::string name{tensor->name};
+                    static std::array<std::string, 2> alternatives{".attn_v_b.weight", ".attn_kv_b.weight"};
+                    for (int j = 0; j < int(alternatives.size()); ++j) {
+                        if (auto pos = name.find(alternatives[j]); pos != std::string::npos) {
+                            int j1 = (j + 1) % alternatives.size();
+                            auto alternative_name = name.substr(0, pos) + alternatives[j1];
+                            it = imatrix_data->find(alternative_name);
+                            break;
+                        }
+                    }
+                }
+                if (it == imatrix_data->end()) {
                     LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
                 } else {
                     if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
@@ -17644,7 +18034,10 @@ struct llama_context_params llama_context_default_params() {
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ false,
         /*.mla_attn                    =*/ 0,
+        /*.attn_max_batch              =*/ 0,
         /*.fused_moe_up_gate           =*/ false,
+        /*.min_experts                 =*/ -1,
+        /*.thtesh_experts              =*/ 0.0f,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
     };
@@ -17674,6 +18067,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.ignore_imatrix_rules        =*/ false,
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
+        /*.custom_quants               =*/ nullptr,
     };
 
     return result;
@@ -17844,7 +18238,11 @@ struct llama_context * llama_new_context_with_model(
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
     cparams.mla_attn         = params.mla_attn;
+    cparams.attn_max_batch   = params.attn_max_batch;
     cparams.fused_moe_up_gate= params.fused_moe_up_gate;
+    cparams.min_experts      = params.min_experts;
+    cparams.thresh_experts   = params.thresh_experts;
+
     cparams.pooling_type     = params.pooling_type;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
@@ -17912,7 +18310,9 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: n_ubatch   = %u\n",     __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: flash_attn = %d\n",     __func__, cparams.flash_attn);
     LLAMA_LOG_INFO("%s: mla_attn   = %d\n",     __func__, cparams.mla_attn);
+    LLAMA_LOG_INFO("%s: attn_max_b = %d\n",     __func__, cparams.attn_max_batch);
     LLAMA_LOG_INFO("%s: fused_moe  = %d\n",     __func__, cparams.fused_moe_up_gate);
+    LLAMA_LOG_INFO("%s: ser        = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base  = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale = %g\n",     __func__, cparams.rope_freq_scale);
 
@@ -18131,7 +18531,7 @@ struct llama_context * llama_new_context_with_model(
             }
 
             if (memory_size_kv + memory_size_kvt > 0) {
-                if (cparams.mla_attn == 1) {
+                if (cparams.mla_attn == 1 && !cparams.flash_attn) {
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T (%s): %7.2f MiB\n", __func__,
                             (float)(memory_size_kv + memory_size_kvt) / (1024.0f * 1024.0f),
                             ggml_type_name(kv_type), (float)memory_size_kv / (1024.0f * 1024.0f),
