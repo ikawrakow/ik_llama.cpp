@@ -10576,6 +10576,11 @@ static void ggml_compute_forward_dup_q(
     if (dst->type == GGML_TYPE_Q8_0 && dst->src[0]->type == GGML_TYPE_Q8_0 &&
             ggml_are_same_shape(dst, dst->src[0])) {
 
+        if (dst->src[0]->nb[0] == sizeof(block_q8_0) && dst->nb[0] == sizeof(block_q8_0)) {
+            ggml_compute_forward_dup_bytes(params, dst);
+            return;
+        }
+
         // we assume src is transposed and that's why we are here
 
         GGML_ASSERT(dst->ne[0] % QK8_0 == 0);
