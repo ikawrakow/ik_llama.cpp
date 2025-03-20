@@ -10626,6 +10626,10 @@ static void ggml_compute_forward_dup_q(
         return;
     }
 
+    if (dst->type != GGML_TYPE_F32) {
+        printf("%s: %s -> %s is of type %s\n", __func__, dst->src[0]->name, dst->name, ggml_type_name(dst->type));
+        GGML_ABORT("fatal error");
+    }
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
     struct ggml_tensor * src0 = dst->src[0];
     GGML_ASSERT(src0->ne[0] == dst->ne[0] && src0->nb[0] == ggml_type_size(src0->type));
