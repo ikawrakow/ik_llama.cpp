@@ -8218,6 +8218,9 @@ static bool llm_load_tensors(
                 ggml_set_name(l.computed_wk_b.get(), name.c_str());
                 ggml_backend_buffer_set_usage(l.computed_wk_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                 ggml_backend_tensor_set(l.computed_wk_b.get(), wk_b->data, 0, ggml_nbytes(wk_b));
+                if (ggml_backend_buffer_is_host(l.computed_wk_b->buffer)) {
+                    iqk_modify_tensor(l.computed_wk_b.get());
+                }
 
                 l.wk_b = l.computed_wk_b.get();
 
@@ -8243,6 +8246,9 @@ static bool llm_load_tensors(
                 ggml_set_name(l.computed_wv_b.get(), name.c_str());
                 ggml_backend_buffer_set_usage(l.computed_wv_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
                 ggml_backend_tensor_set(l.computed_wv_b.get(), wv_b->data, 0, ggml_nbytes(wv_b));
+                if (ggml_backend_buffer_is_host(l.computed_wv_b->buffer)) {
+                    iqk_modify_tensor(l.computed_wv_b.get());
+                }
 
                 l.wv_b = l.computed_wv_b.get();
 
@@ -17315,7 +17321,6 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     // copy the KV pairs from the input file
     gguf_set_kv     (ctx_out, ml.meta);
     gguf_set_val_u32(ctx_out, "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
-    gguf_set_val_u32(ctx_out, "general.file_type", ftype); // TODO: use LLM_KV
 
     // Remove split metadata
     gguf_remove_key(ctx_out, ml.llm_kv(LLM_KV_SPLIT_NO).c_str());
@@ -17370,8 +17375,12 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             printf("=========================== %s: nothing to do for only_repack option\n", __func__);
             return;
         }
-        ftype = repacked_ftype(ftype);
+        ftype = repacked_ftype(model.ftype);
+        printf("===================== Model ftype: %s: Repacked ftype: %s\n", llama_model_ftype_name(model.ftype).c_str(),
+                llama_model_ftype_name(ftype).c_str());
     }
+
+    gguf_set_val_u32(ctx_out, "general.file_type", ftype); // TODO: use LLM_KV
 
     qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)model.hparams.n_layer;
 
