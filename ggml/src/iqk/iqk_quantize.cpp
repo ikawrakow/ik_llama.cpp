@@ -6781,7 +6781,8 @@ const Modify * get_modify_info(ggml_type type) {
     return it != k_mod_map.end() ? &it->second : nullptr;
 }
 bool is_forbidden_tensor(const std::string& name) {
-    if (name == "token_embd.weight") return true;
+    static const std::string kTokenEmbd{"token_embd.weight"};
+    if (name == kTokenEmbd) return true;
     //if (auto pos = name.find("attn_kv_b.weight"); pos != std::string::npos) return true;
     return false;
 }
@@ -6789,9 +6790,9 @@ bool is_forbidden_tensor(const std::string& name) {
 
 bool iqk_should_modify_tensor(const struct ggml_tensor * tensor) {
     return false;
-    if (is_forbidden_tensor(tensor->name)) return false;
-    auto mptr = get_modify_info(tensor->type);
-    return mptr ? true : false;
+    //if (is_forbidden_tensor(tensor->name)) return false;
+    //auto mptr = get_modify_info(tensor->type);
+    //return mptr ? true : false;
 }
 
 bool iqk_modify_tensor(struct ggml_tensor * tensor) {
