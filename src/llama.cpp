@@ -8194,7 +8194,8 @@ static bool llm_load_tensors(
                 auto wk_b_f32_t = ggml_cont(ctx, wk_b_f32_tview);
                 wk_b_f32_t->data = (char *)wk_b_f32->data + ggml_nbytes(wk_b_f32);
 
-                auto new_type = ggml_is_quantized(wkv_b.type) ? GGML_TYPE_Q8_0 : wkv_b.type;
+                auto new_type = ggml_is_quantized(wkv_b.type) ?
+                    wkv_b.type >= GGML_TYPE_Q4_0_R8 && wkv_b.type <= GGML_TYPE_Q8_K_R8 ? GGML_TYPE_Q8_0_R8 : GGML_TYPE_Q8_0 : wkv_b.type;
                 auto wk_b = ggml_cast(ctx, wk_b_f32_t, new_type);
                 wk_b->data = (char *)wk_b_f32_t->data + ggml_nbytes(wk_b_f32_t);
 

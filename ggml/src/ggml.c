@@ -10128,9 +10128,11 @@ static void ggml_compute_forward_dup_f32(
     }
 
     // parallelize by rows
+    int n_packed = ggml_packed_rows(dst->type);
+    GGML_ASSERT(dst->ne[1] % n_packed == 0);
     const int nr = ne01;
     // number of rows per thread
-    const int dr = (nr + nth - 1) / nth;
+    const int dr = n_packed*((nr/n_packed + nth - 1) / nth);
     // row range for this thread
     const int ir0 = dr * ith;
     const int ir1 = MIN(ir0 + dr, nr);
@@ -10182,10 +10184,10 @@ static void ggml_compute_forward_dup_f32(
                 for (int i03 = 0; i03 < ne03; i03++) {
                     for (int i02 = 0; i02 < ne02; i02++) {
                         id += rs * ir0;
-                        for (int i01 = ir0; i01 < ir1; i01++) {
+                        for (int i01 = ir0; i01 < ir1; i01 += n_packed) {
                             const float * src0_ptr = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
-                            quantize_row_q(src0_ptr, dst_ptr + id, ne00);
-                            id += rs;
+                            quantize_row_q(src0_ptr, dst_ptr + id, ne00*n_packed);
+                            id += rs*n_packed;
                         }
                         id += rs * (ne01 - ir1);
                     }
