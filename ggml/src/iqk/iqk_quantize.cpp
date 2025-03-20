@@ -6788,7 +6788,7 @@ bool is_forbidden_tensor(const std::string& name) {
 }
 }
 
-bool iqk_should_modify_tensor(const struct ggml_tensor * tensor) {
+bool iqk_should_modify_tensor([[maybe_unused]] const struct ggml_tensor * tensor) {
     return false;
     //if (is_forbidden_tensor(tensor->name)) return false;
     //auto mptr = get_modify_info(tensor->type);
@@ -6799,7 +6799,7 @@ bool iqk_modify_tensor(struct ggml_tensor * tensor) {
     return false;
     auto mptr = get_modify_info(tensor->type);
     if (!mptr) return false;
-    if (is_forbidden_tensor(tensor->name)) return false;
+    if (is_forbidden_tensor(std::string{tensor->name})) return false;
 
     auto& m = *mptr;
     int nrows = ggml_nrows(tensor);
