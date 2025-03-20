@@ -25,6 +25,7 @@
 #include <thread>
 #include <atomic>
 #include <unordered_map>
+#include <string>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
