@@ -6782,18 +6782,20 @@ const Modify * get_modify_info(ggml_type type) {
 }
 bool is_forbidden_tensor(const std::string& name) {
     if (name == "token_embd.weight") return true;
-    if (auto pos = name.find("attn_kv_b.weight"); pos != std::string::npos) return true;
+    //if (auto pos = name.find("attn_kv_b.weight"); pos != std::string::npos) return true;
     return false;
 }
 }
 
 bool iqk_should_modify_tensor(const struct ggml_tensor * tensor) {
+    return false;
     if (is_forbidden_tensor(tensor->name)) return false;
     auto mptr = get_modify_info(tensor->type);
     return mptr ? true : false;
 }
 
 bool iqk_modify_tensor(struct ggml_tensor * tensor) {
+    return false;
     auto mptr = get_modify_info(tensor->type);
     if (!mptr) return false;
     if (is_forbidden_tensor(tensor->name)) return false;
@@ -6901,7 +6903,8 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
             int last_row = std::min(first_row + chunkSize*r.num_rows, nrows);
             for (int row = first_row; row < last_row; row += r.num_rows) {
                 std::memcpy(qtmp.data(), data + row*row_size, r.num_rows*row_size);
-                r.repack(r.num_rows, n_per_row, qtmp.data(), data + row*row_size, true);
+                //r.repack(r.num_rows, n_per_row, qtmp.data(), data + row*row_size, true);
+                r.repack(r.num_rows, n_per_row, qtmp.data(), data + row*row_size, false);
             }
         }
     };

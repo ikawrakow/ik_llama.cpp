@@ -10590,6 +10590,7 @@ static void ggml_compute_forward_dup_q(
     int nth = params->nth;
 
     if (dst->src[0]->type == dst->type &&
+        dst->src[0]->nb[0] == ggml_type_size(dst->type) &&
         dst->nb[0] == ggml_type_size(dst->type)) {
         ggml_compute_forward_dup_bytes(params, dst);
         return;
