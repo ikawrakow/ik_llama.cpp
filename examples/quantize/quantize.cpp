@@ -145,6 +145,7 @@ static void usage(const char * executable) {
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token_embd.weight tensor.\n\n");
     printf("  --custom-q regex1=type1,regex2=type2...: use this to specify custom quantization type rules.\n\n");
+    printf("  --repack Repack all tensors to the corresponding _r4/8 variant if available.\n\n");
     printf("Additional specific tensor quantization types used in the custom quant scheme 'CQS (default is Q2_K):\n");
     printf("      --attn-q-type ggml_type: use this ggml_type for the attn_q.weight tensor.\n");
     printf("      --attn-k-type ggml_type: use this ggml_type for the attn_k.weight tensor.\n");
@@ -331,6 +332,8 @@ int main(int argc, char ** argv) {
             params.quantize_output_tensor = false;
         } else if (strcmp(argv[arg_idx], "--ignore-imatrix-rules") == 0) {
             params.ignore_imatrix_rules = true;
+        } else if (strcmp(argv[arg_idx], "--repack") == 0) {
+            params.only_repack = true;
         } else if (strcmp(argv[arg_idx], "--output-tensor-type") == 0) {
             if (arg_idx < argc-1) {
                 params.output_tensor_type = parse_ggml_type(argv[++arg_idx]);

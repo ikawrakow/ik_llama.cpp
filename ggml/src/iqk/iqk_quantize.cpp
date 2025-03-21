@@ -25,6 +25,7 @@
 #include <thread>
 #include <atomic>
 #include <unordered_map>
+#include <string>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -6766,9 +6767,7 @@ struct Modify {
     modify_func_t  mod_func;
     int            nrows;
 };
-}
-
-bool iqk_modify_tensor(struct ggml_tensor * tensor) {
+const Modify * get_modify_info(ggml_type type) {
     static const std::unordered_map<ggml_type, Modify> k_mod_map = {
 #ifdef __ARM_NEON
         { GGML_TYPE_Q4_0_R8, {modify_q4_0_r8, 8} },
@@ -6779,10 +6778,31 @@ bool iqk_modify_tensor(struct ggml_tensor * tensor) {
         { GGML_TYPE_Q8_KV_R8, {modify_q8_KV_r8, 8} },
 #endif
     };
-    auto it = k_mod_map.find(tensor->type);
-    if (it == k_mod_map.end()) return false;
+    auto it = k_mod_map.find(type);
+    return it != k_mod_map.end() ? &it->second : nullptr;
+}
+bool is_forbidden_tensor(const std::string& name) {
+    static const std::string kTokenEmbd{"token_embd.weight"};
+    if (name == kTokenEmbd) return true;
+    //if (auto pos = name.find("attn_kv_b.weight"); pos != std::string::npos) return true;
+    return false;
+}
+}
 
-    auto& m = it->second;
+bool iqk_should_modify_tensor([[maybe_unused]] const struct ggml_tensor * tensor) {
+    return false;
+    //if (is_forbidden_tensor(tensor->name)) return false;
+    //auto mptr = get_modify_info(tensor->type);
+    //return mptr ? true : false;
+}
+
+bool iqk_modify_tensor(struct ggml_tensor * tensor) {
+    return false;
+    auto mptr = get_modify_info(tensor->type);
+    if (!mptr) return false;
+    if (is_forbidden_tensor(std::string{tensor->name})) return false;
+
+    auto& m = *mptr;
     int nrows = ggml_nrows(tensor);
     int nchunks = nrows/m.nrows;
     int max_thread = std::max(1, int(std::thread::hardware_concurrency()/2));
@@ -6805,12 +6825,8 @@ bool iqk_modify_tensor(struct ggml_tensor * tensor) {
     return true;
 }
 
-void iqk_repack_tensor(struct ggml_tensor * tensor) {
-    constexpr int kChunk = 8;
-    if (!tensor) return;
-    if (!ggml_is_contiguous(tensor)) return;
-    if (strncmp(tensor->name, "token_embd.weight", GGML_MAX_NAME) == 0) return;
-    if (tensor->ne[1] % 4) return;
+namespace {
+const Repack * get_repack_info(ggml_type type) {
     static const std::unordered_map<ggml_type, Repack> k_map = {
         { GGML_TYPE_IQ2_K,  { GGML_TYPE_IQ2_K_R4,  4,  (Repack::repack_func)repack_iq2_k}   },
         { GGML_TYPE_IQ3_K,  { GGML_TYPE_IQ3_K_R4,  4,  (Repack::repack_func)repack_iq3_k}   },
@@ -6841,12 +6857,30 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
         { GGML_TYPE_F16,    { GGML_TYPE_BF16_R16, 16,  (Repack::repack_func)repack_bf16<ggml_half>}  },
 #endif
     };
+    auto it = k_map.find(type);
+    return it != k_map.end() ? &it->second : nullptr;
+}
+}
 
-    auto it = k_map.find(tensor->type);
-    if (it == k_map.end()) return;
-    if (tensor->ne[1] % it->second.num_rows) return;
+int iqk_repacked_type(const struct ggml_tensor * tensor) {
+    if (!ggml_is_contiguous(tensor)) return (int)tensor->type;
+    if (is_forbidden_tensor(tensor->name)) return (int)tensor->type;
+    auto rptr = get_repack_info(tensor->type);
+    return rptr && tensor->ne[1] % rptr->num_rows == 0 ? (int)rptr->new_type : (int)tensor->type;
+}
 
-    auto& r = it->second;
+void iqk_repack_tensor(struct ggml_tensor * tensor) {
+    constexpr int kChunk = 8;
+    if (!tensor) return;
+    if (!ggml_is_contiguous(tensor)) return;
+    if (is_forbidden_tensor(tensor->name)) return;
+    if (tensor->ne[1] % 4) return;
+
+    auto rptr = get_repack_info(tensor->type);
+    if (!rptr) return;
+    if (tensor->ne[1] % rptr->num_rows) return;
+
+    auto& r = *rptr;
 
     auto nrows = ggml_nrows(tensor);
 
@@ -6871,7 +6905,8 @@ void iqk_repack_tensor(struct ggml_tensor * tensor) {
             int last_row = std::min(first_row + chunkSize*r.num_rows, nrows);
             for (int row = first_row; row < last_row; row += r.num_rows) {
                 std::memcpy(qtmp.data(), data + row*row_size, r.num_rows*row_size);
-                r.repack(r.num_rows, n_per_row, qtmp.data(), data + row*row_size, true);
+                //r.repack(r.num_rows, n_per_row, qtmp.data(), data + row*row_size, true);
+                r.repack(r.num_rows, n_per_row, qtmp.data(), data + row*row_size, false);
             }
         }
     };
