@@ -420,6 +420,7 @@ extern "C" {
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
         void * custom_quants;                // pointer to vector containing custom quantization rules
+        void * repack_pattern;               // pointer to a vector containing regexes to be used for matching tensor names. Can be null
     } llama_model_quantize_params;
 
     // grammar types
