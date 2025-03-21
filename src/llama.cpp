@@ -17348,19 +17348,38 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     bool is_repacked = ml.ftype >= LLAMA_FTYPE_MOSTLY_Q4_0_R8 && ml.ftype <= LLAMA_FTYPE_MOSTLY_Q8_K_R8;
     int n_to_repack = 0, n_to_modify = 0;
+    const std::vector<std::string> * repack_pattern = nullptr;
+    if (params->repack_pattern) repack_pattern = (const std::vector<std::string> *)params->repack_pattern;
+
     for (int i = 0; i < ml.n_tensors; ++i) {
         const struct ggml_tensor * meta = ml.get_tensor_meta(i);
 
+        const std::string name = ggml_get_name(meta);
+
         if (params->only_repack) {
             auto repacked_type = (ggml_type)iqk_repacked_type(meta);
+            bool repack = false, modify = false;
             if (repacked_type != meta->type) {
-                ++n_to_repack;
+                repack = true;
             } else if (!is_repacked) {
-                if (iqk_should_modify_tensor(meta)) ++n_to_modify;
+                if (iqk_should_modify_tensor(meta)) {
+                    modify = true;
+                }
             }
+            if ((repack || modify) && repack_pattern) {
+                bool found = false;
+                for (auto& r : *repack_pattern) {
+                    std::regex pattern(r);
+                    if (std::regex_search(name, pattern)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) repack = modify = false;
+            }
+            if (repack) ++n_to_repack;
+            else if (modify) ++n_to_modify;
         }
-
-        const std::string name = ggml_get_name(meta);
 
         // TODO: avoid hardcoded tensor names - use the TN_* constants
         if (name.find("attn_v.weight")   != std::string::npos ||
@@ -17526,6 +17545,19 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         if (params->only_repack) {
             ggml_type repacked_type = (ggml_type)iqk_repacked_type(tensor);
             bool modify = !is_repacked && iqk_should_modify_tensor(tensor);
+            if ((modify || repacked_type != tensor->type) && repack_pattern) {
+                bool found = false;
+                for (auto& r : *repack_pattern) {
+                    std::regex pattern(r);
+                    if (std::regex_search(tensor->name, pattern)) {
+                        found = true; break;
+                    }
+                }
+                if (!found) {
+                    modify = false;
+                    repacked_type = tensor->type;
+                }
+            }
             if (modify || repacked_type != tensor->type) {
                 new_type = repacked_type;
                 new_size = ggml_nbytes(tensor);
@@ -18153,6 +18185,7 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.custom_quants               =*/ nullptr,
+        /*.repack_pattern              =*/ nullptr,
     };
 
     return result;
