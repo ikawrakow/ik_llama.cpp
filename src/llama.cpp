@@ -12750,120 +12750,104 @@ struct llm_build_context {
     struct ggml_cgraph * build_gemma3() {
         struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model), false);
 
-        const int64_t n_embd_head = hparams.n_embd_head_k;
+        const int64_t n_embd_head_k = hparams.n_embd_head_k;
 
-        ggml_tensor * cur;
-        ggml_tensor * inpL;
+        struct ggml_tensor * cur;
+        struct ggml_tensor * inpL;
 
         inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
 
         // important: do not normalize weights for raw embeddings input (i.e. encoded image emdeddings)
-        // no vision yet, so we need to scale
-        //if (ubatch.token) {
+        if (batch.token) {
             inpL = ggml_scale(ctx0, inpL, sqrtf(n_embd));
             cb(inpL, "inp_scaled", -1);
-        //}
+        }
 
         // inp_pos - contains the positions
-        ggml_tensor * inp_pos = build_inp_pos();
-
-        //// TODO: is causal == true correct? might need some changes
-        //auto * inp_attn = build_attn_inp_kv_unified();
+        struct ggml_tensor * inp_pos = build_inp_pos();
 
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
-        // gemma 2 requires different mask for layers using sliding window (SWA)
+        // gemma3 requires different mask for layers using sliding window (SWA)
         struct ggml_tensor * KQ_mask     = build_inp_KQ_mask(true);
         struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa(true);
 
+        // "5-to-1 interleaved attention"
+        // 5 layers of local attention followed by 1 layer of global attention
+        static const int sliding_window_pattern = 6;
+
         for (int il = 0; il < n_layer; ++il) {
-            const bool is_swa = hparams.n_swa > 0 && hparams.n_swa_pattern > 0 && il % hparams.n_swa_pattern < (hparams.n_swa_pattern - 1);
-            auto KQ_mask_l = is_swa ? KQ_mask_swa : KQ_mask;
+            const bool is_sliding          = (il + 1) % sliding_window_pattern;
+            const float freq_base_l        = is_sliding ? 10000.0f    : freq_base;
+            const float freq_scale_l       = is_sliding ? 1.0f        : freq_scale;
+            struct ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
 
-            const float freq_base_l  = is_swa ? hparams.rope_freq_base_train_swa  : cparams.rope_freq_base;
-            const float freq_scale_l = is_swa ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
-
+            // norm
             cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
 
             // self-attention
             {
                 // compute Q and K and RoPE them
-                ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+                struct ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
                 cb(Qcur, "Qcur", il);
 
-                ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
+                struct ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
                 cb(Kcur, "Kcur", il);
 
-                ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
+                struct ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
                 cb(Vcur, "Vcur", il);
 
-                //Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                //Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                //Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head,    n_tokens);
                 Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
                 cb(Qcur, "Qcur_normed", il);
 
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                         ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(Qcur, "Qcur", il);
 
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv, n_tokens);
                 Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
                 cb(Kcur, "Kcur_normed", il);
 
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                         ext_factor, attn_factor, beta_fast, beta_slow);
-
-                cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
-                cb(Vcur, "Vcur", il);
 
-
-                cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                        model.layers[il].wo, NULL,
+                cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, NULL,
                         Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, hparams.f_attention_scale, cb, il);
-                //cur = build_attn(inp_attn, gf,
-                //        model.layers[il].wo, NULL,
-                //        Qcur, Kcur, Vcur, nullptr, hparams.f_attention_scale, il);
             }
+
             cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_post_norm", il);
 
             if (il == n_layer - 1) {
                 // skip computing output for unused tokens
-                ggml_tensor * inp_out_ids = build_inp_out_ids();
+                struct ggml_tensor * inp_out_ids = build_inp_out_ids();
                 cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
                 inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
             }
 
-            ggml_tensor * sa_out = ggml_add(ctx0, cur, inpL);
+            struct ggml_tensor * sa_out = ggml_add(ctx0, cur, inpL);
             cb(sa_out, "sa_out", il);
 
             cur = llm_build_norm(ctx0, sa_out, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             // feed-forward network
-            {
-                cur = llm_build_ffn(ctx0, lctx, cur,
-                        model.layers[il].ffn_up,   NULL, NULL,
-                        model.layers[il].ffn_gate, NULL, NULL,
-                        model.layers[il].ffn_down, NULL, NULL,
-                        NULL,
-                        LLM_FFN_GELU, LLM_FFN_PAR, cb, il);
-                cb(cur, "ffn_out", il);
-            }
+            cur = llm_build_ffn(ctx0, lctx, cur,
+                    model.layers[il].ffn_up,   NULL, NULL,
+                    model.layers[il].ffn_gate, NULL, NULL,
+                    model.layers[il].ffn_down, NULL, NULL,
+                    NULL,
+                    LLM_FFN_GELU, LLM_FFN_PAR, cb, il);
+            cb(cur, "ffn_out", il);
 
             cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, cb, -1);
             cb(cur, "ffn_post_norm", -1);
 
             cur = ggml_add(ctx0, cur, sa_out);
-
-            // cvec?
-            //cur = build_cvec(cur, il);
-            //cb(cur, "l_out", il);
+            cur = lctx.cvec.apply_to(ctx0, cur, il);
+            cb(cur, "l_out", il);
 
             // input for next layer
             inpL = cur;
