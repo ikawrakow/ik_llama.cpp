@@ -297,10 +297,12 @@ if (GGML_CUDA)
             # 60 == FP16 CUDA intrinsics
             # 61 == integer CUDA intrinsics
             # 70 == compute capability at which unrolling a loop in mul_mat_q kernels is faster
-            if (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-                set(CMAKE_CUDA_ARCHITECTURES "60;61;70;75")
+            if (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+                set(CMAKE_CUDA_ARCHITECTURES "native")
+            elseif (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
+                set(CMAKE_CUDA_ARCHITECTURES "60;61;70;75;80")
             else()
-                set(CMAKE_CUDA_ARCHITECTURES "52;61;70;75")
+                set(CMAKE_CUDA_ARCHITECTURES "50;61;70;75;80")
                 #set(CMAKE_CUDA_ARCHITECTURES "OFF") # use this to compile much faster, but only F16 models work
             endif()
         endif()
