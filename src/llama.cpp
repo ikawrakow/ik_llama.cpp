@@ -1836,7 +1836,7 @@ struct llama_mmap {
     // list of mapped fragments (first_offset, last_offset)
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
 
-    llama_mmap(struct llama_file * file, size_t prefetch = (size_t) -1 /* -1 = max value */, bool numa = false) {
+    llama_mmap(struct llama_file * file, size_t prefetch = (size_t) -1 /* -1 = max value */, bool numa = false, [[maybe_unused]] bool use_thp = false) {
         size = file->size;
         int fd = fileno(file->fp);
         int flags = MAP_SHARED;
@@ -1849,6 +1849,28 @@ struct llama_mmap {
                     strerror(errno));
         }
         if (prefetch) { flags |= MAP_POPULATE; }
+        if (use_thp) {
+            size_t huge = get_default_huge_page_size();
+            auto size = huge*((file->size + huge - 1)/huge);
+            addr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+            if (addr != MAP_FAILED) {
+                printf("%s: using THP with page size %zu MiB ", __func__, huge/(1024*1024));
+                fflush(stdout);
+                size_t tot = 0;
+                while (tot < file->size) {
+                    auto n_read = pread(fd, static_cast<char*>(addr) + tot, file->size - tot, tot);
+                    if (n_read < 0) throw std::runtime_error(format("Reading into mapped huge pages failed at %zu (%s)", tot, strerror(errno)));
+                    printf(".");  fflush(stdout);
+                    tot += n_read;
+                }
+                printf("\n");
+                mapped_fragments.emplace_back(0, file->size);
+                return;
+            }
+            else {
+                fprintf(stderr, "%s: mmap with huge page size %zu MiB failed (%s)\n", __func__, huge/(1024*1024), strerror(errno));
+            }
+        }
 #endif
         addr = mmap(NULL, file->size, PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) { // NOLINT
@@ -1935,6 +1957,28 @@ struct llama_mmap {
         mapped_fragments = std::move(new_mapped_fragments);
     }
 
+#ifdef __linux__
+    static int get_default_huge_page_size() {
+        int pg_size = 2048;
+        std::ifstream in("/proc/meminfo");
+        if (in) {
+            std::string line;
+            while (true) {
+                std::getline(in, line);
+                if (in.fail()) break;
+                if (auto pos = line.find("Hugepagesize:"); pos != std::string::npos) {
+                    std::istringstream str(line.data() + pos + 13);
+                    int aux;
+                    str >> aux;
+                    if (!str.fail()) pg_size = aux;
+                    break;
+                }
+            }
+        }
+        return pg_size * 1024;
+    }
+#endif
+
     ~llama_mmap() {
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
@@ -1945,7 +1989,7 @@ struct llama_mmap {
 #elif defined(_WIN32)
     static constexpr bool SUPPORTED = true;
 
-    llama_mmap(struct llama_file * file, size_t prefetch = (size_t) -1, bool numa = false) {
+    llama_mmap(struct llama_file * file, size_t prefetch = (size_t) -1, bool numa = false, [[maybe_unused]] bool use_thp = false) {
         GGML_UNUSED(numa);
 
         size = file->size;
@@ -2007,10 +2051,11 @@ struct llama_mmap {
 #else
     static constexpr bool SUPPORTED = false;
 
-    llama_mmap(struct llama_file * file, size_t prefetch = -1, bool numa = false) {
+    llama_mmap(struct llama_file * file, size_t prefetch = -1, bool numa = false, bool use_thp = false) {
         GGML_UNUSED(file);
         GGML_UNUSED(prefetch);
         GGML_UNUSED(numa);
+        GGML_UNUSED(use_thp);
 
         throw std::runtime_error("mmap not supported");
     }
@@ -3842,6 +3887,7 @@ struct llama_model_loader {
     bool use_mmap = false;
     bool check_tensors;
     bool repack_tensors = false;
+    bool use_thp = false;
 
     llama_files files;
     llama_ftype ftype;
@@ -3876,7 +3922,7 @@ struct llama_model_loader {
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
 
-    llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, bool repack_tensors,
+    llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
             const llama_model_kv_override * param_overrides_p,
             const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
         int trace = 0;
@@ -4140,6 +4186,7 @@ struct llama_model_loader {
         this->use_mmap = use_mmap;
         this->check_tensors = check_tensors;
         this->repack_tensors = repack_tensors;
+        this->use_thp = use_thp;
     }
 
     ~llama_model_loader() {
@@ -4453,12 +4500,12 @@ struct llama_model_loader {
         }
     }
 
-    void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr) {
+    void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr, bool use_thp = false) {
         if (use_mmap) {
             mappings.reserve(files.size());
             mmaps_used.reserve(files.size());
             for (const auto & file : files) {
-                std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), prefetch ? -1 : 0, ggml_is_numa()));
+                std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), prefetch ? -1 : 0, ggml_is_numa(), use_thp));
                 mmaps_used.emplace_back(mapping->size, 0);
                 if (mlock_mmaps) {
                     std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
@@ -8077,7 +8124,7 @@ static bool llm_load_tensors(
 
     ml.done_getting_tensors();
 
-    ml.init_mappings(true, use_mlock ? &model.mlock_mmaps : nullptr);
+    ml.init_mappings(true, use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
     model.mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -8410,7 +8457,7 @@ static bool llm_load_tensors(
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
         llama_model_loader ml(fname, params.use_mmap, params.check_tensors,
-                params.repack_tensors, params.kv_overrides, params.tensor_buft_overrides);
+                params.repack_tensors, params.use_thp, params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
 
@@ -17494,7 +17541,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         auto v = (std::vector<llama_model_kv_override>*)params->kv_overrides;
         kv_overrides = v->data();
     }
-    llama_model_loader ml(fname_inp, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false, kv_overrides, nullptr);
+    llama_model_loader ml(fname_inp, use_mmap, /*check_tensors*/ true, /* repack_tensors */ false, /* use_thp */ false, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
     llama_model model;
@@ -18318,6 +18365,7 @@ struct llama_model_params llama_model_default_params() {
         /*.use_mlock                   =*/ false,
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
+        /*.use_thp                     =*/ false,
     };
 
 #ifdef GGML_USE_METAL
