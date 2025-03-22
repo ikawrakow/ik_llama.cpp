@@ -1827,6 +1827,7 @@ using llama_files = std::vector<std::unique_ptr<llama_file>>;
 struct llama_mmap {
     void * addr;
     size_t size;
+    size_t mapped_page_size = 0;
 
     llama_mmap(const llama_mmap &) = delete;
 
@@ -1863,8 +1864,9 @@ struct llama_mmap {
                     printf(".");  fflush(stdout);
                     tot += n_read;
                 }
-                printf("\n");
+                printf(" done\n");
                 mapped_fragments.emplace_back(0, file->size);
+                mapped_page_size = huge;
                 return;
             }
             else {
@@ -1915,7 +1917,7 @@ struct llama_mmap {
     void unmap_fragment(size_t first, size_t last) {
         // note: this function must not be called multiple times with overlapping ranges
         // otherwise, there is a risk of invalidating addresses that have been repurposed for other mappings
-        int page_size = sysconf(_SC_PAGESIZE);
+        int page_size = mapped_page_size > 0 ? mapped_page_size : sysconf(_SC_PAGESIZE);
         align_range(&first, &last, page_size);
         size_t len = last - first;
 
