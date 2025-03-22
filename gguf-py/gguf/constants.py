@@ -207,6 +207,7 @@ class MODEL_ARCH(IntEnum):
     MINICPM      = auto()
     GEMMA        = auto()
     GEMMA2       = auto()
+    GEMMA3       = auto()
     STARCODER2   = auto()
     MAMBA        = auto()
     XVERSE       = auto()
@@ -338,6 +339,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MINICPM:        "minicpm",
     MODEL_ARCH.GEMMA:          "gemma",
     MODEL_ARCH.GEMMA2:         "gemma2",
+    MODEL_ARCH.GEMMA3:         "gemma3",
     MODEL_ARCH.STARCODER2:     "starcoder2",
     MODEL_ARCH.MAMBA:          "mamba",
     MODEL_ARCH.XVERSE:         "xverse",
