@@ -345,6 +345,7 @@ extern "C" {
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
         bool repack_tensors;// repack if available
+        bool use_thp;       // uase transparent huge pages (linux only)
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations

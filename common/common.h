@@ -194,6 +194,7 @@ struct gpt_params {
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
     bool repack_tensors    = false; // repack tensors if interleaved variant is available
+    bool use_thp           = false; // use transparent huge pages (linux only)
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
