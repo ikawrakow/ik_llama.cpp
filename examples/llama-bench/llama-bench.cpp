@@ -248,6 +248,7 @@ struct cmd_params {
     bool warmup;
     bool repack = false;
     bool fmoe = false;
+    bool use_thp = false;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -281,6 +282,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* warmup               */ true,
     /* repack               */ false,
+    /* use_thp              */ false,
     /* fmoe                 */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
@@ -320,6 +322,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                       (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
     printf("  -w, --warmup <0|1>                  (default: %s)\n", cmd_params_defaults.warmup ? "1" : "0");
     printf("  -rtr, --run-time-repack <0|1>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
+    printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
     printf("  -ot, --override-tensor pattern      (default: none)\n");
     printf("  -fmoe, --fused-moe <0|1>            (default: %s)\n", cmd_params_defaults.fmoe? "1" : "0");
     printf("\n");
@@ -691,6 +694,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.repack = std::stoi(argv[i]);
+        } else if (arg == "-thp" || arg == "--transparent-huge-pages") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.use_thp = std::stoi(argv[i]);
         } else if (arg == "-fmoe" || arg == "--fused-moe") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -781,6 +790,7 @@ struct cmd_params_instance {
     bool embeddings;
     bool repack = false;
     bool fmoe = false;
+    bool use_thp = false;
     const llama_model_tensor_buft_override* buft_overrides;
 
     llama_model_params to_llama_mparams() const {
@@ -795,6 +805,7 @@ struct cmd_params_instance {
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap = use_mmap;
         mparams.repack_tensors = repack;
+        mparams.use_thp = use_thp;
         mparams.tensor_buft_overrides = buft_overrides;
 
         return mparams;
@@ -808,6 +819,7 @@ struct cmd_params_instance {
                main_gpu == other.main_gpu &&
                use_mmap == other.use_mmap &&
                repack == other.repack &&
+               use_thp == other.use_thp &&
                tensor_split == other.tensor_split;
     }
 
@@ -882,6 +894,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .use_thp      = */ params.use_thp,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -915,6 +928,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .use_thp      = */ params.use_thp,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -948,6 +962,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .use_thp      = */ params.use_thp,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -981,6 +996,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .use_thp      = */ params.use_thp,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1025,6 +1041,7 @@ struct test {
     bool embeddings;
     bool repack = false;
     bool fmoe = false;
+    bool use_thp = false;
     int n_prompt;
     int n_gen;
     std::string test_time;
@@ -1058,6 +1075,7 @@ struct test {
         embeddings = inst.embeddings;
         repack = inst.repack;
         fmoe = inst.fmoe;
+        use_thp = inst.use_thp;
         n_prompt = inst.n_prompt;
         n_gen = inst.n_gen;
         test_kind = inst.test_kind;
@@ -1148,7 +1166,7 @@ struct test {
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser",
-            "tensor_split", "use_mmap", "embeddings", "repack", "fused_moe",
+            "tensor_split", "use_mmap", "embeddings", "repack", "fused_moe", "use_thp",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1169,7 +1187,7 @@ struct test {
         }
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" ||field == "f16_kv" || field == "no_kv_offload" ||
-            field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" ||
+            field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
             field == "fused_moe") {
             return BOOL;
         }
@@ -1211,7 +1229,8 @@ struct test {
             std::to_string(n_gpu_layers), split_mode_str(split_mode),
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser),
-            tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings), std::to_string(repack), std::to_string(fmoe),
+            tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
+            std::to_string(repack), std::to_string(fmoe), std::to_string(use_thp),
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
             std::to_string(avg_ts()), std::to_string(stdev_ts()),
@@ -1389,6 +1408,9 @@ struct markdown_printer : public printer {
         if (field == "repack") {
             return 3;
         }
+        if (field == "use_thp") {
+            return 3;
+        }
         if (field == "fused_moe") {
             return 4;
         }
@@ -1434,6 +1456,9 @@ struct markdown_printer : public printer {
         }
         if (field == "repack") {
             return "rtr";
+        }
+        if (field == "use_thp") {
+            return "thp";
         }
         if (field == "fused_moe") {
             return "fmoe";
@@ -1504,6 +1529,9 @@ struct markdown_printer : public printer {
         }
         if (params.repack != cmd_params_defaults.repack) {
             fields.emplace_back("repack");
+        }
+        if (params.use_thp != cmd_params_defaults.use_thp) {
+            fields.emplace_back("use_thp");
         }
         if (params.fmoe != cmd_params_defaults.fmoe) {
             fields.emplace_back("fused_moe");
