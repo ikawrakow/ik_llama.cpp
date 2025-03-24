@@ -2196,6 +2196,22 @@ static __global__ void k_copy_src1_to_contiguous(const char * __restrict__ src1_
     }
 }
 
+static __global__ void k_copy_src_to_contiguous(const char * __restrict__ src_original, char * __restrict__ src_contiguous,
+                                                  const mmid_row_mapping * __restrict__ row_mapping,
+                                                  int64_t ne10, int64_t ne11, size_t nb11, size_t nb12) {
+    int32_t i = blockIdx.x;
+
+    const int32_t i11 = row_mapping[i].i1 % ne11;
+    const int32_t i12 = row_mapping[i].i2;
+
+    float * src_row_contiguous = (float *)(src_contiguous + i*nb11);
+    const float * src_row_original = (const float *)(src_original + i11*nb11 + i12*nb12);
+
+    for (int j = threadIdx.x; j < ne10; j += blockDim.x) {
+        src_row_contiguous[j] = src_row_original[j];
+    }
+}
+
 static __global__ void k_copy_dst_from_contiguous(char * __restrict__ dst_original, const char * __restrict__ dst_contiguous,
                                                   const mmid_row_mapping * __restrict__ row_mapping,
                                                   int64_t ne0,
@@ -2642,41 +2658,46 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
         bool first = false; //true;
 
+        std::vector<mmid_row_mapping> rmapping(ids->ne[1]*n_ids);
+
         for (int64_t i02 = 0; i02 < n_as; i02++) {
             int64_t num_src1_rows = 0;
 
             for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
                 for (int64_t id = 0; id < n_ids; id++) {
                     const int32_t row_id_i = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
-
-                    if (row_id_i < 0 || row_id_i >= n_as) continue;
-                    //GGML_ASSERT(row_id_i >= 0 && row_id_i < n_as);
-
-                    if (row_id_i != i02) {
-                        continue;
+                    if (row_id_i == i02) {
+                        //if (id >= ne11) printf("Oops: id = %ld, ne11 = %ld\n", id, ne11);
+                        //rmapping[num_src1_rows++] = {(int)(id%ne11), (int)iid1};
+                        rmapping[num_src1_rows++] = {(int)id, (int)iid1};
                     }
-
-                    num_src1_rows++;
                 }
             }
+            //printf("i02 = %ld, num_src1_rows = %ld, rmapping.size() = %zu\n", i02, num_src1_rows, rmapping.size());
 
-            if (num_src1_rows == 0) {
-                continue;
-            }
+            if (num_src1_rows == 0) continue;
 
-            ggml_cuda_pool_alloc<int> dev_cur_src1_row(ctx.pool(), 1);
             ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), num_src1_rows);
-            CUDA_CHECK(cudaMemsetAsync(dev_cur_src1_row.get(), 0, sizeof(int), stream));
+            CUDA_CHECK(cudaMemcpyAsync(dev_row_mapping.get(), rmapping.data(), num_src1_rows*sizeof(mmid_row_mapping), cudaMemcpyHostToDevice, stream));
+            CUDA_CHECK(cudaStreamSynchronize(stream));
+
+            //ggml_cuda_pool_alloc<int> dev_cur_src1_row(ctx.pool(), 1);
+            //ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), num_src1_rows);
+            //CUDA_CHECK(cudaMemsetAsync(dev_cur_src1_row.get(), 0, sizeof(int), stream));
 
             {
                 dim3 block_dims(std::min((unsigned int)ne10, 768u));
-                dim3 grid_dims(ids->ne[1], n_ids);
-                k_copy_src1_to_contiguous<<<grid_dims, block_dims, 0, stream>>>(
-                        src1_original, src1_contiguous.get(),
-                        dev_cur_src1_row.get(), dev_row_mapping.get(),
-                        ids_dev, i02, ids->nb[1], ids->nb[0],
-                        ne11, ne10,
-                        nb11, nb12);
+                dim3 grid_dims(num_src1_rows);
+                k_copy_src_to_contiguous<<<grid_dims, block_dims, 0, stream>>>(
+                        src1_original, src1_contiguous.get(), dev_row_mapping.get(), ne10, ne11, nb11, nb12);
+                //dim3 block_dims(std::min((unsigned int)ne10, 768u));
+                //dim3 grid_dims(ids->ne[1], n_ids);
+                //k_copy_src1_to_contiguous<<<grid_dims, block_dims, 0, stream>>>(
+                //        src1_original, src1_contiguous.get(),
+                //        dev_cur_src1_row.get(), dev_row_mapping.get(),
+                //        ids_dev, i02, ids->nb[1], ids->nb[0],
+                //        ne11, ne10,
+                //        nb11, nb12);
                 CUDA_CHECK(cudaGetLastError());
             }
 
