@@ -2659,37 +2659,68 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         bool first = false; //true;
 
         std::vector<mmid_row_mapping> rmapping(ids->ne[1]*n_ids);
+        std::vector<int> moe_counts(n_as, 0), cum_moe_counts(n_as+1);
 
-        for (int64_t i02 = 0; i02 < n_as; i02++) {
-            int64_t num_src1_rows = 0;
+        for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+            for (int64_t id = 0; id < n_ids; id++) {
+                const int32_t row_id_i = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
+                if (row_id_i >= 0 && row_id_i < n_as) ++moe_counts[row_id_i];
+            }
+        }
+        cum_moe_counts[0] = 0;
+        for (int i = 0; i < (int)n_as; ++i) {
+            cum_moe_counts[i+1] = cum_moe_counts[i] + moe_counts[i];
+            //printf("moe_counts[%2d] = %d, cum = %d\n", i, moe_counts[i], cum_moe_counts[i+1]);
+        }
 
-            for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
-                for (int64_t id = 0; id < n_ids; id++) {
-                    const int32_t row_id_i = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
-                    if (row_id_i == i02) {
-                        //if (id >= ne11) printf("Oops: id = %ld, ne11 = %ld\n", id, ne11);
-                        //rmapping[num_src1_rows++] = {(int)(id%ne11), (int)iid1};
-                        rmapping[num_src1_rows++] = {(int)id, (int)iid1};
-                    }
+        ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), cum_moe_counts[n_as]);
+
+        for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+            for (int64_t id = 0; id < n_ids; id++) {
+                const int32_t row_id_i = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
+                if (row_id_i >= 0 && row_id_i < n_as) {
+                    rmapping[cum_moe_counts[row_id_i]++] = {(int)id, (int)iid1};
                 }
             }
-            //printf("i02 = %ld, num_src1_rows = %ld, rmapping.size() = %zu\n", i02, num_src1_rows, rmapping.size());
+        }
+
+        for (int i = 0; i < (int)n_as; ++i) cum_moe_counts[i] -= moe_counts[i];
+
+        CUDA_CHECK(cudaMemcpyAsync(dev_row_mapping.get(), rmapping.data(), cum_moe_counts[n_as]*sizeof(mmid_row_mapping), cudaMemcpyHostToDevice, stream));
+
+        for (int64_t i02 = 0; i02 < n_as; i02++) {
+            int64_t num_src1_rows = moe_counts[i02];
+            //printf("Processing i02 = %d with %d counts\n", (int)i02, (int)num_src1_rows);
+            //int64_t num_src1_rows = 0;
+
+            //for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+            //    for (int64_t id = 0; id < n_ids; id++) {
+            //        const int32_t row_id_i = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
+            //        if (row_id_i == i02) {
+            //            //if (id >= ne11) printf("Oops: id = %ld, ne11 = %ld\n", id, ne11);
+            //            //rmapping[num_src1_rows++] = {(int)(id%ne11), (int)iid1};
+            //            rmapping[num_src1_rows++] = {(int)id, (int)iid1};
+            //        }
+            //    }
+            //}
 
             if (num_src1_rows == 0) continue;
+            size_t mapping_offset = cum_moe_counts[i02];
 
-            ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), num_src1_rows);
-            CUDA_CHECK(cudaMemcpyAsync(dev_row_mapping.get(), rmapping.data(), num_src1_rows*sizeof(mmid_row_mapping), cudaMemcpyHostToDevice, stream));
-            CUDA_CHECK(cudaStreamSynchronize(stream));
+            //ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), num_src1_rows);
+            //CUDA_CHECK(cudaMemcpyAsync(dev_row_mapping.get(), rmapping.data(), num_src1_rows*sizeof(mmid_row_mapping), cudaMemcpyHostToDevice, stream));
+            //CUDA_CHECK(cudaStreamSynchronize(stream));
 
             //ggml_cuda_pool_alloc<int> dev_cur_src1_row(ctx.pool(), 1);
             //ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), num_src1_rows);
             //CUDA_CHECK(cudaMemsetAsync(dev_cur_src1_row.get(), 0, sizeof(int), stream));
 
             {
+                //printf("Invoking k_copy_src_to_contiguous kernel using offset %zu\n", offset);
                 dim3 block_dims(std::min((unsigned int)ne10, 768u));
                 dim3 grid_dims(num_src1_rows);
                 k_copy_src_to_contiguous<<<grid_dims, block_dims, 0, stream>>>(
-                        src1_original, src1_contiguous.get(), dev_row_mapping.get(), ne10, ne11, nb11, nb12);
+                        src1_original, src1_contiguous.get(), dev_row_mapping.get() + mapping_offset, ne10, ne11, nb11, nb12);
                 //dim3 block_dims(std::min((unsigned int)ne10, 768u));
                 //dim3 grid_dims(ids->ne[1], n_ids);
                 //k_copy_src1_to_contiguous<<<grid_dims, block_dims, 0, stream>>>(
@@ -2754,7 +2785,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 dim3 grid_dims(num_src1_rows);
                 k_copy_dst_from_contiguous<<<grid_dims, block_dims, 0, stream>>>(
                         (char *)next->data, final_dst_contiguous.get(),
-                        dev_row_mapping.get(),
+                        dev_row_mapping.get() + mapping_offset,
                         next->ne[0],
                         next->nb[1], next->nb[2]);
                 CUDA_CHECK(cudaGetLastError());
@@ -2766,7 +2797,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 dim3 grid_dims(num_src1_rows);
                 k_copy_dst_from_contiguous<<<grid_dims, block_dims, 0, stream>>>(
                         dst_original, dst_gate_contiguous.get(),
-                        dev_row_mapping.get(),
+                        dev_row_mapping.get() + mapping_offset,
                         ne0,
                         nb1, nb2);
                 CUDA_CHECK(cudaGetLastError());
