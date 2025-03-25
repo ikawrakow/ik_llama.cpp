@@ -15021,7 +15021,10 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     if (ids->ne[1] == 1 && dst->type == GGML_TYPE_F32) {
         int gcd = simple_gcd(n_ids, nth);
         if (gcd > 1) {
-            ggml_barrier(params->shared);
+            if (src1->type != vec_dot_type) {
+                // make sure quantization has finished
+                ggml_barrier(params->shared);
+            }
             const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
             const size_t row_size = ggml_row_size(vec_dot_type, ne10);
             int counter = 0;

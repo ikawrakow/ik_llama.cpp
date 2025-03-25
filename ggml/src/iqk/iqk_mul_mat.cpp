@@ -532,7 +532,9 @@ bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int unary_op,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth) {
 
     const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
-    assert(row_mapping != nullptr);
+    // Removing this assert to accomodate usage without row id mapping (e.g., for Ny = 1,
+    // or if B has been prepared to be contiguous.
+    //assert(row_mapping != nullptr);
 
     MulMat mm;
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
