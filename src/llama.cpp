@@ -3298,7 +3298,7 @@ static bool llama_kv_cache_init(
             ggml_format_name(v, "cache_v_l%d", i);
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
-	}
+        }
     }
     if (cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
