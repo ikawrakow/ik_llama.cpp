@@ -3298,6 +3298,7 @@ static bool llama_kv_cache_init(
             ggml_format_name(v, "cache_v_l%d", i);
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
+	}
 	//Commented out old method
         //struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
 
