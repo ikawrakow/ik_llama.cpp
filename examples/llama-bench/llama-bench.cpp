@@ -41,6 +41,12 @@ static uint64_t get_time_ns() {
     return std::chrono::nanoseconds(clock::now().time_since_epoch()).count();
 }
 
+template <typename T1, typename T2>
+std::ostream& operator<<(std::ostream& str, const std::pair<T1, T2>& item) {
+    str << '{' << item.first << ", " << item.second << '}';
+    return str;
+}
+
 template<class T>
 static std::string join(const std::vector<T> & values, const std::string & delim) {
     std::ostringstream str;
@@ -228,7 +234,7 @@ struct cmd_params {
     std::vector<int> n_ubatch;
     std::vector<ggml_type> type_k;
     std::vector<ggml_type> type_v;
-    std::vector<int> n_threads;
+    std::vector<std::pair<int,int>> n_threads;
     std::vector<int> n_gpu_layers;
     std::vector<std::string> rpc_servers;
     std::vector<llama_split_mode> split_mode;
@@ -263,7 +269,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_ubatch             */ {512},
     /* type_k               */ {GGML_TYPE_F16},
     /* type_v               */ {GGML_TYPE_F16},
-    /* n_threads            */ {cpu_get_num_math()},
+    /* n_threads            */ {{cpu_get_num_math(), cpu_get_num_math()}},
     /* n_gpu_layers         */ {99},
     /* rpc_servers          */ {""},
     /* split_mode           */ {LLAMA_SPLIT_MODE_LAYER},
@@ -303,6 +309,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ctk, --cache-type-k <t>            (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
     printf("  -ctv, --cache-type-v <t>            (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
     printf("  -t, --threads <n>                   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
+    printf("  -tgb, --threads-gen-batch <n1,n2>   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
     printf("  -sm, --split-mode <none|layer|row>  (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
@@ -538,7 +545,23 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             auto p = string_split<int>(argv[i], split_delim);
-            params.n_threads.insert(params.n_threads.end(), p.begin(), p.end());
+            params.n_threads.reserve(params.n_threads.size() + p.size());
+            for (auto t : p) params.n_threads.push_back({t, t});
+            //params.n_threads.insert(params.n_threads.end(), p.begin(), p.end());
+        } else if (arg == "-tgb" || arg == "--threads-gen-batch") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto ps = string_split<std::string>(argv[i], ';');
+            for (auto& s : ps) {
+                auto p = string_split<int>(s.c_str(), ',');
+                if (p.size() != 2) {
+                    invalid_param = true;
+                    break;
+                }
+                params.n_threads.push_back({p[0], p[1]});
+            }
         } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -775,7 +798,7 @@ struct cmd_params_instance {
     int n_ubatch;
     ggml_type type_k;
     ggml_type type_v;
-    int n_threads;
+    std::pair<int,int> n_threads;
     int n_gpu_layers;
     std::string rpc_servers;
     llama_split_mode split_mode;
@@ -1024,7 +1047,7 @@ struct test {
     uint64_t model_n_params;
     int n_batch;
     int n_ubatch;
-    int n_threads;
+    std::pair<int,int> n_threads;
     bool has_rpc;
     ggml_type type_k;
     ggml_type type_v;
@@ -1218,6 +1241,7 @@ struct test {
             str << ser.first << ',' << ser.second;
             return str.str();
         };
+        bool is_gen = n_gen > 0;
         std::vector<std::string> values = {
             build_commit, std::to_string(build_number),
             std::to_string(cuda), std::to_string(vulkan), std::to_string(vulkan),
@@ -1225,7 +1249,7 @@ struct test {
             cpu_info, gpu_info,
             model_filename, model_type, std::to_string(model_size), std::to_string(model_n_params),
             std::to_string(n_batch), std::to_string(n_ubatch),
-            std::to_string(n_threads), ggml_type_name(type_k), ggml_type_name(type_v),
+            std::to_string(is_gen ? n_threads.first : n_threads.second), ggml_type_name(type_k), ggml_type_name(type_v),
             std::to_string(n_gpu_layers), split_mode_str(split_mode),
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser),
@@ -1787,10 +1811,10 @@ int main(int argc, char ** argv) {
         if (params.warmup) {
             if (t.n_prompt > 0) {
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                test_prompt(ctx, 1, 0, t.n_batch, t.n_threads);
+                test_prompt(ctx, 1, 0, t.n_batch, t.n_threads.second);
             }
             if (t.n_gen > 0) {
-                test_gen(ctx, 1, 0, t.n_threads);
+                test_gen(ctx, 1, 0, t.n_threads.first);
             }
         }
 
@@ -1800,11 +1824,11 @@ int main(int argc, char ** argv) {
             uint64_t t_start = get_time_ns();
 
             if (t.n_prompt > 0) {
-                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads.second);
             }
             if (t.test_kind == TEST_KIND_GP) t_start = get_time_ns();
             if (t.n_gen > 0) {
-                test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
+                test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads.first);
             }
 
             uint64_t t_ns = get_time_ns() - t_start;
