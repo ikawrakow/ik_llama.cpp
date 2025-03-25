@@ -3312,10 +3312,10 @@ static bool llama_kv_cache_init(
 	//    ctx = get_ctx_for_buft(buft);
         //}
 
-        if (!ctx) {
-            LLAMA_LOG_ERROR("%s: failed to create ggml context for kv cache\n", __func__);
-            return false;
-        }
+        //if (!ctx) {
+        //    LLAMA_LOG_ERROR("%s: failed to create ggml context for kv cache\n", __func__);
+        //    return false;
+        //}
     }
     if (cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
