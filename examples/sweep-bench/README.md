@@ -7,6 +7,7 @@ in each ubatch-sized window. Only a single token sequence is used.
 The benchmark steps are:
 
 for each ubatch-sized window in context:
+
     1. generate ubatch/4 tokens (not the whole window to save some time)
     2. measure generation performance
     3. remove generated tokens from KV cache
