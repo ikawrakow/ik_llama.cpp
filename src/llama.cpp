@@ -3273,7 +3273,7 @@ static bool llama_kv_cache_init(
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
-            LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
+            //LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
             if (cparams.flash_attn) {
                 ggml_tensor * kv = ggml_new_tensor_2d(ctx, cache.type_k, kv_lora_rank + n_embd_head_qk_rope, kv_size);
                 ggml_format_name(kv, "cache_kv_l%d", i);
@@ -3299,7 +3299,7 @@ static bool llama_kv_cache_init(
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
 	//Commented out old method
-        struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+        //struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
 
         //ggml_backend_buffer_type_t buft;
         //ggml_context * ctx;
