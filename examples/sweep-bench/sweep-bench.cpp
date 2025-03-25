@@ -18,9 +18,9 @@
 #include <vector>
 
 static void print_usage(int, char ** argv) {
-    LOG("\nexample usage:\n");
-    LOG("\n    %s -m model.gguf -c 8192 -b 2048 -ub 512\n", argv[0]);
-    LOG("\n");
+    LOG_TEE("\nexample usage:\n");
+    LOG_TEE("\n    %s -m model.gguf -c 8192 -b 2048 -ub 512\n", argv[0]);
+    LOG_TEE("\n");
 }
 
 int main(int argc, char ** argv) {
@@ -83,7 +83,7 @@ int main(int argc, char ** argv) {
 
             const int ret = llama_decode(ctx, batch_view);
             if (ret != 0) {
-                LOG("failed to decode the batch, n_batch = %d, ret = %d\n", n_batch, ret);
+                LOG_TEE("failed to decode the batch, n_batch = %d, ret = %d\n", n_batch, ret);
                 return false;
             }
 
@@ -97,11 +97,11 @@ int main(int argc, char ** argv) {
     const unsigned int tg = params.n_ubatch / 4;
 
     if (!params.sweep_bench_output_jsonl) {
-        LOG("\n");
-        LOG("%s: n_kv_max = %d, n_batch = %d, n_ubatch = %d, flash_attn = %d, n_gpu_layers = %d, n_threads = %u, n_threads_batch = %u\n", __func__, n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch);
-        LOG("\n");
-        LOG("|%6s | %6s | %6s | %8s | %8s | %8s | %8s |\n", "PP", "TG", "N_KV", "T_PP s", "S_PP t/s", "T_TG s", "S_TG t/s");
-        LOG("|%6s-|-%6s-|-%6s-|-%8s-|-%8s-|-%8s-|-%8s-|\n", "------", "------", "------", "--------", "--------", "--------", "--------");
+        LOG_TEE("\n");
+        LOG_TEE("%s: n_kv_max = %d, n_batch = %d, n_ubatch = %d, flash_attn = %d, n_gpu_layers = %d, n_threads = %u, n_threads_batch = %u\n", __func__, n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch);
+        LOG_TEE("\n");
+        LOG_TEE("|%6s | %6s | %6s | %8s | %8s | %8s | %8s |\n", "PP", "TG", "N_KV", "T_PP s", "S_PP t/s", "T_TG s", "S_TG t/s");
+        LOG_TEE("|%6s-|-%6s-|-%6s-|-%8s-|-%8s-|-%8s-|-%8s-|\n", "------", "------", "------", "--------", "--------", "--------", "--------");
     }
 
     llama_batch batch = llama_batch_init(n_kv_max, 0, 1);
@@ -111,7 +111,7 @@ int main(int argc, char ** argv) {
         llama_batch_add(batch, bos, 0, { 0 }, false);
 
         if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
-            LOG("%s: llama_decode() failed\n", __func__);
+            LOG_TEE("%s: llama_decode() failed\n", __func__);
             return 1;
         }
     }
@@ -131,7 +131,7 @@ int main(int argc, char ** argv) {
             llama_batch_add(batch, std::rand() % n_vocab, n_kv + i, { 0 }, true);
 
             if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
-                LOG("%s: llama_decode() failed\n", __func__);
+                LOG_TEE("%s: llama_decode() failed\n", __func__);
                 return 1;
             }
         }
@@ -153,7 +153,7 @@ int main(int argc, char ** argv) {
         const auto t_pp_start = ggml_time_us();
 
         if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
-            LOG("%s: llama_decode() failed\n", __func__);
+            LOG_TEE("%s: llama_decode() failed\n", __func__);
             return 1;
         }
 
@@ -167,14 +167,14 @@ int main(int argc, char ** argv) {
         const float speed_tg = tg / t_tg;
 
         if(params.sweep_bench_output_jsonl) {
-            LOG(
+            LOG_TEE(
                 "{\"n_kv_max\": %d, \"n_batch\": %d, \"n_ubatch\": %d, \"flash_attn\": %d, \"n_gpu_layers\": %d, \"n_threads\": %u, \"n_threads_batch\": %u, "
                 "\"pp\": %d, \"tg\": %d, \"n_kv\": %d, \"t_pp\": %f, \"speed_pp\": %f, \"t_tg\": %f, \"speed_tg\": %f }\n",
                 n_kv_max, params.n_batch, params.n_ubatch, params.flash_attn, params.n_gpu_layers, ctx_params.n_threads, ctx_params.n_threads_batch,
                 pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg
             );
         } else {
-            LOG("|%6d | %6d | %6d | %8.3f | %8.2f | %8.3f | %8.2f |\n", pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg);
+            LOG_TEE("|%6d | %6d | %6d | %8.3f | %8.2f | %8.3f | %8.2f |\n", pp, tg, n_kv, t_pp, speed_pp, t_tg, speed_tg);
         }
     }
 
