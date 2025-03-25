@@ -3299,23 +3299,6 @@ static bool llama_kv_cache_init(
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
 	}
-	//Commented out old method
-        //struct ggml_context * ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-
-        //ggml_backend_buffer_type_t buft;
-        //ggml_context * ctx;
-
-        //if (offload) {
-        //    ctx = ctx_map.at(model.buft_layer[i].buft);
-        //} else {
-        //    buft = ggml_backend_numa_buffer_type();
-	//    ctx = get_ctx_for_buft(buft);
-        //}
-
-        //if (!ctx) {
-        //    LLAMA_LOG_ERROR("%s: failed to create ggml context for kv cache\n", __func__);
-        //    return false;
-        //}
     }
     if (cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
