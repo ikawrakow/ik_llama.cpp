@@ -4069,9 +4069,9 @@ static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
 #endif
 
 template <int nrc_y>
-static void mul_mat_q5_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_q5_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%4 == 0);
-    Q8<nrc_y, block_q8_1_x4> q8(info);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
     auto m4 = _mm256_set1_epi8(0xf);
     auto m5 = _mm256_set1_epi8(0x10);
 #ifndef HAVE_FANCY_SIMD
@@ -4118,7 +4118,7 @@ static void mul_mat_q5_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const D
         const block_q5_0_r4 * iq5 = (const block_q5_0_r4 *)((const char *)vx + ix*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d));
+                auto scales = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16));
                 _mm256_storeu_ps(d8 + 8*iy, _mm256_mul_ps(mscale, scales));
             }
             for (int k = 0; k < 4; ++k) {
@@ -4136,9 +4136,10 @@ static void mul_mat_q5_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const D
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto qy = (const block_q8_1 *)q8.y[iy];
                 auto sumi = dot(_mm256_loadu_si256((const __m256i*)qy[ib].qs));
-                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_FP16_TO_FP32(qy[ib].d)));
+                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(d)));
                 acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
-                acc[iy] = _mm256_fmadd_ps(scales, _mm256_set1_ps(-8.f*GGML_FP16_TO_FP32(qy[ib].s)), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(scales, _mm256_set1_ps(-8.f*GGML_BF16_TO_FP32(s)), acc[iy]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
@@ -4151,12 +4152,12 @@ static void mul_mat_q5_0_r4_q8_1_avx2(int n, const void * vx, size_t bx, const D
 
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
-static void mul_mat_q5_0_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_q5_0_r4_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     if constexpr (nrc_y == 1) {
-        mul_mat_q5_0_r4_q8_1_avx2<1>(n, vx, bx, info, nrc_x);
+        mul_mat_q5_0_r4_q8_2_avx2<1>(n, vx, bx, info, nrc_x);
     } else {
     GGML_ASSERT(nrc_x%8 == 0);
-    Q8<nrc_y, block_q8_1_x4> q8(info);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
     auto m4 = _mm512_set1_epi8(0xf);
     auto m5 = _mm512_set1_epi8(0x10);
     int nb = n / QK5_0;
@@ -4198,7 +4199,7 @@ static void mul_mat_q5_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
         const block_q5_0_r4 * iq5h = (const block_q5_0_r4 *)((const char *)vx + (ix+4)*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                _mm256_storeu_ps(d8+8*iy, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)));
+                _mm256_storeu_ps(d8+8*iy, _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16)));
             }
             for (int k = 0; k < 4; ++k) {
                 auto scales = prepare(iq5l[4*ib4+k], iq5h[4*ib4+k]);
@@ -4215,9 +4216,10 @@ static void mul_mat_q5_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto qy = (const block_q8_1 *)q8.y[iy];
                 auto sumi = dot(_mm256_loadu_si256((const __m256i*)qy[ib].qs));
-                auto dy = _mm512_set1_ps(GGML_FP16_TO_FP32(qy[ib].d));
+                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
+                auto dy = _mm512_set1_ps(GGML_BF16_TO_FP32(d));
                 acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(GGML_FP16_TO_FP32(qy[ib].s)), acc[2*iy+1]);
+                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(GGML_BF16_TO_FP32(s)), acc[2*iy+1]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
@@ -4233,8 +4235,8 @@ static void mul_mat_q5_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
 }
 #else
 template <int nrc_y>
-static void mul_mat_q5_0_r4_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    mul_mat_q5_0_r4_q8_1_avx2<nrc_y>(n, vx, bx, info, nrc_x);
+static void mul_mat_q5_0_r4_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    mul_mat_q5_0_r4_q8_2_avx2<nrc_y>(n, vx, bx, info, nrc_x);
 }
 #endif
 
@@ -9710,15 +9712,15 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_Q5_0_R4:
             assert (ne00 % QK4_NL == 0);
-            mm.funcs[0] = mul_mat_q5_0_r4_q8_1<1>;
-            mm.funcs[1] = mul_mat_q5_0_r4_q8_1<2>;
-            mm.funcs[2] = mul_mat_q5_0_r4_q8_1<3>;
-            mm.funcs[3] = mul_mat_q5_0_r4_q8_1<4>;
-            mm.funcs[4] = mul_mat_q5_0_r4_q8_1<5>;
-            mm.funcs[5] = mul_mat_q5_0_r4_q8_1<6>;
-            mm.funcs[6] = mul_mat_q5_0_r4_q8_1<7>;
-            mm.funcs[7] = mul_mat_q5_0_r4_q8_1<8>;
-            expected_typeB = GGML_TYPE_Q8_1_X4;
+            mm.funcs[0] = mul_mat_q5_0_r4_q8_2<1>;
+            mm.funcs[1] = mul_mat_q5_0_r4_q8_2<2>;
+            mm.funcs[2] = mul_mat_q5_0_r4_q8_2<3>;
+            mm.funcs[3] = mul_mat_q5_0_r4_q8_2<4>;
+            mm.funcs[4] = mul_mat_q5_0_r4_q8_2<5>;
+            mm.funcs[5] = mul_mat_q5_0_r4_q8_2<6>;
+            mm.funcs[6] = mul_mat_q5_0_r4_q8_2<7>;
+            mm.funcs[7] = mul_mat_q5_0_r4_q8_2<8>;
+            expected_typeB = GGML_TYPE_Q8_2_X4;
             break;
         case GGML_TYPE_Q6_0_R4:
             assert (ne00 % QK4_NL == 0);
