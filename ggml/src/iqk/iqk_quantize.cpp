@@ -889,13 +889,25 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
         const float max_scalar = _mm_cvtss_f32( max4 );
 
         // Quantize these floats
-        const float d = max_scalar / 127.f;
-        if (i < nb4) {
-            y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
+        float d = max_scalar / 127.f;
+        if constexpr (std::is_same_v<Block, block_q8_1>) {
+            if (i < nb4) {
+                y4[i4].d[ir] = GGML_FP32_TO_FP16(d);
+            } else {
+                y[i].d = GGML_FP32_TO_FP16(d);
+            }
         } else {
-            y[i].d = GGML_FP32_TO_FP16(d);
+            if (i < nb4) {
+                auto t = GGML_FP32_TO_BF16(d);
+                y4[i4].d[ir] = t.bits;
+                d = ggml_bf16_to_fp32(t);
+            } else {
+                auto t = GGML_FP32_TO_BF16(d);
+                y[i].d = t.bits;
+                d = ggml_bf16_to_fp32(t);
+            }
         }
-        const float id = ( max_scalar != 0.0f ) ? 127.f / max_scalar : 0.0f;
+        const float id = d > 0 ? 1/d : 0.f;
         const __m256 mul = _mm256_set1_ps( id );
 
         // Apply the multiplier
@@ -926,9 +938,9 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
             }
         } else {
             if (i < nb4) {
-                y4[i4].s[ir] = isum;
+                y4[i4].d[ir+4] = GGML_FP32_TO_BF16(d * isum).bits;
             } else {
-                y[i].s = isum;
+                y[i].s = GGML_FP32_TO_BF16(d * isum).bits;
             }
         }
 

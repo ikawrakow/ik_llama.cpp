@@ -717,7 +717,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_q4_0_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -789,7 +789,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_q5_0_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -827,7 +827,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_q6_0_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -1282,7 +1282,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_iq4_nl_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -1638,7 +1638,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_iq4_nl_r4_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -1693,7 +1693,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_q8_0_r8_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
