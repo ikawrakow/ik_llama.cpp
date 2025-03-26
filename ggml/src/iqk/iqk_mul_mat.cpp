@@ -4487,9 +4487,9 @@ static void mul_mat_q8_0_q8_2(int n, const void * vx, size_t bx, const DataInfo&
         }
     } else {
         __m256  acc[nrc_y] = {};
-        __m256i qx[8];
+        __m256i qx[4];
         __m256i dot[4];
-        float d4[4];
+        ggml_half d4[4];
         for (int ix = 0; ix < nrc_x; ++ix) {
             const block_q8_0 * iq8 = (const block_q8_0 *)((const char *)vx + ix*bx);
             for (int ib4 = 0; ib4 < nb/4; ++ib4) {
