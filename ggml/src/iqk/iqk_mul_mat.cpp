@@ -3627,7 +3627,7 @@ inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
 }
 
 template <int nrc_y>
-static void mul_mat_q4_0_r8_q8_1_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_q4_0_r8_q8_2_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%8 == 0);
     Q8<nrc_y, block_q8_1_x4> q8(info);
     auto m4 = _mm256_set1_epi8(0xf);
@@ -3641,7 +3641,7 @@ static void mul_mat_q4_0_r8_q8_1_avx2(int n, const void * vx, size_t bx, const D
             auto acc1 = _mm256_setzero_ps();
             auto acc2 = _mm256_setzero_ps();
             for (int ib4 = 0; ib4 < nb/4; ++ib4) {
-                helper.vec = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[0][ib4].d));
+                helper.vec = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[0][ib4].d)), 16));
                 for (int k = 0; k < 4; ++k) {
                     auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[4*ib4+k].d));
                     prepare_q4_0_quants_avx2(iq4[4*ib4+k].qs, v, m4);
@@ -3656,9 +3656,10 @@ static void mul_mat_q4_0_r8_q8_1_avx2(int n, const void * vx, size_t bx, const D
                 auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[ib].d));
                 prepare_q4_0_quants_avx2(iq4[ib].qs, v, m4);
                 auto sumi = accum_q4_0_quants(v, qy[ib].qs);
-                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_FP16_TO_FP32(qy[ib].d)));
+                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(d)));
                 acc1 = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc1);
-                acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(GGML_FP16_TO_FP32(qy[ib].s)), acc2);
+                acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(s)), acc2);
             }
             acc1 = _mm256_fmadd_ps(acc2, _mm256_set1_ps(-8.f), acc1);
             info.store(ix, 0, acc1);
@@ -3676,7 +3677,7 @@ static void mul_mat_q4_0_r8_q8_1_avx2(int n, const void * vx, size_t bx, const D
                     d4[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[4*ib4+k].d));
                 }
                 for (int iy = 0; iy < nrc_y; ++iy) {
-                    auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d));
+                    auto scales = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16));
                     _mm256_storeu_ps(d8 + 8*iy, scales);
                     auto m4 = _mm256_extractf128_ps(scales, 1);
                     auto m8 = _mm256_set_m128(m4, m4);
@@ -3704,9 +3705,10 @@ static void mul_mat_q4_0_r8_q8_1_avx2(int n, const void * vx, size_t bx, const D
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto qy = (const block_q8_1 *)q8.y[iy];
                 auto sumi = accum_q4_0_quants(v, qy[ib].qs);
-                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_FP16_TO_FP32(qy[ib].d)));
+                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(d)));
                 acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
-                acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(GGML_FP16_TO_FP32(qy[ib].s)), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(GGML_BF16_TO_FP32(s)), acc[iy]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
@@ -3981,9 +3983,9 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
 
 #ifdef HAVE_FANCY_SIMD
 template <int nrc_y>
-static void mul_mat_q4_0_r8_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     if constexpr (nrc_y == 1) {
-        mul_mat_q4_0_r8_q8_1_avx2<1>(n, vx, bx, info, nrc_x);
+        mul_mat_q4_0_r8_q8_2_avx2<1>(n, vx, bx, info, nrc_x);
         return;
     }
     GGML_ASSERT(nrc_x%16 == 0);
@@ -4028,7 +4030,8 @@ static void mul_mat_q4_0_r8_q8_1(int n, const void * vx, size_t bx, const DataIn
         const block_iq4_nl_r8 * iq4h = (const block_iq4_nl_r8 *)((const char *)vx + (ix+8)*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                _mm256_storeu_ps(d8+8*iy, _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)));
+                auto aux = _mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16);
+                _mm256_storeu_ps(d8+8*iy, _mm256_castsi256_ps(aux));
             }
             for (int k = 0; k < 4; ++k) {
                 auto scales = prepare(iq4l[4*ib4+k], iq4h[4*ib4+k]);
@@ -4045,9 +4048,10 @@ static void mul_mat_q4_0_r8_q8_1(int n, const void * vx, size_t bx, const DataIn
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto qy = (const block_q8_1 *)q8.y[iy];
                 auto sumi = dot(qy[ib].qs);
-                auto dy = _mm512_set1_ps(GGML_FP16_TO_FP32(qy[ib].d));
+                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
+                auto dy = _mm512_set1_ps(GGML_BF16_TO_FP32(d));
                 acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(GGML_FP16_TO_FP32(qy[ib].s)), acc[2*iy+1]);
+                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(GGML_BF16_TO_FP32(s)), acc[2*iy+1]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
@@ -4059,8 +4063,8 @@ static void mul_mat_q4_0_r8_q8_1(int n, const void * vx, size_t bx, const DataIn
 }
 #else
 template <int nrc_y>
-static void mul_mat_q4_0_r8_q8_1(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    mul_mat_q4_0_r8_q8_1_avx2<nrc_y>(n, vx, bx, info, nrc_x);
+static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    mul_mat_q4_0_r8_q8_2_avx2<nrc_y>(n, vx, bx, info, nrc_x);
 }
 #endif
 
@@ -9691,18 +9695,18 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_Q4_0_R8:
             assert (ne00 % QK4_NL == 0);
-            mm.funcs[0] = mul_mat_q4_0_r8_q8_1<1>;
-            mm.funcs[1] = mul_mat_q4_0_r8_q8_1<2>;
-            mm.funcs[2] = mul_mat_q4_0_r8_q8_1<3>;
-            mm.funcs[3] = mul_mat_q4_0_r8_q8_1<4>;
-            mm.funcs[4] = mul_mat_q4_0_r8_q8_1<5>;
-            mm.funcs[5] = mul_mat_q4_0_r8_q8_1<6>;
-            mm.funcs[6] = mul_mat_q4_0_r8_q8_1<7>;
-            mm.funcs[7] = mul_mat_q4_0_r8_q8_1<8>;
+            mm.funcs[0] = mul_mat_q4_0_r8_q8_2<1>;
+            mm.funcs[1] = mul_mat_q4_0_r8_q8_2<2>;
+            mm.funcs[2] = mul_mat_q4_0_r8_q8_2<3>;
+            mm.funcs[3] = mul_mat_q4_0_r8_q8_2<4>;
+            mm.funcs[4] = mul_mat_q4_0_r8_q8_2<5>;
+            mm.funcs[5] = mul_mat_q4_0_r8_q8_2<6>;
+            mm.funcs[6] = mul_mat_q4_0_r8_q8_2<7>;
+            mm.funcs[7] = mul_mat_q4_0_r8_q8_2<8>;
 #ifdef HAVE_FANCY_SIMD
-            mm.func16 = mul_mat_q4_0_r8_q8_1<16>;
+            mm.func16 = mul_mat_q4_0_r8_q8_2<16>;
 #endif
-            expected_typeB = GGML_TYPE_Q8_1_X4;
+            expected_typeB = GGML_TYPE_Q8_2_X4;
             break;
         case GGML_TYPE_Q5_0_R4:
             assert (ne00 % QK4_NL == 0);
