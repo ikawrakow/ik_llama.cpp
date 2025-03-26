@@ -15314,8 +15314,8 @@ template <int D, int step>
 struct HelperQ80 final : public BaseHelper<step> {
     using Base = BaseHelper<step>;
 #ifdef HAVE_FANCY_SIMD
-    using block_q8 = block_q8_1;
-    constexpr static int block_size_q = QK8_1;
+    using block_q8 = block_q8_2;
+    constexpr static int block_size_q = QK8_2;
 #else
     using block_q8 = block_q8_0;
     constexpr static int block_size_q = QK8_0;
@@ -15358,6 +15358,15 @@ struct HelperQ80 final : public BaseHelper<step> {
         //GGML_ASSERT(nq <= step); Why did I have this assert?
         for (int i = 0; i < nq; ++i) {
             quantize_row_q8_1_x4(q, y, D);
+            q += stride_q;
+            y += D/QK8_1;
+        }
+    }
+
+    static inline void convert(int nq, int stride_q, const float * q, block_q8_2 * y) {
+        //GGML_ASSERT(nq <= step); Why did I have this assert?
+        for (int i = 0; i < nq; ++i) {
+            quantize_row_q8_2_x4(q, y, D);
             q += stride_q;
             y += D/QK8_1;
         }
@@ -16445,7 +16454,7 @@ struct FlashQKfp32 {
             MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ80, nq);
 #else
 #ifdef HAVE_FANCY_SIMD
-            MAKE_FUNCS(mul_mat_qX_1_q8_1_T<Q8_0_1_Unpacker, nq);
+            MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_q8_2, nq);
 #else
             MAKE_FUNCS(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, nq);
 #endif
