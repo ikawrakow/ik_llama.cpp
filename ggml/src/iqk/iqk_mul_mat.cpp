@@ -154,6 +154,7 @@ struct MulMat {
     std::array<mul_mat_t, 8> funcs = {};
     mul_mat_t func16 = nullptr;
     inline void mul_mat_NxM(int n, const void * vx, size_t bx, DataInfo& info, int nrc_x, int nrc_y) {
+        if (nrc_x <= 0) return;
 #ifdef __aarch64__
         constexpr int k_x_step = 64; //8192; // Tiling does not seem to help on my M2 Max (but difference to tiling is small)
 #else
@@ -227,6 +228,7 @@ struct MulMat {
         else GGML_ABORT("fatal error");
     }
     inline void mul_mat_up_gate_NxM(int n, const void * vx_up, const void * vx_gate, size_t bx, DataInfo& info, int nrc_x, int nrc_y, int unary_op) {
+        if (nrc_x <= 0) return;
 #ifdef __aarch64__
         constexpr int k_x_step = 64; //8192; // Tiling does not seem to help on my M2 Max (but difference to tiling is small)
 #else
@@ -4398,7 +4400,7 @@ static void mul_mat_q6_0_r4_q8_1(int n, const void * vx, size_t bx, const DataIn
 }
 #endif
 
-#ifdef HAVE_FANCY_SIMD
+#ifdef z_HAVE_FANCY_SIMD
 inline __m512i qx_r8_q8_dot_product(const __m512i * qx, const int8_t * y) {
     auto y4l = _mm_loadu_si128((const __m128i*)y+0);
     auto y4h = _mm_loadu_si128((const __m128i*)y+1);
@@ -9407,7 +9409,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_Q8_0:
             assert (ne00 % QK8_0 == 0);
-#ifdef HAVE_FANCY_SIMD
+#ifdef z_HAVE_FANCY_SIMD
             MulMat::set_functions<Q8_0_1_Unpacker>(mm);
             expected_typeB = GGML_TYPE_Q8_1_X4;
 #else
