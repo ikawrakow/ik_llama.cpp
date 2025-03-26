@@ -8603,12 +8603,12 @@ struct Q5_0_1_Unpacker final : public Q_Unpacker<block_q5_0, ScaleHelperQ_0_1<16
 };
 struct Q4_1_Unpacker final : public Q_Unpacker<block_q4_1, ScaleHelperQ_1, Q4_1_Dequantizer> {
     Q4_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
-    using Sum4T = Sum4Type1;
+    using Sum4T = Sum4TypeQ82;
     inline static int block_size() { return QK4_1; }
 };
 struct Q5_1_Unpacker final : public Q_Unpacker<block_q5_1, ScaleHelperQ_1, Q5_1_Dequantizer<block_q5_1>> {
     Q5_1_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
-    using Sum4T = Sum4Type1;
+    using Sum4T = Sum4TypeQ82;
     inline static int block_size() { return QK5_1; }
 };
 struct Q6_0_1_Unpacker final : public Q_Unpacker<block_q6_0, ScaleHelperQ_0_1<32>, Q6_0_1_Dequantizer> {
@@ -9102,14 +9102,14 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
             m.funcs[7] = mul_mat_qX_0_q8_0_T<Dequantizer, 8>;
         }
         else if constexpr (std::is_same_v<Dequantizer, Q4_1_Unpacker> || std::is_same_v<Dequantizer, Q5_1_Unpacker>) {
-            m.funcs[0] = mul_mat_qX_1_q8_1_T<Dequantizer, 1>;
-            m.funcs[1] = mul_mat_qX_1_q8_1_T<Dequantizer, 2>;
-            m.funcs[2] = mul_mat_qX_1_q8_1_T<Dequantizer, 3>;
-            m.funcs[3] = mul_mat_qX_1_q8_1_T<Dequantizer, 4>;
-            m.funcs[4] = mul_mat_qX_1_q8_1_T<Dequantizer, 5>;
-            m.funcs[5] = mul_mat_qX_1_q8_1_T<Dequantizer, 6>;
-            m.funcs[6] = mul_mat_qX_1_q8_1_T<Dequantizer, 7>;
-            m.funcs[7] = mul_mat_qX_1_q8_1_T<Dequantizer, 8>;
+            m.funcs[0] = mul_mat_qX_1_q8_2_T<Dequantizer, 1>;
+            m.funcs[1] = mul_mat_qX_1_q8_2_T<Dequantizer, 2>;
+            m.funcs[2] = mul_mat_qX_1_q8_2_T<Dequantizer, 3>;
+            m.funcs[3] = mul_mat_qX_1_q8_2_T<Dequantizer, 4>;
+            m.funcs[4] = mul_mat_qX_1_q8_2_T<Dequantizer, 5>;
+            m.funcs[5] = mul_mat_qX_1_q8_2_T<Dequantizer, 6>;
+            m.funcs[6] = mul_mat_qX_1_q8_2_T<Dequantizer, 7>;
+            m.funcs[7] = mul_mat_qX_1_q8_2_T<Dequantizer, 8>;
         }
         else if constexpr (std::is_same_v<Dequantizer, Q8_0_1_Unpacker> || std::is_same_v<Dequantizer, Q4_0_1_Unpacker> ||
                            std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, IQ4_NL_Unpacker> ||
@@ -9402,7 +9402,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q4_1:
             assert (ne00 % QK4_1 == 0);
             MulMat::set_functions<Q4_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1_X4;
+            expected_typeB = GGML_TYPE_Q8_2_X4;
             break;
         case GGML_TYPE_Q5_0:
             assert (ne00 % QK5_0 == 0);
@@ -9412,7 +9412,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q5_1:
             assert (ne00 % QK5_1 == 0);
             MulMat::set_functions<Q5_1_Unpacker>(mm);
-            expected_typeB = GGML_TYPE_Q8_1_X4;
+            expected_typeB = GGML_TYPE_Q8_2_X4;
             break;
         case GGML_TYPE_Q6_0:
             assert (ne00 % QK6_0 == 0);
@@ -16421,7 +16421,7 @@ struct FlashQKfp32 {
 #ifdef __aarch64__
             MAKE_FUNCS(mul_mat_qX_1_q8_1<DequantizerQ41, nq);
 #else
-            MAKE_FUNCS(mul_mat_qX_1_q8_1_T<Q4_1_Unpacker, nq);
+            MAKE_FUNCS(mul_mat_qX_1_q8_2_T<Q4_1_Unpacker, nq);
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperIQ4nl<D, k_step>>) {
