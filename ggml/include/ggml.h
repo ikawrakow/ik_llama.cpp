@@ -396,8 +396,9 @@ extern "C" {
         //
         GGML_TYPE_I2_S    = 36,
         //
-        GGML_TYPE_Q8_0_X4 = 98,
-        GGML_TYPE_Q8_1_X4 = 99,
+        GGML_TYPE_Q8_0_X4 = 97,
+        GGML_TYPE_Q8_1_X4 = 98,
+        GGML_TYPE_Q8_2_X4 = 99,
         GGML_TYPE_Q6_0    = 133,
         GGML_TYPE_IQ1_BN  = 134,
         GGML_TYPE_IQ2_BN  = 135,

@@ -798,13 +798,14 @@ void quantize_row_q8_0_x4(const float * x, void * vy, int64_t k) {
 #endif
 }
 
-void quantize_row_q8_1_x4(const float * x, void * vy, int64_t k) {
+namespace {
+template <typename Block, typename Block_x4>
+void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
     assert(k % QK8_1 == 0);
     const int nb = k / QK8_1;
 
     const int nb4 = 4*(nb/4);
-    block_q8_1    * y  = (block_q8_1    *)vy;
-    block_q8_1_x4 * y4 = (block_q8_1_x4 *)vy;
+    Block_x4 * y4 = (Block_x4 *)y;
 #if defined(__aarch64__)
     for (int i = 0; i < nb; i++) {
         int i4 = i/4, ir = i%4;
@@ -851,10 +852,18 @@ void quantize_row_q8_1_x4(const float * x, void * vy, int64_t k) {
             accv = vaddq_s32(accv, vi);
         }
 
-        if (i < nb4) {
-            y4[i4].d[ir+4] = GGML_FP32_TO_FP16(d * vaddvq_s32(accv));
+        if constexpr (std::is_same_v<Block, block_q8_1>) {
+            if (i < nb4) {
+                y4[i4].d[ir+4] = GGML_FP32_TO_FP16(d * vaddvq_s32(accv));
+            } else {
+                y[i].s = GGML_FP32_TO_FP16(d * vaddvq_s32(accv));
+            }
         } else {
-            y[i].s = GGML_FP32_TO_FP16(d * vaddvq_s32(accv));
+            if (i < nb4) {
+                y4[i4].s[ir] = vaddvq_s32(accv);
+            } else {
+                y[i].s = vaddvq_s32(accv);
+            }
         }
     }
 #else
@@ -908,10 +917,19 @@ void quantize_row_q8_1_x4(const float * x, void * vy, int64_t k) {
         __m256i i3 = _mm256_cvtps_epi32( v3 );
 
         // Compute the sum of the quants and set y[i].s
-        if (i < nb4) {
-            y4[i4].d[ir+4] = GGML_FP32_TO_FP16(d * hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3))));
+        int isum = hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3)));
+        if constexpr (std::is_same_v<Block, block_q8_1>) {
+            if (i < nb4) {
+                y4[i4].d[ir+4] = GGML_FP32_TO_FP16(d * isum);
+            } else {
+                y[i].s = GGML_FP32_TO_FP16(d * isum);
+            }
         } else {
-            y[i].s = GGML_FP32_TO_FP16(d * hsum_i32_8(_mm256_add_epi32(_mm256_add_epi32(i0, i1), _mm256_add_epi32(i2, i3))));
+            if (i < nb4) {
+                y4[i4].s[ir] = isum;
+            } else {
+                y[i].s = isum;
+            }
         }
 
         // Convert int32 to int16
@@ -933,6 +951,15 @@ void quantize_row_q8_1_x4(const float * x, void * vy, int64_t k) {
         }
     }
 #endif
+}
+}
+
+void quantize_row_q8_1_x4(const float * x, void * vy, int64_t k) {
+    quantize_row_q8_1_x4_T<block_q8_1, block_q8_1_x4>(x, (block_q8_1 *)vy, k);
+}
+
+void quantize_row_q8_2_x4(const float * x, void * vy, int64_t k) {
+    quantize_row_q8_1_x4_T<block_q8_2, block_q8_2_x4>(x, (block_q8_2 *)vy, k);
 }
 
 //
