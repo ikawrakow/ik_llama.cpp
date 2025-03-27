@@ -16762,6 +16762,78 @@ static void llama_tensor_dequantize_internal(
     workers.clear();
 }
 
+static ggml_type change_type_if_necessar(ggml_type new_type, int nx, int ny) {
+    bool convert_incompatible_tensor = false;
+    if (new_type == GGML_TYPE_Q2_K    || new_type == GGML_TYPE_Q3_K    || new_type == GGML_TYPE_Q4_K   ||
+        new_type == GGML_TYPE_Q5_K    || new_type == GGML_TYPE_Q6_K    || new_type == GGML_TYPE_IQ4_XS ||
+        new_type == GGML_TYPE_IQ2_XS  || new_type == GGML_TYPE_IQ2_XXS || new_type == GGML_TYPE_IQ2_S  ||
+        new_type == GGML_TYPE_IQ3_XXS || new_type == GGML_TYPE_IQ1_S   || new_type == GGML_TYPE_IQ3_S  ||
+        new_type == GGML_TYPE_IQ1_M   || new_type == GGML_TYPE_IQ4_K   || new_type == GGML_TYPE_IQ2_K  ||
+        new_type == GGML_TYPE_IQ5_K   || new_type == GGML_TYPE_IQ3_K   || new_type == GGML_TYPE_Q4_K_R4 ||
+        new_type == GGML_TYPE_IQ6_K   || new_type == GGML_TYPE_IQ4_KS  || new_type == GGML_TYPE_IQ4_XS_R8 ||
+        new_type == GGML_TYPE_IQ2_KS  || new_type == GGML_TYPE_IQ4_KSS || new_type == GGML_TYPE_Q6_K_R4 ||
+        new_type == GGML_TYPE_Q5_K_R4 || new_type == GGML_TYPE_Q3_K_R4 || new_type == GGML_TYPE_Q2_K_R4 ||
+        new_type == GGML_TYPE_IQ4_K_R4|| new_type == GGML_TYPE_Q8_K_R8 || new_type == GGML_TYPE_IQ3_K_R4||
+        new_type == GGML_TYPE_IQ2_K_R4|| new_type == GGML_TYPE_IQ5_K_R4|| new_type == GGML_TYPE_IQ4_KS_R4 ||
+        new_type == GGML_TYPE_IQ3_XXS_R4 || new_type == GGML_TYPE_IQ2_XXS_R4 || new_type == GGML_TYPE_IQ2_XS_R4 ||
+        new_type == GGML_TYPE_IQ2_S_R4|| new_type == GGML_TYPE_IQ3_S_R4) {
+        if (nx % QK_K != 0) {
+            LLAMA_LOG_WARN("\n\n%s : tensor cols %d x %d are not divisible by %d, required for %s", __func__, nx, ny, QK_K, ggml_type_name(new_type));
+            convert_incompatible_tensor = true;
+        }
+    }
+    if (new_type == GGML_TYPE_IQ1_BN || new_type == GGML_TYPE_IQ2_BN || new_type == GGML_TYPE_IQ2_BN_R4) {
+        if (nx % QK_IQ1BN != 0) {
+            convert_incompatible_tensor = true;
+        }
+    }
+    if (convert_incompatible_tensor) {
+        switch (new_type) {
+            case GGML_TYPE_IQ2_XXS:
+            case GGML_TYPE_IQ2_XXS_R4:
+            case GGML_TYPE_IQ2_XS:
+            case GGML_TYPE_IQ2_XS_R4:
+            case GGML_TYPE_IQ2_KS:
+            case GGML_TYPE_IQ2_S:
+            case GGML_TYPE_IQ2_S_R4:
+            case GGML_TYPE_IQ3_XXS:
+            case GGML_TYPE_IQ3_XXS_R4:
+            case GGML_TYPE_IQ3_S:
+            case GGML_TYPE_IQ3_S_R4:
+            case GGML_TYPE_IQ1_S:
+            case GGML_TYPE_IQ1_M:
+            case GGML_TYPE_Q2_K:
+            case GGML_TYPE_Q2_K_R4:
+            case GGML_TYPE_Q3_K:
+            case GGML_TYPE_Q3_K_R4:
+            case GGML_TYPE_IQ2_K:
+            case GGML_TYPE_IQ2_K_R4:
+            case GGML_TYPE_IQ3_K:
+            case GGML_TYPE_IQ3_K_R4:
+            case GGML_TYPE_IQ4_KSS:
+            case GGML_TYPE_IQ4_KS:
+            case GGML_TYPE_IQ4_KS_R4:
+            case GGML_TYPE_IQ4_XS_R8:
+            case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
+            case GGML_TYPE_IQ4_K:
+            case GGML_TYPE_IQ4_K_R4:
+            case GGML_TYPE_Q4_K_R4:
+            case GGML_TYPE_Q4_K:   new_type = GGML_TYPE_Q5_0;   break;
+            case GGML_TYPE_IQ5_K:
+            case GGML_TYPE_IQ5_K_R4:
+            case GGML_TYPE_Q5_K_R4:
+            case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q6_0;   break;
+            case GGML_TYPE_IQ6_K:
+            case GGML_TYPE_Q6_K_R4:
+            case GGML_TYPE_Q8_K_R8:
+            case GGML_TYPE_Q6_K:   new_type = GGML_TYPE_Q8_0;   break;
+            default: throw std::runtime_error("\nUnsupported tensor size encountered\n");
+        }
+        LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
+    }
+    return new_type;
+}
+
 static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype) {
     const std::string name = ggml_get_name(tensor);
 
@@ -17260,90 +17332,10 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         LLAMA_LOG_INFO("Using custom type %s for tensor %s\n", ggml_type_name(new_type), name.c_str());
     }
 
-    //    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
-    //}
-    // IK: let's remove this, else Q2_K is almost the same as Q3_K_S
-    //else if (name.find("ffn_gate") != std::string::npos || name.find("ffn_up") != std::string::npos) {
-    //    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
-    //}
-    // This can be used to reduce the size of the Q5_K_S model.
-    // The associated PPL increase is fully in line with the size reduction
-    //else {
-    //    if (ftype == LLAMA_FTYPE_MOSTLY_Q5_K_S) new_type = GGML_TYPE_Q4_K;
-    //}
-    bool convert_incompatible_tensor = false;
-    if (new_type == GGML_TYPE_Q2_K    || new_type == GGML_TYPE_Q3_K    || new_type == GGML_TYPE_Q4_K   ||
-        new_type == GGML_TYPE_Q5_K    || new_type == GGML_TYPE_Q6_K    || new_type == GGML_TYPE_IQ4_XS ||
-        new_type == GGML_TYPE_IQ2_XS  || new_type == GGML_TYPE_IQ2_XXS || new_type == GGML_TYPE_IQ2_S  ||
-        new_type == GGML_TYPE_IQ3_XXS || new_type == GGML_TYPE_IQ1_S   || new_type == GGML_TYPE_IQ3_S  ||
-        new_type == GGML_TYPE_IQ1_M   || new_type == GGML_TYPE_IQ4_K   || new_type == GGML_TYPE_IQ2_K  ||
-        new_type == GGML_TYPE_IQ5_K   || new_type == GGML_TYPE_IQ3_K   || new_type == GGML_TYPE_Q4_K_R4 ||
-        new_type == GGML_TYPE_IQ6_K   || new_type == GGML_TYPE_IQ4_KS  || new_type == GGML_TYPE_IQ4_XS_R8 ||
-        new_type == GGML_TYPE_IQ2_KS  || new_type == GGML_TYPE_IQ4_KSS || new_type == GGML_TYPE_Q6_K_R4 ||
-        new_type == GGML_TYPE_Q5_K_R4 || new_type == GGML_TYPE_Q3_K_R4 || new_type == GGML_TYPE_Q2_K_R4 ||
-        new_type == GGML_TYPE_IQ4_K_R4|| new_type == GGML_TYPE_Q8_K_R8 || new_type == GGML_TYPE_IQ3_K_R4||
-        new_type == GGML_TYPE_IQ2_K_R4|| new_type == GGML_TYPE_IQ5_K_R4|| new_type == GGML_TYPE_IQ4_KS_R4 ||
-        new_type == GGML_TYPE_IQ3_XXS_R4 || new_type == GGML_TYPE_IQ2_XXS_R4 || new_type == GGML_TYPE_IQ2_XS_R4 ||
-        new_type == GGML_TYPE_IQ2_S_R4|| new_type == GGML_TYPE_IQ3_S_R4) {
-        int nx = tensor->ne[0];
-        int ny = tensor->ne[1];
-        if (nx % QK_K != 0) {
-            LLAMA_LOG_WARN("\n\n%s : tensor cols %d x %d are not divisible by %d, required for %s", __func__, nx, ny, QK_K, ggml_type_name(new_type));
-            convert_incompatible_tensor = true;
-        } else {
-            ++qs.n_k_quantized;
-        }
-    }
-    if (new_type == GGML_TYPE_IQ1_BN || new_type == GGML_TYPE_IQ2_BN || new_type == GGML_TYPE_IQ2_BN_R4) {
-        int nx = tensor->ne[0];
-        if (nx % QK_IQ1BN != 0) {
-            convert_incompatible_tensor = true;
-        }
-    }
-    if (convert_incompatible_tensor) {
-        switch (new_type) {
-            case GGML_TYPE_IQ2_XXS:
-            case GGML_TYPE_IQ2_XXS_R4:
-            case GGML_TYPE_IQ2_XS:
-            case GGML_TYPE_IQ2_XS_R4:
-            case GGML_TYPE_IQ2_KS:
-            case GGML_TYPE_IQ2_S:
-            case GGML_TYPE_IQ2_S_R4:
-            case GGML_TYPE_IQ3_XXS:
-            case GGML_TYPE_IQ3_XXS_R4:
-            case GGML_TYPE_IQ3_S:
-            case GGML_TYPE_IQ3_S_R4:
-            case GGML_TYPE_IQ1_S:
-            case GGML_TYPE_IQ1_M:
-            case GGML_TYPE_Q2_K:
-            case GGML_TYPE_Q2_K_R4:
-            case GGML_TYPE_Q3_K:
-            case GGML_TYPE_Q3_K_R4:
-            case GGML_TYPE_IQ2_K:
-            case GGML_TYPE_IQ2_K_R4:
-            case GGML_TYPE_IQ3_K:
-            case GGML_TYPE_IQ3_K_R4:
-            case GGML_TYPE_IQ4_KSS:
-            case GGML_TYPE_IQ4_KS:
-            case GGML_TYPE_IQ4_KS_R4:
-            case GGML_TYPE_IQ4_XS_R8:
-            case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
-            case GGML_TYPE_IQ4_K:
-            case GGML_TYPE_IQ4_K_R4:
-            case GGML_TYPE_Q4_K_R4:
-            case GGML_TYPE_Q4_K:   new_type = GGML_TYPE_Q5_0;   break;
-            case GGML_TYPE_IQ5_K:
-            case GGML_TYPE_IQ5_K_R4:
-            case GGML_TYPE_Q5_K_R4:
-            case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q6_0;   break;
-            case GGML_TYPE_IQ6_K:
-            case GGML_TYPE_Q6_K_R4:
-            case GGML_TYPE_Q8_K_R8:
-            case GGML_TYPE_Q6_K:   new_type = GGML_TYPE_Q8_0;   break;
-            default: throw std::runtime_error("\nUnsupported tensor size encountered\n");
-        }
-        LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
+    auto working_type = change_type_if_necessar(new_type, tensor->ne[0], tensor->ne[1]);
+    if (working_type != new_type) {
         ++qs.n_fallback;
+        new_type = working_type;
     }
 
     return new_type;
@@ -17848,7 +17840,14 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
 
             // get more optimal quantization type based on the tensor shape, layer, etc.
-            if (!params->pure && ggml_is_quantized(default_type)) {
+            if (params->pure) {
+                auto working_type = change_type_if_necessar(new_type, tensor->ne[0], tensor->ne[1]);
+                if (working_type != new_type) {
+                    ++qs.n_fallback;
+                    new_type = working_type;
+                }
+            }
+            else if (ggml_is_quantized(default_type)) {
                 new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
             }
             if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
