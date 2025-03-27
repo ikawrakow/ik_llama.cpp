@@ -717,7 +717,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_q4_0_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -741,7 +741,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4_1_ref,
         .vec_dot                  = ggml_vec_dot_q4_1_q8_1,
 #if GGML_USE_IQK_MULMAT
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_1,
 #endif
@@ -789,7 +789,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_q5_0_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -809,7 +809,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = (ggml_from_float_t) quantize_row_q5_1_ref,
         .vec_dot                  = ggml_vec_dot_q5_1_q8_1,
 #if GGML_USE_IQK_MULMAT
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_1,
 #endif
@@ -827,7 +827,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_q6_0_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -852,7 +852,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         // Remember: we cannot add 128 to the Q8 quants and use iblock sum in Q8_1 to subtract as we do on Zen4 for pure AVX2
         //           because there the result of the _mm256_maddubs_epi16() instruction may overflow the int16_t range
         //           (and it gets satured if it does), leading to wrong results.
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -894,6 +894,16 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .from_float               = quantize_row_q8_1_x4,
         .from_float_ref           = quantize_row_q8_1_x4,
+        .nrows                    = 1,
+        .row_meta_size            = 0,
+    },
+    [GGML_TYPE_Q8_2_X4] = {
+        .type_name                = "q8_2_x4",
+        .blck_size                = QK8_2,
+        .type_size                = sizeof(block_q8_2),
+        .is_quantized             = true,
+        .from_float               = quantize_row_q8_2_x4,
+        .from_float_ref           = quantize_row_q8_2_x4,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1272,7 +1282,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_iq4_nl_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -1628,7 +1638,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_iq4_nl_r4_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -1662,7 +1672,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_q4_0_r8_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -1683,7 +1693,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_q8_0_r8_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -1704,7 +1714,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_q5_0_r4_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -1725,7 +1735,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot                  = vec_dot_q6_0_r4_q8_0,
 #if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
@@ -11647,6 +11657,7 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_Q8_0_X4:
         case GGML_TYPE_Q8_1_X4:
+        case GGML_TYPE_Q8_2_X4:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q2_K_R4:
         case GGML_TYPE_Q3_K:
@@ -11815,6 +11826,7 @@ static void ggml_compute_forward_acc(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_Q8_0_X4:
         case GGML_TYPE_Q8_1_X4:
+        case GGML_TYPE_Q8_2_X4:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q2_K_R4:
         case GGML_TYPE_Q3_K:
@@ -15690,6 +15702,7 @@ static void ggml_compute_forward_set(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_Q8_0_X4:
         case GGML_TYPE_Q8_1_X4:
+        case GGML_TYPE_Q8_2_X4:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q2_K_R4:
         case GGML_TYPE_Q3_K:
@@ -15997,6 +16010,7 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_Q8_0_X4:
         case GGML_TYPE_Q8_1_X4:
+        case GGML_TYPE_Q8_2_X4:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q2_K_R4:
         case GGML_TYPE_Q3_K:
@@ -16627,6 +16641,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_Q8_1:
         case GGML_TYPE_Q8_0_X4:
         case GGML_TYPE_Q8_1_X4:
+        case GGML_TYPE_Q8_2_X4:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q2_K_R4:
         case GGML_TYPE_Q3_K:
