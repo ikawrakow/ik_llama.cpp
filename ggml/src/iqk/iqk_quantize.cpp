@@ -860,9 +860,9 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
             }
         } else {
             if (i < nb4) {
-                y4[i4].s[ir] = vaddvq_s32(accv);
+                y4[i4].d[ir+4] = GGML_FP32_TO_BF16(d * vaddvq_s32(accv)).bits;
             } else {
-                y[i].s = vaddvq_s32(accv);
+                y[i].s = GGML_FP32_TO_BF16(d * vaddvq_s32(accv)).bits;
             }
         }
     }
