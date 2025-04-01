@@ -15514,8 +15514,13 @@ struct HelperQ8KVR8 : public BaseHelper<step> {
 template <int D, int step>
 struct HelperQ40 final : public BaseHelper<step> {
     using Base = BaseHelper<step>;
+#if defined __AVX2__
     using block_q8 = block_q8_2;
     constexpr static int block_size_q = QK8_2;
+#else
+    using block_q8 = block_q8_0;
+    constexpr static int block_size_q = QK8_0;
+#endif
     HelperQ40(const char * data, int stride) : Base(data, stride) {}
 
     // Needed for v * softmax(k * q)
@@ -15558,8 +15563,8 @@ struct HelperQ40 final : public BaseHelper<step> {
 template <int D, int step>
 struct HelperQ41 final : public BaseHelper<step> {
     using Base = BaseHelper<step>;
-    using block_q8 = block_q8_1;
-    constexpr static int block_size_q = QK8_1;
+    using block_q8 = block_q8_2;
+    constexpr static int block_size_q = QK8_2;
     HelperQ41(const char * data, int stride) : Base(data, stride) {}
 
     // Needed for v * softmax(k * q)
@@ -16414,7 +16419,7 @@ struct FlashQKfp32 {
 #ifdef __aarch64__
             MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ40, nq);
 #else
-            MAKE_FUNCS(mul_mat_qX_1_q8_2_T<Q4_0_Unpacker, nq);
+            MAKE_FUNCS(mul_mat_qX_1_q8_2_T<Q4_0_1_Unpacker, nq);
 #endif
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ41<D, k_step>>) {
