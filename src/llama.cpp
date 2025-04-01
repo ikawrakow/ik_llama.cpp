@@ -16762,7 +16762,7 @@ static void llama_tensor_dequantize_internal(
     workers.clear();
 }
 
-static ggml_type change_type_if_necessar(ggml_type new_type, int nx, int ny) {
+static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
     bool convert_incompatible_tensor = false;
     if (new_type == GGML_TYPE_Q2_K    || new_type == GGML_TYPE_Q3_K    || new_type == GGML_TYPE_Q4_K   ||
         new_type == GGML_TYPE_Q5_K    || new_type == GGML_TYPE_Q6_K    || new_type == GGML_TYPE_IQ4_XS ||
@@ -16832,6 +16832,43 @@ static ggml_type change_type_if_necessar(ggml_type new_type, int nx, int ny) {
         LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
     }
     return new_type;
+}
+
+static std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
+    static std::unordered_map<ggml_type, std::pair<ggml_type, int>> k_map = {
+        { GGML_TYPE_Q4_0_4_4,    { GGML_TYPE_Q4_0, 4} },
+        { GGML_TYPE_Q4_0_4_8,    { GGML_TYPE_Q4_0, 4} },
+        { GGML_TYPE_Q4_0_8_8,    { GGML_TYPE_Q4_0, 8} },
+        { GGML_TYPE_Q4_0_R8,     { GGML_TYPE_Q4_0, 8} },
+        { GGML_TYPE_Q5_0_R4,     { GGML_TYPE_Q5_0, 4} },
+        { GGML_TYPE_Q6_0_R4,     { GGML_TYPE_Q6_0, 4} },
+        { GGML_TYPE_Q8_0_R8,     { GGML_TYPE_Q8_0, 8} },
+        { GGML_TYPE_Q2_K_R4,     { GGML_TYPE_Q2_K, 4} },
+        { GGML_TYPE_Q3_K_R4,     { GGML_TYPE_Q3_K, 4} },
+        { GGML_TYPE_Q4_K_R4,     { GGML_TYPE_Q4_K, 4} },
+        { GGML_TYPE_Q5_K_R4,     { GGML_TYPE_Q5_K, 4} },
+        { GGML_TYPE_Q6_K_R4,     { GGML_TYPE_Q6_K, 4} },
+        { GGML_TYPE_IQ2_XXS_R4,  { GGML_TYPE_IQ2_XXS, 4} },
+        { GGML_TYPE_IQ2_XS_R4,   { GGML_TYPE_IQ2_XS, 4} },
+        { GGML_TYPE_IQ2_S_R4,    { GGML_TYPE_IQ2_S, 4} },
+        { GGML_TYPE_IQ3_XXS_R4,  { GGML_TYPE_IQ3_XXS, 4} },
+        { GGML_TYPE_IQ3_S_R4,    { GGML_TYPE_IQ3_S, 4} },
+        { GGML_TYPE_IQ4_XS_R8,   { GGML_TYPE_IQ4_XS, 8} },
+        { GGML_TYPE_IQ4_NL_R4,   { GGML_TYPE_IQ4_NL, 4} },
+        { GGML_TYPE_IQ1_S_R4,    { GGML_TYPE_IQ1_S, 4} },
+        { GGML_TYPE_IQ1_M_R4,    { GGML_TYPE_IQ1_M, 4} },
+        { GGML_TYPE_IQ2_BN_R4,   { GGML_TYPE_IQ2_BN, 4} },
+        { GGML_TYPE_IQ2_K_R4,    { GGML_TYPE_IQ2_K, 4} },
+        { GGML_TYPE_IQ3_K_R4,    { GGML_TYPE_IQ3_K, 4} },
+        { GGML_TYPE_IQ4_K_R4,    { GGML_TYPE_IQ4_K, 4} },
+        { GGML_TYPE_IQ4_KS_R4,   { GGML_TYPE_IQ4_KS, 4} },
+        { GGML_TYPE_IQ5_K_R4,    { GGML_TYPE_IQ5_K, 4} },
+        { GGML_TYPE_Q8_KV_R8,    { GGML_TYPE_Q8_KV, 8} },
+        { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_K, 8} },
+        { GGML_TYPE_BF16_R16,    { GGML_TYPE_BF16, 16} },
+    };
+    if (auto it = k_map.find(type); it != k_map.end()) return it->second;
+    return {type, 1};
 }
 
 static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype) {
@@ -16938,70 +16975,6 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_BN || ftype == LLAMA_FTYPE_MOSTLY_IQ2_BN || ftype == LLAMA_FTYPE_MOSTLY_IQ2_BN_R4) {
                 new_type = GGML_TYPE_IQ4_NL;
-            }
-            else if (new_type == GGML_TYPE_Q4_0_4_4 || new_type == GGML_TYPE_Q4_0_4_8 ||
-                     new_type == GGML_TYPE_Q4_0_8_8) {
-                new_type = GGML_TYPE_Q4_0;
-            }
-            else if (new_type == GGML_TYPE_IQ4_NL_R4) {
-                new_type = GGML_TYPE_IQ4_NL;
-            }
-            else if (new_type == GGML_TYPE_IQ4_XS_R8) {
-                new_type = GGML_TYPE_IQ4_XS;
-            }
-            else if (new_type == GGML_TYPE_Q2_K_R4) {
-                new_type = GGML_TYPE_Q2_K;
-            }
-            else if (new_type == GGML_TYPE_Q3_K_R4) {
-                new_type = GGML_TYPE_Q3_K;
-            }
-            else if (new_type == GGML_TYPE_Q4_K_R4) {
-                new_type = GGML_TYPE_Q4_K;
-            }
-            else if (new_type == GGML_TYPE_Q5_K_R4) {
-                new_type = GGML_TYPE_Q5_K;
-            }
-            else if (new_type == GGML_TYPE_Q6_K_R4) {
-                new_type = GGML_TYPE_Q6_K;
-            }
-            else if (new_type == GGML_TYPE_Q8_K_R8) {
-                new_type = GGML_TYPE_Q8_0;
-            }
-            else if (new_type == GGML_TYPE_Q8_KV_R8) {
-                new_type = GGML_TYPE_Q8_0;
-            }
-            else if (new_type == GGML_TYPE_IQ2_K_R4) {
-                new_type = GGML_TYPE_IQ2_K;
-            }
-            else if (new_type == GGML_TYPE_IQ3_K_R4) {
-                new_type = GGML_TYPE_IQ3_K;
-            }
-            else if (new_type == GGML_TYPE_IQ3_S_R4) {
-                new_type = GGML_TYPE_IQ3_S;
-            }
-            else if (new_type == GGML_TYPE_IQ4_K_R4) {
-                new_type = GGML_TYPE_IQ4_K;
-            }
-            else if (new_type == GGML_TYPE_IQ5_K_R4) {
-                new_type = GGML_TYPE_IQ5_K;
-            }
-            else if (new_type == GGML_TYPE_IQ4_KS_R4) {
-                new_type = GGML_TYPE_IQ4_KS;
-            }
-            else if (new_type == GGML_TYPE_Q4_0_R8) {
-                new_type = GGML_TYPE_Q4_0;
-            }
-            else if (new_type == GGML_TYPE_Q5_0_R4) {
-                new_type = GGML_TYPE_Q5_0;
-            }
-            else if (new_type == GGML_TYPE_Q6_0_R4) {
-                new_type = GGML_TYPE_Q6_0;
-            }
-            else if (new_type == GGML_TYPE_Q8_0_R8) {
-                new_type = GGML_TYPE_Q8_0;
-            }
-            else if (new_type == GGML_TYPE_BF16_R16) {
-                new_type = GGML_TYPE_BF16;
             }
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_S_R4 || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M_R4) {
@@ -17332,10 +17305,19 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         LLAMA_LOG_INFO("Using custom type %s for tensor %s\n", ggml_type_name(new_type), name.c_str());
     }
 
-    auto working_type = change_type_if_necessar(new_type, tensor->ne[0], tensor->ne[1]);
+    auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
     if (working_type != new_type) {
         ++qs.n_fallback;
         new_type = working_type;
+    }
+
+    if (name == "token_embd.weight") {
+        auto working_type = interleaved_properties(new_type).first;
+        if (working_type != new_type) {
+            printf("\n============ Token embeddings cannot be quantized with row-interleaved quants\n");
+            printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(working_type));
+            new_type = working_type;
+        }
     }
 
     return new_type;
@@ -17834,14 +17816,12 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         }
 
         if (quantize) {
+
             new_type = default_type;
-            if (new_type == GGML_TYPE_BF16_R16 && strcmp(tensor->name, "token_embd.weight") == 0) {
-                new_type = GGML_TYPE_BF16;
-            }
 
             // get more optimal quantization type based on the tensor shape, layer, etc.
             if (params->pure) {
-                auto working_type = change_type_if_necessar(new_type, tensor->ne[0], tensor->ne[1]);
+                auto working_type = change_type_if_necessary(new_type, tensor->ne[0], tensor->ne[1]);
                 if (working_type != new_type) {
                     ++qs.n_fallback;
                     new_type = working_type;
@@ -17879,6 +17859,16 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
             if (params->ffn_up_type < GGML_TYPE_COUNT && strcmp(tensor->name, "ffn_up") == 0) {
                 new_type = params->ffn_up_type;
+            }
+
+            if (strcmp(tensor->name, "token_embd.weight") == 0) {
+                // token embeddings cannot be quantized with row-interleaved quants
+                auto working_type = interleaved_properties(new_type).first;
+                if (working_type != new_type) {
+                    printf("\n============ Token embeddings cannot be quantized with row-interleaved quants\n");
+                    printf("---> Changed %s to %s\n", ggml_type_name(new_type), ggml_type_name(working_type));
+                    new_type = working_type;
+                }
             }
 
             // If we've decided to quantize to the same type the tensor is already
@@ -17965,119 +17955,11 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
 
             int chunk_size_multiplier = 1;
-            if (new_type == GGML_TYPE_Q4_0_4_4 || new_type == GGML_TYPE_Q4_0_4_8 || new_type == GGML_TYPE_Q4_0_8_8) {
-                if ((new_type == GGML_TYPE_Q4_0_8_8) && (tensor->ne[1] % 8 != 0)) new_type = GGML_TYPE_Q4_0;
-                else if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q4_0;
-                if (new_type == GGML_TYPE_Q4_0_8_8) chunk_size_multiplier = 8;
-                else if (new_type == GGML_TYPE_Q4_0_4_4 || new_type == GGML_TYPE_Q4_0_4_8) chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ4_NL_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ4_NL;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ4_XS_R8) {
-                if (tensor->ne[1] % 8 != 0) new_type = GGML_TYPE_IQ4_XS;
-                else chunk_size_multiplier = 8;
-            }
-            else if (new_type == GGML_TYPE_Q4_0_R8) {
-                if (tensor->ne[1] % 8 != 0) new_type = GGML_TYPE_Q4_0;
-                else chunk_size_multiplier = 8;
-            }
-            else if (new_type == GGML_TYPE_Q5_0_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q5_0;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_Q6_0_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q6_0;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_Q8_0_R8) {
-                if (tensor->ne[1] % 8 != 0) new_type = GGML_TYPE_Q8_0;
-                else chunk_size_multiplier = 8;
-            }
-            else if (new_type == GGML_TYPE_Q2_K_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q2_K;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_Q3_K_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q3_K;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_Q4_K_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q4_K;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_Q5_K_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q5_K;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_Q6_K_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_Q6_K;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_Q8_K_R8) {
-                if (tensor->ne[1] % 8 != 0) new_type = GGML_TYPE_Q8_0;
-                else chunk_size_multiplier = 8;
-            }
-            else if (new_type == GGML_TYPE_Q8_KV_R8) {
-                if (tensor->ne[1] % 8 != 0) new_type = GGML_TYPE_Q8_0;
-                else chunk_size_multiplier = 8;
-            }
-            else if (new_type == GGML_TYPE_IQ2_BN_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ2_BN;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ2_K_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ2_K;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ3_K_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ3_K;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ4_K_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ4_K;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ5_K_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ5_K;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ4_KS_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ4_KS;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ2_XXS_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ2_XXS;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ2_XS_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ2_XS;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ2_S_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ2_S;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ3_XXS_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ3_XXS;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ3_S_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ3_S;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ1_S_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ1_S;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_IQ1_M_R4) {
-                if (tensor->ne[1] % 4 != 0) new_type = GGML_TYPE_IQ1_M;
-                else chunk_size_multiplier = 4;
-            }
-            else if (new_type == GGML_TYPE_BF16_R16) {
-                if (tensor->ne[1] % 16 != 0) new_type = GGML_TYPE_BF16;
-                else chunk_size_multiplier = 16;
+            auto [working_type, num_rows] = interleaved_properties(new_type);
+            if (tensor->ne[1] % num_rows != 0) {
+                new_type = working_type;
+            } else {
+                chunk_size_multiplier = num_rows;
             }
 
             LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
