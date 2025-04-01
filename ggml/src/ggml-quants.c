@@ -2199,8 +2199,9 @@ static float make_qkx3_quants(int n, int nmax, const float * restrict x, const f
         float rmin, float rdelta, int nstep, bool use_mad) {
     float min = x[0];
     float max = x[0];
-    float sum_w = weights ? weights[0] : x[0]*x[0];
-    float sum_x = sum_w * x[0];
+    double sum_w = weights ? (double)weights[0] : (double)(x[0]*x[0]);
+    double sum_x = sum_w * (double)x[0];
+    double sum_x2 = sum_w * (double)x[0] * (double)x[0];
 #ifdef HAVE_BUGGY_APPLE_LINKER
     // use 'volatile' to prevent unroll and work around a bug in Apple ld64 1015.7
     for (volatile int i = 1; i < n; ++i) {
@@ -2210,8 +2211,9 @@ static float make_qkx3_quants(int n, int nmax, const float * restrict x, const f
         if (x[i] < min) min = x[i];
         if (x[i] > max) max = x[i];
         float w = weights ? weights[i] : x[i]*x[i];
-        sum_w += w;
-        sum_x += w * x[i];
+        sum_w += (double)w;
+        sum_x += (double)w * (double)x[i];
+        sum_x2 += (double)w * (double)x[i] * (double)x[i];
     }
     if (min > 0) {
         min = 0;
@@ -2223,13 +2225,13 @@ static float make_qkx3_quants(int n, int nmax, const float * restrict x, const f
     }
     float iscale = nmax/(max - min);
     float scale = 1/iscale;
-    float best_mad = 0;
+    double best_mad = 0;
     for (int i = 0; i < n; ++i) {
         int l = nearest_int(iscale*(x[i] - min));
         L[i] = MAX(0, MIN(nmax, l));
-        float diff = scale * L[i] + min - x[i];
-        diff = use_mad ? fabsf(diff) : diff*diff;
-        float w = weights ? weights[i] : x[i]*x[i];
+        double diff = (double)scale * L[i] + (double)min - (double)x[i];
+        diff = use_mad ? fabs(diff) : diff*diff;
+        double w = weights ? (double)weights[i] : (double)(x[i]*x[i]);
         best_mad += w * diff;
     }
     if (nstep < 1) {
@@ -2238,30 +2240,35 @@ static float make_qkx3_quants(int n, int nmax, const float * restrict x, const f
     }
     for (int is = 0; is <= nstep; ++is) {
         iscale = (rmin + rdelta*is + nmax)/(max - min);
-        float sum_l = 0, sum_l2 = 0, sum_xl = 0;
+        double sum_l = 0, sum_l2 = 0, sum_xl = 0;
         for (int i = 0; i < n; ++i) {
             int l = nearest_int(iscale*(x[i] - min));
             l = MAX(0, MIN(nmax, l));
             Laux[i] = l;
             float w = weights ? weights[i] : x[i]*x[i];
-            sum_l  += w*l;
-            sum_l2 += w*l*l;
-            sum_xl += w*l*x[i];
+            sum_l  += (double)w*l;
+            sum_l2 += (double)w*l*l;
+            sum_xl += (double)w*l*(double)x[i];
         }
-        float D = sum_w * sum_l2 - sum_l * sum_l;
+        double D = sum_w * sum_l2 - sum_l * sum_l;
         if (D > 0) {
-            float this_scale = (sum_w * sum_xl - sum_x * sum_l)/D;
-            float this_min   = (sum_l2 * sum_x - sum_l * sum_xl)/D;
+            double this_scale = (sum_w * sum_xl - sum_x * sum_l)/D;
+            double this_min   = (sum_l2 * sum_x - sum_l * sum_xl)/D;
             if (this_min > 0) {
                 this_min = 0;
                 this_scale = sum_xl / sum_l2;
             }
-            float mad = 0;
-            for (int i = 0; i < n; ++i) {
-                float diff = this_scale * Laux[i] + this_min - x[i];
-                diff = use_mad ? fabsf(diff) : diff*diff;
-                float w = weights ? weights[i] : x[i]*x[i];
-                mad += w * diff;
+            double mad = 0;
+            if (use_mad) {
+                for (int i = 0; i < n; ++i) {
+                    double diff = (double)this_scale * Laux[i] + (double)this_min - (double)x[i];
+                    diff = fabs(diff);
+                    double w = weights ? (double)weights[i] : (double)(x[i]*x[i]);
+                    mad += w * diff;
+                }
+            } else {
+                mad = sum_x2 - 2*this_scale*sum_xl - 2*this_min*sum_x + 2*this_scale*this_min*sum_l
+                    + this_scale*this_scale*sum_l2 + this_min*this_min*sum_w;
             }
             if (mad < best_mad) {
                 for (int i = 0; i < n; ++i) {
@@ -2272,6 +2279,57 @@ static float make_qkx3_quants(int n, int nmax, const float * restrict x, const f
                 min = this_min;
             }
         }
+    }
+    if (use_mad) {
+        *the_min = -min;
+        return scale;
+    }
+
+    double sum_l = 0, sum_l2 = 0, sum_xl = 0;
+    for (int i = 0; i < n; ++i) {
+        int l = L[i];
+        double w = weights ? (double)weights[i] : (double)(x[i]*x[i]);
+        sum_l  += w*l;
+        sum_l2 += w*l*l;
+        sum_xl += w*l*(double)x[i];
+    }
+    double best = 2*(double)scale*sum_xl + 2*(double)min*sum_x - 2*(double)scale*(double)min*sum_l
+                - (double)scale*(double)scale*sum_l2 - (double)min*(double)min*sum_w;
+    int last_j = -1, last_dir = 0;
+    for (int itry = 0; itry < nmax*n; ++itry) {
+        float gmax = 0;
+        int best_j = -1, dir = 0;
+        for (int j = 0; j < n; ++j) {
+            float g = x[j] - scale*L[j] - min;
+            if (g > 0 && L[j] < nmax && g > gmax) {
+                gmax = g; best_j = j; dir = 1;
+            }
+            else if (g < 0 && L[j] > 0 && -g > gmax) {
+                gmax = -g; best_j = j; dir = -1;
+            }
+        }
+        if (best_j < 0 || (best_j == last_j && dir == -last_dir)) break;
+        double w = weights ? (double)weights[best_j] : (double)(x[best_j]*x[best_j]);
+        sum_l  += w*dir;
+        sum_l2 += w*(2*L[best_j]*dir + 1);
+        sum_xl += w*(double)x[best_j]*dir;
+        double D = (double)sum_w * sum_l2 - sum_l * sum_l;
+        if (D <= 0) break;
+        double this_scale = ((double)sum_w * sum_xl - (double)sum_x * sum_l)/D;
+        double this_min   = (sum_l2 * (double)sum_x - sum_l * sum_xl)/D;
+        if (this_min > 0) {
+            this_min = 0;
+            this_scale = sum_xl / sum_l2;
+        }
+        if (this_scale < 0) break;
+        double score = 2*this_scale*sum_xl + 2*this_min*(double)sum_x - 2*this_scale*this_min*sum_l
+                     - this_scale*this_scale*sum_l2 - this_min*this_min*(double)sum_w;
+        if (score <= best) break;
+        best = score;
+        scale = this_scale;
+        min = this_min;
+        L[best_j] += dir;
+        last_j = best_j; last_dir = dir;
     }
     *the_min = -min;
     return scale;
@@ -2354,7 +2412,6 @@ static void quantize_row_q2_K_impl(const float * restrict x, block_q2_K * restri
     GGML_ASSERT(quant_weights);
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
-    const bool requantize = true;
 
     uint8_t L[QK_K];
     uint8_t Laux[16];
@@ -2368,7 +2425,7 @@ static void quantize_row_q2_K_impl(const float * restrict x, block_q2_K * restri
         memset(sw, 0, QK_K/16*sizeof(float));
         float sumx2 = 0;
         for (int j = 0; j < QK_K; ++j) sumx2 += x[j]*x[j];
-        float sigma2 = sumx2/QK_K;
+        float sigma2 = 0.75f*sumx2/QK_K;
         for (int j = 0; j < QK_K/16; ++j) {
             const float * restrict qw = quant_weights + QK_K * i + 16*j;
             for (int l = 0; l < 16; ++l) weight[l] = qw[l] * sqrtf(sigma2 + x[16*j + l]*x[16*j + l]);
@@ -2376,30 +2433,24 @@ static void quantize_row_q2_K_impl(const float * restrict x, block_q2_K * restri
             scales[j] = make_qkx3_quants(16, 3, x + 16*j, weight, L + 16*j, &mins[j], Laux, -0.9f, 0.05f, 36, false);
         }
 
-        float dm, mm;
-        dm  = make_qp_quants(QK_K/16, 15, scales, Ls, sw);
-        mm  = make_qp_quants(QK_K/16, 15, mins,   Lm, sw);
+        float dm  = make_qp_quants(QK_K/16, 15, scales, Ls, sw);
+        float mm  = make_qp_quants(QK_K/16, 15, mins,   Lm, sw);
 
         y[i].d    = GGML_FP32_TO_FP16(dm);
         y[i].dmin = GGML_FP32_TO_FP16(mm);
-        dm        = GGML_FP16_TO_FP32(y[i].d);
-        mm        = GGML_FP16_TO_FP32(y[i].dmin);
 
         for (int j = 0; j < QK_K/16; ++j) {
-            y[i].scales[j] = Ls[j] | (Lm[j] << 4);
-        }
-
-        if (requantize) {
-            for (int j = 0; j < QK_K/16; ++j) {
-                const float d = dm * (y[i].scales[j] & 0xF);
-                if (!d) continue;
-                const float m = mm * (y[i].scales[j] >> 4);
-                for (int ii = 0; ii < 16; ++ii) {
-                    int l = nearest_int((x[16*j + ii] + m)/d);
-                    l = MAX(0, MIN(3, l));
-                    L[16*j + ii] = l;
-                }
+            float d = dm*Ls[j];
+            float m = mm*Lm[j];
+            float id = d ? 1/d : 0.f;
+            for (int l = 0; l < QK_K/16; ++l) {
+                int q = nearest_int((x[16*j + l] + m)*id);
+                q = MAX(0, MIN(3, q));
+                L[16*j + l] = q;
             }
+        }
+        for (int j = 0; j < QK_K/16; ++j) {
+            y[i].scales[j] = Ls[j] | (Lm[j] << 4);
         }
 
         for (int j = 0; j < QK_K; j += 128) {
