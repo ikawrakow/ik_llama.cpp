@@ -8282,17 +8282,10 @@ kernel void kernel_mul_mm_id(
         stride >>= 1;
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    int64_t _ne1 = nums[ntg-1];
+    uint _ne1 = nums[ntg-1];
     if (!_ne1) return;
 
     uint nprev = tiitg > 0 ? nums[tiitg-1] : 0;
-
-    //uint ncum = 0;
-    //for (uint i = 0; i < tiitg; ++i) ncum += nums[i];
-    //uint nprev = ncum;
-    //for (uint i = tiitg; i < ntg; ++i) ncum += nums[i];
-    //if (!ncum) return;
-    //int64_t _ne1 = ncum;
 
     threadgroup ushort2 * rowids = (threadgroup ushort2 *)(shared_memory + 8192);
     for (uint i = tiitg; i < n; i += ntg) {
@@ -8303,27 +8296,37 @@ kernel void kernel_mul_mm_id(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    kernel_mul_mm_id_impl<Dequantizer>(
-        src0,
-        src1,
-        rowids,
-        dst,
-        ne00,
-        ne02,
-        nb01,
-        nb02,
-        ne11,
-        ne12,
-        nb10,
-        nb11,
-        nb12,
-        ne0,
-        _ne1,
-        ne0*ne1,
-        shared_memory,
-        tgpig,
-        tiitg,
-        sgitg);
+    uint nstep = (_ne1 + BLOCK_SIZE_N - 1)/BLOCK_SIZE_N;
+
+    for (uint istep = 0; istep < nstep; ++istep) {
+
+        uint first = BLOCK_SIZE_N*istep; 
+        uint last  = first + BLOCK_SIZE_N < _ne1 ? first + BLOCK_SIZE_N : _ne1;
+        int64_t this_ne1 = last - first;
+        threadgroup ushort2 * this_rowids = rowids + istep*BLOCK_SIZE_N;
+
+        kernel_mul_mm_id_impl<Dequantizer>(
+            src0,
+            src1,
+            this_rowids,
+            dst,
+            ne00,
+            ne02,
+            nb01,
+            nb02,
+            ne11,
+            ne12,
+            nb10,
+            nb11,
+            nb12,
+            ne0,
+            this_ne1,
+            ne0*ne1,
+            shared_memory,
+            tgpig,
+            tiitg,
+            sgitg);
+    }
 }
 
 #define QK_NL 16
