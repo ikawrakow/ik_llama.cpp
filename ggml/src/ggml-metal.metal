@@ -5751,7 +5751,7 @@ void kernel_mul_mv_iq4_xs_f32_impl(
                    uint      tiisg,
                    uint      sgitg) {
 
-    //threadgroup float * shared_values = (threadgroup float *)shared_values_i8;
+    threadgroup float * shared_values = (threadgroup float *)shared_values_i8;
     const int nb = ne00/QK_K;
     const int r0 = tgpig.x;
     const int r1 = tgpig.y;
@@ -5771,8 +5771,8 @@ void kernel_mul_mv_iq4_xs_f32_impl(
     const int ib = it/2;
     const int il = it%2;
 
-    //shared_values[tiisg] = kvalues_iq4nl_f[tiisg%16];
-    //threadgroup_barrier(mem_flags::mem_threadgroup);
+    shared_values[tiisg] = kvalues_iq4nl_f[tiisg%16];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
     float4 yl[4];
     float sumf[2]={0.f}, all_sum;
@@ -5798,19 +5798,15 @@ void kernel_mul_mv_iq4_xs_f32_impl(
 
             aux32[0] = q4[0] & 0x0f0f0f0f;
             aux32[1] = (q4[0] >> 4) & 0x0f0f0f0f;
-            //qf1 = {shared_values[q8[0]], shared_values[q8[1]], shared_values[q8[2]], shared_values[q8[3]]};
-            //qf2 = {shared_values[q8[4]], shared_values[q8[5]], shared_values[q8[6]], shared_values[q8[7]]};
-            qf1 = {kvalues_iq4nl_f[q8[0]], kvalues_iq4nl_f[q8[1]], kvalues_iq4nl_f[q8[2]], kvalues_iq4nl_f[q8[3]]};
-            qf2 = {kvalues_iq4nl_f[q8[4]], kvalues_iq4nl_f[q8[5]], kvalues_iq4nl_f[q8[6]], kvalues_iq4nl_f[q8[7]]};
+            qf1 = {shared_values[q8[0]], shared_values[q8[1]], shared_values[q8[2]], shared_values[q8[3]]};
+            qf2 = {shared_values[q8[4]], shared_values[q8[5]], shared_values[q8[6]], shared_values[q8[7]]};
             acc1 += yl[0] * qf1;
             acc2 += yl[1] * qf2;
 
             aux32[0] = q4[1] & 0x0f0f0f0f;
             aux32[1] = (q4[1] >> 4) & 0x0f0f0f0f;
-            //qf1 = {shared_values[q8[0]], shared_values[q8[1]], shared_values[q8[2]], shared_values[q8[3]]};
-            //qf2 = {shared_values[q8[4]], shared_values[q8[5]], shared_values[q8[6]], shared_values[q8[7]]};
-            qf1 = {kvalues_iq4nl_f[q8[0]], kvalues_iq4nl_f[q8[1]], kvalues_iq4nl_f[q8[2]], kvalues_iq4nl_f[q8[3]]};
-            qf2 = {kvalues_iq4nl_f[q8[4]], kvalues_iq4nl_f[q8[5]], kvalues_iq4nl_f[q8[6]], kvalues_iq4nl_f[q8[7]]};
+            qf1 = {shared_values[q8[0]], shared_values[q8[1]], shared_values[q8[2]], shared_values[q8[3]]};
+            qf2 = {shared_values[q8[4]], shared_values[q8[5]], shared_values[q8[6]], shared_values[q8[7]]};
             acc1 += yl[2] * qf1;
             acc2 += yl[3] * qf2;
 
@@ -7239,30 +7235,6 @@ void dequantize_q8_0(device const block_q8_0 *xb, short il, thread type4x4 & reg
         }
     }
 }
-
-//template <typename type4x4>
-//void dequantize_q8_0(device const block_q8_0 *xb, short il, thread type4x4 & reg) {
-//    device const int8_t * qs = ((device const int8_t *)xb->qs);
-//    const half d = xb->d;
-//
-//    for (int i = 0; i < 16; i++) {
-//        reg[i/4][i%4] = (qs[i + 16*il] * d);
-//    }
-//}
-
-//template <typename type4x4>
-//void dequantize_q8_0(device const block_q8_0 *xb, short il, thread type4x4 & reg) {
-//    device const int8_t * qs = ((device const int8_t *)xb->qs);
-//    const float d = xb->d;
-//
-//    float4x4 reg_f;
-//
-//    for (int i = 0; i < 16; i++) {
-//        reg_f[i/4][i%4] = d * qs[i + 16*il];
-//    }
-//
-//    reg = (type4x4)reg_f;
-//}
 
 template <typename type4x4>
 void dequantize_q2_K(device const block_q2_K * xb, short il, thread type4x4 & reg) {
