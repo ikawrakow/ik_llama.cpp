@@ -276,9 +276,33 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H96,
     GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H112,
     GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H128,
-  //GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H256,     // https://github.com/ggerganov/llama.cpp/issues/7261
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H256,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_HK192_HV128,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_HK576_HV512,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H64,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H80,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H96,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H112,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H128,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H256,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_HK192_HV128,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_HK576_HV512,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H64,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H80,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H96,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H112,
     GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H128,
-  //GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H256, // https://github.com/ggerganov/llama.cpp/issues/7261
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H256,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_HK192_HV128,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_HK576_HV512,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H64,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H80,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H96,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H112,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H128,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H256,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_HK192_HV128,
+    GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_HK576_HV512,
     GGML_METAL_KERNEL_TYPE_CPY_F32_F32,
     GGML_METAL_KERNEL_TYPE_CPY_F32_F16,
     GGML_METAL_KERNEL_TYPE_CPY_F16_F16,
@@ -844,9 +868,33 @@ static struct ggml_backend_metal_context * ggml_metal_init(int n_cb) {
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H96,        flash_attn_ext_f16_h96,         ctx->support_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H112,       flash_attn_ext_f16_h112,        ctx->support_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H128,       flash_attn_ext_f16_h128,        ctx->support_simdgroup_mm);
-      //GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H256,       flash_attn_ext_f16_h256,        ctx->support_simdgroup_mm);
-        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H128,   flash_attn_ext_vec_f16_h128,    ctx->support_simdgroup_reduction);
-      //GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H256,   flash_attn_ext_vec_f16_h256,    ctx->support_simdgroup_reduction);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H256,       flash_attn_ext_f16_h256,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_HK192_HV128,flash_attn_ext_f16_hk192_hv128, ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_HK576_HV512,flash_attn_ext_f16_hk576_hv512, ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H64,        flash_attn_ext_q8_0_h64,         ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H80,        flash_attn_ext_q8_0_h80,         ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H96,        flash_attn_ext_q8_0_h96,         ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H112,       flash_attn_ext_q8_0_h112,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H128,       flash_attn_ext_q8_0_h128,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H256,       flash_attn_ext_q8_0_h256,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_HK192_HV128,flash_attn_ext_q8_0_hk192_hv128, ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_HK576_HV512,flash_attn_ext_q8_0_hk576_hv512, ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H64,        flash_attn_ext_vec_f16_h64,         ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H80,        flash_attn_ext_vec_f16_h80,         ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H96,        flash_attn_ext_vec_f16_h96,         ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H112,       flash_attn_ext_vec_f16_h112,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H128,       flash_attn_ext_vec_f16_h128,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H256,       flash_attn_ext_vec_f16_h256,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_HK192_HV128,flash_attn_ext_vec_f16_hk192_hv128, ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_HK576_HV512,flash_attn_ext_vec_f16_hk576_hv512, ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H64,        flash_attn_ext_vec_q8_0_h64,         ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H80,        flash_attn_ext_vec_q8_0_h80,         ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H96,        flash_attn_ext_vec_q8_0_h96,         ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H112,       flash_attn_ext_vec_q8_0_h112,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H128,       flash_attn_ext_vec_q8_0_h128,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H256,       flash_attn_ext_vec_q8_0_h256,        ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_HK192_HV128,flash_attn_ext_vec_q8_0_hk192_hv128, ctx->support_simdgroup_mm);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_HK576_HV512,flash_attn_ext_vec_q8_0_hk576_hv512, ctx->support_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_CPY_F32_F16,                   cpy_f32_f16,                    true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_CPY_F32_F32,                   cpy_f32_f32,                    true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_CPY_F16_F16,                   cpy_f16_f16,                    true);
@@ -1001,16 +1049,20 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_context * ctx
         case GGML_OP_LEAKY_RELU:
             return true;
         case GGML_OP_FLASH_ATTN_EXT:
-            if (op->src[1]->type != GGML_TYPE_F16) {
+            if (!ctx->support_simdgroup_mm) {
+                return false; // TODO: over-restricted for vec-kernels
+            }
+            if (op->src[1]->type != op->src[2]->type ||
+               (op->src[1]->type != GGML_TYPE_F16 && op->src[1]->type != GGML_TYPE_Q8_0)) {
                 return false;
             }
-            if (op->src[2]->type != GGML_TYPE_F16) {
-                return false;
+            if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
+                return (op->src[1]->ne[0] == 192 && op->src[2]->ne[0] == 128) ||
+                       (op->src[1]->ne[0] == 576 && op->src[2]->ne[0] == 512);
             }
-            if (op->src[0]->ne[0] == 256) {
-                return false;
-            }
-            return ctx->support_simdgroup_mm; // TODO: over-restricted for vec-kernels
+            return (op->src[1]->ne[0] ==  64 || op->src[1]->ne[0] ==  80 ||
+                    op->src[1]->ne[0] ==  96 || op->src[1]->ne[0] == 112 ||
+                    op->src[1]->ne[0] == 128 || op->src[1]->ne[0] == 256);
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             return ctx->support_simdgroup_reduction &&
@@ -3204,8 +3256,9 @@ static void ggml_metal_encode_node(
                 GGML_ASSERT(ne11 % 32 == 0);
 
                 GGML_ASSERT(src0->type == GGML_TYPE_F32);
-
-                GGML_ASSERT(ggml_are_same_shape (src1, src2));
+                GGML_ASSERT(src1->type == src2->type);
+                GGML_ASSERT(ne11 == ne21);
+                GGML_ASSERT(ne12 == ne22);
 
                 struct ggml_tensor * src3 = node->src[3];
 
@@ -3250,70 +3303,189 @@ static void ggml_metal_encode_node(
 
                 bool use_vec_kernel = false;
 
-                if (ne01 >= 4 || (ne00%128 != 0)) {
-                    switch (ne00) {
-                        case 64:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H64 ].pipeline; break;
-                        case 80:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H80 ].pipeline; break;
-                        case 96:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H96 ].pipeline; break;
-                        case 112: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H112].pipeline; break;
-                        case 128: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H128].pipeline; break;
-                                  //case 256: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H256].pipeline; break;
+                if (ne01 >= 4 || (ne00%128 != 0 && ne00 != 192 && ne00 != 576)) {
+                    switch (src1->type) {
+                        case GGML_TYPE_F16:
+                            {
+                                if (ne00 == 192 && ne20 == 128) {
+                                    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_HK192_HV128].pipeline;
+                                }
+                                else if (ne00 == 576 && ne20 == 512) {
+                                    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_HK576_HV512].pipeline;
+                                } else {
+                                    switch (ne00) {
+                                        case 64:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H64 ].pipeline; break;
+                                        case 80:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H80 ].pipeline; break;
+                                        case 96:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H96 ].pipeline; break;
+                                        case 112: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H112].pipeline; break;
+                                        case 128: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H128].pipeline; break;
+                                        case 256: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_F16_H256].pipeline; break;
+                                        default:
+                                            {
+                                                GGML_METAL_LOG_ERROR("unsupported size: %d\n", (int)ne00);
+                                                GGML_METAL_LOG_ERROR("add template specialization for this size\n");
+                                                GGML_ABORT("add template specialization for this size");
+                                            }
+                                    }
+                                }
+                            } break;
+                        case GGML_TYPE_Q8_0:
+                            {
+                                if (ne00 == 192 && ne20 == 128) {
+                                    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_HK192_HV128].pipeline;
+                                }
+                                else if (ne00 == 576 && ne20 == 512) {
+                                    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_HK576_HV512].pipeline;
+                                } else {
+                                    switch (ne00) {
+                                        case 64:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H64 ].pipeline; break;
+                                        case 80:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H80 ].pipeline; break;
+                                        case 96:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H96 ].pipeline; break;
+                                        case 112: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H112].pipeline; break;
+                                        case 128: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H128].pipeline; break;
+                                        case 256: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_Q8_0_H256].pipeline; break;
+                                        default:
+                                            {
+                                                GGML_METAL_LOG_ERROR("unsupported size: %d\n", (int)ne00);
+                                                GGML_METAL_LOG_ERROR("add template specialization for this size\n");
+                                                GGML_ABORT("add template specialization for this size");
+                                            }
+                                    }
+                                }
+                            } break;
                         default:
-                                  {
-                                      GGML_METAL_LOG_ERROR("unsupported size: %lld\n", ne00);
-                                      GGML_METAL_LOG_ERROR("add template specialization for this size\n");
-                                      GGML_ABORT("add template specialization for this size");
-                                  }
+                            {
+                                GGML_METAL_LOG_ERROR("unsupported type: %s\n", ggml_type_name(src1->type));
+                                GGML_METAL_LOG_ERROR("add template specialization for this type\n");
+                                GGML_ABORT("add template specialization for this type");
+                            }
                     }
                 } else {
                     use_vec_kernel = true;
-
-                    switch (ne00) {
-                        case 128: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H128].pipeline; break;
-                                  //case 256: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H256].pipeline; break;
+                    switch (src1->type) {
+                        case GGML_TYPE_F16:
+                            {
+                                if (ne00 == 192 && ne20 == 128) {
+                                    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_HK192_HV128].pipeline;
+                                }
+                                else if (ne00 == 576 && ne20 == 512) {
+                                    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_HK576_HV512].pipeline;
+                                } else {
+                                    switch (ne00) {
+                                        case 64:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H64 ].pipeline; break;
+                                        case 80:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H80 ].pipeline; break;
+                                        case 96:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H96 ].pipeline; break;
+                                        case 112: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H112].pipeline; break;
+                                        case 128: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H128].pipeline; break;
+                                        case 256: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_F16_H256].pipeline; break;
+                                        default:
+                                            {
+                                                GGML_METAL_LOG_ERROR("unsupported size: %d\n", (int)ne00);
+                                                GGML_METAL_LOG_ERROR("add template specialization for this size\n");
+                                                GGML_ABORT("add template specialization for this size");
+                                            }
+                                    }
+                                }
+                            } break;
+                        case GGML_TYPE_Q8_0:
+                            {
+                                if (ne00 == 192 && ne20 == 128) {
+                                    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_HK192_HV128].pipeline;
+                                }
+                                else if (ne00 == 576 && ne20 == 512) {
+                                    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_HK576_HV512].pipeline;
+                                } else {
+                                    switch (ne00) {
+                                        case 64:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H64 ].pipeline; break;
+                                        case 80:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H80 ].pipeline; break;
+                                        case 96:  pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H96 ].pipeline; break;
+                                        case 112: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H112].pipeline; break;
+                                        case 128: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H128].pipeline; break;
+                                        case 256: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_FLASH_ATTN_EXT_VEC_Q8_0_H256].pipeline; break;
+                                        default:
+                                            {
+                                                GGML_METAL_LOG_ERROR("unsupported size: %d\n", (int)ne00);
+                                                GGML_METAL_LOG_ERROR("add template specialization for this size\n");
+                                                GGML_ABORT("add template specialization for this size");
+                                            }
+                                    }
+                                }
+                            } break;
                         default:
-                                  {
-                                      GGML_METAL_LOG_ERROR("unsupported size: %lld\n", ne00);
-                                      GGML_METAL_LOG_ERROR("add template specialization for this size\n");
-                                      GGML_ABORT("add template specialization for this size");
-                                  }
+                            {
+                                GGML_METAL_LOG_ERROR("unsupported type: %s\n", ggml_type_name(src1->type));
+                                GGML_METAL_LOG_ERROR("add template specialization for this type\n");
+                                GGML_ABORT("add template specialization for this type");
+                            }
                     }
+
                 }
+
+                typedef struct {
+                    int32_t  ne01;
+                    int32_t  ne02;
+                    int32_t  ne03;
+                    uint64_t nb01;
+                    uint64_t nb02;
+                    uint64_t nb03;
+                    int32_t  ne11;
+                    int32_t  ne_12_2; // assume K and V are same shape
+                    int32_t  ne_12_3;
+                    uint64_t nb11;
+                    uint64_t nb12;
+                    uint64_t nb13;
+                    uint64_t nb21;
+                    uint64_t nb22;
+                    uint64_t nb23;
+                    uint64_t nb31;
+                    int32_t  ne1;
+                    int32_t  ne2;
+                    float    scale;
+                    float    max_bias;
+                    float    m0;
+                    float    m1;
+                    uint16_t n_head_log2;
+                    float    logit_softcap;
+                } ggml_metal_kargs_flash_attn_ext;
+
+                ggml_metal_kargs_flash_attn_ext args = {
+                    /*.ne01          =*/ ne01,
+                    /*.ne02          =*/ ne02,
+                    /*.ne03          =*/ ne03,
+                    /*.nb01          =*/ nb01,
+                    /*.nb02          =*/ nb02,
+                    /*.nb03          =*/ nb03,
+                    /*.ne11          =*/ ne11,
+                    /*.ne_12_2       =*/ ne12,
+                    /*.ne_12_3       =*/ ne13,
+                    /*.nb11          =*/ nb11,
+                    /*.nb12          =*/ nb12,
+                    /*.nb13          =*/ nb13,
+                    /*.nb21          =*/ nb21,
+                    /*.nb22          =*/ nb22,
+                    /*.nb23          =*/ nb23,
+                    /*.nb31          =*/ nb31,
+                    /*.ne1           =*/ ne1,
+                    /*.ne2           =*/ ne2,
+                    /*.scale         =*/ scale,
+                    /*.max_bias      =*/ max_bias,
+                    /*.m0            =*/ m0,
+                    /*.m1            =*/ m1,
+                    /*.n_head_log2   =*/ n_head_log2,
+                    /*.logit_softcap =*/ softcap,
+                };
 
                 [encoder setComputePipelineState:pipeline];
-                [encoder setBuffer:id_src0     offset:offs_src0           atIndex:0];
-                [encoder setBuffer:id_src1     offset:offs_src1           atIndex:1];
-                [encoder setBuffer:id_src2     offset:offs_src2           atIndex:2];
+                [encoder setBytes:&args length:sizeof(args)     atIndex:0];
+                [encoder setBuffer:id_src0 offset:offs_src0     atIndex:1];
+                [encoder setBuffer:id_src1 offset:offs_src1     atIndex:2];
+                [encoder setBuffer:id_src2 offset:offs_src2     atIndex:3];
                 if (id_src3) {
-                    [encoder setBuffer:id_src3     offset:offs_src3           atIndex:3];
+                    [encoder setBuffer:id_src3 offset:offs_src3 atIndex:4];
                 } else {
-                    [encoder setBuffer:id_src0     offset:offs_src0           atIndex:3];
+                    [encoder setBuffer:id_src0 offset:offs_src0 atIndex:4];
                 }
-                [encoder setBuffer:id_dst      offset:offs_dst            atIndex:4];
-                [encoder setBytes:&ne01        length:sizeof( int64_t)    atIndex:5];
-                [encoder setBytes:&ne02        length:sizeof( int64_t)    atIndex:6];
-                [encoder setBytes:&ne03        length:sizeof( int64_t)    atIndex:7];
-                [encoder setBytes:&nb01        length:sizeof(uint64_t)    atIndex:8];
-                [encoder setBytes:&nb02        length:sizeof(uint64_t)    atIndex:9];
-                [encoder setBytes:&nb03        length:sizeof(uint64_t)    atIndex:10];
-                [encoder setBytes:&ne11        length:sizeof( int64_t)    atIndex:11];
-                [encoder setBytes:&ne12        length:sizeof( int64_t)    atIndex:12];
-                [encoder setBytes:&ne13        length:sizeof( int64_t)    atIndex:13];
-                [encoder setBytes:&nb11        length:sizeof(uint64_t)    atIndex:14];
-                [encoder setBytes:&nb12        length:sizeof(uint64_t)    atIndex:15];
-                [encoder setBytes:&nb13        length:sizeof(uint64_t)    atIndex:16];
-                [encoder setBytes:&nb21        length:sizeof(uint64_t)    atIndex:17];
-                [encoder setBytes:&nb22        length:sizeof(uint64_t)    atIndex:18];
-                [encoder setBytes:&nb23        length:sizeof(uint64_t)    atIndex:19];
-                [encoder setBytes:&nb31        length:sizeof(uint64_t)    atIndex:20];
-                [encoder setBytes:&ne1         length:sizeof( int64_t)    atIndex:21];
-                [encoder setBytes:&ne2         length:sizeof( int64_t)    atIndex:22];
-                [encoder setBytes:&scale       length:sizeof(   float)    atIndex:23];
-                [encoder setBytes:&max_bias    length:sizeof(   float)    atIndex:24];
-                [encoder setBytes:&m0          length:sizeof(m0)          atIndex:25];
-                [encoder setBytes:&m1          length:sizeof(m1)          atIndex:26];
-                [encoder setBytes:&softcap     length:sizeof(softcap)     atIndex:27];
-                [encoder setBytes:&n_head_log2 length:sizeof(n_head_log2) atIndex:28];
+                [encoder setBuffer:id_dst offset:offs_dst       atIndex:5];
 
                 if (!use_vec_kernel) {
                     // half8x8 kernel
@@ -3324,10 +3496,19 @@ static void ggml_metal_encode_node(
                     GGML_ASSERT(nqptg  % 8  == 0);
                     GGML_ASSERT(ncpsg  % 32 == 0);
 
+                    // 2*(2*ncpsg + nqptg)*(nsg)
+                    // ncpsg soft_max values + ncpsg mask values + a diagonal scaling matrix (in float)
+                    //
+                    // 16*32*(nsg)
+                    // the shared memory needed for the simdgroups to load the KV cache
+                    // each thread loads (dequantizes) 16 head elements, there are 32 threads in th SG
+                    //
+#define FATTN_SMEM(nsg) (GGML_PAD((nqptg*(ne00 + 2*(2*ncpsg + nqptg)*(nsg)) + 16*32*(nsg))*(sizeof(float)/2), 16))
+
                     int64_t nsgmax = 2;
 
                     while (true) {
-                        const size_t smem = nqptg*(ne00 + 2*nsgmax*(ncpsg + nqptg))*(sizeof(float)/2);
+                        const size_t smem = FATTN_SMEM(nsgmax);
                         if (smem > ctx->device.maxThreadgroupMemoryLength) {
                             break;
                         }
@@ -3338,14 +3519,14 @@ static void ggml_metal_encode_node(
                     // simdgroups per threadgroup (a.k.a. warps)
                     const int64_t nsg = ne01 <= nqptg ? MAX(4, MIN(nsgmax, MIN(ne11/ncpsg, (int64_t) pipeline.maxTotalThreadsPerThreadgroup/32))) : 4;
 
-                    const size_t smem = nqptg*(ne00 + 2*nsg*(ncpsg + nqptg))*(sizeof(float)/2);
+                    const size_t smem = FATTN_SMEM(nsg);
 
-                    //printf("smem: %zu, max: %zu\n", smem, ctx->device.maxThreadgroupMemoryLength);
+                    //printf("smem: %zu, max: %zu, nsg = %d\n", smem, device.maxThreadgroupMemoryLength, (int) nsg);
                     GGML_ASSERT(smem <= ctx->device.maxThreadgroupMemoryLength);
-
-                    [encoder setThreadgroupMemoryLength:GGML_PAD(smem, 16) atIndex:0];
-
+                    [encoder setThreadgroupMemoryLength:smem atIndex:0];
+#undef FATTN_SMEM
                     [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nqptg - 1)/nqptg, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+
                 } else {
                     // half1x4 kernel
                     const int64_t nqptg = 1;  // queries per threadgroup    !! sync with kernel template arguments !!
@@ -3355,8 +3536,27 @@ static void ggml_metal_encode_node(
                     GGML_ASSERT(nqptg  % 1  == 0);
                     GGML_ASSERT(ncpsg  % 32 == 0);
 
+                    // ne00 + 2*ncpsg*(nsg)
+                    // for each query, we load it as f16 in shared memory (ne00)
+                    // and store the soft_max values and the mask
+                    //
+                    // ne00*(nsg)
+                    // each simdgroup has a full f16 head vector in shared mem to accumulate results
+                    //
+#define FATTN_SMEM(nsg) (GGML_PAD((nqptg*(GGML_PAD(ne00, 128) + 2*ncpsg*(nsg)) + ne20*(nsg))*(sizeof(float)/2), 16))
+
+                    int64_t nsgmax = 2;
+                    while (true) {
+                        const size_t smem = FATTN_SMEM(nsgmax);
+                        if (smem > ctx->device.maxThreadgroupMemoryLength) {
+                            break;
+                        }
+                        nsgmax *= 2;
+                    }
+                    nsgmax /= 2;
+
                     // simdgroups per threadgroup (a.k.a. warps)
-                    const int64_t nsgt = MAX(2, MIN(ne11/ncpsg, (int64_t) pipeline.maxTotalThreadsPerThreadgroup/32));
+                    const int64_t nsgt = MAX(2, MIN(nsgmax, MIN(ne11/ncpsg, (int64_t) pipeline.maxTotalThreadsPerThreadgroup/32)));
 
                     int64_t nsg = 1;
                     while (nsg <= nsgt) {
@@ -3364,13 +3564,14 @@ static void ggml_metal_encode_node(
                     }
                     nsg /= 2;
 
-                    const size_t smem = (nqptg*(ne00 + 2*nsg*(ncpsg + nqptg)) + nsg*ne00)*(sizeof(float)/2);
+                    const size_t smem = FATTN_SMEM(nsg);
 
-                    //printf("smem: %zu, max: %zu\n", smem, ctx->device.maxThreadgroupMemoryLength);
+                    //printf("smem: %zu, max: %zu, nsg = %d\n", smem, device.maxThreadgroupMemoryLength, (int) nsg);
                     GGML_ASSERT(smem <= ctx->device.maxThreadgroupMemoryLength);
-                    [encoder setThreadgroupMemoryLength:GGML_PAD(smem, 16) atIndex:0];
-
+                    [encoder setThreadgroupMemoryLength:smem atIndex:0];
+#undef FATTN_SMEM
                     [encoder dispatchThreadgroups:MTLSizeMake((ne01 + nqptg - 1)/nqptg, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(32, nsg, 1)];
+
                 }
             } break;
         case GGML_OP_DUP:
