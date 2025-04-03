@@ -15829,9 +15829,9 @@ struct FlashMS {
             auto vm2 = vzip2q_u16(vm, vm);
             auto kq  = vld1q_f32_x2(cache + k_step*j + 8*l);
             vk[2*l+0] = vreinterpretq_f32_u32(vorrq_u32(vandq_u32(vreinterpretq_u32_f32(kq.val[0]), vm1),
-                                                        vbicq_u32(vinf, vm1)));
+                                                        vbicq_u32(vreinterpretq_u32_f32(vinf), vm1)));
             vk[2*l+1] = vreinterpretq_f32_u32(vorrq_u32(vandq_u32(vreinterpretq_u32_f32(kq.val[1]), vm2),
-                                                        vbicq_u32(vinf, vm2)));
+                                                        vbicq_u32(vreinterpretq_u32_f32(vinf), vm2)));
         }
         float32x4_t vmax = vdupq_n_f32(-INFINITY);
         auto vscale32 = vcvt_f32_f16(vget_low_f16(vscale));
