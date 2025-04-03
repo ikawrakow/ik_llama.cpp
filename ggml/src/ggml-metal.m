@@ -2079,7 +2079,7 @@ static void ggml_metal_encode_node(
                         if ([ctx->device supportsFamily:MTLGPUFamilyApple7] &&
                                 !ggml_is_transposed(src0) &&
                                 !ggml_is_transposed(src1) &&
-                                src1t == GGML_TYPE_F32 &&
+                                (src1t == GGML_TYPE_F32 || src1t == GGML_TYPE_F16) &&
                                 ne00 % 32 == 0 && ne00 >= 64 &&
                                 (ne11 > ne11_mm_min || (ggml_is_quantized(src0t) && ne12 > 1))) {
                             //printf("matrix: ne00 = %6d, ne01 = %6d, ne02 = %6d, ne11 = %6d, ne12 = %6d\n", ne00, ne01, ne02, ne11, ne12);

@@ -14015,7 +14015,6 @@ struct llm_build_context {
                     if (lctx.cparams.mla_attn > 1 && lctx.cparams.flash_attn && pp_opt) { // PP for mla=2,3
 
                         auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_lora_rank, n_kv, kv_self.kv_l[il]->nb[1], 0);
-                        auto kv_cache_nope_f32 = ggml_cast(ctx0, kv_cache_nope, GGML_TYPE_F32);
 
                         auto kv_f32_size = model.layers[il].wkv_b->ne[1] * kv_cache_nope->ne[1] * sizeof(float) / (1024*1024);
                         int n_max_head = n_head;
@@ -14059,8 +14058,7 @@ struct llm_build_context {
                             auto wkv_b = ggml_view_2d(ctx0, model.layers[il].wkv_b, model.layers[il].wkv_b->ne[0], n_per_head*n_max_head,
                                     model.layers[il].wkv_b->nb[1], model.layers[il].wkv_b->nb[1]*n_per_head*n_max_head*iter);
 
-                            //auto kv_f32 = ggml_mul_mat(ctx0, wkv_b, kv_cache_nope);
-                            auto kv_f32 = ggml_mul_mat(ctx0, wkv_b, kv_cache_nope_f32);
+                            auto kv_f32 = ggml_mul_mat(ctx0, wkv_b, kv_cache_nope);
                             cb(kv_f32, "kv_f32", il);
 
                             auto v_f32 = ggml_view_3d(ctx0, kv_f32, hparams.n_embd_head_v, n_kv, n_max_head,

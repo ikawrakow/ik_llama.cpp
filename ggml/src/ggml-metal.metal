@@ -8352,7 +8352,8 @@ kernel void kernel_mul_mm(device const  uchar * src0,
         if (is_same_v<src1_t, float>) {
             *(threadgroup float2x4 *)(sb + (tiitg % THREAD_PER_COL) * 8 * 32 + 8 * (tiitg / THREAD_PER_COL)) = *((device float2x4 *)y);
         } else {
-            *(threadgroup float2x4 *)(sb + (tiitg % THREAD_PER_COL) * 8 * 32 + 8 * (tiitg / THREAD_PER_COL)) = (float2x4)(*((device half2x4 *)y));
+            half2x4 h = *((device half2x4 *)y);
+            *(threadgroup float2x4 *)(sb + (tiitg % THREAD_PER_COL) * 8 * 32 + 8 * (tiitg / THREAD_PER_COL)) = (float2x4)h;
         }
 
         deq.next();
@@ -8726,7 +8727,7 @@ template [[host_name("kernel_mul_mm_iq3_k_f32")]]   kernel mat_mm_t kernel_mul_m
 template [[host_name("kernel_mul_mm_iq4_k_f32")]]   kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DD<block_iq4_k,   QK_NL, dequantize_iq4_k>, float>;
 template [[host_name("kernel_mul_mm_iq5_k_f32")]]   kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DD<block_iq5_k,   QK_NL, dequantize_iq5_k>, float>;
 template [[host_name("kernel_mul_mm_iq6_k_f32")]]   kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DD<block_iq6_k,   QK_NL, dequantize_iq6_k>, float>;
-template [[host_name("kernel_mul_mm_iq1_bn_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DequantizerRSBN<half4x4, block_iq1_bn,  half,  4, dequantize_iq1_bn, true>>;
+template [[host_name("kernel_mul_mm_iq1_bn_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DequantizerRSBN<half4x4, block_iq1_bn,  half,  4, dequantize_iq1_bn, true>, float>;
 template [[host_name("kernel_mul_mm_iq2_bn_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DequantizerRSBN<half4x4, block_iq2_bn, float,  4, dequantize_iq2_bn>, float>;
 template [[host_name("kernel_mul_mm_iq4_ks_f32")]]  kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DequantizerRS<half4x4, block_iq4_ks, float, 16, dequantize_iq4_ks>, float>;
 template [[host_name("kernel_mul_mm_iq4_kss_f32")]] kernel mat_mm_t kernel_mul_mm<half, simdgroup_half8x8, DequantizerRS<half4x4, block_iq4_kss,float, 16, dequantize_iq4_kss>, float>;
