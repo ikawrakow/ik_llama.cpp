@@ -1147,6 +1147,10 @@ if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
         if (GGML_SVE)
             list(APPEND ARCH_FLAGS -march=armv8.6-a+sve)
         endif()
+        if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+            # else we fail on Gravitons and such
+            list(APPEND ARCH_FLAGS -flax-vector-conversions)
+        endif()
     endif()
 elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LWR MATCHES "^(x86_64|i686|amd64|x64|win32)$" OR
         (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_GENERATOR_PLATFORM_LWR AND
