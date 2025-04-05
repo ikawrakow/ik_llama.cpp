@@ -2208,7 +2208,7 @@ static inline void prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n
     std::vector<char> ids_host(ggml_nbytes(ids));
     const char * ids_dev = (const char *) ids->data;
     CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
-    //CUDA_CHECK(cudaStreamSynchronize(stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     std::vector<mmid_row_mapping> rmapping(ids->ne[1]*n_ids);
     moe_counts.resize(n_as, 0);
@@ -2239,6 +2239,7 @@ static inline void prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n
     for (int i = 0; i < (int)n_as; ++i) cum_moe_counts[i] -= moe_counts[i];
 
     CUDA_CHECK(cudaMemcpyAsync(dev_row_mapping.get(), rmapping.data(), cum_moe_counts[n_as]*sizeof(mmid_row_mapping), cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
 }
 
@@ -2302,11 +2303,6 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int64_t n_as = ne02;
     const int64_t n_ids = ids->ne[0];
 
-    //std::vector<char> ids_host(ggml_nbytes(ids));
-    //const char * ids_dev = (const char *) ids->data;
-    //CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
-    //CUDA_CHECK(cudaStreamSynchronize(stream));
-
     ggml_tensor src0_row = *src0;
     ggml_tensor src1_row = *src1;
     ggml_tensor dst_row  = *dst;
@@ -2335,12 +2331,12 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         std::vector<char> ids_host(ggml_nbytes(ids));
         const char * ids_dev = (const char *) ids->data;
         CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
         for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
             for (int64_t id = 0; id < n_ids; id++) {
                 const int32_t i02 = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
 
                 if (i02 < 0 || i02 >= n_as) continue;
-                //GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
                 const int64_t i11 = id % ne11;
                 const int64_t i12 = iid1;
