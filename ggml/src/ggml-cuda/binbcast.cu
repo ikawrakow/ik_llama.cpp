@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2024 The ggml authors
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "binbcast.cuh"
 
 static __device__ __forceinline__ float op_repeat(const float a, const float b) {

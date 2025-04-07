@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2024 The ggml authors
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "unary.cuh"
 
 static __global__ void gelu_f32(const float * x, float * dst, const int k) {

@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2025 The llama.cpp authors
+// Copyright (C) 2024-2025 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "llama-impl.h"
 #include "llama-vocab.h"
 #include "llama-grammar.h"
