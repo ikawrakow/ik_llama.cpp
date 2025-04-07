@@ -1,3 +1,9 @@
+//
+// Copyright (C) 2024-2025 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #pragma once
 
 bool iqk_flash_attn_impl(int type_k,             // type of k

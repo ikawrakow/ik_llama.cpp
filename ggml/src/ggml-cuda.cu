@@ -1,3 +1,9 @@
+//
+// Copyright (C) 2023-2024 The ggml authors
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
 #include "ggml-cuda.h"
 #include "ggml.h"
 #include "ggml-backend-impl.h"

@@ -1,3 +1,9 @@
+//
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "common.cuh"
 
 void mul_mat_vec_iq2_k_q8_1_cuda(
