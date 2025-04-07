@@ -1,3 +1,9 @@
+//
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "softcap.cuh"
 
 static __global__ void softcap_f32(const float * x, float * dst, float s_before, float s_after, const int k) {

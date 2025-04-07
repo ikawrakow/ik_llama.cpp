@@ -1,3 +1,9 @@
+//
+// Copyright (C) 2024-2025 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "iqk_config.h"
 #include "iqk_mul_mat.h"
 #include "iqk_flash_impl.h"
