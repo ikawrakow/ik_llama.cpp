@@ -774,9 +774,11 @@ static __global__ void dequantize_block_iq2_ks(const void * __restrict__ vx, dst
     int64_t ii  = blockIdx.x;
     int64_t row = (QK_K * ii) / n_per_row;
     const char * cx = (const char *)vx + row * row_size;
-    const float d = (float)*(const half *)cx;
+    const float d = (float)(*(const half *)cx) * 1.025f;
     const block_iq2_ks * x = (const block_iq2_ks *)(cx + sizeof(half));
     const int64_t i   = ii - (row*n_per_row)/QK_K;
+
+    auto values = iq2ks_values;
 
     const int tid = threadIdx.x;
     int ib128 = tid/16; // 0 or 1
@@ -790,17 +792,17 @@ static __global__ void dequantize_block_iq2_ks(const void * __restrict__ vx, dst
     const uint8_t * qs = x[i].qs + 32*ib128 + 2*il;
     if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
         for (int j = 0; j < 2; ++j) {
-            y[j+ 0] = __float2bfloat16(dl1 * iq2nl_values[((qs[j] >> 0) & 0x03) + ((extra << 2) & 4)]);
-            y[j+32] = __float2bfloat16(dl2 * iq2nl_values[((qs[j] >> 2) & 0x03) + ((extra << 1) & 4)]);
-            y[j+64] = __float2bfloat16(dl3 * iq2nl_values[((qs[j] >> 4) & 0x03) + ((extra >> 0) & 4)]);
-            y[j+96] = __float2bfloat16(dl4 * iq2nl_values[((qs[j] >> 6) & 0x03) + ((extra >> 1) & 4)]);
+            y[j+ 0] = __float2bfloat16(dl1 * values[((qs[j] >> 0) & 0x03) + ((extra << 2) & 4)]);
+            y[j+32] = __float2bfloat16(dl2 * values[((qs[j] >> 2) & 0x03) + ((extra << 1) & 4)]);
+            y[j+64] = __float2bfloat16(dl3 * values[((qs[j] >> 4) & 0x03) + ((extra >> 0) & 4)]);
+            y[j+96] = __float2bfloat16(dl4 * values[((qs[j] >> 6) & 0x03) + ((extra >> 1) & 4)]);
         }
     } else {
         for (int j = 0; j < 2; ++j) {
-            y[j+ 0] = dl1 * iq2nl_values[((qs[j] >> 0) & 0x03) + ((extra << 2) & 4)];
-            y[j+32] = dl2 * iq2nl_values[((qs[j] >> 2) & 0x03) + ((extra << 1) & 4)];
-            y[j+64] = dl3 * iq2nl_values[((qs[j] >> 4) & 0x03) + ((extra >> 0) & 4)];
-            y[j+96] = dl4 * iq2nl_values[((qs[j] >> 6) & 0x03) + ((extra >> 1) & 4)];
+            y[j+ 0] = dl1 * values[((qs[j] >> 0) & 0x03) + ((extra << 2) & 4)];
+            y[j+32] = dl2 * values[((qs[j] >> 2) & 0x03) + ((extra << 1) & 4)];
+            y[j+64] = dl3 * values[((qs[j] >> 4) & 0x03) + ((extra >> 0) & 4)];
+            y[j+96] = dl4 * values[((qs[j] >> 6) & 0x03) + ((extra >> 1) & 4)];
         }
     }
 }

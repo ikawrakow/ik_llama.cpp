@@ -2123,6 +2123,10 @@ GGML_TABLE_BEGIN(int8_t, iq2nl_values, 8)
     -31, -13, 1, 17,   -26, -8, 6, 22
 GGML_TABLE_END()
 
+GGML_TABLE_BEGIN(int8_t, iq2ks_values, 8)
+    -32, -12, 1, 17,   -27, -7, 6, 22
+GGML_TABLE_END()
+
 GGML_TABLE_BEGIN(int8_t, iq3nl_values, 16)
     -63, -40, -23, -10, 1, 13, 28,  47,
     -59, -36, -19,  -6, 5, 17, 32,  51,
