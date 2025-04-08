@@ -3245,13 +3245,15 @@ static bool llama_kv_cache_init(
         cache.ctxs.push_back(ctx);
     }
 
-    cache.k_l.reserve(n_layer);
-    cache.v_l.reserve(n_layer);
-
-    // DeepSeek MLA
-    cache.kv_l.reserve(n_layer);
-    if (cparams.mla_attn == 1 && !cparams.flash_attn) {
-        cache.kvt_l.reserve(n_layer);
+    if (model.arch == LLM_ARCH_DEEPSEEK2 && cparams.mla_attn) {
+        // DeepSeek MLA
+        cache.kv_l.reserve(n_layer);
+        if (cparams.mla_attn == 1 && !cparams.flash_attn) {
+            cache.kvt_l.reserve(n_layer);
+        }
+    } else {
+        cache.k_l.reserve(n_layer);
+        cache.v_l.reserve(n_layer);
     }
 
     bool warn = true;
@@ -3299,7 +3301,7 @@ static bool llama_kv_cache_init(
             cache.v_l.push_back(v);
         }
     }
-    if (cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
+    if (model.arch == LLM_ARCH_DEEPSEEK2 && cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
         LLAMA_LOG_ERROR("%s: bailing out\n", __func__);
         GGML_ABORT("fatal error");
@@ -18566,6 +18568,13 @@ struct llama_context * llama_new_context_with_model(
 
     if (params.seed == LLAMA_DEFAULT_SEED) {
         params.seed = time(NULL);
+    }
+
+    if (model->arch != LLM_ARCH_DEEPSEEK2 && cparams.mla_attn > 0) {
+        LLAMA_LOG_WARN("=====================================================================\n");
+        LLAMA_LOG_WARN(" MLA is only available for LLM_ARCH_DEEPSEEK2 -> turning off MLA\n");
+        LLAMA_LOG_WARN("=====================================================================\n");
+        cparams.mla_attn = 0;
     }
 
     LLAMA_LOG_INFO("%s: n_ctx      = %u\n",     __func__, cparams.n_ctx);
