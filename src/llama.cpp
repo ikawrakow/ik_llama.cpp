@@ -321,6 +321,7 @@ enum llm_kv {
     LLM_KV_TIME_DECAY_EXTRA_DIM,
     LLM_KV_RESIDUAL_SCALE,
     LLM_KV_EMBEDDING_SCALE,
+    LLM_KV_TOKEN_SHIFT_COUNT,
     LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
 
     LLM_KV_ATTENTION_HEAD_COUNT,
@@ -425,6 +426,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_FINAL_LOGIT_SOFTCAPPING,           "%s.final_logit_softcapping"           },
     { LLM_KV_RESIDUAL_SCALE,                    "%s.residual_scale"                    },
     { LLM_KV_EMBEDDING_SCALE,                   "%s.embedding_scale"                   },
+    { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                 },
+    { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
 
     { LLM_KV_ATTENTION_HEAD_COUNT,             "%s.attention.head_count"             },
     { LLM_KV_ATTENTION_HEAD_COUNT_KV,          "%s.attention.head_count_kv"          },
@@ -2983,6 +2986,8 @@ struct llama_context {
     struct llama_kv_cache       kv_self;
     struct llama_control_vector cvec;
 
+    std::vector<float> scale_data;
+
     std::unordered_map<struct llama_lora_adapter *, float> lora_adapters;
 
     std::vector<ggml_backend_t> backends;
@@ -3059,6 +3064,7 @@ struct llama_context {
     struct ggml_tensor * inp_pos_bucket;    // I32 [n_batch|n_kv, n_batch]
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
+    struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
 };
 
 struct llama_lora_weight {
@@ -8761,8 +8767,6 @@ static void llm_build_kv_store(
     // note: storing RoPE-ed version of K in the KV cache
     ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur, k_cache_view));
 
-    assert(v_cur->ne[0] == n_embd_v_gqa && v_cur->ne[1] == n_tokens);
-
     struct ggml_tensor * v_cache_view = nullptr;
 
     if (cparams.flash_attn) {
@@ -9643,6 +9647,14 @@ struct llm_build_context {
         return lctx.inp_pos;
     }
 
+    struct ggml_tensor * build_inpup_scale(int n_tokens) {
+        int n_pos_per_token = 1;
+        lctx.inp_scale = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, 1, n_tokens*n_pos_per_token);
+        cb(lctx.inp_scale, "inp_scale", -1);
+        ggml_set_input(lctx.inp_scale);
+        return lctx.inp_scale;
+    }
+
     struct ggml_tensor * build_rope_factors(int il) {
         // choose long/short freq factors based on the context size
         const auto n_ctx_pre_seq = cparams.n_ctx / cparams.n_seq_max;
@@ -9833,14 +9845,7 @@ struct llm_build_context {
         struct ggml_tensor * inp_pos = build_inp_pos();
 
         if (model.arch == LLM_ARCH_LLAMA4) {
-            //inp_attn_scale = build_inp_attn_scale();
-            inp_attn_scale = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, 1, n_tokens*1); // n_pos_per_token(), which is 4 for LLM_ARCH_QWEN2VL, 1 otherwise
-            ggml_set_input(inp_attn_scale);
-            auto scale_data = (float *)inp_attn_scale->data;
-            auto pos = (const int32_t *)inp_pos->data;
-            for (int i = 0; i < n_tokens; ++i) {
-                scale_data[i] = std::log(std::floor((pos[i] + 1.0f) / hparams.n_attn_temp_floor_scale) + 1.0f) * hparams.f_attn_temp_scale + 1.0f;
-            }
+            inp_attn_scale = build_inpup_scale(n_tokens);
         }
 
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
@@ -9890,20 +9895,16 @@ struct llm_build_context {
                     cb(Vcur, "Vcur", il);
                 }
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
                 if (use_rope) {
-                    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
+                    Qcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_pos, rope_factors,
                             n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                             ext_factor, attn_factor, beta_fast, beta_slow);
 
-                    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
+                    Kcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens), inp_pos, rope_factors,
                             n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                             ext_factor, attn_factor, beta_fast, beta_slow);
                 } else if (inp_attn_scale) {
-                    Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
+                    Qcur = ggml_mul(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_attn_scale);
                 }
 
                 cb(Qcur, "Qcur", il);
@@ -15638,6 +15639,17 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         const int64_t n_tokens = batch.n_tokens;
 
         ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*ggml_element_size(lctx.inp_pos));
+    }
+
+    if (lctx.inp_pos && lctx.inp_scale) {
+        int n_tokens = batch.n_tokens;
+        GGML_ASSERT(ggml_nelements(lctx.inp_scale) >= n_tokens);
+        if (int(lctx.scale_data.size()) < n_tokens) lctx.scale_data.resize(n_tokens);
+        int n_pos_per_token = 1;
+        for (int i = 0; i < n_tokens; ++i) {
+            lctx.scale_data[i] = std::log(std::floor((batch.pos[i] + 1.0f) / hparams.n_attn_temp_floor_scale) + 1.0f) * hparams.f_attn_temp_scale + 1.0f;
+        }
+        ggml_backend_tensor_set(lctx.inp_scale, lctx.scale_data.data(), 0, n_tokens*n_pos_per_token*ggml_element_size(lctx.inp_scale));
     }
 
     if (hparams.causal_attn || cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
