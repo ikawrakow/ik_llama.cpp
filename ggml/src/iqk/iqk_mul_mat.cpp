@@ -16659,7 +16659,7 @@ struct FlashAttn {
                     kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, M, S);
         }
         else if constexpr (std::is_same_v<KHelper, HelperQ80<Dk, k_step>>) {
-            if (nq1 >= 8) {
+            if (nq1 >= 9999999) { //8) {
 #if FA_TIMING
                 auto t1 = Perf::cur_time();
                 HelperQ80R8<Dk, k_step> khr4(nk1, kh);
