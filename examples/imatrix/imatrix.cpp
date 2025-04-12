@@ -13,6 +13,7 @@
 #include <cstring>
 #include <ctime>
 #include <sstream>
+#include <string>
 #include <thread>
 #include <mutex>
 #include <vector>
@@ -30,12 +31,13 @@ static void print_usage(int argc, char ** argv, const gpt_params & params) {
     LOG_TEE("\nexample usage:\n");
     LOG_TEE("\n    %s \\\n"
             "       -m model.gguf -f some-text.txt [-o imatrix.dat] [--process-output] [--verbosity 1] \\\n"
-            "       [--no-ppl] [--chunk 123] [--output-frequency 10] [--save-frequency 0] \\\n"
+            "       [--no-ppl] [--no-lim] [--chunk 123] [--output-frequency 10] [--save-frequency 0] \\\n"
             "       [--in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat ...]\n" , argv[0]);
     LOG_TEE("\n");
 }
 
 struct Stats {
+    std::vector<float> activations;
     std::vector<float> values;
     std::vector<int> counts;
     int ncall = 0;
@@ -48,6 +50,7 @@ public:
     void set_params(gpt_params params) { m_params = std::move(params); }
     bool collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data);
     void save_imatrix(int ncall = -1) const;
+    void compute_lim();
     bool load_imatrix(const char * file_name);
 private:
     std::unordered_map<std::string, Stats> m_stats;
@@ -131,6 +134,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         ++e.ncall;
 
         if (e.values.empty()) {
+            e.activations.resize(src1->ne[0]*n_as, 0);
             e.values.resize(src1->ne[0]*n_as, 0);
             e.counts.resize(src1->ne[0]*n_as, 0);
             e.n_as = n_as;
@@ -162,6 +166,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     const float * x = (const float *)((const char *)data + i11*src1->nb[1] + i12*src1->nb[2]);
 
                     for (int j = 0; j < (int)src1->ne[0]; ++j) {
+                        e.activations[e_start + j] = x[j];
                         e.values[e_start + j] += x[j]*x[j];
                         e.counts[e_start + j]++;
                         if (!std::isfinite(e.values[e_start + j])) {
@@ -183,7 +188,9 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         }
     } else {
         auto & e = m_stats[wname];
+
         if (e.values.empty()) {
+            e.activations.resize(src1->ne[0], 0);
             e.values.resize(src1->ne[0], 0);
             e.counts.resize(src1->ne[0], 0);
         }
@@ -198,6 +205,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         for (int row = 0; row < (int)(src1->ne[1]*src1->ne[2]); ++row) {
             const float * x = data + row * src1->ne[0];
             for (int j = 0; j < (int)src1->ne[0]; ++j) {
+                e.activations[j] = x[j];
                 e.values[j] += x[j]*x[j];
                 e.counts[j]++;
                 if (!std::isfinite(e.values[j])) {
@@ -394,6 +402,99 @@ bool IMatrixCollector::load_imatrix(const char * fname) {
 
     }
     return true;
+}
+
+// Extract layer number from keys like "blk.17.ffn_gate.weight"
+int extract_layer(const std::string& name) {
+    size_t p1 = name.find('.') + 1;       // Skip "blk."
+    size_t p2 = name.find('.', p1);       // Find next "."
+    return std::stoi(name.substr(p1, p2 - p1));
+}
+
+void IMatrixCollector::compute_lim() {
+    if (m_stats.empty()) {
+        fprintf(stderr, "%s: no data collected - cannot compute LIM scores\n", __func__);
+        return;
+    }
+    printf("\n===\n");
+    printf("Computing Layer Importance Modification (LIM) Scores...\n");
+
+    // Convert to vector and sort by layer number
+    std::vector<std::pair<std::string, Stats>> sorted_pairs(m_stats.begin(), m_stats.end());
+    std::sort(sorted_pairs.begin(), sorted_pairs.end(),
+        [](const auto& a, const auto& b) {
+            return extract_layer(a.first) < extract_layer(b.first);
+        }
+    );
+
+    // Group activations by tensor type (e.g., ffn_gate, attn_k, etc.)
+    std::unordered_map<std::string, std::vector<std::pair<int, const std::vector<float>*>>> tensor_groups;
+
+    for (const auto& pair : sorted_pairs) {
+        std::string full_name = pair.first;
+        size_t p1 = full_name.find('.') + 1;               // Skip "blk."
+        size_t p2 = full_name.find('.', p1);               // Find next "."
+        int layer = std::stoi(full_name.substr(p1, p2 - p1));
+        std::string tensor_name = full_name.substr(p2 + 1, full_name.rfind('.') - p2 - 1);
+
+        tensor_groups[tensor_name].emplace_back(layer, &pair.second.activations);
+    }
+
+    // Calculate LIM scores for each tensor type
+    for (const auto& group : tensor_groups) {
+        const std::string& tensor_name = group.first;
+        const auto& layers = group.second;
+
+        printf("\nTensor: %s\n", tensor_name.c_str());
+        printf("Layer\tLIM Score\n");
+        printf("-----\t---------\n");
+
+        // Need at least 2 layers to compute LIM scores
+        if (layers.size() < 2) {
+            printf("(Need at least 2 layers to compute LIM scores)\n");
+            continue;
+        }
+
+        // For each layer, compare with next layer's input (current layer's output)
+        for (size_t i = 0; i < layers.size() - 1; i++) {
+            int layer = layers[i].first;
+            const std::vector<float>& input_acts = *layers[i].second;
+            const std::vector<float>& output_acts = *layers[i+1].second;
+
+            // Check if activation sizes match
+            if (input_acts.size() != output_acts.size()) {
+                printf("%d\t(skipped - dimension mismatch: %zu vs %zu)\n",
+                       layer, input_acts.size(), output_acts.size());
+                continue;
+            }
+
+            // Calculate dot product and magnitudes
+            float dot_product = 0.0f;
+            float input_magnitude = 0.0f;
+            float output_magnitude = 0.0f;
+
+            for (size_t j = 0; j < input_acts.size(); j++) {
+                dot_product += input_acts[j] * output_acts[j];
+                input_magnitude += input_acts[j] * input_acts[j];
+                output_magnitude += output_acts[j] * output_acts[j];
+            }
+
+            input_magnitude = sqrtf(input_magnitude);
+            output_magnitude = sqrtf(output_magnitude);
+
+            // Avoid division by zero
+            if (input_magnitude == 0 || output_magnitude == 0) {
+                printf("%d\t(skipped - zero magnitude)\n", layer);
+                continue;
+            }
+
+            // Calculate cosine similarity and LIM score
+            float cosine_sim = dot_product / (input_magnitude * output_magnitude);
+            float lim_score = -cosine_sim;
+
+            printf("%d\t%.4f\n", layer, lim_score);
+        }
+    }
 }
 
 static IMatrixCollector g_collector;
@@ -683,10 +784,16 @@ int main(int argc, char ** argv) {
 
     llama_print_timings(ctx);
 
+    if (params.compute_lim) {
+        g_collector.compute_lim();
+    }
+
     llama_free(ctx);
     llama_free_model(model);
 
     llama_backend_free();
+
+
 
     return 0;
 }

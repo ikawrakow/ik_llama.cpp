@@ -1419,6 +1419,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.compute_ppl = false;
         return true;
     }
+    if (arg == "--no-lim") {
+        params.compute_lim = false;
+        return true;
+    }
     if (arg == "--chunk" || arg == "--from-chunk") {
         CHECK_ARG
         params.i_chunk = std::stoi(argv[i]);

@@ -270,6 +270,7 @@ struct gpt_params {
 
     bool process_output = false; // collect data for the output tensor
     bool compute_ppl    = true;  // whether to compute perplexity
+    bool compute_lim    = true;  // whether to compute and show Layer Importance Scores https://arxiv.org/pdf/2406.17415
 
     // cvector-generator params
     int n_pca_batch = 100;
