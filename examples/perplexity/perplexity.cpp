@@ -133,7 +133,7 @@ static double log_softmax(int n_vocab, const float * logits, uint16_t * log_prob
         max_logit = std::max(max_logit, logits[i]);
         min_logit = std::min(min_logit, logits[i]);
     }
-    min_logit = std::max(min_logit, max_logit - 16);
+    min_logit = std::max(min_logit, max_logit - 24);
     double sum_exp = 0.0;
     for (int i = 0; i < n_vocab; ++i) {
         sum_exp += expf(logits[i] - max_logit);
