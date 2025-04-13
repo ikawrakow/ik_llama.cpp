@@ -14643,9 +14643,7 @@ static void quantize_row_iq1_m_impl(const float * restrict x, void * restrict vy
             }
         }
         if (sumq2_f > 0) d = sumqx_f/sumq2_f;
-        //s.f16 = GGML_FP32_TO_FP16(d*1.1125f); // 1.1125f is another fudge factor. Don't ask me why it is needed.
-        //s.f16 = GGML_FP32_TO_FP16(d*1.0625f); // 1.1125f is another fudge factor. Don't ask me why it is needed.
-        s.f16 = GGML_FP32_TO_FP16(d*1.085f); // 1.1125f is another fudge factor. Don't ask me why it is needed.
+        s.f16 = GGML_FP32_TO_FP16(d*1.085f); // 1.085f is another fudge factor. Don't ask me why it is needed.
         sc[0] |= ((s.u16 & 0x000f) << 12);
         sc[1] |= ((s.u16 & 0x00f0) <<  8);
         sc[2] |= ((s.u16 & 0x0f00) <<  4);
