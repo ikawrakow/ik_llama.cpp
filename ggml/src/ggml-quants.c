@@ -14455,74 +14455,6 @@ void iq1m_process_1block(const float * xb, const float * weight, int8_t * L, flo
                        (sumw2[i1] - sumw2[0])*x_p[0]*x_p[0] + (sumw2[i2] - sumw2[i1])*x_p[1]*x_p[1] + (sumw2[block_size]-sumw2[i2])*x_p[2]*x_p[2];
             sumq2[3] = (sumw1[i1] - sumw1[0])*x_m[0]*x_m[0] + (sumw1[i2] - sumw1[i1])*x_m[1]*x_m[1] + (sumw1[block_size]-sumw1[i2])*x_m[2]*x_m[2] +
                        (sumw2[i1] - sumw2[0])*x_m[0]*x_m[0] + (sumw2[i2] - sumw2[i1])*x_m[1]*x_m[1] + (sumw2[block_size]-sumw2[i2])*x_m[2]*x_m[2];
-            //memset(sumqx, 0, 4*sizeof(float));
-            //memset(sumq2, 0, 4*sizeof(float));
-            //for (int j = 0; j < i1; ++j) {
-            //    int i = idx[2*j];
-            //    if (i < block_size/2) {
-            //        sumqx[0] += weight[i]*x_p[0]*xb[i];
-            //        sumqx[1] += weight[i]*x_p[0]*xb[i];
-            //        sumqx[2] += weight[i]*x_m[0]*xb[i];
-            //        sumqx[3] += weight[i]*x_m[0]*xb[i];
-            //        sumq2[0] += weight[i]*x_p[0]*x_p[0];
-            //        sumq2[1] += weight[i]*x_p[0]*x_p[0];
-            //        sumq2[2] += weight[i]*x_m[0]*x_m[0];
-            //        sumq2[3] += weight[i]*x_m[0]*x_m[0];
-            //    } else {
-            //        sumqx[0] += weight[i]*x_p[0]*xb[i];
-            //        sumqx[2] += weight[i]*x_p[0]*xb[i];
-            //        sumqx[1] += weight[i]*x_m[0]*xb[i];
-            //        sumqx[3] += weight[i]*x_m[0]*xb[i];
-            //        sumq2[0] += weight[i]*x_p[0]*x_p[0];
-            //        sumq2[2] += weight[i]*x_p[0]*x_p[0];
-            //        sumq2[1] += weight[i]*x_m[0]*x_m[0];
-            //        sumq2[3] += weight[i]*x_m[0]*x_m[0];
-            //    }
-            //}
-            //for (int j = i1; j < i2; ++j) {
-            //    int i = idx[2*j];
-            //    if (i < block_size/2) {
-            //        sumqx[0] += weight[i]*x_p[1]*xb[i];
-            //        sumqx[1] += weight[i]*x_p[1]*xb[i];
-            //        sumqx[2] += weight[i]*x_m[1]*xb[i];
-            //        sumqx[3] += weight[i]*x_m[1]*xb[i];
-            //        sumq2[0] += weight[i]*x_p[1]*x_p[1];
-            //        sumq2[1] += weight[i]*x_p[1]*x_p[1];
-            //        sumq2[2] += weight[i]*x_m[1]*x_m[1];
-            //        sumq2[3] += weight[i]*x_m[1]*x_m[1];
-            //    } else {
-            //        sumqx[0] += weight[i]*x_p[1]*xb[i];
-            //        sumqx[2] += weight[i]*x_p[1]*xb[i];
-            //        sumqx[1] += weight[i]*x_m[1]*xb[i];
-            //        sumqx[3] += weight[i]*x_m[1]*xb[i];
-            //        sumq2[0] += weight[i]*x_p[1]*x_p[1];
-            //        sumq2[2] += weight[i]*x_p[1]*x_p[1];
-            //        sumq2[1] += weight[i]*x_m[1]*x_m[1];
-            //        sumq2[3] += weight[i]*x_m[1]*x_m[1];
-            //    }
-            //}
-            //for (int j = i2; j < block_size; ++j) {
-            //    int i = idx[2*j];
-            //    if (i < block_size/2) {
-            //        sumqx[0] += weight[i]*x_p[2]*xb[i];
-            //        sumqx[1] += weight[i]*x_p[2]*xb[i];
-            //        sumqx[2] += weight[i]*x_m[2]*xb[i];
-            //        sumqx[3] += weight[i]*x_m[2]*xb[i];
-            //        sumq2[0] += weight[i]*x_p[2]*x_p[2];
-            //        sumq2[1] += weight[i]*x_p[2]*x_p[2];
-            //        sumq2[2] += weight[i]*x_m[2]*x_m[2];
-            //        sumq2[3] += weight[i]*x_m[2]*x_m[2];
-            //    } else {
-            //        sumqx[0] += weight[i]*x_p[2]*xb[i];
-            //        sumqx[2] += weight[i]*x_p[2]*xb[i];
-            //        sumqx[1] += weight[i]*x_m[2]*xb[i];
-            //        sumqx[3] += weight[i]*x_m[2]*xb[i];
-            //        sumq2[0] += weight[i]*x_p[2]*x_p[2];
-            //        sumq2[2] += weight[i]*x_p[2]*x_p[2];
-            //        sumq2[1] += weight[i]*x_m[2]*x_m[2];
-            //        sumq2[3] += weight[i]*x_m[2]*x_m[2];
-            //    }
-            //}
             for (int k = 0; k < 4; ++k) {
                 if (sumq2[k] > 0 && sumqx[k]*sumqx[k] > best_score*sumq2[k]) {
                     scale = sumqx[k]/sumq2[k]; best_score = scale*sumqx[k];
@@ -14557,19 +14489,34 @@ void iq1m_process_1block(const float * xb, const float * weight, int8_t * L, flo
         the_index[k] = grid_index;
     }
     if (!all_on_grid) {
-        float sumqx_f = 0, sumq2_f = 0;
-        for (int k = 0; k < block_size/8; ++k) {
-            if (k == 0) xx = best_k < 2 ? x_p : x_m;
-            else xx = best_k%2 == 0 ? x_p : x_m;
-            const int8_t * pg = (const int8_t *)(kgrid_q2xs + the_index[k]);
-            for (int j = 0; j < 8; ++j) {
-                float w = weight[8*k + j];
-                float q = xx[(pg[j] - 1)/2];
-                sumqx_f += w*q*xb[8*k+j];
-                sumq2_f += w*q*q;
+        sumqx[0] = sumqx[1] = sumqx[2] = sumqx[3] = 0;
+        sumq2[0] = sumq2[1] = sumq2[2] = sumq2[3] = 0;
+        for (int j = 0; j < block_size; ++j) {
+            float w = weight[j];
+            float qp = x_p[L[j]];
+            float qm = x_m[L[j]];
+            sumqx[0] += w*xb[j]*qp;
+            sumq2[0] += w*qp*qp;
+            sumqx[3] += w*xb[j]*qm;
+            sumq2[3] += w*qm*qm;
+            if (j < 8) {
+                sumqx[1] += w*xb[j]*qp;
+                sumq2[1] += w*qp*qp;
+                sumqx[2] += w*xb[j]*qm;
+                sumq2[2] += w*qm*qm;
+            } else {
+                sumqx[2] += w*xb[j]*qp;
+                sumq2[2] += w*qp*qp;
+                sumqx[1] += w*xb[j]*qm;
+                sumq2[1] += w*qm*qm;
             }
         }
-        if (sumqx_f > 0 && sumq2_f > 0) scale = sumqx_f/sumq2_f;
+        best_score = 0;
+        for (int k = 0; k < 4; ++k) {
+            if (sumqx[k] > 0 && sumq2[k] > 0 && sumqx[k]*sumqx[k] > best_score*sumq2[k]) {
+                scale = sumqx[k]/sumq2[k]; best_score = scale*sumqx[k]; best_k = k;
+            }
+        }
     }
     *the_scale = scale;
     *the_shift = best_k;
@@ -14697,7 +14644,8 @@ static void quantize_row_iq1_m_impl(const float * restrict x, void * restrict vy
         }
         if (sumq2_f > 0) d = sumqx_f/sumq2_f;
         //s.f16 = GGML_FP32_TO_FP16(d*1.1125f); // 1.1125f is another fudge factor. Don't ask me why it is needed.
-        s.f16 = GGML_FP32_TO_FP16(d*1.0625f); // 1.1125f is another fudge factor. Don't ask me why it is needed.
+        //s.f16 = GGML_FP32_TO_FP16(d*1.0625f); // 1.1125f is another fudge factor. Don't ask me why it is needed.
+        s.f16 = GGML_FP32_TO_FP16(d*1.085f); // 1.1125f is another fudge factor. Don't ask me why it is needed.
         sc[0] |= ((s.u16 & 0x000f) << 12);
         sc[1] |= ((s.u16 & 0x00f0) <<  8);
         sc[2] |= ((s.u16 & 0x0f00) <<  4);
