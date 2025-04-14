@@ -64,6 +64,22 @@ private:
     std::vector<float>                     m_last_input;
     std::vector<std::pair<double,int>>     m_layer_sim;
     bool                                   m_collect_lsim = false;
+
+    std::optional<int> layer_index(const std::string& name) const {
+        if (name == m_params.output_tensor_name && m_last_layer < 199) {
+            return m_last_layer + 1;
+        }
+        if (auto pos = name.find("blk."); pos == 0) {
+            pos += 4;
+            if (auto pos1 = name.find('.', pos); pos1 != std::string::npos) {
+                auto index_str = name.substr(pos, pos1 - pos);
+                std::istringstream str(index_str);
+                int index; str >> index;
+                if (!str.fail()) return index;
+            }
+        }
+        return std::nullopt;
+    }
 };
 
 // remove any prefix and suffixes from the name
@@ -83,19 +99,6 @@ static std::string filter_tensor_name(const char * name) {
         wname = name;
     }
     return wname;
-}
-
-static std::optional<int> layer_index(const std::string& name) {
-    if (auto pos = name.find("blk."); pos == 0) {
-        pos += 4;
-        if (auto pos1 = name.find('.', pos); pos1 != std::string::npos) {
-            auto index_str = name.substr(pos, pos1 - pos);
-            std::istringstream str(index_str);
-            int index; str >> index;
-            if (!str.fail()) return index;
-        }
-    }
-    return std::nullopt;
 }
 
 void IMatrixCollector::print_layer_importance() {
@@ -131,7 +134,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         // why are small batches ignored (<16 tokens)?
         if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
         //printf("wname = %s\n", wname.c_str());
-        if (!(wname.substr(0, 4) == "blk." || (m_params.process_output && wname == m_params.output_tensor_name))) return false;
+        if (!(wname.substr(0, 4) == "blk." || ((m_params.process_output || m_collect_lsim) && wname == m_params.output_tensor_name))) return false;
         return true;
     }
 
@@ -228,7 +231,8 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                 if (*index != m_last_layer) {
                     if (*index > 0) {
                         if (m_last_input.size() != src1->ne[0]*src1->ne[1]) {
-                            printf("Oops: different size (%d vs %d)\n", (int)(src1->ne[0]*src1->ne[1]), (int)m_last_input.size());
+                            printf("Oops: different size (%d vs %d). Tensor name was %s, m_last_layer = %d\n",
+                                    (int)(src1->ne[0]*src1->ne[1]), (int)m_last_input.size(), src0->name, m_last_layer);
                             exit(1);
                         }
                         if (*index > m_layer_sim.size()) m_layer_sim.resize(*index);
