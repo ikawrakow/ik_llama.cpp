@@ -59,10 +59,14 @@ private:
     std::mutex                             m_mutex;
     int                                    m_last_call = 0;
     int                                    m_last_layer = 9999;
+    int                                    m_last_ffn = -1;
     std::vector<float>                     m_src1_data;
     std::vector<char>                      m_ids; // the expert ids from ggml_mul_mat_id
     std::vector<float>                     m_last_input;
+    std::vector<float>                     m_ffn_input;
     std::vector<std::pair<double,int>>     m_layer_sim;
+    std::vector<std::pair<double,int>>     m_attn_sim;
+    std::vector<std::pair<double,int>>     m_ffn_sim;
     bool                                   m_collect_lsim = false;
 
     std::optional<int> layer_index(const std::string& name) const {
@@ -80,6 +84,26 @@ private:
         }
         return std::nullopt;
     }
+
+    static inline double cosine_similarity(int n, const float * x, const float * y) {
+        double sumxy = 0, sumx2 = 0, sumy2 = 0;
+        for (int j = 0; j < n; ++j) {
+            sumxy += x[j]*y[j]; sumx2 += x[j]*x[j]; sumy2 += y[j]*y[j];
+        }
+        double cos_sim = sumx2 > 0 && sumy2 > 0 ? sumxy/sqrt(sumx2*sumy2) : 0;
+        return cos_sim;
+    }
+
+    static inline void collect_cos_similarity(int nrow, int n, const float * x, const float * y, std::pair<double, int>& p) {
+        for (int row = 0; row < nrow; ++row) {
+            p.first  += cosine_similarity(n, x, y);
+            p.second += 1;
+            x += n;
+            y += n;
+        }
+    }
+
+    static void print_layer_importance(const char * msg, const std::vector<std::pair<double, int>>& sim);
 };
 
 // remove any prefix and suffixes from the name
@@ -101,22 +125,43 @@ static std::string filter_tensor_name(const char * name) {
     return wname;
 }
 
-void IMatrixCollector::print_layer_importance() {
-    printf("%s: have %d layers\n", __func__, int(m_layer_sim.size()));
-    if (m_layer_sim.empty()) return;
+void IMatrixCollector::print_layer_importance(const char * msg, const std::vector<std::pair<double, int>>& sim) {
+    if (sim.empty()) return;
     std::vector<std::pair<float, int>> layers;
-    layers.reserve(m_layer_sim.size());
-    for (int i = 0; i < int(m_layer_sim.size()); ++i) {
-        if (m_layer_sim[i].second > 0) layers.emplace_back(float(std::abs(m_layer_sim[i].first/m_layer_sim[i].second)), i);
+    layers.reserve(sim.size());
+    for (int i = 0; i < int(sim.size()); ++i) {
+        if (sim[i].second > 0) layers.emplace_back(float(std::abs(sim[i].first/sim[i].second)), i);
     }
     if (layers.empty()) return;
     std::sort(layers.begin(), layers.end());
-    printf("======================== sorted layer importances\n");
+    printf("%s\n", msg);
+    //printf("======================== sorted layer importances\n");
     int j = 0;
     for (auto& p : layers) {
         int i = p.second;
-        printf("%3d: Layer %3d, <cos_sim> = %g\n", j++, i, m_layer_sim[i].first/m_layer_sim[i].second);
+        printf("%3d: Layer %3d, <cos_sim> = %g\n", j++, i, sim[i].first/sim[i].second);
     }
+}
+
+void IMatrixCollector::print_layer_importance() {
+    print_layer_importance("\n======================== sorted layer importances", m_layer_sim);
+    print_layer_importance("\n======================== sorted attention importances", m_attn_sim);
+    print_layer_importance("\n======================== sorted ffn importances", m_ffn_sim);
+    //printf("%s: have %d layers\n", __func__, int(m_layer_sim.size()));
+    //if (m_layer_sim.empty()) return;
+    //std::vector<std::pair<float, int>> layers;
+    //layers.reserve(m_layer_sim.size());
+    //for (int i = 0; i < int(m_layer_sim.size()); ++i) {
+    //    if (m_layer_sim[i].second > 0) layers.emplace_back(float(std::abs(m_layer_sim[i].first/m_layer_sim[i].second)), i);
+    //}
+    //if (layers.empty()) return;
+    //std::sort(layers.begin(), layers.end());
+    //printf("======================== sorted layer importances\n");
+    //int j = 0;
+    //for (auto& p : layers) {
+    //    int i = p.second;
+    //    printf("%3d: Layer %3d, <cos_sim> = %g\n", j++, i, m_layer_sim[i].first/m_layer_sim[i].second);
+    //}
 }
 
 bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
@@ -149,6 +194,33 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     }
 
     const float * data = is_host ? (const float *) src1->data : m_src1_data.data();
+
+    if (m_collect_lsim) {
+        if (wname.find(".ffn_") != std::string::npos) {
+            if (auto index = layer_index(wname); index.has_value() && *index == m_last_layer && *index != m_last_ffn) {
+                int n = src1->ne[0];
+                int nrow = t->op == GGML_OP_MUL_MAT_ID ? src1->ne[2] : src1->ne[1];
+                if (t->op == GGML_OP_MUL_MAT_ID) {
+                    GGML_ASSERT(src1->ne[1] == 1);
+                }
+                if (m_ffn_input.empty()) {
+                    m_ffn_input.resize(nrow*n);
+                } else {
+                    if ((int)m_ffn_input.size() != nrow*n) {
+                        printf("Oops, inconsistent ffn size\n"); exit(1);
+                    }
+                }
+                std::memcpy(m_ffn_input.data(), data, nrow*n*sizeof(float));
+                if (m_ffn_input.size() != m_last_input.size()) {
+                    printf("Oops, inconsistent ffn vs last_input size\n"); exit(1);
+                }
+                if (m_attn_sim.size() < *index + 1) m_attn_sim.resize(*index + 1);
+                auto& p = m_attn_sim[*index];
+                collect_cos_similarity(nrow, n, m_ffn_input.data(), m_last_input.data(), p);
+                m_last_ffn = *index;
+            }
+        }
+    }
 
     // this has been adapted to the new format of storing merged experts in a single 3d tensor
     // ref: https://github.com/ggerganov/llama.cpp/pull/6387
@@ -237,18 +309,11 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                         }
                         if (*index > m_layer_sim.size()) m_layer_sim.resize(*index);
                         auto& p = m_layer_sim[*index - 1];
-                        auto x = m_last_input.data();
-                        auto y = (const float *)data;
-                        for (int row = 0; row < (int)src1->ne[1]; ++row) {
-                            double sumxy = 0, sumx2 = 0, sumy2 = 0;
-                            for (int j = 0; j < (int)src1->ne[0]; ++j) {
-                                sumxy += x[j]*y[j]; sumx2 += x[j]*x[j]; sumy2 += y[j]*y[j];
-                            }
-                            double cos_sim = sumx2 > 0 && sumy2 > 0 ? sumxy/sqrt(sumx2*sumy2) : 0;
-                            p.first  += cos_sim;
-                            p.second += 1;
-                            x += src1->ne[0];
-                            y += src1->ne[0];
+                        collect_cos_similarity(src1->ne[1], src1->ne[0], m_last_input.data(), (const float *)data, p);
+                        if (*index == m_last_ffn + 1) {
+                            if (*index > m_ffn_sim.size()) m_ffn_sim.resize(*index);
+                            auto& p1 = m_ffn_sim[*index-1];
+                            collect_cos_similarity(src1->ne[1], src1->ne[0], m_ffn_input.data(), (const float *)data, p1);
                         }
                     }
                     m_last_layer = *index;
