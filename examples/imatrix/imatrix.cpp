@@ -299,7 +299,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         if (m_collect_lsim) {
             // We only need to do it here and not in the MoE branch above because the first tensor in a layer
             // never is a MoE tensor
-            if (auto index = layer_index(src0->name); index.has_value()) {
+            if (auto index = layer_index(wname); index.has_value()) {
                 if (*index != m_last_layer) {
                     if (*index > 0) {
                         if (m_last_input.size() != src1->ne[0]*src1->ne[1]) {
