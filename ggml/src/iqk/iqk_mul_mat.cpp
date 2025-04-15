@@ -3620,8 +3620,7 @@ inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
                                   _mm256_maddubs_epi16(v[5], _mm256_shuffle_epi32(yh, 0x55)));
     auto sumi4 = _mm256_add_epi16(_mm256_maddubs_epi16(v[6], _mm256_shuffle_epi32(yh, 0xaa)),
                                   _mm256_maddubs_epi16(v[7], _mm256_shuffle_epi32(yh, 0xff)));
-    auto sumi = _mm256_add_epi32(_mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_add_epi16(sumi1, sumi2)),
-                                 _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_add_epi16(sumi3, sumi4)));
+    auto sumi = _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_add_epi16(_mm256_add_epi16(sumi1, sumi2), _mm256_add_epi16(sumi3, sumi4)));
 #endif
     return sumi;
 }
