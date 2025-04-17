@@ -1299,10 +1299,15 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_OUTPUT,          "output" },
             { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
             { LLM_TENSOR_ATTN_QKV,        "blk.%d.attn_qkv" },
+            { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
             { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
             { LLM_TENSOR_FFN_NORM,        "blk.%d.ffn_norm" },
             { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
             { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
+            { LLM_TENSOR_ATTN_POST_NORM,  "blk.%d.post_attention_norm" },
+            { LLM_TENSOR_FFN_POST_NORM,   "blk.%d.post_ffw_norm" },
         },
     },
     {
@@ -2358,6 +2363,7 @@ enum e_model {
     MODEL_1B,
     MODEL_1_3B,
     MODEL_1_4B,
+    MODEL_1_5B,
     MODEL_2B,
     MODEL_2_8B,
     MODEL_3B,
@@ -2375,6 +2381,7 @@ enum e_model {
     MODEL_16B,
     MODEL_20B,
     MODEL_30B,
+    MODEL_32B,
     MODEL_34B,
     MODEL_35B,
     MODEL_40B,
@@ -2414,7 +2421,6 @@ static const char * llama_expert_gating_func_name(llm_expert_gating_func_type ty
         default:                             return "unknown";
     }
 }
-
 
 
 struct llama_hparams {
@@ -4959,6 +4965,7 @@ static const char * llama_model_type_name(e_model type) {
         case MODEL_1B:            return "1B";
         case MODEL_1_3B:          return "1.3B";
         case MODEL_1_4B:          return "1.4B";
+        case MODEL_1_5B:          return "1.5B";
         case MODEL_2B:            return "2B";
         case MODEL_2_8B:          return "2.8B";
         case MODEL_3B:            return "3B";
@@ -4976,6 +4983,7 @@ static const char * llama_model_type_name(e_model type) {
         case MODEL_16B:           return "16B";
         case MODEL_20B:           return "20B";
         case MODEL_30B:           return "30B";
+        case MODEL_32B:           return "32B";
         case MODEL_34B:           return "34B";
         case MODEL_35B:           return "35B";
         case MODEL_40B:           return "40B";
@@ -5676,9 +5684,21 @@ static void llm_load_hparams(
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 switch (hparams.n_layer) {
-                    case 28: model.type = e_model::MODEL_6B; break;
-                    case 40: model.type = e_model::MODEL_9B; break;
-                    default: model.type = e_model::MODEL_UNKNOWN;
+                    case 28: {
+                                 if (hparams.n_head(0) == 16) {
+                                     model.type = MODEL_1_5B;
+                                     model.type = MODEL_6B;
+                                 }
+                             } break;
+                    case 40: {
+                                 if (hparams.n_head(0) == 24) {
+                                     model.type = MODEL_4B;
+                                 } else {
+                                     model.type = MODEL_9B;
+                                 }
+                             } break;
+                    case 61: model.type = MODEL_32B; break;
+                    default: model.type = MODEL_UNKNOWN;
                 }
             } break;
         case LLM_ARCH_BITNET:
@@ -8259,17 +8279,29 @@ static bool llm_load_tensors(
                         auto & layer = model.layers[i];
 
                         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+                        layer.wqkv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        layer.bqkv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_QKV, "bias", i),   {n_embd + 2*n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
-                        layer.wqkv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + (hparams.n_embd_head_k << 2)});
-                        layer.bqkv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_QKV, "bias", i),   {n_embd + (hparams.n_embd_head_k << 2)});
+                        if (layer.wqkv == nullptr) {
+                            layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                            layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
+                            layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
+                            layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                            layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                            layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        }
 
                         layer.wo   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+
+                        layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
                         layer.ffn_norm   = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
                         layer.ffn_up     = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff * 2});
 
                         layer.ffn_down   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd});
+
+                        layer.ffn_post_norm  = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
                     }
                 } break;
             default:
@@ -15234,12 +15266,22 @@ struct llm_build_context {
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
 
+            // Post-attention norm (Glm4-Z)
+            if (model.layers[il].attn_post_norm){
+                cur = llm_build_norm(ctx0, cur, hparams,
+                        model.layers[il].attn_post_norm,
+                        NULL,
+                        LLM_NORM_RMS, cb, il);
+                cb(cur, "post_attn_norm", il);
+            }
+
             // Add the input
             struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
 
             // FF
             {
+                // Pre-MLP norm
                 cur = llm_build_norm(ctx0, ffn_inp, hparams,
                         model.layers[il].ffn_norm,
                         NULL,
@@ -15254,6 +15296,14 @@ struct llm_build_context {
                         LLM_FFN_SWIGLU, LLM_FFN_SEQ, cb, il);
                 cb(cur, "ffn_out", il);
 
+                // Post-MLP norm
+                if(model.layers[il].ffn_post_norm){
+                    cur = llm_build_norm(ctx0, cur, hparams,
+                            model.layers[il].ffn_post_norm,
+                            NULL,
+                            LLM_NORM_RMS, cb, il);
+                    cb(cur, "post_mlp_norm", il);
+                }
             }
 
             inpL = ggml_add(ctx0, cur, ffn_inp);
