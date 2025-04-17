@@ -15388,7 +15388,119 @@ struct HelperQ80 final : public BaseHelper<step> {
         }
     }
 };
+}
 
+void * iqk_repack_k(int int_type_k, int nek0, int nek1, int nek2, int nek3, long nbk1, long nbk2, long nbk3,
+        const void * data, void * work, int ith, int nth, int& repacked_type, uint64_t& row_size) {
+    repacked_type = int_type_k;
+    auto type_k = ggml_type(int_type_k);
+    if (type_k != GGML_TYPE_Q8_0 || nek0%QK8_0 != 0) return work;
+    int nrows = nek1*nek2*nek3;
+    if (nrows%8 != 0) return work;
+    repacked_type = int(GGML_TYPE_Q8_0_R8);
+    row_size = ggml_row_size(GGML_TYPE_Q8_0, nek0);
+    void * result = (char *)work + nrows*row_size;
+    int npt = 8*((nrows/8 + nth - 1)/nth);
+    int first = npt*ith;
+    if (first >= nrows) return result;
+    int last = std::min(first + npt, nrows);
+    const block_q8_0 * x8[8];
+    auto y = (block_q8_0_r8 *)((char *)work + first*row_size);
+    int nblock = nek0/QK8_0;
+#ifdef __ARM_NEON
+    int8x16x2_t m0, m1, m2, m3;
+#endif
+    for (int row = first; row < last; row += 8) {
+        int ik3 = row/(nek1*nek2);
+        int ik2 = (row - ik3*nek1*nek2)/nek1;
+        int ik1 = row - ik3*nek1*nek2 - ik2*nek1;
+        auto this_data = (const char *)data + ik1*nbk1 + ik2*nbk2 + ik3*nbk3;
+        for (int k = 0; k < 8; ++k) x8[k] = (const block_q8_0 *)(this_data + k*nbk1);
+        for (int ib = 0; ib < nblock; ++ib) {
+            for (int k = 0; k < 8; ++k) y[ib].d[k] = x8[k][ib].d;
+#ifdef __AVX2__
+            auto m0 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[4][ib].qs), _mm_loadu_si128((const __m128i *)x8[0][ib].qs));
+            auto m1 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[5][ib].qs), _mm_loadu_si128((const __m128i *)x8[1][ib].qs));
+            auto m2 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[6][ib].qs), _mm_loadu_si128((const __m128i *)x8[2][ib].qs));
+            auto m3 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[7][ib].qs), _mm_loadu_si128((const __m128i *)x8[3][ib].qs));
+            auto t0 = _mm256_unpacklo_epi32(m0, m1);
+            auto t1 = _mm256_unpacklo_epi32(m2, m3);
+            auto t2 = _mm256_unpackhi_epi32(m0, m1);
+            auto t3 = _mm256_unpackhi_epi32(m2, m3);
+            m0 = _mm256_unpacklo_epi64(t0, t1);
+            m1 = _mm256_unpackhi_epi64(t0, t1);
+            m2 = _mm256_unpacklo_epi64(t2, t3);
+            m3 = _mm256_unpackhi_epi64(t2, t3);
+            //#ifdef HAVE_FANCY_SIMD
+            //                m0 = _mm256_add_epi8(m0, _mm256_set1_epi8(127));
+            //                m1 = _mm256_add_epi8(m1, _mm256_set1_epi8(127));
+            //                m2 = _mm256_add_epi8(m2, _mm256_set1_epi8(127));
+            //                m3 = _mm256_add_epi8(m3, _mm256_set1_epi8(127));
+            //#endif
+            _mm256_storeu_si256((__m256i *)y[ib].qs + 0, m0);
+            _mm256_storeu_si256((__m256i *)y[ib].qs + 1, m1);
+            _mm256_storeu_si256((__m256i *)y[ib].qs + 2, m2);
+            _mm256_storeu_si256((__m256i *)y[ib].qs + 3, m3);
+            m0 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[4][ib].qs+1), _mm_loadu_si128((const __m128i *)x8[0][ib].qs+1));
+            m1 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[5][ib].qs+1), _mm_loadu_si128((const __m128i *)x8[1][ib].qs+1));
+            m2 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[6][ib].qs+1), _mm_loadu_si128((const __m128i *)x8[2][ib].qs+1));
+            m3 = MM256_SET_M128I(_mm_loadu_si128((const __m128i *)x8[7][ib].qs+1), _mm_loadu_si128((const __m128i *)x8[3][ib].qs+1));
+            t0 = _mm256_unpacklo_epi32(m0, m1);
+            t1 = _mm256_unpacklo_epi32(m2, m3);
+            t2 = _mm256_unpackhi_epi32(m0, m1);
+            t3 = _mm256_unpackhi_epi32(m2, m3);
+            m0 = _mm256_unpacklo_epi64(t0, t1);
+            m1 = _mm256_unpackhi_epi64(t0, t1);
+            m2 = _mm256_unpacklo_epi64(t2, t3);
+            m3 = _mm256_unpackhi_epi64(t2, t3);
+            //#ifdef HAVE_FANCY_SIMD
+            //                m0 = _mm256_add_epi8(m0, _mm256_set1_epi8(127));
+            //                m1 = _mm256_add_epi8(m1, _mm256_set1_epi8(127));
+            //                m2 = _mm256_add_epi8(m2, _mm256_set1_epi8(127));
+            //                m3 = _mm256_add_epi8(m3, _mm256_set1_epi8(127));
+            //#endif
+            _mm256_storeu_si256((__m256i *)y[ib].qs + 4, m0);
+            _mm256_storeu_si256((__m256i *)y[ib].qs + 5, m1);
+            _mm256_storeu_si256((__m256i *)y[ib].qs + 6, m2);
+            _mm256_storeu_si256((__m256i *)y[ib].qs + 7, m3);
+#elif defined __ARM_NEON
+            for (int l = 0; l < 2; ++l) {
+                m0.val[0] = vld1q_s8(x8[0][ib].qs+16*l); m0.val[1] = vld1q_s8(x8[4][ib].qs+16*l);
+                m1.val[0] = vld1q_s8(x8[1][ib].qs+16*l); m1.val[1] = vld1q_s8(x8[5][ib].qs+16*l);
+                m2.val[0] = vld1q_s8(x8[2][ib].qs+16*l); m2.val[1] = vld1q_s8(x8[6][ib].qs+16*l);
+                m3.val[0] = vld1q_s8(x8[3][ib].qs+16*l); m3.val[1] = vld1q_s8(x8[7][ib].qs+16*l);
+                auto row01 = vtrnq_s32(vreinterpretq_s32_s8(m0.val[0]), vreinterpretq_s32_s8(m1.val[0]));
+                auto row23 = vtrnq_s32(vreinterpretq_s32_s8(m2.val[0]), vreinterpretq_s32_s8(m3.val[0]));
+                m0.val[0] = vreinterpretq_s8_s64(vtrn1q_s64(vreinterpretq_s64_s32(row01.val[0]), vreinterpretq_s64_s32(row23.val[0])));
+                m1.val[0] = vreinterpretq_s8_s64(vtrn1q_s64(vreinterpretq_s64_s32(row01.val[1]), vreinterpretq_s64_s32(row23.val[1])));
+                m2.val[0] = vreinterpretq_s8_s64(vtrn2q_s64(vreinterpretq_s64_s32(row01.val[0]), vreinterpretq_s64_s32(row23.val[0])));
+                m3.val[0] = vreinterpretq_s8_s64(vtrn2q_s64(vreinterpretq_s64_s32(row01.val[1]), vreinterpretq_s64_s32(row23.val[1])));
+                row01 = vtrnq_s32(vreinterpretq_s32_s8(m0.val[1]), vreinterpretq_s32_s8(m1.val[1]));
+                row23 = vtrnq_s32(vreinterpretq_s32_s8(m2.val[1]), vreinterpretq_s32_s8(m3.val[1]));
+                m0.val[1] = vreinterpretq_s8_s64(vtrn1q_s64(vreinterpretq_s64_s32(row01.val[0]), vreinterpretq_s64_s32(row23.val[0])));
+                m1.val[1] = vreinterpretq_s8_s64(vtrn1q_s64(vreinterpretq_s64_s32(row01.val[1]), vreinterpretq_s64_s32(row23.val[1])));
+                m2.val[1] = vreinterpretq_s8_s64(vtrn2q_s64(vreinterpretq_s64_s32(row01.val[0]), vreinterpretq_s64_s32(row23.val[0])));
+                m3.val[1] = vreinterpretq_s8_s64(vtrn2q_s64(vreinterpretq_s64_s32(row01.val[1]), vreinterpretq_s64_s32(row23.val[1])));
+                vst1q_s8_x2(y[ib].qs +  0 + 128*l, m0);
+                vst1q_s8_x2(y[ib].qs + 32 + 128*l, m1);
+                vst1q_s8_x2(y[ib].qs + 64 + 128*l, m2);
+                vst1q_s8_x2(y[ib].qs + 96 + 128*l, m3);
+            }
+#else
+            for (int l = 0; l < 4; ++l) {
+                for (int k = 0; k < 8; ++k) for (int i = 0; i < 4; ++i) {
+                    y[ib].qs[32*l+4*k+i+  0] = x8[k][ib].qs[i+4*l+ 0];
+                    y[ib].qs[32*l+4*k+i+128] = x8[k][ib].qs[i+4*l+16];
+                }
+            }
+#endif
+        }
+        y += nblock;
+    }
+    return result;
+}
+
+namespace {
 template <int D, int step>
 struct HelperQ80R8 : public BaseHelper<step> {
     using Base = BaseHelper<step>;
@@ -15399,6 +15511,7 @@ struct HelperQ80R8 : public BaseHelper<step> {
     constexpr static int block_size_q = QK8_0;
     using block_q8 = block_q8_0;
 #endif
+    HelperQ80R8(const char * data, int stride) : Base(data, stride) {}
     HelperQ80R8(int nk, const HelperQ80<D, step>& q8) : Base(q8.data, q8.stride) {
         r4 = repack(nk, q8);
         Base::data = (const char *)r4.data();
@@ -16755,7 +16868,8 @@ struct FlashAttn {
             const float * q, const char * mask, float * qkv, [[maybe_unused]] float * M, [[maybe_unused]] float * S) {
         if constexpr (std::is_same_v<KHelper, HelperQ40<Dk, k_step>> || std::is_same_v<KHelper, HelperQ41<Dk, k_step>> ||
                       std::is_same_v<KHelper, HelperIQ4nl<Dk, k_step>> ||
-                      std::is_same_v<KHelper, HelperQ60<Dk, k_step>>) {
+                      std::is_same_v<KHelper, HelperQ60<Dk, k_step>> ||
+                      std::is_same_v<KHelper, HelperQ80R8<Dk, k_step>>) {
             compute_helper_q<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
                     kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, M, S);
         }
@@ -17360,6 +17474,10 @@ inline void iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
             HelperQ80<Dk, k_step> kh(k, stride_k);
             iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
         } break;
+        case GGML_TYPE_Q8_0_R8: {
+            HelperQ80R8<Dk, k_step> kh(k, stride_k);
+            iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
+        } break;
         case GGML_TYPE_Q8_KV: {
             HelperQ8KV<Dk, k_step> kh(k, stride_k);
             iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
@@ -17393,9 +17511,9 @@ inline bool flash_attn_is_supported(ggml_type type) {
 #endif
 #if GGML_IQK_FA_ALL_QUANTS
     if (type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 ||
-        type == GGML_TYPE_Q6_0 || type == GGML_TYPE_IQ4_NL) return true;
+        type == GGML_TYPE_Q6_0 || type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q8_0_R8) return true;
 #else
-    if (type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q8_KV) return true;
+    if (type == GGML_TYPE_F16 || type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q6_0 || type == GGML_TYPE_Q8_KV || type == GGML_TYPE_Q8_0_R8) return true;
 #endif
     return false;
 }
@@ -17432,6 +17550,12 @@ inline bool iqk_deepseek_helper(ggml_type type_k,
                         float scale, float softcap, float * qkv, float * M, float * S) {
     if (type_k == GGML_TYPE_Q8_0) {
         HelperQ80<576, step_k> kh((const char *)k, stride_k);
+        HelperQ80<512, step_k> vh((const char *)v, stride_v);
+        iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
+        return true;
+    }
+    if (type_k == GGML_TYPE_Q8_0_R8) {
+        HelperQ80R8<576, step_k> kh((const char *)k, stride_k);
         HelperQ80<512, step_k> vh((const char *)v, stride_v);
         iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
         return true;

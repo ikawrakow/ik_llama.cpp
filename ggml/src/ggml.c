@@ -21786,15 +21786,19 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
 
                     cur = 3*sizeof(float)*D*n_tasks; // 3x head size/thread
 #if GGML_USE_IQK_MULMAT
+                    size_t qsize = 0;
                     const struct ggml_tensor * q = node->src[0];
                     const struct ggml_tensor * k = node->src[1];
+                    if (k->type == GGML_TYPE_Q8_0) {
+                        qsize = ggml_nrows(k)*ggml_row_size(k->type, k->ne[0]);
+                    }
                     if (q->ne[1] == 1 && q->ne[3] == 1 && q->ne[2]/k->ne[2] > 1 && n_tasks > 1 && k->ne[1]/32 > 1) {
                         if (k->ne[2] > 1) {
                             int nk = MAX(1, 32 * (k->ne[2]*k->ne[1]/(32*n_tasks)));
                             int nstep_k = k->ne[2]*k->ne[1]/nk;
                             size_t result_size = (Dv + 16)*q->ne[2]/k->ne[2]*sizeof(float);
                             size_t size = nstep_k*result_size;
-                            cur = MAX(cur, size);
+                            cur = MAX(cur, size+qsize);
                         } else {
                             int nstep_k = k->ne[1]/32;
                             int gcd_k   = simple_gcd(nstep_k, n_tasks);
@@ -21808,9 +21812,11 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                                     size_t row_size = ggml_row_size(vec_dot_type, q->ne[0]);
                                     size += q->ne[2]*row_size;
                                 }
-                                cur = MAX(cur, size);
+                                cur = MAX(cur, size+qsize);
                             }
                         }
+                    } else {
+                        cur = MAX(cur, qsize);
                     }
 #endif
                 } break;

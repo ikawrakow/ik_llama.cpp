@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 bool iqk_flash_attn_impl(int type_k,             // type of k
                          int type_v,             // type of v
                          int Dk,                 // K head size
@@ -27,3 +29,5 @@ bool iqk_flash_attn_impl(int type_k,             // type of k
                          float       * M,
                          float       * S);
 
+void * iqk_repack_k(int type_k, int nek0, int nek1, int nek2, int nek3, long nbk1, long nbk2, long nbk3,
+        const void * k, void * work, int ith, int nth, int& repacked_type, uint64_t& row_size);

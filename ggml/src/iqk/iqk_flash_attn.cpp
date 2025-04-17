@@ -34,7 +34,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                             int nek3, int nek2, long nbk3, long nbk2,
                             int nev3, int nev2, long nbv3, long nbv2,
                             int ne2,  int ne1,  long nb1,
-                            int int_type_k,         // type of k
+                            int int_type_k_in,      // type of k
                             int int_type_v,         // type of v
                             int Dk,                 // K head size
                             int Dv,                 // V head size
@@ -51,7 +51,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                             float         scale,    // scale applied before softmax
                             float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             float       * qkv,      // v*softmax(scale*(k*q))
-                            [[maybe_unused]] void * work_buffer, [[maybe_unused]] barrier_t barrier, [[maybe_unused]] void * barrier_data,
+                            [[maybe_unused]] void * work_buffer_in, [[maybe_unused]] barrier_t barrier, [[maybe_unused]] void * barrier_data,
                             int ith, int nth) {
 
     if (type_q != 0 || type_mask != 1 || max_bias > 0) return false;
@@ -60,6 +60,29 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     int rv2 = neq2/nev2;
     int rk3 = neq3/nek3;
     int rv3 = neq3/nev3;
+
+    int int_type_k = int_type_k_in;
+    auto work_buffer = work_buffer_in;
+    if (neq1 >= 8 || rk2 >= 4) {
+        uint64_t row_size = 0;
+        work_buffer = iqk_repack_k(int_type_k, Dk, nek1, nek2, nek3, stride_k, nbk2, nbk3, k, work_buffer_in, ith, nth, int_type_k, row_size);
+        if (int_type_k != int_type_k_in) {
+            stride_k = row_size;
+            nbk2 = stride_k*nek1;
+            nbk3 = nbk2*nek2;
+            k = work_buffer_in;
+            barrier(barrier_data);
+        }
+    }
+    //uint64_t row_size = 0;
+    //auto work_buffer = iqk_repack_k(int_type_k, Dk, nek1, nek2, nek3, stride_k, nbk2, nbk3, k, work_buffer_in, ith, nth, int_type_k, row_size);
+    //if (int_type_k != int_type_k_in) {
+    //    stride_k = row_size;
+    //    nbk2 = stride_k*nek1;
+    //    nbk3 = nbk2*nek2;
+    //    k = work_buffer_in;
+    //    barrier(barrier_data);
+    //}
 
     // Getting confused all the time about where to load data from and store the results to
     // (especially when combining the results from the threads).
