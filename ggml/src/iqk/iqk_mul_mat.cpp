@@ -19,6 +19,7 @@
 #include "ggml-quants.h"
 #include "iqk_mul_mat.h"
 #include "iqk_quantize.h"
+#include "iqk_flash_impl.h"
 
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
