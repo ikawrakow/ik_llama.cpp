@@ -15,6 +15,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "ggml.h"
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "iqk_mul_mat.h"
