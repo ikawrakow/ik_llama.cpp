@@ -258,9 +258,10 @@ extern "C" __attribute__ ((visibility ("default"))) bool iqk_flash_attn_noalibi(
                             [[maybe_unused]] int nek3, [[maybe_unused]] int nek2, [[maybe_unused]] long nbk3, [[maybe_unused]] long nbk2,
                             [[maybe_unused]] int nev3, [[maybe_unused]] int nev2, [[maybe_unused]] long nbv3, [[maybe_unused]] long nbv2,
                             [[maybe_unused]] int ne2,  [[maybe_unused]] int ne1,  [[maybe_unused]] long nb1,
-                            [[maybe_unused]] int int_type_k,         // type of k
-                            [[maybe_unused]] int int_type_v,         // type of v
-                            [[maybe_unused]] int D,                  // head size
+                            [[maybe_unused]] int type_k,             // type of k
+                            [[maybe_unused]] int type_v,             // type of v
+                            [[maybe_unused]] int Dk,                 // K head size
+                            [[maybe_unused]] int Dv,                 // V head size
                             [[maybe_unused]] int nq,                 // number of columns in q
                             [[maybe_unused]] int nk,                 // number of rows in k
                             [[maybe_unused]] int stride_q,           // distance between q columns in bytes
