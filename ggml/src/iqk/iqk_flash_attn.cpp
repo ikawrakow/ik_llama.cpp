@@ -29,7 +29,7 @@ inline uint32_t simple_gcd(uint32_t a, uint32_t b) {
 
 // TODO: get the ggml_type enum here without polution
 //
-GGML_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
+__attribute__ ((visibility ("default"))) bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
                             int neq3, int neq2, long nbq3, long nbq2,
                             int nek3, int nek2, long nbk3, long nbk2,
                             int nev3, int nev2, long nbv3, long nbv2,
