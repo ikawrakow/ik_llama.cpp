@@ -14,6 +14,20 @@
 #define IQK_IMPLEMENT
 #endif
 
+#ifdef GGML_SHARED
+#    if defined(_WIN32) && !defined(__MINGW32__)
+#        ifdef GGML_BUILD
+#            define IQK_API __declspec(dllexport)
+#        else
+#            define IQK_API __declspec(dllimport)
+#        endif
+#    else
+#        define IQK_API __attribute__ ((visibility ("default")))
+#    endif
+#else
+#    define IQK_API
+#endif
+
 #ifdef _MSC_VER
 #define IQK_NOINLINE __declspec(noinline)
 #define IQK_ALWAYS_INLINE inline
