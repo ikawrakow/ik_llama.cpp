@@ -11,31 +11,31 @@
 extern "C" {
 #endif
 
-__attribute__ ((visibility ("default"))) bool iqk_mul_mat(long Nx, long Ny, long ne00,
+IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long stride_C, int ith, int nth);
 
-__attribute__ ((visibility ("default"))) bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
+IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
         long ne02, long ne03, long ne12, long ne13,
         long nb02, long nb03, long nb12, long nb13, long nb2, long nb3,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long stride_C, int ith, int nth);
 
-__attribute__ ((visibility ("default"))) bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
+IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
 
-__attribute__ ((visibility ("default"))) bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int unary_op,
+IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int unary_op,
         int typeA, const void * Aup, const void * Agate, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
 
 typedef void (*barrier_t) (void *);
 
-__attribute__ ((visibility ("default"))) bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
+IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
                             int neq3, int neq2, long nbq3, long nbq2,
                             int nek3, int nek2, long nbk3, long nbk2,
                             int nev3, int nev2, long nbv3, long nbv2,
