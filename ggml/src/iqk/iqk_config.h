@@ -14,6 +14,13 @@
 #define IQK_IMPLEMENT
 #endif
 
+#if defined(_WIN32) && !defined(__MINGW32__)
+#    define IQK_API __declspec(dllexport)
+#endif
+#else
+#    define IQK_API __attribute__ ((visibility ("default")))
+#endif
+
 #ifdef _MSC_VER
 #define IQK_NOINLINE __declspec(noinline)
 #define IQK_ALWAYS_INLINE inline

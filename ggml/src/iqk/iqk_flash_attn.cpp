@@ -29,7 +29,7 @@ inline uint32_t simple_gcd(uint32_t a, uint32_t b) {
 
 // TODO: get the ggml_type enum here without polution
 //
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
+extern "C" IQK_API  bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
                             int neq3, int neq2, long nbq3, long nbq2,
                             int nek3, int nek2, long nbk3, long nbk2,
                             int nev3, int nev2, long nbv3, long nbv2,
@@ -253,7 +253,7 @@ extern "C" __attribute__ ((visibility ("default"))) bool iqk_flash_attn_noalibi(
 
 #else
 
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_flash_attn_noalibi([[maybe_unused]] int type_q, [[maybe_unused]] int type_mask, [[maybe_unused]] float max_bias,
+extern "C" IQK_API bool iqk_flash_attn_noalibi([[maybe_unused]] int type_q, [[maybe_unused]] int type_mask, [[maybe_unused]] float max_bias,
                             [[maybe_unused]] int neq3, [[maybe_unused]] int neq2, [[maybe_unused]] long nbq3, [[maybe_unused]] long nbq2,
                             [[maybe_unused]] int nek3, [[maybe_unused]] int nek2, [[maybe_unused]] long nbk3, [[maybe_unused]] long nbk2,
                             [[maybe_unused]] int nev3, [[maybe_unused]] int nev2, [[maybe_unused]] long nbv3, [[maybe_unused]] long nbv2,

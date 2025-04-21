@@ -403,7 +403,7 @@ private:
 
 }
 
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_mul_mat(long Nx, long Ny, long ne00,
+extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long stride_C, int ith, int nth) {
@@ -440,7 +440,7 @@ inline uint32_t simple_gcd(uint32_t a, uint32_t b) {
 }
 }
 
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
+extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
         long ne02, long ne03, long ne12, long ne13,
         long nb02, long nb03, long nb12, long nb13, long nb2, long nb3,
         int typeA, const void * A, long strideA,
@@ -545,7 +545,7 @@ extern "C" __attribute__ ((visibility ("default"))) bool iqk_mul_mat_4d(long Nx,
     return true;
 }
 
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
+extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth) {
@@ -571,7 +571,7 @@ extern "C" __attribute__ ((visibility ("default"))) bool iqk_mul_mat_moe(long Nx
     return true;
 }
 
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int unary_op,
+extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int unary_op,
         int typeA, const void * Aup, const void * Agate, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth) {
@@ -17550,11 +17550,11 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
 
 #else  // IQK_IMPLEMENT
 
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
+extern "C" IQK_API bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
     return false;
 }
 
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_mul_mat_4d(long /*Nx*/, long /*Ny*/, long /*ne00*/,
+extern "C" IQK_API bool iqk_mul_mat_4d(long /*Nx*/, long /*Ny*/, long /*ne00*/,
         long /*ne02*/, long /*ne03*/, long /*ne12*/, long /*ne13*/,
         long /*nb02*/, long /*nb03*/, long /*nb12*/, long /*nb13*/, long /*nb2*/, long /*nb3*/,
         int /*typeA*/, const void * /*A*/, long /*strideA*/,
@@ -17563,12 +17563,12 @@ extern "C" __attribute__ ((visibility ("default"))) bool iqk_mul_mat_4d(long /*N
     return false;
 }
 
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_mul_mat_moe(long, long, long, int, int, const void *, long, int, const void *, long, float *, long, long,
+extern "C" IQK_API bool iqk_mul_mat_moe(long, long, long, int, int, const void *, long, int, const void *, long, float *, long, long,
         const void *, int, int) {
     return false;
 }
 
-extern "C" __attribute__ ((visibility ("default"))) bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*ne00*/, int /*ne11*/, int /*unary_op*/,
+extern "C" IQK_API bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*ne00*/, int /*ne11*/, int /*unary_op*/,
         int /*typeA*/, const void * /*Aup*/, const void * /*Agate*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
         float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, int /*ith*/, int /*nth*/) {
