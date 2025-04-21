@@ -15,9 +15,9 @@
 #endif
 
 #if defined(_WIN32) && !defined(__MINGW32__)
-#    define IQK_API __declspec(dllexport)
+#define IQK_API __declspec(dllexport)
 #else
-#    define IQK_API __attribute__ ((visibility ("default")))
+#define IQK_API __attribute__ ((visibility ("default")))
 #endif
 
 #ifdef _MSC_VER
