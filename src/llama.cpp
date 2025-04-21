@@ -1498,6 +1498,7 @@ enum llm_chat_template {
     LLM_CHAT_TEMPLATE_GIGACHAT,
     LLM_CHAT_TEMPLATE_MEGREZ,
     LLM_CHAT_TEMPLATE_LLAMA4,
+    LLM_CHAT_TEMPLATE_BITNET,
     LLM_CHAT_TEMPLATE_UNKNOWN,
 };
 
@@ -1534,6 +1535,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "gigachat",          LLM_CHAT_TEMPLATE_GIGACHAT          },
     { "megrez",            LLM_CHAT_TEMPLATE_MEGREZ            },
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
+    { "bitnet",            LLM_CHAT_TEMPLATE_BITNET            },
 };
 
 
@@ -21681,7 +21683,7 @@ static int32_t llama_chat_apply_template_internal(
         if (add_ass) {
             ss << "<|header_start|>assistant<|header_end|>\n\n";
         }
-    } else if (tmpl == "bitnet" || (tmpl_contains("BITNET"))) {
+    } else if (tmpl == LLM_CHAT_TEMPLATE_BITNET) {
         // bitnet-25
         std::string system_prompt = "";
         for (auto message : chat) {
