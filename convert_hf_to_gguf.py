@@ -1598,6 +1598,7 @@ class LlamaModel(Model):
 
 
 @Model.register("BitnetForCausalLM")
+@Model.register("BitNetForCausalLM")
 class BitnetModel(Model):
     model_arch = gguf.MODEL_ARCH.BITNET
 
