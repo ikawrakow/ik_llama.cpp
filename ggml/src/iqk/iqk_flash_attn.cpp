@@ -182,7 +182,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     if (neq3 == 1 && rk2 > 1 && rk2 == rv2 && neq1 == 1 && nth >= 1 && nek2*nek1 >= 32*nth) {
         auto result_size = (Dv + 16)*rk2*sizeof(float);
         int gcd = simple_gcd(nek2, nth);
-        if (gcd > 1) {
+        if (false && gcd > 1) {
             int nth_g = nth/gcd;
             int ith_g = ith%nth_g;
             int nek1_32 = nek1/32;
