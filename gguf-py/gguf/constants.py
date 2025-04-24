@@ -1171,47 +1171,86 @@ class PoolingType(IntEnum):
 
 
 class GGMLQuantizationType(IntEnum):
-    F32     = 0
-    F16     = 1
-    Q4_0    = 2
-    Q4_1    = 3
-    Q5_0    = 6
-    Q5_1    = 7
-    Q8_0    = 8
-    Q8_1    = 9
-    Q2_K    = 10
-    Q3_K    = 11
-    Q4_K    = 12
-    Q5_K    = 13
-    Q6_K    = 14
-    Q8_K    = 15
-    IQ2_XXS = 16
-    IQ2_XS  = 17
-    IQ3_XXS = 18
-    IQ1_S   = 19
-    IQ4_NL  = 20
-    IQ3_S   = 21
-    IQ2_S   = 22
-    IQ4_XS  = 23
-    I8      = 24
-    I16     = 25
-    I32     = 26
-    I64     = 27
-    F64     = 28
-    IQ1_M   = 29
-    BF16    = 30
-    Q4_0_4_4 = 31
-    Q4_0_4_8 = 32
-    Q4_0_8_8 = 33
-    IQ1_BN  = 34,
-    IQ2_BN  = 35,
-    Q8_K64  = 36,
-    IQ2_K   = 37,
-    IQ3_K   = 38,
-    IQ4_K   = 39,
-    IQ5_K   = 40,
-    IQ6_K   = 41,
-    IQ2_TN  = 42,
+    F32       =   0
+    F16       =   1
+    Q4_0      =   2
+    Q4_1      =   3
+    Q5_0      =   6
+    Q5_1      =   7
+    Q8_0      =   8
+    Q8_1      =   9
+    Q2_K      =  10
+    Q3_K      =  11
+    Q4_K      =  12
+    Q5_K      =  13
+    Q6_K      =  14
+    Q8_K      =  15
+    IQ2_XXS   =  16
+    IQ2_XS    =  17
+    IQ3_XXS   =  18
+    IQ1_S     =  19
+    IQ4_NL    =  20
+    IQ3_S     =  21
+    IQ2_S     =  22
+    IQ4_XS    =  23
+    I8        =  24
+    I16       =  25
+    I32       =  26
+    I64       =  27
+    F64       =  28
+    IQ1_M     =  29
+    BF16      =  30
+    Q4_0_4_4  =  31
+    Q4_0_4_8  =  32
+    Q4_0_8_8  =  33
+    I2_S      =  36
+    Q8_0_X4   =  97
+    Q8_1_X4   =  98
+    Q8_2_X4   =  99
+    Q6_0      = 133
+    IQ1_BN    = 134
+    IQ2_BN    = 135
+    Q8_K64    = 136
+    IQ2_K     = 137
+    IQ3_K     = 138
+    IQ4_K     = 139
+    IQ5_K     = 140
+    IQ6_K     = 141
+    IQ4_KS    = 144
+    IQ2_KS    = 145
+    IQ4_KSS   = 146
+    Q8_K16    = 147
+    Q8_K32    = 148
+    Q8_KR8    = 149
+    Q8_K128   = 150
+    Q8_KV     = 151
+    Q4_0_R8   = 202
+    Q5_0_R4   = 206
+    Q8_0_R8   = 208
+    Q2_K_R4   = 210
+    Q3_K_R4   = 211
+    Q4_K_R4   = 212
+    Q5_K_R4   = 213
+    Q6_K_R4   = 214
+    IQ2_XXS_R4= 216
+    IQ2_XS_R4 = 217
+    IQ3_XXS_R4= 218
+    IQ1_S_R4  = 219
+    IQ4_NL_R4 = 220
+    IQ3_S_R4  = 221
+    IQ2_S_R4  = 222
+    IQ4_XS_R8 = 223
+    IQ1_M_R4  = 229
+    BF16_R16  = 230
+    Q6_0_R4   = 233
+    IQ2_BN_R4 = 335
+    IQ2_K_R4  = 337
+    IQ3_K_R4  = 338
+    IQ4_K_R4  = 339
+    IQ5_K_R4  = 340
+    IQ4_KS_R4 = 344
+    Q8_KV_R8  = 398
+    Q8_K_R8   = 399
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -1225,50 +1264,71 @@ class ExpertGatingFuncType(IntEnum):
 # from llama_ftype in llama.h
 # ALL VALUES SHOULD BE THE SAME HERE AS THEY ARE OVER THERE.
 class LlamaFileType(IntEnum):
-    ALL_F32              = 0
-    MOSTLY_F16           = 1   # except 1d tensors
-    MOSTLY_Q4_0          = 2   # except 1d tensors
-    MOSTLY_Q4_1          = 3   # except 1d tensors
-    # MOSTLY_Q4_1_SOME_F16 = 4   # tok_embeddings.weight and output.weight are F16
-    # MOSTLY_Q4_2        = 5   # support has been removed
-    # MOSTLY_Q4_3        = 6   # support has been removed
-    MOSTLY_Q8_0          = 7   # except 1d tensors
-    MOSTLY_Q5_0          = 8   # except 1d tensors
-    MOSTLY_Q5_1          = 9   # except 1d tensors
-    MOSTLY_Q2_K          = 10  # except 1d tensors
-    MOSTLY_Q3_K_S        = 11  # except 1d tensors
-    MOSTLY_Q3_K_M        = 12  # except 1d tensors
-    MOSTLY_Q3_K_L        = 13  # except 1d tensors
-    MOSTLY_Q4_K_S        = 14  # except 1d tensors
-    MOSTLY_Q4_K_M        = 15  # except 1d tensors
-    MOSTLY_Q5_K_S        = 16  # except 1d tensors
-    MOSTLY_Q5_K_M        = 17  # except 1d tensors
-    MOSTLY_Q6_K          = 18  # except 1d tensors
-    MOSTLY_IQ2_XXS       = 19  # except 1d tensors
-    MOSTLY_IQ2_XS        = 20  # except 1d tensors
-    MOSTLY_Q2_K_S        = 21  # except 1d tensors
-    MOSTLY_IQ3_XS        = 22  # except 1d tensors
-    MOSTLY_IQ3_XXS       = 23  # except 1d tensors
-    MOSTLY_IQ1_S         = 24  # except 1d tensors
-    MOSTLY_IQ4_NL        = 25  # except 1d tensors
-    MOSTLY_IQ3_S         = 26  # except 1d tensors
-    MOSTLY_IQ3_M         = 27  # except 1d tensors
-    MOSTLY_IQ2_S         = 28  # except 1d tensors
-    MOSTLY_IQ2_M         = 29  # except 1d tensors
-    MOSTLY_IQ4_XS        = 30  # except 1d tensors
-    MOSTLY_IQ1_M         = 31  # except 1d tensors
-    MOSTLY_BF16          = 32  # except 1d tensors
-    MOSTLY_Q4_0_4_4      = 33  # except 1d tensors
-    MOSTLY_Q4_0_4_8      = 34  # except 1d tensors
-    MOSTLY_Q4_0_8_8      = 35  # except 1d tensors
-    MOSTLY_IQ1_BN        = 36, # except 1d tensors
-    MOSTLY_IQ2_BN        = 37, # except 1d tensors
-    MOSTLY_IQ2_K         = 38, # except 1d tensors
-    MOSTLY_IQ3_K         = 39, # except 1d tensors
-    MOSTLY_IQ4_K         = 40, # except 1d tensors
-    MOSTLY_IQ5_K         = 41, # except 1d tensors
-    MOSTLY_IQ6_K         = 42, # except 1d tensors
-    MOSTLY_IQ2_TN        = 43, # except 1d tensors
+    ALL_F32                = 0
+    MOSTLY_F16             = 1      #except 1d tensors
+    MOSTLY_Q4_0            = 2      #except 1d tensors
+    MOSTLY_Q4_1            = 3      #except 1d tensors
+    MOSTLY_Q4_1_SOME_F16   = 4      #tok_embeddings.weight and output.weight are F16
+    MOSTLY_Q8_0            = 7      #except 1d tensors
+    MOSTLY_Q5_0            = 8      #except 1d tensors
+    MOSTLY_Q5_1            = 9      #except 1d tensors
+    MOSTLY_Q2_K            = 10     #except 1d tensors
+    MOSTLY_Q3_K            = 11     #except 1d tensors
+    MOSTLY_Q4_K            = 12     #except 1d tensors
+    MOSTLY_Q5_K            = 13     #except 1d tensors
+    MOSTLY_Q6_K            = 14     #except 1d tensors
+    MOSTLY_IQ2_XXS         = 15     #except 1d tensors
+    MOSTLY_IQ2_XS          = 16     #except 1d tensors
+    MOSTLY_IQ3_XXS         = 17     #except 1d tensors
+    MOSTLY_IQ1_S           = 18     #except 1d tensors
+    MOSTLY_IQ4_NL          = 19     #except 1d tensors
+    MOSTLY_IQ3_S           = 20     #except 1d tensors
+    MOSTLY_IQ2_S           = 21     #except 1d tensors
+    MOSTLY_IQ4_XS          = 22     #except 1d tensors
+    MOSTLY_IQ1_M           = 23     #except 1d tensors
+    MOSTLY_BF16            = 24     #except 1d tensors
+    MOSTLY_Q4_0_4_4        = 25     #except 1d tensors
+    MOSTLY_Q4_0_4_8        = 26     #except 1d tensors
+    MOSTLY_Q4_0_8_8        = 27     #except 1d tensors
+    MOSTLY_Q6_0            = 127    #except 1d tensors
+    MOSTLY_IQ1_BN          = 128    #except 1d tensors
+    MOSTLY_IQ2_BN          = 129    #except 1d tensors
+    MOSTLY_IQ2_K           = 130    #except 1d tensors
+    MOSTLY_IQ3_K           = 131    #except 1d tensors
+    MOSTLY_IQ4_K           = 132    #except 1d tensors
+    MOSTLY_IQ5_K           = 133    #except 1d tensors
+    MOSTLY_IQ6_K           = 134    #except 1d tensors
+    MOSTLY_IQ4_KS          = 137    #except 1d tensors
+    MOSTLY_IQ2_KS          = 138    #except 1d tensors
+    MOSTLY_IQ4_KSS         = 139    #except 1d tensors
+    MOSTLY_Q8_KV           = 140    #except 1d tensors
+    MOSTLY_Q4_0_R8         = 202    #except 1d tensors
+    MOSTLY_Q8_0_R8         = 207    #except 1d tensors
+    MOSTLY_Q5_0_R4         = 208    #except 1d tensors
+    MOSTLY_Q2_K_R4         = 210    #except 1d tensors
+    MOSTLY_Q3_K_R4         = 211    #except 1d tensors
+    MOSTLY_Q4_K_R4         = 212    #except 1d tensors
+    MOSTLY_Q5_K_R4         = 213    #except 1d tensors
+    MOSTLY_Q6_K_R4         = 214    #except 1d tensors
+    MOSTLY_IQ2_XXS_R4      = 215    #except 1d tensors
+    MOSTLY_IQ2_XS_R4       = 216    #except 1d tensors
+    MOSTLY_IQ3_XXS_R4      = 217    #except 1d tensors
+    MOSTLY_IQ1_S_R4        = 218    #except 1d tensors
+    MOSTLY_IQ4_NL_R4       = 219    #except 1d tensors
+    MOSTLY_IQ3_S_R4        = 220    #except 1d tensors
+    MOSTLY_IQ2_S_R4        = 221    #except 1d tensors
+    MOSTLY_IQ4_XS_R8       = 222    #except 1d tensors
+    MOSTLY_IQ1_M_R4        = 223    #except 1d tensors
+    MOSTLY_BF16_R16        = 224    #except 1d tensors
+    MOSTLY_Q6_0_R4         = 227    #except 1d tensors
+    MOSTLY_IQ2_BN_R4       = 329    #except 1d tensors
+    MOSTLY_IQ2_K_R4        = 330    #except 1d tensors
+    MOSTLY_IQ3_K_R4        = 331    #except 1d tensors
+    MOSTLY_IQ4_K_R4        = 332    #except 1d tensors
+    MOSTLY_IQ5_K_R4        = 333    #except 1d tensors
+    MOSTLY_IQ4_KS_R4       = 337    #except 1d tensors
+    MOSTLY_Q8_KV_R8        = 398    #except 1d tensors
+    MOSTLY_Q8_K_R8         = 399    #except 1d tensors
 
 
     GUESSED              = 1024  # not specified in the model file
@@ -1313,39 +1373,89 @@ class GGUFValueType(IntEnum):
 
 # Items here are (block size, type size)
 QK_K = 256
+
+#Values generated programatically
 GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
-    GGMLQuantizationType.F32:     (1, 4),
-    GGMLQuantizationType.F16:     (1, 2),
-    GGMLQuantizationType.Q4_0:    (32, 2 + 16),
-    GGMLQuantizationType.Q4_1:    (32, 2 + 2 + 16),
-    GGMLQuantizationType.Q5_0:    (32, 2 + 4 + 16),
-    GGMLQuantizationType.Q5_1:    (32, 2 + 2 + 4 + 16),
-    GGMLQuantizationType.Q8_0:    (32, 2 + 32),
-    GGMLQuantizationType.Q8_1:    (32, 4 + 4 + 32),
-    GGMLQuantizationType.Q2_K:    (256, 2 + 2 + QK_K // 16 + QK_K // 4),
-    GGMLQuantizationType.Q3_K:    (256, 2 + QK_K // 4 + QK_K // 8 + 12),
-    GGMLQuantizationType.Q4_K:    (256, 2 + 2 + QK_K // 2 + 12),
-    GGMLQuantizationType.Q5_K:    (256, 2 + 2 + QK_K // 2 + QK_K // 8 + 12),
-    GGMLQuantizationType.Q6_K:    (256, 2 + QK_K // 2 + QK_K // 4 + QK_K // 16),
-    GGMLQuantizationType.Q8_K:    (256, 4 + QK_K + QK_K // 8),
-    GGMLQuantizationType.IQ2_XXS: (256, 2 + QK_K // 4),
-    GGMLQuantizationType.IQ2_XS:  (256, 2 + QK_K // 4 + QK_K // 32),
-    GGMLQuantizationType.IQ3_XXS: (256, 2 + QK_K // 4 + QK_K // 8),
-    GGMLQuantizationType.IQ1_S:   (256, 2 + QK_K // 8 + QK_K // 16),
-    GGMLQuantizationType.IQ4_NL:  (32, 2 + 16),
-    GGMLQuantizationType.IQ3_S:   (256, 2 + QK_K // 4 + QK_K // 8 + QK_K // 32 + 4),
-    GGMLQuantizationType.IQ2_S:   (256, 2 + QK_K // 4 + QK_K // 16),
-    GGMLQuantizationType.IQ4_XS:  (256, 2 + 2 + QK_K // 2 + QK_K // 64),
-    GGMLQuantizationType.I8:      (1, 1),
-    GGMLQuantizationType.I16:     (1, 2),
-    GGMLQuantizationType.I32:     (1, 4),
-    GGMLQuantizationType.I64:     (1, 8),
-    GGMLQuantizationType.F64:     (1, 8),
-    GGMLQuantizationType.IQ1_M:   (256, QK_K // 8 + QK_K // 16  + QK_K // 32),
-    GGMLQuantizationType.BF16:    (1, 2),
-    GGMLQuantizationType.Q4_0_4_4:(32, 2 + 16),
-    GGMLQuantizationType.Q4_0_4_8:(32, 2 + 16),
-    GGMLQuantizationType.Q4_0_8_8:(32, 2 + 16),
+    GGMLQuantizationType.F32         : (   1,    4),
+    GGMLQuantizationType.F16         : (   1,    2),
+    GGMLQuantizationType.Q4_0        : (  32,   18),
+    GGMLQuantizationType.Q4_1        : (  32,   20),
+    GGMLQuantizationType.Q5_0        : (  32,   22),
+    GGMLQuantizationType.Q5_1        : (  32,   24),
+    GGMLQuantizationType.Q8_0        : (  32,   34),
+    GGMLQuantizationType.Q8_1        : (  32,   36),
+    GGMLQuantizationType.Q2_K        : ( 256,   84),
+    GGMLQuantizationType.Q3_K        : ( 256,  110),
+    GGMLQuantizationType.Q4_K        : ( 256,  144),
+    GGMLQuantizationType.Q5_K        : ( 256,  176),
+    GGMLQuantizationType.Q6_K        : ( 256,  210),
+    GGMLQuantizationType.Q8_K        : ( 256,  292),
+    GGMLQuantizationType.IQ2_XXS     : ( 256,   66),
+    GGMLQuantizationType.IQ2_XS      : ( 256,   74),
+    GGMLQuantizationType.IQ3_XXS     : ( 256,   98),
+    GGMLQuantizationType.IQ1_S       : ( 256,   50),
+    GGMLQuantizationType.IQ4_NL      : (  32,   18),
+    GGMLQuantizationType.IQ3_S       : ( 256,  110),
+    GGMLQuantizationType.IQ2_S       : ( 256,   82),
+    GGMLQuantizationType.IQ4_XS      : ( 256,  136),
+    GGMLQuantizationType.I8          : (   1,    1),
+    GGMLQuantizationType.I16         : (   1,    2),
+    GGMLQuantizationType.I32         : (   1,    4),
+    GGMLQuantizationType.I64         : (   1,    8),
+    GGMLQuantizationType.F64         : (   1,    8),
+    GGMLQuantizationType.IQ1_M       : ( 256,   56),
+    GGMLQuantizationType.BF16        : (   1,    2),
+    GGMLQuantizationType.Q4_0_4_4    : (  32,   18),
+    GGMLQuantizationType.Q4_0_4_8    : (  32,   18),
+    GGMLQuantizationType.Q4_0_8_8    : (  32,   18),
+    GGMLQuantizationType.I2_S        : (   1,    1),
+    GGMLQuantizationType.Q8_0_X4     : (  32,   34),
+    GGMLQuantizationType.Q8_1_X4     : (  32,   36),
+    GGMLQuantizationType.Q8_2_X4     : (  32,   36),
+    GGMLQuantizationType.Q6_0        : (  32,   26),
+    GGMLQuantizationType.IQ1_BN      : (  64,   13),
+    GGMLQuantizationType.IQ2_BN      : (  64,   16),
+    GGMLQuantizationType.Q8_K64      : (  64,   68),
+    GGMLQuantizationType.IQ2_K       : ( 256,   76),
+    GGMLQuantizationType.IQ3_K       : ( 256,  110),
+    GGMLQuantizationType.IQ4_K       : ( 256,  144),
+    GGMLQuantizationType.IQ5_K       : ( 256,  176),
+    GGMLQuantizationType.IQ6_K       : ( 256,  212),
+    GGMLQuantizationType.IQ4_KS      : ( 256,  136),
+    GGMLQuantizationType.IQ2_KS      : ( 256,   70),
+    GGMLQuantizationType.IQ4_KSS     : ( 256,  128),
+    GGMLQuantizationType.Q8_K16      : (  64,   64),
+    GGMLQuantizationType.Q8_K32      : ( 256,  292),
+    GGMLQuantizationType.Q8_KR8      : ( 256,  292),
+    GGMLQuantizationType.Q8_K128     : ( 128,  140),
+    GGMLQuantizationType.Q8_KV       : (  32,   32),
+    GGMLQuantizationType.Q4_0_R8     : (  32,   18),
+    GGMLQuantizationType.Q5_0_R4     : (  32,   22),
+    GGMLQuantizationType.Q8_0_R8     : (  32,   34),
+    GGMLQuantizationType.Q2_K_R4     : ( 256,   84),
+    GGMLQuantizationType.Q3_K_R4     : ( 256,  110),
+    GGMLQuantizationType.Q4_K_R4     : ( 256,  144),
+    GGMLQuantizationType.Q5_K_R4     : ( 256,  176),
+    GGMLQuantizationType.Q6_K_R4     : ( 256,  210),
+    GGMLQuantizationType.IQ2_XXS_R4  : ( 256,   66),
+    GGMLQuantizationType.IQ2_XS_R4   : ( 256,   74),
+    GGMLQuantizationType.IQ3_XXS_R4  : ( 256,   98),
+    GGMLQuantizationType.IQ1_S_R4    : (  32,    6),
+    GGMLQuantizationType.IQ4_NL_R4   : (  32,   18),
+    GGMLQuantizationType.IQ3_S_R4    : ( 256,  110),
+    GGMLQuantizationType.IQ2_S_R4    : ( 256,   82),
+    GGMLQuantizationType.IQ4_XS_R8   : ( 256,  136),
+    GGMLQuantizationType.IQ1_M_R4    : (  32,    7),
+    GGMLQuantizationType.BF16_R16    : (   1,    2),
+    GGMLQuantizationType.Q6_0_R4     : (  32,   26),
+    GGMLQuantizationType.IQ2_BN_R4   : (  64,   16),
+    GGMLQuantizationType.IQ2_K_R4    : ( 256,   76),
+    GGMLQuantizationType.IQ3_K_R4    : ( 256,  110),
+    GGMLQuantizationType.IQ4_K_R4    : ( 256,  144),
+    GGMLQuantizationType.IQ5_K_R4    : ( 256,  176),
+    GGMLQuantizationType.IQ4_KS_R4   : ( 256,  136),
+    GGMLQuantizationType.Q8_KV_R8    : (  32,   32),
+    GGMLQuantizationType.Q8_K_R8     : ( 256,  258),
 }
 
 
