@@ -9497,7 +9497,7 @@ static struct ggml_tensor * llm_build_kqv(
             //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
 
             if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2 ||
-                model.arch == LLM_ARCH_COHERE2) {
+                model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4) {
                 // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
                 // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
                 ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
@@ -9557,7 +9557,7 @@ static struct ggml_tensor * llm_build_kqv(
                 auto q_i = ggml_view_3d(ctx, q, q->ne[0], q->ne[1], this_ne12, q->nb[1], q->nb[2], q->nb[2]*i12);
                 auto kq_i = ggml_mul_mat(ctx, k_i, q_i);
                 if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2 ||
-                    model.arch == LLM_ARCH_COHERE2) {
+                    model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4) {
                     ggml_mul_mat_set_prec(kq_i, GGML_PREC_F32);
                 }
                 if (model.arch == LLM_ARCH_GROK) {
