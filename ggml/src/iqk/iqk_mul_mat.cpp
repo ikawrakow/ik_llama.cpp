@@ -1750,6 +1750,15 @@ __m256i inline load_iq4nl_values_256() {
     return MM256_SET_M128I(val128, val128);
 }
 
+__m128i inline load_iq4k_values_128() {
+    return _mm_loadu_si128((const __m128i *)iq4k_values);
+}
+
+__m256i inline load_iq4k_values_256() {
+    auto val128 = load_iq4k_values_128();
+    return MM256_SET_M128I(val128, val128);
+}
+
 #ifdef HAVE_FANCY_SIMD
 //====================================== Zen4 ==================================================
 
@@ -8519,7 +8528,11 @@ struct Q4_0_1_Dequantizer {
 
 struct IQ4_NL_Dequantizer {
     Dequantizer4bit b4;
+#ifdef HAVE_FANCY_SIMD
     const __m256i values = load_iq4nl_values_256();
+#else
+    const __m256i values = load_iq4k_values_256();
+#endif
     inline __m256i dequant(const block_iq4_nl * x) const {
         return _mm256_shuffle_epi8(values, b4.dequant(x->qs));
     }
@@ -8630,11 +8643,19 @@ struct Q4_0_1_Unpacker final : public Q_Unpacker<block_q4_0, ScaleHelperQ_0_1<8>
     using Sum4T = Sum4TypeQ82;
     inline static int block_size() { return QK4_0; }
 };
+#ifdef HAVE_FANCY_SIMD
 struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0_1<128>, IQ4_NL_Dequantizer> {
     IQ4_NL_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4TypeQ82;
     inline static int block_size() { return QK4_NL; }
 };
+#else
+struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0, IQ4_NL_Dequantizer> {
+    IQ4_NL_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ80;
+    inline static int block_size() { return QK4_NL; }
+};
+#endif
 struct Q5_0_Unpacker final : public Q_Unpacker<block_q5_0, ScaleHelperQ_0, Q5_0_Dequantizer> {
     Q5_0_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4TypeQ80;
@@ -9155,9 +9176,29 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
             m.funcs[6] = mul_mat_qX_1_q8_2_T<Dequantizer, 7>;
             m.funcs[7] = mul_mat_qX_1_q8_2_T<Dequantizer, 8>;
         }
+        else if constexpr (std::is_same_v<Dequantizer, IQ4_NL_Unpacker>) {
+#ifdef HAVE_FANCY_SIMD
+            m.funcs[0] = mul_mat_qX_1_q8_2_T<Dequantizer, 1>;
+            m.funcs[1] = mul_mat_qX_1_q8_2_T<Dequantizer, 2>;
+            m.funcs[2] = mul_mat_qX_1_q8_2_T<Dequantizer, 3>;
+            m.funcs[3] = mul_mat_qX_1_q8_2_T<Dequantizer, 4>;
+            m.funcs[4] = mul_mat_qX_1_q8_2_T<Dequantizer, 5>;
+            m.funcs[5] = mul_mat_qX_1_q8_2_T<Dequantizer, 6>;
+            m.funcs[6] = mul_mat_qX_1_q8_2_T<Dequantizer, 7>;
+            m.funcs[7] = mul_mat_qX_1_q8_2_T<Dequantizer, 8>;
+#else
+            m.funcs[0] = mul_mat_qX_0_q8_0_T<Dequantizer, 1>;
+            m.funcs[1] = mul_mat_qX_0_q8_0_T<Dequantizer, 2>;
+            m.funcs[2] = mul_mat_qX_0_q8_0_T<Dequantizer, 3>;
+            m.funcs[3] = mul_mat_qX_0_q8_0_T<Dequantizer, 4>;
+            m.funcs[4] = mul_mat_qX_0_q8_0_T<Dequantizer, 5>;
+            m.funcs[5] = mul_mat_qX_0_q8_0_T<Dequantizer, 6>;
+            m.funcs[6] = mul_mat_qX_0_q8_0_T<Dequantizer, 7>;
+            m.funcs[7] = mul_mat_qX_0_q8_0_T<Dequantizer, 8>;
+#endif
+        }
         else if constexpr (std::is_same_v<Dequantizer, Q8_0_1_Unpacker> || std::is_same_v<Dequantizer, Q4_0_1_Unpacker> ||
-                           std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, IQ4_NL_Unpacker> ||
-                           std::is_same_v<Dequantizer, Q6_0_1_Unpacker>) {
+                           std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, Q6_0_1_Unpacker>) {
             m.funcs[0] = mul_mat_qX_1_q8_2_T<Dequantizer, 1>;
             m.funcs[1] = mul_mat_qX_1_q8_2_T<Dequantizer, 2>;
             m.funcs[2] = mul_mat_qX_1_q8_2_T<Dequantizer, 3>;
@@ -9476,7 +9517,11 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_IQ4_NL:
             assert (ne00 % QK4_NL == 0);
             MulMat::set_functions<IQ4_NL_Unpacker>(mm);
+#ifdef HAVE_FANCY_SIMD
             expected_typeB = GGML_TYPE_Q8_2_X4;
+#else
+            expected_typeB = GGML_TYPE_Q8_0_X4;
+#endif
             break;
         case GGML_TYPE_IQ4_NL_R4:
             assert (ne00 % QK4_NL == 0);
