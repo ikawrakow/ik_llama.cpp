@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) with better CPU and hybrid GPU/CPU performance.
+This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) with better CPU and hybrid GPU/CPU performance, new SOTA quantization types, first-class Bitnet support, better DeepSeek performance via MLA, FlashMLA, fused MoE operations and tensor overrides for hybrid GPU/CPU inference, row-interleaved quant packing, etc.
 
 ## Latest News
 
@@ -43,10 +43,18 @@ This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp)
 * Feb 9 2025: MLA for DeepSeek models
 * Jan 23 2025: DeepSeek-V3 support added
 
-### Contributing
+## Resources
 
-Contributions in form of pull requests or issue submissions (bug reports, feature requests) are welcome.
+There is no single point of reference describing all new `ik_llama.cpp` features. Pull requests often contain detailed information, so browsing the PRs is often the best way to learn about new features and how to use them. In addition
+* [The Wiki page](https://github.com/ikawrakow/ik_llama.cpp/wiki) has performance comparisons to mainline `llama.cpp`
+* [This guide](https://github.com/ikawrakow/ik_llama.cpp/discussions/258) is a good place to start if you came here because of DeepSeek models
+* [This discussion](https://github.com/ikawrakow/ik_llama.cpp/discussions/266) is about running DeepSeek-V3/R1 on a 16 x 3090 setup
+* [This discussion](https://github.com/ikawrakow/ik_llama.cpp/discussions/8) describes the new quantization types available in `ik_llama.cpp`
 
-### Licens
+## Contributing
+
+Contributions in form of pull requests, issue submissions (bug reports, feature requests), or general discussions, are welcome.
+
+## License
 
 MIT
