@@ -198,6 +198,8 @@ class MODEL_ARCH(IntEnum):
     QWEN         = auto()
     QWEN2        = auto()
     QWEN2MOE     = auto()
+    QWEN3        = auto()
+    QWEN3MOE     = auto()
     PHI2         = auto()
     PHI3         = auto()
     PLAMO        = auto()
