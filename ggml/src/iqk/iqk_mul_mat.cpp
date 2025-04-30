@@ -16076,8 +16076,13 @@ struct HelperIQ4nl final : public BaseHelper<step> {
     constexpr static int block_size_q = QK8_0;
 #else
     HelperIQ4nl(const char * data, int stride) : Base(data, stride) {}
+#ifdef HAVE_FANCY_SIMD
     using block_q8 = block_q8_2;
     constexpr static int block_size_q = QK8_2;
+#else
+    using block_q8 = block_q8_0;
+    constexpr static int block_size_q = QK8_0;
+#endif
 #endif
 
     // Needed for v * softmax(k * q)
@@ -16974,7 +16979,11 @@ struct FlashQKfp32 {
 #ifdef __aarch64__
             MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerIQ4NL, nq);
 #else
+#ifdef HAVE_FANCY_SIMD
             MAKE_FUNCS(mul_mat_qX_1_q8_2_T<IQ4_NL_Unpacker, nq);
+#else
+            MAKE_FUNCS(mul_mat_qX_0_q8_0_T<IQ4_NL_Unpacker, nq);
+#endif
 #endif
         }
 #endif
