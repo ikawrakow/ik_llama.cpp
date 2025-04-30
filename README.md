@@ -8,9 +8,11 @@ This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp)
 
 ## Latest News
 
+* April 29 2025: Qwen3 support added
 * April 26 2025: GLM-4 support added
 * April 26 2025: Command-A support added
 * April 22 2025: Support for the latest Microsoft Bitnet model added
+* April 21 2025: ik_llama.cpp builds and runs successfully on Android (using termux)
 * April 17 2025: Better CPU Flash Attention token generation performance
 * April 13 2025: `IQ1_M` quantization improvements
 * April 10 2025: LLaMA-4 support added
