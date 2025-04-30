@@ -306,7 +306,7 @@ int main(int argc, char * argv[]) {
     else {
         get_backend_memory(&free_mem, &total_mem);
     }
-    const char* cache_dir = nullptr;
+    const char * cache_dir = nullptr;
     std::string cache_dir_str;
     if (params.use_cache) {
         cache_dir_str = fs_get_cache_directory() + "rpc/";
