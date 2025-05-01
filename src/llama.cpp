@@ -12279,7 +12279,7 @@ struct llm_build_context {
                 Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
+                    ext_factor, std::max(1,(n_tokens / n_ctx_orig)), beta_fast, beta_slow
                 );
                 cb(Qcur, "Qcur", il);
 
@@ -12290,7 +12290,7 @@ struct llm_build_context {
                 Kcur = ggml_rope_ext(
                     ctx0, Kcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
+                    ext_factor, std::max(1,(n_tokens / n_ctx_orig)), beta_fast, beta_slow
                 );
                 cb(Kcur, "Kcur", il);
 
@@ -12397,7 +12397,7 @@ struct llm_build_context {
                 Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
+                    ext_factor, std::max(1,(n_tokens / n_ctx_orig)), beta_fast, beta_slow
                 );
                 cb(Qcur, "Qcur", il);
 
@@ -12408,7 +12408,7 @@ struct llm_build_context {
                 Kcur = ggml_rope_ext(
                     ctx0, Kcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
+                    ext_factor, std::max(1,(n_tokens / n_ctx_orig)), beta_fast, beta_slow
                 );
                 cb(Kcur, "Kcur", il);
 
