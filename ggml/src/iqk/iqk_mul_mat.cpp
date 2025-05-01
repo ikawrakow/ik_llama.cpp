@@ -17124,7 +17124,7 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
             HelperQ80<Dk, QK8_0>::convert(q_step, stride_q, q, q8r);
             auto mr = mask;
             for (int k1 = 0; k1 < nk1/k_step; ++k1) {
-                HelperQ80R8<Dk, k_step>::repack(k_step, kh.data, kh.stride, q8r8);
+                HelperQ80R8<Dk, k_step>::repack(k_step, kh.block, kh.stride, q8r8);
                 KQHelper::mul_mask_kq(khr8, stride_m, q8r, mr, fms);
                 fqkv.accumulate_qkv(vh, fms);
                 kh.next_block();
