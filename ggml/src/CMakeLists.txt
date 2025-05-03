@@ -321,6 +321,8 @@ if (GGML_CUDA)
         list(APPEND GGML_SOURCES_CUDA "ggml-cuda.cu")
         file(GLOB   SRCS "ggml-cuda/template-instances/fattn-wmma*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
+        file(GLOB   SRCS "ggml-cuda/template-instances/fattn-mma*.cu")
+        list(APPEND GGML_SOURCES_CUDA ${SRCS})
         file(GLOB   SRCS "ggml-cuda/template-instances/mmq*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
