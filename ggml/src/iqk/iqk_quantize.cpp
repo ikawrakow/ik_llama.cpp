@@ -6721,12 +6721,12 @@ size_t quantize_iq1_m_r4(const float * src, void * dst, int64_t nrows, int64_t n
                     for (int j = 0; j < kBlockSize; ++j) weight[j] = imatrix[kBlockSize*ibl + j]*sqrt(sigma2 + xb[j]*xb[j]);
                     float sumwx = 0;
                     for (int j = 0; j < kBlockSize/2; ++j) sumwx += weight[j]*std::abs(xb[j]);
-                    if (!sumwx) {
+                    if (sumwx < 1e-14f) {
                         for (int j = 0; j < kBlockSize/2; ++j) weight[j] = sqrt(sigma2 + xb[j]*xb[j]);
                     }
                     sumwx = 0;
                     for (int j = kBlockSize/2; j < kBlockSize; ++j) sumwx += weight[j]*std::abs(xb[j]);
-                    if (!sumwx) {
+                    if (sumwx < 1e-14) {
                         for (int j = kBlockSize/2; j < kBlockSize; ++j) weight[j] = sqrt(sigma2 + xb[j]*xb[j]);
                     }
                 } else {
