@@ -6572,8 +6572,8 @@ size_t quantize_iq1_s_r4(const float * src, void * dst, int64_t nrows, int64_t n
                 auto xb = src + k*n_per_row + kBlockSize*ibl;
                 float sumx2 = 0;
                 for (int j = 0; j < kBlockSize; ++j) sumx2 += xb[j]*xb[j];
-                if (!sumx2) {
-                    printf("Found block with all zeros\n");
+                if (sumx2 < 1e-14f) {
+                    //printf("Found block with all zeros\n");
                     // all zero
                     int ind = 1029; // this is the grid entry with all zeros
                     scales[4*ibl+k] = 0;
@@ -6703,13 +6703,18 @@ size_t quantize_iq1_m_r4(const float * src, void * dst, int64_t nrows, int64_t n
                 auto xb = src + k*n_per_row + kBlockSize*ibl;
                 float sumx2 = 0;
                 for (int j = 0; j < kBlockSize; ++j) sumx2 += xb[j]*xb[j];
-                if (!sumx2) {
+                if (sumx2 < 1e-14f) {
                     scales[8*ibl+2*k+0] = scales[8*ibl+2*k+1] = 0;
                     continue;
                 }
                 float sigma2 = 1.5f*sumx2/kBlockSize;
                 if (imatrix) {
                     for (int j = 0; j < kBlockSize; ++j) weight[j] = imatrix[kBlockSize*ibl + j]*sqrt(sigma2 + xb[j]*xb[j]);
+                    float sumwx = 0;
+                    for (int j = 0; j < kBlockSize; ++j) sumwx += weight[j]*std::abs(xb[j]);
+                    if (!sumwx) {
+                        for (int j = 0; j < kBlockSize; ++j) weight[j] = sqrt(sigma2 + xb[j]*xb[j]);
+                    }
                 } else {
                     for (int j = 0; j < kBlockSize; ++j) weight[j] = sqrt(sigma2 + xb[j]*xb[j]);
                 }
