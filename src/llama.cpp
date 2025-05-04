@@ -2553,6 +2553,7 @@ enum e_model {
     MODEL_70B,
     MODEL_236B,
     MODEL_314B,
+    MODEL_405B,
     MODEL_671B,
     MODEL_SMALL,
     MODEL_MEDIUM,
@@ -5156,6 +5157,7 @@ static const char * llama_model_type_name(e_model type) {
         case MODEL_70B:           return "70B";
         case MODEL_236B:          return "236B";
         case MODEL_314B:          return "314B";
+        case MODEL_405B:          return "405B";
         case MODEL_671B:          return "671B";
         case MODEL_SMALL:         return "0.1B";
         case MODEL_MEDIUM:        return "0.4B";
@@ -5356,6 +5358,7 @@ static void llm_load_hparams(
                 switch (hparams.n_layer) {
                     case 32: model.type = e_model::MODEL_7B; break;
                     case 80: model.type = e_model::MODEL_70B; break;
+	            case 162: model.type = e_model::MODEL_405B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
@@ -7039,8 +7042,9 @@ static bool llm_load_tensors(
                         layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
                         layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
                         layer.bo = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd},     llama_model_loader::TENSOR_NOT_REQUIRED);
-
-			layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+                        if (n_ff > 0) {
+			    layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+			}
 
                         if (hparams.rope_scaling_type_train == LLAMA_ROPE_SCALING_TYPE_LONGROPE) {
                             layer.rope_long  = create_tensor(ctx_layer, tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight"), { n_rot/2 }, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
@@ -7050,9 +7054,11 @@ static bool llm_load_tensors(
                             layer.rope_freqs = create_tensor(ctx_layer, tn(LLM_TENSOR_ROPE_FREQS, "weight"), {n_rot/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
                         }
 
-                        layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff});
-                        layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd});
-                        layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
+			if (n_ff > 0) {
+                            layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff});
+                            layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd});
+                            layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
+			}
 
                         // optional MLP bias
                         layer.ffn_gate_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "bias", i), {n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -10615,6 +10621,7 @@ struct llm_build_context {
             struct ggml_tensor * inpSA = inpL;
             const int64_t n_head_kv = hparams.n_head_kv(il);
             const int64_t n_head    = hparams.n_head(il);
+	    const int64_t n_ff      = hparams.n_ff(il);
 
             if (n_head == 0) { // attention-free layer of Llama-3_1-Nemotron-51B
                 cur = inpL;
@@ -10681,6 +10688,11 @@ struct llm_build_context {
                 n_tokens = n_outputs;
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+
+	    // FFN-free layer of Llama-3_1-Nemotron-Ultra-253B
+            if (n_ff == 0) {
+                continue;
             }
 
             // For Granite architecture
