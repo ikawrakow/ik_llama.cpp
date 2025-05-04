@@ -10695,7 +10695,6 @@ struct llm_build_context {
                 continue;
             }
 
-            // For Granite architecture
             if (hparams.f_residual_scale) {
                 cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
             }
@@ -10723,7 +10722,6 @@ struct llm_build_context {
                 cb(cur, "ffn_out", il);
             }
 
-            // For Granite architecture
             if (hparams.f_residual_scale) {
                 cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
             }
@@ -10748,7 +10746,6 @@ struct llm_build_context {
         // lm_head
         cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
 
-        // For Granite architecture
         if (hparams.f_logit_scale) {
             cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
         }
