@@ -180,6 +180,7 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
         case GGML_TYPE_IQ1_S   : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_XS  : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_IQ4_NL  : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_IQ4_KS  : return MMQ_DP4A_TXS_Q8_0;
         default                : return tile_x_sizes{0, 0, 0};
     }
 }
@@ -217,6 +218,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
         case GGML_TYPE_IQ1_S   : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_XS  : return MMQ_MMA_TILE_X_K_Q8_0;
         case GGML_TYPE_IQ4_NL  : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_IQ4_KS  : return MMQ_MMA_TILE_X_K_Q8_0;
         default                : return 0;
     }
 }
