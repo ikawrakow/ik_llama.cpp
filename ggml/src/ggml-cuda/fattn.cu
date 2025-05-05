@@ -521,6 +521,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     // K and V head sizes.
     if (K->ne[0] != V->ne[0]) {
         ggml_cuda_flash_attn_ext_wmma_f16(ctx, dst);
+        return;
     }
 
     ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
