@@ -173,20 +173,20 @@ static void mul_mat_vec_q_cuda(
     if (ggml_cuda_info().devices[id].cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
         switch(ncols_y) {
             case 1:
-                nwarps = 4;
+                if (ne2 == 1) nwarps = 4;
                 rows_per_cuda_block = 1;
                 break;
             case 2:
             case 3:
             case 4:
-                nwarps = 4;
+                if (ne2 == 1) nwarps = 4;
                 rows_per_cuda_block = 2;
                 break;
             case 5:
             case 6:
             case 7:
             case 8:
-                nwarps = 2;
+                if (ne2 == 1) nwarps = 2;
                 rows_per_cuda_block = 2;
                 break;
             default:
