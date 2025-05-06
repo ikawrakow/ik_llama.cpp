@@ -13,6 +13,7 @@
 #include "fattn-vec-f32.cuh"
 #include "fattn-wmma-f16.cuh"
 #include "fattn-mma-f16.cuh"
+#include "fattn-new-mma.cuh"
 #include "fattn.cuh"
 
 #include <cstdint>
@@ -519,10 +520,12 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
     // We need this because I haven't adapted the MMA kernels to work for different
     // K and V head sizes.
-    if (K->ne[0] != V->ne[0]) {
+    //if (K->ne[0] != V->ne[0]) {
+    if (!new_mma_available(cc)) {
         ggml_cuda_flash_attn_ext_wmma_f16(ctx, dst);
         return;
     }
 
-    ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
+    //ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
+    ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
 }
