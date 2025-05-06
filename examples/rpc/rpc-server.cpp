@@ -16,10 +16,14 @@
 #ifdef _WIN32
 #  define DIRECTORY_SEPARATOR '\\'
 #  define NOMINMAX
+#  include <locale>
 #  include <windows.h>
+#  include <fcntl.h>
+#  include <io.h>
 #else
 #  define DIRECTORY_SEPARATOR '/'
 #  include <unistd.h>
+#  include <sys/stat.h>
 #endif
 #include <string>
 #include <stdio.h>
