@@ -7,8 +7,8 @@
 This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) with better CPU and hybrid GPU/CPU performance, new SOTA quantization types, first-class Bitnet support, better DeepSeek performance via MLA, FlashMLA, fused MoE operations and tensor overrides for hybrid GPU/CPU inference, row-interleaved quant packing, etc.
 
 >[!IMPORTANT]
->The new GGUFs for DeepSeek-V3/R1/Lite do not work in this repository. This is due to the backwards incompatibe change in mainline `llama.cpp` that [added MLA support](https://github.com/ggml-org/llama.cpp/pull/12801)
->2.5 months after MLA was available here, and worked with the original DeepSeek GGUFs. Please use the original GGUF or, if you don't have one, convert the HF safetnosrs using the Python conversion scrip in this repository.     
+>The new GGUFs for DeepSeek-V3/R1/Lite do not work in this repository. This is due to the backwards incompatible change in mainline `llama.cpp` that [added MLA support](https://github.com/ggml-org/llama.cpp/pull/12801)
+>2.5 months after MLA was available here, and worked with the original DeepSeek GGUFs. Please use the original GGUF or, if you don't have one, convert the HF safetensors using the Python conversion script in this repository.
 
 ## Latest News
 
