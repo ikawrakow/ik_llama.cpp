@@ -1,3 +1,4 @@
+#pragma warning(disable : 4996)
 #include "utils.hpp"
 
 #include "common.h"
@@ -15,23 +16,8 @@
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "json.hpp"
-
-// auto generated files (update with ./deps.sh)
-#include "colorthemes.css.hpp"
-#include "style.css.hpp"
-#include "theme-beeninorder.css.hpp"
-#include "theme-ketivah.css.hpp"
-#include "theme-mangotango.css.hpp"
-#include "theme-playground.css.hpp"
-#include "theme-polarnight.css.hpp"
-#include "theme-snowstorm.css.hpp"
-#include "index.html.hpp"
-#include "index-new.html.hpp"
-#include "index.js.hpp"
-#include "completion.js.hpp"
-#include "system-prompts.js.hpp"
-#include "prompt-formats.js.hpp"
-#include "json-schema-to-grammar.mjs.hpp"
+#include "index.html.gz.hpp"
+#include "loading.html.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -3407,25 +3393,33 @@ int main(int argc, char ** argv) {
         svr->set_base_dir(params.public_path);
     }
 
-    // using embedded static files
-    svr->Get("/",                           handle_static_file(index_html, index_html_len, "text/html; charset=utf-8"));
-    svr->Get("/index.js",                   handle_static_file(index_js, index_js_len, "text/javascript; charset=utf-8"));
-    svr->Get("/completion.js",              handle_static_file(completion_js, completion_js_len, "text/javascript; charset=utf-8"));
-    svr->Get("/json-schema-to-grammar.mjs", handle_static_file(json_schema_to_grammar_mjs, json_schema_to_grammar_mjs_len, "text/javascript; charset=utf-8"));
-
-    // add new-ui files
-    svr->Get("/colorthemes.css",       handle_static_file(colorthemes_css, colorthemes_css_len, "text/css; charset=utf-8"));
-    svr->Get("/style.css",             handle_static_file(style_css, style_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-beeninorder.css", handle_static_file(theme_beeninorder_css, theme_beeninorder_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-ketivah.css",     handle_static_file(theme_ketivah_css, theme_ketivah_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-mangotango.css",  handle_static_file(theme_mangotango_css, theme_mangotango_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-playground.css",  handle_static_file(theme_playground_css, theme_playground_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-polarnight.css",  handle_static_file(theme_polarnight_css, theme_polarnight_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-snowstorm.css",   handle_static_file(theme_snowstorm_css, theme_snowstorm_css_len, "text/css; charset=utf-8"));
-    svr->Get("/index-new.html",        handle_static_file(index_new_html, index_new_html_len, "text/html; charset=utf-8"));
-    svr->Get("/system-prompts.js",     handle_static_file(system_prompts_js, system_prompts_js_len, "text/javascript; charset=utf-8"));
-    svr->Get("/prompt-formats.js",     handle_static_file(prompt_formats_js, prompt_formats_js_len, "text/javascript; charset=utf-8"));
-
+    {
+        // register static assets routes
+        if (!params.public_path.empty()) {
+            // Set the base directory for serving static files
+            bool is_found = svr->set_mount_point("/", params.public_path);
+            if (!is_found) {
+                GGML_ABORT("%s: static assets path not found: %s\n", __func__, params.public_path.c_str());
+                return 1;
+            }
+        }
+        else {
+            // using embedded static index.html
+            svr->Get("/", [](const httplib::Request& req, httplib::Response& res) {
+                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
+                }
+                else {
+                    res.set_header("Content-Encoding", "gzip");
+                    // COEP and COOP headers, required by pyodide (python interpreter)
+                    res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                    res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                    res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
+                }
+                return false;
+                });
+        }
+    }
     // register API routes
     svr->Get ("/health",              handle_health);
     svr->Get ("/metrics",             handle_metrics);
