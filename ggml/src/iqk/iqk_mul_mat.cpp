@@ -18033,7 +18033,7 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
     auto type_v = ggml_type(int_type_v);
 
     if (Dk == 576 && Dv == 512) {
-        GGML_ASSERT(type_k == type_v);
+        GGML_ASSERT(type_k == type_v || (type_k == GGML_TYPE_Q8_0_R8 && type_v == GGML_TYPE_Q8_0));
         stride_q /= sizeof(float); // q stride as float
         return iqk_deepseek_helper<32>(type_k, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
                         q, (const char *)k, (const char *)v, (const char *)mask, scale, softcap, qkv, M, S);
