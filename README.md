@@ -9,9 +9,12 @@ This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp)
 >[!IMPORTANT]
 >The new GGUFs for DeepSeek-V3/R1/Lite do not work in this repository. This is due to the backwards incompatible change in mainline `llama.cpp` that [added MLA support](https://github.com/ggml-org/llama.cpp/pull/12801)
 >2.5 months after MLA was available here, and worked with the original DeepSeek GGUFs. Please use the original GGUF or, if you don't have one, convert the HF safetensors using the Python conversion script in this repository.
+>
+>**Update** There is now [PR 394](https://github.com/ikawrakow/ik_llama.cpp/pull/394) addressing the issue. Would appreciate testing with DeepSeek-V3/R1.
 
 ## Latest News
 
+* May 7 2025: 🚀 Faster TG for DeepSeek models with GPU or hybrid GPU/CPU inference. See [PR 386](https://github.com/ikawrakow/ik_llama.cpp/pull/386) for details. Caveat: Ampere or newer Nvidia GPU required
 * May 4 2025: 🚀 Significant token generation performance improvement on CUDA with Flash Attention for GQA models. For details and benchmarks see [PR #370](https://github.com/ikawrakow/ik_llama.cpp/pull/370) 
 * April 29 2025: Qwen3 support added
 * April 26 2025: GLM-4 support added
