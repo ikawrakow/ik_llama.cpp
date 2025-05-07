@@ -3439,6 +3439,30 @@ static bool llama_kv_cache_init(
         cache.ctxs.push_back(ctx);
     }
 
+    if (model.arch == LLM_ARCH_DEEPSEEK2) {
+        bool have_wkv_b = true;
+        for (auto& l : model.layers) {
+            if (!l.wkv_b) {
+                have_wkv_b = false;
+                break;
+            }
+        }
+        if (!have_wkv_b) {
+            if (cparams.mla_attn != 1) {
+                LLAMA_LOG_WARN("=========================================================\n");
+                LLAMA_LOG_WARN("%s: missing wkv_b tensor(s)\n", __func__);
+                LLAMA_LOG_WARN("%s: changing MLA from %d to 1\n", __func__, cparams.mla_attn);
+                if (cparams.mla_attn > 1) {
+                    LLAMA_LOG_WARN("%s: ** Prompt processing performance will be crippled **\n", __func__);
+                }
+                LLAMA_LOG_WARN("=========================================================\n");
+                // Sorry for the hack.
+                auto& non_cparams = const_cast<llama_cparams&>(cparams);
+                non_cparams.mla_attn = 1;
+            }
+        }
+    }
+
     if (model.arch == LLM_ARCH_DEEPSEEK2 && cparams.mla_attn) {
         // DeepSeek MLA
         cache.kv_l.reserve(n_layer);
@@ -3468,7 +3492,7 @@ static bool llama_kv_cache_init(
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
-            LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
+            //LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
             if (cparams.flash_attn) {
                 ggml_tensor * kv = ggml_new_tensor_2d(ctx, cache.type_k, kv_lora_rank + n_embd_head_qk_rope, kv_size);
                 ggml_format_name(kv, "cache_kv_l%d", i);
@@ -5807,6 +5831,25 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_DEEPSEEK2:
             {
+                if (hparams.n_head_kv() == 1) {
+                    printf("==========================================================================\n");
+                    printf("Detected incompatible DeepSeek model.\n");
+                    printf("Will try to fix, but there are no guarantees\n\n");
+                    printf("*** Your prompt processing speed will be crippled ***\n\n");
+                    printf("Consider making your own ik_llama.cpp compatible model or\n");
+                    printf("ask the model provider to make one for you,\n");
+                    int n_nead_kv = hparams.n_gqa();
+                    if (n_nead_kv%16 != 0 || hparams.n_embd_head_k != 576 || hparams.n_embd_head_v != 512 ||
+                        hparams.n_rot != 64) {
+                        printf("Sorry, uknown model => cannot fix it => bailing out\n");
+                        GGML_ABORT("Fatal error");
+                    }
+                    for (auto& item : hparams.n_head_kv_arr) item = n_nead_kv;
+                    hparams.n_embd_head_k = 192;
+                    hparams.n_embd_head_v = 128;
+                    printf("==========================================================================\n");
+                    //GGML_ABORT("Fatal error");
+                }
                 bool is_lite = (hparams.n_layer == 27);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT, hparams.n_layer_dense_lead);
@@ -5819,7 +5862,7 @@ static void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE, hparams.expert_weights_scale);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM, hparams.expert_weights_norm, false);
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func, false);
-	        if (hparams.expert_gating_func == 0) {
+	            if (hparams.expert_gating_func == 0) {
                     // for compatibility with existing DeepSeek V2 and V2.5 GGUFs
                     // that have no expert_gating_func model parameter set
                     hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SOFTMAX;
@@ -8309,10 +8352,18 @@ static bool llm_load_tensors(
                             layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd_k_gqa});
                         }
 
-                        layer.wkv_a_mqa = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + (n_embd_head_qk_rope)});
-                        layer.wkv_b     = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)});
-                        layer.wk_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, 1);
-                        layer.wv_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B,      "weight", i), {kv_lora_rank, n_head * n_embd_head_v}, 1);
+                        layer.wkv_a_mqa = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i),{n_embd, kv_lora_rank + (n_embd_head_qk_rope)});
+                        layer.wkv_b     = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_KV_B,     "weight", i),
+                                {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        if (!layer.wkv_b) {
+                            // Incompatible mainline model. Let's see if we can still load it
+                            layer.wk_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B, "weight", i), {n_embd_head_qk_nope, kv_lora_rank, n_head}, 0);
+                            layer.wv_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B, "weight", i), {kv_lora_rank, n_embd_head_v, n_head}, 0);
+
+                        } else {
+                            layer.wk_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, 1);
+                            layer.wv_b      = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B,      "weight", i), {kv_lora_rank, n_head * n_embd_head_v}, 1);
+                        }
                         layer.wo        = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT,      "weight", i), {              n_head * (                      n_embd_head_v), n_embd});
 
                         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
