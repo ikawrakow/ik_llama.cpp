@@ -3587,6 +3587,11 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 return (op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16) ||
                        (op->src[1]->type == GGML_TYPE_Q8_0 && op->src[2]->type == GGML_TYPE_Q8_0);
             }
+            if (op->src[1]->ne[0] == 576 && op->src[2]->ne[0] == 512) {
+                const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
+                int gqa = op->src[0]->ne[2]/op->src[1]->ne[2];
+                return (new_mma_available(cc) && cc >= CC_AMPERE && op->src[3] && gqa%16 == 0);
+            }
             if (op->src[1]->ne[0] > 256) {
                 return false;
             }
