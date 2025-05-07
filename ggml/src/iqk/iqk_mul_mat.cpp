@@ -1389,7 +1389,7 @@ static const uint32_t iq1s_grid_us[2048] = {
 };
 #endif
 
-#ifndef HAVE_FANCY_SIMD
+#if !(defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__)
 const uint64_t keven_signs[128] = {
     0x0101010101010101, 0xff010101010101ff, 0xff0101010101ff01, 0x010101010101ffff,
     0xff01010101ff0101, 0x0101010101ff01ff, 0x0101010101ffff01, 0xff01010101ffffff,
@@ -7574,7 +7574,7 @@ struct DequantizerIQ1BN {
             _mm256_set_epi64x(0x0300010003000900, 0x1b00510001000300, 0x09001b0051000100, 0x030009001b005100),
     };
     const __m256i m3 = _mm256_set1_epi16(3);
-#ifdef HAVE_FANCY_SIMD
+#if defined HAVE_FANCY_SIMD && defined __AVX512VBMI__
     const __m256i bmask = _mm256_set_epi8(62, 60, 58, 56, 54, 52, 50, 48, 46, 44, 42, 40, 38, 36, 34, 32, 30, 28, 26, 24, 22, 20, 18, 16, 14, 12, 10, 8, 6, 4, 2, 0);
 #endif
 
@@ -7585,7 +7585,7 @@ struct DequantizerIQ1BN {
         auto val2 = _mm256_mulhi_epu16(_mm256_mullo_epi16(_mm256_shuffle_epi8(data, shuff[1]), mult[1]), m3);
         auto val3 = _mm256_mulhi_epu16(_mm256_mullo_epi16(_mm256_shuffle_epi8(data, shuff[2]), mult[2]), m3);
         auto val4 = _mm256_mulhi_epu16(_mm256_mullo_epi16(_mm256_shuffle_epi8(data, shuff[3]), mult[3]), m3);
-#ifdef HAVE_FANCY_SIMD
+#if defined HAVE_FANCY_SIMD && defined __AVX512VBMI__
         v1 = _mm256_permutex2var_epi8(val1, bmask, val2);
         v2 = _mm256_permutex2var_epi8(val3, bmask, val4);
 #else
@@ -7866,7 +7866,7 @@ struct DequantizerIQ3S final : public BaseDequantizer<block_iq3_s> {
 };
 
 struct EvenSignHelper {
-#ifdef HAVE_FANCY_SIMD
+#if defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
     union sbits_t {
         __m128i vec;
         __mmask32 mask[4];
@@ -7931,7 +7931,7 @@ struct DequantizerIQ3XXS final : public BaseDequantizer<block_iq3_xxs> {
     }
 
     IQK_ALWAYS_INLINE void sign_2_values(const uint16_t * signs, __m256i * values) const {
-#ifdef HAVE_FANCY_SIMD
+#if defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
         esh.sign_2_values(MM256_SET_M128I(_mm_set1_epi32(signs[2] | (signs[3] << 16)), _mm_set1_epi32(signs[0] | (signs[1] << 16))), values);
 #else
         esh.sign_value(signs[0] | (signs[1] << 16), values[0]);
@@ -8106,7 +8106,7 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
         value = _mm256_sign_epi8(value, _mm256_or_si256(signs, mone));
     }
     inline void sign_values(const __m256i& data, __m256i * values) const {
-#ifdef HAVE_FANCY_SIMD
+#if defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
         auto partial_bits = _mm256_cvtepi16_epi8(_mm256_srli_epi16(data,  9));
         auto pcnt = _mm_popcnt_epi8(partial_bits);
         auto full_bits = _mm_or_si128(partial_bits, _mm_slli_epi16(_mm_and_si128(pcnt, _mm_set1_epi8(1)), 7));
@@ -8156,7 +8156,7 @@ struct DequantizerIQ2XS final : public BaseDequantizer<block_iq2_xs> {
     constexpr static int minv = 43;
 
     SimpleBits bits;
-#ifndef HAVE_FANCY_SIMD
+#if !(defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__)
     Helper helper;
 #endif
     const __m256i idx_mask  = _mm256_set1_epi16(511);
@@ -8201,7 +8201,7 @@ struct DequantizerIQ2XXS final : public BaseDequantizer<block_iq2_xxs> {
     }
 
     IQK_ALWAYS_INLINE void sign_values(const uint32_t * aux32, __m256i * values) const {
-#ifdef HAVE_FANCY_SIMD
+#if defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__
         esh.sign_2_values(MM256_SET_M128I(_mm_set1_epi32(aux32[3]), _mm_set1_epi32(aux32[1])), values+0);
         esh.sign_2_values(MM256_SET_M128I(_mm_set1_epi32(aux32[7]), _mm_set1_epi32(aux32[5])), values+2);
 #else
@@ -18033,7 +18033,7 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
     auto type_v = ggml_type(int_type_v);
 
     if (Dk == 576 && Dv == 512) {
-        GGML_ASSERT(type_k == type_v);
+        GGML_ASSERT(type_k == type_v || (type_k == GGML_TYPE_Q8_0_R8 && type_v == GGML_TYPE_Q8_0));
         stride_q /= sizeof(float); // q stride as float
         return iqk_deepseek_helper<32>(type_k, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
                         q, (const char *)k, (const char *)v, (const char *)mask, scale, softcap, qkv, M, S);

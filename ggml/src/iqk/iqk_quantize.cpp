@@ -6572,8 +6572,8 @@ size_t quantize_iq1_s_r4(const float * src, void * dst, int64_t nrows, int64_t n
                 auto xb = src + k*n_per_row + kBlockSize*ibl;
                 float sumx2 = 0;
                 for (int j = 0; j < kBlockSize; ++j) sumx2 += xb[j]*xb[j];
-                if (!sumx2) {
-                    printf("Found block with all zeros\n");
+                if (sumx2 < 1e-14f) {
+                    //printf("Found block with all zeros\n");
                     // all zero
                     int ind = 1029; // this is the grid entry with all zeros
                     scales[4*ibl+k] = 0;
@@ -6701,20 +6701,49 @@ size_t quantize_iq1_m_r4(const float * src, void * dst, int64_t nrows, int64_t n
         for (int ibl = 0; ibl < nblock; ++ibl) {
             for (int k = 0; k < 4; ++k) {
                 auto xb = src + k*n_per_row + kBlockSize*ibl;
-                float sumx2 = 0;
-                for (int j = 0; j < kBlockSize; ++j) sumx2 += xb[j]*xb[j];
-                if (!sumx2) {
+                float sumx2l = 0, sumx2h = 0;
+                for (int j = 0; j < kBlockSize/2; ++j) sumx2l += xb[j]*xb[j];
+                for (int j = kBlockSize/2; j < kBlockSize; ++j) sumx2h += xb[j]*xb[j];
+                float sumx2 = sumx2l + sumx2h;
+                if (sumx2 < 1e-14f) {
                     scales[8*ibl+2*k+0] = scales[8*ibl+2*k+1] = 0;
+                    int ind = 1029;
+                    for (int i = 0; i < 4; ++i) {
+                        y[ibl].qs[4*i + k] = ind & 255;
+                    }
+                    for (int i = 0; i < 2; ++i) {
+                        y[ibl].qh[4*i+k] = (ind >> 8) | ((ind >> 8) << 4);
+                    }
                     continue;
                 }
                 float sigma2 = 1.5f*sumx2/kBlockSize;
                 if (imatrix) {
                     for (int j = 0; j < kBlockSize; ++j) weight[j] = imatrix[kBlockSize*ibl + j]*sqrt(sigma2 + xb[j]*xb[j]);
+                    float sumwx = 0;
+                    for (int j = 0; j < kBlockSize/2; ++j) sumwx += weight[j]*std::abs(xb[j]);
+                    if (sumwx < 1e-14f) {
+                        for (int j = 0; j < kBlockSize/2; ++j) weight[j] = sqrt(sigma2 + xb[j]*xb[j]);
+                    }
+                    sumwx = 0;
+                    for (int j = kBlockSize/2; j < kBlockSize; ++j) sumwx += weight[j]*std::abs(xb[j]);
+                    if (sumwx < 1e-14) {
+                        for (int j = kBlockSize/2; j < kBlockSize; ++j) weight[j] = sqrt(sigma2 + xb[j]*xb[j]);
+                    }
                 } else {
                     for (int j = 0; j < kBlockSize; ++j) weight[j] = sqrt(sigma2 + xb[j]*xb[j]);
                 }
-                iq1m_process_1block(xb+ 0, weight+ 0, L, scales.data() + 8*ibl + 2*k+0, index+0, &shift1, pairs);
-                iq1m_process_1block(xb+16, weight+16, L, scales.data() + 8*ibl + 2*k+1, index+2, &shift2, pairs);
+                if (sumx2l > 1e-14f) {
+                    iq1m_process_1block(xb+ 0, weight+ 0, L, scales.data() + 8*ibl + 2*k+0, index+0, &shift1, pairs);
+                } else {
+                    scales[8*ibl+2*k+0] = 0;
+                    index[0] = index[1] = 1029;
+                }
+                if (sumx2h > 1e-14f) {
+                    iq1m_process_1block(xb+16, weight+16, L, scales.data() + 8*ibl + 2*k+1, index+2, &shift2, pairs);
+                } else {
+                    scales[8*ibl+2*k+1] = 0;
+                    index[2] = index[3] = 1029;
+                }
                 max[k] = std::max(max[k], std::max(scales[8*ibl+2*k+0], scales[8*ibl+2*k+1]));
                 for (int i = 0; i < 4; ++i) {
                     y[ibl].qs[4*i + k] = index[i] & 255;
