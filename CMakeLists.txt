@@ -10,10 +10,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 
-set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES 0)
-set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_LIBRARIES 0)
-set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_OBJECTS 0)
-
 if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
@@ -54,11 +50,11 @@ if (WIN32)
 endif()
 
 # force MSVC compiler charset to utf-8
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
-    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/source-charset:utf-8>")
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/source-charset:utf-8>")
-    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/execution-charset:utf-8>")
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/execution-charset:utf-8>")
+if (MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/bigobj>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
 endif()
 
 #
@@ -123,6 +119,29 @@ llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
 llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
 llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
 
+if (NOT MSVC)
+    if (LLAMA_SANITIZE_THREAD)
+        message(STATUS "Using -fsanitize=thread")
+
+        add_compile_options(-fsanitize=thread)
+        link_libraries     (-fsanitize=thread)
+    endif()
+
+    if (LLAMA_SANITIZE_ADDRESS)
+        message(STATUS "Using -fsanitize=address")
+
+        add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+        link_libraries     (-fsanitize=address)
+    endif()
+
+    if (LLAMA_SANITIZE_UNDEFINED)
+        message(STATUS "Using -fsanitize=undefined")
+
+        add_compile_options(-fsanitize=undefined)
+        link_libraries     (-fsanitize=undefined)
+    endif()
+endif()
+
 #
 # build the library
 #
@@ -131,6 +150,11 @@ if (NOT TARGET ggml)
     add_subdirectory(ggml)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
+
+#
+# build the library
+#
+
 add_subdirectory(src)
 
 #
