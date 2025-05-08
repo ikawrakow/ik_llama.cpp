@@ -1034,7 +1034,7 @@ bool rpc_server::buffer_clear(const rpc_msg_buffer_clear_req& request) {
 ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
     // Validate tensor type before using it
     if (tensor->type >= GGML_TYPE_COUNT) {
-        GGML_LOG_ERROR("[%s] invalid tensor type received: %u\n", __func__, tensor->type);
+        GGML_PRINT_DEBUG("[%s] invalid tensor type received: %u\n", __func__, tensor->type);
         return nullptr;
     }
 
@@ -1043,7 +1043,7 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
 
     // ggml_new_tensor_4d might fail if dimensions are invalid, although less likely to crash than invalid type
     if (result == nullptr) {
-        GGML_LOG_ERROR("[%s] ggml_new_tensor_4d failed for type %u\\n", __func__, tensor->type);
+        GGML_PRINT_DEBUG("[%s] ggml_new_tensor_4d failed for type %u\\n", __func__, tensor->type);
         return nullptr;
     }
 
@@ -1105,7 +1105,7 @@ bool rpc_server::set_tensor(const std::vector<uint8_t>& input) {
         const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
 
         if (in_tensor->data + offset < p0 || in_tensor->data + offset >= p1 || size >(p1 - in_tensor->data - offset)) {
-            GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu) out of buffer bounds [0x%zx, 0x%zx)\n",
+            GGML_PRINT_DEBUG("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu) out of buffer bounds [0x%zx, 0x%zx)\n",
                            __func__, in_tensor->data, offset, size, p0, p1);
             return false;
         }
@@ -1183,7 +1183,7 @@ bool rpc_server::set_tensor_hash(const std::vector<uint8_t>& input, rpc_msg_set_
         const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
 
         if (in_tensor->data + offset < p0 || in_tensor->data + offset >= p1 || size >(p1 - in_tensor->data - offset)) {
-            GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu, hash=0x%" PRIx64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
+            GGML_PRINT_DEBUG("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu, hash=0x%" PRIx64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
                            __func__, in_tensor->data, offset, size, *hash, p0, p1);
             return false;
         }
@@ -1252,7 +1252,7 @@ bool rpc_server::get_tensor(const rpc_msg_get_tensor_req& request, std::vector<u
         if (request.tensor.data + request.offset < p0 ||
             request.tensor.data + request.offset >= p1 ||
             request.size > (p1 - request.tensor.data - request.offset)) {
-                GGML_LOG_ERROR("[%s] requested tensor region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%" PRIu64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
+                GGML_PRINT_DEBUG("[%s] requested tensor region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%" PRIu64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
                                __func__, request.tensor.data, request.offset, request.size, p0, p1);
                 return false;
         }
@@ -1331,7 +1331,7 @@ ggml_tensor* rpc_server::create_node(uint64_t id,
             result->src[i] = create_node(tensor->src[i], ctx, tensor_ptrs, tensor_map);
             // If the recursive call failed for a non-zero ID, propagate the error
             if (result->src[i] == nullptr) {
-                GGML_LOG_ERROR("[%s] failed to create source node %d (src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
+                GGML_PRINT_DEBUG("[%s] failed to create source node %d (src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
                                __func__, i, tensor->src[i], id);
                 // Must return nullptr to signal failure up the call stack
                 return nullptr;
@@ -1346,7 +1346,7 @@ ggml_tensor* rpc_server::create_node(uint64_t id,
         result->view_src = create_node(tensor->view_src, ctx, tensor_ptrs, tensor_map);
         // If the recursive call failed for a non-zero ID, propagate the error
         if (result->view_src == nullptr) {
-            GGML_LOG_ERROR("[%s] failed to create view_src node (view_src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
+            GGML_PRINT_DEBUG("[%s] failed to create view_src node (view_src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
                            __func__, tensor->view_src, id);
             // Must return nullptr to signal failure up the call stack
             return nullptr;
@@ -1400,7 +1400,7 @@ bool rpc_server::graph_compute(const std::vector<uint8_t>& input, rpc_msg_graph_
         // If id was 0, create_node returning nullptr is expected.
         // If id was non-zero and create_node returned nullptr, it indicates a deserialization error.
         if (graph->nodes[i] == nullptr && id != 0) {
-            GGML_LOG_ERROR("[%s] failed to create graph node %d (id=%" PRId64 ")\n", __func__, i, id);
+            GGML_PRINT_DEBUG("[%s] failed to create graph node %d (id=%" PRId64 ")\n", __func__, i, id);
             return false;
         }
     }
@@ -1439,22 +1439,17 @@ static void rpc_serve_client(ggml_backend_t backend, const char* cache_dir,
             if (!send_msg(sockfd, &response, sizeof(response))) {
                 return;
             }
-            case RPC_CMD_GET_ALLOC_SIZE: {
-                rpc_msg_get_alloc_size_req request;
-                if (!recv_msg(sockfd, &request, sizeof(request))) {
-                    return;
-                }
-                rpc_msg_get_alloc_size_rsp response;
-                if (!server.get_alloc_size(request, response)) {
-                    return;
-                }
-                if (!send_msg(sockfd, &response, sizeof(response))) {
-                    return;
-                }
-                break;
+            break;
+        }
+        case RPC_CMD_GET_ALLOC_SIZE: {
+            rpc_msg_get_alloc_size_req request;
+            if (!recv_msg(sockfd, &request, sizeof(request))) {
+                return;
             }
             rpc_msg_get_alloc_size_rsp response;
-            server.get_alloc_size(request, response);
+            if (!server.get_alloc_size(request, response)) {
+                return;
+            }
             if (!send_msg(sockfd, &response, sizeof(response))) {
                 return;
             }
