@@ -505,11 +505,20 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
     return result;
 }
 
-GGML_CALL static void ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-    UNUSED(buffer);
-    if (ggml_is_quantized(tensor->type)) {
-        // TODO: this check is due to MATRIX_ROW_PADDING in CUDA and should be generalized
-        //GGML_ASSERT(tensor->ne[0] % 512 == 0 && "unsupported quantized tensor");
+
+GGML_CALL static void ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor* tensor) {
+    ggml_backend_rpc_buffer_context* ctx = (ggml_backend_rpc_buffer_context*)buffer->context;
+
+    // CUDA backend on the server pads everything to 512 due to CUDA limitations.
+    // Due to bandwidth constraints, we only call the server init tensor functions if necessary.
+    // In particular, only quantized tensors need padding
+    if (ggml_is_quantized(tensor->type) && (tensor->ne[0] % 512 != 0) && (tensor->view_src == nullptr)) {
+        rpc_msg_init_tensor_req request;
+
+        request.tensor = serialize_tensor(tensor);
+
+        bool status = send_rpc_cmd(ctx->sock, RPC_CMD_INIT_TENSOR, &request, sizeof(request), nullptr, 0);
+        GGML_ASSERT(status);
     }
 }
 
@@ -643,10 +652,28 @@ GGML_CALL static size_t ggml_backend_rpc_get_max_size(ggml_backend_buffer_type_t
     return buft_ctx->max_size;
 }
 
-GGML_CALL static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    UNUSED(buft);
-    return ggml_nbytes(tensor);
+GGML_CALL static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor* tensor) {
+    // See comments in init_tensor.
+    if (ggml_is_quantized(tensor->type) && (tensor->ne[0] % 512 != 0) && (tensor->view_src == nullptr)) {
+        ggml_backend_rpc_buffer_type_context* buft_ctx = (ggml_backend_rpc_buffer_type_context*)buft->context;
+        auto sock = get_socket(buft_ctx->endpoint);
+
+        rpc_msg_get_alloc_size_req request;
+
+        request.tensor = serialize_tensor(tensor);
+
+        rpc_msg_get_alloc_size_rsp response;
+        bool status = send_rpc_cmd(sock, RPC_CMD_GET_ALLOC_SIZE, &request, sizeof(request), &response, sizeof(response));
+        GGML_ASSERT(status);
+
+        return response.alloc_size;
+    }
+    else {
+        return ggml_nbytes(tensor);
+    }
 }
+
+
 
 static ggml_backend_buffer_type_i ggml_backend_rpc_buffer_type_interface = {
     /* .get_name         = */ ggml_backend_rpc_buffer_type_name,
@@ -1071,6 +1098,7 @@ bool rpc_server::set_tensor(const std::vector<uint8_t>& input) {
     return true;
 }
 
+
 bool rpc_server::get_cached_file(uint64_t hash, std::vector<uint8_t>& data) {
     if (!cache_dir) {
         return false;
@@ -1144,7 +1172,7 @@ bool rpc_server::init_tensor(const rpc_msg_init_tensor_req& request) {
     struct ggml_context* ctx = ggml_init(params);
     ggml_tensor* tensor = deserialize_tensor(ctx, &request.tensor);
     if (tensor == nullptr) {
-        GGML_ABORT("Null tensor pointer passed to server init_tensor function.\n");
+        GGML_PRINT_DEBUG("Null tensor pointer passed to server init_tensor function.\n");
         ggml_free(ctx);
         return false;
     }
@@ -1155,13 +1183,13 @@ bool rpc_server::init_tensor(const rpc_msg_init_tensor_req& request) {
         buffer->iface.init_tensor(buffer, tensor);
     }
     else {
-        GGML_ABORT("Null buffer for tensor passed to init_tensor function\n");
+        GGML_PRINT_DEBUG("Null buffer for tensor passed to init_tensor function\n");
     }
 
     if (tensor->extra != nullptr) {
         // This pointer can either be passed around client/server, or probably better stored server-side and kept track of.
         // Currently unimplemented.
-        GGML_ABORT("tensor->extra populated by the backend, this is currently unsupported.\n");
+        GGML_PRINT_DEBUG("tensor->extra populated by the backend, this is currently unsupported.\n");
         ggml_free(ctx);
         return false;
     }
