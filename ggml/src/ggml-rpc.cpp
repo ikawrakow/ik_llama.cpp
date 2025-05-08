@@ -649,12 +649,13 @@ static ggml_backend_buffer_t ggml_backend_rpc_buffer_type_alloc_buffer(ggml_back
     rpc_msg_alloc_buffer_req request = { size };
     rpc_msg_alloc_buffer_rsp response;
     auto sock = get_socket(buft_ctx->endpoint);
+    std::string name= "RPC[" + std::string(buft_ctx->endpoint) + "]";
     bool status = send_rpc_cmd(sock, RPC_CMD_ALLOC_BUFFER, &request, sizeof(request), &response, sizeof(response));
     GGML_ASSERT(status);
     if (response.remote_ptr != 0) {
         ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft,
             ggml_backend_rpc_buffer_interface,
-            new ggml_backend_rpc_buffer_context{ sock, nullptr, response.remote_ptr },
+            new ggml_backend_rpc_buffer_context{ sock, nullptr, response.remote_ptr, name },
             response.remote_size);
         return buffer;
     }
@@ -858,7 +859,6 @@ GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const
         /* .context = */ buft_ctx
     };
     buft_map[endpoint] = buft;
-    //auto str1 = (&(buft->context))->name;
     return buft;
 }
 
