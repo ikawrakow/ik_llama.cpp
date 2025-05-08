@@ -948,7 +948,7 @@ GGML_CALL static ggml_backend_t ggml_backend_reg_cpu_init(const char * params, v
 }
 
 GGML_CALL static ggml_backend_t ggml_backend_reg_rpc_init(const char* params, void* user_data) {
-    return ggml_backend_rpc_init();
+    return ggml_backend_rpc_init((const char*)user_data);
 
     GGML_UNUSED(params);
     GGML_UNUSED(user_data);
