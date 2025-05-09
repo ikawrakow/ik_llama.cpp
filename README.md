@@ -14,7 +14,7 @@ This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp)
 
 ## Latest News
 
-* May 9 2025: Support for LlaMA-3-Nmotron models added, see [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377)
+* May 9 2025: Support for LlaMA-3-Nemotron models added, see [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377)
 * May 7 2025: 🚀 Faster TG for DeepSeek models with GPU or hybrid GPU/CPU inference. See [PR 386](https://github.com/ikawrakow/ik_llama.cpp/pull/386) for details. Caveat: Ampere or newer Nvidia GPU required
 * May 4 2025: 🚀 Significant token generation performance improvement on CUDA with Flash Attention for GQA models. For details and benchmarks see [PR #370](https://github.com/ikawrakow/ik_llama.cpp/pull/370) 
 * April 29 2025: Qwen3 support added
