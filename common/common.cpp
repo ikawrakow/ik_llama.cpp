@@ -1457,6 +1457,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.warmup = false;
         return true;
     }
+    if (arg == "--warmup-batch" || arg == "-wb") {
+        params.batch_warmup = true;
+        return true;
+    }
     if (arg == "--output-format") {
         CHECK_ARG
         std::string value(argv[i]);

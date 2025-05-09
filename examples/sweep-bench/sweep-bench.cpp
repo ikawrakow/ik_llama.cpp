@@ -107,10 +107,26 @@ int main(int argc, char ** argv) {
     llama_batch batch = llama_batch_init(n_kv_max, 0, 1);
 
     // warm up
-    {
+    if (params.warmup) {
         llama_batch_add(batch, bos, 0, { 0 }, false);
 
         if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
+            LOG_TEE("%s: llama_decode() failed\n", __func__);
+            return 1;
+        }
+    }
+    if (params.batch_warmup) {
+        // clean up KV cache after generation
+        llama_kv_cache_seq_rm(ctx, 0, params.n_ubatch, -1);
+
+        // prepare batch of pp size for prompt processing performance measurement
+        llama_batch_clear(batch);
+
+        for (unsigned int i = 0; i < params.n_ubatch; ++i) {
+            llama_batch_add(batch, std::rand() % n_vocab, i, { 0 }, false);
+        }
+
+        if (!decode_helper(ctx, batch, ctx_params.n_ubatch)) {
             LOG_TEE("%s: llama_decode() failed\n", __func__);
             return 1;
         }
