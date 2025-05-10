@@ -148,6 +148,7 @@ static __global__ void mul_mat_vec_q(
     const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0) {
     int i2 = blockIdx.y;
     int i02 = ids_data ? *(const int *)(ids_data + i2*ids_nb0) : i2;
+    if (i02 < 0) return;
     const char * cx = (const char *)vx + i02*nb02;
     const char * cy = (const char *)vy + i2*nb12;
     char * cdst = (char *)dst + i2*nb2;
