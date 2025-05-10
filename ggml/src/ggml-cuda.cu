@@ -2505,11 +2505,6 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                         dst_padded_col_size, next->src[0]->type, stream);
                 CUDA_CHECK(cudaGetLastError());
 
-                std::vector<char> ids_host(ggml_nbytes(ids));
-                const char * ids_dev = (const char *) ids->data;
-                CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
-                CUDA_CHECK(cudaStreamSynchronize(stream));
-
                 local_dst.ne[2] = 1;
 
                 auto local_next = *next;
