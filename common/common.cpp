@@ -1213,6 +1213,17 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--offload-policy" || arg == "-op") {
+        CHECK_ARG
+        auto p = string_split_pairs<int,int>(argv[i], ',');
+        if (p.empty()) {
+            fprintf(stderr, "error: Invalid offload policy argument: %s\n", argv[i]);
+            invalid_param = true;
+        } else {
+            params.offload_policy.insert(params.offload_policy.end(), p.begin(), p.end());
+        }
+        return true;
+    }
     if (arg == "--host") {
         CHECK_ARG
         params.hostname = argv[i];
@@ -2222,6 +2233,10 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         return iparams;
     }
 
+    for (auto [op, on_off] : params.offload_policy) {
+        llama_set_offload_policy(lctx, op, on_off);
+    }
+
     if (!params.control_vectors.empty()) {
         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
         if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_n_layer(model);
@@ -2417,6 +2432,8 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
+
+    if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
 
     return cparams;
 }
