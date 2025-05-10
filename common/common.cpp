@@ -2206,7 +2206,6 @@ std::string fs_get_cache_file(const std::string & filename) {
 // Model utils
 //
 struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
-    printf("================================================== %s\n", __func__);
     llama_init_result iparams;
     auto mparams = llama_model_params_from_gpt_params(params);
 
@@ -2234,7 +2233,6 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         return iparams;
     }
 
-    printf("%d entries in params.offload_policy\n", (int)params.offload_policy.size());
     for (auto [op, on_off] : params.offload_policy) {
         llama_set_offload_policy(lctx, op, on_off);
     }

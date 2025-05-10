@@ -23239,6 +23239,7 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
 
 void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_off) {
     if (!lctx || !lctx->sched) return;
-    printf("XXXXXXXXXXXXXXXXXXXXXXXXXXXX offload(%s) = %d\n", ggml_op_name(ggml_op(op)), on_or_off);
+    const char * op_name = op < 0 || op >= int(GGML_OP_COUNT) ? "all ops" : ggml_op_name(ggml_op(op));
+    printf("XXXXXXXXXXXXXXXXXXXXXXXXXXXX offload(%s) = %d\n", op_name, on_or_off);
     ggml_backend_sched_set_op_offload(lctx->sched, ggml_op(op), on_or_off);
 }
