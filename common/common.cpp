@@ -1213,6 +1213,17 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--offload-policy" || arg == "-op") {
+        CHECK_ARG
+        auto p = string_split_pairs<int,int>(argv[i], ',');
+        if (p.empty()) {
+            fprintf(stderr, "error: Invalid offload policy argument: %s\n", argv[i]);
+            invalid_param = true;
+        } else {
+            params.offload_policy.insert(params.offload_policy.end(), p.begin(), p.end());
+        }
+        return true;
+    }
     if (arg == "--host") {
         CHECK_ARG
         params.hostname = argv[i];
@@ -2195,6 +2206,7 @@ std::string fs_get_cache_file(const std::string & filename) {
 // Model utils
 //
 struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
+    printf("================================================== %s\n", __func__);
     llama_init_result iparams;
     auto mparams = llama_model_params_from_gpt_params(params);
 
@@ -2220,6 +2232,11 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
         llama_free_model(model);
         return iparams;
+    }
+
+    printf("%d entries in params.offload_policy\n", (int)params.offload_policy.size());
+    for (auto [op, on_off] : params.offload_policy) {
+        llama_set_offload_policy(lctx, op, on_off);
     }
 
     if (!params.control_vectors.empty()) {
@@ -2417,6 +2434,8 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
+
+    if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
 
     return cparams;
 }
