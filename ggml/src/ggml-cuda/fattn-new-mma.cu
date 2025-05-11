@@ -898,6 +898,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             KQ_crs += __shfl_xor_sync(0xFFFFFFFF, KQ_crs, offset, WARP_SIZE);
         }
 
+        __syncthreads();
+
         // Write back combined meta data:
 #pragma unroll
         for (int imeta = 0; imeta < nmeta; ++imeta) {
