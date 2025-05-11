@@ -325,6 +325,7 @@ extern "C" {
 
     struct llama_model_params {
         int32_t n_gpu_layers; // number of layers to store in VRAM
+        int32_t mla;          // MLA implementation to use (only applicable to DeepSeek models at this point)
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
 
         // main_gpu interpretation depends on split_mode:
