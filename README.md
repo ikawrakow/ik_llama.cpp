@@ -6,29 +6,26 @@
 
 This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) with better CPU and hybrid GPU/CPU performance, new SOTA quantization types, first-class Bitnet support, better DeepSeek performance via MLA, FlashMLA, fused MoE operations and tensor overrides for hybrid GPU/CPU inference, row-interleaved quant packing, etc.
 
->[!IMPORTANT]
->The new GGUFs for DeepSeek-V3/R1/Lite do not work in this repository. This is due to the backwards incompatible change in mainline `llama.cpp` that [added MLA support](https://github.com/ggml-org/llama.cpp/pull/12801)
->2.5 months after MLA was available here, and worked with the original DeepSeek GGUFs. Please use the original GGUF or, if you don't have one, convert the HF safetensors using the Python conversion script in this repository.
->
->**Update** There is now [PR 394](https://github.com/ikawrakow/ik_llama.cpp/pull/394) addressing the issue. Would appreciate testing with DeepSeek-V3/R1.
-
 ## Latest News
 
+* May 12 2025: User can now control if/which operations with tensors held in RAM are offloaded to the GPU. See [PR 405](https://github.com/ikawrakow/ik_llama.cpp/pull/405) 
+* May 12 2025: Compatibility issues with mainline `llama.cpp` GGUFs for DeepSeek models with MLA enabled were resolved in [PR 394](https://github.com/ikawrakow/ik_llama.cpp/pull/394). The lower prompt processing performance resulting from using `llama.cpp`-style MLA GGUFs was recovered in [PR 409](https://github.com/ikawrakow/ik_llama.cpp/pull/409).
+* May 11 2025: 🚀 Slightly faster flash attention for DeepSeek models on CUDA, along with extending compatibility to Touring or newer GPUs. See [PR 408](https://github.com/ikawrakow/ik_llama.cpp/pull/408)
 * May 9 2025: Support for LlaMA-3-Nemotron models added, see [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377)
 * May 7 2025: 🚀 Faster TG for DeepSeek models with GPU or hybrid GPU/CPU inference. See [PR 386](https://github.com/ikawrakow/ik_llama.cpp/pull/386) for details. Caveat: Ampere or newer Nvidia GPU required
 * May 4 2025: 🚀 Significant token generation performance improvement on CUDA with Flash Attention for GQA models. For details and benchmarks see [PR #370](https://github.com/ikawrakow/ik_llama.cpp/pull/370) 
-* April 29 2025: Qwen3 support added
-* April 26 2025: GLM-4 support added
-* April 26 2025: Command-A support added
-* April 22 2025: Support for the latest Microsoft Bitnet model added
-* April 21 2025: ik_llama.cpp builds and runs successfully on Android (using termux)
-* April 17 2025: 🚀 Better CPU Flash Attention token generation performance
-* April 13 2025: `IQ1_M` quantization improvements
-* April 10 2025: LLaMA-4 support added
-* April 7 2025: `IQ2_XS` quantization improvements
-* April 3 2025: 🚀 Much faster MoE implementation on Metal
-* April 1 2025: Quantization improvements for `Q2_K, Q4_K, Q5_K, Q4_1, Q5_1`
-* March 28 2025: Quantization imrovements for `Q4_0, Q5_0, Q6_0, Q3_K, Q6_K, IQ4_XS, IQ4_NL`
+* April 29 2025: Qwen3 support added, see [PR 355](https://github.com/ikawrakow/ik_llama.cpp/pull/355)
+* April 26 2025: GLM-4 support added, see [PR 344](https://github.com/ikawrakow/ik_llama.cpp/pull/344)
+* April 26 2025: Command-A support added, see [PR 341](https://github.com/ikawrakow/ik_llama.cpp/pull/341)
+* April 22 2025: Support for the latest Microsoft Bitnet model added, see [PR 337](https://github.com/ikawrakow/ik_llama.cpp/pull/337)
+* April 21 2025: ik_llama.cpp builds and runs successfully on Android (using termux), see [PR 336](https://github.com/ikawrakow/ik_llama.cpp/pull/336)
+* April 17 2025: 🚀 Better CPU Flash Attention token generation performance, see [PR 332](https://github.com/ikawrakow/ik_llama.cpp/pull/332)
+* April 13 2025: `IQ1_M` quantization improvements, see [PR 327](https://github.com/ikawrakow/ik_llama.cpp/pull/327)
+* April 10 2025: LLaMA-4 support added, see [PR 321](https://github.com/ikawrakow/ik_llama.cpp/pull/321). In the PR there are also some custom quantization recipes for L4-Scout provided.
+* April 7 2025: `IQ2_XS` quantization improvements, see [PR 312](https://github.com/ikawrakow/ik_llama.cpp/pull/312)
+* April 3 2025: 🚀 Much faster MoE implementation on Metal, see [PR 307](https://github.com/ikawrakow/ik_llama.cpp/pull/307) 
+* April 1 2025: Quantization improvements for `Q2_K, Q4_K, Q5_K, Q4_1, Q5_1`, see [PR 302](https://github.com/ikawrakow/ik_llama.cpp/pull/302)
+* March 28 2025: Quantization imrovements for `Q4_0, Q5_0, Q6_0, Q3_K, Q6_K, IQ4_XS, IQ4_NL`, see [PR 295](https://github.com/ikawrakow/ik_llama.cpp/pull/295)
 * March 25 2025: 🚀 Better MoE performance on CUDA
 * March 23 2025: 🚀 Better batched processing speed for DeepSeek models
 * March 22 2025: Gemma3 support added
