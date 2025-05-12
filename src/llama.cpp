@@ -19980,6 +19980,7 @@ struct llama_context_params llama_context_default_params() {
         /*.thtesh_experts              =*/ 0.0f,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
+        /*.offload_policy              =*/ nullptr,
     };
 
     return result;
@@ -20571,6 +20572,19 @@ struct llama_context * llama_new_context_with_model(
             int n_splits = ggml_backend_sched_get_n_splits(ctx->sched);
             LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, gf->n_nodes);
             LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits);
+        }
+    }
+
+    if (params.offload_policy) {
+        const std::vector<std::pair<int, int>>& policy = *(const std::vector<std::pair<int, int>>*)params.offload_policy;
+        for (auto [op, on_off] : policy) {
+            if (op < 0 || op >= int(GGML_OP_COUNT)) {
+                LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXX Setting offload policy for all ops to %s\n", on_off ? "ON" : "OFF");
+            } else {
+                LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXX Setting offload policy for op %s to %s\n",
+                        ggml_op_name(ggml_op(op)), on_off ? "ON" : "OFF");
+            }
+            ggml_backend_sched_set_op_offload(ctx->sched, ggml_op(op), on_off);
         }
     }
 
@@ -23221,4 +23235,11 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
     (void) user_data;
     fputs(text, stderr);
     fflush(stderr);
+}
+
+void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_off) {
+    if (!lctx || !lctx->sched) return;
+    const char * op_name = op < 0 || op >= int(GGML_OP_COUNT) ? "all ops" : ggml_op_name(ggml_op(op));
+    printf("XXXXXXXXXXXXXXXXXXXXXXXXXXXX offload(%s) = %d\n", op_name, on_or_off);
+    ggml_backend_sched_set_op_offload(lctx->sched, ggml_op(op), on_or_off);
 }

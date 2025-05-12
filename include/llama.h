@@ -408,6 +408,7 @@ extern "C" {
         // currently works only with CPU execution
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
+        void *              offload_policy;
     };
 
     // model quantization parameters
@@ -522,6 +523,8 @@ extern "C" {
     LLAMA_API struct llama_context * llama_new_context_with_model(
                      struct llama_model * model,
             struct llama_context_params   params);
+
+    LLAMA_API void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_off);
 
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
