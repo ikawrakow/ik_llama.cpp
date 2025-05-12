@@ -17930,10 +17930,10 @@ inline void iqk_deepseek_helper(KHelper& kh, VHelper& vh,
         return false;
     };
     if (nq1 >= 16) {
-        int n_step = nq1/8;
-        FlashAttn<576, 512, 8, step_k> fa(scale, softcap);
-        fa.compute(kh, vh, 8*n_step, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv, M, S);
-        if (update(8*n_step)) return;
+        int n_step = nq1/16;
+        FlashAttn<576, 512, 16, step_k> fa(scale, softcap);
+        fa.compute(kh, vh, 16*n_step, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv, M, S);
+        if (update(16*n_step)) return;
     }
     if (nq1 >= 8) {
         int n_step = nq1/8;
