@@ -273,11 +273,11 @@ struct fattn_mma_f16_config<576, 512> {
     }
 
     static constexpr __device__ int get_nbatch_V2_device(int ncols) {
-#if __CUDA_ARCH__ == GML_CUDA_CC_TURING
+#if __CUDA_ARCH__ == CC_TURING
         return ncols <= 16 ? 64 : 128;
 #else
         return ncols <= 16 ? 256 : 128;
-#endif // __CUDA_ARCH__ == GML_CUDA_CC_TURING
+#endif // __CUDA_ARCH__ == CC_TURING
     }
 
     static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
