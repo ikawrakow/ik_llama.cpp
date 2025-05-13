@@ -2244,7 +2244,8 @@ static inline void prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n
 
     for (int i = 0; i < (int)n_as; ++i) cum_moe_counts[i] -= moe_counts[i];
 
-    CUDA_CHECK(cudaMemcpyAsync(dev_row_mapping.get(), rmapping.data(), cum_moe_counts[n_as]*sizeof(mmid_row_mapping), cudaMemcpyHostToDevice, stream));
+    CUDA_CHECK(cudaMemcpyAsync(dev_row_mapping.get(), rmapping.data(),
+                cum_moe_counts[n_as]*sizeof(mmid_row_mapping), cudaMemcpyHostToDevice, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
 }
@@ -2253,6 +2254,8 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
+
+    CUDA_CHECK(cudaMemset((char *)dst->data, 0, ggml_nbytes(dst)));
 
     if (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
         ggml_is_quantized(src0->type) &&
@@ -2519,6 +2522,8 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 auto local_src0 = *next->src[0];
                 local_src0.ne[2] = local_src0.ne[3] = 1;
 
+                CUDA_CHECK(cudaMemset(next->data, 0, ggml_nbytes(next)));
+
                 ggml_cuda_op_mul_mat_vec_q_id(ctx, &local_src0, &local_src1, ids, &local_next,
                     (const char *)next->src[0]->data, nullptr, dst_quantized.get(), (float *)next->data,
                     0, next->src[0]->ne[1], 1, dst_padded_col_size, stream);
@@ -2526,6 +2531,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
                 return true;
             } else {
+                CUDA_CHECK(cudaMemset(dst->data, 0, ggml_nbytes(dst)));
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
                         (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(), (float *)dst->data);
                 CUDA_CHECK(cudaGetLastError());
@@ -2533,7 +2539,6 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             }
         }
     }
-
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
