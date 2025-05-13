@@ -12472,6 +12472,11 @@ static void ggml_compute_forward_sum_rows_f32(
                 float * dst_row = (float *) ((char *) dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
                 float row_sum = 0;
                 ggml_vec_sum_f32(ne00, &row_sum, src_row);
+                if (!isfinite(row_sum)) {
+                    fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
+                            (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
+                    exit(1);
+                }
                 dst_row[0] = row_sum;
             }
         }
@@ -14759,6 +14764,18 @@ static void ggml_compute_forward_mul_mat_id(
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
 
+    GGML_ASSERT(ids->ne[1] == dst->ne[2]);
+    for (int64_t iid1 = ith; iid1 < ids->ne[1]; iid1 += nth) {
+        for (int id = 0; id < n_ids; ++id) {
+            const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+            if (i02 < 0 || i02 >= n_as) {
+                // This is needed for SER. If fewer experts have been activated for this row, we need to
+                // clear it, else there could be garbage that leads to NaNs later on.
+                memset((char *)dst->data + id*dst->nb[1] + iid1*dst->nb[2], 0, dst->ne[0]*sizeof(float));
+            }
+        }
+    }
+
     if (ith == 0) {
         // initialize matrix_row_counts
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
@@ -15011,6 +15028,18 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     }
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
+
+    GGML_ASSERT(ids->ne[1] == dst->ne[2]);
+    for (int64_t iid1 = ith; iid1 < ids->ne[1]; iid1 += nth) {
+        for (int id = 0; id < n_ids; ++id) {
+            const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+            if (i02 < 0 || i02 >= n_as) {
+                // This is needed for SER. If fewer experts have been activated for this row, we need to
+                // clear it, else there could be garbage that leads to NaNs later on.
+                memset((char *)dst->data + id*dst->nb[1] + iid1*dst->nb[2], 0, dst->ne[0]*sizeof(float));
+            }
+        }
+    }
 
     if (ith == 0) {
         // initialize matrix_row_counts
@@ -15916,7 +15945,7 @@ static void ggml_compute_forward_get_rows_f16(
                     (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
                          (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
         } else {
-            memset((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03, 0, nc*sizeof(float));
+            memset((char *) dst->data + i10*nb1  + i11*nb2  + i12*nb3, 0, nc*sizeof(float));
         }
 
     }
@@ -15960,7 +15989,7 @@ static void ggml_compute_forward_get_rows_bf16(
                     (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
                          (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
         } else {
-            memset((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03, 0, nc*sizeof(float));
+            memset((char *) dst->data + i10*nb1  + i11*nb2  + i12*nb3, 0, nc*sizeof(float));
         }
     }
 }
