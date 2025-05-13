@@ -458,31 +458,29 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
             if (r2 <= 8) {
                 MulMat mm;
                 if (!MulMat::prepare(typeA, typeB, ne00, mm, r2)) return false;
-                int nx64 = Nx/64;
-                int nchunk64 = nx64*ne02;
-                for (int ichunk = ith; ichunk < nchunk64; ichunk += nth) {
-                    int i02 = ichunk/nx64;
-                    int ix = 64*(ichunk - i02*nx64);
-                    DataInfo info{C + ix + r2*i02*nb2, (const char *)B + r2*i02*nb12, (size_t)nb2, (size_t)nb12, 0, 1, nullptr, 0};
-                    mm.funcs[r2-1](ne00, (const void *)((const char *)A + ix*strideA + i02*nb02), strideA, info, 64);
-                }
-                int ix0 = 64*nx64;
-                if (ix0 < Nx) {
-                    nx32 -= 2*nx64;
-                    nchunk = nx32*ne02;
-                    for (int ichunk = ith; ichunk < nchunk; ichunk += nth) {
-                        int i02 = ichunk/nx32;
-                        int ix = ix0 + 32*(ichunk - i02*nx32);
+                int ny = mm.funcs.size();
+                while (ny > 0 && !mm.funcs[ny-1]) --ny;
+                if (ny >= r2) {
+                    int nx64 = Nx/64;
+                    int nchunk64 = nx64*ne02;
+                    for (int ichunk = ith; ichunk < nchunk64; ichunk += nth) {
+                        int i02 = ichunk/nx64;
+                        int ix = 64*(ichunk - i02*nx64);
                         DataInfo info{C + ix + r2*i02*nb2, (const char *)B + r2*i02*nb12, (size_t)nb2, (size_t)nb12, 0, 1, nullptr, 0};
-                        mm.funcs[r2-1](ne00, (const void *)((const char *)A + ix*strideA + i02*nb02), strideA, info, 32);
+                        mm.funcs[r2-1](ne00, (const void *)((const char *)A + ix*strideA + i02*nb02), strideA, info, 64);
+                    }
+                    int ix0 = 64*nx64;
+                    if (ix0 < Nx) {
+                        nx32 -= 2*nx64;
+                        nchunk = nx32*ne02;
+                        for (int ichunk = ith; ichunk < nchunk; ichunk += nth) {
+                            int i02 = ichunk/nx32;
+                            int ix = ix0 + 32*(ichunk - i02*nx32);
+                            DataInfo info{C + ix + r2*i02*nb2, (const char *)B + r2*i02*nb12, (size_t)nb2, (size_t)nb12, 0, 1, nullptr, 0};
+                            mm.funcs[r2-1](ne00, (const void *)((const char *)A + ix*strideA + i02*nb02), strideA, info, 32);
+                        }
                     }
                 }
-                //for (int ichunk = ith; ichunk < nchunk; ichunk += nth) {
-                //    int i02 = ichunk/nx32;
-                //    int ix = 32*(ichunk - i02*nx32);
-                //    DataInfo info{C + ix + r2*i02*nb2, (const char *)B + r2*i02*nb12, (size_t)nb2, (size_t)nb12, 0, 1, nullptr, 0};
-                //    mm.funcs[r2-1](ne00, (const void *)((const char *)A + ix*strideA + i02*nb02), strideA, info, 32);
-                //}
                 return true;
             }
             for (int ichunk = ith; ichunk < nchunk; ichunk += nth) {

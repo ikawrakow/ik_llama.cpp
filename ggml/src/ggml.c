@@ -5696,6 +5696,8 @@ struct ggml_tensor * ggml_multi_add(
     result->src[0] = a;
     result->op_params[0] = n_experts;
 
+    //printf("%s: n_experts = %d\n", __func__, n_experts);
+
     return result;
 }
 
@@ -11275,6 +11277,8 @@ static void ggml_compute_forward_multi_add_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    //if (ith == 0) printf("%s: n_add = %d\n", __func__, n_add);
+
     const int nr  = ggml_nrows(dst);
 
     // rows per thread
@@ -11293,6 +11297,12 @@ static void ggml_compute_forward_multi_add_f32(
         memset(dst_ptr, 0, ne0*sizeof(float));
         for (int j = 0; j < n_add; ++j) {
             ggml_vec_add_f32(ne0, dst_ptr, dst_ptr, data + j*ne0);
+            //for (int l = 0; l < (int)ne0; ++l) {
+            //    if (!isfinite(dst_ptr[l])) {
+            //        printf("Oops: found %g for l = %d, j = %d in op %s\n", (double)dst_ptr[l], l, j, dst->name);
+            //        exit(1);
+            //    }
+            //}
         }
     }
 }
@@ -11993,6 +12003,7 @@ static void ggml_compute_forward_mul_f32(
 
     if (ggml_nelements(dst->src[1]) == 1 && ggml_is_contiguous(dst->src[0]) && ggml_is_contiguous(dst) &&
         dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        if (ith == 0) printf("%s: fast path\n", __func__);
         int64_t nelements = ggml_nelements(dst->src[0]);
         int64_t n_per_thread = (nelements + nth - 1)/nth;
         n_per_thread = MAX(1024, n_per_thread);
@@ -12032,6 +12043,14 @@ static void ggml_compute_forward_mul_f32(
             float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
 
             for (int64_t r = 0 ; r < nr0; ++r) {
+                //const float * x = src0_ptr + r*ne10;
+                //const float * y = src1_ptr;
+                //for (int j = 0; j < (int)ne10; ++j) {
+                //    if (!isfinite(x[j]) || !isfinite(y[j])) {
+                //        printf("Oops(%s, %s): found x = %g, y = %g for i3=%d,%d i2=%d,%d, i1=%d,%d, r=%d, j=%d\n", __func__, dst->name, (double)x[j], (double)y[j], (int)i03, (int)i13, (int)i02, (int)i12, (int)i01, (int)i11, (int)r, j);
+                //        exit(1);
+                //    }
+                //}
 #ifdef GGML_USE_ACCELERATE
                 UNUSED(ggml_vec_mul_f32);
 
@@ -12126,6 +12145,14 @@ static void ggml_compute_forward_div_f32(
             float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
 
             for (int64_t r = 0; r < nr0; ++r) {
+                //const float * x = src0_ptr + r*ne10;
+                //const float * y = src1_ptr;
+                //for (int j = 0; j < (int)ne10; ++j) {
+                //    if (!isfinite(x[j]) || !isfinite(y[j]) || fabsf(y[j]) < 1e-30f) {
+                //        printf("Oops(%s, %s): found x = %g, y = %g for i3=%d,%d i2=%d,%d, i1=%d,%d, r=%d, j=%d\n", __func__, dst->name, (double)x[j], (double)y[j], (int)i03, (int)i13, (int)i02, (int)i12, (int)i01, (int)i11, (int)r, j);
+                //        exit(1);
+                //    }
+                //}
 #ifdef GGML_USE_ACCELERATE
                 UNUSED(ggml_vec_div_f32);
 
@@ -12136,6 +12163,7 @@ static void ggml_compute_forward_div_f32(
             }
         }
     } else {
+        printf("Non-contiguous div?\n");
         // src1 is not contiguous
         for (int64_t ir = ith; ir < nr; ir += nth) {
             // src0 and dst are same shape => same indices
@@ -12472,6 +12500,11 @@ static void ggml_compute_forward_sum_rows_f32(
                 float * dst_row = (float *) ((char *) dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
                 float row_sum = 0;
                 ggml_vec_sum_f32(ne00, &row_sum, src_row);
+                if (!isfinite(row_sum)) {
+                    fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
+                            (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
+                    exit(1);
+                }
                 dst_row[0] = row_sum;
             }
         }
@@ -14757,7 +14790,47 @@ static void ggml_compute_forward_mul_mat_id(
         }
     }
 
+//#if GGML_USE_IQK_MULMAT
+//    if (ne13 == 1 && ids->ne[1] == 1 && dst->type == GGML_TYPE_F32) {
+//        if (src1->type != vec_dot_type) {
+//            ggml_barrier(params->shared);
+//        }
+//        //if (ith == 0) printf("ne0 = %d, nb = %d, %d, %d\n", (int)ne0, (int)nb0, (int)nb1, (int)nb2);
+//        const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+//        const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+//        for (int id = 0; id < n_ids; ++id) {
+//            int i02 = *(const int32_t *) ((const char *) ids->data + id*ids->nb[0]);
+//            if (i02 >= 0 && i02 < n_as) {
+//                if (!iqk_mul_mat(ne01, 1, ne00,
+//                            src0->type, (const char *)src0->data + i02*nb02, src0->nb[1],
+//                            vec_dot_type, wdata, row_size,
+//                            (float *)dst->data + ne0*id, ne0, ith, nth)) goto IQK_MulMat_Not_Available0;
+//            } else {
+//                int npt = (ne0 + nth - 1)/nth;
+//                int npt64 = 64*((npt + 63)/64);
+//                int first = npt64*ith;
+//                int last  = MIN(first + npt64, ne0);
+//                if (last > first) {
+//                    memset((float *)dst->data + ne0*id + first, 0, (last - first)*sizeof(float));
+//                }
+//            }
+//        }
+//        return;
+//    }
+//IQK_MulMat_Not_Available0:;
+//#endif
+
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
+
+    GGML_ASSERT(ids->ne[1] == dst->ne[2]);
+    for (int64_t iid1 = ith; iid1 < ids->ne[1]; iid1 += nth) {
+        for (int id = 0; id < n_ids; ++id) {
+            const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+            if (i02 < 0 || i02 >= n_as) {
+                memset((char *)dst->data + id*dst->nb[1] + iid1*dst->nb[2], 0, dst->ne[0]*sizeof(float));
+            }
+        }
+    }
 
     if (ith == 0) {
         // initialize matrix_row_counts
@@ -14776,6 +14849,20 @@ static void ggml_compute_forward_mul_mat_id(
             }
         }
     }
+
+    //{
+    //    int nrows = ggml_nrows(dst);
+    //    int npt = (nrows + nth - 1)/nth;
+    //    int first_row = ith*npt;
+    //    if (first_row < nrows) {
+    //        int last_row = MIN(first_row + npt, nrows);
+    //        for (int row = first_row; row < last_row; ++row) {
+    //            int i12 = row/ne1;
+    //            int i11 = row - i12*ne11;
+    //            memset((char *)dst->data + i11*nb1 + i12*nb2, 0, ne0*sizeof(float));
+    //        }
+    //    }
+    //}
 
     ggml_barrier(params->shared);
 
@@ -14807,6 +14894,7 @@ static void ggml_compute_forward_mul_mat_id(
 IQK_MulMat_Not_Available:;
 #endif
 
+        //printf("Oops\n");
         if (((ggml_n_dims(src0) - 1) == 2) && gemv) {
             int64_t src0_cur_start = (ith * ne01) / nth;
             int64_t src0_cur_end   = ((ith + 1) * ne01) / nth;
@@ -14932,6 +15020,23 @@ IQK_MulMat_Not_Available:;
         }
     }
 
+    //ggml_barrier(params->shared);
+    //if (ith == 0) {
+    //    printf("%s: Checking %s for NaNs. ne = %d, %d, %d, nb = %d, %d, %d\n", __func__, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2], (int)nb0, (int)nb1, (int)nb2);
+    //    printf("%s: src0 is %s, src1 is %s\n", __func__, src0->name, src1->name);
+    //for (int i2 = 0; i2 < (int)dst->ne[2]; ++i2) {
+    //    for (int i1 = 0; i1 < (int)dst->ne[1]; ++i1) {
+    //        const float * c = (const float *)((const char *)dst->data + i1*nb1 + i2*nb2);
+    //        for (int j = 0; j < (int)dst->ne[0]; ++j) {
+    //            if (!isfinite(c[j])) {
+    //                printf("Oops: found %g in %s for i0=%d, i1=%d, i2=%d\n", (double)c[j], dst->name, j, i1, i2);
+    //                exit(1);
+    //            }
+    //        }
+    //    }
+    //}
+    //}
+
 #undef MMID_MATRIX_ROW
 }
 
@@ -15012,6 +15117,16 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
 #define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id)*ne12 + (i1)]
 
+    GGML_ASSERT(ids->ne[1] == dst->ne[2]);
+    for (int64_t iid1 = ith; iid1 < ids->ne[1]; iid1 += nth) {
+        for (int id = 0; id < n_ids; ++id) {
+            const int32_t i02 = *(const int32_t *) ((const char *) ids->data + iid1*ids->nb[1] + id*ids->nb[0]);
+            if (i02 < 0 || i02 >= n_as) {
+                memset((char *)dst->data + id*dst->nb[1] + iid1*dst->nb[2], 0, dst->ne[0]*sizeof(float));
+            }
+        }
+    }
+
     if (ith == 0) {
         // initialize matrix_row_counts
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
@@ -15029,6 +15144,20 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
             }
         }
     }
+
+    //{
+    //    int nrows = ggml_nrows(dst);
+    //    int npt = (nrows + nth - 1)/nth;
+    //    int first_row = ith*npt;
+    //    if (first_row < nrows) {
+    //        int last_row = MIN(first_row + npt, nrows);
+    //        for (int row = first_row; row < last_row; ++row) {
+    //            int i12 = row/ne1;
+    //            int i11 = row - i12*ne11;
+    //            memset((char *)dst->data + i11*nb1 + i12*nb2, 0, ne0*sizeof(float));
+    //        }
+    //    }
+    //}
 
     ggml_barrier(params->shared);
 
@@ -15080,6 +15209,23 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 //                        matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
 //        }
     }
+
+    //ggml_barrier(params->shared);
+    //if (ith == 0) {
+    //    printf("%s: Checking %s for NaNs. ne = %d, %d, %d, nb = %d, %d, %d\n", __func__, dst->name, (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2], (int)nb0, (int)nb1, (int)nb2);
+    //for (int i2 = 0; i2 < (int)dst->ne[2]; ++i2) {
+    //    for (int i1 = 0; i1 < (int)dst->ne[1]; ++i1) {
+    //        const float * c = (const float *)((const char *)dst->data + i1*nb1 + i2*nb2);
+    //        for (int j = 0; j < (int)dst->ne[0]; ++j) {
+    //            if (!isfinite(c[j])) {
+    //                printf("Oops: found %g in %s for i0=%d, i1=%d, i2=%d\n", (double)c[j], dst->name, j, i1, i2);
+    //                exit(1);
+    //            }
+    //        }
+    //    }
+    //}
+    //}
+
 
 #undef MMID_MATRIX_ROW
 }
@@ -15916,7 +16062,7 @@ static void ggml_compute_forward_get_rows_f16(
                     (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
                          (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
         } else {
-            memset((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03, 0, nc*sizeof(float));
+            memset((char *) dst->data + i10*nb1  + i11*nb2  + i12*nb3, 0, nc*sizeof(float));
         }
 
     }
@@ -15960,7 +16106,7 @@ static void ggml_compute_forward_get_rows_bf16(
                     (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
                          (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
         } else {
-            memset((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03, 0, nc*sizeof(float));
+            memset((char *) dst->data + i10*nb1  + i11*nb2  + i12*nb3, 0, nc*sizeof(float));
         }
     }
 }
@@ -16101,6 +16247,23 @@ static void ggml_compute_forward_get_rows(
                 GGML_ABORT("fatal error");
             }
     }
+
+    //ggml_barrier(params->shared);
+    //if (params->ith == 0) {
+    //    for (int i3 = 0; i3 < (int)dst->ne[3]; ++i3) {
+    //        for (int i2 = 0; i2 < (int)dst->ne[2]; ++i2) {
+    //            for (int i1 = 0; i1 < (int)dst->ne[1]; ++i1) {
+    //                const float * x = (const float *)((const char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
+    //                for (int j = 0; j < (int)dst->ne[0]; ++j) {
+    //                    if (!isfinite(x[j])) {
+    //                        printf("Oops(%s, %s): found %g for i0=%d, i1=%d, i2=%d, i3=%d\n", __func__, dst->name, (double)x[j], j, i1, i2, i3);
+    //                    }
+    //                }
+    //            }
+    //        }
+    //    }
+    //}
+
 
     //static bool first = true;
     //printf("ne0 = %d, ne1 = %d, ne2 = %d\n", dst->ne[0], dst->ne[1], dst->ne[2]);
