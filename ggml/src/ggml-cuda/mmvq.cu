@@ -150,7 +150,7 @@ static __global__ void mul_mat_vec_q(
     char * cdst = (char *)dst + i2*nb2;
     int i02 = ids_data ? *(const int *)(ids_data + i2*ids_nb0) : i2;
     if (i02 < 0) {
-        // We clar the buffer via cudaMemset instead
+        // We clear the buffer via cudaMemset instead
 //#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
 //        constexpr int rows_per_cuda_block = 1;
 //#else
