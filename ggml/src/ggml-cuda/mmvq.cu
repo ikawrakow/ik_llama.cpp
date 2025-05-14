@@ -150,20 +150,21 @@ static __global__ void mul_mat_vec_q(
     char * cdst = (char *)dst + i2*nb2;
     int i02 = ids_data ? *(const int *)(ids_data + i2*ids_nb0) : i2;
     if (i02 < 0) {
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
-        constexpr int rows_per_cuda_block = 1;
-#else
-        constexpr int rows_per_cuda_block = ncols_y == 1 ? 1 : 2;
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
-        const int row0 = rows_per_cuda_block*blockIdx.x;
-        if (threadIdx.y == 0) {
-            dst = (float *)cdst;
-            for (int j = 0; j < ncols_y; ++j) {
-                if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || row0 + threadIdx.x < nrows_dst)) {
-                    dst[j*nrows_dst + row0 + threadIdx.x] = 0;
-                }
-            }
-        }
+        // We clear the buffer via cudaMemset instead
+//#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
+//        constexpr int rows_per_cuda_block = 1;
+//#else
+//        constexpr int rows_per_cuda_block = ncols_y == 1 ? 1 : 2;
+//#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
+//        const int row0 = rows_per_cuda_block*blockIdx.x;
+//        if (threadIdx.y == 0) {
+//            dst = (float *)cdst;
+//            for (int j = 0; j < ncols_y; ++j) {
+//                if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || row0 + threadIdx.x < nrows_dst)) {
+//                    dst[j*nrows_dst + row0 + threadIdx.x] = 0;
+//                }
+//            }
+//        }
         return;
     }
     const char * cx = (const char *)vx + i02*nb02;
