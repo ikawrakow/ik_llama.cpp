@@ -2426,68 +2426,134 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     int   * x_qs = (int   *)  x_tile;
     float * x_df = (float *) (x_qs + WARP_SIZE*2);
 #else
-    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q3_K, mmq_y);
+    constexpr tile_x_sizes txs = MMQ_DP4A_TXS_Q8_0_16;
     int   * x_qs = (int   *)  x_tile;
     float * x_df = (float *) (x_qs + txs.qs);
 #endif // INT8_MMA_AVAILABLE
 
+    constexpr int qstep = 8;
+    const int kqsx = threadIdx.x % qstep;
+
+    uint32_t aux32[2];
+    const uint8_t * aux8 = (const uint8_t *)aux32;
 #pragma unroll
-    for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
-        int i = i0 + threadIdx.y;
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * WARP_SIZE/qstep) {
+        int i = i0 + threadIdx.y*(WARP_SIZE/qstep) + threadIdx.x/qstep;
 
         if (need_check) {
             i = min(i, i_max);
         }
 
         const block_iq4_k * bxi = (const block_iq4_k *)(x + i*stride) + kbx0;
+        const uint16_t extra = bxi->extra >> 2*kqsx;
 
-        const uint16_t extra = bxi->extra >> 2*(threadIdx.x/4);
-        auto values0 = iq4k_values + ((extra & 1) << 4);
-        auto values1 = iq4k_values + ((extra & 2) << 3);
-        const int q4 = get_int_b4(bxi->qs, threadIdx.x);
-        const int q40 = (q4 >> 0) & 0x0F0F0F0F;
-        const int q41 = (q4 >> 4) & 0x0F0F0F0F;
+        auto values_l = iq4k_values + ((extra & 1) << 4);
+        auto values_h = iq4k_values + ((extra & 2) << 3);
 
-        const int8_t * aux80 = (const int8_t *)&q40;
-        const char4    val0  = make_char4(values0[aux80[0]], values0[aux80[1]], values0[aux80[2]], values0[aux80[3]]);
-        const int8_t * aux81 = (const int8_t *)&q41;
-        const char4    val1  = make_char4(values1[aux80[1]], values1[aux81[1]], values1[aux81[2]], values1[aux81[3]]);
+    #pragma unroll
+        for (int l = 0; l < qstep/2; ++l) {
 
-        const int k0 = 8 * (threadIdx.x / 4) + threadIdx.x % 4;
+            const int q4 = get_int_b4(bxi->qs, (qstep/2)*kqsx + l);
+            aux32[0] = (q4 >> 0) & 0x0f0f0f0f;
+            aux32[1] = (q4 >> 4) & 0x0f0f0f0f;
+
+            const char4 val0  = make_char4(values_l[aux8[0]], values_l[aux8[1]], values_l[aux8[2]], values_l[aux8[3]]);
+            const char4 val1  = make_char4(values_h[aux8[4]], values_h[aux8[5]], values_h[aux8[6]], values_h[aux8[7]]);
+
 #ifdef INT8_MMA_AVAILABLE
-        x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + k0 + 0] = *(const int *)&val0;
-        x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + k0 + 4] = *(const int *)&val1;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + l + 0] = *(const int *)&val0;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + l + 4] = *(const int *)&val1;
 #else
-        x_qs[i*(2*WARP_SIZE + 1)     + k0 + 0] = *(const int *)&val0;
-        x_qs[i*(2*WARP_SIZE + 1)     + k0 + 4] = *(const int *)&val1;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + l + 0] = *(const int *)&val0;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + l + 4] = *(const int *)&val1;
 #endif // INT8_MMA_AVAILABLE
-    }
-
-    const int ib32 = threadIdx.x % 8;
-#pragma unroll
-    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * 4) {
-        int i = i0 + threadIdx.y * 4 + threadIdx.x / 8;
-
-        if (need_check) {
-            i = min(i, i_max);
         }
 
-        const block_iq4_k * bxi = (const block_iq4_k *)(x + i*stride) + kbx0;
-        const uint8_t sh = bxi->scales_h[ib32/2] >> 4*(ib32%2);
-        const int ls1 = ((bxi->scales_l[ib32] & 0xf) | ((sh << 4) & 0x30)) - 32;
-        const int ls2 = ((bxi->scales_l[ib32] >>  4) | ((sh << 2) & 0x30)) - 32;
+        const uint8_t sh = bxi->scales_h[kqsx/2] >> 4*(kqsx%2);
+        const int ls1 = ((bxi->scales_l[kqsx] & 0xf) | ((sh << 4) & 0x30)) - 32;
+        const int ls2 = ((bxi->scales_l[kqsx] >>  4) | ((sh << 2) & 0x30)) - 32;
 
         const float d = bxi->d;
+
 #ifdef INT8_MMA_AVAILABLE
-        x_df[i*MMQ_MMA_TILE_X_K_Q3_K + 2*ib32 + 0] = d * ls1;
-        x_df[i*MMQ_MMA_TILE_X_K_Q3_K + 2*ib32 + 1] = d * ls2;
+        x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+0] = d * ls1;
+        x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+1] = d * ls2;
 #else
-        // TODO
-        x_df[i*(WARP_SIZE/4) + i/4   + threadIdx.x % 8] = d * ls1;
+        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+0] = d * ls1;
+        x_df[i*(2*WARP_SIZE*2/QI8_0) + i/(QI8_0/4) + 2*kqsx+1] = d * ls2;
 #endif // INT8_MMA_AVAILABLE
     }
-
 }
+
+//template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq4_k(
+//    const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride) {
+//
+//#ifdef INT8_MMA_AVAILABLE
+//    int   * x_qs = (int   *)  x_tile;
+//    float * x_df = (float *) (x_qs + WARP_SIZE*2);
+//#else
+//    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q3_K, mmq_y);
+//    int   * x_qs = (int   *)  x_tile;
+//    float * x_df = (float *) (x_qs + txs.qs);
+//#endif // INT8_MMA_AVAILABLE
+//
+//#pragma unroll
+//    for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
+//        int i = i0 + threadIdx.y;
+//
+//        if (need_check) {
+//            i = min(i, i_max);
+//        }
+//
+//        const block_iq4_k * bxi = (const block_iq4_k *)(x + i*stride) + kbx0;
+//
+//        const uint16_t extra = bxi->extra >> 2*(threadIdx.x/4);
+//        auto values0 = iq4k_values + ((extra & 1) << 4);
+//        auto values1 = iq4k_values + ((extra & 2) << 3);
+//        const int q4 = get_int_b4(bxi->qs, threadIdx.x);
+//        const int q40 = (q4 >> 0) & 0x0F0F0F0F;
+//        const int q41 = (q4 >> 4) & 0x0F0F0F0F;
+//
+//        const int8_t * aux80 = (const int8_t *)&q40;
+//        const char4    val0  = make_char4(values0[aux80[0]], values0[aux80[1]], values0[aux80[2]], values0[aux80[3]]);
+//        const int8_t * aux81 = (const int8_t *)&q41;
+//        const char4    val1  = make_char4(values1[aux80[1]], values1[aux81[1]], values1[aux81[2]], values1[aux81[3]]);
+//
+//        const int k0 = 8 * (threadIdx.x / 4) + threadIdx.x % 4;
+//#ifdef INT8_MMA_AVAILABLE
+//        x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + k0 + 0] = *(const int *)&val0;
+//        x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + k0 + 4] = *(const int *)&val1;
+//#else
+//        x_qs[i*(2*WARP_SIZE + 1)     + k0 + 0] = *(const int *)&val0;
+//        x_qs[i*(2*WARP_SIZE + 1)     + k0 + 4] = *(const int *)&val1;
+//#endif // INT8_MMA_AVAILABLE
+//    }
+//
+//    const int ib32 = threadIdx.x % 8;
+//#pragma unroll
+//    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * 4) {
+//        int i = i0 + threadIdx.y * 4 + threadIdx.x / 8;
+//
+//        if (need_check) {
+//            i = min(i, i_max);
+//        }
+//
+//        const block_iq4_k * bxi = (const block_iq4_k *)(x + i*stride) + kbx0;
+//        const uint8_t sh = bxi->scales_h[ib32/2] >> 4*(ib32%2);
+//        const int ls1 = ((bxi->scales_l[ib32] & 0xf) | ((sh << 4) & 0x30)) - 32;
+//        const int ls2 = ((bxi->scales_l[ib32] >>  4) | ((sh << 2) & 0x30)) - 32;
+//
+//        const float d = bxi->d;
+//#ifdef INT8_MMA_AVAILABLE
+//        x_df[i*MMQ_MMA_TILE_X_K_Q3_K + 2*ib32 + 0] = d * ls1;
+//        x_df[i*MMQ_MMA_TILE_X_K_Q3_K + 2*ib32 + 1] = d * ls2;
+//#else
+//        // TODO
+//        x_df[i*(WARP_SIZE/4) + i/4   + threadIdx.x % 8] = d * ls1;
+//#endif // INT8_MMA_AVAILABLE
+//    }
+//
+//}
 
 template<int mmq_x, int mmq_y, int nwarps, bool need_check>
 static __device__ __forceinline__ void mmq_write_back_dp4a(
@@ -2712,7 +2778,8 @@ struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ4_XS> {
 
 template <int mmq_x, int mmq_y, int nwarps, bool need_check>
 struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ4_K> {
-    static constexpr int              vdr          = VDR_IQ4_XS_Q8_1_MMQ;
+    static constexpr int              vdr          = VDR_IQ2_XS_Q8_1_MMQ;
+    //static constexpr int              vdr          = VDR_IQ4_XS_Q8_1_MMQ;
     static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq4_k<mmq_y, nwarps, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y, nwarps>;
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
