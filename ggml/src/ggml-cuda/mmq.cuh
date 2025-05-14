@@ -2404,7 +2404,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 
         const block_iq2_ks * bxi = (const block_iq2_ks *)(x + i*stride + sizeof(half)) + kbx0;
 
-        uint16_t extra = bxi->extra >> 8*(kqsx/8);
+        uint16_t extra = bxi->extra >> 4*(kqsx/8);
         int q2 = get_int_b2(bxi->qs, kqsx);
 
         aux32[0] = ((q2 >> 0) & 0x03030303) | (((extra << 2) & 4) * 0x01010101);
