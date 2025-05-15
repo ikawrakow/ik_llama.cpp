@@ -425,6 +425,7 @@ extern "C" {
         GGML_TYPE_Q8_KR8  = 149,
         GGML_TYPE_Q8_K128 = 150,
         GGML_TYPE_Q8_KV   = 151,
+        GGML_TYPE_IQ5_KS  = 152,
 
         GGML_TYPE_Q4_0_R8   = 202,
         GGML_TYPE_Q5_0_R4   = 206,
@@ -512,6 +513,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ2_KS  = 138, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_KSS = 139, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q8_KV   = 140, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ5_KS  = 141, // except 1d tensors
                                          //
         GGML_FTYPE_MOSTLY_Q4_0_R8   = 202, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q8_0_R8   = 207, // except 1d tensors
