@@ -7509,6 +7509,7 @@ static void mul_mat_iq5_ks_r4_q8_k(int n, const void * vx, size_t bx, const Data
     using helper_t = union { __m256i vec; uint32_t val[8]; };
 #ifndef HAVE_FANCY_SIMD
     helper_t h, h_shift;
+    auto s_shuffle = _mm256_set_epi64x(0x0f0e0f0e0d0c0d0c, 0x0b0a0b0a09080908, 0x0706070605040504, 0x0302030201000100);
 #else
     using helper512_t = union { __m512i vec; uint64_t val[8]; };
     helper_t h;
