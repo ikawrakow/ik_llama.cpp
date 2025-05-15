@@ -79,7 +79,6 @@ struct rpc_tensor {
 
     char padding[4];
 };
-#pragma pack(pop)
 
 static_assert(sizeof(rpc_tensor) % 8 == 0, "rpc_tensor size must be multiple of 8");
 static std::unordered_map<std::string, std::string> rpc_server_map;
