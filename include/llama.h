@@ -193,6 +193,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ2_KS        = 147, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KSS       = 148, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_KV         = 149, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ5_KS        = 150, // except 1d tensors
                                                 //
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
@@ -231,7 +232,7 @@ extern "C" {
         LLAMA_ROPE_SCALING_TYPE_LINEAR      = 1,
         LLAMA_ROPE_SCALING_TYPE_YARN        = 2,
         LLAMA_ROPE_SCALING_TYPE_LONGROPE    = 3,
-        LLAMA_ROPE_SCALING_TYPE_MAX_VALUE   = LLAMA_ROPE_SCALING_TYPE_LONGROPE, 
+        LLAMA_ROPE_SCALING_TYPE_MAX_VALUE   = LLAMA_ROPE_SCALING_TYPE_LONGROPE,
     };
 
     enum llama_pooling_type {
