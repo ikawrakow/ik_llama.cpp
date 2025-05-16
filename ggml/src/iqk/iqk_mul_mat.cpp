@@ -3002,7 +3002,7 @@ struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
 };
 
 struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
-    DequantizerIQ6K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), iqxk(1, -128) { load_values(values); }
+    DequantizerIQ6K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), iqxk(1, 0) { load_values(values); }
     template <typename Q8>
     inline void new_block(int i, const Q8& q8, __m256 * accm, __m256i * scales) {
         d = GGML_FP16_TO_FP32(x[i].d);
@@ -3030,14 +3030,8 @@ struct DequantizerIQ6K final : public BaseDequantizer<block_iq6_k> {
                                                _mm256_and_si256(mask4, _mm256_shuffle_epi8(values[3], l))));
     }
     static void load_values(__m256i * values) {
-        static const uint8_t kvalues_iq6nl[64] = {
-               1,    7,   13,   19,   24,   30,   35,   40,   44,   49,   54,   58,   62,   66,   70,   74,
-              77,   81,   84,   88,   91,   94,   97,  100,  103,  106,  109,  112,  115,  117,  120,  123,
-             126,  128,  131,  134,  137,  140,  142,  145,  148,  151,  155,  158,  161,  164,  168,  172,
-             175,  179,  183,  187,  191,  196,  200,  205,  210,  215,  220,  226,  231,  237,  243,  249,
-        };
         for (int k = 0; k < 4; ++k) {
-            auto values128 = _mm_loadu_si128((const __m128i *)kvalues_iq6nl + k);
+            auto values128 = _mm_loadu_si128((const __m128i *)iq6nl_values + k);
             values[k] = MM256_SET_M128I(values128, values128);
         }
     }
@@ -3335,7 +3329,8 @@ static void mul_mat_qY_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
                 deq.prepare(i, j);
                 set_scales_16(all_scales[j], scales);
                 if constexpr (std::is_same_v<Dequantizer, DequantizerIQ4K> ||
-                              std::is_same_v<Dequantizer, DequantizerIQ5K>) {
+                              std::is_same_v<Dequantizer, DequantizerIQ5K> ||
+                              std::is_same_v<Dequantizer, DequantizerIQ6K>) {
                     multiply_add_avx2(deq.bits, scales, j, i, q8, sumi);
                 } else {
                     multiply_add(deq.bits, scales, j, i, q8, sumi);
