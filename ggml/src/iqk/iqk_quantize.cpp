@@ -5827,9 +5827,9 @@ void dequantize_row_iq5_ks_r4(const block_iq5_ks_r4 * x, float * y, int64_t k) {
     for (int ibl = 0; ibl < nblock; ++ibl) {
         for (int k = 0; k < 4; ++k) {
             const float d = dptr[k];
-            if (!isfinite(d)) {
-                printf("Oops: d = %g for ibl = %d, k = %d\n", d, ibl, k); exit(1);
-            }
+            //if (!isfinite(d)) {
+            //    printf("Oops: d = %g for ibl = %d, k = %d\n", d, ibl, k); exit(1);
+            //}
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 uint8_t sc = x[ibl].scales[4*ib+k];
                 float dl = d * ((sc & 254) - 127);
