@@ -1673,6 +1673,29 @@ inline void multiply_add(const Bits& bits, const __m256i * scales, int j, int i,
     }
 }
 
+template <typename Q8, typename Bits>
+inline void multiply_add_avx2(const Bits& bits, const __m256i * scales, int j, int i, const Q8& q8, __m256i * sumi) {
+    __m256i p[4];
+    if (j == 0) {
+        for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+            for (int k = 0; k < 4; ++k) {
+                auto s = _mm256_sign_epi8(bits.values[k], bits.values[k]);
+                p[k] = _mm256_madd_epi16(scales[k], _mm256_maddubs_epi16(s, _mm256_sign_epi8(q8.load_quants(iy, i, k), bits.values[k])));
+            }
+            sumi[iy] = _mm256_add_epi32(_mm256_add_epi32(p[0], p[1]), _mm256_add_epi32(p[2], p[3]));
+        }
+    } else {
+        for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+            for (int k = 0; k < 4; ++k) {
+                auto s = _mm256_sign_epi8(bits.values[k], bits.values[k]);
+                p[k] = _mm256_madd_epi16(scales[k], _mm256_maddubs_epi16(s, _mm256_sign_epi8(q8.load_quants(iy, i, 4+k), bits.values[k])));
+            }
+            sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(p[0], p[2]));
+            sumi[iy] = _mm256_add_epi32(sumi[iy], _mm256_add_epi32(p[1], p[3]));
+        }
+    }
+}
+
 struct SignHelper {
     inline __m256i make_signs(uint32_t sign_bits) const {
         auto aux256 = _mm256_set1_epi32(sign_bits);
@@ -2892,18 +2915,21 @@ struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
 };
 
 struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
-    DequantizerIQ4K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), iqxk(4, -128), values(load_iq4nl_values_256()) {}
+    DequantizerIQ4K(const void * vx, size_t bx) : BaseDequantizer(vx, bx) { load_values(); }
     template <typename Q8>
-    inline void new_block(int i, const Q8& q8, __m256 * accm, __m256i * scales) {
+    inline void new_block(int i, [[maybe_unused]] const Q8& q8, [[maybe_unused]] __m256 * accm, __m256i * scales) {
         d = GGML_FP16_TO_FP32(x[i].d);
-        iqxk.process(i, d, x[i].extra, make_scales(x[i].scales_l, (const uint16_t *)x[i].scales_h), q8, accm, scales);
+        auto scales8 = make_scales(x[i].scales_l, (const uint16_t *)x[i].scales_h);
+        auto scales16 = _mm256_cvtepi8_epi16(_mm_shuffle_epi8(scales8, hshuff));
+        prepare_scales_16(scales16, scales);
     }
     inline void prepare(int i, int j) {
         bits.prepare16(x[i].qs, j);
-        bits.values[0] = _mm256_shuffle_epi8(values, bits.values[0]);
-        bits.values[1] = _mm256_shuffle_epi8(values, bits.values[1]);
-        bits.values[2] = _mm256_shuffle_epi8(values, bits.values[2]);
-        bits.values[3] = _mm256_shuffle_epi8(values, bits.values[3]);
+        auto extra = x[i].extra >> 8*j;
+        bits.values[0] = _mm256_shuffle_epi8(values[extra & 3], bits.values[0]); extra >>= 2;
+        bits.values[1] = _mm256_shuffle_epi8(values[extra & 3], bits.values[1]); extra >>= 2;
+        bits.values[2] = _mm256_shuffle_epi8(values[extra & 3], bits.values[2]); extra >>= 2;
+        bits.values[3] = _mm256_shuffle_epi8(values[extra & 3], bits.values[3]);
     }
     __m128i make_scales(const uint8_t * scales_l, const uint16_t * scales_h) const {
         uint64_t aux64;
@@ -2911,16 +2937,24 @@ struct DequantizerIQ4K final : public BaseDequantizer<block_iq4_k> {
         auto scl = _mm_and_si128(_mm_set_epi64x(aux64 >> 4, aux64), maskl);
         const uint32_t aux32 = scales_h[0] | (scales_h[1] << 16);
         auto aux = _mm_and_si128(_mm_set_epi32(aux32 >> 2, aux32, aux32 << 2, aux32 << 4), maskh);
-        auto sch = _mm_shuffle_epi8(aux, iqxk.hshuff);
+        auto sch = _mm_shuffle_epi8(aux, hshuff);
         return _mm_add_epi8(_mm_or_si128(scl, sch), m32);
+    }
+    void load_values() {
+        auto v1 = _mm_loadu_si128((const __m128i *)iq4k_values+0);
+        auto v2 = _mm_loadu_si128((const __m128i *)iq4k_values+1);
+        values[0] = MM256_SET_M128I(v1, v1);
+        values[1] = MM256_SET_M128I(v1, v2);
+        values[2] = MM256_SET_M128I(v2, v1);
+        values[3] = MM256_SET_M128I(v2, v2);
     }
 
     Q4Bits bits;
-    const IQXKScales iqxk;
-    const __m256i values;
     const __m128i maskl    = _mm_set1_epi8(0xf);
     const __m128i maskh    = _mm_set1_epi8(0x30);
     const __m128i m32      = _mm_set1_epi8(-32);
+    const __m128i hshuff   = _mm_set_epi32(0x0f070e06, 0x0d050c04, 0x0b030a02, 0x09010800);
+    __m256i values[4];
 };
 
 struct DequantizerIQ5K final : public BaseDequantizer<block_iq5_k> {
@@ -3304,7 +3338,11 @@ static void mul_mat_qY_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
             for (int j = 0; j < QK_K/128; ++j) {
                 deq.prepare(i, j);
                 set_scales_16(all_scales[j], scales);
-                multiply_add(deq.bits, scales, j, i, q8, sumi);
+                if constexpr (std::is_same_v<Dequantizer, DequantizerIQ4K>) {
+                    multiply_add_avx2(deq.bits, scales, j, i, q8, sumi);
+                } else {
+                    multiply_add(deq.bits, scales, j, i, q8, sumi);
+                }
             }
 
             for (int iy = 0; iy < nrc_y; ++iy) {
