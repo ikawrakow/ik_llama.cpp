@@ -135,4 +135,6 @@ struct DataInfo {
 
 typedef void (*mul_mat_t)(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x);
 
+#define IQK_MAX_NY 8
+
 #endif
