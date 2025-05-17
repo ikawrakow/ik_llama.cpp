@@ -261,10 +261,12 @@ if (GGML_IQK_MUL_MAT)
     set(GGML_SOURCES_IQK_MM iqk/iqk_mul_mat.cpp
                             iqk/iqk_flash_attn.cpp
                             iqk/iqk_gemm_floats.cpp
+                            iqk/iqk_gemm_kquants.cpp
                             iqk/iqk_gemm_legacy_quants.cpp)
     set(GGML_HEADERS_IQK_MM iqk/iqk_mul_mat.h
                             iqk/iqk_flash_impl.h
                             iqk/iqk_gemm_floats.h
+                            iqk/iqk_gemm_kquants.h
                             iqk/iqk_gemm_legacy_quants.h)
     if (GGML_IQK_FLASH_ATTENTION)
         message(STATUS "Enabling IQK Flash Attention kernels")

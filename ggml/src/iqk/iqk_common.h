@@ -16,6 +16,7 @@
 #include <cstring>
 #include <type_traits>
 #include <vector>
+#include <cstdint>
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
@@ -139,6 +140,17 @@ typedef void (*mul_mat_t)(int n, const void * vx, size_t bx, const DataInfo& inf
 
 // ==================================================================================================
 
+static inline void make_q4_scales(const uint8_t * scales8, uint32_t * aux32) {
+    const uint16_t * scales = (const uint16_t *)scales8;
+    const uint32_t a0 = scales[0] | (scales[1] << 16);
+    const uint32_t a1 = scales[2] | (scales[3] << 16);
+    const uint32_t a2 = scales[4] | (scales[5] << 16);
+    aux32[3] = ((a2 >> 4) & 0x0f0f0f0f) | ((a1 >> 2) & 0x30303030);
+    aux32[1] = ((a2 >> 0) & 0x0f0f0f0f) | ((a0 >> 2) & 0x30303030);
+    aux32[2] = a1 & 0x3f3f3f3f;
+    aux32[0] = a0 & 0x3f3f3f3f;
+}
+
 #ifdef __AVX2__
 
 #define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
@@ -234,6 +246,49 @@ template <int nrc> struct Q8_16 {
 
     float d[5*nrc_y];
     const int8_t * y[nrc_y];
+};
+
+struct Scales8KBase {
+    template <typename Q8>
+    inline void accum_mins(const __m128i& mins128, const Q8& q8, int i, float c, __m256 * accd) const {
+        const __m256i mins = MM256_SET_M128I(_mm_shuffle_epi8(mins128, shuffles[1]), _mm_shuffle_epi8(mins128, shuffles[0]));
+        for (int iy = 0; iy < Q8::nrc_y; ++iy) {
+            const __m256i q8s = q8.load_bsums(iy, i);
+            const __m256i prod = _mm256_madd_epi16(mins, q8s);
+            accd[iy] = _mm256_fmadd_ps(_mm256_set1_ps(c*q8.scale(iy, i)), _mm256_cvtepi32_ps(prod), accd[iy]);
+        }
+    }
+    inline __m256i shuffle(__m128i mins) const {
+        return MM256_SET_M128I(_mm_shuffle_epi8(mins, shuffles[1]), _mm_shuffle_epi8(mins, shuffles[0]));
+    }
+    const __m128i shuffles[2] = {_mm_set_epi32(0x07060706, 0x05040504, 0x03020302, 0x01000100),
+                                 _mm_set_epi32(0x0f0e0f0e, 0x0d0c0d0c, 0x0b0a0b0a, 0x09080908)};
+};
+
+template <typename Block, bool per_row_scale = false, bool is_f16 = false>
+struct BaseDequantizer {
+    BaseDequantizer(const void * vx, size_t bx) : vx(vx), bx(bx) {}
+    inline void new_row(int ix) {
+        if constexpr (per_row_scale) {
+            if constexpr (is_f16) {
+                const ggml_half * dptr = (const ggml_half *)((const char *)vx + bx*ix);
+                d = GGML_FP16_TO_FP32(*dptr);
+                x = (const Block *)(dptr + 1);
+            } else {
+                const float * dptr = (const float *)((const char *)vx + bx*ix);
+                d = *dptr;
+                x = (const Block *)(dptr + 1);
+            }
+        } else {
+            x = (const Block *)((const char *)vx + bx*ix);
+        }
+    }
+
+    const void *  vx;
+    const size_t  bx;
+    const Block * x;
+
+    float d;
 };
 
 #endif
