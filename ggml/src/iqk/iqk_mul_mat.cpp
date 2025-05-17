@@ -15875,6 +15875,7 @@ void MulMat::relu(int n, const float * x, float * y) {
 #endif
 } // namespace
 
+#ifdef GGML_IQK_FLASH_ATTENTION
 namespace {
 
 template <int k_step>
@@ -18663,6 +18664,7 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
 
     return true;
 }
+#endif
 
 #else  // IQK_IMPLEMENT
 
