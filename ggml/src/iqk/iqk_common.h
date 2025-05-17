@@ -7,6 +7,8 @@
 // SPDX-License-Identifier: MIT
 //
 
+#pragma once
+
 #include "iqk_config.h"
 
 #if defined IQK_IMPLEMENT
@@ -134,5 +136,106 @@ struct DataInfo {
 typedef void (*mul_mat_t)(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x);
 
 #define IQK_MAX_NY 8
+
+// ==================================================================================================
+
+#ifdef __AVX2__
+
+#define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
+
+static inline float hsum_float_4(__m128 x) {
+    x = _mm_add_ps(x, _mm_movehl_ps(x, x));
+    x = _mm_add_ss(x, _mm_movehdup_ps(x));
+    return _mm_cvtss_f32(x);
+}
+static inline float hsum_float_8(__m256 x) {
+    return hsum_float_4(_mm_add_ps(_mm256_castps256_ps128(x), _mm256_extractf128_ps(x, 1)));
+}
+static inline int hsum_i32_8(const __m256i a) {
+    const __m128i sum128 = _mm_add_epi32(_mm256_castsi256_si128(a), _mm256_extractf128_si256(a, 1));
+    const __m128i hi64 = _mm_unpackhi_epi64(sum128, sum128);
+    const __m128i sum64 = _mm_add_epi32(hi64, sum128);
+    const __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));
+    return _mm_cvtsi128_si32(_mm_add_epi32(sum64, hi32));
+}
+static inline float hmax_float_8(__m256 x) {
+    __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x));
+    max4 = _mm_max_ps( max4, _mm_movehl_ps(max4, max4));
+    max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4));
+    return  _mm_cvtss_f32(max4);
+}
+
+static inline __m256 hsum_float_8x8(__m256 * accm) {
+    for (int i = 0; i < 4; ++i) {
+        accm[i] = _mm256_add_ps(_mm256_permute2f128_ps(accm[i], accm[i+4], 0x20), _mm256_permute2f128_ps(accm[i], accm[i+4], 0x31));
+        //accm[i] = _mm256_set_m128(_mm_add_ps(_mm256_castps256_ps128(accm[i+4]), _mm256_extractf128_ps(accm[i+4], 1)),
+        //                          _mm_add_ps(_mm256_castps256_ps128(accm[i+0]), _mm256_extractf128_ps(accm[i+0], 1)));
+    }
+    for (int i = 0; i < 2; ++i) accm[i] = _mm256_add_ps(_mm256_unpacklo_ps(accm[i], accm[i+2]), _mm256_unpackhi_ps(accm[i], accm[i+2]));
+    return _mm256_add_ps(_mm256_unpacklo_ps(accm[0], accm[1]), _mm256_unpackhi_ps(accm[0], accm[1]));
+}
+
+static inline __m128i load_iq4nl_values_128() {
+    static const uint8_t kvalues_iq4nl[16] = {1, 24, 45, 63, 79, 93, 106, 118, 129, 141, 153, 166, 181, 197, 217, 241};
+    return _mm_loadu_si128((const __m128i *)kvalues_iq4nl);
+}
+
+static inline __m256i load_iq4nl_values_256() {
+    auto val128 = load_iq4nl_values_128();
+    return MM256_SET_M128I(val128, val128);
+}
+
+static inline __m128i load_iq4k_values_128() {
+    return _mm_loadu_si128((const __m128i *)iq4k_values);
+}
+
+static inline __m256i load_iq4k_values_256() {
+    auto val128 = load_iq4k_values_128();
+    return MM256_SET_M128I(val128, val128);
+}
+
+template <int nrc, typename block_q8 = block_q8_K> struct Q8 {
+
+    constexpr static int nrc_y = nrc;
+
+    Q8(const DataInfo& info) {
+        for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const block_q8 *)info.src1_row(iy);
+    }
+
+#ifdef HAVE_FANCY_SIMD
+    inline __m512i load_quants64(int iy, int i, int j) const { return _mm512_loadu_si512((const __m512i*)y[iy][i].qs + j); }
+#endif
+    inline __m256i load_quants(int iy, int i, int j) const { return _mm256_loadu_si256((const __m256i*)y[iy][i].qs + j); }
+    inline __m256i load_bsums(int iy, int i) const { return _mm256_loadu_si256((const __m256i*)y[iy][i].bsums); }
+    inline float scale(int iy, int i) const { return y[iy][i].d; }
+
+    const block_q8 * y[nrc_y];
+};
+
+template <int nrc> struct Q8_16 {
+
+    constexpr static int nrc_y = nrc;
+
+    Q8_16(const DataInfo& info) {
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto ptr = (const float *)info.src1_row(iy);
+            std::memcpy(d + 5*iy, ptr, 5*sizeof(float));
+            y[iy] = (const int8_t *)(ptr + 5);
+        }
+    }
+
+#ifdef HAVE_FANCY_SIMD
+    inline __m512i load_quants64(int iy, int i) const { return _mm512_loadu_si512((const __m512i*)y[iy] + i); }
+#endif
+    inline __m256i load_quants(int iy, int i) const { return _mm256_loadu_si256((const __m256i*)y[iy] + i); }
+    inline float scale(int iy, int k) const { return d[5*iy+k]; }
+    inline float sum_row(int iy) const { return d[5*iy + 4]; }
+    inline __m128 scale(int iy) const { return _mm_loadu_ps(d + 5*iy); }
+
+    float d[5*nrc_y];
+    const int8_t * y[nrc_y];
+};
+
+#endif
 
 #endif
