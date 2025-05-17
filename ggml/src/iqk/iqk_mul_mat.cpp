@@ -1945,11 +1945,7 @@ static void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
 
                 set_scales_8(all_scales, j, scales);
 
-                if constexpr (std::is_same_v<Dequantizer, DequantizerIQ4KS>) {
-                    multiply_add_avx2(deq.bits, scales, j, i, q8, sumi);
-                } else {
-                    multiply_add(deq.bits, scales, j, i, q8, sumi);
-                }
+                multiply_add(deq.bits, scales, j, i, q8, sumi);
 
             }
 
