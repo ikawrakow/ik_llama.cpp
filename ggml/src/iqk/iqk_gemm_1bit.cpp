@@ -1045,9 +1045,11 @@ static void mul_mat_iq1_m_r4_q8_0(int n, const void * vx, size_t bx, const DataI
 
 } // namespace
 
-bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
+bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& funcs, mul_mat_t& func16) {
 
     auto expected_typeB = GGML_TYPE_Q8_K128;
+
+    func16 = nullptr;
 
     switch (typeA) {
         case GGML_TYPE_IQ1_S:
@@ -1076,7 +1078,7 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
             funcs[6] = mul_mat_iq1_s_r4_q8_1<7>;
             funcs[7] = mul_mat_iq1_s_r4_q8_1<8>;
 #ifdef HAVE_FANCY_SIMD
-            mm.func16 = mul_mat_iq1_s_r4_q8_1<16>;
+            func16 = mul_mat_iq1_s_r4_q8_1<16>;
 #endif
             break;
         case GGML_TYPE_IQ1_M_R4:
@@ -1090,7 +1092,7 @@ bool iqk_set_kernels_1bit(int ne00, int typeA, int typeB, std::array<mul_mat_t, 
             funcs[6] = mul_mat_iq1_m_r4_q8_0<7>;
             funcs[7] = mul_mat_iq1_m_r4_q8_0<8>;
 #ifdef HAVE_FANCY_SIMD
-            mm.func16 = mul_mat_iq1_m_r4_q8_0<16>;
+            func16 = mul_mat_iq1_m_r4_q8_0<16>;
 #endif
             break;
         default:
