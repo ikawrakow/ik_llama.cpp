@@ -79,8 +79,6 @@ struct Perf {
 #define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
 #endif
 
-namespace {
-
 typedef struct {
     int32_t i1;
     int32_t i2;

@@ -258,8 +258,12 @@ set (GGML_HEADERS_IQK iqk/iqk_config.h)
 if (GGML_IQK_MUL_MAT)
     message(STATUS "Using optimized iqk matrix multiplications")
     add_compile_definitions(GGML_USE_IQK_MULMAT)
-    set(GGML_SOURCES_IQK_MM iqk/iqk_mul_mat.cpp iqk/iqk_flash_attn.cpp)
-    set(GGML_HEADERS_IQK_MM iqk/iqk_mul_mat.h iqk/iqk_flash_impl.h)
+    set(GGML_SOURCES_IQK_MM iqk/iqk_mul_mat.cpp
+                            iqk/iqk_flash_attn.cpp
+                            iqk/iqk_gemm_floats.cpp)
+    set(GGML_HEADERS_IQK_MM iqk/iqk_mul_mat.h
+                            iqk/iqk_flash_impl.h
+                            iqk/iqk_gemm_floats.h)
     if (GGML_IQK_FLASH_ATTENTION)
         message(STATUS "Enabling IQK Flash Attention kernels")
         add_compile_definitions(GGML_IQK_FLASH_ATTENTION)
