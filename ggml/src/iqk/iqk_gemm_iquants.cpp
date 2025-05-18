@@ -1632,6 +1632,7 @@ bool iqk_set_kernels_iquants(int ne00, int typeA, int typeB, std::array<mul_mat_
 #else
 // --------------------------------------- __aarch64__ ---------------------------------------------
 
+
 #endif
 
 #endif
