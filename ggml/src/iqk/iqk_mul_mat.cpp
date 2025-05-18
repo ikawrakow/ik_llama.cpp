@@ -3057,19 +3057,48 @@ static void mul_mat_q2_KT_q8_K_T(int n, const void * vx, size_t bx, const DataIn
 
         for (int i = 0; i < nb; ++i) {
             const uint16_t * ql = (const uint16_t *)x[i].ql;
-            uint32_t val;
-            for (int j = 0; j < QK_K; ++j) {
-                if (j % 8 == 0) { val = ql[j/8] + 4096; }
-                float x_scale;
-                if (j < 128) {
-                    x_scale = iq4k_values[x[i].scales[j/32 % 4] & 0xf];
-                } else {
-                    x_scale = iq4k_values[x[i].scales[j/32 % 4] >> 4];
-                }
-                float x_val = trellis_gen(val, s);
-                x_val *= x_scale;
+            for (int j = 0; j < 128; j+=8) {
+                uint32_t val1 = ql[j/8] + 4096;
+                uint32_t val2 = ql[j/8+16] + 4096;
+                const float x_scale1 = iq4k_values[x[i].scales[j/32] & 0xf];
+                const float x_scale2 = iq4k_values[x[i].scales[j/32] >> 4];
+                const float x_val1_0 = trellis_gen(val1, s);
+                const float x_val1_1 = trellis_gen(val1, s);
+                const float x_val1_2 = trellis_gen(val1, s);
+                const float x_val1_3 = trellis_gen(val1, s);
+                const float x_val1_4 = trellis_gen(val1, s);
+                const float x_val1_5 = trellis_gen(val1, s);
+                const float x_val1_6 = trellis_gen(val1, s);
+                const float x_val1_7 = trellis_gen(val1, s);
+                const float x_val2_0 = trellis_gen(val2, s);
+                const float x_val2_1 = trellis_gen(val2, s);
+                const float x_val2_2 = trellis_gen(val2, s);
+                const float x_val2_3 = trellis_gen(val2, s);
+                const float x_val2_4 = trellis_gen(val2, s);
+                const float x_val2_5 = trellis_gen(val2, s);
+                const float x_val2_6 = trellis_gen(val2, s);
+                const float x_val2_7 = trellis_gen(val2, s);
                 for (int iy = 0; iy < nrc_y; ++iy) {
-                    accd[iy] += (y[iy][i].d*y[iy][i].qs[j]) * x_val;
+                    const float xy1_0 = y[iy][i].qs[j+0] * x_val1_0;
+                    const float xy1_1 = y[iy][i].qs[j+1] * x_val1_1;
+                    const float xy1_2 = y[iy][i].qs[j+2] * x_val1_2;
+                    const float xy1_3 = y[iy][i].qs[j+3] * x_val1_3;
+                    const float xy1_4 = y[iy][i].qs[j+4] * x_val1_4;
+                    const float xy1_5 = y[iy][i].qs[j+5] * x_val1_5;
+                    const float xy1_6 = y[iy][i].qs[j+6] * x_val1_6;
+                    const float xy1_7 = y[iy][i].qs[j+7] * x_val1_7;
+                    const float xy2_0 = y[iy][i].qs[j+128+0] * x_val2_0;
+                    const float xy2_1 = y[iy][i].qs[j+128+1] * x_val2_1;
+                    const float xy2_2 = y[iy][i].qs[j+128+2] * x_val2_2;
+                    const float xy2_3 = y[iy][i].qs[j+128+3] * x_val2_3;
+                    const float xy2_4 = y[iy][i].qs[j+128+4] * x_val2_4;
+                    const float xy2_5 = y[iy][i].qs[j+128+5] * x_val2_5;
+                    const float xy2_6 = y[iy][i].qs[j+128+6] * x_val2_6;
+                    const float xy2_7 = y[iy][i].qs[j+128+7] * x_val2_7;
+                    accd[iy] += y[iy][i].d * (
+                        x_scale1 * (xy1_0 + xy1_1 + xy1_2 + xy1_3 + xy1_4 + xy1_5 + xy1_6 + xy1_7) +
+                        x_scale2 * (xy2_0 + xy2_1 + xy2_2 + xy2_3 + xy2_4 + xy2_5 + xy2_6 + xy2_7)
+                    );
                 }
             }
         }
