@@ -7,6 +7,7 @@
 // SPDX-License-Identifier: MIT
 //
 
+#include <immintrin.h>
 #if defined IQK_IMPLEMENT
 #undef IQK_IMPLEMENT
 #endif
@@ -309,7 +310,6 @@ struct MulMat {
     }
 private:
     template <typename Dequantizer> static void set_functions(MulMat& m);
-    static void set_functions_iq2_kt(MulMat& mm);
 };
 
 }
@@ -3028,14 +3028,58 @@ static inline uint32_t trellis_next(uint32_t& val) {
     constexpr uint32_t kb = 64248484;
     constexpr uint32_t kmask = 0x8fff8fff;
     constexpr uint32_t km32 = 0x3b603b60;
-    val = ka*val + kb;
+    val = val*ka + kb;
     return (val & kmask) ^ km32;
+}
+
+static inline __m256i trellis_next8(uint32_t val) {
+    constexpr uint32_t kmask = 0x8fff8fff;
+    constexpr uint32_t km32 = 0x3b603b60;
+    constexpr uint32_t ka = 89226354;
+    constexpr uint32_t kb = 64248484;
+    constexpr uint32_t ka1 = ka*ka;
+    constexpr uint32_t kb1 = kb*ka+kb;
+    constexpr uint32_t ka2 = ka1*ka;
+    constexpr uint32_t kb2 = kb1*ka+kb;
+    constexpr uint32_t ka3 = ka2*ka;
+    constexpr uint32_t kb3 = kb2*ka+kb;
+    constexpr uint32_t ka4 = ka3*ka;
+    constexpr uint32_t kb4 = kb3*ka+kb;
+    constexpr uint32_t ka5 = ka4*ka;
+    constexpr uint32_t kb5 = kb4*ka+kb;
+    constexpr uint32_t ka6 = ka5*ka;
+    constexpr uint32_t kb6 = kb5*ka+kb;
+    constexpr uint32_t ka7 = ka6*ka;
+    constexpr uint32_t kb7 = kb6*ka+kb;
+    __m256i mka = _mm256_setr_epi32(ka, ka1, ka2, ka3, ka4, ka5, ka6, ka7);
+    __m256i mkb = _mm256_setr_epi32(kb, kb1, kb2, kb3, kb4, kb5, kb6, kb7);
+    __m256i mval = _mm256_set1_epi32(val);
+    __m256i mres = _mm256_add_epi32(_mm256_mullo_epi32(mval, mka), mkb);
+    return _mm256_and_si256(mres, _mm256_set1_epi32(kmask)) ^ _mm256_set1_epi32(km32);
 }
 
 static inline float trellis_gen(uint32_t& val, uint32_t* s) {
     const ggml_fp16_t * h = (const ggml_fp16_t *)s;
     s[0] = trellis_next(val);
     return GGML_FP16_TO_FP32(h[0]) + GGML_FP16_TO_FP32(h[1]);
+}
+
+static inline __m256 trellis_gen8(uint32_t val) {
+    __m256i i8 = trellis_next8(val);
+    // split upper and lower bits of each 32-bit lane into two 8xfloat16 `hlo`, `hhi`
+    __m256i low_16_bits_mask = _mm256_set1_epi32(0x0000FFFF);
+    __m256i lower_halves_lanes32 = _mm256_and_si256(i8, low_16_bits_mask);
+    __m256i upper_halves_lanes32 = _mm256_srli_epi32(i8, 16);
+    __m128i lo0123 = _mm256_extracti128_si256(lower_halves_lanes32, 0); // Extracts [00L0, 00L1, 00L2, 00L3]
+    __m128i lo4567 = _mm256_extracti128_si256(lower_halves_lanes32, 1); // Extracts [00L4, 00L5, 00L6, 00L7]
+    __m128i hlo = _mm_packus_epi32(lo0123, lo4567);
+    __m128i hi0123 = _mm256_extracti128_si256(upper_halves_lanes32, 0); // Extracts [00H0, 00H1, 00H2, 00H3]
+    __m128i hi4567 = _mm256_extracti128_si256(upper_halves_lanes32, 1); // Extracts [00H4, 00H5, 00H6, 00H7]
+    __m128i hhi = _mm_packus_epi32(hi0123, hi4567);
+    // widen both to 8xfloat32 and sum
+    __m256 f1 = _mm256_cvtph_ps(hlo);
+    __m256 f2 = _mm256_cvtph_ps(hhi);
+    return _mm256_add_ps(f1, f2);
 }
 
 template <int nrc_y>
@@ -3105,6 +3149,53 @@ static void mul_mat_q2_KT_q8_K_T(int n, const void * vx, size_t bx, const DataIn
 
         for (int iy = 0; iy < nrc_y; ++iy) {
             info.store(ix, iy, d*accd[iy]);
+        }
+    }
+}
+
+template <int nrc_y>
+static void mul_mat_q2_KT_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%QK_K == 0);
+    const int nb = n/QK_K;
+
+    __m256  accd[nrc_y];
+    const float * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const float *)info.src1_row(iy);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        const float d = *dptr * 31.75f * 1.05f;
+        const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
+
+        for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = _mm256_setzero_ps();
+
+        for (int i = 0; i < nb; ++i) {
+            const uint16_t * ql = (const uint16_t *)x[i].ql;
+            for (int j = 0; j < 128; j+=8) {
+                uint32_t val1 = ql[j/8] + 4096;
+                uint32_t val2 = ql[j/8+16] + 4096;
+                const float x_scale1 = iq4k_values[x[i].scales[j/32] & 0xf];
+                const float x_scale2 = iq4k_values[x[i].scales[j/32] >> 4];
+                const __m256 x_val1 = trellis_gen8(val1);
+                const __m256 x_val2 = trellis_gen8(val2);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    accd[iy] = _mm256_fmadd_ps(
+                        _mm256_load_ps(y[iy] + i*QK_K+j), 
+                        _mm256_mul_ps(_mm256_set1_ps(x_scale1), x_val1),
+                        accd[iy]
+                    );
+                    accd[iy] = _mm256_fmadd_ps(
+                        _mm256_load_ps(y[iy] + i*QK_K+j+128), 
+                        _mm256_mul_ps(_mm256_set1_ps(x_scale2), x_val2),
+                        accd[iy]
+                    );
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            __m256 res = _mm256_mul_ps(_mm256_set1_ps(d), accd[iy]);
+            info.store(ix, iy, hsum_float_8(res));
         }
     }
 }
@@ -8724,17 +8815,6 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
         }
 }
 
-void MulMat::set_functions_iq2_kt(MulMat& mm) {
-    mm.funcs[0] = mul_mat_q2_KT_q8_K_T<1>;
-    mm.funcs[1] = mul_mat_q2_KT_q8_K_T<2>;
-    mm.funcs[2] = mul_mat_q2_KT_q8_K_T<3>;
-    mm.funcs[3] = mul_mat_q2_KT_q8_K_T<4>;
-    mm.funcs[4] = mul_mat_q2_KT_q8_K_T<5>;
-    mm.funcs[5] = mul_mat_q2_KT_q8_K_T<6>;
-    mm.funcs[6] = mul_mat_q2_KT_q8_K_T<7>;
-    mm.funcs[7] = mul_mat_q2_KT_q8_K_T<8>;
-}
-
 template <typename FloatX, typename FloatY>
 void set_mul_mat_f(MulMat& mm) {
     for (auto& f : mm.funcs) f = nullptr;
@@ -8864,7 +8944,23 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_IQ2_KT:
             assert (ne00 % QK_K == 0);
-            MulMat::set_functions_iq2_kt(mm);
+            // mm.funcs[0] = mul_mat_q2_KT_q8_K_T<1>;
+            // mm.funcs[1] = mul_mat_q2_KT_q8_K_T<2>;
+            // mm.funcs[2] = mul_mat_q2_KT_q8_K_T<3>;
+            // mm.funcs[3] = mul_mat_q2_KT_q8_K_T<4>;
+            // mm.funcs[4] = mul_mat_q2_KT_q8_K_T<5>;
+            // mm.funcs[5] = mul_mat_q2_KT_q8_K_T<6>;
+            // mm.funcs[6] = mul_mat_q2_KT_q8_K_T<7>;
+            // mm.funcs[7] = mul_mat_q2_KT_q8_K_T<8>;
+            mm.funcs[0] = mul_mat_q2_KT_F32_T<1>;
+            mm.funcs[1] = mul_mat_q2_KT_F32_T<2>;
+            mm.funcs[2] = mul_mat_q2_KT_F32_T<3>;
+            mm.funcs[3] = mul_mat_q2_KT_F32_T<4>;
+            mm.funcs[4] = mul_mat_q2_KT_F32_T<5>;
+            mm.funcs[5] = mul_mat_q2_KT_F32_T<6>;
+            mm.funcs[6] = mul_mat_q2_KT_F32_T<7>;
+            mm.funcs[7] = mul_mat_q2_KT_F32_T<8>;
+            expected_typeB = GGML_TYPE_F32;
             break;
         case GGML_TYPE_IQ3_K:
             assert (ne00 % QK_K == 0);
