@@ -138,6 +138,27 @@ typedef void (*mul_mat_t)(int n, const void * vx, size_t bx, const DataInfo& inf
 
 #define IQK_MAX_NY 8
 
+#define IQK_SET_MUL_MAT_FUNCTIONS_T(kernel, Dequantizer, funcs) \
+            funcs[0] = kernel<Dequantizer, 1>;\
+            funcs[1] = kernel<Dequantizer, 2>;\
+            funcs[2] = kernel<Dequantizer, 3>;\
+            funcs[3] = kernel<Dequantizer, 4>;\
+            funcs[4] = kernel<Dequantizer, 5>;\
+            funcs[5] = kernel<Dequantizer, 6>;\
+            funcs[6] = kernel<Dequantizer, 7>;\
+            funcs[7] = kernel<Dequantizer, 8>;\
+
+#define IQK_SET_MUL_MAT_FUNCTIONS(kernel, funcs) \
+            funcs[0] = kernel<1>;\
+            funcs[1] = kernel<2>;\
+            funcs[2] = kernel<3>;\
+            funcs[3] = kernel<4>;\
+            funcs[4] = kernel<5>;\
+            funcs[5] = kernel<6>;\
+            funcs[6] = kernel<7>;\
+            funcs[7] = kernel<8>;\
+
+
 // ==================================================================================================
 
 static inline void make_q4_scales(const uint8_t * scales8, uint32_t * aux32) {
@@ -233,6 +254,13 @@ static inline __m256i load_iq4nl_values_256() {
     auto val128 = load_iq4nl_values_128();
     return MM256_SET_M128I(val128, val128);
 }
+
+#ifdef HAVE_FANCY_SIMD
+static inline __m512i load_iq4nl_values_512() {
+    auto val256 = load_iq4nl_values_256();
+    return _mm512_inserti32x8(_mm512_castsi256_si512(val256), val256, 1);
+}
+#endif
 
 static inline __m128i load_iq4k_values_128() {
     return _mm_loadu_si128((const __m128i *)iq4k_values);

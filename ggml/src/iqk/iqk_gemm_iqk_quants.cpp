@@ -11,11 +11,6 @@ namespace {
 
 #ifdef HAVE_FANCY_SIMD
 
-__m512i inline load_iq4nl_values_512() {
-    auto val256 = load_iq4nl_values_256();
-    return _mm512_inserti32x8(_mm512_castsi256_si512(val256), val256, 1);
-}
-
 struct IQXKScales {
     IQXKScales(uint8_t shift, int8_t min_val) : eshift(_mm256_set1_epi16(shift)), min(_mm256_set1_epi16(min_val)) {}
     template <typename Q8>

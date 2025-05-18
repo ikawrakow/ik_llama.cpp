@@ -285,11 +285,6 @@ struct DequantizerQ6K final : public BaseDequantizer<block_q6_K> {
 
 };
 
-__m512i inline load_iq4nl_values_512() {
-    auto val256 = load_iq4nl_values_256();
-    return _mm512_inserti32x8(_mm512_castsi256_si512(val256), val256, 1);
-}
-
 struct DequantizerIQ4XS final : public BaseDequantizer<block_iq4_xs> {
     DequantizerIQ4XS(const void * vx, size_t bx) : BaseDequantizer(vx, bx), values(load_iq4nl_values_512()) {}
     template <typename Q8>
