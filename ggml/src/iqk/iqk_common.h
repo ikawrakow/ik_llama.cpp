@@ -696,6 +696,23 @@ static inline void compute_16_blocks(const uint8x16x4_t& qx_1, const uint8x16x4_
     sumi = vmlaq_s32(sumi, scales.val[2*j+1], p34);
 }
 
+struct SignHelper {
+
+    inline void init() { shuffle = vcombine_u8(vdup_n_u8(0), vdup_n_u8(1)); }
+
+    inline void apply_signs_1(uint8x16_t * b, const uint8x16_t& signs16) {
+        auto aux = vqtbl1q_u8(signs16, shuffle);
+        auto s = vreinterpretq_s8_u8(vorrq_u8(vceqq_u8(vandq_u8(aux, smask), smask), m1));
+        b[0] = vreinterpretq_u8_s8(vmulq_s8(vreinterpretq_s8_u8(b[0]), s));
+        shuffle = vaddq_u8(shuffle, step);
+    }
+
+    const uint8x16_t smask = vreinterpretq_u8_u64(vdupq_n_u64(0x8040201008040201));
+    const uint8x16_t m1    = vdupq_n_u8(1);
+    const uint8x16_t step  = vdupq_n_u8(2);
+    uint8x16_t shuffle;
+};
+
 template <typename Dequantizer, int nrc_y>
 static void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n % QK_K == 0);
