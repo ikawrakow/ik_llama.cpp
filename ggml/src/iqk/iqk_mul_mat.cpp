@@ -309,6 +309,7 @@ struct MulMat {
     }
 private:
     template <typename Dequantizer> static void set_functions(MulMat& m);
+    static void set_functions_iq2_kt(MulMat& mm);
 };
 
 }
@@ -3019,6 +3020,55 @@ static void mul_mat_qX_K_q8_K_T(int n, const void * vx, size_t bx, const DataInf
             info.store(ix, iy, hsum_float_8(accd[iy]));
         }
 
+    }
+}
+
+static inline uint32_t trellis_next(uint32_t& val) {
+    constexpr uint32_t ka = 89226354;
+    constexpr uint32_t kb = 64248484;
+    constexpr uint32_t kmask = 0x8fff8fff;
+    constexpr uint32_t km32 = 0x3b603b60;
+    val = ka*val + kb;
+    return (val & kmask) ^ km32;
+}
+
+static inline float trellis_gen(uint32_t& val, uint32_t* s) {
+    const ggml_half * h = (const ggml_half *)s;
+    s[0] = trellis_next(val);
+    return (float)(h[0] + h[1]);
+}
+
+template <int nrc_y>
+static void mul_mat_q2_KT_q8_K_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%QK_K == 0);
+    const int nb = n/QK_K;
+
+    float  accd[nrc_y];
+    uint32_t s[1];
+    const block_q8_K * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const block_q8_K *)info.src1_row(iy);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        const float d = *dptr * 31.75f * 1.05f;
+        const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
+
+        for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = 0.0f;
+
+        for (int i = 0; i < nb; ++i) {
+            const uint16_t * ql = (const uint16_t *)x[i].ql;
+            uint32_t val = ql[0] + 4096;
+            for (int j = 0; j < QK_K; ++j) {
+                const float x_scale = iq4k_values[x[i].scales[j/4] & 0xf];
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    accd[iy] += (y[iy]->d*y[iy]->qs[j]) * x_scale * trellis_gen(val, s);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, d*accd[iy]);
+        }
     }
 }
 
@@ -8637,6 +8687,17 @@ template <typename Dequantizer> void MulMat::set_functions(MulMat& m) {
         }
 }
 
+void MulMat::set_functions_iq2_kt(MulMat& mm) {
+    mm.funcs[0] = mul_mat_q2_KT_q8_K_T<1>;
+    mm.funcs[1] = mul_mat_q2_KT_q8_K_T<2>;
+    mm.funcs[2] = mul_mat_q2_KT_q8_K_T<3>;
+    mm.funcs[3] = mul_mat_q2_KT_q8_K_T<4>;
+    mm.funcs[4] = mul_mat_q2_KT_q8_K_T<5>;
+    mm.funcs[5] = mul_mat_q2_KT_q8_K_T<6>;
+    mm.funcs[6] = mul_mat_q2_KT_q8_K_T<7>;
+    mm.funcs[7] = mul_mat_q2_KT_q8_K_T<8>;
+}
+
 template <typename FloatX, typename FloatY>
 void set_mul_mat_f(MulMat& mm) {
     for (auto& f : mm.funcs) f = nullptr;
@@ -8763,6 +8824,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_IQ2_KS:
             assert (ne00 % QK_K == 0);
             MulMat::set_functions<DequantizerIQ2KS>(mm);
+            break;
+        case GGML_TYPE_IQ2_KT:
+            assert (ne00 % QK_K == 0);
+            MulMat::set_functions_iq2_kt(mm);
             break;
         case GGML_TYPE_IQ3_K:
             assert (ne00 % QK_K == 0);
