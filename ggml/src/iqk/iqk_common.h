@@ -525,6 +525,28 @@ struct Q4Bits {
 
 #endif
 
+#else
+
+template <int nrc, typename block_q8 = block_q8_K> struct Q8 {
+
+    constexpr static int nrc_y = nrc;
+
+    Q8(const DataInfo& info) {
+        for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const block_q8 *)info.src1_row(iy);
+    }
+
+    inline int8x16x2_t load_quants(int iy, int i, int j) const { return vld1q_s8_x2(y[iy][i].qs + 32*j); }
+    inline int8x16x4_t load_quants_64(int iy, int i, int j) const { return vld1q_s8_x4(y[iy][i].qs + 64*j); }
+    inline int16x8x2_t load_bsums(int iy, int i) const { return vld1q_s16_x2(y[iy][i].bsums); }
+    inline int16x8_t load_bsums8(int iy, int i) const {
+        auto q8s = vld1q_s16_x2(y[iy][i].bsums);
+        return vpaddq_s16(q8s.val[0], q8s.val[1]);
+    }
+    inline float scale(int iy, int i) const { return y[iy][i].d; }
+
+    const block_q8 * y[nrc_y];
+};
+
 #endif
 
 #endif

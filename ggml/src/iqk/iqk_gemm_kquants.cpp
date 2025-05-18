@@ -7,6 +7,8 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 
+#ifdef __x86_64__
+
 namespace {
 
 // Handles q4_K and q5_K scales/mins
@@ -1775,5 +1777,10 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
     return true;
 
 }
+
+#else
+// --------------------------------- __aarch64__ --------------------------------------
+
+#endif
 
 #endif

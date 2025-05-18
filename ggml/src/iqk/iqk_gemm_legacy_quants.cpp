@@ -11,6 +11,8 @@
 // ============================== Legacy quants
 //
 
+#ifdef __x86_64__
+
 namespace {
 
 struct DotHelper {
@@ -1698,5 +1700,10 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
 
     return ggml_type(typeB) == expected_typeB;
 }
+
+#else
+// ---------------------------- __aarch64__ ----------------------------------------------
+
+#endif
 
 #endif

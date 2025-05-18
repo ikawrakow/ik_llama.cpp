@@ -7,6 +7,8 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 
+#ifdef __x86_64__
+
 namespace {
 
 // float matrices - we handle f16, bf16 (if native bf16 support is available) and f32, but only to f32 result
@@ -563,5 +565,10 @@ bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t,
     return false;
 
 }
+
+#else
+// ----------------------------------- __aarch64__ -----------------------------------------------
+
+#endif
 
 #endif

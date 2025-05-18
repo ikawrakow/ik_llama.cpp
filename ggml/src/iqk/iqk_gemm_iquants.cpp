@@ -7,6 +7,8 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 
+#ifdef __x86_64__
+
 namespace {
 
 inline __m256i get_scale_shuffle_8(int i) {
@@ -1626,5 +1628,10 @@ bool iqk_set_kernels_iquants(int ne00, int typeA, int typeB, std::array<mul_mat_
     return true;
 
 }
+
+#else
+// --------------------------------------- __aarch64__ ---------------------------------------------
+
+#endif
 
 #endif

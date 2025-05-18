@@ -7,6 +7,8 @@
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 
+#ifdef __x86_64__
+
 namespace {
 
 #ifdef HAVE_FANCY_SIMD
@@ -2123,5 +2125,10 @@ bool iqk_set_kernels_iqk_quants(int ne00, int typeA, int typeB, std::array<mul_m
     return true;
 
 }
+
+#else
+// ----------------------------------------- __aarch64__ ---------------------------------------------
+
+#endif
 
 #endif
