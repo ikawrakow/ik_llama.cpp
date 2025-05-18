@@ -1625,6 +1625,81 @@ static void mul_mat_q8_KV_q8_KV(int n, const void * vx, size_t bx, const DataInf
     }
 }
 
+// The HAVE_FANCY_SIMD should only be #if defined(__AVX512_VNNI__ && defined(__AVX512VL__)
+template <int nrc_y>
+static void mul_mat_q8_KV_r8_q8_KV(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(n%32 == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+#ifndef HAVE_FANCY_SIMD
+    auto m1 = _mm256_set1_epi16(1);
+#endif
+    int nb = n / 16;
+    __m256i acc[nrc_y] = {};
+    __m256i qx[4];
+    float dy[nrc_y];
+#ifdef HAVE_FANCY_SIMD
+    float sy[nrc_y];
+#endif
+    const int8_t * q8y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        auto dptr = (const float *)info.src1_row(iy);
+        dy[iy] = dptr[0];
+#ifdef HAVE_FANCY_SIMD
+        auto iptr = (const int32_t *)(dptr + 1);
+        sy[iy] = -127*iptr[0];
+#endif
+        q8y[iy] = (const int8_t *)(dptr + 2);
+    }
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        auto dptr = (const float *)((const char *)vx + ix*bx);
+        auto dx = _mm256_loadu_ps(dptr);
+        auto q8x = (const int8_t *)(dptr + 8);
+        for (int ib = 0; ib < nb; ++ib) { // Blocks of 16 for 8 interleaved rows
+            qx[0] = _mm256_loadu_si256((const __m256i *)q8x+4*ib+0);
+            qx[1] = _mm256_loadu_si256((const __m256i *)q8x+4*ib+1);
+            qx[2] = _mm256_loadu_si256((const __m256i *)q8x+4*ib+2);
+            qx[3] = _mm256_loadu_si256((const __m256i *)q8x+4*ib+3);
+#ifndef HAVE_FANCY_SIMD
+            auto s0 = _mm256_sign_epi8(qx[0], qx[0]);
+            auto s1 = _mm256_sign_epi8(qx[1], qx[1]);
+            auto s2 = _mm256_sign_epi8(qx[2], qx[2]);
+            auto s3 = _mm256_sign_epi8(qx[3], qx[3]);
+#else
+            qx[0] = _mm256_add_epi8(qx[0], _mm256_set1_epi8(127));
+            qx[1] = _mm256_add_epi8(qx[1], _mm256_set1_epi8(127));
+            qx[2] = _mm256_add_epi8(qx[2], _mm256_set1_epi8(127));
+            qx[3] = _mm256_add_epi8(qx[3], _mm256_set1_epi8(127));
+#endif
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y128 = _mm_loadu_si128((const __m128i*)q8y[iy]+ib);
+                auto y = MM256_SET_M128I(y128, y128);
+#ifdef HAVE_FANCY_SIMD
+                acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[0], _mm256_shuffle_epi32(y, 0x00));
+                acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[1], _mm256_shuffle_epi32(y, 0x55));
+                acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[2], _mm256_shuffle_epi32(y, 0xaa));
+                acc[iy] = _mm256_dpbusd_epi32(acc[iy], qx[3], _mm256_shuffle_epi32(y, 0xff));
+#else
+                auto sumi1 = _mm256_maddubs_epi16(s0, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x00), qx[0]));
+                auto sumi2 = _mm256_maddubs_epi16(s1, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0x55), qx[1]));
+                auto sumi3 = _mm256_maddubs_epi16(s2, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xaa), qx[2]));
+                auto sumi4 = _mm256_maddubs_epi16(s3, _mm256_sign_epi8(_mm256_shuffle_epi32(y, 0xff), qx[3]));
+                auto sumi12 = _mm256_add_epi32(_mm256_madd_epi16(m1, sumi1), _mm256_madd_epi16(m1, sumi2));
+                auto sumi34 = _mm256_add_epi32(_mm256_madd_epi16(m1, sumi3), _mm256_madd_epi16(m1, sumi4));
+                acc[iy] = _mm256_add_epi32(acc[iy], _mm256_add_epi32(sumi12, sumi34));
+#endif
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            auto scale = _mm256_mul_ps(dx, _mm256_set1_ps(dy[iy]));
+#ifdef HAVE_FANCY_SIMD
+            acc[iy] = _mm256_add_epi32(acc[iy], _mm256_set1_epi32(sy[iy]));
+#endif
+            info.store(ix, iy, _mm256_mul_ps(scale, _mm256_cvtepi32_ps(acc[iy])));
+            acc[iy] = _mm256_setzero_si256();
+        }
+    }
+}
+
 } // namespace
 
 bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
@@ -1632,7 +1707,7 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
     auto etypeA = ggml_type(typeA);
     auto expected_type_B = etypeA == GGML_TYPE_IQ4_XS_R8 || etypeA == GGML_TYPE_Q4_K_R4 || etypeA == GGML_TYPE_Q5_K_R4 ? GGML_TYPE_Q8_K32
                          : etypeA == GGML_TYPE_Q8_K_R8 ? GGML_TYPE_Q8_KR8
-                         : etypeA == GGML_TYPE_Q8_KV   ? GGML_TYPE_Q8_KV
+                         : etypeA == GGML_TYPE_Q8_KV || etypeA == GGML_TYPE_Q8_KV_R8 ? GGML_TYPE_Q8_KV
                          : GGML_TYPE_Q8_K;
 
     if (ne00%QK_K != 0 || ggml_type(typeB) != expected_type_B) {
@@ -1689,6 +1764,9 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
 #ifdef HAVE_FANCY_SIMD
             func16 = mul_mat_q8_KV_q8_KV<16>;
 #endif
+            break;
+        case GGML_TYPE_Q8_KV_R8:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_KV_r8_q8_KV, kernels);
             break;
         default:
             return false;
