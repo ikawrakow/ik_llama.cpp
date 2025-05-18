@@ -3033,9 +3033,9 @@ static inline uint32_t trellis_next(uint32_t& val) {
 }
 
 static inline float trellis_gen(uint32_t& val, uint32_t* s) {
-    const ggml_half * h = (const ggml_half *)s;
+    const ggml_fp16_t * h = (const ggml_fp16_t *)s;
     s[0] = trellis_next(val);
-    return (float)(h[0] + h[1]);
+    return GGML_FP16_TO_FP32(h[0]) + GGML_FP16_TO_FP32(h[1]);
 }
 
 template <int nrc_y>
@@ -3057,11 +3057,19 @@ static void mul_mat_q2_KT_q8_K_T(int n, const void * vx, size_t bx, const DataIn
 
         for (int i = 0; i < nb; ++i) {
             const uint16_t * ql = (const uint16_t *)x[i].ql;
-            uint32_t val = ql[0] + 4096;
+            uint32_t val;
             for (int j = 0; j < QK_K; ++j) {
-                const float x_scale = iq4k_values[x[i].scales[j/4] & 0xf];
+                if (j % 8 == 0) { val = ql[j/8] + 4096; }
+                float x_scale;
+                if (j < 128) {
+                    x_scale = iq4k_values[x[i].scales[j/32 % 4] & 0xf];
+                } else {
+                    x_scale = iq4k_values[x[i].scales[j/32 % 4] >> 4];
+                }
+                float x_val = trellis_gen(val, s);
+                x_val *= x_scale;
                 for (int iy = 0; iy < nrc_y; ++iy) {
-                    accd[iy] += (y[iy]->d*y[iy]->qs[j]) * x_scale * trellis_gen(val, s);
+                    accd[iy] += (y[iy][i].d*y[iy][i].qs[j]) * x_val;
                 }
             }
         }
