@@ -169,6 +169,7 @@ static constexpr __device__ int get_mmq_y_device() {
 
 static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml_type type, int mmq_y) {
     switch (type) {
+        case GGML_TYPE_Q4_0    : return MMQ_DP4A_TXS_Q4_0;
         case GGML_TYPE_Q4_1    : return MMQ_DP4A_TXS_Q4_1;
         case GGML_TYPE_Q5_0    : return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_Q5_1    : return MMQ_DP4A_TXS_Q8_1;
@@ -3363,7 +3364,7 @@ static __global__ void mul_mat_q(
     const int jt =  kbc /    (blocks_per_ne00*nty);
     const int it = (kbc - jt*(blocks_per_ne00*nty)) / blocks_per_ne00;
 
-    constexpr bool fixup = true; // Last index writes it data to fixup buffer to avoid data races with other blocks.
+    constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
     mul_mat_q_process_tile<type, mmq_x, nwarps, need_check, fixup>
         (x, yc, dst, tmp_fixup, ne00, ne01, stride01, ne10, ne11, stride11, ne0,
             it, jt, kb0_start, kb0_stop);
