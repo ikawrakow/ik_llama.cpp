@@ -1653,8 +1653,8 @@ struct FlashAttn {
 #ifdef __AVX512BF16__
 
 template <int D, int step>
-struct HelperBF16 final : public BaseHelper<step> {
-    using Base = BaseHelper<step>;
+struct HelperBF16 final : public BaseHelper {
+    using Base = BaseHelper;
     HelperBF16(const char * data, int stride) : Base(data, stride) {}
     inline void load(int l1, __m512bh * vk) const {
         auto dr = Base::lblock(l1);
