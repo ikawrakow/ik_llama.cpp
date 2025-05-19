@@ -2836,6 +2836,7 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_KV_q8_KV, kernels)
             kernels[0] = mul_mat_q8_KV_q8_KV_1;
             func16 = mul_mat_q8_KV_q8_KV<16>;
+            break;
         case GGML_TYPE_Q8_KV_R8:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q8_KV_r8_q8_KV, kernels);
             break;
