@@ -2063,6 +2063,8 @@ bool iqk_set_kernels_iqk_quants(int ne00, int typeA, int typeB, std::array<mul_m
         return false;
     }
 
+    func16 = nullptr;
+
     switch (typeA) {
         case GGML_TYPE_IQ2_KS:
             set_functions<DequantizerIQ2KS>(kernels);
@@ -2117,6 +2119,10 @@ bool iqk_set_kernels_iqk_quants(int ne00, int typeA, int typeB, std::array<mul_m
             // For some reason Zen4 does not like this particular function
             func16 = mul_mat_iq5_ks_r4_q8_k<16>;
 #endif
+            break;
+        case GGML_TYPE_IQ5_K_R4:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq5_k_r4_q8_k, kernels);
+            func16  = mul_mat_iq5_k_r4_q8_k<16>;
             break;
         default:
             return false;
@@ -3261,6 +3267,8 @@ bool iqk_set_kernels_iqk_quants(int ne00, int typeA, int typeB, std::array<mul_m
             break;
         case GGML_TYPE_IQ5_KS_R4:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq5_ks_r4_q8_k, kernels);
+        case GGML_TYPE_IQ5_K_R4:
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq5_k_r4_q8_k, kernels);
         default:
             return false;
     }
