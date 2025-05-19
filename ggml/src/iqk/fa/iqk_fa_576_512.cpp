@@ -53,32 +53,34 @@ inline bool iqk_deepseek_helper(ggml_type type_k,
                         const float * q, const char * k, const char * v, const char * mask,
                         float scale, float softcap, float * qkv, float * M, float * S) {
     if (type_k == GGML_TYPE_Q8_0) {
-        HelperQ80<576, step_k> kh((const char *)k, stride_k);
-        HelperQ80<512, step_k> vh((const char *)v, stride_v);
+        HelperQ80 kh((const char *)k, stride_k);
+        HelperQ80 vh((const char *)v, stride_v);
         iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
         return true;
     }
     if (type_k == GGML_TYPE_Q8_0_R8) {
-        HelperQ80R8<576, step_k> kh((const char *)k, stride_k);
-        HelperQ80<512, step_k> vh((const char *)v, stride_v);
+        HelperQ80R8<576> kh((const char *)k, stride_k);
+        HelperQ80 vh((const char *)v, stride_v);
         iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
         return true;
     }
     if (type_k == GGML_TYPE_Q6_0) {
-        HelperQ60<576, step_k> kh((const char *)k, stride_k);
-        HelperQ60<512, step_k> vh((const char *)v, stride_v);
+        HelperQ60 kh((const char *)k, stride_k);
+        HelperQ60 vh((const char *)v, stride_v);
         iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
         return true;
     }
+#if GGML_IQK_FA_ALL_QUANTS
     if (type_k == GGML_TYPE_Q8_KV) {
-        HelperQ8KV<576, step_k> kh((const char *)k, stride_k);
-        HelperQ8KV<512, step_k> vh((const char *)v, stride_v);
+        HelperQ8KV<576> kh((const char *)k, stride_k);
+        HelperQ8KV<512> vh((const char *)v, stride_v);
         iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
         return true;
     }
+#endif
     if (type_k == GGML_TYPE_F16) {
-        HelperF16<576, step_k> kh((const char *)k, stride_k);
-        HelperF16<512, step_k> vh((const char *)v, stride_v);
+        HelperF16 kh((const char *)k, stride_k);
+        HelperF16 vh((const char *)v, stride_v);
         iqk_deepseek_helper<step_k>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
         return true;
     }

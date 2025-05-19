@@ -3039,7 +3039,7 @@ static void mul_mat_q8_KV_q8_KV_8(int n, const void * vx, size_t bx, const DataI
 #endif
 
 template <int k_step>
-inline std::pair<mul_mat_t, int> mul_mat_kernel(int D, int int_typeA, int nq) {
+inline std::pair<mul_mat_t, int> mul_mat_kernel([[maybe_unused]] int D, int int_typeA, int nq) {
     auto typeA = ggml_type(int_typeA);
     constexpr int kMaxQ = 8;
 #define MAKE_FUNCS(mul_mat, n) \
