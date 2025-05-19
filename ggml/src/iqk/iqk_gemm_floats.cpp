@@ -1008,6 +1008,41 @@ bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t,
 
 }
 
+namespace {
+template <int nrc_q>
+inline void mm_helper(int D, int nq, const char * cx, size_t bx, DataInfo& info, int k_step) {
+    constexpr int nrc_k = 6;
+    int krem = k_step - nrc_k*(k_step/nrc_k);
+    for (int iq = 0; iq < nq/nrc_q; ++iq) {
+        for (int ik = 0; ik < k_step/nrc_k; ++ik) {
+            mul_mat_f16_f16_NxN<nrc_q, nrc_k, true>(D, cx, bx, ik*nrc_k, info);
+        }
+        if (krem > 0) {
+            switch (krem) {
+                case  1: mul_mat_f16_f16_NxN<nrc_q, 1, true>(D, cx, bx, k_step - krem, info); break;
+                case  2: mul_mat_f16_f16_NxN<nrc_q, 2, true>(D, cx, bx, k_step - krem, info); break;
+                case  3: mul_mat_f16_f16_NxN<nrc_q, 3, true>(D, cx, bx, k_step - krem, info); break;
+                case  4: mul_mat_f16_f16_NxN<nrc_q, 4, true>(D, cx, bx, k_step - krem, info); break;
+                default: mul_mat_f16_f16_NxN<nrc_q, 5, true>(D, cx, bx, k_step - krem, info); break;
+            }
+        }
+        info.cur_y += nrc_q;
+    }
+}
+}
+
+void iqk_gemm_default_floats(int D, int nq, const char * cx, size_t bx, DataInfo& info, int k_step) {
+    constexpr int nrc_q = 4;
+    mm_helper<nrc_q>(D, nq, cx, bx, info, k_step);
+    if (int qrem = nq - nrc_q*(nq/nrc_q); qrem > 0) {
+        switch (qrem) {
+            case  1: mm_helper<1>(D, nq, cx, bx, info, k_step);
+            case  2: mm_helper<2>(D, nq, cx, bx, info, k_step);
+            default: mm_helper<3>(D, nq, cx, bx, info, k_step);
+        }
+    }
+}
+
 #endif
 
 #endif
