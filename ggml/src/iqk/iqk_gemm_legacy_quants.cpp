@@ -2635,4 +2635,129 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
 
 #endif
 
+namespace {
+template <int k_step>
+inline std::pair<mul_mat_t, int> mul_mat_kernel(int int_typeA, int nq) {
+    auto typeA = ggml_type(int_typeA);
+    constexpr int kMaxQ = 8;
+#define MAKE_FUNCS(mul_mat, n) \
+    if (n >= kMaxQ) return std::make_pair(mul_mat, kMaxQ>, kMaxQ);\
+    else {\
+        switch (n) {\
+            case 1: return std::make_pair(mul_mat, 1>, 1);\
+            case 2: return std::make_pair(mul_mat, 2>, 2);\
+            case 3: return std::make_pair(mul_mat, 3>, 3);\
+            case 4: return std::make_pair(mul_mat, 4>, 4);\
+            case 5: return std::make_pair(mul_mat, 5>, 5);\
+            case 6: return std::make_pair(mul_mat, 6>, 6);\
+            case 7: return std::make_pair(mul_mat, 7>, 7);\
+        }\
+    }
+#define MAKE_FUNCS_ONLY_NRC(mul_mat, n) \
+    if (n >= kMaxQ) return std::make_pair(mul_mat<kMaxQ>, kMaxQ);\
+    else {\
+        switch (n) {\
+            case 1: return std::make_pair(mul_mat<1>, 1);\
+            case 2: return std::make_pair(mul_mat<2>, 2);\
+            case 3: return std::make_pair(mul_mat<3>, 3);\
+            case 4: return std::make_pair(mul_mat<4>, 4);\
+            case 5: return std::make_pair(mul_mat<5>, 5);\
+            case 6: return std::make_pair(mul_mat<6>, 6);\
+            case 7: return std::make_pair(mul_mat<7>, 7);\
+        }\
+    }
+    if (typeA == GGML_TYPE_Q8_0) {
+#ifdef __aarch64__
+        MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ80, nq);
+#else
+#ifdef HAVE_FANCY_SIMD
+        if (nq == 1) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q8_0_1_Unpacker, 1, k_step>, 1);
+        if (nq == 2) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q8_0_1_Unpacker, 2, k_step>, 2);
+        if (nq == 4) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q8_0_1_Unpacker, 4, k_step>, 4);
+        MAKE_FUNCS(mul_mat_qX_1_q8_2_T<Q8_0_1_Unpacker, nq);
+#else
+        if (nq == 1) return std::make_pair(mul_mat_qX_0_q8_0_Tx<Q8_0_Unpacker, 1, k_step>, 1);
+        if (nq == 2) return std::make_pair(mul_mat_qX_0_q8_0_Tx<Q8_0_Unpacker, 2, k_step>, 2);
+        if (nq == 4) return std::make_pair(mul_mat_qX_0_q8_0_Tx<Q8_0_Unpacker, 4, k_step>, 4);
+        MAKE_FUNCS(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, nq);
+#endif
+#endif
+    }
+    else if (typeA == GGML_TYPE_Q8_0_R8) {
+#ifdef __aarch64__
+        MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r8_q8_0, nq);
+#else
+        MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r8_q8_2, nq);
+#endif
+    }
+    else if (typeA == GGML_TYPE_Q8_0) {
+#ifdef __aarch64__
+        MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ60, nq);
+#else
+        if (nq == 1) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q6_0_1_Unpacker, 1, k_step>, 1);
+        if (nq == 2) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q6_0_1_Unpacker, 2, k_step>, 2);
+        if (nq == 4) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q6_0_1_Unpacker, 4, k_step>, 4);
+        MAKE_FUNCS(mul_mat_qX_1_q8_2_T<Q6_0_1_Unpacker, nq);
+#endif
+    }
+    else if (typeA == GGML_TYPE_Q4_0) {
+#ifdef __aarch64__
+        MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ40, nq);
+#else
+        if (nq == 1) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q4_0_1_Unpacker, 1, k_step>, 1);
+        if (nq == 2) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q4_0_1_Unpacker, 2, k_step>, 2);
+        if (nq == 4) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q4_0_1_Unpacker, 4, k_step>, 4);
+        MAKE_FUNCS(mul_mat_qX_1_q8_2_T<Q4_0_1_Unpacker, nq);
+#endif
+    }
+#if GGML_IQK_FA_ALL_QUANTS
+    else if (typeA == GGML_TYPE_Q4_1) {
+#ifdef __aarch64__
+        MAKE_FUNCS(mul_mat_qX_1_q8_1<DequantizerQ41, nq);
+#else
+        MAKE_FUNCS(mul_mat_qX_1_q8_2_T<Q4_1_Unpacker, nq);
+#endif
+    }
+    else if (typeA == GGML_TYPE_IQ4_NL) {
+#ifdef __aarch64__
+       MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerIQ4NL, nq);
+#else
+#ifdef HAVE_FANCY_SIMD
+       MAKE_FUNCS(mul_mat_qX_1_q8_2_T<IQ4_NL_Unpacker, nq);
+#else
+       MAKE_FUNCS(mul_mat_qX_0_q8_0_T<IQ4_NL_Unpacker, nq);
+#endif
+#endif
+    }
+#endif
+    else {
+        GGML_ASSERT(false);
+    }
+    return std::make_pair<mul_mat_t, int>(nullptr, 0);
+}
+
+inline std::pair<mul_mat_t, int> mul_mat_kernel(int int_typeA, int nq, int k_step) {
+    switch (k_step) {
+        case  32: return mul_mat_kernel< 32>(int_typeA, nq);
+        case  64: return mul_mat_kernel< 64>(int_typeA, nq);
+        case 128: return mul_mat_kernel<128>(int_typeA, nq);
+        default: GGML_ABORT("Fatal error");
+    }
+}
+}
+
+void iqk_gemm_legacy_fa(int D, int nq, int type_k, const char * k, size_t stride_k, DataInfo& info, int k_step) {
+    auto [mul_mat, nrc_q] = mul_mat_kernel(type_k, nq, k_step);
+    for (int iq = 0; iq < nq/nrc_q; ++iq) {
+        mul_mat(D, k, stride_k, info, k_step);
+        info.cur_y += nrc_q;
+    }
+    int iq = nrc_q*(nq/nrc_q);
+    if (iq < nq) {
+        auto [mul_mat1, nrc_q1] = mul_mat_kernel(type_k, nq - iq, k_step);
+        GGML_ASSERT(nrc_q1 == nq - iq);
+        mul_mat1(D, k, stride_k, info, k_step);
+    }
+}
+
 #endif

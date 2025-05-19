@@ -566,6 +566,67 @@ bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t,
 
 }
 
+void iqk_gemm_default_floats(int D, int nq, const char * cx, size_t bx, DataInfo& info, int k_step) {
+    using q_float = float;
+#ifdef HAVE_FANCY_SIMD
+    constexpr int nrc_q = 8;
+    constexpr int nrc_k = 8;
+#else
+    // somewhat surprisingly, nrc_q = 4, nrc_k = 8 is better than nrc_q = 8, nrc_k = 4
+    constexpr int nrc_q = 4;
+    constexpr int nrc_k = 8;
+#endif
+    GGML_ASSERT(k_step%nrc_k == 0);
+    int qrem = nq - nrc_q*(nq/nrc_q);
+    for (int iq = 0; iq < nq/nrc_q; ++iq) {
+        for (int ik = 0; ik < k_step/nrc_k; ++ik) {
+            mul_mat_Qx_Qy_MxN_fa4<QFT<float, nrc_q>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);
+        }
+        info.cur_y += nrc_q;
+    }
+    if (qrem > 0) {
+        switch (qrem) {
+            case 1: {
+                for (int ik = 0; ik < k_step/nrc_k; ++ik) {
+                    mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, 1>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);
+                }
+            } break;
+            case 2: {
+                for (int ik = 0; ik < k_step/nrc_k; ++ik) {
+                    mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, 2>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);
+                }
+            } break;
+            case 3: {
+                for (int ik = 0; ik < k_step/nrc_k; ++ik) {
+                    mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, 3>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);
+                }
+            } break;
+#ifdef HAVE_FANCY_SIMD
+            case 4: {
+                for (int ik = 0; ik < k_step/nrc_k; ++ik) {
+                    mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, 4>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);
+                }
+            } break;
+            case 5: {
+                for (int ik = 0; ik < k_step/nrc_k; ++ik) {
+                    mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, 5>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);
+                }
+            } break;
+            case 6: {
+                for (int ik = 0; ik < k_step/nrc_k; ++ik) {
+                    mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, 6>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);
+                }
+            } break;
+            case 7: {
+                for (int ik = 0; ik < k_step/nrc_k; ++ik) {
+                    mul_mat_Qx_Qy_MxN_fa4<QFT<q_float, 7>, QFT<ggml_half, nrc_k>>(D, cx, bx, ik*nrc_k, info);
+                }
+            } break;
+#endif
+        }
+    }
+}
+
 #else
 // ----------------------------------- __aarch64__ -----------------------------------------------
 
