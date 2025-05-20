@@ -1,4 +1,12 @@
+//
+// Copyright (C) 2023-2024 The ggml authors
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "cpy.cuh"
+#include "convert.cuh"
 
 typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
 
@@ -63,6 +71,71 @@ static __global__ void cpy_f32_f16(const char * cx, char * cdst, const int ne,
     const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13 * nb13;
 
     cpy_1(cx + x_offset, cdst + dst_offset);
+}
+
+template <typename dst_t>
+static __global__ void k_cpy_q8_0_to_float(const char * cx, dst_t * dst, const int ne,
+                                   const int ne00, const int ne01, const int ne02, const int nb01, const int nb02, const int nb03) {
+    const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= ne) {
+        return;
+    }
+
+    const int64_t i03 = i/(ne00 * ne01 * ne02);
+    const int64_t i02 = (i - i03*ne00*ne01*ne02) / (ne00*ne01);
+    const int64_t i01 = (i - i03*ne00*ne01*ne02 - i02*ne00*ne01) / ne00;
+    const int64_t i00 = i - i03*ne00*ne01*ne02 - i02*ne00*ne01 - i01*ne00;
+
+    const block_q8_0 * q8 = (const block_q8_0 *)(cx + i01*nb01 + i02*nb02 + i03*nb03);
+    const int ib = i00/QK8_0;
+    const int iq = i00%QK8_0;
+
+    if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
+        dst[i00 + i01*ne00 + i02*ne00*ne01 + i03*ne00*ne01*ne02] = __float2bfloat16(__half2float(q8[ib].d)*q8[ib].qs[iq]);
+    } else {
+        dst[i00 + i01*ne00 + i02*ne00*ne01 + i03*ne00*ne01*ne02] = __half2float(q8[ib].d)*q8[ib].qs[iq];
+    }
+}
+
+static __global__ void k_transpose_q8_0(const char * cx, char * cdst,
+                                   const int ne10, const int ne11, const int ne12,
+                                   const int nb01, const int nb02, const int nb03,
+                                   const int nb11, const int nb12, const int nb13) {
+    const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    const int64_t i13 = i/(ne10 * ne11 * ne12);
+    const int64_t i12 = (i - i13*ne10*ne11*ne12) / (ne10*ne11);
+    const int64_t i11 = (i - i13*ne10*ne11*ne12 - i12*ne10*ne11) / ne10;
+    const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
+
+    //const int64_t ne00 = ne11;
+    //const int64_t ne01 = ne10;
+    //const int64_t ne02 = ne12;
+    const int64_t i03 = i13;
+    const int64_t i02 = i12;
+    const int64_t i01 = i10; //(i - i03*ne00*ne01*ne02 - i02*ne00*ne01) / ne00;
+    const int64_t i00 = i11; //i - i03*ne00*ne01*ne02 - i02*ne00*ne01 - i01*ne00;
+
+    const block_q8_0 * q8 = (const block_q8_0 *)(cx + i01*nb01 + i02*nb02 + i03*nb03);
+    const int ib0 = i00/QK8_0;
+    const int iq0 = i00%QK8_0;
+
+    float xi = __half2float(q8[ib0].d)*q8[ib0].qs[iq0];
+    float amax = fabsf(xi);
+    amax = warp_reduce_max(amax);
+
+    //printf("%d, %d, %d: i = %ld, i11 = %ld i10 = %ld, xi = %g, amax = %g\n", blockDim.x, blockIdx.x, threadIdx.x, i, i11, i10, xi, amax);
+
+    float d = amax/127;
+    int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
+
+    block_q8_0 * dst = (block_q8_0 *)(cdst + i11*nb11 + i12*nb12 + i13*nb13);
+    dst[i10 / QK8_0].qs[i10 % QK8_0] = q;
+
+    if (threadIdx.x == 0) {
+        dst[i10 / QK8_0].d = __float2half(d);
+    }
 }
 
 static __device__ void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
@@ -464,6 +537,35 @@ static void ggml_cpy_f16_f16_cuda(
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
 }
 
+static void transpose_q8_0(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
+    auto stream = ctx.stream();
+    auto num_blocks = ggml_nelements(dst)/QK8_0;
+    k_transpose_q8_0<<<num_blocks, QK8_0, 0, stream>>>(
+            (const char *)src->data, (char *)dst->data,
+            dst->ne[0], dst->ne[1], dst->ne[2], src->nb[0], src->nb[2], src->nb[3],
+            dst->nb[1], dst->nb[2], dst->nb[3]);
+}
+
+static void copy_q8_0_to_float(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
+    auto stream = ctx.stream();
+    auto num_blocks = ggml_nelements(dst)/QK8_0;
+    if (dst->type == GGML_TYPE_F16) {
+        k_cpy_q8_0_to_float<<<num_blocks, QK8_0, 0, stream>>>((const char *)src->data, (half *)dst->data, ggml_nelements(dst),
+                src->ne[0], src->ne[1], src->ne[2], src->nb[1], src->nb[2], src->nb[3]);
+    }
+    else if (dst->type == GGML_TYPE_F32) {
+        k_cpy_q8_0_to_float<<<num_blocks, QK8_0, 0, stream>>>((const char *)src->data, (float *)dst->data, ggml_nelements(dst),
+                src->ne[0], src->ne[1], src->ne[2], src->nb[1], src->nb[2], src->nb[3]);
+    }
+    else if (dst->type == GGML_TYPE_BF16) {
+        k_cpy_q8_0_to_float<<<num_blocks, QK8_0, 0, stream>>>((const char *)src->data, (nv_bfloat16 *)dst->data, ggml_nelements(dst),
+                src->ne[0], src->ne[1], src->ne[2], src->nb[1], src->nb[2], src->nb[3]);
+    }
+    else {
+        GGML_ABORT("fatal error");
+    }
+}
+
 void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1) {
     const int64_t ne = ggml_nelements(src0);
     GGML_ASSERT(ne == ggml_nelements(src1));
@@ -520,11 +622,40 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         ggml_cpy_f32_q5_1_cuda(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16) {
         ggml_cpy_f16_f16_cuda (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_BF16) {
+        ggml_cpy_f16_f16_cuda (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32) {
         ggml_cpy_f16_f32_cuda (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+    } else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_0 &&
+            (src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16 || src1->type == GGML_TYPE_F32)) {
+        copy_q8_0_to_float(ctx, src0, src1);
+    } else if (ggml_is_contiguous(src0) && ggml_are_same_shape(src0, src1)) {
+        if (src1->type == GGML_TYPE_F16) {
+            auto to_fp16 = ggml_get_to_fp16_cuda(src0->type);
+            if (to_fp16) {
+                to_fp16(src0->data, (half *)src1->data, ggml_nrows(src0), src0->ne[0], main_stream);
+            }
+        }
+        else if (src1->type == GGML_TYPE_F32) {
+            auto to_fp32 = ggml_get_to_fp32_cuda(src0->type);
+            if (to_fp32) {
+                to_fp32(src0->data, (float *)src1->data, ggml_nrows(src0), src0->ne[0], main_stream);
+            }
+        }
+        else if (src1->type == GGML_TYPE_BF16) {
+            auto to_bf16 = ggml_get_to_bf16_cuda(src0->type);
+            if (to_bf16) {
+                to_bf16(src0->data, (nv_bfloat16 *)src1->data, ggml_nrows(src0), src0->ne[0], main_stream);
+            }
+        }
+    } else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_0 && src1->type == GGML_TYPE_Q8_0) {
+        transpose_q8_0(ctx, src0, src1);
     } else {
         fprintf(stderr, "%s: unsupported type combination (%s to %s)\n", __func__,
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
+        fprintf(stderr, "%s: %ld x %ld x %ld; %zu x %zu %zu -> %ld x %ld x %ld; %zu x %zu x %zu\n", __func__,
+                src0->ne[0], src0->ne[1], src0->ne[2], src0->nb[1], src0->nb[2], src0->nb[3],
+                src1->ne[0], src1->ne[1], src1->ne[2], src1->nb[1], src1->nb[2], src1->nb[3]);
         GGML_ABORT("fatal error");
     }
 }
@@ -556,12 +687,33 @@ void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_Q6_0) {
             return (void*) cpy_f32_q<cpy_blck_f32_q6_0, QK6_0>;
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16) {
-            return (void*) cpy_f32_f16<cpy_1_f32_f16>;
+            return (void*) cpy_f32_f16<cpy_1_f16_f16>;
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32) {
             return (void*) cpy_f32_f16<cpy_1_f16_f32>;
-    } else {
-        fprintf(stderr, "%s: unsupported type combination (%s to %s)\n", __func__,
-                ggml_type_name(src0->type), ggml_type_name(src1->type));
-        GGML_ABORT("fatal error");
+    } else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_0 &&
+            (src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16 || src1->type == GGML_TYPE_F32)) {
+        return (void*)copy_q8_0_to_float;
+    } else if (ggml_is_contiguous(src0) && ggml_are_same_shape(src0, src1)) {
+        if (src1->type == GGML_TYPE_F16) {
+            auto to_fp16 = ggml_get_to_fp16_cuda(src0->type);
+            if (to_fp16) return (void*)to_fp16;
+        }
+        else if (src1->type == GGML_TYPE_F32) {
+            auto to_fp32 = ggml_get_to_fp32_cuda(src0->type);
+            if (to_fp32) return (void*)to_fp32;
+        }
+        else if (src1->type == GGML_TYPE_BF16) {
+            auto to_bf16 = ggml_get_to_bf16_cuda(src0->type);
+            if (to_bf16) return (void*)to_bf16;
+        }
     }
+    else if (ggml_are_same_shape(src0, src1) && src0->type == GGML_TYPE_Q8_0 && src1->type == GGML_TYPE_Q8_0) {
+        return (void *)transpose_q8_0;
+    }
+    fprintf(stderr, "%s: unsupported type combination (%s to %s)\n", __func__,
+            ggml_type_name(src0->type), ggml_type_name(src1->type));
+    fprintf(stderr, "%s: %ld x %ld x %ld; %zu x %zu %zu -> %ld x %ld x %ld; %zu x %zu x %zu\n", __func__,
+                src0->ne[0], src0->ne[1], src0->ne[2], src0->nb[1], src0->nb[2], src0->nb[3],
+                src1->ne[0], src1->ne[1], src1->ne[2], src1->nb[1], src1->nb[2], src1->nb[3]);
+    GGML_ABORT("fatal error");
 }

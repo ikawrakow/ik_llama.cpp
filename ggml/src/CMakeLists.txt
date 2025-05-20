@@ -254,11 +254,12 @@ if (GGML_BLAS)
 endif()
 
 set (GGML_SOURCES_IQK iqk/iqk_quantize.cpp)
+set (GGML_HEADERS_IQK iqk/iqk_config.h)
 if (GGML_IQK_MUL_MAT)
     message(STATUS "Using optimized iqk matrix multiplications")
     add_compile_definitions(GGML_USE_IQK_MULMAT)
-    set(GGML_SOURCES_IQK_MM iqk/iqk_mul_mat.cpp)
-    set(GGML_HEADERS_IQK_MM iqk/iqk_mul_mat.h)
+    set(GGML_SOURCES_IQK_MM iqk/iqk_mul_mat.cpp iqk/iqk_flash_attn.cpp)
+    set(GGML_HEADERS_IQK_MM iqk/iqk_mul_mat.h iqk/iqk_flash_impl.h)
     if (GGML_IQK_FA_ALL_QUANTS)
         message(STATUS "Including all IQK FA kernels")
         add_compile_definitions(GGML_IQK_FA_ALL_QUANTS)
@@ -296,10 +297,12 @@ if (GGML_CUDA)
             # 60 == FP16 CUDA intrinsics
             # 61 == integer CUDA intrinsics
             # 70 == compute capability at which unrolling a loop in mul_mat_q kernels is faster
-            if (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-                set(CMAKE_CUDA_ARCHITECTURES "60;61;70;75")
+            if (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+                set(CMAKE_CUDA_ARCHITECTURES "native")
+            elseif (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
+                set(CMAKE_CUDA_ARCHITECTURES "60;61;70;75;80")
             else()
-                set(CMAKE_CUDA_ARCHITECTURES "52;61;70;75")
+                set(CMAKE_CUDA_ARCHITECTURES "50;61;70;75;80")
                 #set(CMAKE_CUDA_ARCHITECTURES "OFF") # use this to compile much faster, but only F16 models work
             endif()
         endif()
@@ -317,6 +320,8 @@ if (GGML_CUDA)
         file(GLOB   GGML_SOURCES_CUDA "ggml-cuda/*.cu")
         list(APPEND GGML_SOURCES_CUDA "ggml-cuda.cu")
         file(GLOB   SRCS "ggml-cuda/template-instances/fattn-wmma*.cu")
+        list(APPEND GGML_SOURCES_CUDA ${SRCS})
+        file(GLOB   SRCS "ggml-cuda/template-instances/fattn-mma*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
         file(GLOB   SRCS "ggml-cuda/template-instances/mmq*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
@@ -359,6 +364,10 @@ if (GGML_CUDA)
 
         if (GGML_CUDA_FORCE_MMQ)
             add_compile_definitions(GGML_CUDA_FORCE_MMQ)
+        endif()
+
+        if (GGML_CUDA_IQK_FORCE_BF16)
+            add_compile_definitions(GGML_CUDA_IQK_FORCE_BF16)
         endif()
 
         if (GGML_CUDA_FORCE_CUBLAS)
@@ -415,6 +424,11 @@ if (GGML_CUDA)
             else()
                 set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cuda_driver) # required by cuDeviceGetAttribute(), cuMemGetAllocationGranularity(...), ...
             endif()
+        endif()
+        if (NOT GGML_MUSA)
+            set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES 0)
+            set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_LIBRARIES 0)
+            set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_OBJECTS 0)
         endif()
     else()
         message(WARNING "CUDA not found")
@@ -1074,7 +1088,7 @@ if (NOT MSVC)
     endif()
 endif()
 
-set(ARCH_FLAGS "")
+set(ARCH_FLAGS ${GGML_ARCH_FLAGS})
 
 if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
     CMAKE_GENERATOR_PLATFORM_LWR STREQUAL "arm64" OR
@@ -1134,6 +1148,10 @@ if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
         endif()
         if (GGML_SVE)
             list(APPEND ARCH_FLAGS -march=armv8.6-a+sve)
+        endif()
+        if (CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+            # else we fail on Gravitons and such
+            list(APPEND ARCH_FLAGS -flax-vector-conversions)
         endif()
     endif()
 elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LWR MATCHES "^(x86_64|i686|amd64|x64|win32)$" OR
@@ -1324,7 +1342,7 @@ add_library(ggml
             ${GGML_SOURCES_BLAS}      ${GGML_HEADERS_BLAS}
             ${GGML_SOURCES_LLAMAFILE} ${GGML_HEADERS_LLAMAFILE}
             ${GGML_SOURCES_IQK_MM}    ${GGML_HEADERS_IQK_MM}
-            ${GGML_SOURCES_IQK}
+            ${GGML_SOURCES_IQK}       ${GGML_HEADERS_IQK}
             ${GGML_SOURCES_CANN}      ${GGML_HEADERS_CANN}
             ggml-aarch64.c            ggml-aarch64.h
             )

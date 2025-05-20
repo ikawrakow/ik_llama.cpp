@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2025 The llama.cpp authors
+// Copyright (C) 2024-2025 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -39,6 +46,12 @@
 static uint64_t get_time_ns() {
     using clock = std::chrono::high_resolution_clock;
     return std::chrono::nanoseconds(clock::now().time_since_epoch()).count();
+}
+
+template <typename T1, typename T2>
+std::ostream& operator<<(std::ostream& str, const std::pair<T1, T2>& item) {
+    str << '{' << item.first << ", " << item.second << '}';
+    return str;
 }
 
 template<class T>
@@ -215,6 +228,9 @@ static std::string pair_str(const std::pair<int, int> & p) {
     return buf;
 }
 
+// Ser = Smart Expert Reduction
+using Ser = std::pair<int,float>;
+
 struct cmd_params {
     std::vector<std::string> model;
     std::vector<int> n_prompt;
@@ -225,21 +241,27 @@ struct cmd_params {
     std::vector<int> n_ubatch;
     std::vector<ggml_type> type_k;
     std::vector<ggml_type> type_v;
-    std::vector<int> n_threads;
+    std::vector<std::pair<int,int>> n_threads;
     std::vector<int> n_gpu_layers;
     std::vector<std::string> rpc_servers;
     std::vector<llama_split_mode> split_mode;
     std::vector<int> main_gpu;
     std::vector<bool> no_kv_offload;
     std::vector<bool> flash_attn;
+    std::vector<int> mla_attn;
+    std::vector<int> attn_max_batch;
+    std::vector<Ser> ser;
     std::vector<std::vector<float>> tensor_split;
     std::vector<bool> use_mmap;
     std::vector<bool> embeddings;
+    std::vector<llama_model_tensor_buft_override> buft_overrides;
     ggml_numa_strategy numa;
     int reps;
     bool verbose;
     bool warmup;
     bool repack = false;
+    bool fmoe = false;
+    bool use_thp = false;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -254,21 +276,27 @@ static const cmd_params cmd_params_defaults = {
     /* n_ubatch             */ {512},
     /* type_k               */ {GGML_TYPE_F16},
     /* type_v               */ {GGML_TYPE_F16},
-    /* n_threads            */ {cpu_get_num_math()},
+    /* n_threads            */ {{cpu_get_num_math(), cpu_get_num_math()}},
     /* n_gpu_layers         */ {99},
     /* rpc_servers          */ {""},
     /* split_mode           */ {LLAMA_SPLIT_MODE_LAYER},
     /* main_gpu             */ {0},
     /* no_kv_offload        */ {false},
     /* flash_attn           */ {false},
+    /* mla_attn             */ {0},
+    /* attn_max_batch       */ {0},
+    /* ser                  */ {{-1,0.0f}},
     /* tensor_split         */ {std::vector<float>(llama_max_devices(), 0.0f)},
     /* use_mmap             */ {true},
     /* embeddings           */ {false},
+    /* buft_overrides       */ {},
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* verbose              */ false,
     /* warmup               */ true,
     /* repack               */ false,
+    /* use_thp              */ false,
+    /* fmoe                 */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -288,12 +316,16 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ctk, --cache-type-k <t>            (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
     printf("  -ctv, --cache-type-v <t>            (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
     printf("  -t, --threads <n>                   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
+    printf("  -tgb, --threads-gen-batch <n1,n2>   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
     printf("  -sm, --split-mode <none|layer|row>  (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>        (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>             (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
+    printf("  -mla, --mla-attn <0|1|2>            (default: %s)\n", join(cmd_params_defaults.mla_attn, ",").c_str());
+    printf("  -amb, --attn-max-batch <i>          (default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
+    printf("  -ser, --smart-expert-reduction <i,f>(default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
     printf("  -mmp, --mmap <0|1>                  (default: %s)\n", join(cmd_params_defaults.use_mmap, ",").c_str());
     printf("  --numa <distribute|isolate|numactl> (default: disabled)\n");
     printf("  -embd, --embeddings <0|1>           (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
@@ -304,6 +336,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                       (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
     printf("  -w, --warmup <0|1>                  (default: %s)\n", cmd_params_defaults.warmup ? "1" : "0");
     printf("  -rtr, --run-time-repack <0|1>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
+    printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
+    printf("  -ot, --override-tensor pattern      (default: none)\n");
+    printf("  -fmoe, --fused-moe <0|1>            (default: %s)\n", cmd_params_defaults.fmoe? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
 }
@@ -336,10 +371,68 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "q6_0") {
         return GGML_TYPE_Q6_0;
     }
+    if (s == "q8_KV") {
+        return GGML_TYPE_Q8_KV;
+    }
 
     return GGML_TYPE_COUNT;
 }
 
+namespace {
+bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tensor_buft_override>& overrides) {
+    /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
+    if (buft_list.empty()) {
+        // enumerate all the devices and add their buffer types to the list
+        for (size_t i = 0; i < ggml_backend_reg_get_count(); ++i) {
+            //auto * dev = ggml_backend_reg_get_name(i);
+            auto * buft = ggml_backend_reg_get_default_buffer_type(i);
+            if (buft) {
+                buft_list[ggml_backend_buft_name(buft)] = buft;
+            }
+        }
+    }
+    for (const auto & override : string_split<std::string>(value, ',')) {
+        std::string::size_type pos = override.find('=');
+        if (pos == std::string::npos) {
+            fprintf(stderr, "Invalid buft override argument %s\n", value.c_str());
+            return false;
+        }
+        std::string tensor_name = override.substr(0, pos);
+        std::string buffer_type = override.substr(pos + 1);
+        if (buft_list.find(buffer_type) == buft_list.end()) {
+            fprintf(stderr, "Available buffer types:\n");
+            for (const auto & it : buft_list) {
+                fprintf(stderr, "  %s\n", ggml_backend_buft_name(it.second));
+            }
+            return false;
+        }
+        overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+    }
+    return true;
+}
+template<class T1, class T2>
+std::vector<std::pair<T1,T2>> string_split_pairs(const std::string & str, char delim) {
+    std::vector<std::pair<T1,T2>> values;
+    std::istringstream str_stream(str);
+    std::string token;
+    T1 first_value;
+    int i = 0;
+    while (std::getline(str_stream, token, delim)) {
+        std::istringstream token_stream(token);
+        if (i%2 == 0) {
+            token_stream >> first_value;
+            if (token_stream.fail()) return {};
+        } else {
+            T2 value;
+            token_stream >> value;
+            if (token_stream.fail()) return {};
+            values.emplace_back(first_value, value);
+        }
+        i++;
+    }
+    return values;
+}
+}
 
 static cmd_params parse_cmd_params(int argc, char ** argv) {
     cmd_params params;
@@ -459,7 +552,23 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             auto p = string_split<int>(argv[i], split_delim);
-            params.n_threads.insert(params.n_threads.end(), p.begin(), p.end());
+            params.n_threads.reserve(params.n_threads.size() + p.size());
+            for (auto t : p) params.n_threads.push_back({t, t});
+            //params.n_threads.insert(params.n_threads.end(), p.begin(), p.end());
+        } else if (arg == "-tgb" || arg == "--threads-gen-batch") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto ps = string_split<std::string>(argv[i], ';');
+            for (auto& s : ps) {
+                auto p = string_split<int>(s.c_str(), ',');
+                if (p.size() != 2) {
+                    invalid_param = true;
+                    break;
+                }
+                params.n_threads.push_back({p[0], p[1]});
+            }
         } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -526,6 +635,27 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             auto p = string_split<bool>(argv[i], split_delim);
             params.flash_attn.insert(params.flash_attn.end(), p.begin(), p.end());
+        } else if (arg == "-mla" || arg == "--mla-attn") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto p = string_split<int>(argv[i], split_delim);
+            params.mla_attn.insert(params.mla_attn.end(), p.begin(), p.end());
+        } else if (arg == "-amb" || arg == "--attn-max-batch") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto p = string_split<int>(argv[i], split_delim);
+            params.attn_max_batch.insert(params.attn_max_batch.end(), p.begin(), p.end());
+        } else if (arg == "-ser" || arg == "--smart-expert-reduction") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto p = string_split_pairs<int,float>(argv[i], split_delim);
+            params.ser.insert(params.ser.end(), p.begin(), p.end());
         } else if (arg == "-mmp" || arg == "--mmap") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -594,6 +724,28 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.repack = std::stoi(argv[i]);
+        } else if (arg == "-thp" || arg == "--transparent-huge-pages") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.use_thp = std::stoi(argv[i]);
+        } else if (arg == "-fmoe" || arg == "--fused-moe") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.fmoe = std::stoi(argv[i]);
+        } else if (arg == "-ot" || arg == "--override-tensor") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            if (!parse_buft_overrides(std::string{argv[i]}, params.buft_overrides)) {
+                fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
+                invalid_param = true;
+                break;
+            }
         } else {
             invalid_param = true;
             break;
@@ -621,10 +773,14 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.main_gpu.empty())     { params.main_gpu = cmd_params_defaults.main_gpu; }
     if (params.no_kv_offload.empty()){ params.no_kv_offload = cmd_params_defaults.no_kv_offload; }
     if (params.flash_attn.empty())   { params.flash_attn = cmd_params_defaults.flash_attn; }
+    if (params.mla_attn.empty())     { params.mla_attn = cmd_params_defaults.mla_attn; }
+    if (params.attn_max_batch.empty()){ params.attn_max_batch = cmd_params_defaults.attn_max_batch; }
+    if (params.ser.empty())          { params.ser = cmd_params_defaults.ser; }
     if (params.tensor_split.empty()) { params.tensor_split = cmd_params_defaults.tensor_split; }
     if (params.use_mmap.empty())     { params.use_mmap = cmd_params_defaults.use_mmap; }
     if (params.embeddings.empty())   { params.embeddings = cmd_params_defaults.embeddings; }
     if (params.n_threads.empty())    { params.n_threads = cmd_params_defaults.n_threads; }
+    if (!params.buft_overrides.empty()) params.buft_overrides.emplace_back(llama_model_tensor_buft_override{nullptr, nullptr});
 
     return params;
 }
@@ -649,17 +805,23 @@ struct cmd_params_instance {
     int n_ubatch;
     ggml_type type_k;
     ggml_type type_v;
-    int n_threads;
+    std::pair<int,int> n_threads;
     int n_gpu_layers;
     std::string rpc_servers;
     llama_split_mode split_mode;
     int main_gpu;
     bool no_kv_offload;
     bool flash_attn;
+    int  mla_attn;
+    int  attn_max_batch;
+    Ser  ser;
     std::vector<float> tensor_split;
     bool use_mmap;
     bool embeddings;
     bool repack = false;
+    bool fmoe = false;
+    bool use_thp = false;
+    const llama_model_tensor_buft_override* buft_overrides;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -673,6 +835,8 @@ struct cmd_params_instance {
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap = use_mmap;
         mparams.repack_tensors = repack;
+        mparams.use_thp = use_thp;
+        mparams.tensor_buft_overrides = buft_overrides;
 
         return mparams;
     }
@@ -685,6 +849,7 @@ struct cmd_params_instance {
                main_gpu == other.main_gpu &&
                use_mmap == other.use_mmap &&
                repack == other.repack &&
+               use_thp == other.use_thp &&
                tensor_split == other.tensor_split;
     }
 
@@ -698,6 +863,11 @@ struct cmd_params_instance {
         cparams.type_v = type_v;
         cparams.offload_kqv = !no_kv_offload;
         cparams.flash_attn = flash_attn;
+        cparams.mla_attn = mla_attn;
+        cparams.attn_max_batch = attn_max_batch;
+        cparams.fused_moe_up_gate = fmoe;
+        cparams.min_experts = ser.first;
+        cparams.thresh_experts = ser.second;
         cparams.embeddings = embeddings;
 
         return cparams;
@@ -722,6 +892,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & tv : params.type_v)
     for (const auto & nkvo : params.no_kv_offload)
     for (const auto & fa : params.flash_attn)
+    for (const auto & mla : params.mla_attn)
+    for (const auto & amb : params.attn_max_batch)
+    for (const auto & ser : params.ser)
     for (const auto & nt : params.n_threads) {
         for (const auto & n_prompt : params.n_prompt) {
             if (n_prompt == 0) {
@@ -743,10 +916,16 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .mla_attn     = */ mla,
+                /* .attn_max_b   = */ amb,
+                /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .fmoe         = */ params.fmoe,
+                /* .use_thp      = */ params.use_thp,
+                /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
         }
@@ -771,10 +950,16 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .mla_attn     = */ mla,
+                /* .attn_max_b   = */ amb,
+                /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .fmoe         = */ params.fmoe,
+                /* .use_thp      = */ params.use_thp,
+                /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
         }
@@ -799,10 +984,16 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .mla_attn     = */ mla,
+                /* .attn_max_b   = */ amb,
+                /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .fmoe         = */ params.fmoe,
+                /* .use_thp      = */ params.use_thp,
+                /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
         }
@@ -827,10 +1018,16 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .main_gpu     = */ mg,
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
+                /* .mla_attn     = */ mla,
+                /* .attn_max_b   = */ amb,
+                /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
+                /* .fmoe         = */ params.fmoe,
+                /* .use_thp      = */ params.use_thp,
+                /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
         }
@@ -857,7 +1054,7 @@ struct test {
     uint64_t model_n_params;
     int n_batch;
     int n_ubatch;
-    int n_threads;
+    std::pair<int,int> n_threads;
     bool has_rpc;
     ggml_type type_k;
     ggml_type type_v;
@@ -866,10 +1063,15 @@ struct test {
     int main_gpu;
     bool no_kv_offload;
     bool flash_attn;
+    int  mla_attn;
+    int  attn_max_batch;
+    Ser  ser;
     std::vector<float> tensor_split;
     bool use_mmap;
     bool embeddings;
     bool repack = false;
+    bool fmoe = false;
+    bool use_thp = false;
     int n_prompt;
     int n_gen;
     std::string test_time;
@@ -895,10 +1097,15 @@ struct test {
         main_gpu = inst.main_gpu;
         no_kv_offload = inst.no_kv_offload;
         flash_attn = inst.flash_attn;
+        mla_attn = inst.mla_attn;
+        attn_max_batch = inst.attn_max_batch;
+        ser = inst.ser;
         tensor_split = inst.tensor_split;
         use_mmap = inst.use_mmap;
         embeddings = inst.embeddings;
         repack = inst.repack;
+        fmoe = inst.fmoe;
+        use_thp = inst.use_thp;
         n_prompt = inst.n_prompt;
         n_gen = inst.n_gen;
         test_kind = inst.test_kind;
@@ -988,8 +1195,8 @@ struct test {
             "n_batch", "n_ubatch",
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
-            "main_gpu", "no_kv_offload", "flash_attn",
-            "tensor_split", "use_mmap", "embeddings", "repack",
+            "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser",
+            "tensor_split", "use_mmap", "embeddings", "repack", "fused_moe", "use_thp",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1004,13 +1211,14 @@ struct test {
             field == "n_threads" ||
             field == "model_size" || field == "model_n_params" ||
             field == "n_gpu_layers" || field == "main_gpu" ||
-            field == "n_prompt" || field == "n_gen" ||
+            field == "n_prompt" || field == "n_gen" || field == "mla_attn" || field == "attn_max_batch" ||
             field == "avg_ns" || field == "stddev_ns") {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" ||field == "f16_kv" || field == "no_kv_offload" ||
-            field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack") {
+            field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
+            field == "fused_moe") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1035,6 +1243,12 @@ struct test {
                 tensor_split_str += "/";
             }
         }
+        auto ser_to_string = [] (const Ser& ser) {
+            std::ostringstream str;
+            str << ser.first << ',' << ser.second;
+            return str.str();
+        };
+        bool is_gen = n_gen > 0;
         std::vector<std::string> values = {
             build_commit, std::to_string(build_number),
             std::to_string(cuda), std::to_string(vulkan), std::to_string(vulkan),
@@ -1042,10 +1256,12 @@ struct test {
             cpu_info, gpu_info,
             model_filename, model_type, std::to_string(model_size), std::to_string(model_n_params),
             std::to_string(n_batch), std::to_string(n_ubatch),
-            std::to_string(n_threads), ggml_type_name(type_k), ggml_type_name(type_v),
+            std::to_string(is_gen ? n_threads.first : n_threads.second), ggml_type_name(type_k), ggml_type_name(type_v),
             std::to_string(n_gpu_layers), split_mode_str(split_mode),
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
-            tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings), std::to_string(repack),
+            std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser),
+            tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
+            std::to_string(repack), std::to_string(fmoe), std::to_string(use_thp),
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
             std::to_string(avg_ts()), std::to_string(stdev_ts()),
@@ -1208,11 +1424,26 @@ struct markdown_printer : public printer {
         if (field == "flash_attn") {
             return 2;
         }
+        if (field == "mla_attn") {
+            return 3;
+        }
+        if (field == "attn_max_batch") {
+            return 5;
+        }
+        if (field == "ser") {
+            return 10;
+        }
         if (field == "use_mmap") {
             return 4;
         }
         if (field == "repack") {
             return 3;
+        }
+        if (field == "use_thp") {
+            return 3;
+        }
+        if (field == "fused_moe") {
+            return 4;
         }
         if (field == "test") {
             return 13;
@@ -1242,11 +1473,26 @@ struct markdown_printer : public printer {
         if (field == "flash_attn") {
             return "fa";
         }
+        if (field == "mla_attn") {
+            return "mla";
+        }
+        if (field == "attn_max_batch") {
+            return "amb";
+        }
+        if (field == "attn_max_batch") {
+            return "ser";
+        }
         if (field == "use_mmap") {
             return "mmap";
         }
         if (field == "repack") {
             return "rtr";
+        }
+        if (field == "use_thp") {
+            return "thp";
+        }
+        if (field == "fused_moe") {
+            return "fmoe";
         }
         if (field == "embeddings") {
             return "embd";
@@ -1294,6 +1540,15 @@ struct markdown_printer : public printer {
         if (params.flash_attn.size() > 1 || params.flash_attn != cmd_params_defaults.flash_attn) {
             fields.emplace_back("flash_attn");
         }
+        if (params.mla_attn.size() > 1 || params.mla_attn != cmd_params_defaults.mla_attn) {
+            fields.emplace_back("mla_attn");
+        }
+        if (params.attn_max_batch.size() > 1 || params.attn_max_batch != cmd_params_defaults.mla_attn) {
+            fields.emplace_back("attn_max_batch");
+        }
+        if (params.ser.size() > 1 || params.ser != cmd_params_defaults.ser) {
+            fields.emplace_back("ser");
+        }
         if (params.tensor_split.size() > 1 || params.tensor_split != cmd_params_defaults.tensor_split) {
             fields.emplace_back("tensor_split");
         }
@@ -1305,6 +1560,12 @@ struct markdown_printer : public printer {
         }
         if (params.repack != cmd_params_defaults.repack) {
             fields.emplace_back("repack");
+        }
+        if (params.use_thp != cmd_params_defaults.use_thp) {
+            fields.emplace_back("use_thp");
+        }
+        if (params.fmoe != cmd_params_defaults.fmoe) {
+            fields.emplace_back("fused_moe");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
@@ -1557,10 +1818,10 @@ int main(int argc, char ** argv) {
         if (params.warmup) {
             if (t.n_prompt > 0) {
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+                test_prompt(ctx, 1, 0, t.n_batch, t.n_threads.second);
             }
             if (t.n_gen > 0) {
-                test_gen(ctx, 1, 0, t.n_threads);
+                test_gen(ctx, 1, 0, t.n_threads.first);
             }
         }
 
@@ -1570,11 +1831,11 @@ int main(int argc, char ** argv) {
             uint64_t t_start = get_time_ns();
 
             if (t.n_prompt > 0) {
-                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads);
+                test_prompt(ctx, t.n_prompt, 0, t.n_batch, t.n_threads.second);
             }
             if (t.test_kind == TEST_KIND_GP) t_start = get_time_ns();
             if (t.n_gen > 0) {
-                test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads);
+                test_gen(ctx, t.n_gen, t.n_prompt, t.n_threads.first);
             }
 
             uint64_t t_ns = get_time_ns() - t_start;

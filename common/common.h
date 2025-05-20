@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2025 The llama.cpp authors
+// Copyright (C) 2024-2025 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 // Various helper functions and utilities
 
 #pragma once
@@ -135,6 +142,7 @@ struct gpt_params {
     std::vector<std::string> in_files;   // all input files
     std::vector<std::string> antiprompt; // strings upon which more user input is prompted (a.k.a. reverse prompts)
     std::vector<llama_model_kv_override> kv_overrides;
+    std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_lora_adapter_apply)
     std::vector<llama_lora_adapter_info> lora_adapters; // lora adapter path with user defined scale
@@ -174,6 +182,11 @@ struct gpt_params {
     bool simple_io         = false; // improves compatibility with subprocesses and limited consoles
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
     bool flash_attn        = false; // flash attention
+    int  mla_attn          = 0;     // MLA 0: standard attention, 1: MLA with K and transposed V cache, 2: MLA with just K cache
+    int  attn_max_batch    = 0;     // Max batch size to use when computing attention (only applicable if flash_attn = false)
+    bool fused_moe_up_gate = false; // fused up*unary(gate) op for MoE models
+    int  min_experts       = -1;
+    float thresh_experts   = 0;
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
     bool ignore_eos        = false; // ignore generated EOS tokens
@@ -188,6 +201,7 @@ struct gpt_params {
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
     bool repack_tensors    = false; // repack tensors if interleaved variant is available
+    bool use_thp           = false; // use transparent huge pages (linux only)
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
@@ -268,6 +282,8 @@ struct gpt_params {
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
 
     std::string lora_outfile = "ggml-lora-merged-f16.gguf";
+
+    bool sweep_bench_output_jsonl = false;
 };
 
 void gpt_params_handle_hf_token(gpt_params & params);

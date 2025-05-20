@@ -14,6 +14,7 @@ from enum import IntEnum
 from pathlib import Path
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Iterator, Literal, Sequence, TypeVar, cast
+from itertools import chain
 
 import math
 import numpy as np
@@ -256,10 +257,14 @@ class Model:
 
         return False
 
+    # some models need extra generated tensors (like rope_freqs)
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        return ()
+
     def prepare_tensors(self):
         max_name_len = max(len(s) for _, s in self.tensor_map.mapping.values()) + len(".weight,")
 
-        for name, data_torch in self.get_tensors():
+        for name, data_torch in chain(self.generate_extra_tensors(), self.get_tensors()):
             # we don't need these
             if name.endswith((".attention.masked_bias", ".attention.bias", ".rotary_emb.inv_freq")):
                 continue
@@ -1559,7 +1564,7 @@ class LlamaModel(Model):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-    def prepare_tensors(self):
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         if rope_scaling := self.find_hparam(["rope_scaling"], optional=True):
             if rope_scaling.get("rope_type", '').lower() == "llama3":
                 base = self.hparams.get("rope_theta", 10000.0)
@@ -1586,8 +1591,9 @@ class LlamaModel(Model):
                         smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
                         rope_factors.append(1 / ((1 - smooth) / factor + smooth))
 
-                self.gguf_writer.add_tensor(self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), np.array(rope_factors, dtype=np.float32))
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
+    def prepare_tensors(self):
         super().prepare_tensors()
 
         if self._experts is not None:
@@ -1597,7 +1603,186 @@ class LlamaModel(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@Model.register("DeciLMForCausalLM")
+class DeciModel(Model):
+    model_arch = gguf.MODEL_ARCH.DECI
+
+    @staticmethod
+    def _ffn_mult_to_intermediate_size(ffn_mult: float, n_embd: int) -> int:
+        # DeciLM-specific code
+        intermediate_size = int(2 * ffn_mult * n_embd / 3)
+        return DeciModel._find_multiple(intermediate_size, 256)
+
+    @staticmethod
+    def _find_multiple(n: int, k: int) -> int:
+        # DeciLM-specific code
+        if n % k == 0:
+            return n
+        return n + k - (n % k)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if "block_configs" in self.hparams: # Llama-3_1-Nemotron-51B
+            _block_configs: list[dict[str,Any]] = self.hparams["block_configs"]
+            assert self.block_count == len(_block_configs)
+            self._num_kv_heads = list()
+            self._num_heads = list()
+            _ffn_multipliers = list()
+            # ***linear attention layer***
+            # if n_heads_in_group is None and replace_with_linear is True
+            # then _num_kv_heads[il] is 0 and _num_heads[il] is num_attention_heads
+            # ***attention-free layer***
+            # if n_heads_in_group is None and replace_with_linear is False
+            # then _num_kv_heads[il] is 0 and _num_heads[il] is 0
+            # ***normal attention-layer***
+            # if n_heads_in_group is not None, then
+            # _num_kv_heads[il] is num_attention_head // n_heads_in_group and
+            # _num_heads[il] is num_attention_head
+            # ***dummy layer*** for nemotron 253B
+            # if n_heads_in_group is None and ffn_mult is None
+            # then _num_kv_heads[il] is 0 and _num_heads[il] is 0 and _ffn_dims is 0
+            for il in range(len(_block_configs)):
+                if _block_configs[il]["attention"]["n_heads_in_group"] is None:
+                    if _block_configs[il]["attention"]["replace_with_linear"] is True:
+                        self._num_kv_heads.append(0)
+                        self._num_heads.append(self.hparams["num_attention_heads"])
+                    else:
+                        self._num_kv_heads.append(0)
+                        self._num_heads.append(0)
+                else:
+                    self._num_kv_heads.append(self.hparams["num_attention_heads"] // _block_configs[il]["attention"]["n_heads_in_group"])
+                    self._num_heads.append(self.hparams["num_attention_heads"])
+                if _block_configs[il]["ffn"]["ffn_mult"] is None: # dummy layer
+                    _ffn_multipliers.append(0.0)
+                else:
+                    _ffn_multipliers.append(_block_configs[il]["ffn"]["ffn_mult"])
+            assert self.block_count == len(self._num_kv_heads)
+            assert self.block_count == len(self._num_heads)
+            assert self.block_count == len(_ffn_multipliers)
+            assert isinstance(self._num_kv_heads, list) and isinstance(self._num_kv_heads[0], int)
+            assert isinstance(self._num_heads, list) and isinstance(self._num_heads[0], int)
+            assert isinstance(_ffn_multipliers, list) and isinstance(_ffn_multipliers[0], float)
+            self._ffn_dims: list[int] = [
+                DeciModel._ffn_mult_to_intermediate_size(multiplier, self.hparams["hidden_size"])
+                for multiplier in _ffn_multipliers
+            ]
+
+    def set_vocab(self):
+        # Please change tokenizer_config.json of Llama-3_1-Nemotron-51B's
+        # eos_token from '|eot_id|' to '|end_of_text|'
+        if self.hparams.get("vocab_size", 128256) == 128256:
+            tokens, toktypes, tokpre = self.get_vocab_base()
+            self.gguf_writer.add_tokenizer_model("gpt2")
+            self.gguf_writer.add_tokenizer_pre(tokpre)
+            self.gguf_writer.add_token_list(tokens)
+            self.gguf_writer.add_token_types(toktypes)
+
+            special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+            special_vocab.add_to_gguf(self.gguf_writer)
+        else:
+            # DeciLM-7B
+            self._set_vocab_llama_hf()
+
+    def set_gguf_parameters(self):
+        if "block_configs" in self.hparams: # Llama-3_1-Nemotron-51B
+            assert self.block_count == len(self._num_kv_heads)
+            assert self.block_count == len(self._num_heads)
+            assert self.block_count == len(self._ffn_dims)
+            if (rope_theta := self.hparams.get("rope_theta")) is not None:
+                self.gguf_writer.add_rope_freq_base(rope_theta)
+            self.gguf_writer.add_head_count_kv(self._num_kv_heads)
+            self.gguf_writer.add_head_count(self._num_heads)
+            self.gguf_writer.add_feed_forward_length(self._ffn_dims)
+            self.gguf_writer.add_block_count(self.block_count)
+            self.gguf_writer.add_context_length(self.hparams["max_position_embeddings"])
+            self.gguf_writer.add_embedding_length(self.hparams["hidden_size"])
+            self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
+            self.gguf_writer.add_key_length(self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+            self.gguf_writer.add_value_length(self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+            self.gguf_writer.add_file_type(self.ftype)
+        else: # DeciLM-7B
+            super().set_gguf_parameters()
+            if "num_key_value_heads_per_layer" in self.hparams: # DeciLM-7B
+                self._num_kv_heads: list[int] = self.hparams["num_key_value_heads_per_layer"]
+                assert self.block_count == len(self._num_kv_heads)
+                self.gguf_writer.add_head_count_kv(self._num_kv_heads)
+        hparams = self.hparams
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+
+        if "head_dim" in hparams:
+            rope_dim = hparams["head_dim"]
+        else:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
+            if self.hparams["rope_scaling"].get("type") == "linear":
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+
+    @staticmethod
+    def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
+        if n_head_kv is not None and n_head != n_head_kv:
+            n_head = n_head_kv
+        return (weights.reshape(n_head, 2, weights.shape[0] // n_head // 2, *weights.shape[1:])
+                .swapaxes(1, 2)
+                .reshape(weights.shape))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        n_head = self.hparams["num_attention_heads"]
+        if bid is not None:
+            if "num_key_value_heads_per_layer" in self.hparams:
+                n_kv_head = self.hparams["num_key_value_heads_per_layer"][bid]
+            elif "block_configs" in self.hparams:
+                n_kv_head = self._num_kv_heads[bid]
+                n_head = self._num_heads[bid]
+            else:
+                n_kv_head = self.hparams.get("num_key_value_heads")
+        else:
+            n_kv_head = self.hparams.get("num_key_value_heads")
+
+        if name.endswith(("q_proj.weight", "q_proj.bias")):
+            data_torch = DeciModel.permute(data_torch, n_head, n_head)
+        if name.endswith(("k_proj.weight", "k_proj.bias")):
+            data_torch = DeciModel.permute(data_torch, n_head, n_kv_head)
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        if rope_scaling := self.find_hparam(["rope_scaling"], optional=True):
+            if rope_scaling.get("rope_type", '').lower() == "llama3":
+                base = self.hparams.get("rope_theta", 10000.0)
+                dim = self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+                freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+
+                factor = rope_scaling.get("factor", 8.0)
+                low_freq_factor = rope_scaling.get("low_freq_factor", 1.0)
+                high_freq_factor = rope_scaling.get("high_freq_factor", 4.0)
+                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+
+                low_freq_wavelen = old_context_len / low_freq_factor
+                high_freq_wavelen = old_context_len / high_freq_factor
+                assert low_freq_wavelen != high_freq_wavelen
+
+                rope_factors = []
+                for freq in freqs:
+                    wavelen = 2 * math.pi / freq
+                    if wavelen < high_freq_wavelen:
+                        rope_factors.append(1)
+                    elif wavelen > low_freq_wavelen:
+                        rope_factors.append(factor)
+                    else:
+                        smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+                        rope_factors.append(1 / ((1 - smooth) / factor + smooth))
+
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+
 @Model.register("BitnetForCausalLM")
+@Model.register("BitNetForCausalLM")
 class BitnetModel(Model):
     model_arch = gguf.MODEL_ARCH.BITNET
 
@@ -1937,6 +2122,13 @@ class Qwen2MoeModel(Model):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
+@Model.register("Qwen3ForCausalLM")
+class Qwen3Model(Qwen2Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+@Model.register("Qwen3MoeForCausalLM")
+class Qwen3MoeModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
 @Model.register("GPT2LMHeadModel")
 class GPT2Model(Model):
@@ -2121,6 +2313,13 @@ class Phi3MiniModel(Model):
         self.gguf_writer.add_file_type(self.ftype)
         self.gguf_writer.add_sliding_window(self.find_hparam(["sliding_window"]))
 
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        n_embd = self.find_hparam(["hidden_size", "n_embd"])
+        n_head = self.find_hparam(["num_attention_heads", "n_head"])
+        max_pos_embds = self.find_hparam(["n_positions", "max_position_embeddings"])
+        orig_max_pos_embds = self.find_hparam(["original_max_position_embeddings"])
+        rope_dims = n_embd // n_head
+
         # write rope scaling for long context (128k) model
         rope_scaling = self.find_hparam(['rope_scaling'], True)
         if rope_scaling is None:
@@ -2150,8 +2349,8 @@ class Phi3MiniModel(Model):
         if len(long_factors) != len(short_factors) or len(long_factors) != rope_dims / 2:
             raise ValueError(f'The length of rope long and short factors must be {rope_dims / 2}')
 
-        self.gguf_writer.add_tensor(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.ROPE_FACTORS_LONG]  + ".weight", np.array(long_factors, dtype=np.float32))
-        self.gguf_writer.add_tensor(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT] + ".weight", np.array(short_factors, dtype=np.float32))
+        yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_LONG), torch.tensor(long_factors, dtype=torch.float32))
+        yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
 
 
 @Model.register("PlamoForCausalLM")
@@ -3123,6 +3322,7 @@ class ArcticModel(Model):
 
 
 @Model.register("DeepseekV2ForCausalLM")
+@Model.register("DeepseekV3ForCausalLM")
 class DeepseekV2Model(Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 
@@ -3144,6 +3344,15 @@ class DeepseekV2Model(Model):
         self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
         self.gguf_writer.add_expert_shared_count(hparams["n_shared_experts"])
         self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
+
+        if hparams["scoring_func"] == "sigmoid":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        elif hparams["scoring_func"] == "softmax":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+        else:
+            raise ValueError(f"Unsupported scoring_func value: {hparams['scoring_func']}")
+
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
         if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
@@ -3156,6 +3365,17 @@ class DeepseekV2Model(Model):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # rename e_score_correction_bias tensors
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+
+        # skip Multi-Token Prediction (MTP) layers
+        block_count = self.hparams["num_hidden_layers"]
+        match = re.match(r"model.layers.(\d+)", name)
+        if match and int(match.group(1)) >= block_count:
+            return []
+
+
         # process the experts separately
         if name.find("mlp.experts") != -1:
             n_experts = self.hparams["n_routed_experts"]
@@ -3188,6 +3408,27 @@ class DeepseekV2Model(Model):
                 return tensors
             else:
                 return []
+        if name.endswith("kv_b_proj.weight"):
+            name_kb = name.replace("kv_b_proj", "k_b_proj")
+            name_vb = name.replace("kv_b_proj", "v_b_proj")
+
+            n_head_kv = self.hparams["num_key_value_heads"]
+            v_head_dim = self.hparams["v_head_dim"]
+            qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
+
+            assert data_torch.shape[0] == n_head_kv * (v_head_dim + qk_nope_head_dim)
+
+            kv_b = data_torch.view(n_head_kv, v_head_dim + qk_nope_head_dim, data_torch.shape[-1])
+            k_b, v_b = torch.split(kv_b, [qk_nope_head_dim, v_head_dim], dim=1)
+            k_b = k_b.transpose(1, 2)
+            k_b = k_b.reshape(n_head_kv * data_torch.shape[-1], qk_nope_head_dim)
+            v_b = v_b.reshape(n_head_kv * v_head_dim, data_torch.shape[-1])
+
+            return [
+                (self.map_tensor_name(name),    data_torch),
+                (self.map_tensor_name(name_kb), k_b),
+                (self.map_tensor_name(name_vb), v_b)
+            ]
 
         return [(self.map_tensor_name(name), data_torch)]
 

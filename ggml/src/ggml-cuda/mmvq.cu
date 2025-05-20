@@ -1,61 +1,68 @@
+//
+// Copyright (C) 2023-2024 The ggml authors
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "mmvq.cuh"
-#include "vecdotq.cuh"
 #include "iqk_mmvq.cuh"
+#include "vecdotq.cuh"
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
-    return type == GGML_TYPE_Q4_0 ? vec_dot_q4_0_q8_1 :
-        type == GGML_TYPE_Q4_1 ? vec_dot_q4_1_q8_1 :
-        type == GGML_TYPE_Q5_0 ? vec_dot_q5_0_q8_1 :
-        type == GGML_TYPE_Q5_1 ? vec_dot_q5_1_q8_1 :
-        type == GGML_TYPE_Q6_0 ? vec_dot_q6_0_q8_1 :
-        type == GGML_TYPE_Q8_0 ? vec_dot_q8_0_q8_1 :
-        type == GGML_TYPE_Q2_K ? vec_dot_q2_K_q8_1 :
-        type == GGML_TYPE_Q3_K ? vec_dot_q3_K_q8_1 :
-        type == GGML_TYPE_Q4_K ? vec_dot_q4_K_q8_1 :
-        type == GGML_TYPE_Q5_K ? vec_dot_q5_K_q8_1 :
-        type == GGML_TYPE_Q6_K ? vec_dot_q6_K_q8_1 :
-        type == GGML_TYPE_IQ2_XXS ? vec_dot_iq2_xxs_q8_1 :
-        type == GGML_TYPE_IQ2_XS ? vec_dot_iq2_xs_q8_1 :
-        type == GGML_TYPE_IQ2_S ? vec_dot_iq2_s_q8_1 :
-        type == GGML_TYPE_IQ3_XXS ? vec_dot_iq3_xxs_q8_1 :
-        type == GGML_TYPE_IQ1_S ? vec_dot_iq1_s_q8_1 :
-        type == GGML_TYPE_IQ1_M ? vec_dot_iq1_m_q8_1 :
-        type == GGML_TYPE_IQ4_NL ? vec_dot_iq4_nl_q8_1 :
-        type == GGML_TYPE_IQ4_XS ? vec_dot_iq4_xs_q8_1 :
-        type == GGML_TYPE_IQ3_S ? vec_dot_iq3_s_q8_1 :
-        nullptr;
+    switch (type) {
+        case GGML_TYPE_Q4_0   : return vec_dot_q4_0_q8_1;
+        case GGML_TYPE_Q4_1   : return vec_dot_q4_1_q8_1;
+        case GGML_TYPE_Q5_0   : return vec_dot_q5_0_q8_1;
+        case GGML_TYPE_Q5_1   : return vec_dot_q5_1_q8_1;
+        case GGML_TYPE_Q6_0   : return vec_dot_q6_0_q8_1;
+        case GGML_TYPE_Q8_0   : return vec_dot_q8_0_q8_1;
+        case GGML_TYPE_Q2_K   : return vec_dot_q2_K_q8_1;
+        case GGML_TYPE_Q3_K   : return vec_dot_q3_K_q8_1;
+        case GGML_TYPE_Q4_K   : return vec_dot_q4_K_q8_1;
+        case GGML_TYPE_Q5_K   : return vec_dot_q5_K_q8_1;
+        case GGML_TYPE_Q6_K   : return vec_dot_q6_K_q8_1;
+        case GGML_TYPE_IQ2_XXS: return vec_dot_iq2_xxs_q8_1;
+        case GGML_TYPE_IQ2_XS : return vec_dot_iq2_xs_q8_1;
+        case GGML_TYPE_IQ2_S  : return vec_dot_iq2_s_q8_1;
+        case GGML_TYPE_IQ3_XXS: return vec_dot_iq3_xxs_q8_1;
+        case GGML_TYPE_IQ1_S  : return vec_dot_iq1_s_q8_1;
+        case GGML_TYPE_IQ1_M  : return vec_dot_iq1_m_q8_1;
+        case GGML_TYPE_IQ4_NL : return vec_dot_iq4_nl_q8_1;
+        case GGML_TYPE_IQ4_XS : return vec_dot_iq4_xs_q8_1;
+        case GGML_TYPE_IQ3_S  : return vec_dot_iq3_s_q8_1;
+        default               : return nullptr;
+    }
 }
 
 static constexpr __device__ int get_vdr_mmvq(ggml_type type) {
-    return type == GGML_TYPE_Q4_0 ? VDR_Q4_0_Q8_1_MMVQ :
-        type == GGML_TYPE_Q4_1    ? VDR_Q4_1_Q8_1_MMVQ :
-        type == GGML_TYPE_Q5_0    ? VDR_Q5_0_Q8_1_MMVQ :
-        type == GGML_TYPE_Q5_1    ? VDR_Q5_1_Q8_1_MMVQ :
-        type == GGML_TYPE_Q6_0    ? VDR_Q6_0_Q8_1_MMVQ :
-        type == GGML_TYPE_Q8_0    ? VDR_Q8_0_Q8_1_MMVQ :
-        type == GGML_TYPE_Q2_K    ? VDR_Q2_K_Q8_1_MMVQ :
-        type == GGML_TYPE_Q3_K    ? VDR_Q3_K_Q8_1_MMVQ :
-        type == GGML_TYPE_Q4_K    ? VDR_Q4_K_Q8_1_MMVQ :
-        type == GGML_TYPE_Q5_K    ? VDR_Q5_K_Q8_1_MMVQ :
-        type == GGML_TYPE_Q6_K    ? VDR_Q6_K_Q8_1_MMVQ :
-        type == GGML_TYPE_IQ2_XXS ? VDR_IQ2_XXS_Q8_1_MMVQ :
-        type == GGML_TYPE_IQ2_XS  ? VDR_IQ2_XS_Q8_1_MMVQ :
-        type == GGML_TYPE_IQ2_S   ? VDR_IQ2_S_Q8_1_MMVQ :
-        type == GGML_TYPE_IQ3_XXS ? VDR_IQ3_XXS_Q8_1_MMVQ :
-        type == GGML_TYPE_IQ3_S   ? VDR_IQ3_S_Q8_1_MMVQ :
-        type == GGML_TYPE_IQ4_NL  ? VDR_IQ4_NL_Q8_1_MMVQ :
-        type == GGML_TYPE_IQ4_XS  ? VDR_IQ4_XS_Q8_1_MMVQ :
-        1;
+    switch (type) {
+        case GGML_TYPE_Q4_0    : return VDR_Q4_0_Q8_1_MMVQ;
+        case GGML_TYPE_Q4_1    : return VDR_Q4_1_Q8_1_MMVQ;
+        case GGML_TYPE_Q5_0    : return VDR_Q5_0_Q8_1_MMVQ;
+        case GGML_TYPE_Q5_1    : return VDR_Q5_1_Q8_1_MMVQ;
+        case GGML_TYPE_Q6_0    : return VDR_Q6_0_Q8_1_MMVQ;
+        case GGML_TYPE_Q8_0    : return VDR_Q8_0_Q8_1_MMVQ;
+        case GGML_TYPE_Q2_K    : return VDR_Q2_K_Q8_1_MMVQ;
+        case GGML_TYPE_Q3_K    : return VDR_Q3_K_Q8_1_MMVQ;
+        case GGML_TYPE_Q4_K    : return VDR_Q4_K_Q8_1_MMVQ;
+        case GGML_TYPE_Q5_K    : return VDR_Q5_K_Q8_1_MMVQ;
+        case GGML_TYPE_Q6_K    : return VDR_Q6_K_Q8_1_MMVQ;
+        case GGML_TYPE_IQ2_XXS : return VDR_IQ2_XXS_Q8_1_MMVQ;
+        case GGML_TYPE_IQ2_XS  : return VDR_IQ2_XS_Q8_1_MMVQ;
+        case GGML_TYPE_IQ2_S   : return VDR_IQ2_S_Q8_1_MMVQ;
+        case GGML_TYPE_IQ3_XXS : return VDR_IQ3_XXS_Q8_1_MMVQ;
+        case GGML_TYPE_IQ3_S   : return VDR_IQ3_S_Q8_1_MMVQ;
+        case GGML_TYPE_IQ4_NL  : return VDR_IQ4_NL_Q8_1_MMVQ;
+        case GGML_TYPE_IQ4_XS  : return VDR_IQ4_XS_Q8_1_MMVQ;
+        default                : return 1;
+    }
 }
 
-template <ggml_type type, int ncols_y>
-#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
-// tell the compiler to use as many registers as it wants, see nwarps definition below
-__launch_bounds__((ncols_y <= 4 ? 4 : 2)*WARP_SIZE, 1)
-#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
-static __global__ void mul_mat_vec_q(
+template <ggml_type type, int ncols_y, int nwarps>
+static __device__ void mul_mat_vec_q(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
 
@@ -66,10 +73,8 @@ static __global__ void mul_mat_vec_q(
     constexpr vec_dot_q_cuda_t vec_dot_q_cuda = get_vec_dot_q_cuda(type);
 
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
-    constexpr int nwarps              = 1;
     constexpr int rows_per_cuda_block = 1;
 #else
-    constexpr int nwarps              = ncols_y <= 4 ? 4 : 2;
     constexpr int rows_per_cuda_block = ncols_y == 1 ? 1 : 2;
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
 
@@ -132,71 +137,106 @@ static __global__ void mul_mat_vec_q(
     }
 }
 
-template <ggml_type type>
-static void mul_mat_vec_q_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+template <ggml_type type, int ncols_y, int nwarps>
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
+// tell the compiler to use as many registers as it wants, see nwarps definition below
+__launch_bounds__(nwarps*WARP_SIZE, 1)
+#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__))
+static __global__ void mul_mat_vec_q(
+    const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst, const char * __restrict__ ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst,
+    const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0) {
+    int i2 = blockIdx.y;
+    char * cdst = (char *)dst + i2*nb2;
+    int i02 = ids_data ? *(const int *)(ids_data + i2*ids_nb0) : i2;
+    if (i02 < 0) {
+#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && (defined(RDNA2) || defined(RDNA3))
+        constexpr int rows_per_cuda_block = 1;
+#else
+        constexpr int rows_per_cuda_block = ncols_y == 1 ? 1 : 2;
+#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
+        const int row0 = rows_per_cuda_block*blockIdx.x;
+        if (threadIdx.y == 0) {
+            dst = (float *)cdst;
+            for (int j = 0; j < ncols_y; ++j) {
+                if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || row0 + threadIdx.x < nrows_dst)) {
+                    dst[j*nrows_dst + row0 + threadIdx.x] = 0;
+                }
+            }
+        }
+        return;
+    }
+    const char * cx = (const char *)vx + i02*nb02;
+    const char * cy = (const char *)vy + i2*nb12;
+    mul_mat_vec_q<type, ncols_y, nwarps>(cx, cy, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst);
+}
+
+template <ggml_type type, int nwarps>
+static void mul_mat_vec_q_cuda_T(
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, cudaStream_t stream) {
 
     GGML_ASSERT(ncols_x % ggml_blck_size(type) == 0);
     GGML_ASSERT(ncols_y <= MMVQ_MAX_BATCH_SIZE);
 
     int id = ggml_cuda_get_device();
 
-    int64_t nwarps = 1;
-    int64_t rows_per_cuda_block = 1;
+    int64_t rows_per_cuda_block = ggml_cuda_info().devices[id].cc < CC_RDNA2 ?
+        ncols_y < 4 ? 1 : 2 : 1;
 
-    if (ggml_cuda_info().devices[id].cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
-        switch(ncols_y) {
-            case 1:
-                nwarps = 4;
-                rows_per_cuda_block = 1;
-                break;
-            case 2:
-            case 3:
-            case 4:
-                nwarps = 4;
-                rows_per_cuda_block = 2;
-                break;
-            case 5:
-            case 6:
-            case 7:
-            case 8:
-                nwarps = 2;
-                rows_per_cuda_block = 2;
-                break;
-            default:
-                GGML_ABORT("fatal error");
-                break;
-        }
-    }
+    //if (ggml_cuda_info().devices[id].cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
+    //    switch(ncols_y) {
+    //        case 1:
+    //            nwarps = 4;
+    //            rows_per_cuda_block = 1;
+    //            break;
+    //        case 2:
+    //        case 3:
+    //        case 4:
+    //            nwarps = 4;
+    //            rows_per_cuda_block = 2;
+    //            break;
+    //        case 5:
+    //        case 6:
+    //        case 7:
+    //        case 8:
+    //            nwarps = 2;
+    //            rows_per_cuda_block = 2;
+    //            break;
+    //        default:
+    //            GGML_ABORT("fatal error");
+    //            break;
+    //    }
+    //}
     const int64_t nblocks = (nrows_x + rows_per_cuda_block - 1) / rows_per_cuda_block;
-    const dim3 block_nums(nblocks, 1, 1);
+    const dim3 block_nums(nblocks, ne2, 1);
     const dim3 block_dims(WARP_SIZE, nwarps, 1);
 
     switch (ncols_y) {
         case 1:
-            mul_mat_vec_q<type, 1><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+            mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, nrows_dst, nb02, nb12, nb2, ids_nb0);
             break;
         case 2:
-            mul_mat_vec_q<type, 2><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+            mul_mat_vec_q<type, 2, nwarps><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, nrows_dst, nb02, nb12, nb2, ids_nb0);
             break;
         case 3:
-            mul_mat_vec_q<type, 3><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+            mul_mat_vec_q<type, 3, nwarps><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, nrows_dst, nb02, nb12, nb2, ids_nb0);
             break;
         case 4:
-            mul_mat_vec_q<type, 4><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+            mul_mat_vec_q<type, 4, nwarps><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, nrows_dst, nb02, nb12, nb2, ids_nb0);
             break;
         case 5:
-            mul_mat_vec_q<type, 5><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+            mul_mat_vec_q<type, 5, nwarps><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, nrows_dst, nb02, nb12, nb2, ids_nb0);
             break;
         case 6:
-            mul_mat_vec_q<type, 6><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+            mul_mat_vec_q<type, 6, nwarps><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, nrows_dst, nb02, nb12, nb2, ids_nb0);
             break;
         case 7:
-            mul_mat_vec_q<type, 7><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+            mul_mat_vec_q<type, 7, nwarps><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, nrows_dst, nb02, nb12, nb2, ids_nb0);
             break;
         case 8:
-            mul_mat_vec_q<type, 8><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
+            mul_mat_vec_q<type, 8, nwarps><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, nrows_dst, nb02, nb12, nb2, ids_nb0);
             break;
         default:
             GGML_ABORT("fatal error");
@@ -204,144 +244,328 @@ static void mul_mat_vec_q_cuda(
     }
 }
 
-static void mul_mat_vec_q4_0_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+template <ggml_type type>
+static void mul_mat_vec_q_cuda(
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, cudaStream_t stream) {
+    int nwarps = 1;
+    int id = ggml_cuda_get_device();
+    if (ne2 < 2 && ggml_cuda_info().devices[id].cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
+        nwarps = ncols_y <= 4 ? 4 : 2;
+    }
+    switch (nwarps) {
+        case 1:
+            mul_mat_vec_q_cuda_T<type, 1>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst,
+                    ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case 2:
+            mul_mat_vec_q_cuda_T<type, 2>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst,
+                    ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        default:
+            mul_mat_vec_q_cuda_T<type, 4>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst,
+                    ne2, nb02, nb12, nb2, ids_nb0, stream);
+    }
+}
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q4_0>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+static void mul_mat_vec_q4_0_q8_1_cuda(
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
+
+    mul_mat_vec_q_cuda<GGML_TYPE_Q4_0>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q4_1_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q4_1>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q4_1>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q5_0_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q5_0>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q5_0>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q5_1_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q5_1>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q5_1>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q6_0_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q6_0>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q6_0>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q8_0_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q8_0>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q8_0>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q2_K_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q2_K>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q2_K>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q3_K_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q3_K>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q3_K>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q4_K_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q4_K>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q4_K>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q5_K_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q5_K>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q5_K>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_q6_K_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_Q6_K>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_Q6_K>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_iq2_xxs_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_IQ2_XXS>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_IQ2_XXS>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_iq2_xs_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_IQ2_XS>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_IQ2_XS>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_iq2_s_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_IQ2_S>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_IQ2_S>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_iq3_xxs_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_IQ3_XXS>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_IQ3_XXS>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_iq1_s_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_IQ1_S>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_IQ1_S>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_iq1_m_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_IQ1_M>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_IQ1_M>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_iq4_nl_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_IQ4_NL>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_IQ4_NL>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_iq4_xs_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_IQ4_XS>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_IQ4_XS>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 static void mul_mat_vec_iq3_s_q8_1_cuda(
-    const void * vx, const void * vy, float * dst,
-    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst, cudaStream_t stream) {
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
-    mul_mat_vec_q_cuda<GGML_TYPE_IQ3_S>(vx, vy, dst, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, stream);
+    mul_mat_vec_q_cuda<GGML_TYPE_IQ3_S>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+}
+
+static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggml_type type,
+        const int64_t ne00, const int64_t ne0, const int64_t ne2,
+        const int64_t nb02, const int64_t nb12, const int64_t nb2, const int64_t ids_nb0,
+        const char * src0_dd_i, const char * src1_ddq_i, float * dst_dd_i, const char * ids_data,
+        const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+        const int64_t src1_padded_row_size, cudaStream_t stream) {
+
+    const int64_t row_diff = row_high - row_low;
+
+    int id = ggml_cuda_get_device();
+
+    // the main device has a larger memory buffer to hold the results from all GPUs
+    // nrows_dst == nrows of the matrix that the kernel writes into
+    const int64_t nrows_dst = id == ctx.device ? ne0 : row_diff;
+
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+            mul_mat_vec_q4_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q4_1:
+            mul_mat_vec_q4_1_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q5_0:
+            mul_mat_vec_q5_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q5_1:
+            mul_mat_vec_q5_1_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q6_0:
+            mul_mat_vec_q6_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q8_0:
+            mul_mat_vec_q8_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q2_K:
+            mul_mat_vec_q2_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q3_K:
+            mul_mat_vec_q3_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q4_K:
+            mul_mat_vec_q4_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q5_K:
+            mul_mat_vec_q5_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_Q6_K:
+            mul_mat_vec_q6_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ2_XXS:
+            mul_mat_vec_iq2_xxs_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ2_XS:
+            mul_mat_vec_iq2_xs_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,  ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ2_S:
+            mul_mat_vec_iq2_s_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,   ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ3_XXS:
+            mul_mat_vec_iq3_xxs_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ1_S:
+            mul_mat_vec_iq1_s_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,   ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ1_M:
+            mul_mat_vec_iq1_m_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,   ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ1_BN:
+            mul_mat_vec_iq1_bn_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,  ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ2_BN:
+            mul_mat_vec_iq2_bn_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,  ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ4_NL:
+            mul_mat_vec_iq4_nl_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,  ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ4_XS:
+            mul_mat_vec_iq4_xs_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,  ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ2_K:
+            mul_mat_vec_iq2_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,   ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ3_K:
+            mul_mat_vec_iq3_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,   ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ4_K:
+            mul_mat_vec_iq4_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,   ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ4_KS:
+            mul_mat_vec_iq4_ks_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,  ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ4_KSS:
+            mul_mat_vec_iq4_kss_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ2_KS:
+            mul_mat_vec_iq2_ks_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,  ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ5_K:
+            mul_mat_vec_iq5_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,   ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ6_K:
+            mul_mat_vec_iq6_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,   ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        case GGML_TYPE_IQ3_S:
+            mul_mat_vec_iq3_s_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ids_data, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst,   ne2, nb02, nb12, nb2, ids_nb0, stream);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+            break;
+    }
+
+}
+
+void ggml_cuda_op_mul_mat_vec_q_3D(
+    ggml_backend_cuda_context & ctx,
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
+    const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+    const int64_t src1_padded_row_size, cudaStream_t stream) {
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne10 = src1->ne[0];
+    GGML_ASSERT(ne10 % QK8_1 == 0);
+    GGML_ASSERT(src0->ne[3] == 1 && src1->ne[3] == 1 && dst->ne[3] == 1);
+    GGML_ASSERT(src0->ne[2] == src1->ne[2] && src0->ne[2] == dst->ne[2]);
+
+    const int64_t ne0 = dst->ne[0];
+
+    const int64_t src1_row_size = ggml_row_size(GGML_TYPE_Q8_1, src1_padded_row_size);
+
+    ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
+        ne00, ne0, dst->ne[2],
+        src0->nb[2], src1_row_size, dst->nb[2], 0,
+        src0_dd_i, src1_ddq_i, dst_dd_i, nullptr,
+        row_low, row_high, src1_ncols,
+        src1_padded_row_size, stream);
+
+    GGML_UNUSED(src1_ddf_i);
 }
 
 void ggml_cuda_op_mul_mat_vec_q(
@@ -351,120 +575,44 @@ void ggml_cuda_op_mul_mat_vec_q(
     const int64_t src1_padded_row_size, cudaStream_t stream) {
 
     const int64_t ne00 = src0->ne[0];
-    const int64_t row_diff = row_high - row_low;
-
     const int64_t ne10 = src1->ne[0];
     GGML_ASSERT(ne10 % QK8_1 == 0);
 
     const int64_t ne0 = dst->ne[0];
 
-    int id = ggml_cuda_get_device();
+    ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
+        ne00, ne0, 1, 0, 0, 0, 0,
+        src0_dd_i, src1_ddq_i, dst_dd_i, nullptr,
+        row_low, row_high, src1_ncols,
+        src1_padded_row_size, stream);
 
-    // the main device has a larger memory buffer to hold the results from all GPUs
-    // nrows_dst == nrows of the matrix that the kernel writes into
-    const int64_t nrows_dst = id == ctx.device ? ne0 : row_diff;
-
-    switch (src0->type) {
-        case GGML_TYPE_Q4_0:
-            mul_mat_vec_q4_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q4_1:
-            mul_mat_vec_q4_1_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q5_0:
-            mul_mat_vec_q5_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q5_1:
-            mul_mat_vec_q5_1_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q6_0:
-            mul_mat_vec_q6_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q8_0:
-            mul_mat_vec_q8_0_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q2_K:
-            mul_mat_vec_q2_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q3_K:
-            mul_mat_vec_q3_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q4_K:
-            mul_mat_vec_q4_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q5_K:
-            mul_mat_vec_q5_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_Q6_K:
-            mul_mat_vec_q6_K_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ2_XXS:
-            mul_mat_vec_iq2_xxs_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ2_XS:
-            mul_mat_vec_iq2_xs_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ2_S:
-            mul_mat_vec_iq2_s_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ3_XXS:
-            mul_mat_vec_iq3_xxs_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ1_S:
-            mul_mat_vec_iq1_s_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ1_M:
-            mul_mat_vec_iq1_m_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ1_BN:
-            mul_mat_vec_iq1_bn_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ2_BN:
-            mul_mat_vec_iq2_bn_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ4_NL:
-            mul_mat_vec_iq4_nl_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ4_XS:
-            mul_mat_vec_iq4_xs_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ2_K:
-            mul_mat_vec_iq2_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ3_K:
-            mul_mat_vec_iq3_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ4_K:
-            mul_mat_vec_iq4_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ4_KS:
-            mul_mat_vec_iq4_ks_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ4_KSS:
-            mul_mat_vec_iq4_kss_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ2_KS:
-            mul_mat_vec_iq2_ks_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ5_K:
-            mul_mat_vec_iq5_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ6_K:
-            mul_mat_vec_iq6_k_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        case GGML_TYPE_IQ3_S:
-            mul_mat_vec_iq3_s_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
-            break;
-        default:
-            GGML_ABORT("fatal error");
-            break;
-    }
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
     GGML_UNUSED(src1_ddf_i);
-    GGML_UNUSED(src1_ncols);
-    GGML_UNUSED(src1_padded_row_size);
+}
+
+void ggml_cuda_op_mul_mat_vec_q_id(
+    ggml_backend_cuda_context & ctx,
+    const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+    const char * src0_dd_i, const float * src1_ddf_i,
+    const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+    const int64_t src1_padded_row_size, cudaStream_t stream) {
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne10 = src1->ne[0];
+    GGML_ASSERT(ne10 % QK8_1 == 0);
+    GGML_ASSERT(src0->ne[3] == 1 && src1->ne[3] == 1 && dst->ne[3] == 1);
+    GGML_ASSERT(src1->ne[1] == 1 && src1->ne[2] == 1);
+    GGML_ASSERT(ids->ne[0] == dst->ne[2]);
+
+    const int64_t ne0 = dst->ne[0];
+
+    ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
+        ne00, ne0, dst->ne[2],
+        src0->nb[2], src1->nb[2], dst->nb[2], ids->nb[0],
+        src0_dd_i, src1_ddq_i, dst_dd_i, (const char *)ids->data,
+        row_low, row_high, src1_ncols,
+        src1_padded_row_size, stream);
+
+    GGML_UNUSED(src1_ddf_i);
 }
 
 bool ggml_cuda_mmvq_type_supported(ggml_type src0_type) {

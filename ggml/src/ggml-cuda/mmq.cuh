@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2024 The ggml authors
+// Copyright (C) 2024 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #pragma once
 
 #include "common.cuh"
@@ -75,6 +82,7 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
             return MMQ_Q8_1_DS_LAYOUT_DS4;
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_KS:
             return MMQ_Q8_1_DS_LAYOUT_D4;
         default:
             GGML_ABORT("fatal error");
@@ -153,26 +161,28 @@ static constexpr __device__ int get_mmq_y_device() {
 #define MMQ_DP4A_TXS_Q6_K    tile_x_sizes{mmq_y*WARP_SIZE*2 + mmq_y, mmq_y*WARP_SIZE/QI6_K   + mmq_y/QI6_K,     mmq_y*WARP_SIZE/8 + mmq_y/8}
 
 static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml_type type, int mmq_y) {
-    return type == GGML_TYPE_Q4_0 ? MMQ_DP4A_TXS_Q4_0 :
-        type == GGML_TYPE_Q4_1    ? MMQ_DP4A_TXS_Q4_1 :
-        type == GGML_TYPE_Q5_0    ? MMQ_DP4A_TXS_Q8_0 :
-        type == GGML_TYPE_Q5_1    ? MMQ_DP4A_TXS_Q8_1 :
-        type == GGML_TYPE_Q6_0    ? MMQ_DP4A_TXS_Q8_0 :
-        type == GGML_TYPE_Q8_0    ? MMQ_DP4A_TXS_Q8_0 :
-        type == GGML_TYPE_Q2_K    ? MMQ_DP4A_TXS_Q2_K :
-        type == GGML_TYPE_Q3_K    ? MMQ_DP4A_TXS_Q3_K :
-        type == GGML_TYPE_Q4_K    ? MMQ_DP4A_TXS_Q4_K :
-        type == GGML_TYPE_Q5_K    ? MMQ_DP4A_TXS_Q5_K :
-        type == GGML_TYPE_Q6_K    ? MMQ_DP4A_TXS_Q6_K :
-        type == GGML_TYPE_IQ2_XXS ? MMQ_DP4A_TXS_Q8_0 :
-        type == GGML_TYPE_IQ2_XS  ? MMQ_DP4A_TXS_Q8_0_16 :
-        type == GGML_TYPE_IQ2_S   ? MMQ_DP4A_TXS_Q8_0_16 :
-        type == GGML_TYPE_IQ3_XXS ? MMQ_DP4A_TXS_Q8_0 :
-        type == GGML_TYPE_IQ3_S   ? MMQ_DP4A_TXS_Q8_0 :
-        type == GGML_TYPE_IQ1_S   ? MMQ_DP4A_TXS_Q8_0 :
-        type == GGML_TYPE_IQ4_XS  ? MMQ_DP4A_TXS_Q8_0 :
-        type == GGML_TYPE_IQ4_NL  ? MMQ_DP4A_TXS_Q8_0 :
-        tile_x_sizes{0, 0, 0};
+    switch (type) {
+        case GGML_TYPE_Q4_1    : return MMQ_DP4A_TXS_Q4_1;
+        case GGML_TYPE_Q5_0    : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_Q5_1    : return MMQ_DP4A_TXS_Q8_1;
+        case GGML_TYPE_Q6_0    : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_Q8_0    : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_Q2_K    : return MMQ_DP4A_TXS_Q2_K;
+        case GGML_TYPE_Q3_K    : return MMQ_DP4A_TXS_Q3_K;
+        case GGML_TYPE_Q4_K    : return MMQ_DP4A_TXS_Q4_K;
+        case GGML_TYPE_Q5_K    : return MMQ_DP4A_TXS_Q5_K;
+        case GGML_TYPE_Q6_K    : return MMQ_DP4A_TXS_Q6_K;
+        case GGML_TYPE_IQ2_XXS : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_IQ2_XS  : return MMQ_DP4A_TXS_Q8_0_16;
+        case GGML_TYPE_IQ2_S   : return MMQ_DP4A_TXS_Q8_0_16;
+        case GGML_TYPE_IQ3_XXS : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_IQ3_S   : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_IQ1_S   : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_IQ4_XS  : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_IQ4_NL  : return MMQ_DP4A_TXS_Q8_0;
+        case GGML_TYPE_IQ4_KS  : return MMQ_DP4A_TXS_Q8_0;
+        default                : return tile_x_sizes{0, 0, 0};
+    }
 }
 
 #define MMQ_MMA_TILE_X_K_Q8_0 (2*WARP_SIZE + 2*WARP_SIZE/QI8_0                 + 4)
@@ -188,26 +198,29 @@ static_assert(MMQ_MMA_TILE_X_K_Q3_K % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_Q6_K % 8 == 4, "Wrong padding.");
 
 static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
-    return type == GGML_TYPE_Q4_0 ? MMQ_MMA_TILE_X_K_Q8_0 :
-        type == GGML_TYPE_Q4_1    ? MMQ_MMA_TILE_X_K_Q8_1 :
-        type == GGML_TYPE_Q5_0    ? MMQ_MMA_TILE_X_K_Q8_0 :
-        type == GGML_TYPE_Q5_1    ? MMQ_MMA_TILE_X_K_Q8_1 :
-        type == GGML_TYPE_Q6_0    ? MMQ_MMA_TILE_X_K_Q8_0 :
-        type == GGML_TYPE_Q8_0    ? MMQ_MMA_TILE_X_K_Q8_0 :
-        type == GGML_TYPE_Q2_K    ? MMQ_MMA_TILE_X_K_Q2_K :
-        type == GGML_TYPE_Q3_K    ? MMQ_MMA_TILE_X_K_Q3_K :
-        type == GGML_TYPE_Q4_K    ? MMQ_MMA_TILE_X_K_Q8_1 :
-        type == GGML_TYPE_Q5_K    ? MMQ_MMA_TILE_X_K_Q8_1 :
-        type == GGML_TYPE_Q6_K    ? MMQ_MMA_TILE_X_K_Q6_K :
-        type == GGML_TYPE_IQ2_XXS ? MMQ_MMA_TILE_X_K_Q8_0 :
-        type == GGML_TYPE_IQ2_XS  ? MMQ_MMA_TILE_X_K_Q3_K :
-        type == GGML_TYPE_IQ2_S   ? MMQ_MMA_TILE_X_K_Q3_K :
-        type == GGML_TYPE_IQ3_XXS ? MMQ_MMA_TILE_X_K_Q8_0 :
-        type == GGML_TYPE_IQ3_S   ? MMQ_MMA_TILE_X_K_Q8_0 :
-        type == GGML_TYPE_IQ1_S   ? MMQ_MMA_TILE_X_K_Q8_0 :
-        type == GGML_TYPE_IQ4_XS  ? MMQ_MMA_TILE_X_K_Q8_0 :
-        type == GGML_TYPE_IQ4_NL  ? MMQ_MMA_TILE_X_K_Q8_0 :
-        0;
+    switch (type) {
+        case GGML_TYPE_Q4_0    : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_Q4_1    : return MMQ_MMA_TILE_X_K_Q8_1;
+        case GGML_TYPE_Q5_0    : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_Q5_1    : return MMQ_MMA_TILE_X_K_Q8_1;
+        case GGML_TYPE_Q6_0    : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_Q8_0    : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_Q2_K    : return MMQ_MMA_TILE_X_K_Q2_K;
+        case GGML_TYPE_Q3_K    : return MMQ_MMA_TILE_X_K_Q3_K;
+        case GGML_TYPE_Q4_K    : return MMQ_MMA_TILE_X_K_Q8_1;
+        case GGML_TYPE_Q5_K    : return MMQ_MMA_TILE_X_K_Q8_1;
+        case GGML_TYPE_Q6_K    : return MMQ_MMA_TILE_X_K_Q6_K;
+        case GGML_TYPE_IQ2_XXS : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_IQ2_XS  : return MMQ_MMA_TILE_X_K_Q3_K;
+        case GGML_TYPE_IQ2_S   : return MMQ_MMA_TILE_X_K_Q3_K;
+        case GGML_TYPE_IQ3_XXS : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_IQ3_S   : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_IQ1_S   : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_IQ4_XS  : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_IQ4_NL  : return MMQ_MMA_TILE_X_K_Q8_0;
+        case GGML_TYPE_IQ4_KS  : return MMQ_MMA_TILE_X_K_Q8_0;
+        default                : return 0;
+    }
 }
 
 #define MMQ_TILE_Y_K (WARP_SIZE + WARP_SIZE/QI8_1)
@@ -251,7 +264,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q4_0 * bxi = (const block_q4_0 *) x + kbx0 + i*stride + kbx;
+        const block_q4_0 * bxi = (const block_q4_0 *)(x + i*stride) + kbx0 + kbx;
         const int qs0 = get_int_b2(bxi->qs, kqsx);
 
 #ifdef INT8_MMA_AVAILABLE
@@ -273,7 +286,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q4_0 * bxi = (const block_q4_0 *) x + kbx0 + i*stride + kbxd;
+        const block_q4_0 * bxi = (const block_q4_0 *)(x + i*stride) + kbx0 + kbxd;
 
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0       + kbxd] = bxi->d;
@@ -346,7 +359,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q4_1 * bxi = (const block_q4_1 *) x + kbx0 + i*stride + kbx;
+        const block_q4_1 * bxi = (const block_q4_1 *)(x + i*stride) + kbx0 + kbx;
         const int qs0 = get_int_b4(bxi->qs, kqsx);
 
 #ifdef INT8_MMA_AVAILABLE
@@ -368,7 +381,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q4_1 * bxi = (const block_q4_1 *) x + kbx0 + i*stride + kbxd;
+        const block_q4_1 * bxi = (const block_q4_1 *)(x + i*stride) + kbx0 + kbxd;
 
 #ifdef INT8_MMA_AVAILABLE
         x_dm[i*MMQ_MMA_TILE_X_K_Q8_1       + kbxd] = bxi->dm;
@@ -441,7 +454,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q5_0 * bxi = (const block_q5_0 *) x + kbx0 + i*stride + kbx;
+        const block_q5_0 * bxi = (const block_q5_0 *)(x + i*stride) + kbx0 + kbx;
 
         const int ql = get_int_b2(bxi->qs, kqsx);
         const int qh = get_int_b2(bxi->qh, 0) >> (4 * (threadIdx.x % QI5_0));
@@ -480,7 +493,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q5_0 * bxi = (const block_q5_0 *) x + kbx0 + i*stride + kbxd;
+        const block_q5_0 * bxi = (const block_q5_0 *)(x + i*stride) + kbx0 + kbxd;
 
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0       + kbxd] = bxi->d;
@@ -513,7 +526,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q5_1 * bxi = (const block_q5_1 *) x + kbx0 + i*stride + kbx;
+        const block_q5_1 * bxi = (const block_q5_1 *)(x + i*stride) + kbx0 + kbx;
 
         const int ql = get_int_b4(bxi->qs, kqsx);
         const int qh = get_int_b4(bxi->qh, 0) >> (4 * (threadIdx.x % QI5_1));
@@ -550,7 +563,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q5_1 * bxi = (const block_q5_1 *) x + kbx0 + i*stride + kbxd;
+        const block_q5_1 * bxi = (const block_q5_1 *)(x + i*stride) + kbx0 + kbxd;
 
 #ifdef INT8_MMA_AVAILABLE
         x_dm[i*MMQ_MMA_TILE_X_K_Q8_1       + kbxd] = bxi->dm;
@@ -583,7 +596,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q6_0 * bxi = (const block_q6_0 *) x + kbx0 + i*stride + kbx;
+        const block_q6_0 * bxi = (const block_q6_0 *)(x + i*stride) + kbx0 + kbx;
 
         const int ql = get_int_b2(bxi->qs, kqsx);
         const int qh = get_int_b2(bxi->qh, kqsx%2) >> 4*(kqsx/2);
@@ -613,7 +626,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q6_0 * bxi = (const block_q6_0 *) x + kbx0 + i*stride + kbxd;
+        const block_q6_0 * bxi = (const block_q6_0 *)(x + i*stride) + kbx0 + kbxd;
 
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0       + kbxd] = bxi->d;
@@ -646,7 +659,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q8_0 * bxi = (const block_q8_0 *) x + kbx0 + i*stride + kbx;
+        const block_q8_0 * bxi = (const block_q8_0 *)(x + i*stride) + kbx0 + kbx;
 
 #ifdef INT8_MMA_AVAILABLE
         x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 0         + threadIdx.x] = get_int_b2(bxi[0].qs,               kqsx);
@@ -668,7 +681,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q8_0 * bxi = (const block_q8_0 *) x + kbx0 + i*stride + kbxd;
+        const block_q8_0 * bxi = (const block_q8_0 *)(x + i*stride) + kbx0 + kbxd;
 
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0             + kbxd] = bxi->d;
@@ -1034,7 +1047,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q2_K * bxi = (const block_q2_K *) x + kbx0 + i*stride;
+        const block_q2_K * bxi = (const block_q2_K *)(x + i*stride) + kbx0;
 
         const int x_ql_0 = get_int_b2(bxi->qs, kqsx);
 
@@ -1265,7 +1278,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q3_K * bxi = (const block_q3_K *) x + kbx0 + i*stride;
+        const block_q3_K * bxi = (const block_q3_K *)(x + i*stride) + kbx0;
 
         const int x_ql_0 = get_int_b2(bxi->qs,    kqsx);
         const int x_qh_0 = get_int_b2(bxi->hmask, kqsx % (QI3_K/2)) >> (4 * (kqsx / (QI3_K/2)));
@@ -1295,7 +1308,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q3_K * bxi = (const block_q3_K *) x + kbx0 + i*stride;
+        const block_q3_K * bxi = (const block_q3_K *)(x + i*stride) + kbx0;
 
         const int ksc = threadIdx.x % (WARP_SIZE/8);
 
@@ -1331,7 +1344,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q3_K * bxi = (const block_q3_K *) x + kbx0 + i*stride;
+        const block_q3_K * bxi = (const block_q3_K *)(x + i*stride) + kbx0;
 
         x_df[i] = bxi->d;
     }
@@ -1402,7 +1415,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride;
+        const block_q4_K * bxi = (const block_q4_K *)(x + i*stride) + kbx0;
         const int qs0 = get_int_b4(bxi->qs, threadIdx.x);
 
 #ifdef INT8_MMA_AVAILABLE
@@ -1423,7 +1436,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride;
+        const block_q4_K * bxi = (const block_q4_K *)(x + i*stride) + kbx0;
 
         const int * scales = (const int *) bxi->scales;
         const int ksc = threadIdx.x % (WARP_SIZE/16);
@@ -1452,7 +1465,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride;
+        const block_q4_K * bxi = (const block_q4_K *)(x + i*stride) + kbx0;
 
         x_dm[i] = bxi->dm;
     }
@@ -1465,7 +1478,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride + (threadIdx.x % (WARP_SIZE/8)) / (QI4_K/8);
+        const block_q4_K * bxi = (const block_q4_K *)(x + i*stride) + kbx0 + (threadIdx.x % (WARP_SIZE/8)) / (QI4_K/8);
 
         const int * scales = (const int *) bxi->scales;
 
@@ -1531,7 +1544,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = (const block_q5_K *) x + kbx0 + i*stride;
+        const block_q5_K * bxi = (const block_q5_K *)(x + i*stride) + kbx0;
         const int ky = QR5_K*threadIdx.x;
 
         const int ql = get_int_b4(bxi->qs, threadIdx.x);
@@ -1564,7 +1577,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = (const block_q5_K *) x + kbx0 + i*stride;
+        const block_q5_K * bxi = (const block_q5_K *)(x + i*stride) + kbx0;
 
         const int * scales = (const int *) bxi->scales;
         const int ksc = threadIdx.x % (WARP_SIZE/16);
@@ -1593,7 +1606,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = (const block_q5_K *) x + kbx0 + i*stride;
+        const block_q5_K * bxi = (const block_q5_K *)(x + i*stride) + kbx0;
 
         x_dm[i] = bxi->dm;
     }
@@ -1606,7 +1619,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = (const block_q5_K *) x + kbx0 + i*stride;
+        const block_q5_K * bxi = (const block_q5_K *)(x + i*stride) + kbx0;
 
         const int * scales = (const int *) bxi->scales;
 
@@ -1673,7 +1686,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q6_K * bxi = (const block_q6_K *) x + kbx0 + i*stride;
+        const block_q6_K * bxi = (const block_q6_K *)(x + i*stride) + kbx0;
 
         const int ql = get_int_b2(bxi->ql, threadIdx.x);
         const int ql0 = (ql >> 0) & 0x0F0F0F0F;
@@ -1706,7 +1719,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q6_K * bxi = (const block_q6_K *) x + kbx0 + i*stride + kbxd;
+        const block_q6_K * bxi = (const block_q6_K *)(x + i*stride) + kbx0 + kbxd;
 
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q6_K       + kbxd] = bxi->d;
@@ -1723,7 +1736,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_q6_K * bxi = (const block_q6_K *) x + kbx0 + i*stride + (threadIdx.x % (WARP_SIZE/8)) / 4;
+        const block_q6_K * bxi = (const block_q6_K *)(x + i*stride) + kbx0 + (threadIdx.x % (WARP_SIZE/8)) / 4;
 
 #ifdef INT8_MMA_AVAILABLE
         x_sc[i*MMQ_MMA_TILE_X_K_Q6_K + threadIdx.x % (WARP_SIZE/8)] = get_int_b2(bxi->scales, threadIdx.x % (QI6_K/8));
@@ -1898,7 +1911,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq4_nl * bxi = (const block_iq4_nl *) x + kbx0 + i*stride + kbx;
+        const block_iq4_nl * bxi = (const block_iq4_nl *)(x + i*stride) + kbx0 + kbx;
 
         const int aux_q4 = get_int_b2(bxi->qs, kqsx);
         const int2 v = get_int_from_table_16(aux_q4);
@@ -1923,7 +1936,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq4_nl * bxi = (const block_iq4_nl *) x + kbx0 + i*stride + kbxd;
+        const block_iq4_nl * bxi = (const block_iq4_nl *)(x + i*stride) + kbx0 + kbxd;
 
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kbxd] = __half2float(bxi->d);
@@ -1955,7 +1968,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq2_xxs * bxi = (const block_iq2_xxs *) x + kbx0 + i*stride;
+        const block_iq2_xxs * bxi = (const block_iq2_xxs *)(x + i*stride) + kbx0;
 
         const int q2 = get_int_b2(bxi->qs, 2*kqsx+0);
         const uint8_t * aux8 = (const uint8_t *) &q2;
@@ -2013,7 +2026,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq2_xs * bxi = (const block_iq2_xs *) x + kbx0 + i*stride;
+        const block_iq2_xs * bxi = (const block_iq2_xs *)(x + i*stride) + kbx0;
 
         const int2 q2_packed = make_int2(get_int_b2(bxi->qs, 2*kqsx+0), get_int_b2(bxi->qs, 2*kqsx+1));
         const uint16_t * q2 = (const uint16_t *) &q2_packed;
@@ -2069,7 +2082,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq2_s * bxi = (const block_iq2_s *) x + kbx0 + i*stride;
+        const block_iq2_s * bxi = (const block_iq2_s *)(x + i*stride) + kbx0;
 
         const int       qs_packed = get_int_b2(bxi->qs, kqsx);
         const uint8_t * qs        = (const uint8_t *) &qs_packed;
@@ -2132,7 +2145,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq3_xxs * bxi = (const block_iq3_xxs *) x + kbx0 + i*stride;
+        const block_iq3_xxs * bxi = (const block_iq3_xxs *)(x + i*stride) + kbx0;
 
         const int2 q3_packed = make_int2(get_int_b2(bxi->qs, 2*kqsx+0), get_int_b2(bxi->qs, 2*kqsx+1));
         const uint8_t * q3 = (const uint8_t *) &q3_packed;
@@ -2188,7 +2201,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq3_s * bxi = (const block_iq3_s *) x + kbx0 + i*stride;
+        const block_iq3_s * bxi = (const block_iq3_s *)(x + i*stride) + kbx0;
 
         const int2      qs_packed = make_int2(get_int_b2(bxi->qs, 2*kqsx+0), get_int_b2(bxi->qs, 2*kqsx+1));
         const uint8_t * qs        = (const uint8_t *) &qs_packed;
@@ -2251,7 +2264,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq1_s * bxi = (const block_iq1_s *) x + kbx0 + i*stride;
+        const block_iq1_s * bxi = (const block_iq1_s *)(x + i*stride) + kbx0;
 
         const int       qs_packed = get_int_b2(bxi->qs, kqsx);
         const uint8_t * qs        = (const uint8_t *) &qs_packed;
@@ -2308,7 +2321,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq4_xs * bxi = (const block_iq4_xs *) x + kbx0 + i*stride + kbx;
+        const block_iq4_xs * bxi = (const block_iq4_xs *)(x + i*stride) + kbx0 + kbx;
 
         const int aux_q4 = get_int_b4(bxi->qs, kqsx);
         const int2 v = get_int_from_table_16(aux_q4);
@@ -2330,7 +2343,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq4_xs * bxi = (const block_iq4_xs *) x + kbx0 + i*stride;
+        const block_iq4_xs * bxi = (const block_iq4_xs *)(x + i*stride) + kbx0;
 
         const float d = __half2float(bxi->d);
 
@@ -2341,6 +2354,64 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + threadIdx.x % 8] = d * (ls - 32);
 #else
         x_df[i*(WARP_SIZE/4) + i/4   + threadIdx.x % 8] = d * (ls - 32);
+#endif // INT8_MMA_AVAILABLE
+    }
+}
+
+template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq4_ks(
+    const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride) {
+
+#ifdef INT8_MMA_AVAILABLE
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + WARP_SIZE*2);
+#else
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_IQ4_XS, mmq_y);
+    int   * x_qs = (int   *)  x_tile;
+    float * x_df = (float *) (x_qs + txs.qs);
+#endif // INT8_MMA_AVAILABLE
+
+    const int kbx  = 0;           // threadIdx.x / QI4_XS
+    const int kqsx = threadIdx.x; // threadIdx.x % QI4_XS
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
+        int i = i0 + threadIdx.y;
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const block_iq4_ks * bxi = (const block_iq4_ks *)(x + i*stride + sizeof(float)) + kbx0 + kbx;
+
+        auto values = iq4k_values + ((bxi->scales[kqsx/4] & 1) << 4);
+        const int aux_q4 = get_int_b4(bxi->qs, kqsx);
+        const int2 v = get_int_from_table_16(aux_q4, values);
+        const int k0 = 8 * (threadIdx.x / 4) + threadIdx.x % 4;
+#ifdef INT8_MMA_AVAILABLE
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + k0 + 0] = v.x;
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + k0 + 4] = v.y;
+#else
+        x_qs[i*(2*WARP_SIZE + 1)     + k0 + 0] = v.x;
+        x_qs[i*(2*WARP_SIZE + 1)     + k0 + 4] = v.y;
+#endif // INT8_MMA_AVAILABLE
+    }
+
+#pragma unroll
+    for (int i0 = 0; i0 < mmq_y; i0 += nwarps * 4) {
+        int i = i0 + threadIdx.y * 4 + threadIdx.x / (WARP_SIZE/4);
+
+        if (need_check) {
+            i = min(i, i_max);
+        }
+
+        const float * dptr = (const float *)(x + i*stride);
+        const block_iq4_ks * bxi = (const block_iq4_ks *)(dptr + 1) + kbx0;
+        const int ls = (bxi->scales[threadIdx.x % 8] & 254) - 127;
+
+#ifdef INT8_MMA_AVAILABLE
+        x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + threadIdx.x % 8] = dptr[0] * ls;
+#else
+        x_df[i*(WARP_SIZE/4) + i/4   + threadIdx.x % 8] = dptr[0] * ls;
 #endif // INT8_MMA_AVAILABLE
     }
 }
@@ -2566,6 +2637,14 @@ struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ4_XS> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
 };
 
+template <int mmq_x, int mmq_y, int nwarps, bool need_check>
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ4_KS> {
+    static constexpr int              vdr          = VDR_IQ4_XS_Q8_1_MMQ;
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq4_ks<mmq_y, nwarps, need_check>;
+    static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_q8_1_mma<mmq_x, mmq_y, nwarps, MMQ_Q8_1_DS_LAYOUT_D4>;
+    static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
+};
+
 template <ggml_type type, int mmq_x, int nwarps, bool need_check, bool fixup>
 static __device__ void mul_mat_q_process_tile(
     const char * __restrict__ x, const char * __restrict__ yc, float * __restrict__ dst, float * __restrict__ tmp_fixup,
@@ -2598,7 +2677,7 @@ static __device__ void mul_mat_q_process_tile(
     const int * y = (const int *) yc + jt*(mmq_x*sizeof(block_q8_1_mmq)/sizeof(int));
 
     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-        load_tiles(x, tile_x, stride01*it*mmq_y + kb0, tile_x_max_i, stride01);
+        load_tiles(x + stride01*it*mmq_y, tile_x, kb0, tile_x_max_i, stride01);
 
         {
             const int * by0 = y + stride11*(kb0*(qk*sizeof(block_q8_1_mmq) / (4*QK8_1*sizeof(int))) + 0*sizeof(block_q8_1_mmq)/sizeof(int));
@@ -2879,6 +2958,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
         mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, 0, stream>>>
             (args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.ne11, args.ne0, block_nums_mmq.x);
+
     } else {
         constexpr bool need_check = true;
 
@@ -2887,6 +2967,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
         mul_mat_q_stream_k_fixup<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, 0, stream>>>
             (args.dst, tmp_fixup.ptr, args.ne00, args.ne01, args.ne11, args.ne0, block_nums_mmq.x);
+
     }
 }
 
@@ -3000,6 +3081,7 @@ extern DECL_MMQ_CASE(GGML_TYPE_IQ3_S);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ1_S);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NL);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ4_KS);
 
 // -------------------------------------------------------------------------------------------------------------------------
 

@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2025 The llama.cpp authors
+// Copyright (C) 2024-2025 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #if defined(_MSC_VER)
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
@@ -265,6 +272,9 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         params.kv_overrides.emplace_back();
         params.kv_overrides.back().key[0] = 0;
     }
+    if (!params.tensor_buft_overrides.empty()) {
+        params.tensor_buft_overrides.push_back({nullptr, nullptr});
+    }
 
     return true;
 }
@@ -285,6 +295,60 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
     }
 
     return true;
+}
+
+namespace {
+bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tensor_buft_override>& overrides) {
+    /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
+    if (buft_list.empty()) {
+        // enumerate all the devices and add their buffer types to the list
+        for (size_t i = 0; i < ggml_backend_reg_get_count(); ++i) {
+            //auto * dev = ggml_backend_reg_get_name(i);
+            auto * buft = ggml_backend_reg_get_default_buffer_type(i);
+            if (buft) {
+                buft_list[ggml_backend_buft_name(buft)] = buft;
+            }
+        }
+    }
+    for (const auto & override : string_split<std::string>(value, ',')) {
+        std::string::size_type pos = override.find('=');
+        if (pos == std::string::npos) {
+            fprintf(stderr, "Invalid buft override argument %s\n", value.c_str());
+            return false;
+        }
+        std::string tensor_name = override.substr(0, pos);
+        std::string buffer_type = override.substr(pos + 1);
+        if (buft_list.find(buffer_type) == buft_list.end()) {
+            fprintf(stderr, "Available buffer types:\n");
+            for (const auto & it : buft_list) {
+                fprintf(stderr, "  %s\n", ggml_backend_buft_name(it.second));
+            }
+            return false;
+        }
+        overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+    }
+    return true;
+}
+template<class T1, class T2>
+std::vector<std::pair<T1,T2>> string_split_pairs(const std::string & str, char delim) {
+    std::vector<std::pair<T1,T2>> values;
+    std::istringstream str_stream(str);
+    std::string token;
+    T1 first_value;
+    int i = 0;
+    while (std::getline(str_stream, token, delim)) {
+        std::istringstream token_stream(token);
+        if (i%2 == 0) {
+            token_stream >> first_value;
+        } else {
+            T2 value;
+            token_stream >> value;
+            values.emplace_back(first_value, value);
+        }
+        i++;
+    }
+    return values;
+}
 }
 
 #define CHECK_ARG if (++i >= argc) { invalid_param = true; return true; }
@@ -813,6 +877,31 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.flash_attn = true;
         return true;
     }
+    if (arg == "-mla" || arg == "--mla-use") {
+        CHECK_ARG
+        params.mla_attn = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "-amb" || arg == "--attention-max-batch") {
+        CHECK_ARG
+        params.attn_max_batch = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "-fmoe" || arg == "--fused-moe") {
+        params.fused_moe_up_gate = true;
+        return true;
+    }
+    if (arg == "-ser" || arg == "--smart-expert-reduction") {
+        CHECK_ARG
+        auto values = string_split_pairs<int,float>(argv[i], ',');
+        if (values.size() == 1) {
+            params.min_experts    = values.front().first;
+            params.thresh_experts = values.front().second;
+        } else {
+            invalid_param = true;
+        }
+        return true;
+    }
     if (arg == "-co" || arg == "--color") {
         params.use_color = true;
         return true;
@@ -909,6 +998,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "-rtr" || arg == "--run-time-repack") {
         params.repack_tensors = true;
         params.use_mmap = false;
+        return true;
+    }
+    if (arg == "-thp" || arg == "--transparent-huge-pages") {
+        params.use_thp = true;
         return true;
     }
     if (arg == "--numa") {
@@ -1109,6 +1202,14 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             fprintf(stderr, "error: Invalid type for KV override: %s\n", argv[i]);
             invalid_param = true;
             return true;
+        }
+        return true;
+    }
+    if (arg == "--override-tensor" || arg == "-ot") {
+        CHECK_ARG
+        if (!parse_buft_overrides(std::string{argv[i]}, params.tensor_buft_overrides)) {
+            fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
+            invalid_param = true;
         }
         return true;
     }
@@ -1356,6 +1457,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.warmup = false;
         return true;
     }
+    if (arg == "--output-format") {
+        CHECK_ARG
+        std::string value(argv[i]);
+        /**/ if (value == "jsonl") { params.sweep_bench_output_jsonl = true; }
+        else if (value == "md") { params.sweep_bench_output_jsonl = false; }
+        else { invalid_param = true; }
+        return true;
+    }
+
 #ifndef LOG_DISABLE_LOGS
     // Parse args for logging parameters
     if (log_param_single_parse(argv[i])) {
@@ -1452,6 +1562,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --keep N",               "number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep });
     options.push_back({ "*",           "       --chunks N",             "max number of chunks to process (default: %d, -1 = all)", params.n_chunks });
     options.push_back({ "*",           "-fa,   --flash-attn",           "enable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
+    options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
+    options.push_back({ "*",           "-fmoe, --fused-moe",            "enable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
+    options.push_back({ "*",         "-ser,  --smart-expert-reduction,","experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
                                                                         "in conversation mode, this will be used as system prompt\n"
                                                                         "(default: '%s')", params.prompt.c_str() });
@@ -2164,8 +2278,10 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         if (bos != -1) {
             tmp.push_back(bos);
         }
-        tmp.push_back(eos);
-
+	else
+	{
+	    tmp.push_back(eos);
+	}
         if (llama_model_has_encoder(model)) {
             llama_encode(lctx, llama_batch_get_one(tmp.data(), tmp.size(), 0, 0));
             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
@@ -2211,11 +2327,18 @@ struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & 
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.repack_tensors  = params.repack_tensors;
+    mparams.use_thp         = params.use_thp;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
         GGML_ASSERT(params.kv_overrides.back().key[0] == 0 && "KV overrides not terminated with empty key");
         mparams.kv_overrides = params.kv_overrides.data();
+    }
+    if (params.tensor_buft_overrides.empty()) {
+        mparams.tensor_buft_overrides = NULL;
+    } else {
+        GGML_ASSERT(params.tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
+        mparams.tensor_buft_overrides = params.tensor_buft_overrides.data();
     }
 
     return mparams;
@@ -2252,6 +2375,9 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
     if (s == "q6_0") {
         return GGML_TYPE_Q6_0;
     }
+    if (s == "q8_KV") {
+        return GGML_TYPE_Q8_KV;
+    }
 
     throw std::runtime_error("Invalid cache type: " + s);
 }
@@ -2283,6 +2409,11 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;
     cparams.flash_attn        = params.flash_attn;
+    cparams.mla_attn          = params.mla_attn;
+    cparams.attn_max_batch    = params.attn_max_batch;
+    cparams.fused_moe_up_gate = params.fused_moe_up_gate;
+    cparams.min_experts       = params.min_experts;
+    cparams.thresh_experts    = params.thresh_experts;
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
@@ -3252,6 +3383,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "n_probs: %d # only used by server binary, default: 0\n", sparams.n_probs);
     fprintf(stream, "no_mmap: %s # default: false\n", !params.use_mmap ? "true" : "false");
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
+    fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
     fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);
@@ -3280,6 +3412,10 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "simple_io: %s # default: false\n", params.simple_io ? "true" : "false");
     fprintf(stream, "cont_batching: %s # default: false\n", params.cont_batching ? "true" : "false");
     fprintf(stream, "flash_attn: %s # default: false\n", params.flash_attn ? "true" : "false");
+    fprintf(stream, "mla_attn: %d # default: 0\n", params.mla_attn);
+    fprintf(stream, "attn_max_batch: %d # default: 0\n", params.attn_max_batch);
+    fprintf(stream, "fused_moe: %s # default: false\n", params.fused_moe_up_gate ? "true" : "false");
+    fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
     const std::vector<float> tensor_split_vector(params.tensor_split, params.tensor_split + llama_max_devices());

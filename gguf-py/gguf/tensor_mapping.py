@@ -82,6 +82,9 @@ class TensorNameMap:
             "rope.freqs",  # llama-pth
             "rotary_pos_emb.inv_freq",  # chatglm
         ),
+
+        MODEL_TENSOR.ROPE_FACTORS_LONG: (),
+        MODEL_TENSOR.ROPE_FACTORS_SHORT: (),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -131,6 +134,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
+            "layers.{bid}.attention.wqkv",
         ),
 
         # Attention query
@@ -175,7 +179,8 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.out_proj",                       # mpt
             "transformer.h.{bid}.self_attention.dense",                     # falcon
             "h.{bid}.self_attention.dense",                                 # bloom
-            "model.layers.{bid}.self_attn.o_proj",                          # llama-hf
+            "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe olmo2
+            "model.layers.{bid}.self_attn.linear_attn",                     # deci
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert
             "transformer.h.{bid}.attn.out_proj",                            # gpt-j
@@ -446,6 +451,14 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.kv_b_proj", # deepseek2
         ),
 
+        MODEL_TENSOR.ATTN_K_B: (
+            "model.layers.{bid}.self_attn.k_b_proj",  # deepseek2
+        ),
+
+        MODEL_TENSOR.ATTN_V_B: (
+            "model.layers.{bid}.self_attn.v_b_proj",  # deepseek2
+        ),
+
         MODEL_TENSOR.ATTN_Q_A_NORM: (
             "model.layers.{bid}.self_attn.q_a_layernorm", # deepseek2
         ),
@@ -456,10 +469,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_SUB_NORM: (
             "model.layers.{bid}.self_attn.inner_attn_ln",  # bitnet
+            "layers.{bid}.attention.attn_sub_norm",  # bitnet
+            "model.layers.{bid}.self_attn.attn_sub_norm",
         ),
 
         MODEL_TENSOR.FFN_SUB_NORM: (
             "model.layers.{bid}.mlp.ffn_layernorm",  # bitnet
+            "layers.{bid}.feed_forward.ffn_sub_norm", # bitnet
+            "model.layers.{bid}.mlp.ffn_sub_norm",
         ),
 
         MODEL_TENSOR.DEC_ATTN_NORM: (

@@ -1,3 +1,10 @@
+//
+// Copyright (C) 2023-2025 The llama.cpp authors
+// Copyright (C) 2024-2025 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #ifndef LLAMA_H
 #define LLAMA_H
 
@@ -93,7 +100,12 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_TEKKEN         = 20,
         LLAMA_VOCAB_PRE_TYPE_SMOLLM         = 21,
         LLAMA_VOCAB_PRE_TYPE_CODESHELL      = 22,
-        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 23, //llama.cpp lists this as 28
+        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 28, //llama.cpp lists this as 28
+        LLAMA_VOCAB_PRE_TYPE_GPT4O          = 29,
+        LLAMA_VOCAB_PRE_TYPE_SUPERBPE       = 30,
+        LLAMA_VOCAB_PRE_TYPE_TRILLION       = 31,
+        LLAMA_VOCAB_PRE_TYPE_BAILINGMOE     = 32,
+        LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
     };
 
     // note: these values should be synchronized with ggml_rope
@@ -180,9 +192,10 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ3_KL        = 146, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ2_KS        = 147, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KSS       = 148, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_KT        = 149, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ3_KT        = 150, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ4_KT        = 151, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q8_KV         = 149, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_KT        = 150, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ3_KT        = 151, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ4_KT        = 152, // except 1d tensors
                                                 //
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
@@ -209,6 +222,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ4_K_R4      = 340, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ5_K_R4      = 341, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KS_R4     = 345, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q8_KV_R8      = 398, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_K_R8       = 399, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
@@ -219,7 +233,8 @@ extern "C" {
         LLAMA_ROPE_SCALING_TYPE_NONE        = 0,
         LLAMA_ROPE_SCALING_TYPE_LINEAR      = 1,
         LLAMA_ROPE_SCALING_TYPE_YARN        = 2,
-        LLAMA_ROPE_SCALING_TYPE_MAX_VALUE   = LLAMA_ROPE_SCALING_TYPE_YARN,
+        LLAMA_ROPE_SCALING_TYPE_LONGROPE    = 3,
+        LLAMA_ROPE_SCALING_TYPE_MAX_VALUE   = LLAMA_ROPE_SCALING_TYPE_LONGROPE, 
     };
 
     enum llama_pooling_type {
@@ -306,6 +321,11 @@ extern "C" {
         };
     };
 
+    struct llama_model_tensor_buft_override {
+        const char * pattern;
+        ggml_backend_buffer_type_t buft;
+    };
+
     struct llama_model_params {
         int32_t n_gpu_layers; // number of layers to store in VRAM
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
@@ -333,12 +353,15 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        const struct llama_model_tensor_buft_override * tensor_buft_overrides;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;    // only load the vocabulary, no weights
         bool use_mmap;      // use mmap if possible
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
         bool repack_tensors;// repack if available
+        bool use_thp;       // uase transparent huge pages (linux only)
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -377,6 +400,11 @@ extern "C" {
         bool embeddings;  // if true, extract embeddings (together with logits)
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
+        int  mla_attn;    // whether to use MLA attention [EXPERIMENTAL]
+        int  attn_max_batch;    // maximum batch size for attention computations [EXPERIMENTAL]
+        bool fused_moe_up_gate; // whether to use fused MoE up/down op [EXPERIMENTAL]
+        int  min_experts;
+        float thresh_experts;
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -405,8 +433,11 @@ extern "C" {
         bool pure;                           // quantize all tensors to the default type
         bool keep_split;                     // quantize to the same number of shards
         bool ignore_imatrix_rules;           // If set to true, the built-in rules for refusing to quantize into certain quants without imatrix are ignored
+        bool only_repack;                    // Only repack tensors
         void * imatrix;                      // pointer to importance matrix data
         void * kv_overrides;                 // pointer to vector containing overrides
+        void * custom_quants;                // pointer to vector containing custom quantization rules
+        void * repack_pattern;               // pointer to a vector containing regexes to be used for matching tensor names. Can be null
     } llama_model_quantize_params;
 
     // grammar types

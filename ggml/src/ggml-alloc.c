@@ -174,6 +174,8 @@ static size_t ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * alloc, size_t siz
             // this should never happen
             fprintf(stderr, "%s: not enough space in the buffer to allocate %zu bytes, largest block available %zu bytes\n",
                     __func__, size, max_avail);
+            fprintf(stderr, "%s: tensor was %s with %g elements and %zu bytes\n", __func__, tensor->name,
+                    1.*ggml_nelements(tensor), ggml_nbytes(tensor));
             GGML_ABORT("not enough space in the buffer");
         }
     }
