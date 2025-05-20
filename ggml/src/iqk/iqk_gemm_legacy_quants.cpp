@@ -2690,7 +2690,7 @@ inline std::pair<mul_mat_t, int> mul_mat_kernel(int int_typeA, int nq) {
         MAKE_FUNCS_ONLY_NRC(mul_mat_q8_0_r8_q8_2, nq);
 #endif
     }
-    else if (typeA == GGML_TYPE_Q8_0) {
+    else if (typeA == GGML_TYPE_Q6_0) {
 #ifdef __aarch64__
         MAKE_FUNCS(mul_mat_qX_0_q8_0<DequantizerQ60, nq);
 #else
