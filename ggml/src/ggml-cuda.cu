@@ -2440,6 +2440,14 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     const ggml_tensor * src1 = dst->src[2];
     const ggml_tensor * ids  = dst->src[3];
 
+    int device_id = ctx.device;
+    bool can_fuse_down = next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
+                         ggml_backend_buffer_is_cuda(next->src[0]->buffer) &&
+                        !ggml_backend_buffer_is_cuda_split(next->src[0]->buffer) &&
+                       ((ggml_backend_cuda_buffer_context *)next->src[0]->buffer->context)->device == device_id &&
+                         ggml_backend_buffer_is_cuda(next->buffer) &&
+                       ((ggml_backend_cuda_buffer_context *)next->buffer->context)->device == device_id;
+
     if (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
         ggml_is_quantized(src0_1->type) &&
         ggml_is_quantized(src0_2->type) &&
@@ -2450,7 +2458,6 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         !ggml_backend_buffer_is_cuda_split(src0_1->buffer) &&
         !ggml_backend_buffer_is_cuda_split(src0_2->buffer) &&
         src1->type == GGML_TYPE_F32) {
-        int device_id = ctx.device;
         ggml_backend_cuda_buffer_context * src0_1_ctx = (ggml_backend_cuda_buffer_context *) src0_1->buffer->context;
         ggml_backend_cuda_buffer_context * src0_2_ctx = (ggml_backend_cuda_buffer_context *) src0_2->buffer->context;
         ggml_backend_cuda_buffer_context * src1_ctx   = (ggml_backend_cuda_buffer_context *) src1->buffer->context;
@@ -2500,12 +2507,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 0, src0_2->ne[1], 1, src1_padded_col_size, stream);
             CUDA_CHECK(cudaGetLastError());
 
-            if (next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
-                ggml_backend_buffer_is_cuda(next->src[0]->buffer) &&
-               !ggml_backend_buffer_is_cuda_split(next->src[0]->buffer) &&
-                ((ggml_backend_cuda_buffer_context *)next->src[0]->buffer->context)->device == device_id &&
-                ggml_backend_buffer_is_cuda(next->buffer) &&
-                ((ggml_backend_cuda_buffer_context *)next->buffer->context)->device == device_id) {
+            if (can_fuse_down) {
 
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], dst->ne[0]*n_ids,
                         (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(), (float *)dst_gate_contiguous.get());
@@ -2599,7 +2601,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     dst_row.nb[3] = nb1;
 
     bool fuse_down = false;
-    if (next && next->op == GGML_OP_MUL_MAT_ID) {
+    if (can_fuse_down) {
         //printf("Fusing MoE down gemm\n");
         fuse_down = true;
         final_dst = *next;

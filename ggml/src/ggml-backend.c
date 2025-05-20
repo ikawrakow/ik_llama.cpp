@@ -20,6 +20,11 @@ const char * ggml_backend_buft_name(ggml_backend_buffer_type_t buft) {
 }
 
 GGML_CALL ggml_backend_buffer_t ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    // TODO
+    //if (size == 0) {
+    //    // return a dummy buffer for zero-sized allocations
+    //    return ggml_backend_buffer_init(buft, NULL, NULL, 0);
+    //}
     return buft->iface.alloc_buffer(buft, size);
 }
 
@@ -92,6 +97,11 @@ size_t ggml_backend_buffer_get_size(ggml_backend_buffer_t buffer) {
 }
 
 void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
+    // get_base is optional if the buffer is zero-sized
+    if (buffer->size == 0) {
+        return NULL;
+    }
+
     void * base = buffer->iface.get_base(buffer);
 
     GGML_ASSERT(base != NULL && "backend buffer base cannot be NULL");
@@ -222,13 +232,13 @@ void ggml_backend_tensor_get_async(ggml_backend_t backend, const struct ggml_ten
 GGML_CALL void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
-    GGML_ASSERT(buf != NULL && "tensor buffer not set");
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
-    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
-
     if (!size) {
         return;
     }
+
+    GGML_ASSERT(buf != NULL && "tensor buffer not set");
+    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
 
 #if IK_PRINT_TIMING
@@ -243,16 +253,18 @@ GGML_CALL void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void *
 
 }
 
-GGML_CALL void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    GGML_ASSERT(tensor);
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+
+    if (size == 0) {
+        return;
+    }
 
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
 
-    if (!size) {
-        return;
-    }
 
 #if IK_PRINT_TIMING
     int64_t tim1 = ggml_time_us();
@@ -1148,7 +1160,7 @@ static int ggml_backend_sched_backend_id(ggml_backend_sched_t sched, ggml_backen
 }
 
 static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, const struct ggml_tensor * tensor, const struct ggml_tensor * op) {
-    ggml_backend_buffer_t buffer = tensor->buffer;
+    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
     if (buffer == NULL) {
         return -1;
     }
@@ -1196,6 +1208,12 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
             SET_CAUSE(tensor, "1.vsrc");
             return cur_backend_id;
         }
+    }
+
+    if (tensor->buffer || (tensor->view_src && tensor->view_src->buffer)) {
+        // since the tensor is pre-allocated, it cannot be moved to another backend
+        ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+        GGML_ABORT("pre-allocated tensor (%s) in a buffer (%s) that cannot run the operation (%s)", tensor->name, ggml_backend_buffer_name(buffer), ggml_op_name(tensor->op));
     }
 
     // graph input
@@ -1679,6 +1697,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         sched->prev_leaf_backend_ids = tmp;
     }
 
+    // mainline: int graph_size = std::max(graph->n_nodes, graph->n_leafs) + sched->n_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2*sched->n_copies;
     int graph_size = graph->n_nodes + sched->n_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2;
     if (sched->graph.size < graph_size) {
         sched->graph.size = graph_size;
@@ -1998,12 +2017,14 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
 
     ggml_backend_sched_split_graph(sched, measure_graph);
 
+    ggml_backend_sched_synchronize(sched);
+
     if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
         return false;
     }
 
     ggml_backend_sched_reset(sched);
-    ggml_backend_sched_synchronize(sched);
+    //ggml_backend_sched_synchronize(sched);
 
     return true;
 }
