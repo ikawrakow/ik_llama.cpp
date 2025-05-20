@@ -2411,9 +2411,12 @@ struct DequantizerIQ4KS final : public BaseDequantizer<block_iq4_ks, true> {
     }
     inline void prepare(int i, int j) {
         bits.prepare16(x[i].qs+64*j);
+        const uint32_t * scales32 = (const uint32_t *)x[i].scales;
+        uint32_t aux32 = scales32[j] & 0x01010101;
+        const uint8_t * aux8 = (const uint8_t *)&aux32;
         for (int k = 0; k < 4; ++k) {
-            bits.b1.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[x[i].scales[4*j+k] & 1], bits.b1.val[k]));
-            bits.b2.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[x[i].scales[4*j+k] & 1], bits.b2.val[k]));
+            bits.b1.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[aux8[k/2+0]], bits.b1.val[k]));
+            bits.b2.val[k] = vreinterpretq_u8_s8(vqtbl1q_s8(values.val[aux8[k/2+2]], bits.b2.val[k]));
         }
     }
 
