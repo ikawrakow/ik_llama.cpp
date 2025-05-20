@@ -3093,9 +3093,9 @@ static inline __m256i trellis_next8(uint32_t val1, uint32_t val2) {
     constexpr uint32_t kb2 = kb1*ka+kb;
     constexpr uint32_t ka3 = ka2*ka;
     constexpr uint32_t kb3 = kb2*ka+kb;
-    __m256i mka = _mm256_setr_epi32(ka, ka1, ka, ka1, ka2, ka3, ka2, ka3);
-    __m256i mkb = _mm256_setr_epi32(kb, kb1, kb, kb1, kb2, kb3, kb2, kb3);
-    __m256i mval = _mm256_setr_epi32(val1, val1, val2, val2, val1, val1, val2, val2);
+    __m256i mka = _mm256_setr_epi32(ka, ka1, ka2, ka3, ka, ka1, ka2, ka3);
+    __m256i mkb = _mm256_setr_epi32(kb, kb1, kb2, kb3, kb, kb1, kb2, kb3);
+    __m256i mval = _mm256_setr_epi32(val1, val1, val1, val1, val2, val2, val2, val2);
     __m256i mres = _mm256_add_epi32(_mm256_mullo_epi32(mval, mka), mkb);
     return _mm256_and_si256(mres, _mm256_set1_epi32(kmask)) ^ _mm256_set1_epi32(km32);
 }
