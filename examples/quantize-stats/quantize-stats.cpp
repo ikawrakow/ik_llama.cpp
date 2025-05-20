@@ -258,44 +258,7 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
-//static void fast_ht(int n, float * values) {
-//    constexpr float ksqrt2 = 0.707106781f;
-//    float scale = 1;
-//    int h = 1;
-//    while (h < n) {
-//        for (int i = 0; i < n; i += 2*h) {
-//            for (int j = i; j < i + h; ++j) {
-//                float x = values[j], y = values[j + h];
-//                values[j+0] = x + y;
-//                values[j+h] = x - y;
-//            }
-//        }
-//        h *= 2;
-//        scale *= ksqrt2;
-//    }
-//    for (int i = 0; i < n; ++i) values[i] *= scale;
-//}
-
 static const int8_t scale_values[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
-
-//static std::vector<float> make_values(int nval, int n_per_val) {
-//    GGML_ASSERT(n_per_val%4 == 0);
-//    std::vector<float> result(nval*n_per_val);
-//    const uint32_t a = 89226354, b = 64248484;
-//    float * data = result.data();
-//    uint32_t aux32;
-//    const uint8_t * q = (const uint8_t *)&aux32;
-//    for (int i = 0; i < nval; ++i) {
-//        uint32_t x = i + 32767;
-//        for (int k = 0; k < n_per_val/4; ++k) {
-//            x = a*x + b;
-//            aux32 = x & 0x0f0f0f0f;
-//            for (int l = 0; l < 4; ++l) data[4*k+l] = scale_values[q[l]];
-//        }
-//        data += n_per_val;
-//    }
-//    return result;
-//}
 
 static std::vector<float> make_values(int nval, int n_per_val, float scale = 16.f) {
     std::vector<float> result(nval*n_per_val);
@@ -316,22 +279,6 @@ static std::vector<float> make_values(int nval, int n_per_val, float scale = 16.
     }
     return result;
 }
-
-//static std::vector<float> make_values(int nval, int n_per_val) {
-//    std::vector<float> result(nval*n_per_val);
-//    const uint32_t a = 34038481, b = 76625530;
-//    float * data = result.data();
-//    for (int i = 0; i < nval; ++i) {
-//        uint32_t x = i + 4096;
-//        for (int k = 0; k < n_per_val; ++k) {
-//            x = a*x + b;
-//            uint32_t s = (x & 255) + ((x >> 8) & 255) + ((x >> 16) & 255) + ((x >> 24) & 255);
-//            data[k] = (s - 510.f)/147.8f;
-//        }
-//        data += n_per_val;
-//    }
-//    return result;
-//}
 
 #ifdef __AVX2__
 static inline float hsum_float_4(__m128 x) {
@@ -684,42 +631,11 @@ static void analyze_x_v2(const char * name, int nrows, int n_per_row, const floa
                         for (int i = 0; i < 8; ++i) {
                             if (sx[i] < best) { best = sx[i]; jbest = index[i]; }
                         }
-                        //int jbest_cluster = jbest;
-                        //best = INFINITY; jbest = -1;
-                        //for (auto ip : points) {
-                        //    auto vc = codes.data() + ip*kGroupSize;
-                        //    float diff2 = 0;
-                        //    for (int k = 0; k < kGroupSize; ++k) {
-                        //        float delta = d*vc[k] - xl[k];
-                        //        diff2 += wl[k]*delta*delta;
-                        //    }
-                        //    if (diff2 < best) {
-                        //        best = diff2; jbest = ip;
-                        //    }
-                        //}
                         if (jbest < 0) {
                             printf("Oops: jbest = %d for cluster %d with %d points\n", jbest, jbest_cluster, int(points.size()));
                             GGML_ASSERT(false);
                         }
                         GGML_ASSERT(jbest >= 0);
-                        //for (int j = 0; j < kNumVal; j += 8) {
-                        //    auto idx = _mm256_add_epi32(_mm256_set1_epi32(j), add_idx);
-                        //    for (int i = 0; i < 8; ++i) {
-                        //        auto vq = _mm256_loadu_ps(codes.data() + kGroupSize*(j+i));
-                        //        auto vdiff = _mm256_sub_ps(vq, vx);
-                        //        sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, vdiff));
-                        //    }
-                        //    auto score = hsum_float_8x8(sqx);
-                        //    auto mask  = _mm256_cmp_ps(score, vbest, _CMP_LT_OQ);
-                        //    best_index = _mm256_or_si256(_mm256_and_si256(_mm256_castps_si256(mask), idx),
-                        //                              _mm256_andnot_si256(_mm256_castps_si256(mask), best_index));
-                        //    vbest = _mm256_min_ps(vbest, score);
-                        //}
-                        //_mm256_store_ps(sx, vbest);
-                        //_mm256_store_si256((__m256i *)index, best_index);
-                        //for (int i = 0; i < 8; ++i) {
-                        //    if (sx[i] < best) { best = sx[i]; jbest = index[i]; }
-                        //}
                         best_idx[ib*kNg + l] = jbest;
                     }
                     auto vqx = _mm256_setzero_ps();
@@ -798,7 +714,6 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
         float lmse = 0, lmse_q = 0;
         std::vector<float> scales(n_per_row/kBlockSize);
         std::vector<int> best_idx(n_per_row/kBlockSize);
-        //float xtmp[kBlockSize];
         while (true) {
             std::unique_lock<std::mutex> lock(mutex);
             int first = counter; counter += chunk;
@@ -820,11 +735,8 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
                 for (int ib = 0; ib < n_per_row/kBlockSize; ++ib) {
                     float best = 0, d = 0; int jbest = -1;
                     auto xb = xr + kBlockSize*ib;
-                    //std::memcpy(xtmp, xb, kBlockSize*sizeof(float));
-                    //fast_ht(kBlockSize, xtmp);
 #ifdef __AVX2__
                     for (int l = 0; l < kBlockSize/8; ++l) {
-                        //vx[l] = _mm256_loadu_ps(xtmp+8*l);
                         vx[l] = _mm256_loadu_ps(xb+8*l);
                     }
                     auto vbest = _mm256_set1_ps(0.f);
@@ -853,7 +765,6 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
                     auto qv = codes.data() + kBlockSize*jbest;
                     float sumqx = 0;
                     for (int k = 0; k < kBlockSize; ++k) sumqx += xb[k]*qv[k];
-                    //for (int k = 0; k < kBlockSize; ++k) sumqx += xtmp[k]*qv[k];
                     d = sumqx*sumq2i[jbest];
 #else
                     for (int j = 0; j < kNumVal; ++j) {
@@ -871,7 +782,6 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
                     best_idx[ib] = jbest;
                     for (int k = 0; k < kBlockSize; ++k) {
                         float diff = xb[k] - d*qv[k];
-                        //float diff = xtmp[k] - d*qv[k];
                         lmse += diff*diff;
                     }
                 }
@@ -890,45 +800,12 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
                     int ls = best_index_scale(scale_values, id*scales[ib]);
                     float dl = d * scale_values[ls];
                     auto xb = xr + kBlockSize*ib;
-                    //std::memcpy(xtmp, xb, kBlockSize*sizeof(float));
-                    //fast_ht(kBlockSize, xtmp);
                     auto qv = codes.data() + kBlockSize*best_idx[ib];
                     for (int k = 0; k < kBlockSize; ++k) {
                         float diff = xb[k] - dl*qv[k];
-                        //float diff = xtmp[k] - dl*qv[k];
                         lmse_q += diff*diff;
                     }
                 }
-                //for (int ibl = 0; ibl < n_per_row/kSuperBlockSize; ++ibl) {
-                //    auto sb = scales.data() + ibl*(kSuperBlockSize/kBlockSize);
-                //    auto idx = best_idx.data() + ibl*(kSuperBlockSize/kBlockSize);
-                //    auto xbl = xr + ibl*kSuperBlockSize;
-                //    float amax_scale = 0, max_scale = 0;
-                //    for (int ib = 0; ib < kSuperBlockSize/kBlockSize; ++ib) {
-                //        float ax = std::abs(sb[ib]);
-                //        if (ax > amax_scale) {
-                //            amax_scale = ax; max_scale = sb[ib];
-                //        }
-                //        //amax_scale = std::max(amax_scale, std::abs(sb[ib]));
-                //    }
-                //    float d = max_scale/scale_values[0];
-                //    float id = d ? 1/d : 0.f;
-                //    //float id = amax_scale > 0 ? 15/amax_scale : 0;
-                //    //float d = amax_scale/15;
-                //    for (int ib = 0; ib < kSuperBlockSize/kBlockSize; ++ib) {
-                //        int ls = best_index_scale(scale_values, id*sb[ib]);
-                //        float dl = d * scale_values[ls];
-                //        //int ls = nearest_int(0.5f*(id*sb[ib]+15));
-                //        //ls = std::max(0, std::min(ls, 15));
-                //        //float dl = d*(2*ls - 15);
-                //        auto xb = xbl + kBlockSize*ib;
-                //        auto qv = codes.data() + kBlockSize*idx[ib];
-                //        for (int k = 0; k < kBlockSize; ++k) {
-                //            float diff = xb[k] - dl*qv[k];
-                //            lmse_q += diff*diff;
-                //        }
-                //    }
-                //}
             }
         }
     };
@@ -992,17 +869,6 @@ static void analyze_iq4ks(const char * name, int nrows, int n_per_row, const flo
                                 lmse += diff4;
                             } else {
                                 float best = std::numeric_limits<float>::max();
-                                //for (int k = 0; k < 16; k += 4) {
-                                //    uint16_t v = v0 ^ (1 << k);
-                                //    uint8_t v1 = v;
-                                //    uint8_t v2 = v >> 8;
-                                //    diff1 = xb[j+ 0] - dl*values[v1 & 0xf];
-                                //    diff2 = xb[j+16] - dl*values[v1 >>  4];
-                                //    diff3 = xb[j+ 1] - dl*values[v2 & 0xf];
-                                //    diff4 = xb[j+17] - dl*values[v2 >>  4];
-                                //    float score = diff1*diff1 + diff2*diff2 + diff3*diff3 + diff4*diff4;
-                                //    if (score < best) best = score;
-                                //}
                                 for (int k = 0; k < 4; ++k) {
                                     uint16_t v = (v0 >> 4*k) & 0xf;
                                     auto pc = popcount(v);
@@ -1040,7 +906,6 @@ static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_mse_
         return;
     }
     if (t->type == GGML_TYPE_F32) {
-        //analyze_iq4ks(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_elements);
         analyze_x_v2(t->name, t->ne[1], t->ne[0], (const float *)t->data, tot_mse, tot_mse_q, tot_elements);
     } else {
         std::vector<float> aux(t->ne[0]*t->ne[1]);
@@ -1049,7 +914,6 @@ static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_mse_
         } else {
             ggml_bf16_to_fp32_row((const ggml_bf16_t *)t->data, aux.data(), aux.size());
         }
-        //analyze_iq4ks(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_elements);
         analyze_x_v2(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_mse_q, tot_elements);
     }
 }

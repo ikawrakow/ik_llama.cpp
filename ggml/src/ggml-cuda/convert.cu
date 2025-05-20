@@ -349,11 +349,6 @@ float __device__ __forceinline__ trellis_next(uint32_t& val) {
     const half * h = (const half *)&s;
     val = ka*val + kb;
     s = (val & kmask) ^ km32;
-    //float r = (float)(h[0] +h[1]);
-    //val = ka*val + kb;
-    //s = (val & kmask) ^ km32;
-    //r += (float)(h[0]+h[1]);
-    //return r;
     return (float)(h[0]+h[1]);
 }
 
@@ -399,30 +394,6 @@ static __global__ void dequantize_block_iq3_kt(const void * __restrict__ vx, dst
         y[j] = dl * std::abs(trellis_next(idx)) * (x[i].qh[(8*ib+j)%32] & mask ? -1.f : 1.f);
     }
 }
-
-//template<typename dst_t>
-//static __global__ void dequantize_block_iq3_kt(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
-//
-//    int64_t ii  = blockIdx.x;
-//    int64_t row = (QK_K * ii) / n_per_row;
-//    const float * dptr = (const float *)((const char *)vx + row * row_size);
-//    float scale = dptr[0];
-//    float alpha = dptr[1];
-//    const block_iq3_kt * x = (const block_iq3_kt *)(dptr + 2);
-//    const int64_t i = ii - (row*n_per_row)/QK_K;
-//
-//    const int64_t tid = threadIdx.x;
-//    const int64_t ib = tid; // 0...31
-//    dst_t * y = yy + ii*QK_K + 8*ib;
-//    const uint16_t * ql = (const uint16_t *)x[i].ql;
-//    uint32_t idx = ql[ib] + 4096;
-//    const float dl = scale * ((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf) * 31.75f * 1.01f; //1.015f;
-//    uint8_t mask = 1 << (ib/4);
-//    for (int j = 0; j < 8; ++j) {
-//        float ay = std::abs(trellis_next(idx));
-//        y[j] = dl * ay/(1 - alpha*ay) * (x[i].qh[(8*ib+j)%32] & mask ? -1.f : 1.f);
-//    }
-//}
 
 template<typename dst_t>
 static __global__ void dequantize_block_iq4_kt(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {

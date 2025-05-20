@@ -6653,16 +6653,6 @@ public:
             if constexpr (is_abs) result[k] = scale*std::abs(val);
             else result[k] = scale*val;
         }
-        //for (int k = 0; k < kGroupSize; ++k) {
-        //    x = ka*x + kb;
-        //    uint32_t s = (x & kmask) ^ km32;
-        //    float val = GGML_FP16_TO_FP32(s & 65535) + GGML_FP16_TO_FP32(s >> 16);
-        //    x = ka*x + kb;
-        //    s = (x & kmask) ^ km32;
-        //    val += GGML_FP16_TO_FP32(s & 65535) + GGML_FP16_TO_FP32(s >> 16);
-        //    if constexpr (is_abs) result[k] = scale*std::abs(0.5f*val);
-        //    else result[k] = 0.5f*scale*val;
-        //}
     }
 
     static inline int bin4(float x) {
@@ -6851,7 +6841,6 @@ void QuantizerIQKT<block_size, group_size, num_bits, is_abs>::find_best_match(fl
             auto& points = m_in_cluster[jbest];
             auto& values = points.empty() ? m_values : m_c_values[jbest];
             int npoint = values.size()/kGroupSize;
-            //if (points.empty() || points.size()%8 != 0) printf("Oops: %d points in cluster %d\n", int(points.size()), jbest);
             GGML_ASSERT(npoint > 0 && npoint%8 == 0);
             int jbest_cluster = jbest;
             auto vbest = _mm256_set1_ps(INFINITY);
@@ -6917,8 +6906,6 @@ void QuantizerIQKT<block_size, group_size, num_bits, is_abs>::find_best_match(fl
                     for (int i = 0; i < 4; ++i) {
                         auto vq = _mm256_loadu_ps(m_clusters.data() + kGroupSize*(j+2*i));
                         auto vdiff = _mm256_sub_ps(vq, vx);
-                        //vdiff = _mm256_mul_ps(vdiff, vdiff);
-                        //sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, vdiff));
                         vdiff = _mm256_and_ps(sign_bit, vdiff);
                         sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
                     }
@@ -6947,10 +6934,7 @@ void QuantizerIQKT<block_size, group_size, num_bits, is_abs>::find_best_match(fl
                 for (int i = 0; i < 4; ++i) {
                     auto vq = _mm256_loadu_ps(values.data() + kGroupSize*(j+2*i));
                     auto vdiff = _mm256_sub_ps(vq, vx);
-                    //vdiff = _mm256_mul_ps(vdiff, vdiff);
                     sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, vdiff));
-                    //vdiff = _mm256_and_ps(sign_bit, vdiff);
-                    //sqx[i] = _mm256_mul_ps(vw, _mm256_mul_ps(vdiff, _mm256_mul_ps(vdiff, vdiff)));
                 }
                 auto score = hsum_float_4x8(sqx);
                 auto mask  = _mm256_cmp_ps(score, vbest, _CMP_LT_OQ);
@@ -6981,7 +6965,6 @@ template <int block_size, int group_size, int num_bits, bool is_abs>
 std::vector<std::vector<int>> QuantizerIQKT<block_size, group_size, num_bits, is_abs>::finalize_clusters(int num_neighbours,
         const std::vector<float>& values, const std::vector<float>& clusters, std::vector<std::vector<float>>& c_values) {
     int ncluster = clusters.size()/kGroupSize;
-    //GGML_ASSERT(ncluster%8 == 0);
     std::vector<std::vector<int>> p_in_cluster(ncluster);
     std::vector<int> which_cluster(num_neighbours*kNumVal);
     std::vector<int> ibest(num_neighbours);
@@ -7167,28 +7150,11 @@ std::vector<float> QuantizerIQKT<block_size, group_size, num_bits, is_abs>::clus
                     printf(" %d", l);
                 }
                 printf("\n");
-                //GGML_ABORT("fatal error");
             } else {
                 for (int k = 0; k < ndim; ++k) result[ic*ndim + k] = sump[ic*ndim + k]/counts[ic];
             }
         }
         if (nzero > 0) printf("%s: %d out of %d clusters dir not have any points\n", __func__, nzero, ncluster);
-        //counts.resize(ndim*ncluster);
-        //auto fcounts = (float *)counts.data();
-        //std::memset(fcounts, 0, counts.size()*sizeof(float));
-        //for (int ip = 0; ip < npoint; ++ip) {
-        //    auto vp = points.data() + ndim*ip;
-        //    uint8_t u = 0;
-        //    for (int k = 0; k < ndim; ++k) u |= (bin4(vp[k]) << 2*k);
-        //    for (int k = 0; k < ndim; ++k) {
-        //        float w = std::abs(vp[k]);
-        //        sump[ndim*u + k] += w*vp[k];
-        //        fcounts[ndim*u + k] += w;
-        //    }
-        //}
-        //for (int ic = 0; ic < ncluster; ++ic) {
-        //    for (int k = 0; k < ndim; ++k) result[ic*ndim + k] = fcounts[ic*ndim + k] > 0 ? sump[ic*ndim + k]/fcounts[ic*ndim + k] : 0.f;
-        //}
         return result;
     }
     std::mt19937 rndm(1234);
@@ -7369,8 +7335,6 @@ void quantize_row_iq2_kt_impl(const float * x, void * vy, int n_per_row, const f
 
     *dptr = d;
     if (!d) return;
-
-    //d *= 1.05f;
 
     for (int iloop = 0; iloop < 1; ++iloop) {
 

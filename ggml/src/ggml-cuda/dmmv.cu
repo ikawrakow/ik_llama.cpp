@@ -41,30 +41,6 @@ static __device__ __forceinline__ void trellis_accum(uint32_t& val1, uint32_t& v
 #endif
 }
 
-//static __device__ __forceinline__ void trellis_accum(uint32_t& val1, uint32_t& val2, uint32_t* s, const dfloat2* y, dfloat2& bdot1, dfloat2& bdot2) {
-//    const half * h = (const half *)s;
-//    s[0] = trellis_next(val1);
-//    s[1] = trellis_next(val1);
-//    s[2] = trellis_next(val1);
-//    s[3] = trellis_next(val1);
-//#ifdef GGML_CUDA_F16
-//    bdot1 = __hfma2(y[ 0], {h[0]+h[1]+h[2]+h[3], h[4]+h[5]+h[6]+h[7]}, bdot1);
-//#else
-//    bdot1.x += y[ 0].x * (float)(h[0] + h[1] + h[2] + h[3]);
-//    bdot1.y += y[ 0].y * (float)(h[4] + h[5] + h[6] + h[7]);
-//#endif
-//    s[0] = trellis_next(val2);
-//    s[1] = trellis_next(val2);
-//    s[2] = trellis_next(val2);
-//    s[3] = trellis_next(val2);
-//#ifdef GGML_CUDA_F16
-//    bdot2 = __hfma2(y[64], {h[0]+h[1]+h[2]+h[3], h[4]+h[5]+h[6]+h[7]}, bdot2);
-//#else
-//    bdot2.x += y[64].x * (float)(h[0] + h[1] + h[2] + h[3]);
-//    bdot2.y += y[64].y * (float)(h[4] + h[5] + h[6] + h[7]);
-//#endif
-//}
-
 static __device__ __forceinline__ void trellis_accum_abs(uint8_t signs1, uint8_t signs2, uint8_t mask1, uint8_t mask2,
         uint32_t& val1, uint32_t& val2, uint32_t* s, const dfloat2* y, dfloat2& bdot1, dfloat2& bdot2) {
     const half * h = (const half *)s;
@@ -77,8 +53,6 @@ static __device__ __forceinline__ void trellis_accum_abs(uint8_t signs1, uint8_t
     half h10 = __habs(h[4]+h[5]), h11 = __habs(h[6]+h[7]);
     half2 h1 = {signs1 & mask1 ? -h00 : h00, signs2 & mask1 ? -h01 : h01};
     half2 h2 = {signs1 & mask2 ? -h10 : h10, signs2 & mask2 ? -h11 : h11};
-    //half2 h1 = __hmul2(__habs2({h[0]+h[1], h[2]+h[3]}), {signs1 & mask1 ? -1 : 1, signs2 & mask1 ? -1 : 1});
-    //half2 h2 = __hmul2(__habs2({h[4]+h[5], h[6]+h[7]}), {signs1 & mask2 ? -1 : 1, signs2 & mask2 ? -1 : 1});
     bdot1 = __hfma2(y[ 0], h1, bdot1);
     bdot2 = __hfma2(y[64], h2, bdot2);
 #else
