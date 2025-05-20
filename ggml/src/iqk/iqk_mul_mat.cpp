@@ -3119,78 +3119,7 @@ static inline __m256 trellis_gen8(uint32_t val1, uint32_t val2) {
 }
 
 template <int nrc_y>
-static void mul_mat_iq2_KT_q8_K_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
-    assert(n%QK_K == 0);
-    const int nb = n/QK_K;
-
-    float  accd[nrc_y];
-    uint32_t s[1];
-    const block_q8_K * y[nrc_y];
-    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const block_q8_K *)info.src1_row(iy);
-
-    for (int ix = 0; ix < nrc_x; ++ix) {
-        const float * dptr = (const float *)((const char*)vx + ix*bx);
-        const float d = *dptr * 31.75f * 1.05f;
-        const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
-
-        for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = 0.0f;
-
-        for (int i = 0; i < nb; ++i) {
-            const uint16_t * ql = (const uint16_t *)x[i].ql;
-            for (int j = 0; j < 128; j+=8) {
-                uint32_t val1 = ql[j/8] + 4096;
-                uint32_t val2 = ql[j/8+16] + 4096;
-                const float x_scale1 = iq4k_values[x[i].scales[j/32] & 0xf];
-                const float x_scale2 = iq4k_values[x[i].scales[j/32] >> 4];
-                const float x_val1_0 = trellis_gen(val1, s);
-                const float x_val1_1 = trellis_gen(val1, s);
-                const float x_val1_2 = trellis_gen(val1, s);
-                const float x_val1_3 = trellis_gen(val1, s);
-                const float x_val1_4 = trellis_gen(val1, s);
-                const float x_val1_5 = trellis_gen(val1, s);
-                const float x_val1_6 = trellis_gen(val1, s);
-                const float x_val1_7 = trellis_gen(val1, s);
-                const float x_val2_0 = trellis_gen(val2, s);
-                const float x_val2_1 = trellis_gen(val2, s);
-                const float x_val2_2 = trellis_gen(val2, s);
-                const float x_val2_3 = trellis_gen(val2, s);
-                const float x_val2_4 = trellis_gen(val2, s);
-                const float x_val2_5 = trellis_gen(val2, s);
-                const float x_val2_6 = trellis_gen(val2, s);
-                const float x_val2_7 = trellis_gen(val2, s);
-                for (int iy = 0; iy < nrc_y; ++iy) {
-                    const float xy1_0 = y[iy][i].qs[j+0] * x_val1_0;
-                    const float xy1_1 = y[iy][i].qs[j+1] * x_val1_1;
-                    const float xy1_2 = y[iy][i].qs[j+2] * x_val1_2;
-                    const float xy1_3 = y[iy][i].qs[j+3] * x_val1_3;
-                    const float xy1_4 = y[iy][i].qs[j+4] * x_val1_4;
-                    const float xy1_5 = y[iy][i].qs[j+5] * x_val1_5;
-                    const float xy1_6 = y[iy][i].qs[j+6] * x_val1_6;
-                    const float xy1_7 = y[iy][i].qs[j+7] * x_val1_7;
-                    const float xy2_0 = y[iy][i].qs[j+128+0] * x_val2_0;
-                    const float xy2_1 = y[iy][i].qs[j+128+1] * x_val2_1;
-                    const float xy2_2 = y[iy][i].qs[j+128+2] * x_val2_2;
-                    const float xy2_3 = y[iy][i].qs[j+128+3] * x_val2_3;
-                    const float xy2_4 = y[iy][i].qs[j+128+4] * x_val2_4;
-                    const float xy2_5 = y[iy][i].qs[j+128+5] * x_val2_5;
-                    const float xy2_6 = y[iy][i].qs[j+128+6] * x_val2_6;
-                    const float xy2_7 = y[iy][i].qs[j+128+7] * x_val2_7;
-                    accd[iy] += y[iy][i].d * (
-                        x_scale1 * (xy1_0 + xy1_1 + xy1_2 + xy1_3 + xy1_4 + xy1_5 + xy1_6 + xy1_7) +
-                        x_scale2 * (xy2_0 + xy2_1 + xy2_2 + xy2_3 + xy2_4 + xy2_5 + xy2_6 + xy2_7)
-                    );
-                }
-            }
-        }
-
-        for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, d*accd[iy]);
-        }
-    }
-}
-
-template <int nrc_y>
-static void mul_mat_iq2_KT_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_iq2_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n%QK_K == 0);
     const int nb = n/QK_K;
 
@@ -3265,7 +3194,7 @@ static inline __m256 conditional_negate_ps(__m256 vals, uint64_t condition_mask_
 }
 
 template <int nrc_y>
-static void mul_mat_iq3_KT_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_iq3_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n%QK_K == 0);
     const int nb = n/QK_K;
 
@@ -3320,7 +3249,7 @@ static void mul_mat_iq3_KT_F32_T(int n, const void * vx, size_t bx, const DataIn
 }
 
 template <int nrc_y>
-static void mul_mat_iq4_KT_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+static void mul_mat_iq4_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n%QK_K == 0);
     const int nb = n/QK_K;
     constexpr int kNumGroups = 64;
@@ -9133,46 +9062,38 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
             break;
         case GGML_TYPE_IQ2_KT:
             assert (ne00 % QK_K == 0);
-            // mm.funcs[0] = mul_mat_iq2_KT_q8_K_T<1>;
-            // mm.funcs[1] = mul_mat_iq2_KT_q8_K_T<2>;
-            // mm.funcs[2] = mul_mat_iq2_KT_q8_K_T<3>;
-            // mm.funcs[3] = mul_mat_iq2_KT_q8_K_T<4>;
-            // mm.funcs[4] = mul_mat_iq2_KT_q8_K_T<5>;
-            // mm.funcs[5] = mul_mat_iq2_KT_q8_K_T<6>;
-            // mm.funcs[6] = mul_mat_iq2_KT_q8_K_T<7>;
-            // mm.funcs[7] = mul_mat_iq2_KT_q8_K_T<8>;
-            mm.funcs[0] = mul_mat_iq2_KT_F32_T<1>;
-            mm.funcs[1] = mul_mat_iq2_KT_F32_T<2>;
-            mm.funcs[2] = mul_mat_iq2_KT_F32_T<3>;
-            mm.funcs[3] = mul_mat_iq2_KT_F32_T<4>;
-            mm.funcs[4] = mul_mat_iq2_KT_F32_T<5>;
-            mm.funcs[5] = mul_mat_iq2_KT_F32_T<6>;
-            mm.funcs[6] = mul_mat_iq2_KT_F32_T<7>;
-            mm.funcs[7] = mul_mat_iq2_KT_F32_T<8>;
+            mm.funcs[0] = mul_mat_iq2_kt_F32_T<1>;
+            mm.funcs[1] = mul_mat_iq2_kt_F32_T<2>;
+            mm.funcs[2] = mul_mat_iq2_kt_F32_T<3>;
+            mm.funcs[3] = mul_mat_iq2_kt_F32_T<4>;
+            mm.funcs[4] = mul_mat_iq2_kt_F32_T<5>;
+            mm.funcs[5] = mul_mat_iq2_kt_F32_T<6>;
+            mm.funcs[6] = mul_mat_iq2_kt_F32_T<7>;
+            mm.funcs[7] = mul_mat_iq2_kt_F32_T<8>;
             expected_typeB = GGML_TYPE_F32;
             break;
         case GGML_TYPE_IQ3_KT:
             assert (ne00 % QK_K == 0);
-            mm.funcs[0] = mul_mat_iq3_KT_F32_T<1>;
-            mm.funcs[1] = mul_mat_iq3_KT_F32_T<2>;
-            mm.funcs[2] = mul_mat_iq3_KT_F32_T<3>;
-            mm.funcs[3] = mul_mat_iq3_KT_F32_T<4>;
-            mm.funcs[4] = mul_mat_iq3_KT_F32_T<5>;
-            mm.funcs[5] = mul_mat_iq3_KT_F32_T<6>;
-            mm.funcs[6] = mul_mat_iq3_KT_F32_T<7>;
-            mm.funcs[7] = mul_mat_iq3_KT_F32_T<8>;
+            mm.funcs[0] = mul_mat_iq3_kt_F32_T<1>;
+            mm.funcs[1] = mul_mat_iq3_kt_F32_T<2>;
+            mm.funcs[2] = mul_mat_iq3_kt_F32_T<3>;
+            mm.funcs[3] = mul_mat_iq3_kt_F32_T<4>;
+            mm.funcs[4] = mul_mat_iq3_kt_F32_T<5>;
+            mm.funcs[5] = mul_mat_iq3_kt_F32_T<6>;
+            mm.funcs[6] = mul_mat_iq3_kt_F32_T<7>;
+            mm.funcs[7] = mul_mat_iq3_kt_F32_T<8>;
             expected_typeB = GGML_TYPE_F32;
             break;
         case GGML_TYPE_IQ4_KT:
             assert (ne00 % QK_K == 0);
-            mm.funcs[0] = mul_mat_iq4_KT_F32_T<1>;
-            mm.funcs[1] = mul_mat_iq4_KT_F32_T<2>;
-            mm.funcs[2] = mul_mat_iq4_KT_F32_T<3>;
-            mm.funcs[3] = mul_mat_iq4_KT_F32_T<4>;
-            mm.funcs[4] = mul_mat_iq4_KT_F32_T<5>;
-            mm.funcs[5] = mul_mat_iq4_KT_F32_T<6>;
-            mm.funcs[6] = mul_mat_iq4_KT_F32_T<7>;
-            mm.funcs[7] = mul_mat_iq4_KT_F32_T<8>;
+            mm.funcs[0] = mul_mat_iq4_kt_F32_T<1>;
+            mm.funcs[1] = mul_mat_iq4_kt_F32_T<2>;
+            mm.funcs[2] = mul_mat_iq4_kt_F32_T<3>;
+            mm.funcs[3] = mul_mat_iq4_kt_F32_T<4>;
+            mm.funcs[4] = mul_mat_iq4_kt_F32_T<5>;
+            mm.funcs[5] = mul_mat_iq4_kt_F32_T<6>;
+            mm.funcs[6] = mul_mat_iq4_kt_F32_T<7>;
+            mm.funcs[7] = mul_mat_iq4_kt_F32_T<8>;
             expected_typeB = GGML_TYPE_F32;
             break;
         case GGML_TYPE_IQ3_K:
