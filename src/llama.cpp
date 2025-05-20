@@ -2942,6 +2942,7 @@ struct llama_layer {
 
     std::unique_ptr<ggml_tensor> computed_wk_b;
     std::unique_ptr<ggml_tensor> computed_wv_b;
+    std::unique_ptr<ggml_tensor> computed_wkv_b;
 };
 
 struct llama_kv_cell {
@@ -4374,7 +4375,9 @@ struct llama_model_loader {
                 case GGML_TYPE_IQ4_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_XS;  break;
                 case GGML_TYPE_IQ4_KS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_KS;  break;
                 case GGML_TYPE_IQ4_KS_R4:ftype = LLAMA_FTYPE_MOSTLY_IQ4_KS_R4;  break;
+                case GGML_TYPE_IQ5_KS_R4:ftype = LLAMA_FTYPE_MOSTLY_IQ5_KS_R4;  break;
                 case GGML_TYPE_IQ4_KSS: ftype = LLAMA_FTYPE_MOSTLY_IQ4_KSS; break;
+                case GGML_TYPE_IQ5_KS:  ftype = LLAMA_FTYPE_MOSTLY_IQ5_KS;  break;
                 case GGML_TYPE_IQ2_K:   ftype = LLAMA_FTYPE_MOSTLY_IQ2_K;   break;
                 case GGML_TYPE_IQ2_K_R4:ftype = LLAMA_FTYPE_MOSTLY_IQ2_K_R4;break;
                 case GGML_TYPE_IQ3_K:   ftype = LLAMA_FTYPE_MOSTLY_IQ3_K;   break;
@@ -5113,7 +5116,9 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:   return "IQ4_XS - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KS:   return "IQ4_KS - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KS_R4:return "IQ4_KS_R4 - 4.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ5_KS_R4:return "IQ5_KS_R4 - 5.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ4_KSS:  return "IQ4_KSS - 4.0 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ5_KS:   return "IQ5_KS - 5.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_K:    return "IQ2_K - 2.375 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_K_R4: return "IQ2_K_R4 - 2.375 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_K:    return "IQ3_K - 3.4325 bpw";
@@ -6762,11 +6767,299 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
 
 }
 
+static void llm_prepare_mla(llama_model & model, int mla) {
+    if (model.arch != LLM_ARCH_DEEPSEEK2) return;
+    const auto& hparams = model.hparams;
+    const int n_layer = model.layers.size();
+    int n_to_compute = 0;
+    for (auto& l : model.layers) {
+        if (!l.wk_b) ++n_to_compute;
+    }
+    if (mla > 0 && n_to_compute > 0) {
+        // Prepare wk_b tensors to enable MLA usage also for model files that do not include
+        // the wk_b tensors (because, e.g., they were converted using mainline llama.cpp)
+        // We do it here because otherwise wkv_b may get run-time-repacked, which will make
+        // preparation of wk_b impossible. It also has the benefit that wk_b will get automatically
+        // run-time repacked if the rtr option is set. The downside is that we will prepare wk_b
+        // even if it is not needed (because MLA is not being used). If we wanted to avoid
+        // computing wk_b from wkv_b if not needed, we would need to propagate the context parameters
+        // to the model loading function. On the other hand, in some hypothetical bright future,
+        // where we are able to use the optimum settings for the computation, which for DeepSeekV3/R1/Lite
+        // is no MLA + FA for prompt processing, and MLA + FA for token generation, it would be useful
+        // to change the MLA setting on the fly, depending on context. In that case, having prepared
+        // the MLA tensors here is the right ting to do^TM.
+        const uint32_t n_embd_head_qk_rope = hparams.n_rot;
+        const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
+        const uint32_t kv_lora_rank = hparams.n_lora_kv;
+        const int32_t n_embd_head_v = hparams.n_embd_head_v;
+        const int32_t n_head        = hparams.n_head(0);
+        std::vector<uint8_t> work_data;
+        LLAMA_LOG_INFO("============ %s: need to compute %d wk_b/wv_b tensors\n", __func__, n_to_compute);
+        for (int il = 1; il < n_layer; ++il) {
+            // Somehow the number of heads is being defined as being per layer. Not sure why this is the
+            // case, but for now we do not support strange models that have different numbers of heads
+            // in different model layers.
+            if (hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
+        }
+        auto total_size_wkb = 0;
+        size_t max_wkv_size = 0;
+        size_t max_wk_size = 0;
+        for (auto& l : model.layers) {
+            if (!l.wk_b) {
+                auto new_type = ggml_is_quantized(l.wkv_b->type) ? GGML_TYPE_Q8_0 : l.wkv_b->type;
+                auto size = ggml_row_size(new_type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
+                max_wk_size = std::max(max_wk_size, size);
+                if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
+                    max_wkv_size = std::max(max_wkv_size, ggml_nbytes(l.wkv_b));
+                }
+            }
+        }
+        auto context_size = max_wk_size + 2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float);
+        context_size *= 2; // just in case;
+        std::vector<uint8_t> wkv_buffer;
+        if (max_wkv_size > 0) wkv_buffer.resize(max_wkv_size);
+        // So, transposing tensors and then making them contiguous as needed for wk_b may or may not
+        // be supported on all backends. Hence, to be sure that the preparation of wk_b will
+        // work correctly, we do it on the CPU backend. We then copy the resulting tensor data to
+        // the bacikend where wkv_b is stored.
+        ggml_init_params params{context_size, nullptr, true};
+        auto ctx = ggml_init(params);
+        auto graph = ggml_new_graph_custom(ctx, 8, false);
+        std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + max_wk_size);
+        for (int il = 0; il < n_layer; ++il) {
+            auto& l = model.layers[il];
+            if (l.wk_b) continue;
+            auto wkv_b = *l.wkv_b;
+            if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
+                ggml_backend_tensor_get(l.wkv_b, wkv_buffer.data(), 0, ggml_nbytes(l.wkv_b));
+                wkv_b.data = wkv_buffer.data();
+            }
+            auto wk_b_view = ggml_view_3d(ctx, &wkv_b, kv_lora_rank, n_embd_head_qk_nope, n_head,
+                    l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), 0);
+            auto wk_b_f32 = ggml_cast(ctx, wk_b_view, GGML_TYPE_F32);
+            wk_b_f32->data = tensor_data.data();
+            auto wk_b_f32_tview = ggml_transpose(ctx, wk_b_f32);
+            auto wk_b_f32_t = ggml_cont(ctx, wk_b_f32_tview);
+            wk_b_f32_t->data = (char *)wk_b_f32->data + ggml_nbytes(wk_b_f32);
+
+            auto new_type = ggml_is_quantized(wkv_b.type) ?
+                wkv_b.type >= GGML_TYPE_Q4_0_R8 && wkv_b.type <= GGML_TYPE_Q8_K_R8 ? GGML_TYPE_Q8_0_R8 : GGML_TYPE_Q8_0 : wkv_b.type;
+            auto wk_b = ggml_cast(ctx, wk_b_f32_t, new_type);
+            wk_b->data = (char *)wk_b_f32_t->data + ggml_nbytes(wk_b_f32_t);
+
+            ggml_build_forward_expand(graph, wk_b);
+
+            auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+            if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+            plan.work_data = work_data.data();
+
+            auto status = ggml_graph_compute(graph, &plan);
+            if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wk_b");
+
+            auto name = std::string{"blk."} + std::to_string(il) + ".attn_k_b.weight";
+
+            l.computed_wk_b = std::make_unique<ggml_tensor>(*wk_b);
+            l.computed_wk_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wk_b));
+            l.computed_wk_b->data   = ggml_backend_buffer_get_base(l.computed_wk_b->buffer);
+            l.computed_wk_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
+                                                // of wk_b, which no longer exist, and will therefore crash.
+            for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wk_b->src[j] = nullptr;
+            ggml_set_name(l.computed_wk_b.get(), name.c_str());
+            ggml_backend_buffer_set_usage(l.computed_wk_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ggml_backend_tensor_set(l.computed_wk_b.get(), wk_b->data, 0, ggml_nbytes(wk_b));
+            if (ggml_backend_buffer_is_host(l.computed_wk_b->buffer)) {
+                iqk_modify_tensor(l.computed_wk_b.get());
+            }
+
+            l.wk_b = l.computed_wk_b.get();
+            model.tensors_by_name.push_back(std::make_pair(name, l.wk_b));
+
+            ggml_graph_clear(graph);
+            auto wv_b = ggml_cont(ctx, ggml_view_3d(ctx, &wkv_b, kv_lora_rank, n_embd_head_v, n_head,
+                        l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), l.wkv_b->nb[1]*n_embd_head_qk_nope));
+            wv_b->data = tensor_data.data();
+            ggml_build_forward_expand(graph, wv_b);
+            plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+            if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+            plan.work_data = work_data.data();
+            status = ggml_graph_compute(graph, &plan);
+            if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wv_b");
+
+            name = std::string{"blk."} + std::to_string(il) + ".attn_v_b.weight";
+
+            l.computed_wv_b = std::make_unique<ggml_tensor>(*wv_b);
+            l.computed_wv_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wv_b));
+            l.computed_wv_b->data   = ggml_backend_buffer_get_base(l.computed_wv_b->buffer);
+            l.computed_wv_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
+                                                // of wk_b, which no longer exist, and will therefore crash.
+            for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wv_b->src[j] = nullptr;
+            ggml_set_name(l.computed_wv_b.get(), name.c_str());
+            ggml_backend_buffer_set_usage(l.computed_wv_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ggml_backend_tensor_set(l.computed_wv_b.get(), wv_b->data, 0, ggml_nbytes(wv_b));
+            if (ggml_backend_buffer_is_host(l.computed_wv_b->buffer)) {
+                iqk_modify_tensor(l.computed_wv_b.get());
+            }
+
+            l.wv_b = l.computed_wv_b.get();
+            model.tensors_by_name.push_back(std::make_pair(name, l.wv_b));
+
+            printf("Computed %s as %ld x %ld x %ld and stored in buffer %s\n", name.c_str(), wk_b->ne[0], wk_b->ne[1], wk_b->ne[2],
+                    ggml_backend_buffer_name(l.computed_wk_b->buffer));
+
+            ggml_graph_clear(graph);
+        }
+        ggml_free(ctx);
+    }
+    if (mla == 1) return;
+
+    n_to_compute = 0;
+    for (auto& l : model.layers) {
+        if (l.wk_b && l.wv_b && !l.wkv_b) ++n_to_compute;
+    }
+    if (n_to_compute == 0) return;
+
+    //
+    // Prepare wkv_b tensors to enable MLA=2,3 usage also for model files that have been
+    // crippled to the mainline llama.cpp MLA implementation (MLA=1 here).
+    // We do it here because otherwise wk_b and wv_b may get run-time-repacked, which will make
+    // preparation of wkv_b impossible. It also has the benefit that wkv_b will get automatically
+    // run-time repacked if the rtr option is set.
+    //
+    const uint32_t n_embd_head_qk_rope = hparams.n_rot;
+    const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
+    const uint32_t kv_lora_rank = hparams.n_lora_kv;
+    const int32_t n_embd_head_v = hparams.n_embd_head_v;
+    const int32_t n_head        = hparams.n_head(0);
+    std::vector<uint8_t> work_data;
+    LLAMA_LOG_INFO("============ %s: need to compute %d wkv_b tensors\n", __func__, n_to_compute);
+    for (int il = 1; il < n_layer; ++il) {
+        // Somehow the number of heads is being defined as being per layer. Not sure why this is the
+        // case, but for now we do not support strange models that have different numbers of heads
+        // in different model layers.
+        if (hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
+    }
+
+    size_t context_size = ggml_tensor_overhead()*16*n_layer;
+
+    ggml_init_params params{context_size, nullptr, true};
+    auto ctx = ggml_init(params);
+    auto graph = ggml_new_graph_custom(ctx, 8, false);
+
+    //layer.wk_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B, "weight", i), {n_embd_head_qk_nope, kv_lora_rank, n_head}, 0);
+    //layer.wv_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B, "weight", i), {kv_lora_rank, n_embd_head_v, n_head}, 0);
+
+    std::vector<char> wk_buffer, wv_buffer;
+    std::vector<char> tmp_buffer;
+    //std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + max_wk_size);
+    for (int il = 0; il < n_layer; ++il) {
+        auto& l = model.layers[il];
+        if (l.wkv_b || !l.wk_b || !l.wv_b) continue;
+        auto wk_b = *l.wk_b;
+        auto wv_b = *l.wv_b;
+        if (!ggml_backend_buffer_is_host(l.wk_b->buffer)) {
+            auto nbytes = ggml_nbytes(l.wk_b);
+            if (wk_buffer.size() < nbytes) wk_buffer.resize(nbytes);
+            ggml_backend_tensor_get(l.wk_b, wk_buffer.data(), 0, nbytes);
+            wk_b.data = wk_buffer.data();
+        }
+        if (!ggml_backend_buffer_is_host(l.wv_b->buffer)) {
+            auto nbytes = ggml_nbytes(l.wv_b);
+            if (wv_buffer.size() < nbytes) wv_buffer.resize(nbytes);
+            ggml_backend_tensor_get(l.wv_b, wv_buffer.data(), 0, nbytes);
+            wv_b.data = wv_buffer.data();
+        }
+
+        auto n_wk = ggml_nelements(&wk_b);
+        auto n_wv = ggml_nelements(&wv_b);
+
+        size_t tot_size = 0;
+        if (wk_b.type != GGML_TYPE_F32) {
+            tot_size += n_wk*sizeof(float);
+        }
+        tot_size += n_wk*sizeof(float); // ggml_cont(ctx, ggml_transpose(ctx, wk_b_used));
+        if (wv_b.type != GGML_TYPE_F32) {
+            tot_size += n_wv*sizeof(float);
+        }
+        tot_size += (n_wk + n_wv)*sizeof(float); // ggml_concat(ctx, wk_b_transposed, wv_b_used, 0);
+        tot_size += (n_wk + n_wv)*sizeof(float); // ggml_cast(ctx, wkv_b_f32, new_type);
+
+        if (tmp_buffer.size() < tot_size) tmp_buffer.resize(tot_size);
+
+        auto ptr = tmp_buffer.data();
+
+        auto wk_b_used = &wk_b;
+        if (wk_b.type != GGML_TYPE_F32) {
+            wk_b_used = ggml_cast(ctx, &wk_b, GGML_TYPE_F32);
+            wk_b_used->data = ptr;
+            ptr += ggml_nbytes(wk_b_used);
+        }
+        auto wk_b_transposed = ggml_cont(ctx, ggml_transpose(ctx, wk_b_used));
+        wk_b_transposed->data = ptr;
+        ptr += ggml_nbytes(wk_b_transposed);
+
+        auto wv_b_used = &wv_b;
+        if (wv_b.type != GGML_TYPE_F32) {
+            wv_b_used = ggml_cast(ctx, &wv_b, GGML_TYPE_F32);
+            wv_b_used->data = ptr;
+            ptr += ggml_nbytes(wv_b_used);
+        }
+
+        auto wkv_b_f32_3d = ggml_concat(ctx, wk_b_transposed, wv_b_used, 1);
+        wkv_b_f32_3d->data = ptr;
+        ptr += ggml_nbytes(wkv_b_f32_3d);
+
+        auto wkv_b_f32 = ggml_view_2d(ctx, wkv_b_f32_3d, wkv_b_f32_3d->ne[0], wkv_b_f32_3d->ne[1]*wkv_b_f32_3d->ne[2],
+                wkv_b_f32_3d->nb[1], 0);
+
+        auto new_type = wk_b.type == GGML_TYPE_BF16 && wv_b.type == GGML_TYPE_BF16 ? GGML_TYPE_BF16
+                      : wk_b.type == GGML_TYPE_F16  && wv_b.type == GGML_TYPE_F16  ? GGML_TYPE_F16
+                      : GGML_TYPE_Q8_0;
+
+        auto wkv_b = ggml_cast(ctx, wkv_b_f32, new_type);
+        wkv_b->data = ptr;
+        ptr += ggml_nbytes(wkv_b);
+
+        ggml_build_forward_expand(graph, wkv_b);
+
+        auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
+        if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
+        plan.work_data = work_data.data();
+
+        auto status = ggml_graph_compute(graph, &plan);
+        if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wkv_b");
+
+        auto name = std::string{"blk."} + std::to_string(il) + ".attn_kv_b.weight";
+
+        l.computed_wkv_b = std::make_unique<ggml_tensor>(*wkv_b);
+        l.computed_wkv_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wk_b->buffer), ggml_nbytes(wkv_b));
+        l.computed_wkv_b->data   = ggml_backend_buffer_get_base(l.computed_wkv_b->buffer);
+        l.computed_wkv_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
+                                             // of wkv_b, which no longer exist, and will therefore crash.
+        for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wkv_b->src[j] = nullptr;
+        ggml_set_name(l.computed_wkv_b.get(), name.c_str());
+        ggml_backend_buffer_set_usage(l.computed_wkv_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        ggml_backend_tensor_set(l.computed_wkv_b.get(), wkv_b->data, 0, ggml_nbytes(wkv_b));
+        if (ggml_backend_buffer_is_host(l.computed_wkv_b->buffer)) {
+            iqk_modify_tensor(l.computed_wkv_b.get());
+        }
+
+        l.wkv_b = l.computed_wkv_b.get();
+        model.tensors_by_name.push_back(std::make_pair(name, l.wkv_b));
+
+        printf("Computed %s as %ld x %ld and stored in buffer %s\n", name.c_str(), wkv_b->ne[0], wkv_b->ne[1],
+                    ggml_backend_buffer_name(l.computed_wkv_b->buffer));
+
+        ggml_graph_clear(graph);
+    }
+    ggml_free(ctx);
+}
+
 // Returns false if cancelled by progress_callback
 static bool llm_load_tensors(
         llama_model_loader & ml,
         llama_model & model,
         int n_gpu_layers,
+        int mla_attn,
         enum llama_split_mode split_mode,
         int main_gpu,
         const float * tensor_split,
@@ -9003,145 +9296,7 @@ static bool llm_load_tensors(
         }
     }
 
-    if (model.arch == LLM_ARCH_DEEPSEEK2) {
-        int n_to_compute = 0;
-        for (auto& l : model.layers) {
-            if (!l.wk_b) ++n_to_compute;
-        }
-        if (n_to_compute > 0) {
-            // Prepare wk_b tensors to enable MLA usage also for model files that do not include
-            // the wk_b tensors (because, e.g., they were converted using mainline llama.cpp)
-            // We do it here because otherwise wkv_b may get run-time-repacked, which will make
-            // preparation of wk_b impossible. It also has the benefit that wk_b will get automatically
-            // run-time repacked if the rtr option is set. The downside is that we will prepare wk_b
-            // even if it is not needed (because MLA is not being used). If we wanted to avoid
-            // computing wk_b from wkv_b if not needed, we would need to propagate the context parameters
-            // to the model loading function. On the other hand, in some hypothetical bright future,
-            // where we are able to use the optimum settings for the computation, which for DeepSeekV3/R1/Lite
-            // is no MLA + FA for prompt processing, and MLA + FA for token generation, it would be useful
-            // to change the MLA setting on the fly, depending on context. In that case, having prepared
-            // the MLA tensors here is the right ting to do^TM.
-            const uint32_t n_embd_head_qk_rope = hparams.n_rot;
-            const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
-            const uint32_t kv_lora_rank = hparams.n_lora_kv;
-            const int32_t n_embd_head_v = hparams.n_embd_head_v;
-            const int32_t n_head        = hparams.n_head(0);
-            std::vector<uint8_t> work_data;
-            LLAMA_LOG_INFO("============ %s: need to compute %d wk_b tensors\n", __func__, n_to_compute);
-            for (int il = 1; il < n_layer; ++il) {
-                // Somehow the number of heads is being defined as being per layer. Not sure why this is the
-                // case, but for now we do not support strange models that have different numbers of heads
-                // in different model layers.
-                if (hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
-            }
-            auto total_size_wkb = 0;
-            size_t max_wkv_size = 0;
-            size_t max_wk_size = 0;
-            for (auto& l : model.layers) {
-                if (!l.wk_b) {
-                    auto new_type = ggml_is_quantized(l.wkv_b->type) ? GGML_TYPE_Q8_0 : l.wkv_b->type;
-                    auto size = ggml_row_size(new_type, n_embd_head_qk_nope)*kv_lora_rank*n_head;
-                    max_wk_size = std::max(max_wk_size, size);
-                    if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
-                        max_wkv_size = std::max(max_wkv_size, ggml_nbytes(l.wkv_b));
-                    }
-                }
-            }
-            auto context_size = max_wk_size + 2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float);
-            context_size *= 2; // just in case;
-            std::vector<uint8_t> wkv_buffer;
-            if (max_wkv_size > 0) wkv_buffer.resize(max_wkv_size);
-            // So, transposing tensors and then making them contiguous as needed for wk_b may or may not
-            // be supported on all backends. Hence, to be sure that the preparation of wk_b will
-            // work correctly, we do it on the CPU backend. We then copy the resulting tensor data to
-            // the bacikend where wkv_b is stored.
-            ggml_init_params params{context_size, nullptr, true};
-            auto ctx = ggml_init(params);
-            auto graph = ggml_new_graph_custom(ctx, 8, false);
-            std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + max_wk_size);
-            for (int il = 0; il < n_layer; ++il) {
-                auto& l = model.layers[il];
-                if (l.wk_b) continue;
-                auto wkv_b = *l.wkv_b;
-                if (!ggml_backend_buffer_is_host(l.wkv_b->buffer)) {
-                    ggml_backend_tensor_get(l.wkv_b, wkv_buffer.data(), 0, ggml_nbytes(l.wkv_b));
-                    wkv_b.data = wkv_buffer.data();
-                }
-                auto wk_b_view = ggml_view_3d(ctx, &wkv_b, kv_lora_rank, n_embd_head_qk_nope, n_head,
-                        l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), 0);
-                auto wk_b_f32 = ggml_cast(ctx, wk_b_view, GGML_TYPE_F32);
-                wk_b_f32->data = tensor_data.data();
-                auto wk_b_f32_tview = ggml_transpose(ctx, wk_b_f32);
-                auto wk_b_f32_t = ggml_cont(ctx, wk_b_f32_tview);
-                wk_b_f32_t->data = (char *)wk_b_f32->data + ggml_nbytes(wk_b_f32);
-
-                auto new_type = ggml_is_quantized(wkv_b.type) ?
-                    wkv_b.type >= GGML_TYPE_Q4_0_R8 && wkv_b.type <= GGML_TYPE_Q8_K_R8 ? GGML_TYPE_Q8_0_R8 : GGML_TYPE_Q8_0 : wkv_b.type;
-                auto wk_b = ggml_cast(ctx, wk_b_f32_t, new_type);
-                wk_b->data = (char *)wk_b_f32_t->data + ggml_nbytes(wk_b_f32_t);
-
-                ggml_build_forward_expand(graph, wk_b);
-
-                auto plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
-                if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
-                plan.work_data = work_data.data();
-
-                auto status = ggml_graph_compute(graph, &plan);
-                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wk_b");
-
-                auto name = std::string{"blk."} + std::to_string(il) + ".attn_k_b.weight";
-
-                l.computed_wk_b = std::make_unique<ggml_tensor>(*wk_b);
-                l.computed_wk_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wk_b));
-                l.computed_wk_b->data   = ggml_backend_buffer_get_base(l.computed_wk_b->buffer);
-                l.computed_wk_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
-                                                    // of wk_b, which no longer exist, and will therefore crash.
-                for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wk_b->src[j] = nullptr;
-                ggml_set_name(l.computed_wk_b.get(), name.c_str());
-                ggml_backend_buffer_set_usage(l.computed_wk_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-                ggml_backend_tensor_set(l.computed_wk_b.get(), wk_b->data, 0, ggml_nbytes(wk_b));
-                if (ggml_backend_buffer_is_host(l.computed_wk_b->buffer)) {
-                    iqk_modify_tensor(l.computed_wk_b.get());
-                }
-
-                l.wk_b = l.computed_wk_b.get();
-
-                ggml_graph_clear(graph);
-                auto wv_b = ggml_cont(ctx, ggml_view_3d(ctx, &wkv_b, kv_lora_rank, n_embd_head_v, n_head,
-                            l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), l.wkv_b->nb[1]*n_embd_head_qk_nope));
-                wv_b->data = tensor_data.data();
-                ggml_build_forward_expand(graph, wv_b);
-                plan = ggml_graph_plan(graph, std::thread::hardware_concurrency()/2);
-                if (plan.work_size > work_data.size()) work_data.resize(plan.work_size);
-                plan.work_data = work_data.data();
-                status = ggml_graph_compute(graph, &plan);
-                if (status != GGML_STATUS_SUCCESS) throw std::runtime_error("Failed to compute wv_b");
-
-                name = std::string{"blk."} + std::to_string(il) + ".attn_v_b.weight";
-
-                l.computed_wv_b = std::make_unique<ggml_tensor>(*wv_b);
-                l.computed_wv_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wkv_b->buffer), ggml_nbytes(wv_b));
-                l.computed_wv_b->data   = ggml_backend_buffer_get_base(l.computed_wv_b->buffer);
-                l.computed_wv_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
-                                                    // of wk_b, which no longer exist, and will therefore crash.
-                for (int j = 0; j < GGML_MAX_SRC; ++j) l.computed_wv_b->src[j] = nullptr;
-                ggml_set_name(l.computed_wv_b.get(), name.c_str());
-                ggml_backend_buffer_set_usage(l.computed_wv_b->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-                ggml_backend_tensor_set(l.computed_wv_b.get(), wv_b->data, 0, ggml_nbytes(wv_b));
-                if (ggml_backend_buffer_is_host(l.computed_wv_b->buffer)) {
-                    iqk_modify_tensor(l.computed_wv_b.get());
-                }
-
-                l.wv_b = l.computed_wv_b.get();
-
-                printf("Computed %s as %ld x %ld x %ld and stored in buffer %s\n", name.c_str(), wk_b->ne[0], wk_b->ne[1], wk_b->ne[2],
-                        ggml_backend_buffer_name(l.computed_wk_b->buffer));
-
-                ggml_graph_clear(graph);
-            }
-            ggml_free(ctx);
-        }
-    }
+    llm_prepare_mla(model, mla_attn);
 
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
@@ -9258,7 +9413,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #endif
 
         if (!llm_load_tensors(
-            ml, model, params.n_gpu_layers, params.split_mode,  params.main_gpu, params.tensor_split, params.use_mlock,
+            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.tensor_split, params.use_mlock,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
@@ -15230,7 +15385,8 @@ struct llm_build_context {
                         cb(kv_cache_trans, "kv_cache_trans", il);
                     }
 
-                    ggml_tensor * kvr = ggml_concat(ctx0, kv_compressed, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), 0);
+                    //ggml_tensor * kvr = ggml_concat(ctx0, kv_compressed, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), 0);
+                    ggml_tensor * kvr = ggml_concat(ctx0, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), kv_compressed, 0);
                     cb(kvr, "kvr", il);
 
                     auto row_size = ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope);
@@ -15246,7 +15402,8 @@ struct llm_build_context {
 
                     if (lctx.cparams.mla_attn > 1 && lctx.cparams.flash_attn && pp_opt) { // PP for mla=2,3
 
-                        auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_lora_rank, n_kv, kv_self.kv_l[il]->nb[1], 0);
+                        auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_lora_rank, n_kv, kv_self.kv_l[il]->nb[1],
+                                ggml_row_size(kv_self.kv_l[il]->type, n_embd_head_qk_rope));
 
                         auto kv_f32_size = model.layers[il].wkv_b->ne[1] * kv_cache_nope->ne[1] * sizeof(float) / (1024*1024);
                         int n_max_head = n_head;
@@ -15260,7 +15417,7 @@ struct llm_build_context {
                         auto n_per_head = model.layers[il].wkv_b->ne[1] / n_head;
 
                         auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.kv_l[il], n_embd_head_qk_rope, n_kv, 1,
-                                kv_self.kv_l[il]->nb[1], kv_self.kv_l[il]->nb[2], ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank));
+                                kv_self.kv_l[il]->nb[1], kv_self.kv_l[il]->nb[2], 0); //ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank));
 
                         // There is still an issue with one or more of the ops GGML_OP_REPEAT, GGML_OP_CONCAT, GGML_OP_CPY on CUDA when
                         // the KV cache is quantized. Hence, in that case we will simply use fp16 for now.
@@ -15279,7 +15436,8 @@ struct llm_build_context {
                         }
                         cb(k_rope, "k_rope", il);
 
-                        auto q = ggml_concat(ctx0, q_nope, q_rope, 0);
+                        //auto q = ggml_concat(ctx0, q_nope, q_rope, 0);
+                        auto q = ggml_concat(ctx0, q_rope, q_nope, 0);
                         q = ggml_permute(ctx0, q, 0, 2, 1, 3);
                         cb(q, "q_concat", il);
 
@@ -15313,7 +15471,8 @@ struct llm_build_context {
                             ggml_build_forward_expand(gf, k_nope);
                             ggml_build_forward_expand(gf, v);
 
-                            auto k = ggml_concat(ctx0, k_nope, k_rope, 0);
+                            //auto k = ggml_concat(ctx0, k_nope, k_rope, 0);
+                            auto k = ggml_concat(ctx0, k_rope, k_nope, 0);
                             cb(k, "k", il);
 
                             ggml_build_forward_expand(gf, k);
@@ -15350,13 +15509,15 @@ struct llm_build_context {
                         struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope);
                         cb(q_nope2, "q_nope2", il);
 
-                        ggml_tensor * q = ggml_concat(ctx0, q_nope2, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), 0);
+                        //ggml_tensor * q = ggml_concat(ctx0, q_nope2, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), 0);
+                        ggml_tensor * q = ggml_concat(ctx0, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), q_nope2, 0);
                         cb(q, "q", il);
 
                         if (lctx.cparams.flash_attn && (lctx.cparams.mla_attn == 1 || lctx.cparams.mla_attn == 3)) {
                             ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.kv_l[il],
                                     kv_lora_rank, n_kv,
-                                    ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
+                                    ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope),
+                                    ggml_row_size(kv_self.kv_l[il]->type, n_embd_head_qk_rope));
                             cb(kv_cache_lora, "kv_cache_lora", il);
 
                             kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, kv_cache_lora, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
@@ -15369,7 +15530,8 @@ struct llm_build_context {
                             if (lctx.cparams.mla_attn > 1) {
                                 ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.kv_l[il],
                                         kv_lora_rank, n_kv,
-                                        ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
+                                        ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope),
+                                        ggml_row_size(kv_self.kv_l[il]->type, n_embd_head_qk_rope));
                                 cb(kv_cache, "kv_cache_lora", il);
 
                                 kv_cache_trans = ggml_cont(ctx0, ggml_transpose(ctx0, kv_cache_lora));
@@ -18467,7 +18629,8 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
         new_type == GGML_TYPE_IQ4_K_R4|| new_type == GGML_TYPE_Q8_K_R8 || new_type == GGML_TYPE_IQ3_K_R4||
         new_type == GGML_TYPE_IQ2_K_R4|| new_type == GGML_TYPE_IQ5_K_R4|| new_type == GGML_TYPE_IQ4_KS_R4 ||
         new_type == GGML_TYPE_IQ3_XXS_R4 || new_type == GGML_TYPE_IQ2_XXS_R4 || new_type == GGML_TYPE_IQ2_XS_R4 ||
-        new_type == GGML_TYPE_IQ2_S_R4|| new_type == GGML_TYPE_IQ3_S_R4) {
+        new_type == GGML_TYPE_IQ2_S_R4|| new_type == GGML_TYPE_IQ3_S_R4||
+        new_type == GGML_TYPE_IQ5_KS || new_type == GGML_TYPE_IQ5_KS_R4) {
         if (nx % QK_K != 0) {
             LLAMA_LOG_WARN("\n\n%s : tensor cols %d x %d are not divisible by %d, required for %s", __func__, nx, ny, QK_K, ggml_type_name(new_type));
             convert_incompatible_tensor = true;
@@ -18509,6 +18672,8 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ4_K:
             case GGML_TYPE_IQ4_K_R4:
             case GGML_TYPE_Q4_K_R4:
+            case GGML_TYPE_IQ5_KS:
+            case GGML_TYPE_IQ5_KS_R4:
             case GGML_TYPE_Q4_K:   new_type = GGML_TYPE_Q5_0;   break;
             case GGML_TYPE_IQ5_K:
             case GGML_TYPE_IQ5_K_R4:
@@ -18553,6 +18718,7 @@ static std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
         { GGML_TYPE_IQ3_K_R4,    { GGML_TYPE_IQ3_K, 4} },
         { GGML_TYPE_IQ4_K_R4,    { GGML_TYPE_IQ4_K, 4} },
         { GGML_TYPE_IQ4_KS_R4,   { GGML_TYPE_IQ4_KS, 4} },
+        { GGML_TYPE_IQ5_KS_R4,   { GGML_TYPE_IQ5_KS, 4} },
         { GGML_TYPE_IQ5_K_R4,    { GGML_TYPE_IQ5_K, 4} },
         { GGML_TYPE_Q8_KV_R8,    { GGML_TYPE_Q8_KV, 8} },
         { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_K, 8} },
@@ -19151,6 +19317,7 @@ static llama_ftype repacked_ftype(llama_ftype ftype) {
         { LLAMA_FTYPE_MOSTLY_IQ4_K,   LLAMA_FTYPE_MOSTLY_IQ4_K_R4   },
         { LLAMA_FTYPE_MOSTLY_IQ5_K,   LLAMA_FTYPE_MOSTLY_IQ5_K_R4   },
         { LLAMA_FTYPE_MOSTLY_IQ4_KS,  LLAMA_FTYPE_MOSTLY_IQ4_KS_R4  },
+        { LLAMA_FTYPE_MOSTLY_IQ5_KS,  LLAMA_FTYPE_MOSTLY_IQ5_KS_R4  },
         { LLAMA_FTYPE_MOSTLY_Q8_KV,   LLAMA_FTYPE_MOSTLY_Q8_KV_R8   },
     };
     if (auto it = k_map.find(ftype); it != k_map.end()) return it->second;
@@ -19223,7 +19390,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:  default_type = GGML_TYPE_IQ4_XS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KS:  default_type = GGML_TYPE_IQ4_KS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KS_R4:default_type = GGML_TYPE_IQ4_KS_R4;break;
+        case LLAMA_FTYPE_MOSTLY_IQ5_KS_R4:default_type = GGML_TYPE_IQ5_KS_R4;break;
         case LLAMA_FTYPE_MOSTLY_IQ4_KSS: default_type = GGML_TYPE_IQ4_KSS; break;
+        case LLAMA_FTYPE_MOSTLY_IQ5_KS:  default_type = GGML_TYPE_IQ5_KS;  break;
         case LLAMA_FTYPE_MOSTLY_IQ2_K:   default_type = GGML_TYPE_IQ2_K;   break;
         case LLAMA_FTYPE_MOSTLY_IQ2_K_R4:default_type = GGML_TYPE_IQ2_K_R4;break;
         case LLAMA_FTYPE_MOSTLY_IQ3_K:   default_type = GGML_TYPE_IQ3_K;   break;
@@ -19982,6 +20151,7 @@ void llama_lora_adapter_free(struct llama_lora_adapter * adapter) {
 struct llama_model_params llama_model_default_params() {
     struct llama_model_params result = {
         /*.n_gpu_layers                =*/ 0,
+        /*.mla                         =*/ 0,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
         /*.main_gpu                    =*/ 0,
         /*.tensor_split                =*/ nullptr,
@@ -20041,6 +20211,7 @@ struct llama_context_params llama_context_default_params() {
         /*.thtesh_experts              =*/ 0.0f,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
+        /*.offload_policy              =*/ nullptr,
     };
 
     return result;
@@ -20632,6 +20803,19 @@ struct llama_context * llama_new_context_with_model(
             int n_splits = ggml_backend_sched_get_n_splits(ctx->sched);
             LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, gf->n_nodes);
             LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits);
+        }
+    }
+
+    if (params.offload_policy) {
+        const std::vector<std::pair<int, int>>& policy = *(const std::vector<std::pair<int, int>>*)params.offload_policy;
+        for (auto [op, on_off] : policy) {
+            if (op < 0 || op >= int(GGML_OP_COUNT)) {
+                LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXX Setting offload policy for all ops to %s\n", on_off ? "ON" : "OFF");
+            } else {
+                LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXX Setting offload policy for op %s to %s\n",
+                        ggml_op_name(ggml_op(op)), on_off ? "ON" : "OFF");
+            }
+            ggml_backend_sched_set_op_offload(ctx->sched, ggml_op(op), on_off);
         }
     }
 
@@ -23282,4 +23466,11 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
     (void) user_data;
     fputs(text, stderr);
     fflush(stderr);
+}
+
+void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_off) {
+    if (!lctx || !lctx->sched) return;
+    const char * op_name = op < 0 || op >= int(GGML_OP_COUNT) ? "all ops" : ggml_op_name(ggml_op(op));
+    printf("XXXXXXXXXXXXXXXXXXXXXXXXXXXX offload(%s) = %d\n", op_name, on_or_off);
+    ggml_backend_sched_set_op_offload(lctx->sched, ggml_op(op), on_or_off);
 }

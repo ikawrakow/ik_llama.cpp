@@ -193,9 +193,10 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ2_KS        = 147, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KSS       = 148, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_KV         = 149, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ2_KT        = 150, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ3_KT        = 151, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_IQ4_KT        = 152, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ5_KS        = 150, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_KT        = 151, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ3_KT        = 152, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ4_KT        = 153, // except 1d tensors
                                                 //
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
@@ -222,6 +223,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ4_K_R4      = 340, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ5_K_R4      = 341, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KS_R4     = 345, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ5_KS_R4     = 350, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_KV_R8      = 398, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_K_R8       = 399, // except 1d tensors
 
@@ -234,7 +236,7 @@ extern "C" {
         LLAMA_ROPE_SCALING_TYPE_LINEAR      = 1,
         LLAMA_ROPE_SCALING_TYPE_YARN        = 2,
         LLAMA_ROPE_SCALING_TYPE_LONGROPE    = 3,
-        LLAMA_ROPE_SCALING_TYPE_MAX_VALUE   = LLAMA_ROPE_SCALING_TYPE_LONGROPE, 
+        LLAMA_ROPE_SCALING_TYPE_MAX_VALUE   = LLAMA_ROPE_SCALING_TYPE_LONGROPE,
     };
 
     enum llama_pooling_type {
@@ -328,6 +330,7 @@ extern "C" {
 
     struct llama_model_params {
         int32_t n_gpu_layers; // number of layers to store in VRAM
+        int32_t mla;          // MLA implementation to use (only applicable to DeepSeek models at this point)
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
 
         // main_gpu interpretation depends on split_mode:
@@ -411,6 +414,7 @@ extern "C" {
         // currently works only with CPU execution
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
+        void *              offload_policy;
     };
 
     // model quantization parameters
@@ -525,6 +529,8 @@ extern "C" {
     LLAMA_API struct llama_context * llama_new_context_with_model(
                      struct llama_model * model,
             struct llama_context_params   params);
+
+    LLAMA_API void llama_set_offload_policy(struct llama_context * lctx, int op, bool on_or_off);
 
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
