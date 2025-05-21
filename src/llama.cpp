@@ -7025,6 +7025,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         auto name = std::string{"blk."} + std::to_string(il) + ".attn_kv_b.weight";
 
         l.computed_wkv_b = std::make_unique<ggml_tensor>(*wkv_b);
+        l.computed_wkv_b->view_src = nullptr;
         l.computed_wkv_b->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_buffer_get_type(l.wk_b->buffer), ggml_nbytes(wkv_b));
         l.computed_wkv_b->data   = ggml_backend_buffer_get_base(l.computed_wkv_b->buffer);
         l.computed_wkv_b->op = GGML_OP_NONE; // we absolutely need to do this, else the backend will attempt to find the parents
