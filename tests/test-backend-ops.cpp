@@ -623,11 +623,11 @@ struct test_case {
         }
 
         // run
-        ggml_backend_synchronize(backend);
+        ggml_backend_synchronize(backend, __func__, __FILE__, __LINE__);
 
         int64_t start_time = ggml_time_us();
         ggml_backend_graph_compute(backend, gf);
-        ggml_backend_synchronize(backend);
+        ggml_backend_synchronize(backend, __func__, __FILE__, __LINE__);
         int64_t end_time = ggml_time_us();
         double time_us = end_time - start_time;
 

@@ -91,7 +91,7 @@ extern "C" {
         bool (*GGML_CALL cpy_tensor_async)(ggml_backend_t backend_src, ggml_backend_t backend_dst, const struct ggml_tensor * src, struct ggml_tensor * dst);
 
         // (optional) complete all pending operations
-        void (*GGML_CALL synchronize)(ggml_backend_t backend);
+        void (*GGML_CALL synchronize)(ggml_backend_t backend, const char * func, const char * file, int line);
 
         // compute graph with a plan (not used currently)
         // create a new plan for a graph

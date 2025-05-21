@@ -265,12 +265,12 @@ GGML_CALL void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void *
 #endif
 }
 
-void ggml_backend_synchronize(ggml_backend_t backend) {
+void ggml_backend_synchronize(ggml_backend_t backend, const char * func, const char * file, int line) {
     if (backend->iface.synchronize == NULL) {
         return;
     }
 
-    backend->iface.synchronize(backend);
+    backend->iface.synchronize(backend, func, file, line);
 }
 
 ggml_backend_graph_plan_t ggml_backend_graph_plan_create(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
@@ -293,7 +293,7 @@ enum ggml_status ggml_backend_graph_plan_compute(ggml_backend_t backend, ggml_ba
 
 enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
-    ggml_backend_synchronize(backend);
+    ggml_backend_synchronize(backend, __func__, __FILE__, __LINE__);
     return err;
 }
 
@@ -371,8 +371,8 @@ void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t b
 
     // an async copy would normally happen after all the queued operations on both backends are completed
     // to simulate the same behavior, we need to synchronize both backends first, and do a blocking copy
-    ggml_backend_synchronize(backend_src);
-    ggml_backend_synchronize(backend_dst);
+    ggml_backend_synchronize(backend_src, __func__, __FILE__, __LINE__);
+    ggml_backend_synchronize(backend_dst, __func__, __FILE__, __LINE__);
     ggml_backend_tensor_copy(src, dst);
 }
 
@@ -1817,7 +1817,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    ggml_backend_synchronize(split_backend, __func__, __FILE__, __LINE__);
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
@@ -1825,18 +1825,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    ggml_backend_synchronize(split_backend, __func__, __FILE__, __LINE__);
                 }
                 GGML_ASSERT(input_backend);
                 GGML_ASSERT(input_backend->context);
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                 if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-                    ggml_backend_synchronize(input_backend);
+                    ggml_backend_synchronize(input_backend, __func__, __FILE__, __LINE__);
                     if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                         ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                     } else {
-                        ggml_backend_synchronize(split_backend);
+                        ggml_backend_synchronize(split_backend, __func__, __FILE__, __LINE__);
                     }
                     ggml_backend_tensor_copy(input, input_cpy);
                 }
@@ -1881,7 +1881,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
 
                 // TODO: pass backend to the callback, then the user can decide if they want to synchronize
-                ggml_backend_synchronize(split_backend);
+                ggml_backend_synchronize(split_backend, __func__, __FILE__, __LINE__);
 
                 if (need && !sched->callback_eval(t, false, sched->callback_eval_user_data)) {
                     break;
@@ -2047,7 +2047,7 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
 
 void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
     for (int i = 0; i < sched->n_backends; i++) {
-        ggml_backend_synchronize(sched->backends[i]);
+        ggml_backend_synchronize(sched->backends[i], __func__, __FILE__, __LINE__);
     }
 }
 
