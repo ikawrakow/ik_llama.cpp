@@ -568,6 +568,7 @@ void ggml_cuda_op_mul_mat_vec_q_3D(
         src0_dd_i, src1_ddq_i, dst_dd_i, nullptr,
         row_low, row_high, src1_ncols,
         src1_padded_row_size, stream);
+    CUDA_CHECK(cudaGetLastError());
 
     GGML_UNUSED(src1_ddf_i);
 }
@@ -589,6 +590,7 @@ void ggml_cuda_op_mul_mat_vec_q(
         src0_dd_i, src1_ddq_i, dst_dd_i, nullptr,
         row_low, row_high, src1_ncols,
         src1_padded_row_size, stream);
+    CUDA_CHECK(cudaGetLastError());
 
     GGML_UNUSED(src1_ddf_i);
 }
@@ -615,6 +617,7 @@ void ggml_cuda_op_mul_mat_vec_q_id(
         src0_dd_i, src1_ddq_i, dst_dd_i, (const char *)ids->data,
         row_low, row_high, src1_ncols,
         src1_padded_row_size, stream);
+    CUDA_CHECK(cudaGetLastError());
 
     GGML_UNUSED(src1_ddf_i);
 }
