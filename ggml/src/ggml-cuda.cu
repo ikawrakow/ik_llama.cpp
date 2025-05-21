@@ -98,6 +98,17 @@ static void ggml_cuda_log(enum ggml_log_level level, const char * format, ...) {
     }
 }
 
+void Tracer::print_calls() const {
+    if (num_calls == 0) return;
+    GGML_CUDA_LOG_ERROR("========================== CUDA trace: %zu previous calls\n", num_calls);
+    int first = std::max(int64_t(0), num_calls - 1 - kNumStored);
+    for (int64_t i = num_calls-1; i >= first; --i) {
+        auto& call = calls[i%kNumStored];
+        GGML_CUDA_LOG_ERROR("%12zu: function %s, file %s, line %d\n", uint64_t(i), call.func.c_str(), call.file.c_str(), call.line);
+    }
+}
+
+
 [[noreturn]]
 void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg) {
     int id = -1; // in case cudaGetDevice fails
@@ -106,6 +117,7 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
     GGML_CUDA_LOG_ERROR("CUDA error: %s\n", msg);
     GGML_CUDA_LOG_ERROR("  current device: %d, in function %s at %s:%d\n", id, func, file, line);
     GGML_CUDA_LOG_ERROR("  %s\n", stmt);
+    Tracer::instance().print_calls();
     // abort with GGML_ASSERT to get a stack trace
     GGML_ABORT("CUDA error");
 }

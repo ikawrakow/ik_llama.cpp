@@ -25,6 +25,7 @@
 #include <cfloat>
 #include <string>
 #include <vector>
+#include <mutex>
 
 #if defined(GGML_USE_HIPBLAS)
 #include "vendors/hip.h"
@@ -66,11 +67,44 @@
 [[noreturn]]
 void ggml_cuda_error(const char * stmt, const char * func, const char * file, int line, const char * msg);
 
+struct Tracer {
+    constexpr static int kNumStored = 32;
+    struct Call {
+        std::string func;
+        std::string file;
+        int         line;
+    };
+    std::mutex mutex;
+    std::array<Call, kNumStored> calls;
+    int64_t num_calls = 0;
+
+    inline void add_call(const char * func, const char * file, int line) {
+        std::lock_guard<std::mutex> lock(mutex);
+        calls[num_calls%kNumStored] = {{func}, {file}, line};
+        ++num_calls;
+    }
+
+    static Tracer& instance() {
+        static Tracer tracer;
+        return tracer;
+    }
+
+    void print_calls() const;
+
+    static inline void register_call(const char * func, const char * file, int line) {
+        instance().add_call(func, file, line);
+    }
+
+    ~Tracer() { print_calls(); }
+};
+
 #define CUDA_CHECK_GEN(err, success, error_fn)                                      \
      do {                                                                           \
         auto err_ = (err);                                                          \
         if (err_ != (success)) {                                                    \
             ggml_cuda_error(#err, __func__, __FILE__, __LINE__, error_fn(err_));    \
+        } else {                                                                    \
+            Tracer::register_call(__func__, __FILE__, __LINE__);                  \
         }                                                                           \
     } while (0)
 
