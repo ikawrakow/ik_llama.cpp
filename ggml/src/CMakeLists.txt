@@ -258,8 +258,29 @@ set (GGML_HEADERS_IQK iqk/iqk_config.h)
 if (GGML_IQK_MUL_MAT)
     message(STATUS "Using optimized iqk matrix multiplications")
     add_compile_definitions(GGML_USE_IQK_MULMAT)
-    set(GGML_SOURCES_IQK_MM iqk/iqk_mul_mat.cpp iqk/iqk_flash_attn.cpp)
-    set(GGML_HEADERS_IQK_MM iqk/iqk_mul_mat.h iqk/iqk_flash_impl.h)
+    set(GGML_SOURCES_IQK_MM iqk/iqk_mul_mat.cpp
+                            iqk/iqk_flash_attn.cpp
+                            iqk/fa/iqk_fa_576_512.cpp
+                            iqk/fa/iqk_fa_192_128.cpp
+                            iqk/fa/iqk_fa_256_256.cpp
+                            iqk/fa/iqk_fa_128_128.cpp
+                            iqk/fa/iqk_fa_96_96.cpp
+                            iqk/fa/iqk_fa_64_64.cpp
+                            iqk/iqk_gemm_floats.cpp
+                            iqk/iqk_gemm_kquants.cpp
+                            iqk/iqk_gemm_iquants.cpp
+                            iqk/iqk_gemm_iqk_quants.cpp
+                            iqk/iqk_gemm_1bit.cpp
+                            iqk/iqk_gemm_legacy_quants.cpp)
+    set(GGML_HEADERS_IQK_MM iqk/iqk_mul_mat.h
+                            iqk/iqk_flash_impl.h
+                            iqk/fa/iqk_fa_templates.h
+                            iqk/iqk_gemm_floats.h
+                            iqk/iqk_gemm_kquants.h
+                            iqk/iqk_gemm_iquants.h
+                            iqk/iqk_gemm_iqk_quants.h
+                            iqk/iqk_gemm_1bit.h
+                            iqk/iqk_gemm_legacy_quants.h)
     if (GGML_IQK_FLASH_ATTENTION)
         message(STATUS "Enabling IQK Flash Attention kernels")
         add_compile_definitions(GGML_IQK_FLASH_ATTENTION)
