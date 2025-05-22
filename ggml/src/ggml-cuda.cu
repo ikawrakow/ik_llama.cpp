@@ -2812,9 +2812,12 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         GGML_CUDA_LOG_ERROR("src0_1: %s, %s, %d x %d x %d\n", src0_1->name, ggml_type_name(src0_1->type), (int)src0_1->ne[0], (int)src0_1->ne[1], (int)src0_1->ne[2]);
         GGML_CUDA_LOG_ERROR("src0_2: %s, %s, %d x %d x %d\n", src0_2->name, ggml_type_name(src0_2->type), (int)src0_2->ne[0], (int)src0_2->ne[1], (int)src0_2->ne[2]);
         GGML_CUDA_LOG_ERROR("src1  : %s, %s, %d x %d x %d\n", src1->name, ggml_type_name(src1->type), (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2]);
+        GGML_CUDA_LOG_ERROR("nb0_1 : %zu x %zu x %zu\n", src0_1->nb[0], src0_1->nb[1], src0_1->nb[2]);
+        GGML_CUDA_LOG_ERROR("nb0_2 : %zu x %zu x %zu\n", src0_2->nb[0], src0_2->nb[1], src0_2->nb[2]);
         if (fuse_down) {
             GGML_CUDA_LOG_ERROR("src0_n: %s, %s, %d x %d x %d\n", next->src[0]->name, ggml_type_name(next->src[0]->type), (int)next->src[0]->ne[0], (int)next->src[0]->ne[1], (int)next->src[0]->ne[2]);
             GGML_CUDA_LOG_ERROR("next  : %s, %s, %d x %d x %d\n", next->name, ggml_type_name(next->type), (int)next->ne[0], (int)next->ne[1], (int)next->ne[2]);
+            GGML_CUDA_LOG_ERROR("nxt_nb: %zu x %zu x %zu\n", next->src[0]->nb[0], next->src[0]->nb[1], next->src[0]->nb[2]);
             auto next_ctx = (ggml_backend_cuda_buffer_context *)next->buffer->context;
             auto next_src = (ggml_backend_cuda_buffer_context *)next->src[0]->buffer->context;
             GGML_CUDA_LOG_ERROR("next devices: %d, %d\n", next_ctx->device, next_src->device);
