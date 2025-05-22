@@ -18978,7 +18978,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             if (new_type == GGML_TYPE_Q3_K || new_type == GGML_TYPE_Q4_K) new_type = GGML_TYPE_Q5_K;
             if (new_type == GGML_TYPE_IQ3_K) new_type = GGML_TYPE_IQ5_K;
         }
-        if (qs.model.hparams.n_expert >= 4 && qs.model.hparams.n_expert <= 8) {
+        if (qs.model.hparams.n_expert >= 4) {
             // for the 4-8-expert model, bumping this to Q8_0 trades just ~128MB
             // TODO: explore better strategies
             new_type = GGML_TYPE_Q8_0;
@@ -19001,7 +19001,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
         ++qs.i_attention_wv;
     } else if (name.find("attn_k") != std::string::npos) {
         if (qs.params->attn_k_type < GGML_TYPE_COUNT) new_type = qs.params->attn_k_type;
-        else if (qs.model.hparams.n_expert >= 4 && qs.model.hparams.n_expert <= 8) {
+        else if (qs.model.hparams.n_expert >= 4) {
             // for the 4-8-expert model, bumping this to Q8_0 trades just ~128MB
             // TODO: explore better strategies
             new_type = GGML_TYPE_Q8_0;
@@ -19055,7 +19055,7 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                      : GGML_TYPE_Q3_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_M && (i_layer < n_layer/8 ||
-                    (qs.model.hparams.n_expert >= 4 && qs.model.hparams.n_expert <= 8 && use_more_bits(i_layer, n_layer)))) {
+                    (qs.model.hparams.n_expert >= 4 && use_more_bits(i_layer, n_layer)))) {
             new_type = GGML_TYPE_IQ4_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L) {
