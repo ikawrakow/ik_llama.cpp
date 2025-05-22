@@ -2235,6 +2235,9 @@ static inline bool prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n
         ggml_cuda_pool_alloc<mmid_row_mapping>& dev_row_mapping) {
 
     GGML_ASSERT(moe_counts.empty() && cum_moe_counts.empty());
+    GGML_ASSERT(ggml_backend_buffer_is_cuda(ids->buffer));
+    auto ids_ctx = (ggml_backend_cuda_buffer_context *)ids->buffer->context;
+    GGML_ASSERT(ctx.device == ids_ctx->device);
 
     auto stream = ctx.stream();
 
@@ -2285,8 +2288,6 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
 
-    CUDA_CHECK(cudaMemsetAsync((char *)dst->data, 0, ggml_nbytes(dst), ctx.stream()));
-
     if (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
         ggml_is_quantized(src0->type) &&
         ggml_backend_buffer_is_cuda(src0->buffer) &&
@@ -2323,6 +2324,8 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             CUDA_CHECK(cudaGetLastError());
 
             local_src1.nb[1] = src_1_ddq_size;
+
+            CUDA_CHECK(cudaMemsetAsync((char *)dst->data, 0, ggml_nbytes(dst), ctx.stream()));
 
             ggml_cuda_op_mul_mat_vec_q_id(ctx, src0, &local_src1, ids, &local_dst,
                 (const char *)src0->data, nullptr, src1_quantized.get(), (float *)dst->data,
