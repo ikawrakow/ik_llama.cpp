@@ -3794,8 +3794,9 @@ static ggml_guid_t ggml_backend_cuda_guid() {
 }
 
 GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device) {
-    if (device < 0 || device >= ggml_backend_cuda_get_device_count()) {
-        GGML_CUDA_LOG_ERROR("%s: invalid device %d\n", __func__, device);
+    int num_devices = ggml_backend_cuda_get_device_count();
+    if (device < 0 || device >= num_devices) {
+        GGML_CUDA_LOG_ERROR("%s: invalid device %d. In must be 0...%d\n", __func__, device, num_devices-1);
         return nullptr;
     }
 
@@ -3811,6 +3812,18 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device) {
         /* .context   = */ ctx
     };
 
+#ifndef GGML_CUDA_NO_PEER_COPY
+    if (num_devices > 1) {
+        CUDA_CHECK(cudaSetDevice(device));
+        for (int i = 0; i < num_devices; ++i) {
+            if (i == device) continue;
+            cudaError_t err = cudaDeviceEnablePeerAccess(i, 0);
+            if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
+                GGML_CUDA_LOG_ERROR("Failed to enable peer access from %d to %d: %s", device, i, cudaGetErrorString(err));
+            }
+        }
+    }
+#endif
     return cuda_backend;
 }
 
