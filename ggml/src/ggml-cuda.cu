@@ -2637,6 +2637,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     }
 
     if (ne12 == 1) {
+        GGML_CUDA_LOG_WARN("Oops, why have we landed here?\n");
         ggml_cuda_pool_alloc<char> dst_up_contiguous(ctx.pool(), sizeof(float)*dst_row.ne[0]);
         ggml_cuda_pool_alloc<char> dst_gate_contiguous(ctx.pool(), sizeof(float)*dst_row.ne[0]);
         if (fuse_down) {
@@ -2798,7 +2799,29 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         }
     }
 
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    auto err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) {
+        ggml_backend_cuda_buffer_context * src0_1_ctx = (ggml_backend_cuda_buffer_context *) src0_1->buffer->context;
+        ggml_backend_cuda_buffer_context * src0_2_ctx = (ggml_backend_cuda_buffer_context *) src0_2->buffer->context;
+        ggml_backend_cuda_buffer_context * src1_ctx   = (ggml_backend_cuda_buffer_context *) src1->buffer->context;
+        ggml_backend_cuda_buffer_context * dst_ctx    = (ggml_backend_cuda_buffer_context *) dst->buffer->context;
+        GGML_CUDA_LOG_ERROR("========================================== Error in %s. Device = %d\n", __func__, ctx.device);
+        int cur_device;
+        cudaGetDevice(&cur_device);
+        GGML_CUDA_LOG_ERROR("Devices: %d, %d, %d, %d. Current: %d\n", src0_1_ctx->device, src0_2_ctx->device, src1_ctx->device, dst_ctx->device, cur_device);
+        GGML_CUDA_LOG_ERROR("src0_1: %s, %s, %d x %d x %d\n", src0_1->name, ggml_type_name(src0_1->type), (int)src0_1->ne[0], (int)src0_1->ne[1], (int)src0_1->ne[2]);
+        GGML_CUDA_LOG_ERROR("src0_2: %s, %s, %d x %d x %d\n", src0_2->name, ggml_type_name(src0_2->type), (int)src0_2->ne[0], (int)src0_2->ne[1], (int)src0_2->ne[2]);
+        GGML_CUDA_LOG_ERROR("src1  : %s, %s, %d x %d x %d\n", src1->name, ggml_type_name(src1->type), (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2]);
+        if (fuse_down) {
+            GGML_CUDA_LOG_ERROR("src0_n: %s, %s, %d x %d x %d\n", next->src[0]->name, ggml_type_name(next->src[0]->type), (int)next->src[0]->ne[0], (int)next->src[0]->ne[1], (int)next->src[0]->ne[2]);
+            GGML_CUDA_LOG_ERROR("next  : %s, %s, %d x %d x %d\n", next->name, ggml_type_name(next->type), (int)next->ne[0], (int)next->ne[1], (int)next->ne[2]);
+            auto next_ctx = (ggml_backend_cuda_buffer_context *)next->buffer->context;
+            auto next_src = (ggml_backend_cuda_buffer_context *)next->src[0]->buffer->context;
+            GGML_CUDA_LOG_ERROR("next devices: %d, %d\n", next_ctx->device, next_src->device);
+        }
+        GGML_ABORT("Fatal error");
+    }
+    //CUDA_CHECK(cudaStreamSynchronize(stream));
 
     return fuse_down;
 }
