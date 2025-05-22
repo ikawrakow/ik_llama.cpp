@@ -3050,7 +3050,14 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
         return false;
     }
 
+    int cur_device;
+    CUDA_CHECK(cudaGetDevice(&cur_device));
+
     if (backend_src != backend_dst) {
+        if (cuda_ctx_src->device != cur_device) {
+            GGML_CUDA_LOG_WARN("%s: attempt to copy on device %d while current device is %d\n", __func__, cuda_ctx_src->device, cur_device);
+            CUDA_CHECK(cudaSetDevice(cuda_ctx_src->device));
+        }
         // copy on src stream
         if (cuda_ctx_src->device == cuda_ctx_dst->device) {
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
@@ -3058,7 +3065,14 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
 #ifdef GGML_CUDA_NO_PEER_COPY
             return false;
 #else
-            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+            int can_access_peer;
+            CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, cuda_ctx_src->device, cuda_ctx_dst->device));
+            if (can_access_peer) {
+                CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+            } else {
+                GGML_CUDA_LOG_WARN("%s: attempt to copy from device %d to device %d without access enabled\n", __func__, cuda_ctx_src->device, cuda_ctx_dst->device);
+                return false;
+            }
 #endif
         }
 
