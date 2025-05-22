@@ -2748,6 +2748,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             dst_row.data  =  dst_up_contiguous.get();
             ggml_cuda_mul_mat(ctx, &src0_1_row, &src1_row, &dst_row);
             CUDA_CHECK(cudaGetLastError());
+            CUDA_CHECK(cudaStreamSynchronize(stream));
 
             dst_row.data  = dst_gate_contiguous.get();
             ggml_cuda_mul_mat(ctx, &src0_2_row, &src1_row, &dst_row);
@@ -2756,6 +2757,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
                         (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(), (float *)dst_gate_contiguous.get());
             CUDA_CHECK(cudaGetLastError());
+            CUDA_CHECK(cudaStreamSynchronize(stream));
 
             if (fuse_down) {
 
@@ -2777,6 +2779,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 ggml_cuda_mul_mat(ctx, &final_src, &dst_row, &final_dst);
                 //ggml_cuda_mul_mat(ctx, next->src[0], &dst_row, &final_dst);
                 CUDA_CHECK(cudaGetLastError());
+                CUDA_CHECK(cudaStreamSynchronize(stream));
 
                 dim3 block_dims(std::min((unsigned int)next->ne[0], 768u));
                 dim3 grid_dims(num_src1_rows);
