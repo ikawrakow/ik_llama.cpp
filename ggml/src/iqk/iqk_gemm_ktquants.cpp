@@ -21,32 +21,6 @@ static inline uint32_t trellis_next(uint32_t& val) {
     return (val & kmask) ^ km32;
 }
 
-static inline __m256i trellis_next8(uint32_t val) {
-    constexpr uint32_t kmask = 0x8fff8fff;
-    constexpr uint32_t km32 = 0x3b603b60;
-    constexpr uint32_t ka = 89226354;
-    constexpr uint32_t kb = 64248484;
-    constexpr uint32_t ka1 = ka*ka;
-    constexpr uint32_t kb1 = kb*ka+kb;
-    constexpr uint32_t ka2 = ka1*ka;
-    constexpr uint32_t kb2 = kb1*ka+kb;
-    constexpr uint32_t ka3 = ka2*ka;
-    constexpr uint32_t kb3 = kb2*ka+kb;
-    constexpr uint32_t ka4 = ka3*ka;
-    constexpr uint32_t kb4 = kb3*ka+kb;
-    constexpr uint32_t ka5 = ka4*ka;
-    constexpr uint32_t kb5 = kb4*ka+kb;
-    constexpr uint32_t ka6 = ka5*ka;
-    constexpr uint32_t kb6 = kb5*ka+kb;
-    constexpr uint32_t ka7 = ka6*ka;
-    constexpr uint32_t kb7 = kb6*ka+kb;
-    __m256i mka = _mm256_setr_epi32(ka, ka1, ka2, ka3, ka4, ka5, ka6, ka7);
-    __m256i mkb = _mm256_setr_epi32(kb, kb1, kb2, kb3, kb4, kb5, kb6, kb7);
-    __m256i mval = _mm256_set1_epi32(val);
-    __m256i mres = _mm256_add_epi32(_mm256_mullo_epi32(mval, mka), mkb);
-    return _mm256_and_si256(mres, _mm256_set1_epi32(kmask)) ^ _mm256_set1_epi32(km32);
-}
-
 static inline float trellis_gen(uint32_t& val, uint32_t* s) {
     const ggml_fp16_t * h = (const ggml_fp16_t *)s;
     s[0] = trellis_next(val);
@@ -80,7 +54,7 @@ struct Trellis1 {
     inline __m256i next8(uint32_t val) const {
         auto mval = _mm256_set1_epi32(val);
         auto mres = _mm256_add_epi32(_mm256_mullo_epi32(mval, mka), mkb);
-        return _mm256_and_si256(mres, mask1) ^ mask2;
+        return _mm256_xor_si256(_mm256_and_si256(mres, mask1), mask2);
     }
 };
 
@@ -117,7 +91,7 @@ struct Trellis2 {
     inline __m256i next8(uint32_t val1, uint32_t val2) {
         __m256i mval = _mm256_setr_epi32(val1, val1, val1, val1, val2, val2, val2, val2);
         __m256i mres = _mm256_add_epi32(_mm256_mullo_epi32(mval, mka), mkb);
-        return _mm256_and_si256(mres, _mm256_set1_epi32(kmask)) ^ _mm256_set1_epi32(km32);
+        return _mm256_xor_si256(_mm256_and_si256(mres, _mm256_set1_epi32(kmask)), _mm256_set1_epi32(km32));
     }
 };
 
