@@ -779,7 +779,7 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
                         auto qv = codes.data() + kBlockSize*j;
                         float sumqx = 0;
                         for (int k = 0; k < kBlockSize; ++k) sumqx += qv[k]*xb[k];
-                        if (sumqx*sumqx*sumq2i[j] > best]) {
+                        if (sumqx*sumqx*sumq2i[j] > best) {
                             d = sumqx*sumq2i[j]; best = d*sumqx; jbest = j;
                         }
                     }
