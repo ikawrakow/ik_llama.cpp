@@ -550,6 +550,10 @@ static void analyze_x_v2(const char * name, int nrows, int n_per_row, const floa
     int counter = 0;
     float mse = 0, mse_q = 0;
     auto compute = [&mutex, &counter, &mse, &mse_q, values, nrows, n_per_row, chunk] () {
+        constexpr int kNumVal = 1 << 15;
+        constexpr int kBlockSize = 32;
+        constexpr int kGroupSize = 8;
+        constexpr int kNg = kBlockSize/kGroupSize;
         double lmse = 0, lmse_q = 0;
         std::vector<float> scales(n_per_row/kBlockSize);
         std::vector<int> best_idx(n_per_row/kGroupSize);
@@ -689,9 +693,8 @@ static void analyze_x_v2(const char * name, int nrows, int n_per_row, const floa
             }
         }
     };
-    std::vector<std::thread> workers(nthread-1);
+    std::vector<std::thread> workers(nthread);
     for (auto& w : workers) w = std::thread(compute);
-    compute();
     for (auto& w : workers) w.join();
     tot_mse += mse;
     tot_mse_q += mse_q;
@@ -718,6 +721,8 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
     int counter = 0;
     float mse = 0, mse_q = 0;
     auto compute = [&mutex, &counter, &mse, &mse_q, &codes, &sumq2i, values, nrows, n_per_row, chunk] () {
+        constexpr int kBlockSize = 8;
+        constexpr int kNumVal = 1 << 12;
         float lmse = 0, lmse_q = 0;
         std::vector<float> scales(n_per_row/kBlockSize);
         std::vector<int> best_idx(n_per_row/kBlockSize);
@@ -816,9 +821,8 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
             }
         }
     };
-    std::vector<std::thread> workers(nthread-1);
+    std::vector<std::thread> workers(nthread);
     for (auto& w : workers) w = std::thread(compute);
-    compute();
     for (auto& w : workers) w.join();
     tot_mse += mse;
     tot_mse_q += mse_q;
