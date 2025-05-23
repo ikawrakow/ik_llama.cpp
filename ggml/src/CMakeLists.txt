@@ -268,6 +268,7 @@ if (GGML_IQK_MUL_MAT)
                             iqk/fa/iqk_fa_64_64.cpp
                             iqk/iqk_gemm_floats.cpp
                             iqk/iqk_gemm_kquants.cpp
+                            iqk/iqk_gemm_ktquants.cpp
                             iqk/iqk_gemm_iquants.cpp
                             iqk/iqk_gemm_iqk_quants.cpp
                             iqk/iqk_gemm_1bit.cpp
@@ -277,6 +278,7 @@ if (GGML_IQK_MUL_MAT)
                             iqk/fa/iqk_fa_templates.h
                             iqk/iqk_gemm_floats.h
                             iqk/iqk_gemm_kquants.h
+                            iqk/iqk_gemm_ktquants.h
                             iqk/iqk_gemm_iquants.h
                             iqk/iqk_gemm_iqk_quants.h
                             iqk/iqk_gemm_1bit.h

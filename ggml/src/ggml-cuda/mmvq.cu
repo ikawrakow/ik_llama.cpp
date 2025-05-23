@@ -618,3 +618,41 @@ void ggml_cuda_op_mul_mat_vec_q_id(
 
     GGML_UNUSED(src1_ddf_i);
 }
+
+bool ggml_cuda_mmvq_type_supported(ggml_type src0_type) {
+    switch (src0_type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q6_0:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ1_BN:
+        case GGML_TYPE_IQ2_BN:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ2_K:
+        case GGML_TYPE_IQ3_K:
+        case GGML_TYPE_IQ4_K:
+        case GGML_TYPE_IQ4_KS:
+        case GGML_TYPE_IQ4_KSS:
+        case GGML_TYPE_IQ2_KS:
+        case GGML_TYPE_IQ5_K:
+        case GGML_TYPE_IQ6_K:
+        case GGML_TYPE_IQ3_S:
+            return true;
+        default:
+            return false;
+    }
+}
