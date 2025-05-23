@@ -22,6 +22,7 @@
 #include "iqk_flash_impl.h"
 #include "iqk_gemm_floats.h"
 #include "iqk_gemm_kquants.h"
+#include "iqk_gemm_ktquants.h"
 #include "iqk_gemm_iquants.h"
 #include "iqk_gemm_iqk_quants.h"
 #include "iqk_gemm_1bit.h"
@@ -541,6 +542,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_IQ4_KS_R4:
         case GGML_TYPE_IQ5_KS_R4:
             return iqk_set_kernels_iqk_quants(ne00, typeA, typeB, mm.funcs, mm.func16);
+        case GGML_TYPE_IQ2_KT:
+        case GGML_TYPE_IQ3_KT:
+        case GGML_TYPE_IQ4_KT:
+            return ggml_type(typeB) == GGML_TYPE_F32 ? iqk_set_kernels_ktquants(ne00, typeA, typeB, mm.funcs, mm.func16) : false;
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
