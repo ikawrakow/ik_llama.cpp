@@ -190,10 +190,9 @@ static inline __m256 abs_ps(__m256 vals) {
 }
 
 // Negates 32-bit float lanes of an 8x32-bit vector
-// based on 8x8-bit condition var. For float lane i, if byte i of 
+// based on 8x8-bit condition var. For float lane i, if byte i of
 // `condition` is nonzero, the float will be negated.
-static inline __m256 conditional_negate_ps(__m256 vals, uint64_t condition_mask_u64) {
-    __m128i condition_bytes = _mm_set_epi64x(0, condition_mask_u64);
+static inline __m256 conditional_negate_ps(__m256 vals, __m128i condition_bytes) {
     // Make `should_negate_byte_mask` where byte i == 0xFF if byte i in condition_bytes is zero,
     // else 0x00 (upper bytes are meaningless)
     __m128i zeros = _mm_setzero_si128();
@@ -218,6 +217,17 @@ static void mul_mat_iq3_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
 
     Trellis1 trellis;
 
+    union { __m256 vec; float val[8]; } s_helper;
+
+    auto shifts = _mm_set_epi32(0, 0, 4, 0);
+    //auto sign_mask1 = _mm256_set1_epi32(0x01);
+    //auto sign_mask2 = _mm256_set1_epi32(0x10);
+    //auto sign_bit   = _mm256_set1_ps(-0.0f);
+
+    __m256i all_signs[4];
+    auto mask1 = _mm256_set1_epi32(0x01);
+    auto mask2 = _mm256_set1_epi32(0x10);
+
     __m256  accd[nrc_y];
     const float * y[nrc_y];
     for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const float *)info.src1_row(iy);
@@ -232,33 +242,86 @@ static void mul_mat_iq3_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
         for (int i = 0; i < nb; ++i) {
             const uint16_t * ql = (const uint16_t *)x[i].ql;
             const uint8_t * qh = x[i].qh;
-            for (int j = 0; j < 128; j+=8) {
-                uint64_t mask1 = 0x0101010101010101 << (j/32);
-                uint64_t mask2 = mask1 << 4;
-                uint32_t val1 = ql[j/8] + 4096;
-                uint32_t val2 = ql[j/8+16] + 4096;
-                const uint64_t signs = *((const uint64_t *)(qh + (j%32)));
-                const float x_scale1 = (x[i].scales[j/32] & 0xf);
-                const float x_scale2 = (x[i].scales[j/32] >> 4);
-                const __m256 x_val1 = abs_ps(trellis_gen8(trellis.next8(val1)));
-                const __m256 x_val2 = abs_ps(trellis_gen8(trellis.next8(val2)));
-                for (int iy = 0; iy < nrc_y; ++iy) {
-                    accd[iy] = _mm256_fmadd_ps(
-                        conditional_negate_ps(
-                            _mm256_load_ps(y[iy] + i*QK_K+j), signs & mask1
-                        ),
-                        _mm256_mul_ps(_mm256_set1_ps(x_scale1), x_val1),
-                        accd[iy]
-                    );
-                    accd[iy] = _mm256_fmadd_ps(
-                        conditional_negate_ps(
-                            _mm256_load_ps(y[iy] + i*QK_K+j+128), signs & mask2
-                        ),
-                        _mm256_mul_ps(_mm256_set1_ps(x_scale2), x_val2),
-                        accd[iy]
-                    );
+            auto s8 = _mm_set1_epi32(*(const uint32_t *)x[i].scales);
+            s8 = _mm_and_si128(_mm_srlv_epi32(s8, shifts), _mm_set1_epi8(0xf));
+            auto s32 = _mm256_cvtepi8_epi32(s8);
+            s_helper.vec = _mm256_cvtepi32_ps(s32);
+            //auto mask1 = _mm_set1_epi8(1);
+            //auto mask2 = _mm_slli_epi16(mask1, 4);
+            for (int j = 0; j < 4; ++j) all_signs[j] = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(qh + 8*j)));
+            for (int ib = 0; ib < 4; ++ib) {
+                //auto sign_bits = _mm256_cvtepu8_epi32(_mm_loadl_epi64((const __m128i *)(x[i].qh + 8*ib)));
+                auto scale1 = _mm256_set1_ps(s_helper.val[ib+0]);
+                auto scale2 = _mm256_set1_ps(s_helper.val[ib+4]);
+                //uint64_t mask1 = 0x0101010101010101 << ib; //(j/32);
+                //uint64_t mask2 = mask1 << 4;
+                for (int j = 0; j < 4; ++j) {
+                    uint32_t val1 = ql[4*ib+j   ] + 4096;
+                    uint32_t val2 = ql[4*ib+j+16] + 4096;
+                    auto sign1 = _mm256_and_si256(_mm256_cmpeq_epi32(_mm256_and_si256(all_signs[j], mask1), mask1), _mm256_set1_epi32(0x80000000));
+                    auto sign2 = _mm256_and_si256(_mm256_cmpeq_epi32(_mm256_and_si256(all_signs[j], mask2), mask2), _mm256_set1_epi32(0x80000000));
+                    all_signs[j] = _mm256_srli_epi32(all_signs[j], 1);
+                    //auto signs = _mm_loadl_epi64((const __m128i *)(qh + j));
+                    //auto sign1 = _mm_and_si128(signs, mask1);
+                    //auto sign2 = _mm_and_si128(signs, mask2);
+                    //const uint64_t signs = *((const uint64_t *)(qh + j));
+                    auto x_val1 = abs_ps(trellis_gen8(trellis.next8(val1)));
+                    auto x_val2 = abs_ps(trellis_gen8(trellis.next8(val2)));
+                    x_val1 = _mm256_mul_ps(scale1, _mm256_xor_ps(x_val1, _mm256_castsi256_ps(sign1)));
+                    x_val2 = _mm256_mul_ps(scale2, _mm256_xor_ps(x_val2, _mm256_castsi256_ps(sign2)));
+                    for (int iy = 0; iy < nrc_y; ++iy) {
+                        accd[iy] = _mm256_fmadd_ps(_mm256_load_ps(y[iy] + i*QK_K+32*ib+8*j    ), x_val1, accd[iy]);
+                        accd[iy] = _mm256_fmadd_ps(_mm256_load_ps(y[iy] + i*QK_K+32*ib+8*j+128), x_val2, accd[iy]);
+                    }
                 }
+                //mask1 = _mm_slli_epi16(mask1, 1);
+                //mask2 = _mm_slli_epi16(mask2, 1);
+                //for (int j = 0; j < 4; ++j) {
+                //    //auto signs1 = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_and_si256(sign_bits, sign_mask1), 27));
+                //    //auto signs2 = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_and_si256(sign_bits, sign_mask2), 23));
+                //    //sign_bits   = _mm256_srli_epi32(sign_bits, 1);
+                //    auto smask1 = _mm256_cmpeq_epi32(_mm256_and_si256(sign_bits, sign_mask1), sign_mask1);
+                //    auto smask2 = _mm256_cmpeq_epi32(_mm256_and_si256(sign_bits, sign_mask2), sign_mask2);
+                //    sign_bits   = _mm256_srli_epi32(sign_bits, 1);
+                //    auto signs1 = _mm256_and_ps(_mm256_castsi256_ps(smask1), sign_bit);
+                //    auto signs2 = _mm256_and_ps(_mm256_castsi256_ps(smask2), sign_bit);
+                //    auto a_val1 = _mm256_andnot_ps(sign_bit, trellis_gen8(trellis.next8(ql[4*ib+j+ 0]+4096)));
+                //    auto a_val2 = _mm256_andnot_ps(sign_bit, trellis_gen8(trellis.next8(ql[4*ib+j+16]+4096)));
+                //    auto x_val1 = _mm256_mul_ps(scale1, _mm256_xor_ps(a_val1, signs1));
+                //    auto x_val2 = _mm256_mul_ps(scale2, _mm256_xor_ps(a_val2, signs2));
+                //    for (int iy = 0; iy < nrc_y; ++iy) {
+                //        accd[iy] = _mm256_fmadd_ps(_mm256_loadu_ps(y[iy] + i*QK_K + 32*ib + 8*j +   0), x_val1, accd[iy]);
+                //        accd[iy] = _mm256_fmadd_ps(_mm256_loadu_ps(y[iy] + i*QK_K + 32*ib + 8*j + 128), x_val2, accd[iy]);
+                //    }
+                //}
             }
+            //for (int j = 0; j < 128; j+=8) {
+            //    uint64_t mask1 = 0x0101010101010101 << (j/32);
+            //    uint64_t mask2 = mask1 << 4;
+            //    uint32_t val1 = ql[j/8] + 4096;
+            //    uint32_t val2 = ql[j/8+16] + 4096;
+            //    const uint64_t signs = *((const uint64_t *)(qh + (j%32)));
+            //    const float x_scale1 = (x[i].scales[j/32] & 0xf);
+            //    const float x_scale2 = (x[i].scales[j/32] >> 4);
+            //    const __m256 x_val1 = abs_ps(trellis_gen8(trellis.next8(val1)));
+            //    const __m256 x_val2 = abs_ps(trellis_gen8(trellis.next8(val2)));
+            //    for (int iy = 0; iy < nrc_y; ++iy) {
+            //        accd[iy] = _mm256_fmadd_ps(
+            //            conditional_negate_ps(
+            //                _mm256_load_ps(y[iy] + i*QK_K+j), signs & mask1
+            //            ),
+            //            _mm256_mul_ps(_mm256_set1_ps(x_scale1), x_val1),
+            //            accd[iy]
+            //        );
+            //        accd[iy] = _mm256_fmadd_ps(
+            //            conditional_negate_ps(
+            //                _mm256_load_ps(y[iy] + i*QK_K+j+128), signs & mask2
+            //            ),
+            //            _mm256_mul_ps(_mm256_set1_ps(x_scale2), x_val2),
+            //            accd[iy]
+            //        );
+            //    }
+            //}
         }
 
         for (int iy = 0; iy < nrc_y; ++iy) {
