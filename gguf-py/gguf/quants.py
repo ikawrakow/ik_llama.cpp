@@ -61,6 +61,7 @@ def quantize(data: np.ndarray, qtype: GGMLQuantizationType) -> np.ndarray:
     elif (q := _type_traits.get(qtype)) is not None:
         return q.quantize(data)
     else:
+        print(_type_traits)
         raise NotImplementedError(f"Quantization for {qtype.name} is not yet implemented")
 
 
@@ -216,6 +217,110 @@ class BF16(__Quant, qtype=GGMLQuantizationType.BF16):
     def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
         return (blocks.view(np.int16).astype(np.int32) << 16).view(np.float32)
 
+
+class FP8_E4M3(__Quant, qtype=GGMLQuantizationType.FP8_E4M3):
+    FP8_EXP_BIAS = 7
+    FP8_MAX_EXP = 14
+    FP8_MANT_BITS = 3
+    FP32_EXP_BIAS = 127
+
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        f32 = blocks.view(np.float32)
+        u32 = f32.view(np.uint32)
+        sign = (u32 >> 31).astype(np.uint32)
+        exp = (u32 >> 23) & 0xFF
+        mant = u32 & 0x7FFFFF
+
+        #special cases
+        is_nan = (exp == 0xFF) & (mant != 0)
+        is_inf = (exp == 0xFF) & (mant == 0)
+        is_zero = (exp == 0) & (mant == 0)
+        
+        #normalize FP32 subnormals
+        is_subnormal_fp32 = (exp == 0) & (mant != 0)
+        leading_zeros = 22 - np.log2(np.maximum(mant, 1)).astype(int)
+        mant = np.where(is_subnormal_fp32, mant << leading_zeros, mant)
+        exp = np.where(is_subnormal_fp32, 1 - leading_zeros, exp)
+
+        #calculate unclipped exponent
+        fp8_exp_raw = exp.astype(np.int32) - (cls.FP32_EXP_BIAS - cls.FP8_EXP_BIAS)
+        underflow = fp8_exp_raw < 0
+        fp8_exp = np.clip(fp8_exp_raw, 0, cls.FP8_MAX_EXP)
+        
+        # calculate subnormal shift
+        shift = np.where(underflow, 1 - fp8_exp_raw, 0)
+       
+        # align and round mantissa (RNE)
+        mant_plus_implicit = np.where(exp > 0, mant | 0x800000, mant)
+        total_shift = 20 + shift
+        mant_shifted = np.right_shift(mant_plus_implicit, total_shift)
+        round_bit = np.right_shift(mant_plus_implicit, total_shift - 1) & 1
+        sticky_mask = (1 << (total_shift - 1)) - 1
+        sticky = (mant_plus_implicit & sticky_mask) != 0
+        rounded = mant_shifted + ((round_bit & (sticky | (mant_shifted & 1))) != 0)
+        
+        # handle mantissa overflow
+        mant_overflow = rounded >= 16  # 1 << (3+1)
+        fp8_exp = np.where(mant_overflow, fp8_exp + 1, fp8_exp)
+        rounded = np.where(mant_overflow, 8, rounded)  # Reset to 1.000
+        
+        # handle exponent overflow
+        overflow = fp8_exp > cls.FP8_MAX_EXP
+        fp8_exp = np.where(overflow, 0xF, fp8_exp)
+        rounded = np.where(overflow, 0, rounded)
+        
+        # make the FP8
+        fp8 = (
+            (sign << 7) |
+            ((fp8_exp << 3) & 0x78) |
+            (rounded & 0x7)
+        )
+        fp8 = np.where(is_nan, (sign << 7) | 0x7D, fp8)   # NaN
+        fp8 = np.where(is_inf, (sign << 7) | 0x78, fp8)   # Inf
+        fp8 = np.where(is_zero, sign << 7, fp8)           # Zero
+        
+        return fp8.astype(np.uint8)
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        fp8 = blocks.astype(np.uint32)
+        sign = (fp8 >> 7) & 1
+        exp = (fp8 >> 3) & 0xF
+        mant = fp8 & 0x7
+        
+        #special cases
+        is_nan = (exp == 0xF) & (mant != 0)
+        is_inf = (exp == 0xF) & (mant == 0)
+        is_zero = (exp == 0) & (mant == 0)
+        is_subnormal = (exp == 0) & (mant != 0)
+        
+        fp32_exp = np.where(
+            exp > 0,
+            exp + (cls.FP32_EXP_BIAS - cls.FP8_EXP_BIAS),
+            (1 - cls.FP8_EXP_BIAS) + cls.FP32_EXP_BIAS  # -6 + 127 = 121
+        )
+        
+        mant_scale = np.where(
+            is_subnormal,
+            mant.astype(np.float32) * 0.125,  # 1/8
+            1.0 + mant.astype(np.float32) * 0.125
+        )
+        
+        result = np.where(
+            is_nan,
+            np.nan,
+            np.where(
+                is_inf,
+                np.copysign(np.inf, (-1.0)**sign),
+                np.where(
+                    is_zero,
+                    np.copysign(0.0, (-1.0)**sign),
+                    np.ldexp(mant_scale * (-1.0)**sign, fp32_exp - cls.FP32_EXP_BIAS)
+                )
+            )
+        )
+        return result.astype(np.float32)
 
 class Q4_0(__Quant, qtype=GGMLQuantizationType.Q4_0):
     @classmethod

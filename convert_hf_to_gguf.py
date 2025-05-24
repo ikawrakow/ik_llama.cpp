@@ -195,7 +195,7 @@ class Model:
                 return False
         return name == (key_name + suffix)
 
-    def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias")) -> str:
+    def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias", ".weight_scale_inv")) -> str:
         new_name = self.tensor_map.get_name(key=name, try_suffixes=try_suffixes)
         if new_name is None:
             raise ValueError(f"Can not map tensor {name!r}")
@@ -316,6 +316,8 @@ class Model:
                         data_qtype = gguf.GGMLQuantizationType.BF16
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0:
                         data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_FP8_E4M3:
+                        data_qtype = gguf.GGMLQuantizationType.FP8_E4M3
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
 
@@ -4076,8 +4078,8 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "auto"], default="f16",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
+        "--outtype", type=str, choices=["f32", "f16", "bf16", "fp8", "q8_0", "auto"], default="f16",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, fp8 for float8_e4m3fn, q8_0 for Q8_0, auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
@@ -4164,6 +4166,7 @@ def main() -> None:
         "f16": gguf.LlamaFileType.MOSTLY_F16,
         "bf16": gguf.LlamaFileType.MOSTLY_BF16,
         "q8_0": gguf.LlamaFileType.MOSTLY_Q8_0,
+        "fp8": gguf.LlamaFileType.MOSTLY_FP8_E4M3,
         "auto": gguf.LlamaFileType.GUESSED,
     }
 
