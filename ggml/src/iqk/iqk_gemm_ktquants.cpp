@@ -252,15 +252,6 @@ static void mul_mat_iq3_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
     }
 }
 
-// QuantizerIQKT<block_size = 32, group_size = 4, num_bits = 15>;
-// constexpr static int kSuperBlockSize = QK_K;
-// constexpr static int kBlockSize = block_size; -> 32
-// constexpr static int kGroupSize = group_size; ->  4
-// constexpr static int kNg = kBlockSize/kGroupSize; -> 8
-// constexpr static int kNblock = kSuperBlockSize/kBlockSize; -> 8
-// constexpr static int kNumVal = 1 << num_bits; -> 32768
-// constexpr int kNumGroups = Q::kSuperBlockSize/Q::kGroupSize -> 64
-
 template <int nrc_y>
 static void mul_mat_iq4_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n%QK_K == 0);
@@ -270,9 +261,11 @@ static void mul_mat_iq4_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
     Trellis2 trellis;
 
     union { __m256  vec; float    val[8]; } s_helper;
-    union { __m256i vec; uint32_t val[8]; } o_helper; //, q_helper1, q_helper2;
+    union { __m256i vec; uint32_t val[8]; } o_helper;
 
-    __m256  accd[nrc_y];
+    constexpr int k_acc = nrc_y == 1 ? 2 : nrc_y;
+
+    __m256  accd[k_acc];
     const float * y[nrc_y];
     float row_sum[nrc_y];
     for (int iy = 0; iy < nrc_y; ++iy) {
@@ -288,7 +281,7 @@ static void mul_mat_iq4_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
         auto dav = dptr[1];
         const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 2);
 
-        for (int iy = 0; iy < nrc_y; ++iy) accd[iy] = _mm256_setzero_ps();
+        for (int iy = 0; iy < k_acc; ++iy) accd[iy] = _mm256_setzero_ps();
 
         for (int i = 0; i < nb; ++i) {
             auto vshb = _mm256_loadu_si256((const __m256i *)x[i].qs);
@@ -310,18 +303,29 @@ static void mul_mat_iq4_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
                     uint32_t val4 = ql[8*ib+2*j+33] + ((qh[8*ib+2*j+1] << 4) & 0xf00) + ((sh2 & 56) << 9) + o_helper.val[ib+4];
                     auto x_val1 = _mm256_mul_ps(scale1, trellis_gen8(trellis.next8(val1, val3)));
                     auto x_val2 = _mm256_mul_ps(scale2, trellis_gen8(trellis.next8(val2, val4)));
-                    for (int iy = 0; iy < nrc_y; ++iy) {
-                        auto y1 = _mm256_load_ps(y[iy] + i*QK_K+32*ib+8*j+  0);
-                        auto y2 = _mm256_load_ps(y[iy] + i*QK_K+32*ib+8*j+128);
-                        accd[iy] = _mm256_fmadd_ps(y1, x_val1, accd[iy]);
-                        accd[iy] = _mm256_fmadd_ps(y2, x_val2, accd[iy]);
+                    if constexpr (nrc_y == 1) {
+                        auto y1 = _mm256_load_ps(y[0] + i*QK_K+32*ib+8*j+  0);
+                        auto y2 = _mm256_load_ps(y[0] + i*QK_K+32*ib+8*j+128);
+                        accd[0] = _mm256_fmadd_ps(y1, x_val1, accd[0]);
+                        accd[1] = _mm256_fmadd_ps(y2, x_val2, accd[1]);
+                    } else {
+                        for (int iy = 0; iy < nrc_y; ++iy) {
+                            auto y1 = _mm256_load_ps(y[iy] + i*QK_K+32*ib+8*j+  0);
+                            auto y2 = _mm256_load_ps(y[iy] + i*QK_K+32*ib+8*j+128);
+                            accd[iy] = _mm256_fmadd_ps(y1, x_val1, accd[iy]);
+                            accd[iy] = _mm256_fmadd_ps(y2, x_val2, accd[iy]);
+                        }
                     }
                 }
             }
         }
 
-        for (int iy = 0; iy < nrc_y; ++iy) {
-            info.store(ix, iy, hsum_float_8(accd[iy]) + dav*row_sum[iy]);
+        if constexpr (nrc_y == 1) {
+            info.store(ix, 0, hsum_float_8(_mm256_add_ps(accd[0], accd[1])) + dav*row_sum[0]);
+        } else {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                info.store(ix, iy, hsum_float_8(accd[iy]) + dav*row_sum[iy]);
+            }
         }
     }
 }
