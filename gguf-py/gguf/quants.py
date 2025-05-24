@@ -61,7 +61,6 @@ def quantize(data: np.ndarray, qtype: GGMLQuantizationType) -> np.ndarray:
     elif (q := _type_traits.get(qtype)) is not None:
         return q.quantize(data)
     else:
-        print(_type_traits)
         raise NotImplementedError(f"Quantization for {qtype.name} is not yet implemented")
 
 
