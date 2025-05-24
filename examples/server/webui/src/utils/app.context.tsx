@@ -16,6 +16,9 @@ import {
 import { BASE_URL, CONFIG_DEFAULT, isDev } from '../Config';
 import { matchPath, useLocation, useNavigate } from 'react-router';
 
+class Timer {
+	static timercount = 1;
+}
 interface AppContextValue {
   // conversations and messages
   viewingChat: ViewingChat | null;
@@ -155,7 +158,8 @@ export const AppContextProvider = ({
       throw new Error('Current messages are not found');
     }
 
-    const pendingId = Date.now() + 1;
+    const pendingId = Date.now() + Timer.timercount + 1;
+	Timer.timercount=Timer.timercount+2;
     let pendingMsg: PendingMessage = {
       id: pendingId,
       convId,
@@ -292,7 +296,8 @@ export const AppContextProvider = ({
       navigate(`/chat/${convId}`);
     }
 
-    const now = Date.now();
+    const now = Date.now()+Timer.timercount;
+	Timer.timercount=Timer.timercount + 2;
     const currMsgId = now;
     StorageUtils.appendMsg(
       {
