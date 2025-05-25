@@ -1290,6 +1290,10 @@ class GGMLQuantizationType(IntEnum):
     Q8_KR8    = 149
     Q8_K128   = 150
     Q8_KV     = 151
+    IQ5_KS    = 152
+    IQ2_KT    = 153
+    IQ3_KT    = 154
+    IQ4_KT    = 155
     Q4_0_R8   = 202
     Q5_0_R4   = 206
     Q8_0_R8   = 208
@@ -1315,6 +1319,7 @@ class GGMLQuantizationType(IntEnum):
     IQ4_K_R4  = 339
     IQ5_K_R4  = 340
     IQ4_KS_R4 = 344
+    IQ5_KS_R4 = 352
     Q8_KV_R8  = 398
     Q8_K_R8   = 399
 
@@ -1368,6 +1373,10 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ2_KS          = 138    #except 1d tensors
     MOSTLY_IQ4_KSS         = 139    #except 1d tensors
     MOSTLY_Q8_KV           = 140    #except 1d tensors
+    MOSTLY_IQ5_KS          = 141    #except 1d tensors
+    MOSTLY_IQ2_KT          = 142    #except 1d tensors
+    MOSTLY_IQ3_KT          = 143    #except 1d tensors
+    MOSTLY_IQ4_KT          = 144    #except 1d tensors
     MOSTLY_Q4_0_R8         = 202    #except 1d tensors
     MOSTLY_Q8_0_R8         = 207    #except 1d tensors
     MOSTLY_Q5_0_R4         = 208    #except 1d tensors
@@ -1393,6 +1402,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ4_K_R4        = 332    #except 1d tensors
     MOSTLY_IQ5_K_R4        = 333    #except 1d tensors
     MOSTLY_IQ4_KS_R4       = 337    #except 1d tensors
+    MOSTLY_IQ5_KS_R4       = 341    #except 1d tensors
     MOSTLY_Q8_KV_R8        = 398    #except 1d tensors
     MOSTLY_Q8_K_R8         = 399    #except 1d tensors
 
@@ -1495,6 +1505,10 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q8_KR8      : ( 256,  292),
     GGMLQuantizationType.Q8_K128     : ( 128,  140),
     GGMLQuantizationType.Q8_KV       : (  32,   32),
+    GGMLQuantizationType.IQ5_KS      : ( 256,  168),
+    GGMLQuantizationType.IQ2_KT      : ( 256,   68),
+    GGMLQuantizationType.IQ3_KT      : ( 256,  100),
+    GGMLQuantizationType.IQ4_KT      : ( 256,  128),
     GGMLQuantizationType.Q4_0_R8     : (  32,   18),
     GGMLQuantizationType.Q5_0_R4     : (  32,   22),
     GGMLQuantizationType.Q8_0_R8     : (  32,   34),
@@ -1520,6 +1534,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ4_K_R4    : ( 256,  144),
     GGMLQuantizationType.IQ5_K_R4    : ( 256,  176),
     GGMLQuantizationType.IQ4_KS_R4   : ( 256,  136),
+    GGMLQuantizationType.IQ5_KS_R4   : ( 256,  168),
     GGMLQuantizationType.Q8_KV_R8    : (  32,   32),
     GGMLQuantizationType.Q8_K_R8     : ( 256,  258),
 }
