@@ -12,10 +12,8 @@
 #include "ggml.h"
 #include "ggml-aarch64.h"
 #include "iqk/iqk_quantize.h"
-#if GGML_USE_IQK_MULMAT
 #include "iqk/iqk_mul_mat.h"
 #include "iqk/iqk_config.h"
-#endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -715,14 +713,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q4_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4_0_ref,
         .vec_dot                  = ggml_vec_dot_q4_0_q8_0,
-#if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
 #if defined (__ARM_FEATURE_MATMUL_INT8)
         .nrows                    = 2,
@@ -740,14 +734,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q4_1,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4_1_ref,
         .vec_dot                  = ggml_vec_dot_q4_1_q8_1,
-#if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_1_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_1,
 #endif
 #if defined (__ARM_FEATURE_MATMUL_INT8)
         .nrows                    = 2,
@@ -791,14 +781,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q5_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q5_0_ref,
         .vec_dot                  = ggml_vec_dot_q5_0_q8_0,
-#if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
@@ -812,14 +798,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q5_1,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q5_1_ref,
         .vec_dot                  = ggml_vec_dot_q5_1_q8_1,
-#if GGML_USE_IQK_MULMAT
 #ifdef __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_1_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_1,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
@@ -833,14 +815,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q6_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q6_0_ref,
         .vec_dot                  = ggml_vec_dot_q6_0_q8_0,
-#if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
@@ -855,7 +833,6 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = (ggml_from_float_t) quantize_row_q8_0_ref,
         .from_float_to_mat        = quantize_mat_q8_0,
         .vec_dot                  = ggml_vec_dot_q8_0_q8_0,
-#if GGML_USE_IQK_MULMAT
 #ifdef HAVE_FANCY_SIMD
         // Remember: we cannot add 128 to the Q8 quants and use iblock sum in Q8_1 to subtract as we do on Zen4 for pure AVX2
         //           because there the result of the _mm256_maddubs_epi16() instruction may overflow the int16_t range
@@ -863,9 +840,6 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
 #if defined (__ARM_FEATURE_MATMUL_INT8)
         .nrows                    = 2,
@@ -1288,14 +1262,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq4_nl,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq4_nl_ref,
         .vec_dot                  = ggml_vec_dot_iq4_nl_q8_0,
-#if GGML_USE_IQK_MULMAT
 #if defined HAVE_FANCY_SIMD
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
@@ -1713,14 +1683,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq4_nl_r4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq4_nl_r4_ref,
         .vec_dot                  = vec_dot_iq4_nl_r4_q8_0,
-#if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
@@ -1747,14 +1713,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q4_0_r8,
         .from_float_ref           = (ggml_from_float_t)quantize_row_q4_0_r8_ref,
         .vec_dot                  = vec_dot_q4_0_r8_q8_0,
-#if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
@@ -1768,14 +1730,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q8_0_r8,
         .from_float_ref           = (ggml_from_float_t)quantize_row_q8_0_r8_ref,
         .vec_dot                  = vec_dot_q8_0_r8_q8_0,
-#if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
@@ -1789,14 +1747,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q5_0_r4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_q5_0_r4_ref,
         .vec_dot                  = vec_dot_q5_0_r4_q8_0,
-#if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
@@ -1810,14 +1764,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q6_0_r4,
         .from_float_ref           = (ggml_from_float_t)quantize_row_q6_0_r4_ref,
         .vec_dot                  = vec_dot_q6_0_r4_q8_0,
-#if GGML_USE_IQK_MULMAT
 #if defined __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
-#endif
-#else
-        .vec_dot_type             = GGML_TYPE_Q8_0,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
@@ -14501,10 +14451,6 @@ static void ggml_compute_forward_mul_mat(
     ggml_from_float_t        const from_float           = type_traits[vec_dot_type].from_float;
     int64_t                  const vec_dot_num_rows     = type_traits[type].nrows;
     int64_t                  const matmul_num_cols      = type_traits[type].ncols;
-#if !GGML_USE_IQK_MULMAT
-    ggml_from_float_to_mat_t const from_float_to_mat    = type_traits[vec_dot_type].from_float_to_mat;
-    int64_t                  const blck_size_interleave = type_traits[type].blck_size_interleave;
-#endif
     ggml_gemv_t              const gemv                 = type_traits[type].gemv;
     ggml_gemm_t              const gemm                 = type_traits[type].gemm;
 
@@ -14532,7 +14478,6 @@ static void ggml_compute_forward_mul_mat(
     const int64_t r3 = ne13 / ne03;
 #endif
 
-#if GGML_USE_IQK_MULMAT
     if (dst->type == GGML_TYPE_F32) {
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
                     ne02, ne03, ne12, ne13, nb02, nb03, nb12, nb13, nb2/sizeof(float), nb3/sizeof(float),
@@ -14540,7 +14485,6 @@ static void ggml_compute_forward_mul_mat(
                     src1->type, src1->data, nb11,
                     (float *)dst->data, nb1/sizeof(float), ith, nth)) return;
     }
-#endif
 
 #if GGML_USE_LLAMAFILE
 
@@ -14579,61 +14523,22 @@ UseGgmlGemm1:;
 
         assert(params->wsize >= ne13*nbw3);
         if (src1->type != GGML_TYPE_F32) {
-#if GGML_USE_IQK_MULMAT
             char * work_buffer = wdata + ne13*nbw3 + ith*ne10*sizeof(float);
             GGML_ASSERT(params->wsize >= ne13*nbw3 + nth*ne10*sizeof(float));
             iqk_quantize_any(src1->type, vec_dot_type, ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13,
                     src1->data, wdata, work_buffer, type_traits[src1->type].to_float, from_float, ith, nth);
-#else
-            GGML_ABORT("fatal error");
-#endif
         }
         else {
-
-//#ifdef GGML_USE_IQK_MULMAT
-//        int ts = type_traits[vec_dot_type].type_size;
-//        int bs = type_traits[vec_dot_type].blck_size;
-//        int64_t blocks_per_row = ne10/bs;
-//        int64_t num_blocks = ne11*ne12*ne13*blocks_per_row;
-//        int gcd = simple_gcd(128, ts); // 128 is to cover cache line sizes for common architectures without getting involved
-//                                       // with trying to get it from ggml
-//        int64_t num_blocks_gcd = (num_blocks + gcd - 1)/gcd;
-//        int64_t block_per_thread = ((num_blocks_gcd + nth - 1)/nth)*gcd;
-//        int64_t first_block = ith*block_per_thread;
-//        int64_t last_block = MIN(num_blocks, first_block + block_per_thread);
-//        while (first_block < last_block) {
-//            int64_t i13 = first_block/(ne11*ne12*blocks_per_row);
-//            int64_t i12 = (first_block - i13*ne11*ne12*blocks_per_row)/(ne11*blocks_per_row);
-//            int64_t i11 = (first_block - (i13*ne12 + i12)*ne11*blocks_per_row)/blocks_per_row;
-//            int64_t i10 = first_block % blocks_per_row;
-//            int64_t blocks_to_do = MIN(blocks_per_row - i10, last_block - first_block);
-//            from_float((float *)((char *)src1->data + i13*nb13 + i12*nb12 + i11*nb11) + i10*bs,
-//                    (void *)(wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + i10*ts), blocks_to_do*bs);
-//            first_block += blocks_to_do;
-//        }
-//#else
-
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                int64_t i11_processed = 0;
-#if !GGML_USE_IQK_MULMAT
-                if ((ggml_n_dims(src1) == 2) && from_float_to_mat && gemm) {
-                    for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
-                        from_float_to_mat((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                                          (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                                          4, ne10, blck_size_interleave);
+            for (int64_t i13 = 0; i13 < ne13; ++i13) {
+                for (int64_t i12 = 0; i12 < ne12; ++i12) {
+                    int64_t i11_processed = 0;
+                    for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
+                        from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                                ne10);
                     }
-                    i11_processed = ne11 - ne11 % 4;
-                }
-#endif
-                for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                           (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                           ne10);
                 }
             }
-        }
-//#endif
         }
 
         ggml_barrier(params->shared);
@@ -14653,7 +14558,6 @@ UseGgmlGemm1:;
 
     const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
 
-#if GGML_USE_IQK_MULMAT
     if (src1->type != vec_dot_type && dst->type == GGML_TYPE_F32) {
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
@@ -14663,7 +14567,6 @@ UseGgmlGemm1:;
                     vec_dot_type, wdata, row_size,
                     (float *)dst->data, nb1/sizeof(float), ith, nth)) return;
     }
-#endif
 
 #if GGML_USE_LLAMAFILE
     if (src1->type != vec_dot_type) {
@@ -14901,7 +14804,6 @@ static void ggml_compute_forward_mul_mat_id(
         const int64_t nr0 = ne01; // src0 rows
         const int64_t nr1 = cne1; // src1 rows
                                   //
-#if GGML_USE_IQK_MULMAT
         if (ne13 == 1 && dst->type == GGML_TYPE_F32) {
            if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11,
                        src0->type, (const char *)src0_cur, nb01, ///ggml_type_size(src0->type),
@@ -14911,7 +14813,6 @@ static void ggml_compute_forward_mul_mat_id(
                 continue;
         }
 IQK_MulMat_Not_Available:;
-#endif
 
         if (((ggml_n_dims(src0) - 1) == 2) && gemv) {
             int64_t src0_cur_start = (ith * ne01) / nth;
@@ -15041,7 +14942,6 @@ IQK_MulMat_Not_Available:;
 #undef MMID_MATRIX_ROW
 }
 
-#if GGML_USE_IQK_MULMAT
 static void ggml_compute_forward_mul_mat_id_up_gate(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -15176,32 +15076,10 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             (float *)dst->data, nb1, nb2,
                             matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
 
-//        if (nth%2 == 0) {
-//            const char * src0_d = ith%2 == 0 ? src0_1_cur : src0_2_cur;
-//            void *        dst_d = ith%2 == 0 ? dst1->data : dst2->data;
-//            if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11,
-//                        type, src0_d, nb01,
-//                        vec_dot_type, (const char *)wdata, row_size,
-//                        (float *)dst_d, nb1, nb2,
-//                        matrix_rows + cur_a*ne12, ith/2, nth/2)) GGML_ABORT("fatal error");
-//
-//        } else {
-//            if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11,
-//                        src0_1->type, (const char *)src0_1_cur, nb01,
-//                        vec_dot_type, (const char *)wdata, row_size,
-//                        (float *)dst1->data, nb1, nb2,
-//                        matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
-//            if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11,
-//                        src0_2->type, (const char *)src0_2_cur, nb01,
-//                        vec_dot_type, (const char *)wdata, row_size,
-//                        (float *)dst2->data, nb1, nb2,
-//                        matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
-//        }
     }
 
 #undef MMID_MATRIX_ROW
 }
-#endif
 
 // ggml_compute_forward_out_prod
 
@@ -18251,7 +18129,6 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         scale /= softcap;
     }
 
-#if GGML_USE_IQK_MULMAT
     if (iqk_flash_attn_noalibi(q->type, mask->type, max_bias,
                 q->ne[3], q->ne[2], q->nb[3], q->nb[2],
                 k->ne[3], k->ne[2], k->nb[3], k->nb[2],
@@ -18303,7 +18180,6 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 //IQK_Flash_Attn_NotAvailable:;
 //        printf("iqk_flash was rejected\n");
 //    }
-#endif
 
     const uint32_t n_head      = neq2;
     const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
@@ -21930,7 +21806,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const int64_t D  = MAX(Dk, Dv);
 
                     cur = 3*sizeof(float)*D*n_tasks; // 3x head size/thread
-#if GGML_USE_IQK_MULMAT
+#if GGML_IQK_FLASH_ATTENTION
                     size_t qsize = 0;
                     const struct ggml_tensor * q = node->src[0];
                     const struct ggml_tensor * k = node->src[1];
