@@ -14523,8 +14523,6 @@ static void ggml_compute_forward_mul_mat(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    bool debug = strcmp(src0->name, "blk.0.attn_q.weight") == 0 && ith == 0;
-
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
@@ -14540,12 +14538,7 @@ static void ggml_compute_forward_mul_mat(
                     ne02, ne03, ne12, ne13, nb02, nb03, nb12, nb13, nb2/sizeof(float), nb3/sizeof(float),
                     src0->type, src0->data, nb01,
                     src1->type, src1->data, nb11,
-                    (float *)dst->data, nb1/sizeof(float), ith, nth, debug)) return;
-        if (src0->type == GGML_TYPE_IQ2_KT && debug) {
-            printf("iqk_mul_mat GGML_TYPE_IQ2_KT src0.name: %s\n", src0->name);
-            printf("END\n");
-            exit(0);
-        }
+                    (float *)dst->data, nb1/sizeof(float), ith, nth)) return;
     }
 #endif
 
@@ -14668,12 +14661,7 @@ UseGgmlGemm1:;
                     nb2/sizeof(float), nb3/sizeof(float),
                     src0->type, src0->data, nb01,
                     vec_dot_type, wdata, row_size,
-                    (float *)dst->data, nb1/sizeof(float), ith, nth, debug)) return;
-        if (src0->type == GGML_TYPE_IQ2_KT && debug) {
-            printf("iqk_mul_mat GGML_TYPE_IQ2_KT src0.name: %s\n", src0->name);
-            printf("END\n");
-            exit(0);
-        }
+                    (float *)dst->data, nb1/sizeof(float), ith, nth)) return;
     }
 #endif
 

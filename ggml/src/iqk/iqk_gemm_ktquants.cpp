@@ -496,7 +496,6 @@ static void mul_mat_iq2_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
                 // Create scale vectors (4 elements each instead of 8)
                 float32x4_t scale1 = vdupq_n_f32(iq4k_values[x[i].scales[ib] & 0xf]);
                 float32x4_t scale2 = vdupq_n_f32(iq4k_values[x[i].scales[ib] >>  4]);
-                bool debug_this_block = info.debug && i == 0 && ix == 0;
                 
                 for (int j = 0; j < 4; ++j) {
                     uint32_t val1 = ql[4*ib+j+ 0] + 4096;
@@ -507,10 +506,6 @@ static void mul_mat_iq2_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
                     const uint32x4x2_t trellis_vals2 = trellis.next8(val2);
                     const float32x4x2_t x_vals1 = trellis_gen8(trellis_vals1);
                     const float32x4x2_t x_vals2 = trellis_gen8(trellis_vals2);
-
-                    if (debug_this_block && j == 0) {
-                        printf("xsum: %f\n", hsum_float_8(x_vals1) + hsum_float_8(x_vals2));
-                    }
                     
                     // Scale the trellis values
                     const float32x4_t x_val1_lo = vmulq_f32(scale1, x_vals1.val[0]);

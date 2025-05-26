@@ -310,14 +310,6 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
         float * C, long stride_C, int ith, int nth) {
-    return iqk_mul_mat2(Nx, Ny, ne00, typeA, A, strideA, typeB, B, strideB, C, stride_C, ith, nth, false);
-}
-
-extern "C" IQK_API bool iqk_mul_mat2(long Nx, long Ny, long ne00,
-        int typeA, const void * A, long strideA,
-        int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth, bool debug) {
-
     MulMat mm;
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
@@ -333,8 +325,7 @@ extern "C" IQK_API bool iqk_mul_mat2(long Nx, long Ny, long ne00,
     auto first_x = ith*nrc_x;
     if (first_x + nrc_x > Nx/num_rows) nrc_x = Nx/num_rows - first_x;
 
-    bool debug_this_thread = debug && ith == 0 && first_x == 0;
-    DataInfo info{C + first_x*num_rows, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0, debug_this_thread};
+    DataInfo info{C + first_x*num_rows, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
 
     mm.mul_mat_NxM(ne00, (const char *)A + row_size_qx*first_x*num_rows, row_size_qx, info, nrc_x*num_rows, Ny);
 
@@ -356,7 +347,7 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
         long nb02, long nb03, long nb12, long nb13, long nb2, long nb3,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,
-        float * C, long stride_C, int ith, int nth, bool debug) {
+        float * C, long stride_C, int ith, int nth) {
 
     auto r2 = ne12 / ne02;
     auto r3 = ne13 / ne03;
@@ -384,10 +375,10 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
             for (int ichunk = ith; ichunk < nchunk; ichunk += nth) {
                 int i02 = ichunk/nx32;
                 int ix = ichunk - i02*nx32;
-                if (!iqk_mul_mat2(32, r2, ne00,
+                if (!iqk_mul_mat(32, r2, ne00,
                             typeA, (const char *)A + 32*ix*strideA + i02*nb02, strideA,
                             typeB, (const char *)B + i02*r2*nb12, nb12,
-                            C + 32*ix + r2*i02*nb2, nb2, 0, 1, debug)) return false;
+                            C + 32*ix + r2*i02*nb2, nb2, 0, 1)) return false;
 
             }
             return true;
@@ -396,11 +387,11 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
         int counter = 0;
         for (int64_t i12 = 0; i12 < ne02; i12++) {
             if ((counter++ % gcd) == (ith%gcd)) {
-                if (!iqk_mul_mat2(Nx, r2, ne00,
+                if (!iqk_mul_mat(Nx, r2, ne00,
                             typeA, (const char *)A + i12*nb02, strideA,
                             typeB, (const char *)B + i12*r2*nb12, nb12,
                             C + r2*i12*nb2, nb2,
-                            ith/gcd, nth/gcd, debug)) return false;
+                            ith/gcd, nth/gcd)) return false;
             }
         }
         return true;
@@ -429,11 +420,11 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long Nx, long Ny, long ne00,
     for (int64_t i13 = 0; i13 < ne13; i13++) {
         for (int64_t i12 = 0; i12 < ne12; i12++) {
             if ((counter++ % gcd) == (ith%gcd)) {
-                if (!iqk_mul_mat2(Nx, Ny, ne00,
+                if (!iqk_mul_mat(Nx, Ny, ne00,
                             typeA, (const char *)A + i12/r2*nb02 + i13/r3*nb03, strideA,
                             typeB, (const char *)B + i12*nb12 + i13*nb13, strideB,
                             C + i12*nb2 + i13*nb3, stride_C,
-                            ith/gcd, nth/gcd, debug)) return false;
+                            ith/gcd, nth/gcd)) return false;
             }
         }
     }
@@ -628,6 +619,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_IQ4_KS_R4:
         case GGML_TYPE_IQ5_KS_R4:
             return iqk_set_kernels_iqk_quants(ne00, typeA, typeB, m.funcs, m.func16);
+        case GGML_TYPE_IQ2_KT:
+        // case GGML_TYPE_IQ3_KT:
+        // case GGML_TYPE_IQ4_KT:
+            return iqk_set_kernels_ktquants(ne00, typeA, typeB, m.funcs, m.func16);
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ2_S:
