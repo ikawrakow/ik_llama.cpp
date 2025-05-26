@@ -558,6 +558,108 @@ static void mul_mat_iq2_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
     }
 }
 
+static inline float32x4_t abs_ps(float32x4_t vals) {
+    // Clear sign-bit of all the 32-bit floats in vals
+    uint32x4_t sign_mask = vdupq_n_u32(0x80000000);
+    return vreinterpretq_f32_u32(vbicq_u32(vreinterpretq_u32_f32(vals), sign_mask));
+}
+
+// Helper to conditionally negate 4 floats based on 4 bits from condition_mask
+static inline float32x4_t conditional_negate_ps(float32x4_t vals, uint32_t condition_bits) {
+    // Create masks for each lane based on individual bits
+    uint32_t masks[4] = {
+        (condition_bits & 0x00000001) ? 0x80000000 : 0,
+        (condition_bits & 0x00000100) ? 0x80000000 : 0,
+        (condition_bits & 0x00010000) ? 0x80000000 : 0,
+        (condition_bits & 0x01000000) ? 0x80000000 : 0
+    };
+    
+    uint32x4_t xor_mask = vld1q_u32(masks);
+    return vreinterpretq_f32_u32(veorq_u32(vreinterpretq_u32_f32(vals), xor_mask));
+}
+
+template <int nrc_y>
+static void mul_mat_iq3_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%QK_K == 0);
+    const int nb = n/QK_K;
+
+    Trellis1 trellis;
+
+    // Need 2 accumulators per y row for ARM Neon (4 floats each)
+    float32x4_t accd[nrc_y * 2];
+    const float * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const float *)info.src1_row(iy);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        const float d = *dptr * 31.75f * 1.015f;
+        const block_iq3_kt * x = (const block_iq3_kt *)(dptr + 1);
+
+        // Initialize accumulators to zero
+        for (int iy = 0; iy < nrc_y * 2; ++iy) accd[iy] = vdupq_n_f32(0.0f);
+
+        for (int i = 0; i < nb; ++i) {
+            const uint16_t * ql = (const uint16_t *)x[i].ql;
+            const uint8_t * qh = x[i].qh;
+            
+            for (int j = 0; j < 128; j+=8) {
+                uint64_t mask1 = 0x0101010101010101ULL << (j/32);
+                uint64_t mask2 = mask1 << 4;
+                uint32_t val1 = ql[j/8] + 4096;
+                uint32_t val2 = ql[j/8+16] + 4096;
+                const uint64_t signs = *((const uint64_t *)(qh + (j%32)));
+                const float x_scale1 = (x[i].scales[j/32] & 0xf);
+                const float x_scale2 = (x[i].scales[j/32] >> 4);
+                // Generate abs(trellis values) with 3INST
+                const uint32x4x2_t trellis_vals1 = trellis.next8(val1);
+                const uint32x4x2_t trellis_vals2 = trellis.next8(val2);
+                const float32x4x2_t gen_vals1 = trellis_gen8(trellis_vals1);
+                const float32x4x2_t gen_vals2 = trellis_gen8(trellis_vals2);
+                const float32x4_t x_val1_lo = abs_ps(gen_vals1.val[0]);
+                const float32x4_t x_val1_hi = abs_ps(gen_vals1.val[1]);
+                const float32x4_t x_val2_lo = abs_ps(gen_vals2.val[0]);
+                const float32x4_t x_val2_hi = abs_ps(gen_vals2.val[1]);
+                // Scale the values
+                const float32x4_t scale1 = vdupq_n_f32(x_scale1);
+                const float32x4_t scale2 = vdupq_n_f32(x_scale2);
+                const float32x4_t scaled_x1_lo = vmulq_f32(scale1, x_val1_lo);
+                const float32x4_t scaled_x1_hi = vmulq_f32(scale1, x_val1_hi);
+                const float32x4_t scaled_x2_lo = vmulq_f32(scale2, x_val2_lo);
+                const float32x4_t scaled_x2_hi = vmulq_f32(scale2, x_val2_hi);
+                // Extract sign bits
+                uint64_t signs_mask1 = signs & mask1;
+                uint64_t signs_mask2 = signs & mask2;
+                uint64_t sign_bits1 = signs_mask1 >> (j/32);
+                uint64_t sign_bits2 = signs_mask2 >> (j/32+4);
+                
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    float32x4_t y1_lo = vld1q_f32(y[iy] + i*QK_K + j);
+                    float32x4_t y1_hi = vld1q_f32(y[iy] + i*QK_K + j + 4);
+                    float32x4_t y2_lo = vld1q_f32(y[iy] + i*QK_K + j + 128);
+                    float32x4_t y2_hi = vld1q_f32(y[iy] + i*QK_K + j + 128 + 4);
+                    
+                    y1_lo = conditional_negate_ps(y1_lo, sign_bits1 & 0xFFFFFFFF);
+                    y1_hi = conditional_negate_ps(y1_hi, sign_bits1 >> 32);
+                    y2_lo = conditional_negate_ps(y2_lo, sign_bits2 & 0xFFFFFFFF);
+                    y2_hi = conditional_negate_ps(y2_hi, sign_bits2 >> 32);
+                    
+                    accd[iy*2 + 0] = vfmaq_f32(accd[iy*2 + 0], y1_lo, scaled_x1_lo);
+                    accd[iy*2 + 1] = vfmaq_f32(accd[iy*2 + 1], y1_hi, scaled_x1_hi);
+                    accd[iy*2 + 0] = vfmaq_f32(accd[iy*2 + 0], y2_lo, scaled_x2_lo);
+                    accd[iy*2 + 1] = vfmaq_f32(accd[iy*2 + 1], y2_hi, scaled_x2_hi);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            // Sum the two accumulators for this y row
+            float32x4_t sum = vaddq_f32(accd[iy*2], accd[iy*2 + 1]);
+            float32x4_t res = vmulq_n_f32(sum, d);
+            info.store(ix, iy, hsum_float_4(res));
+        }
+    }
+}
+
 } // namespace
 
 bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
@@ -579,17 +681,17 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
             kernels[6] = mul_mat_iq2_kt_F32_T<7>;
             kernels[7] = mul_mat_iq2_kt_F32_T<8>;
             break;
-        // case GGML_TYPE_IQ3_KT:
-        //     assert (ne00 % QK_K == 0);
-        //     kernels[0] = mul_mat_iq3_kt_F32_T<1>;
-        //     kernels[1] = mul_mat_iq3_kt_F32_T<2>;
-        //     kernels[2] = mul_mat_iq3_kt_F32_T<3>;
-        //     kernels[3] = mul_mat_iq3_kt_F32_T<4>;
-        //     kernels[4] = mul_mat_iq3_kt_F32_T<5>;
-        //     kernels[5] = mul_mat_iq3_kt_F32_T<6>;
-        //     kernels[6] = mul_mat_iq3_kt_F32_T<7>;
-        //     kernels[7] = mul_mat_iq3_kt_F32_T<8>;
-        //     break;
+        case GGML_TYPE_IQ3_KT:
+            assert (ne00 % QK_K == 0);
+            kernels[0] = mul_mat_iq3_kt_F32_T<1>;
+            kernels[1] = mul_mat_iq3_kt_F32_T<2>;
+            kernels[2] = mul_mat_iq3_kt_F32_T<3>;
+            kernels[3] = mul_mat_iq3_kt_F32_T<4>;
+            kernels[4] = mul_mat_iq3_kt_F32_T<5>;
+            kernels[5] = mul_mat_iq3_kt_F32_T<6>;
+            kernels[6] = mul_mat_iq3_kt_F32_T<7>;
+            kernels[7] = mul_mat_iq3_kt_F32_T<8>;
+            break;
         // case GGML_TYPE_IQ4_KT:
         //     assert (ne00 % QK_K == 0);
         //     kernels[0] = mul_mat_iq4_kt_F32_T<1>;
