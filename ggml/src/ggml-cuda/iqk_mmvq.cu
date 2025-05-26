@@ -9,6 +9,13 @@
 typedef void (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float *);
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ2_K_R4> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR4_XS;
+    static constexpr int qi = QI4_XS;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ3_K_R4> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR4_XS;
@@ -494,7 +501,7 @@ __device__ __forceinline__ void vec_dot_iq3_k_r4_q8_1(
     // This is not faster. Why?
     //scales[1] = __vcmpeq4((scales_h[is] >> ib32) & 0x01010101, 0x01010101);
     //scales[0] = __vsub4(scales[0] ^ scales[1], scales[1]);
-    const int8_t * s8 = (const int8_t *)&scales;
+    const int8_t * s8 = (const int8_t *)scales;
     int2 val1;
     const int * q2 = (const int *)bq3->qs + 8*ib32 + 4*is;
     const int * qh = (const int *)bq3->qh + 4*ib32;
@@ -517,6 +524,45 @@ __device__ __forceinline__ void vec_dot_iq3_k_r4_q8_1(
         const float d = __half2float(bq3->d[i]) * d8;
         result[i] += d * sumi1 * s8[i] * (s8[i+4] ? -1 : 1);
         //result[i] += d * sumi1 * s8[i];
+    }
+}
+
+__device__ __forceinline__ void vec_dot_iq2_k_r4_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
+
+    const block_iq2_k_r4 * bq2 = (const block_iq2_k_r4 *)vbq + kbx;
+
+    // iqs is 0...30 in steps of 2
+    const int ib16 = iqs/2;
+    const float d8 = __low2float(bq8_1[ib16/2].ds);
+    const int32_t  * q8 = (const int *)bq8_1[ib16/2].qs + 4*(ib16%2);
+
+    int ib32 = ib16/2;
+    int is   = ib16%2;
+    const int * scales_l = (const int *)bq2->scales;
+
+    int scales = __vsub4(((scales_l[2*(ib32%4)+is] >> 4*(ib32/4)) & 0x0f0f0f0f), 0x08080808);
+    const int8_t * s8 = (const int8_t *)&scales;
+    int2 val1;
+    const int * q2 = (const int *)bq2->qs + 8*ib32 + 4*is;
+    int aux32[2];
+    const uint8_t * aux8 = (const uint8_t *)aux32;
+    for (int i = 0; i < 4; ++i) {
+        auto values1 = iq2nl_values + (((bq2->extra[i+4*is] >> ib32) & 1) << 2);
+        int sumi1 = 0;
+        aux32[0] = ((q2[i] >> 0) & 0x03030303);
+        aux32[1] = ((q2[i] >> 2) & 0x03030303);
+        // TODO: int_from_table_4
+        val1.x  = int_from_table(aux8+0, (const uint8_t *)values1);
+        val1.y  = int_from_table(aux8+4, (const uint8_t *)values1);
+        sumi1 = ggml_cuda_dp4a(val1.x, q8[0], ggml_cuda_dp4a(val1.y, q8[1], sumi1));
+        aux32[0] = ((q2[i] >> 4) & 0x03030303);
+        aux32[1] = ((q2[i] >> 6) & 0x03030303);
+        val1.x  = int_from_table(aux8+0, (const uint8_t *)values1);
+        val1.y  = int_from_table(aux8+4, (const uint8_t *)values1);
+        sumi1 = ggml_cuda_dp4a(val1.x, q8[2], ggml_cuda_dp4a(val1.y, q8[3], sumi1));
+        const float d = __half2float(bq2->d[i]) * d8;
+        result[i] += d * sumi1 * s8[i];
     }
 }
 
@@ -971,6 +1017,14 @@ void mul_mat_vec_iq5_k_r4_q8_1_cuda(
     const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
     iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ5_K_R4, 2, vec_dot_iq5_k_r4_q8_1, 4>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+}
+
+void mul_mat_vec_iq2_k_r4_q8_1_cuda(
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
+
+    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ2_K_R4, 2, vec_dot_iq2_k_r4_q8_1, 4>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 void mul_mat_vec_iq3_k_r4_q8_1_cuda(
