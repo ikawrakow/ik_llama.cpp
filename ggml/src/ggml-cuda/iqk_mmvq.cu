@@ -34,7 +34,7 @@ __device__ void iqk_mul_mat_vec_q(
     constexpr int nwarps              = 1;
     constexpr int rows_per_cuda_block = n_interleaved;
 #else
-    constexpr int nwarps              = ncols_y <= 4 ? 4 : 2;
+    constexpr int nwarps              = n_interleaved == 1 ? ncols_y <= 4 ? 4 : 2 : 1;
     constexpr int rows_per_cuda_block = n_interleaved == 1 ? ncols_y == 1 ? 1 : 2 : n_interleaved;
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__) && !defined(RDNA2) && !defined(RDNA3)
 
@@ -138,20 +138,20 @@ void iqk_mul_mat_vec_q_cuda(
     if (ggml_cuda_info().devices[id].cc < CC_RDNA2) { // NVIDIA and AMD older than RDNA2
         switch(ncols_y) {
             case 1:
-                nwarps = 4;
+                nwarps = n_interleaved == 1 ? 4 : 1;
                 rows_per_cuda_block = n_interleaved == 1 ? 1 : n_interleaved;
                 break;
             case 2:
             case 3:
             case 4:
-                nwarps = 4;
+                nwarps = n_interleaved == 1 ? 4 : 1;
                 rows_per_cuda_block = n_interleaved == 1 ? 2 : n_interleaved;
                 break;
             case 5:
             case 6:
             case 7:
             case 8:
-                nwarps = 2;
+                nwarps = n_interleaved == 1 ? 2 : 1;
                 rows_per_cuda_block = n_interleaved == 1 ? 2 : n_interleaved;
                 break;
             default:
@@ -265,6 +265,12 @@ __device__ __forceinline__ void vec_dot_iq4_k_r4_q8_1(
     const float d8 = __low2float(bq8_1[ib32].ds);
     const int32_t  * q8 = (const int *)bq8_1[ib32].qs;
 
+    int scales[2];
+    const uint32_t * scales_l = (const uint32_t *)bq4->scales_l;
+    const uint32_t * scales_h = (const uint32_t *)bq4->scales_h;
+    scales[0] = __vsub4(((scales_l[2*(ib32%4)+0] >> 4*(ib32/4)) & 0x0f0f0f0f) | (((scales_h[2*(ib32%2)+0] >> 2*(ib32/2)) & 0x03030303) << 4), 0x20202020);
+    scales[1] = __vsub4(((scales_l[2*(ib32%4)+1] >> 4*(ib32/4)) & 0x0f0f0f0f) | (((scales_h[2*(ib32%2)+1] >> 2*(ib32/2)) & 0x03030303) << 4), 0x20202020);
+    const int8_t * s8 = (const int8_t *)scales;
     int2 val1, val2;
     const int * q4 = (const int *)bq4->qs + 16*ib32;
     for (int i = 0; i < 4; ++i) {
@@ -279,12 +285,8 @@ __device__ __forceinline__ void vec_dot_iq4_k_r4_q8_1(
         sumi1 = ggml_cuda_dp4a(val1.x, q8[1], ggml_cuda_dp4a(val1.y, q8[3], sumi1));
         val2  = get_int_from_table_16(q4[i+12], values2);
         sumi2 = ggml_cuda_dp4a(val2.x, q8[5], ggml_cuda_dp4a(val2.y, q8[7], sumi2));
-        int is = 8*ib32 + i;
-        int ls1 = (((bq4->scales_l[is%32] >> 4*(is/32)) & 0xf) | (((bq4->scales_h[is%16] >> 2*(is/16)) & 3) << 4)) - 32;
-        is += 4;
-        int ls2 = (((bq4->scales_l[is%32] >> 4*(is/32)) & 0xf) | (((bq4->scales_h[is%16] >> 2*(is/16)) & 3) << 4)) - 32;
         const float d = __half2float(bq4->d[i]) * d8;
-        result[i] += d * (sumi1 * ls1 + sumi2 * ls2);
+        result[i] += d * (sumi1 * s8[i] + sumi2 * s8[i+4]);
     }
 }
 
