@@ -660,6 +660,97 @@ static void mul_mat_iq3_kt_F32_T(int n, const void * vx, size_t bx, const DataIn
     }
 }
 
+template <int nrc_y>
+static void mul_mat_iq4_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%QK_K == 0);
+    const int nb = n/QK_K;
+    constexpr int kNumGroups = 64;
+
+    Trellis2 trellis;
+
+    float32x4_t accd[nrc_y * 2];
+    float32x4_t accd2[nrc_y * 2];
+    const float * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const float *)info.src1_row(iy);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        const float d = dptr[0] * 31.75f * 1.01f;
+        const float row_av = dptr[1];
+        const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 2);
+
+        for (int iy = 0; iy < nrc_y * 2; ++iy) {
+            accd[iy] = vdupq_n_f32(0.0f);
+            accd2[iy] = vdupq_n_f32(0.0f);
+        }
+
+        for (int i = 0; i < nb; ++i) {
+            const uint32_t * shb = x[i].qs;
+            const uint8_t * ql = (const uint8_t *)(shb + 8);
+            const uint8_t * qh = ql + kNumGroups;
+            
+            for (int j = 0; j < 128; j+=8) {
+                const uint32_t offset1 = 4096 + ((shb[j/32+0] & 1) << 15);
+                const uint32_t offset2 = 4096 + ((shb[j/32+4] & 1) << 15);
+                const float x_scale1 = (int)((shb[j/32+0] & 0xff) >> 1) - 64;
+                const float x_scale2 = (int)((shb[j/32+4] & 0xff) >> 1) - 64;
+                const uint32_t sh1 = shb[j/32+0] >> (8 + 6*((j/8)%4));
+                const uint32_t sh2 = shb[j/32+4] >> (8 + 6*((j/8)%4));
+                
+                uint32_t val1 = ql[j/4+ 0] + ((qh[j/4+0] << 8) & 0xf00) + ((sh1 & 7) << 12) + offset1;
+                uint32_t val2 = ql[j/4+32] + ((qh[j/4+0] << 4) & 0xf00) + ((sh2 & 7) << 12) + offset2;
+                uint32_t val3 = ql[j/4+ 1] + ((qh[j/4+1] << 8) & 0xf00) + ((sh1 & 56) << 9) + offset1;
+                uint32_t val4 = ql[j/4+33] + ((qh[j/4+1] << 4) & 0xf00) + ((sh2 & 56) << 9) + offset2;
+                
+                // Generate trellis values
+                const uint32x4x2_t trellis_vals1 = trellis.next8(val1, val3);
+                const uint32x4x2_t trellis_vals2 = trellis.next8(val2, val4);
+                const float32x4x2_t x_vals1 = trellis_gen8(trellis_vals1);
+                const float32x4x2_t x_vals2 = trellis_gen8(trellis_vals2);
+                
+                // Scale the values
+                const float32x4_t scale1 = vdupq_n_f32(x_scale1);
+                const float32x4_t scale2 = vdupq_n_f32(x_scale2);
+                const float32x4_t x_val1_lo = vmulq_f32(scale1, x_vals1.val[0]);
+                const float32x4_t x_val1_hi = vmulq_f32(scale1, x_vals1.val[1]);
+                const float32x4_t x_val2_lo = vmulq_f32(scale2, x_vals2.val[0]);
+                const float32x4_t x_val2_hi = vmulq_f32(scale2, x_vals2.val[1]);
+                
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    float32x4_t y1_lo = vld1q_f32(y[iy] + i*QK_K + j);
+                    float32x4_t y1_hi = vld1q_f32(y[iy] + i*QK_K + j + 4);
+                    float32x4_t y2_lo = vld1q_f32(y[iy] + i*QK_K + j + 128);
+                    float32x4_t y2_hi = vld1q_f32(y[iy] + i*QK_K + j + 128 + 4);
+                    
+                    accd[iy*2 + 0] = vfmaq_f32(accd[iy*2 + 0], y1_lo, x_val1_lo);
+                    accd[iy*2 + 1] = vfmaq_f32(accd[iy*2 + 1], y1_hi, x_val1_hi);
+                    accd[iy*2 + 0] = vfmaq_f32(accd[iy*2 + 0], y2_lo, x_val2_lo);
+                    accd[iy*2 + 1] = vfmaq_f32(accd[iy*2 + 1], y2_hi, x_val2_hi);
+                    
+                    accd2[iy*2 + 0] = vaddq_f32(accd2[iy*2 + 0], y1_lo);
+                    accd2[iy*2 + 1] = vaddq_f32(accd2[iy*2 + 1], y1_hi);
+                    accd2[iy*2 + 0] = vaddq_f32(accd2[iy*2 + 0], y2_lo);
+                    accd2[iy*2 + 1] = vaddq_f32(accd2[iy*2 + 1], y2_hi);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            // Sum the two accumulators for this y row
+            float32x4_t sum1 = vaddq_f32(accd[iy*2], accd[iy*2 + 1]);
+            float32x4_t sum2 = vaddq_f32(accd2[iy*2], accd2[iy*2 + 1]);
+            
+            // Scale by d and row_av
+            float32x4_t res1 = vmulq_n_f32(sum1, d);
+            float32x4_t res2 = vmulq_n_f32(sum2, row_av);
+            
+            // Compute final result
+            float result = hsum_float_4(res1) + hsum_float_4(res2);
+            info.store(ix, iy, result);
+        }
+    }
+}
+
 } // namespace
 
 bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
@@ -692,17 +783,17 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
             kernels[6] = mul_mat_iq3_kt_F32_T<7>;
             kernels[7] = mul_mat_iq3_kt_F32_T<8>;
             break;
-        // case GGML_TYPE_IQ4_KT:
-        //     assert (ne00 % QK_K == 0);
-        //     kernels[0] = mul_mat_iq4_kt_F32_T<1>;
-        //     kernels[1] = mul_mat_iq4_kt_F32_T<2>;
-        //     kernels[2] = mul_mat_iq4_kt_F32_T<3>;
-        //     kernels[3] = mul_mat_iq4_kt_F32_T<4>;
-        //     kernels[4] = mul_mat_iq4_kt_F32_T<5>;
-        //     kernels[5] = mul_mat_iq4_kt_F32_T<6>;
-        //     kernels[6] = mul_mat_iq4_kt_F32_T<7>;
-        //     kernels[7] = mul_mat_iq4_kt_F32_T<8>;
-        //     break;
+        case GGML_TYPE_IQ4_KT:
+            assert (ne00 % QK_K == 0);
+            kernels[0] = mul_mat_iq4_kt_F32_T<1>;
+            kernels[1] = mul_mat_iq4_kt_F32_T<2>;
+            kernels[2] = mul_mat_iq4_kt_F32_T<3>;
+            kernels[3] = mul_mat_iq4_kt_F32_T<4>;
+            kernels[4] = mul_mat_iq4_kt_F32_T<5>;
+            kernels[5] = mul_mat_iq4_kt_F32_T<6>;
+            kernels[6] = mul_mat_iq4_kt_F32_T<7>;
+            kernels[7] = mul_mat_iq4_kt_F32_T<8>;
+            break;
         default:
             return false;
     }
