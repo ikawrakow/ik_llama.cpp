@@ -478,41 +478,45 @@ __device__ __forceinline__ void vec_dot_iq3_k_r4_q8_1(
 
     const block_iq3_k_r4 * bq3 = (const block_iq3_k_r4 *)vbq + kbx;
 
-    // iqs is 0...28 in steps of 2
+    // iqs is 0...30 in steps of 2
     const int ib16 = iqs/2;
     const float d8 = __low2float(bq8_1[ib16/2].ds);
     const int32_t  * q8 = (const int *)bq8_1[ib16/2].qs + 4*(ib16%2);
 
-    // (8*ib32 + i)%32
-    // (8*ib32 + i)%8: ib32=0->i, ib32=i
     int ib32 = ib16/2;
     int is   = ib16%2;
     int scales[2];
     const uint32_t * scales_l = (const uint32_t *)bq3->scales_l;
     const uint32_t * scales_h = (const uint32_t *)bq3->scales_h;
+
     scales[0] = (((scales_l[2*(ib32%4)+is] >> 4*(ib32/4)) & 0x0f0f0f0f) << 1) | 0x01010101;
     scales[1] = (scales_h[is] >> ib32) & 0x01010101;
+    // This is not faster. Why?
+    //scales[1] = __vcmpeq4((scales_h[is] >> ib32) & 0x01010101, 0x01010101);
+    //scales[0] = __vsub4(scales[0] ^ scales[1], scales[1]);
     const int8_t * s8 = (const int8_t *)&scales;
     int2 val1;
-    const int * q2 = (const int *)bq3->qs + 8*ib32;
+    const int * q2 = (const int *)bq3->qs + 8*ib32 + 4*is;
     const int * qh = (const int *)bq3->qh + 4*ib32;
     int aux32[2];
     const uint8_t * aux8 = (const uint8_t *)aux32;
     for (int i = 0; i < 4; ++i) {
         auto values1 = iq3nl_values + (((bq3->extra[i+4*is] >> ib32) & 1) << 3);
         int sumi1 = 0;
-        aux32[0] = ((q2[i+4*is] >> 0) & 0x03030303) | (((qh[i] >> (4*is+0)) & 0x01010101) << 2);
-        aux32[1] = ((q2[i+4*is] >> 2) & 0x03030303) | (((qh[i] >> (4*is+1)) & 0x01010101) << 2);
+        int h = qh[i] >> 4*is;
+        aux32[0] = ((q2[i] >> 0) & 0x03030303) | ((h << 2) & 0x04040404);
+        aux32[1] = ((q2[i] >> 2) & 0x03030303) | ((h << 1) & 0x04040404);
         val1.x  = int_from_table(aux8+0, (const uint8_t *)values1);
         val1.y  = int_from_table(aux8+4, (const uint8_t *)values1);
         sumi1 = ggml_cuda_dp4a(val1.x, q8[0], ggml_cuda_dp4a(val1.y, q8[1], sumi1));
-        aux32[0] = ((q2[i+4*is] >> 4) & 0x03030303) | (((qh[i] >> (4*is+2)) & 0x01010101) << 2);
-        aux32[1] = ((q2[i+4*is] >> 6) & 0x03030303) | (((qh[i] >> (4*is+3)) & 0x01010101) << 2);
+        aux32[0] = ((q2[i] >> 4) & 0x03030303) | ((h >> 0) & 0x04040404);
+        aux32[1] = ((q2[i] >> 6) & 0x03030303) | ((h >> 1) & 0x04040404);
         val1.x  = int_from_table(aux8+0, (const uint8_t *)values1);
         val1.y  = int_from_table(aux8+4, (const uint8_t *)values1);
         sumi1 = ggml_cuda_dp4a(val1.x, q8[2], ggml_cuda_dp4a(val1.y, q8[3], sumi1));
         const float d = __half2float(bq3->d[i]) * d8;
         result[i] += d * sumi1 * s8[i] * (s8[i+4] ? -1 : 1);
+        //result[i] += d * sumi1 * s8[i];
     }
 }
 
