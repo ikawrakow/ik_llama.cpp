@@ -366,10 +366,251 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
 
 }
 
-#else // !__x86_64__
+#else
+// --------------------------------- __aarch64__ --------------------------------------
+
+namespace {
+
+struct Trellis1 {
+    constexpr static uint32_t kmask = 0x8fff8fff;
+    constexpr static uint32_t km32 = 0x3b603b60;
+    constexpr static uint32_t ka = 89226354;
+    constexpr static uint32_t kb = 64248484;
+    constexpr static uint32_t ka1 = ka*ka;
+    constexpr static uint32_t kb1 = kb*ka+kb;
+    constexpr static uint32_t ka2 = ka1*ka;
+    constexpr static uint32_t kb2 = kb1*ka+kb;
+    constexpr static uint32_t ka3 = ka2*ka;
+    constexpr static uint32_t kb3 = kb2*ka+kb;
+    constexpr static uint32_t ka4 = ka3*ka;
+    constexpr static uint32_t kb4 = kb3*ka+kb;
+    constexpr static uint32_t ka5 = ka4*ka;
+    constexpr static uint32_t kb5 = kb4*ka+kb;
+    constexpr static uint32_t ka6 = ka5*ka;
+    constexpr static uint32_t kb6 = kb5*ka+kb;
+    constexpr static uint32_t ka7 = ka6*ka;
+    constexpr static uint32_t kb7 = kb6*ka+kb;
+    const uint32x4_t mka[2] = {(uint32x4_t){ka, ka1, ka2, ka3}, (uint32x4_t){ka4, ka5, ka6, ka7}};
+    const uint32x4_t mkb[2] = {(uint32x4_t){kb, kb1, kb2, kb3}, (uint32x4_t){kb4, kb5, kb6, kb7}};
+    const uint32x4_t mask1 = vdupq_n_u32(kmask);
+    const uint32x4_t mask2 = vdupq_n_u32(km32);
+
+    inline uint32x4x2_t next8(uint32_t val_seed) const {
+        uint32x4_t mval_seed_vec = vdupq_n_u32(val_seed);
+        uint32x4_t res_lo = vmulq_u32(mval_seed_vec, mka[0]);
+        res_lo = vaddq_u32(res_lo, mkb[0]);
+        res_lo = vandq_u32(res_lo, mask1);
+        res_lo = veorq_u32(res_lo, mask2);
+        uint32x4_t res_hi = vmulq_u32(mval_seed_vec, mka[1]);
+        res_hi = vaddq_u32(res_hi, mkb[1]);
+        res_hi = vandq_u32(res_hi, mask1);
+        res_hi = veorq_u32(res_hi, mask2);
+        return {{res_lo, res_hi}};
+    }
+};
+
+static inline float32x4_t trellis_gen4(uint32x4_t i4) {
+    uint16x4_t h0_u16 = vmovn_u32(i4);
+    uint16x4_t h1_u16 = vmovn_u32(vshrq_n_u32(i4, 16));
+
+    float16x4_t h0_f16 = vreinterpret_f16_u16(h0_u16);
+    float16x4_t h1_f16 = vreinterpret_f16_u16(h1_u16);
+    
+    return vcvt_f32_f16(vadd_f16(h0_f16, h1_f16));
+}
+
+static inline float32x4x2_t trellis_gen8(uint32x4x2_t i8) {
+    float32x4_t fv1 = trellis_gen4(i8.val[0]);
+    float32x4_t fv2 = trellis_gen4(i8.val[1]);
+    return {{fv1, fv2}};
+}
+
+struct Trellis2 {
+    constexpr static uint32_t kmask = 0x8fff8fff;
+    constexpr static uint32_t km32 = 0x3b603b60;
+    constexpr static uint32_t ka = 89226354;
+    constexpr static uint32_t kb = 64248484;
+    constexpr static uint32_t ka1 = ka*ka;
+    constexpr static uint32_t kb1 = kb*ka+kb;
+    constexpr static uint32_t ka2 = ka1*ka;
+    constexpr static uint32_t kb2 = kb1*ka+kb;
+    constexpr static uint32_t ka3 = ka2*ka;
+    constexpr static uint32_t kb3 = kb2*ka+kb;
+    const uint32x4_t mka[2] = {(uint32x4_t){ka, ka1, ka2, ka3}, (uint32x4_t){ka, ka1, ka2, ka3}};
+    const uint32x4_t mkb[2] = {(uint32x4_t){kb, kb1, kb2, kb3}, (uint32x4_t){kb, kb1, kb2, kb3}};
+    const uint32x4_t mask1 = vdupq_n_u32(kmask);
+    const uint32x4_t mask2 = vdupq_n_u32(km32);
+
+    inline uint32x4x2_t next8(uint32_t val1, uint32_t val2) const {
+        uint32x4_t mval_lo = (uint32x4_t) {val1, val1, val1, val1};
+        uint32x4_t mval_hi = (uint32x4_t) {val2, val2, val2, val2};
+        uint32x4_t res_lo = vmulq_u32(mval_lo, mka[0]);
+        res_lo = vaddq_u32(res_lo, mkb[0]);
+        res_lo = vandq_u32(res_lo, mask1);
+        res_lo = veorq_u32(res_lo, mask2);
+        uint32x4_t res_hi = vmulq_u32(mval_hi, mka[1]);
+        res_hi = vaddq_u32(res_hi, mkb[1]);
+        res_hi = vandq_u32(res_hi, mask1);
+        res_hi = veorq_u32(res_hi, mask2);
+        return {{res_lo, res_hi}};
+    }
+};
+
+inline float hsum_float_4(float32x4_t v) {
+    float32x2_t sum_pair = vadd_f32(vget_high_f32(v), vget_low_f32(v));
+    return vget_lane_f32(vpadd_f32(sum_pair, sum_pair), 0);
+}
+
+inline float hsum_float_8(float32x4_t v1, float32x4_t v2) {
+    return hsum_float_4(v1) + hsum_float_4(v2);
+}
+
+inline float hsum_float_8(float32x4x2_t v) {
+    return hsum_float_4(v.val[0]) + hsum_float_4(v.val[1]);
+}
+
+template <int nrc_y>
+static void mul_mat_iq2_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%QK_K == 0);
+    const int nb = n/QK_K;
+
+    Trellis1 trellis;
+
+    constexpr int k_acc = nrc_y == 1 ? 4 : 4*nrc_y;
+
+    float32x4_t accd[k_acc];
+    const float * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const float *)info.src1_row(iy);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        const float d = *dptr * 31.75f * 1.05f;
+        const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
+
+        // Initialize accumulators to zero
+        for (int iy = 0; iy < k_acc; ++iy) accd[iy] = vdupq_n_f32(0.0f);
+
+        for (int i = 0; i < nb; ++i) {
+            const uint16_t * ql = (const uint16_t *)x[i].ql;
+            for (int ib = 0; ib < QK_K/64; ++ib) {
+                // Create scale vectors (4 elements each instead of 8)
+                float32x4_t scale1 = vdupq_n_f32(iq4k_values[x[i].scales[ib] & 0xf]);
+                float32x4_t scale2 = vdupq_n_f32(iq4k_values[x[i].scales[ib] >>  4]);
+                bool debug_this_block = info.debug && i == 0 && ix == 0;
+                
+                for (int j = 0; j < 4; ++j) {
+                    uint32_t val1 = ql[4*ib+j+ 0] + 4096;
+                    uint32_t val2 = ql[4*ib+j+16] + 4096;
+                    
+                    // Generate trellis values using 3INST
+                    const uint32x4x2_t trellis_vals1 = trellis.next8(val1);
+                    const uint32x4x2_t trellis_vals2 = trellis.next8(val2);
+                    const float32x4x2_t x_vals1 = trellis_gen8(trellis_vals1);
+                    const float32x4x2_t x_vals2 = trellis_gen8(trellis_vals2);
+
+                    if (debug_this_block && j == 0) {
+                        printf("xsum: %f\n", hsum_float_8(x_vals1) + hsum_float_8(x_vals2));
+                    }
+                    
+                    // Scale the trellis values
+                    const float32x4_t x_val1_lo = vmulq_f32(scale1, x_vals1.val[0]);
+                    const float32x4_t x_val1_hi = vmulq_f32(scale1, x_vals1.val[1]);
+                    const float32x4_t x_val2_lo = vmulq_f32(scale2, x_vals2.val[0]);
+                    const float32x4_t x_val2_hi = vmulq_f32(scale2, x_vals2.val[1]);
+                    
+                    if constexpr (nrc_y == 1) {
+                        float32x4_t y1_lo = vld1q_f32(y[0] + i*QK_K + 32*ib + 8*j);
+                        float32x4_t y1_hi = vld1q_f32(y[0] + i*QK_K + 32*ib + 8*j + 4);
+                        float32x4_t y2_lo = vld1q_f32(y[0] + i*QK_K + 32*ib + 8*j + 128);
+                        float32x4_t y2_hi = vld1q_f32(y[0] + i*QK_K + 32*ib + 8*j + 128 + 4);
+                        
+                        accd[0] = vfmaq_f32(accd[0], y1_lo, x_val1_lo);
+                        accd[1] = vfmaq_f32(accd[1], y1_hi, x_val1_hi);
+                        accd[2] = vfmaq_f32(accd[2], y2_lo, x_val2_lo);
+                        accd[3] = vfmaq_f32(accd[3], y2_hi, x_val2_hi);
+                    } else {
+                        for (int iy = 0; iy < nrc_y; ++iy) {
+                            float32x4_t y1_lo = vld1q_f32(y[iy] + i*QK_K + 32*ib + 8*j);
+                            float32x4_t y1_hi = vld1q_f32(y[iy] + i*QK_K + 32*ib + 8*j + 4);
+                            float32x4_t y2_lo = vld1q_f32(y[iy] + i*QK_K + 32*ib + 8*j + 128);
+                            float32x4_t y2_hi = vld1q_f32(y[iy] + i*QK_K + 32*ib + 8*j + 128 + 4);
+                            
+                            accd[4*iy + 0] = vfmaq_f32(accd[4*iy + 0], y1_lo, x_val1_lo);
+                            accd[4*iy + 1] = vfmaq_f32(accd[4*iy + 1], y1_hi, x_val1_hi);
+                            accd[4*iy + 2] = vfmaq_f32(accd[4*iy + 2], y2_lo, x_val2_lo);
+                            accd[4*iy + 3] = vfmaq_f32(accd[4*iy + 3], y2_hi, x_val2_hi);
+                        }
+                    }
+                }
+            }
+        }
+
+        if constexpr (nrc_y == 1) {
+            float32x4_t sum_lo = vaddq_f32(accd[0], accd[2]);
+            float32x4_t sum_hi = vaddq_f32(accd[1], accd[3]);
+            float32x4_t res_lo = vmulq_n_f32(sum_lo, d);
+            float32x4_t res_hi = vmulq_n_f32(sum_hi, d);
+            info.store(ix, 0, hsum_float_8(res_lo, res_hi));
+        } else {
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                float32x4_t sum_lo = vaddq_f32(accd[4*iy + 0], accd[4*iy + 2]);
+                float32x4_t sum_hi = vaddq_f32(accd[4*iy + 1], accd[4*iy + 3]);
+                float32x4_t res_lo = vmulq_n_f32(sum_lo, d);
+                float32x4_t res_hi = vmulq_n_f32(sum_hi, d);
+                info.store(ix, iy, hsum_float_8(res_lo, res_hi));
+            }
+        }
+    }
+}
+
+} // namespace
 
 bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
-    return false;
+    if (ne00%QK_K != 0 || ggml_type(typeB) != GGML_TYPE_F32) {
+        return false;
+    }
+
+    func16 = nullptr;
+
+    switch (typeA) {
+        case GGML_TYPE_IQ2_KT:
+            assert (ne00 % QK_K == 0);
+            kernels[0] = mul_mat_iq2_kt_F32_T<1>;
+            kernels[1] = mul_mat_iq2_kt_F32_T<2>;
+            kernels[2] = mul_mat_iq2_kt_F32_T<3>;
+            kernels[3] = mul_mat_iq2_kt_F32_T<4>;
+            kernels[4] = mul_mat_iq2_kt_F32_T<5>;
+            kernels[5] = mul_mat_iq2_kt_F32_T<6>;
+            kernels[6] = mul_mat_iq2_kt_F32_T<7>;
+            kernels[7] = mul_mat_iq2_kt_F32_T<8>;
+            break;
+        // case GGML_TYPE_IQ3_KT:
+        //     assert (ne00 % QK_K == 0);
+        //     kernels[0] = mul_mat_iq3_kt_F32_T<1>;
+        //     kernels[1] = mul_mat_iq3_kt_F32_T<2>;
+        //     kernels[2] = mul_mat_iq3_kt_F32_T<3>;
+        //     kernels[3] = mul_mat_iq3_kt_F32_T<4>;
+        //     kernels[4] = mul_mat_iq3_kt_F32_T<5>;
+        //     kernels[5] = mul_mat_iq3_kt_F32_T<6>;
+        //     kernels[6] = mul_mat_iq3_kt_F32_T<7>;
+        //     kernels[7] = mul_mat_iq3_kt_F32_T<8>;
+        //     break;
+        // case GGML_TYPE_IQ4_KT:
+        //     assert (ne00 % QK_K == 0);
+        //     kernels[0] = mul_mat_iq4_kt_F32_T<1>;
+        //     kernels[1] = mul_mat_iq4_kt_F32_T<2>;
+        //     kernels[2] = mul_mat_iq4_kt_F32_T<3>;
+        //     kernels[3] = mul_mat_iq4_kt_F32_T<4>;
+        //     kernels[4] = mul_mat_iq4_kt_F32_T<5>;
+        //     kernels[5] = mul_mat_iq4_kt_F32_T<6>;
+        //     kernels[6] = mul_mat_iq4_kt_F32_T<7>;
+        //     kernels[7] = mul_mat_iq4_kt_F32_T<8>;
+        //     break;
+        default:
+            return false;
+    }
+
+    return true;
 }
 
 #endif

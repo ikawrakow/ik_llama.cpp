@@ -96,6 +96,7 @@ struct DataInfo {
     int           ne11;
     const mmid_row_mapping * row_mapping = nullptr;
     size_t        bs2 = 0;
+    bool debug = false;
 
     inline const char * src1_row(int iy) const {
         if (!row_mapping) return cy + (cur_y + iy)*by;
