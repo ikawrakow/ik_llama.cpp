@@ -755,6 +755,89 @@ static __global__ void dequantize_block_iq4_k(const void * __restrict__ vx, dst_
 }
 
 template<typename dst_t>
+static __global__ void dequantize_block_iq4_k_r4(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
+
+    int64_t ii = blockIdx.x;
+
+    //int64_t nblock = n_per_row/256;
+    //int64_t row = ii/nblock;
+    //int64_t ibl = ii - row*nblock;
+    //int64_t row4 = row/4;
+    //int64_t ir = row4%4;
+
+    //const block_iq4_k_r4 * x = (const block_iq4_k_r4 *)vx + row4*nblock;
+
+    //int64_t row4 = (256*ii)/(4*n_per_row); // rows of 4 index
+    //int64_t ibl = ii - row4*n_per_row/64;  // block index within the rows of 4
+    //int64_t ir = row4%4;                   // row
+
+    //int64_t ibl = ii/4;
+    //int     ir  = ii%4;
+    int64_t nblock = n_per_row/256;
+    int64_t row  = ii/nblock;
+    int64_t row4 = row/4;
+    int64_t ir   = row%4;
+    int64_t ibl  = row4*nblock + ii%nblock;
+    // ii = 0 -> row = 0, row4 = 0, ir = 0, ibl should be 0
+    // ii = 1 -> row = 0, row4 = 0, ir = 0, ibl should be 1
+    // ii = 2 -> row = 0, row4 = 0, ir = 0, ibl should be 2
+    // ...
+    // ii = 16 -> row = 1, row4 = 0, ir = 1, ibl should be 0
+    // ..
+    // ii = 64 -> row = 4, row4 = 1, ir = 0, ibl should be 16
+
+
+    const block_iq4_k_r4 * x = (const block_iq4_k_r4 *)vx;
+    ////const block_iq4_k_r4 * x = (const block_iq4_k_r4 *)((const char *)vx + 4*row4*row_size);
+
+    // Say, we have rows of 4096, and we have 8 rows -> 4096*8/256 = 128 blocks of 256, 16 blocks per row
+    // ii = 0 -> ibl = 0, ir = 0 -> warp processes 0...255 in row 0
+    // ii = 1 -> ibl = 0, ir = 1 -> warp processes 0...255 in row 1
+    // ii = 2 -> ibl = 0, ir = 2 -> warp processes 0...255 in row 2
+    // ii = 3 -> ibl = 0, ir = 3 -> warp processes 0...255 in row 3
+    // ii = 4 -> ibl = 1, ir = 0 -> warp processes 256...511 in row 0
+    // ii = 5 -> ibl = 1, ir = 1 -> warp processes 256...511 in row 1
+    // ii = 6 -> ibl = 1, ir = 2 -> warp processes 256...511 in row 2
+    // ii = 7 -> ibl = 1, ir = 3 -> warp processes 256...511 in row 3
+    // ...
+    // ii = 63 -> ibl = 15, ir = 3 -> warp processes 3840...4096 in row 3
+    // ii = 64 -> ibl = 16, ir = 0 -> warp processes 0...255 in row 4, so offset is 4*4096 = 4*16*256
+    const int tid = threadIdx.x;
+    const int  il = tid/8; // 0...3
+    const int  ib = tid%8; // 0...7
+    const float d = __half2float(x[ibl].d[ir]);
+    int is = 8*ib + ir;
+    float dl1 = d * ((((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[is%16] >> 2*(is/16)) & 3) << 4)) - 32);
+    is += 4;
+    float dl2 = d * ((((x[ibl].scales_l[is%32] >> 4*(is/32)) & 0xf) | (((x[ibl].scales_h[is%16] >> 2*(is/16)) & 3) << 4)) - 32);
+    auto values1 = iq4k_values + (((x[ibl].extra[ir+0] >> ib) & 1) << 4);
+    auto values2 = iq4k_values + (((x[ibl].extra[ir+4] >> ib) & 1) << 4);
+    dst_t * y = yy + 256*ii + 32*ib;
+    //dst_t * y = yy + (4*row4 + ir)*n_per_row + ibl*QK_K + 32*ib;
+    //dst_t * y = yy + ir*n_per_row + 4*ibl*QK_K + 32*ib;
+    auto qs = x[ibl].qs + 64*ib + 4*ir;
+    if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
+        y[il+ 0] = __float2bfloat16(dl1 * values1[qs[il+ 0] & 0xf]);
+        y[il+ 8] = __float2bfloat16(dl1 * values1[qs[il+ 0] >>  4]);
+        y[il+16] = __float2bfloat16(dl2 * values2[qs[il+16] & 0xf]);
+        y[il+24] = __float2bfloat16(dl2 * values2[qs[il+16] >>  4]);
+        y[il+ 4] = __float2bfloat16(dl1 * values1[qs[il+32] & 0xf]);
+        y[il+12] = __float2bfloat16(dl1 * values1[qs[il+32] >>  4]);
+        y[il+20] = __float2bfloat16(dl2 * values2[qs[il+48] & 0xf]);
+        y[il+28] = __float2bfloat16(dl2 * values2[qs[il+48] >>  4]);
+    } else {
+        y[il+ 0] = dl1 * values1[qs[il+ 0] & 0xf];
+        y[il+ 4] = dl1 * values1[qs[il+32] & 0xf];
+        y[il+ 8] = dl1 * values1[qs[il+ 0] >>  4];
+        y[il+12] = dl1 * values1[qs[il+32] >>  4];
+        y[il+16] = dl2 * values2[qs[il+16] & 0xf];
+        y[il+20] = dl2 * values2[qs[il+48] & 0xf];
+        y[il+24] = dl2 * values2[qs[il+16] >>  4];
+        y[il+28] = dl2 * values2[qs[il+48] >>  4];
+    }
+}
+
+template<typename dst_t>
 static __global__ void dequantize_block_iq5_k(const void * __restrict__ vx, dst_t * __restrict__ yy) {
 
     const int i   = blockIdx.x;
@@ -1210,6 +1293,14 @@ static void dequantize_row_iq4_k_cuda(const void * vx, dst_t * y, const int64_t 
 }
 
 template<typename dst_t>
+static void dequantize_row_iq4_k_r4_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
+    const int64_t k = nrows * n_per_row;
+    const int64_t row_size = ggml_row_size(GGML_TYPE_IQ4_K, n_per_row);
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_iq4_k_r4<<<nb, 32, 0, stream>>>(vx, y, n_per_row, row_size);
+}
+
+template<typename dst_t>
 static void dequantize_row_iq5_k_cuda(const void * vx, dst_t * y, const int64_t nrows, const int64_t n_per_row, cudaStream_t stream) {
     const int64_t k = nrows * n_per_row;
     const int nb = (k + QK_K - 1) / QK_K;
@@ -1312,6 +1403,8 @@ to_bf16_cuda_t ggml_get_to_bf16_cuda(ggml_type type) {
             return dequantize_row_iq5_k_cuda<nv_bfloat16>;
         case GGML_TYPE_IQ6_K:
             return dequantize_row_iq6_k_cuda<nv_bfloat16>;
+        case GGML_TYPE_IQ4_K_R4:
+            return dequantize_row_iq4_k_r4_cuda<nv_bfloat16>;
         default:
             return nullptr;
     }
@@ -1394,6 +1487,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return convert_unary_cuda<float>;
         case GGML_TYPE_BF16:
             return convert_from_bf16_cuda;
+        case GGML_TYPE_IQ4_K_R4:
+            return dequantize_row_iq4_k_r4_cuda;
         default:
             return nullptr;
     }
@@ -1473,6 +1568,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return convert_unary_cuda<half>;
         case GGML_TYPE_BF16:
             return convert_from_bf16_cuda;
+        case GGML_TYPE_IQ4_K_R4:
+            return dequantize_row_iq4_k_r4_cuda;
         default:
             return nullptr;
     }
