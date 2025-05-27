@@ -36,6 +36,20 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ5_K_R4> {
     static constexpr int qi = QI5_XS;
 };
 
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KS_R4> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR4_XS;
+    static constexpr int qi = QI4_XS;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ5_KS_R4> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR5_XS;
+    static constexpr int qi = QI5_XS;
+};
+
 
 //  Reminder:
 //    constexpr int qk  = ggml_cuda_type_traits<type>::qk;
@@ -309,6 +323,36 @@ __device__ __forceinline__ void vec_dot_iq4_k_r4_q8_1(
     }
 }
 
+__device__ __forceinline__ void vec_dot_iq4_ks_r4_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
+
+    const float * dptr = (const float *)vbq;
+    const block_iq4_ks_r4 * bq4 = (const block_iq4_ks_r4 *)(dptr + 4) + kbx;
+
+    // iqs is 0...28 in steps of 2
+    const int ib16 = iqs/2;
+    const float d8 = __low2float(bq8_1[ib16/2].ds);
+    const int32_t  * q8 = (const int *)bq8_1[ib16/2].qs + 4*(ib16%2);
+
+    int ib32 = ib16/2;
+    int is   = ib16%2;
+    const uint32_t * scales32 = (const uint32_t *)bq4->scales;
+    int scales = __vsub4(scales32[ib32] & 0xfefefefe, 0x7f7f7f7f);
+    const int8_t * s8 = (const int8_t *)&scales;
+    int2 val;
+    const int * q4 = (const int *)bq4->qs + 16*ib32;
+    for (int i = 0; i < 4; ++i) {
+        auto values = iq4k_values + ((bq4->scales[4*ib32+i] & 1) << 4);
+        int sumi = 0;
+        val  = get_int_from_table_16(q4[i+4*is+0], values);
+        sumi = ggml_cuda_dp4a(val.x, q8[0], ggml_cuda_dp4a(val.y, q8[2], sumi));
+        val  = get_int_from_table_16(q4[i+4*is+8], values);
+        sumi = ggml_cuda_dp4a(val.x, q8[1], ggml_cuda_dp4a(val.y, q8[3], sumi));
+        const float d = dptr[i] * d8;
+        result[i] += d * sumi * s8[i];
+    }
+}
+
 #define VDR_IQ4_KS_Q8_1_MMVQ 4
 #define VDR_IQ4_KS_Q8_1_MMQ  4
 
@@ -444,6 +488,44 @@ __device__ __forceinline__ void vec_dot_iq5_k_r4_q8_1(
         sumi1 = ggml_cuda_dp4a(val1.x, q8[1], ggml_cuda_dp4a(val1.y, q8[3], sumi1));
         const float d = __half2float(bq5->d[i]) * d8;
         result[i] += d * sumi1 * s8[i];
+    }
+}
+
+__device__ __forceinline__ void vec_dot_iq5_ks_r4_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
+
+    const float * dptr = (const float *)vbq;
+    const block_iq5_ks_r4 * bq5 = (const block_iq5_ks_r4 *)(dptr + 4) + kbx;
+
+    // iqs is 0...28 in steps of 2
+    const int ib16 = iqs/2;
+    const float d8 = __low2float(bq8_1[ib16/2].ds);
+    const int32_t  * q8 = (const int *)bq8_1[ib16/2].qs + 4*(ib16%2);
+
+    int ib32 = ib16/2;
+    int is   = ib16%2;
+    const uint32_t * scales32 = (const uint32_t *)bq5->scales;
+    int scales = __vsub4(scales32[ib32] & 0xfefefefe, 0x7f7f7f7f);
+    const int8_t * s8 = (const int8_t *)&scales;
+    int2 val;
+    const int * q4 = (const int *)bq5->qs + 16*ib32;
+    const int * qh = (const int *)bq5->qh +  4*ib32;
+    int aux32[2];
+    const uint8_t * aux8 = (const uint8_t *)aux32;
+    for (int i = 0; i < 4; ++i) {
+        auto values = iq5nl_values + ((bq5->scales[4*ib32+i] & 1) << 5);
+        int sumi = 0;
+        aux32[0] = ((q4[i+4*is+0] >> 0) & 0x0f0f0f0f) | (((qh[i] >> (2*is+0)) & 0x01010101) << 4);
+        aux32[1] = ((q4[i+4*is+0] >> 4) & 0x0f0f0f0f) | (((qh[i] >> (2*is+1)) & 0x01010101) << 4);
+        val.x  = int_from_table(aux8+0, (const uint8_t *)values);
+        val.y  = int_from_table(aux8+4, (const uint8_t *)values);
+        sumi = ggml_cuda_dp4a(val.x, q8[0], ggml_cuda_dp4a(val.y, q8[2], sumi));
+        aux32[0] = ((q4[i+4*is+8] >> 0) & 0x0f0f0f0f) | (((qh[i] >> (2*is+4)) & 0x01010101) << 4);
+        aux32[1] = ((q4[i+4*is+8] >> 4) & 0x0f0f0f0f) | (((qh[i] >> (2*is+5)) & 0x01010101) << 4);
+        val.x  = int_from_table(aux8+0, (const uint8_t *)values);
+        val.y  = int_from_table(aux8+4, (const uint8_t *)values);
+        sumi = ggml_cuda_dp4a(val.x, q8[1], ggml_cuda_dp4a(val.y, q8[3], sumi));
+        result[i] += dptr[i] * d8 * sumi * s8[i];
     }
 }
 
@@ -1013,12 +1095,28 @@ void mul_mat_vec_iq4_k_r4_q8_1_cuda(
     iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ4_K_R4, 2, vec_dot_iq4_k_r4_q8_1, 4>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
+void mul_mat_vec_iq4_ks_r4_q8_1_cuda(
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
+
+    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ4_KS_R4, 2, vec_dot_iq4_ks_r4_q8_1, 4>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+}
+
 void mul_mat_vec_iq5_k_r4_q8_1_cuda(
     const void * vx, const void * vy, float * dst, const char * ids_data,
     const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
     const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
     iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ5_K_R4, 2, vec_dot_iq5_k_r4_q8_1, 4>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+}
+
+void mul_mat_vec_iq5_ks_r4_q8_1_cuda(
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
+
+    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ5_KS_R4, 2, vec_dot_iq5_ks_r4_q8_1, 4>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 void mul_mat_vec_iq2_k_r4_q8_1_cuda(
