@@ -2991,10 +2991,6 @@ struct llama_kv_cache {
     std::vector<struct ggml_tensor *> k_l; // per layer
     std::vector<struct ggml_tensor *> v_l;
 
-    // DeepSeek MLA
-    std::vector<struct ggml_tensor *> kv_l;
-    std::vector<struct ggml_tensor *> kvt_l;
-
     std::vector<struct ggml_context *> ctxs;
     std::vector<ggml_backend_buffer_t> bufs;
 
@@ -3493,16 +3489,12 @@ static bool llama_kv_cache_init(
         }
     }
 
+    cache.k_l.reserve(n_layer);
+    bool needs_v_cache = true;
     if (model.arch == LLM_ARCH_DEEPSEEK2 && cparams.mla_attn) {
-        // DeepSeek MLA
-        cache.kv_l.reserve(n_layer);
-        if (cparams.mla_attn == 1 && !cparams.flash_attn) {
-            cache.kvt_l.reserve(n_layer);
-        }
-    } else {
-        cache.k_l.reserve(n_layer);
-        cache.v_l.reserve(n_layer);
+        needs_v_cache = cparams.mla_attn == 1 && !cparams.flash_attn;
     }
+    if (needs_v_cache) cache.v_l.reserve(n_layer);
 
     bool warn = true;
     int n_mla = 0;
@@ -3525,17 +3517,17 @@ static bool llama_kv_cache_init(
             //LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
             if (cparams.flash_attn) {
                 ggml_tensor * kv = ggml_new_tensor_2d(ctx, cache.type_k, kv_lora_rank + n_embd_head_qk_rope, kv_size);
-                ggml_format_name(kv, "cache_kv_l%d", i);
-                cache.kv_l.push_back(kv);
+                ggml_format_name(kv, "cache_k_l%d", i);
+                cache.k_l.push_back(kv);
             } else {
                 auto kv_type = cparams.mla_attn == 1 ? cache.type_k : cache.type_v;
                 ggml_tensor * kv = ggml_new_tensor_2d(ctx, kv_type, kv_lora_rank + n_embd_head_qk_rope, kv_size);
-                ggml_format_name(kv, "cache_kv_l%d", i);
-                cache.kv_l.push_back(kv);
+                ggml_format_name(kv, "cache_k_l%d", i);
+                cache.k_l.push_back(kv);
                 if (cparams.mla_attn == 1) {
                     ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
-                    ggml_format_name(kvt, "cache_kvt_l%d", i);
-                    cache.kvt_l.push_back(kvt);
+                    ggml_format_name(kvt, "cache_v_l%d", i);
+                    cache.v_l.push_back(kvt);
                 }
             }
             n_mla++;
@@ -15371,16 +15363,16 @@ struct llm_build_context {
                     ggml_tensor * kv_cache_trans;
 
                     if (lctx.cparams.mla_attn == 1 && !lctx.cparams.flash_attn) {
-                        ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.kvt_l[il], n_tokens, kv_lora_rank,
-                                ggml_row_size(kv_self.kvt_l[il]->type, kv_self.size), ggml_row_size(kv_self.kvt_l[il]->type, kv_head));
+                        ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.v_l[il], n_tokens, kv_lora_rank,
+                                ggml_row_size(kv_self.v_l[il]->type, kv_self.size), ggml_row_size(kv_self.v_l[il]->type, kv_head));
                         cb(kv_cache_trans_view, "kv_cache_trans_view", il);
 
                         // note: storing transposed c^KV in the transposed KV cache
                         ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_transpose(ctx0, kv_compressed), kv_cache_trans_view));
 
-                        kv_cache_trans = ggml_view_2d(ctx0, kv_self.kvt_l[il],
+                        kv_cache_trans = ggml_view_2d(ctx0, kv_self.v_l[il],
                                 n_kv, kv_lora_rank,
-                                ggml_row_size(kv_self.kvt_l[il]->type, kv_self.size),
+                                ggml_row_size(kv_self.v_l[il]->type, kv_self.size),
                                 0);
                         cb(kv_cache_trans, "kv_cache_trans", il);
                     }
@@ -15389,21 +15381,21 @@ struct llm_build_context {
                     ggml_tensor * kvr = ggml_concat(ctx0, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), kv_compressed, 0);
                     cb(kvr, "kvr", il);
 
-                    auto row_size = ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope);
-                    ggml_tensor * kv_cache_view = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_self.kv_l[il]->ne[0], n_tokens,
+                    auto row_size = ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope);
+                    ggml_tensor * kv_cache_view = ggml_view_2d(ctx0, kv_self.k_l[il], kv_self.k_l[il]->ne[0], n_tokens,
                             row_size, row_size*kv_head);
                     ggml_build_forward_expand(gf, ggml_cpy(ctx0, kvr, kv_cache_view));
-                    ggml_tensor * kv_cache = ggml_view_2d(ctx0, kv_self.kv_l[il],
+                    ggml_tensor * kv_cache = ggml_view_2d(ctx0, kv_self.k_l[il],
                             kv_lora_rank + n_embd_head_qk_rope, n_kv,
-                            ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
+                            ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
                     cb(kv_cache, "kv_cache", il);
 
                     ggml_tensor * kqv;
 
                     if (lctx.cparams.mla_attn > 1 && lctx.cparams.flash_attn && pp_opt) { // PP for mla=2,3
 
-                        auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.kv_l[il], kv_lora_rank, n_kv, kv_self.kv_l[il]->nb[1],
-                                ggml_row_size(kv_self.kv_l[il]->type, n_embd_head_qk_rope));
+                        auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank, n_kv, kv_self.k_l[il]->nb[1],
+                                ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
 
                         auto kv_f32_size = model.layers[il].wkv_b->ne[1] * kv_cache_nope->ne[1] * sizeof(float) / (1024*1024);
                         int n_max_head = n_head;
@@ -15416,14 +15408,14 @@ struct llm_build_context {
 
                         auto n_per_head = model.layers[il].wkv_b->ne[1] / n_head;
 
-                        auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.kv_l[il], n_embd_head_qk_rope, n_kv, 1,
-                                kv_self.kv_l[il]->nb[1], kv_self.kv_l[il]->nb[2], 0); //ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank));
+                        auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.k_l[il], n_embd_head_qk_rope, n_kv, 1,
+                                kv_self.k_l[il]->nb[1], kv_self.k_l[il]->nb[2], 0); //ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank));
 
                         // There is still an issue with one or more of the ops GGML_OP_REPEAT, GGML_OP_CONCAT, GGML_OP_CPY on CUDA when
                         // the KV cache is quantized. Hence, in that case we will simply use fp16 for now.
                         // The downside of the following line is that fp16 will be used even if attention is computed on the CPU
                         // if the build is with CUDA enabled.
-                        auto kv_type = lctx.backends.size() == 1 && lctx.backends.front() == lctx.backend_cpu ? kv_self.kv_l[il]->type : GGML_TYPE_F16;
+                        auto kv_type = lctx.backends.size() == 1 && lctx.backends.front() == lctx.backend_cpu ? kv_self.k_l[il]->type : GGML_TYPE_F16;
 
                         ggml_tensor repeater;
                         repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_kv; repeater.ne[2] = n_max_head; repeater.ne[3] = 1;
@@ -15514,10 +15506,10 @@ struct llm_build_context {
                         cb(q, "q", il);
 
                         if (lctx.cparams.flash_attn && (lctx.cparams.mla_attn == 1 || lctx.cparams.mla_attn == 3)) {
-                            ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.kv_l[il],
+                            ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.k_l[il],
                                     kv_lora_rank, n_kv,
-                                    ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope),
-                                    ggml_row_size(kv_self.kv_l[il]->type, n_embd_head_qk_rope));
+                                    ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope),
+                                    ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
                             cb(kv_cache_lora, "kv_cache_lora", il);
 
                             kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, kv_cache_lora, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
@@ -15528,10 +15520,10 @@ struct llm_build_context {
                         }
                         else {
                             if (lctx.cparams.mla_attn > 1) {
-                                ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.kv_l[il],
+                                ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.k_l[il],
                                         kv_lora_rank, n_kv,
-                                        ggml_row_size(kv_self.kv_l[il]->type, kv_lora_rank + n_embd_head_qk_rope),
-                                        ggml_row_size(kv_self.kv_l[il]->type, n_embd_head_qk_rope));
+                                        ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope),
+                                        ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
                                 cb(kv_cache, "kv_cache_lora", il);
 
                                 kv_cache_trans = ggml_cont(ctx0, ggml_transpose(ctx0, kv_cache_lora));
@@ -20716,12 +20708,12 @@ struct llama_context * llama_new_context_with_model(
             ggml_type kv_type = GGML_TYPE_COUNT;
             ggml_type kvt_type = GGML_TYPE_COUNT;
 
-            for (auto & kv : ctx->kv_self.kv_l) {
+            for (auto & kv : ctx->kv_self.k_l) {
                 memory_size_kv += ggml_nbytes(kv);
                 kv_type = kv->type;
             }
 
-            for (auto & kvt : ctx->kv_self.kvt_l) {
+            for (auto & kvt : ctx->kv_self.v_l) {
                 memory_size_kvt += ggml_nbytes(kvt);
                 kvt_type = kvt->type;
             }
@@ -20733,7 +20725,6 @@ struct llama_context * llama_new_context_with_model(
                             ggml_type_name(kv_type), (float)memory_size_kv / (1024.0f * 1024.0f),
                             ggml_type_name(kvt_type), (float)memory_size_kvt / (1024.0f * 1024.0f));
                 } else {
-                    GGML_ASSERT(memory_size_kvt == 0);
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T: not used\n", __func__,
                             (float)(memory_size_kv + memory_size_kvt) / (1024.0f * 1024.0f),
                             ggml_type_name(kv_type), (float)memory_size_kv / (1024.0f * 1024.0f));
