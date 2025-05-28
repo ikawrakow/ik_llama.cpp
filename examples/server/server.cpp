@@ -112,7 +112,7 @@ struct server_task_multi {
 
 struct slot_params {
     bool stream       = true;
-    bool cache_prompt = false; // remember the prompt to avoid reprocessing all prompt
+    bool cache_prompt = true; // remember the prompt to avoid reprocessing all prompt
 
     int32_t  n_keep    =  0; // number of tokens to keep from initial prompt
     int32_t  n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
@@ -905,7 +905,7 @@ struct server_context {
         }
 
         slot.params.stream             = json_value(data, "stream",            false);
-        slot.params.cache_prompt       = json_value(data, "cache_prompt",      false);
+        slot.params.cache_prompt       = json_value(data, "cache_prompt",      true);
         slot.params.n_predict          = json_value(data, "n_predict",         json_value(data, "max_tokens", default_params.n_predict));
         slot.sparams.top_k             = json_value(data, "top_k",             default_sparams.top_k);
         slot.sparams.top_p             = json_value(data, "top_p",             default_sparams.top_p);
