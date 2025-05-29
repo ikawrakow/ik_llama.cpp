@@ -1618,7 +1618,8 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq4_kt_ref,
         .vec_dot                  = vec_dot_iq4_kt_q8_k,
 #ifdef __ARM_NEON
-        .vec_dot_type             = GGML_TYPE_F16,
+        //.vec_dot_type             = GGML_TYPE_F16,
+        .vec_dot_type             = GGML_TYPE_F32,
 #else
         .vec_dot_type             = GGML_TYPE_F32,
 #endif
