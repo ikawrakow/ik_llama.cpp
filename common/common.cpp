@@ -1234,6 +1234,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.port = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "--send-done") {
+        params.send_done = true;
+        return true;
+    }
     if (arg == "--path") {
         CHECK_ARG
         params.public_path = argv[i];
