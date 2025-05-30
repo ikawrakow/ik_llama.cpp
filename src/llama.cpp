@@ -20699,41 +20699,21 @@ struct llama_context * llama_new_context_with_model(
             }
 
             if (memory_size_k + memory_size_v > 0) {
-                LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
-                        (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
-                        ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
-                        ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
-            }
-        }
-
-	    {
-            size_t memory_size_kv = 0;
-            size_t memory_size_kvt = 0;
-
-            ggml_type kv_type = GGML_TYPE_COUNT;
-            ggml_type kvt_type = GGML_TYPE_COUNT;
-
-            for (auto & kv : ctx->kv_self.k_l) {
-                memory_size_kv += ggml_nbytes(kv);
-                kv_type = kv->type;
-            }
-
-            for (auto & kvt : ctx->kv_self.v_l) {
-                memory_size_kvt += ggml_nbytes(kvt);
-                kvt_type = kvt->type;
-            }
-
-            if (memory_size_kv + memory_size_kvt > 0) {
-                if (cparams.mla_attn == 1 && !cparams.flash_attn) {
+	        if (cparams.mla_attn != 0 && !cparams.flash_attn) {
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T (%s): %7.2f MiB\n", __func__,
-                            (float)(memory_size_kv + memory_size_kvt) / (1024.0f * 1024.0f),
-                            ggml_type_name(kv_type), (float)memory_size_kv / (1024.0f * 1024.0f),
-                            ggml_type_name(kvt_type), (float)memory_size_kvt / (1024.0f * 1024.0f));
-                } else {
+                            (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
+                            ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
+                            ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+                } else if (cparams.mla_attn != 0 && cparams.flash_attn) {
                     LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, c^KV (%s): %7.2f MiB, kv^T: not used\n", __func__,
-                            (float)(memory_size_kv + memory_size_kvt) / (1024.0f * 1024.0f),
-                            ggml_type_name(kv_type), (float)memory_size_kv / (1024.0f * 1024.0f));
-                }
+                            (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
+                            ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f));
+                } else {
+                    LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
+                            (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
+                            ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
+                            ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+		}
             }
         }
 
@@ -21749,7 +21729,7 @@ struct llama_data_read {
         const struct llama_hparams & hparams = ctx->model.hparams;
         struct llama_kv_cache & kv_self = ctx->kv_self;
 
-	// v_state: 0 -> not transposed V cache
+        // v_state: 0 -> not transposed V cache
         //          1 -> transposed V cache
         //          2 -> no V cache (as it may be the case with MLA)
         uint32_t v_state;
