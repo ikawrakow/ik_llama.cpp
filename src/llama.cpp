@@ -21450,13 +21450,13 @@ struct llama_data_write {
         const struct llama_kv_cache & kv_self = ctx->kv_self;
         const struct llama_hparams & hparams = ctx->model.hparams;
 
-        // Misuse v_trans: 0 -> not transposed V cache
-        //                 1 -> transposed V cache
-        //                 2 -> no V cache (as it maybe the case with MLA)
-        const uint32_t v_trans = kv_self.v_l.empty() ? 2 : kv_self.v_trans ? 1 : 0;
+        // v_state: 0 -> not transposed V cache
+        //          1 -> transposed V cache
+        //          2 -> no V cache (as it may be the case with MLA)
+        const uint32_t v_state = kv_self.v_l.empty() ? 2 : kv_self.v_trans ? 1 : 0;
         const uint32_t n_layer = hparams.n_layer;
 
-        write(&v_trans, sizeof(v_trans));
+        write(&v_state, sizeof(v_state));
         write(&n_layer, sizeof(n_layer));
 
         std::vector<uint8_t> tmp_buf;
@@ -21482,7 +21482,7 @@ struct llama_data_write {
             }
         }
 
-        if (kv_self.v_trans == 0) {
+        if (v_state == 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
 
@@ -21502,7 +21502,7 @@ struct llama_data_write {
                 }
             }
         }
-        else if (v_trans == 1) {
+        else if (v_state == 1) {
             // When v is transposed, we also need the element size and get the element ranges from each row
             const uint32_t kv_size = kv_self.size;
             for (uint32_t il = 0; il < n_layer; ++il) {
@@ -21748,9 +21748,13 @@ struct llama_data_read {
     bool read_kv_cache_data(struct llama_context * ctx, uint32_t cell_count) {
         const struct llama_hparams & hparams = ctx->model.hparams;
         struct llama_kv_cache & kv_self = ctx->kv_self;
-        uint32_t v_trans;
+
+	// v_state: 0 -> not transposed V cache
+        //          1 -> transposed V cache
+        //          2 -> no V cache (as it may be the case with MLA)
+        uint32_t v_state;
         uint32_t n_layer;
-        read_to(&v_trans, sizeof(v_trans));
+        read_to(&v_state, sizeof(v_state));
         read_to(&n_layer, sizeof(n_layer));
 
         if (n_layer != hparams.n_layer) {
@@ -21761,7 +21765,9 @@ struct llama_data_read {
             LLAMA_LOG_ERROR("%s: not enough cells in kv cache to restore state (%u > %u)\n", __func__, cell_count, kv_self.size);
             return false;
         }
-        if (kv_self.v_trans != (bool) v_trans) {
+
+	// Currently the only way there is no V cache (and thus v_state is 2) requires flash_attn, and flash_attn sets kv_self.v_trans to false
+        if (kv_self.v_trans != (v_state == 1)) {
             LLAMA_LOG_ERROR("%s: incompatible V transposition\n", __func__);
             return false;
         }
@@ -21794,7 +21800,7 @@ struct llama_data_read {
             }
         }
 
-        if (kv_self.v_trans == 0) {
+        if (v_state == 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
 
@@ -21822,7 +21828,7 @@ struct llama_data_read {
                 }
             }
         }
-        else if (v_trans == 1) {
+        else if (v_state == 1) {
             // For each layer, read the values for each cell (transposed)
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
