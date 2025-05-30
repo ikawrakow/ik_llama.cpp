@@ -6806,7 +6806,7 @@ void kernel_mul_mv_iq3_kt_f32_impl(
     float drow[N_DST];
     for (int row = 0; row < N_DST; ++row) {
         device const float * dptr = (device const float *)(cx + row*row_size);
-        drow[row] = dptr[0] * 31.75f * 1.05f;
+        drow[row] = dptr[0] * 31.75f * 1.01f;
     }
 
     device const block_iq3_kt * x = (device const block_iq3_kt *)(cx + sizeof(float));
@@ -6911,7 +6911,7 @@ void kernel_mul_mv_iq4_kt_f32_impl(
     const int im = tgpig.z;
 
     const int first_row = (r0 * N_SIMDGROUP + sgitg) * N_DST;
-    const uint row_size = sizeof(float) + nb*sizeof(block_iq4_kt);
+    const uint row_size = 2*sizeof(float) + nb*sizeof(block_iq4_kt);
 
     const uint i12 = im%ne12;
     const uint i13 = im/ne12;
@@ -6931,47 +6931,47 @@ void kernel_mul_mv_iq4_kt_f32_impl(
     float4 v[2];
     thread uint32_t * u32 = (thread uint32_t *)v;
 
-    float drow[N_DST];
+    float drow[2*N_DST];
     for (int row = 0; row < N_DST; ++row) {
         device const float * dptr = (device const float *)(cx + row*row_size);
-        drow[row] = dptr[0] * 31.75f * 1.05f;
+        drow[2*row+0] = dptr[0] * 31.75f * 1.01f;
+        drow[2*row+1] = dptr[1];
     }
 
-    device const block_iq3_kt * x = (device const block_iq3_kt *)(cx + sizeof(float));
+    device const block_iq4_kt * x = (device const block_iq4_kt *)(cx + 2*sizeof(float));
 
     for (int ib = ix; ib < nb; ib += 2) {
 
-        device const uint8_t * sc  = (device const uint8_t *)x[ib].scales;
+        auto sumy = y4[0] + y4[1] + y4[2] + y4[3];
+
+        device const uint32_t * shb  = x[ib].qs;
 
         for (int row = 0; row < N_DST; row++) {
 
-            device const uint16_t * q2 = (device const uint16_t *)(sc + 4);
-            device const uint8_t  * qh = (device const uint8_t  *)(q2 + QK_K/8) + 16*(it%2);
+            device const uint8_t * ql = (device const uint8_t *)(shb + 8);
+            device const uint8_t * qh = ql + 64;
 
-            const float ls = drow[row] * ((sc[(it/2)%4] >> 4*(it/8)) & 0xf);
-            const uint8_t mask = 1 << (it/2);
+            const float ls = drow[2*row] * (((shb[it/2] & 0xff) >> 1) - 64);
 
-            Trellis::gen8(q2[2*it+0]+4096, v[0], v[1]);
-            for (int j = 0; j < 8; ++j) {
-                u32[j] &= 0x7fffffff;
-                u32[j] |= qh[j+0] & mask ? 0x80000000 : 0;
+            const int jj = 8*(it/2) + 4*(it%2);
+            ql += jj;
+            qh += jj%32;
+
+            const uint32_t offset = 4096 + ((shb[it/2] & 1) << 15);
+            const int shift = 8 - 4*(jj/32);
+            uint32_t sh = (shb[it/2] >> (8 + 12*(it%2))) << 12;
+
+            float4 sum = {0.f};
+            for (int j = 0; j < 4; ++j) {
+                uint32_t idx = ql[j] + ((qh[j] << shift) & 0xf00) + ((sh >> 3*j) & 0x7000) + offset; 
+                auto v = Trellis::gen4(idx);
+                sum += y4[j] * (float4)v;
             }
-
-            auto sum = v[0]*y4[0] + v[1]*y4[1];
-
-            Trellis::gen8(q2[2*it+1]+4096, v[0], v[1]);
-            for (int j = 0; j < 8; ++j) {
-                u32[j] &= 0x7fffffff;
-                u32[j] |= qh[j+8] & mask ? 0x80000000 : 0;
-            }
-
-            sum += v[0]*y4[2] + v[1]*y4[3];
-
             sum *= ls;
 
-            sumf[row] += sum[0] + sum[1] + sum[2] + sum[3];
+            sumf[row] += sum[0] + sum[1] + sum[2] + sum[3] + drow[2*row+1]*(sumy[0] + sumy[1] + sumy[2] + sumy[3]);
 
-            sc  += row_size;
+            shb += row_size/4;
 
         }
 
