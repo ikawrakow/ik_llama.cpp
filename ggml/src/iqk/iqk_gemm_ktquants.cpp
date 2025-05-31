@@ -771,6 +771,61 @@ void mul_mat_iq3_kt_F16_T(int n, const void * vx, size_t bx, const DataInfo& inf
     }
 }
 
+void iqk_dequantize_iq4_kt(int n, const void * vx, size_t bx, float16_t * y, size_t stride_y, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    const int nb = n/QK_K;
+    constexpr int kNumGroups = 64;
+
+    Trellis1 trellis;
+
+    union { float16x8_t vec; float16_t val[8]; } s_helper;
+    union { uint16x8_t  vec; uint16_t  val[8]; } o_helper;
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        auto d = dptr[0] * 31.75f * 1.01f;
+        //auto dav = dptr[1];
+        // Something goes wrong when we add the average. Why?
+        //auto vav = std::abs(dav) > 0.00006103515625f ? vdupq_n_f16(GGML_FP32_TO_FP16(dav)) : vdupq_n_f16(0);
+        auto vd = vdupq_n_f32(d);
+        const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 2);
+
+        for (int i = 0; i < nb; ++i) {
+            const uint32_t * shb = x[i].qs;
+            auto vshb = vld1q_u32_x2(shb);
+            auto vshb16 = vcombine_u16(vmovn_u32(vandq_u32(vshb.val[0], vdupq_n_u32(0xff))), vmovn_u32(vandq_u32(vshb.val[1], vdupq_n_u32(0xff))));
+            const uint8_t * ql = (const uint8_t *)(shb + 8);
+            const uint8_t * qh = ql + kNumGroups;
+            auto iscales = vsubq_s16(vreinterpretq_s16_u16(vshrq_n_u16(vshb16, 1)), vdupq_n_s16(64));
+            auto s32l = vmovl_s16(vget_low_s16(iscales));
+            auto s32h = vmovl_s16(vget_high_s16(iscales));
+            auto f32l = vmulq_f32(vd, vcvtq_f32_s32(s32l));
+            auto f32h = vmulq_f32(vd, vcvtq_f32_s32(s32h));
+            s_helper.vec = vcombine_f16(vcvt_f16_f32(f32l), vcvt_f16_f32(f32h));
+            o_helper.vec = vaddq_u16(vshlq_n_u16(vandq_u16(vshb16, vdupq_n_u16(1)), 15), vdupq_n_u16(4096));
+            for (int ib = 0; ib < 4; ++ib) {
+                auto scale1 = vdupq_n_f16(s_helper.val[ib+0]);
+                auto scale2 = vdupq_n_f16(s_helper.val[ib+4]);
+                for (int j = 0; j < 4; ++j) {
+                    const uint32_t sh1 = shb[ib+0] >> (8 + 6*j);
+                    const uint32_t sh2 = shb[ib+4] >> (8 + 6*j);
+                    uint32_t val1 = ql[8*ib+2*j+ 0] + ((qh[8*ib+2*j+0] << 8) & 0xf00) + ((sh1 & 7) << 12) + o_helper.val[ib+0];
+                    uint32_t val2 = ql[8*ib+2*j+32] + ((qh[8*ib+2*j+0] << 4) & 0xf00) + ((sh2 & 7) << 12) + o_helper.val[ib+4];
+                    uint32_t val3 = ql[8*ib+2*j+ 1] + ((qh[8*ib+2*j+1] << 8) & 0xf00) + ((sh1 & 56) << 9) + o_helper.val[ib+0];
+                    uint32_t val4 = ql[8*ib+2*j+33] + ((qh[8*ib+2*j+1] << 4) & 0xf00) + ((sh2 & 56) << 9) + o_helper.val[ib+4];
+                    //auto x_val1 = vfmaq_f16(vav, scale1, trellis.gen8(val1, val3));
+                    //auto x_val2 = vfmaq_f16(vav, scale2, trellis.gen8(val2, val4));
+                    auto x_val1 = vmulq_f16(scale1, trellis.gen8(val1, val3));
+                    auto x_val2 = vmulq_f16(scale2, trellis.gen8(val2, val4));
+                    vst1q_f16(y + i*QK_K+32*ib+8*j+  0, x_val1);
+                    vst1q_f16(y + i*QK_K+32*ib+8*j+128, x_val2);
+                }
+            }
+        }
+        y += stride_y;
+    }
+}
+
 template <int nrc_y>
 void mul_mat_iq4_kt_F16_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n%QK_K == 0);
@@ -974,6 +1029,7 @@ bool iqk_dequantize_ktquants(int type, int n, const void * vx, size_t bx, void *
     switch (type) {
         case GGML_TYPE_IQ2_KT: iqk_dequantize_iq2_kt(n, vx, bx, (float16_t *)y, stride_y, nrc_x); break;
         case GGML_TYPE_IQ3_KT: iqk_dequantize_iq3_kt(n, vx, bx, (float16_t *)y, stride_y, nrc_x); break;
+        case GGML_TYPE_IQ4_KT: iqk_dequantize_iq4_kt(n, vx, bx, (float16_t *)y, stride_y, nrc_x); break;
         default: return false;
     }
 
