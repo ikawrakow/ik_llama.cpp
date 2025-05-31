@@ -236,6 +236,8 @@ struct MulMat {
     static inline bool is_dequant_better(ggml_type type, int nrc_y) {
 #ifdef __AVX2__
         switch (type) {
+            case GGML_TYPE_IQ2_KT: return nrc_y >= 32;
+            case GGML_TYPE_IQ3_KT: return nrc_y >= 32;
             case GGML_TYPE_IQ4_KT: return nrc_y >= 32;
             default: break;
         }
@@ -349,21 +351,11 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
             this_info.s += ix;
             int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
             if (f32.size() < std::vector<float>::size_type(ne00*this_nrc_x)) f32.resize(ne00*this_nrc_x);
-            iqk_dequantize_iq4_kt(ne00, (const char *)A + (first_x + ix)*strideA, strideA, f32.data(), ne00, this_nrc_x);
+            if (!iqk_dequantize_ktquants(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f32.data(), ne00, this_nrc_x)) {
+                GGML_ABORT("Fatal error");
+            }
             mm.mul_mat_NxM(ne00, (const char *)f32.data(), row_size_qx, this_info, this_nrc_x, Ny);
         }
-
-        //thread_local std::vector<float> f32;
-        //if (f32.size() < std::vector<float>::size_type(ne00*nrc_x)) f32.resize(ne00*nrc_x);
-
-        //iqk_dequantize_iq4_kt(ne00, (const char *)A + first_x*strideA, strideA, f32.data(), ne00, nrc_x);
-
-        //size_t row_size_qx = ne00*sizeof(float);
-        //size_t row_size_qy = strideB;
-
-        //DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
-
-        //mm.mul_mat_NxM(ne00, (const char *)f32.data(), row_size_qx, info, nrc_x, Ny);
 
         return true;
 
