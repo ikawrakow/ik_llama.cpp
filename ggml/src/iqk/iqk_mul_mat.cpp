@@ -233,6 +233,15 @@ struct MulMat {
         }
     }
     static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
+    static inline bool is_dequant_better(ggml_type type, int nrc_y) {
+#ifdef __AVX2__
+        switch (type) {
+            case GGML_TYPE_IQ4_KT: return nrc_y >= 32;
+            default: break;
+        }
+#endif
+        return false;
+    }
     static inline int num_rows(ggml_type type) {
 #ifdef HAVE_FANCY_SIMD
         switch (type) {
@@ -312,6 +321,54 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         float * C, long stride_C, int ith, int nth) {
 
     MulMat mm;
+
+    if (MulMat::is_dequant_better(ggml_type(typeA), Ny)) {
+        if (!MulMat::prepare(GGML_TYPE_F32, typeB, ne00, mm, Ny)) {
+            return false;
+        }
+
+        constexpr int k_x_step = 32;
+
+        auto num_rows = MulMat::num_rows(ggml_type(typeA));
+        GGML_ASSERT(Nx%num_rows == 0);
+        auto nrc_x = (Nx/num_rows + nth - 1)/nth;
+        auto first_x = ith*nrc_x;
+        if (first_x + nrc_x > Nx/num_rows) nrc_x = Nx/num_rows - first_x;
+        first_x *= num_rows;
+        nrc_x   *= num_rows;
+
+        thread_local std::vector<float> f32;
+
+        size_t row_size_qx = ne00*sizeof(float);
+        size_t row_size_qy = strideB;
+
+        DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+
+        for (int ix = 0; ix < nrc_x; ix += k_x_step) {
+            auto this_info = info;
+            this_info.s += ix;
+            int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
+            if (f32.size() < std::vector<float>::size_type(ne00*this_nrc_x)) f32.resize(ne00*this_nrc_x);
+            iqk_dequantize_iq4_kt(ne00, (const char *)A + (first_x + ix)*strideA, strideA, f32.data(), ne00, this_nrc_x);
+            mm.mul_mat_NxM(ne00, (const char *)f32.data(), row_size_qx, this_info, this_nrc_x, Ny);
+        }
+
+        //thread_local std::vector<float> f32;
+        //if (f32.size() < std::vector<float>::size_type(ne00*nrc_x)) f32.resize(ne00*nrc_x);
+
+        //iqk_dequantize_iq4_kt(ne00, (const char *)A + first_x*strideA, strideA, f32.data(), ne00, nrc_x);
+
+        //size_t row_size_qx = ne00*sizeof(float);
+        //size_t row_size_qy = strideB;
+
+        //DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+
+        //mm.mul_mat_NxM(ne00, (const char *)f32.data(), row_size_qx, info, nrc_x, Ny);
+
+        return true;
+
+    }
+
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
     }

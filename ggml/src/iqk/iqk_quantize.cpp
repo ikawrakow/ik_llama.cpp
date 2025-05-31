@@ -14,6 +14,8 @@
 #include "iqk_quantize.h"
 #include "iqk_config.h"
 
+#include "iqk_gemm_ktquants.h"
+
 #include <vector>
 #include <utility>
 #include <cstdint>
@@ -8750,6 +8752,9 @@ size_t quantize_iq4_kt(const float * src, void * dst, int64_t nrows, int64_t n_p
 }
 
 void dequantize_row_iq4_kt(const block_iq4_kt * x, float * y, int64_t k) {
+#ifdef __AVX2__
+    iqk_dequantize_iq4_kt(k, x, 0, y, 0, 1);
+#else
     using Q = QuantizerIQ4KT;
     assert(k % Q::kSuperBlockSize == 0);
     constexpr int kNumGroups = Q::kSuperBlockSize/Q::kGroupSize;
@@ -8777,6 +8782,7 @@ void dequantize_row_iq4_kt(const block_iq4_kt * x, float * y, int64_t k) {
             }
         }
     }
+#endif
 }
 
 void vec_dot_iq4_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
