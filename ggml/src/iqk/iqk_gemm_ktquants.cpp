@@ -51,7 +51,28 @@ struct Trellis1 {
     const __m256i mkb = _mm256_setr_epi32(kb, kb1, kb2, kb3, kb4, kb5, kb6, kb7);
     const __m256i mask1 = _mm256_set1_epi32(kmask);
     const __m256i mask2 = _mm256_set1_epi32(km32);
-
+#ifdef __AVX512BF16__
+    const __m512i shuf1 = load_shuffle(0);
+    const __m512i shuf2 = load_shuffle(1);
+    static __m512i load_shuffle(int i) {
+        static const int32_t k_idx[32] = {0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30,
+                                          1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31};
+        return _mm512_loadu_si512((const __m512i *)k_idx + i);
+    }
+    inline __m256 gen8(__m256i i8) const {
+        auto v = _mm512_cvtph_ps(i8);
+        v = _mm512_add_ps(_mm512_permutexvar_ps(shuf1, v), _mm512_permutexvar_ps(shuf2, v));
+        return _mm512_castps512_ps256(v);
+    }
+    inline __m256i gen8bh(__m256i i8_1, __m256i i8_2, __m512 scale) const {
+        auto v1 = _mm512_cvtph_ps(i8_1);
+        auto v2 = _mm512_cvtph_ps(i8_2);
+        auto vs1 = _mm512_permutex2var_ps(v1, shuf1, v2);
+        auto vs2 = _mm512_permutex2var_ps(v1, shuf2, v2);
+        auto v = _mm512_mul_ps(scale, _mm512_add_ps(vs1, vs2));
+        return __m256i(_mm512_cvtneps_pbh(v));
+    }
+#endif
     inline __m256i next8(uint32_t val) const {
         auto mval = _mm256_set1_epi32(val);
         auto mres = _mm256_add_epi32(_mm256_mullo_epi32(mval, mka), mkb);
@@ -96,6 +117,93 @@ struct Trellis2 {
         return _mm256_xor_si256(_mm256_and_si256(mres, _mm256_set1_epi32(kmask)), _mm256_set1_epi32(km32));
     }
 };
+
+#ifdef __AVX512BF16__
+template <int nrc_y>
+void mul_mat_iq2_kt_BF16_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%QK_K == 0);
+    const int nb = n/QK_K;
+
+    Trellis1 trellis;
+
+    auto shifts = _mm_set_epi32(0, 0, 4, 0);
+    auto values = _mm_loadu_si128((const __m128i *)iq4k_values);
+
+    union { __m256 vec; float val[8]; } s_helper;
+
+    constexpr int k_acc = 2 * nrc_y;
+    __m256  accd[k_acc];
+    const ggml_bf16_t * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) y[iy] = (const ggml_bf16_t *)info.src1_row(iy);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        const float d = *dptr * 31.75f * 1.05f;
+        const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
+
+        for (int iy = 0; iy < k_acc; ++iy) accd[iy] = _mm256_setzero_ps();
+
+        for (int i = 0; i < nb; ++i) {
+            const uint16_t * ql = (const uint16_t *)x[i].ql;
+            auto s8 = _mm_set1_epi32(*(const uint32_t *)x[i].scales);
+            s8 = _mm_and_si128(_mm_srlv_epi32(s8, shifts), _mm_set1_epi8(0xf));
+            s8 = _mm_shuffle_epi8(values, s8);
+            auto s32 = _mm256_cvtepi8_epi32(s8);
+            s_helper.vec = _mm256_cvtepi32_ps(s32);
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                auto scale = _mm512_set1_ps(s_helper.val[ib]);
+                auto xval1 = __m256bh(trellis.gen8bh(trellis.next8(ql[4*ib+0]+4096), trellis.next8(ql[4*ib+1]+4096), scale));
+                auto xval2 = __m256bh(trellis.gen8bh(trellis.next8(ql[4*ib+2]+4096), trellis.next8(ql[4*ib+3]+4096), scale));
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    auto y1 = __m256bh(_mm256_loadu_si256((const __m256i *)(y[iy] + i*QK_K + 32*ib +  0)));
+                    auto y2 = __m256bh(_mm256_loadu_si256((const __m256i *)(y[iy] + i*QK_K + 32*ib + 16)));
+                    accd[2*iy+0] = _mm256_dpbf16_ps(accd[2*iy+0], y1, xval1);
+                    accd[2*iy+1] = _mm256_dpbf16_ps(accd[2*iy+1], y2, xval2);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, d*hsum_float_8(_mm256_add_ps(accd[2*iy], accd[2*iy+1])));
+        }
+    }
+}
+
+void iqk_dequantize_iq2_kt(int n, const void * vx, size_t bx, ggml_bf16_t * y, size_t stride_y, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    const int nb = n/QK_K;
+
+    Trellis1 trellis;
+
+    auto shifts = _mm_set_epi32(0, 0, 4, 0);
+    auto values = _mm_loadu_si128((const __m128i *)iq4k_values);
+
+    union { __m256 vec; float val[8]; } s_helper;
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        auto vd = _mm256_set1_ps(*dptr * 31.75f * 1.05f);
+        const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
+
+        for (int i = 0; i < nb; ++i) {
+            const uint16_t * ql = (const uint16_t *)x[i].ql;
+            auto s8 = _mm_set1_epi32(*(const uint32_t *)x[i].scales);
+            s8 = _mm_and_si128(_mm_srlv_epi32(s8, shifts), _mm_set1_epi8(0xf));
+            s8 = _mm_shuffle_epi8(values, s8);
+            auto s32 = _mm256_cvtepi8_epi32(s8);
+            s_helper.vec = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(s32));
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                auto scale = _mm512_set1_ps(s_helper.val[ib]);
+                auto xval1 = trellis.gen8bh(trellis.next8(ql[4*ib+0]+4096), trellis.next8(ql[4*ib+1]+4096), scale);
+                auto xval2 = trellis.gen8bh(trellis.next8(ql[4*ib+2]+4096), trellis.next8(ql[4*ib+3]+4096), scale);
+                _mm256_storeu_si256((__m256i *)(y + i*QK_K + 32*ib +  0), xval1);
+                _mm256_storeu_si256((__m256i *)(y + i*QK_K + 32*ib + 16), xval2);
+            }
+        }
+        y += stride_y;
+    }
+}
+#endif
 
 void iqk_dequantize_iq2_kt(int n, const void * vx, size_t bx, float * y, size_t stride_y, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
@@ -446,11 +554,21 @@ void mul_mat_iq4_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& inf
 
 bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
 
-    if (ne00%QK_K != 0 || ggml_type(typeB) != GGML_TYPE_F32) {
-        return false;
-    }
+    if (ne00%QK_K != 0) return false;
 
     func16 = nullptr;
+
+#ifdef __AVX512BF16__
+    if (typeA == GGML_TYPE_IQ2_KT) {
+        if (typeB != GGML_TYPE_BF16) return false;
+        IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq2_kt_BF16_T, kernels);
+        return true;
+    }
+#endif
+
+    if (ggml_type(typeB) != GGML_TYPE_F32) {
+        return false;
+    }
 
     switch (typeA) {
         case GGML_TYPE_IQ2_KT:
@@ -472,7 +590,11 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
 
 bool iqk_dequantize_ktquants(int type, int n, const void * vx, size_t bx, void * y, size_t stride_y, int nrc_x) {
     switch (type) {
+#ifdef __AVX512BF16__
+        case GGML_TYPE_IQ2_KT: iqk_dequantize_iq2_kt(n, vx, bx, (ggml_bf16_t *)y, stride_y, nrc_x); break;
+#else
         case GGML_TYPE_IQ2_KT: iqk_dequantize_iq2_kt(n, vx, bx, (float *)y, stride_y, nrc_x); break;
+#endif
         case GGML_TYPE_IQ3_KT: iqk_dequantize_iq3_kt(n, vx, bx, (float *)y, stride_y, nrc_x); break;
         case GGML_TYPE_IQ4_KT: iqk_dequantize_iq4_kt(n, vx, bx, (float *)y, stride_y, nrc_x); break;
         default: return false;
