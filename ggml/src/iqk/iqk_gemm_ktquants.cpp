@@ -97,7 +97,7 @@ struct Trellis2 {
     }
 };
 
-void iqk_dequantize_iq2_kt(int n, const void * vx, size_t bx, ggml_half * y, size_t stride_y, int nrc_x) {
+void iqk_dequantize_iq2_kt(int n, const void * vx, size_t bx, float * y, size_t stride_y, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     const int nb = n/QK_K;
 
