@@ -1484,6 +1484,14 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
+    [GGML_TYPE_F32_R8] = {
+        .type_name                = "f32_r8",
+        .blck_size                = 1,
+        .type_size                = sizeof(float),
+        .vec_dot_type             = GGML_TYPE_F32,
+        .is_quantized             = false,
+        .row_meta_size            = 0,
+    },
     [GGML_TYPE_Q4_0_4_4] = {
         .type_name                = "q4_0_4x4",
         .blck_size                = QK4_0,
@@ -16873,6 +16881,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_I32:
         case GGML_TYPE_I64:
         case GGML_TYPE_F64:
+        case GGML_TYPE_F32_R8:
         case GGML_TYPE_COUNT:
             {
                 GGML_ABORT("fatal error");

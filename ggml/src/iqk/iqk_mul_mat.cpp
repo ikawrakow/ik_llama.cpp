@@ -239,6 +239,7 @@ struct MulMat {
             case GGML_TYPE_IQ2_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
             case GGML_TYPE_IQ3_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
             case GGML_TYPE_IQ4_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
+            case GGML_TYPE_F16:    return nrc_y >= 32 ? GGML_TYPE_F32_R8 : type;
             default: break;
         }
 #else
@@ -246,6 +247,7 @@ struct MulMat {
             case GGML_TYPE_IQ2_KT: return nrc_y >= 32 ? GGML_TYPE_F16 : type;
             case GGML_TYPE_IQ3_KT: return nrc_y >= 32 ? GGML_TYPE_F16 : type;
             case GGML_TYPE_IQ4_KT: return nrc_y >= 32 ? GGML_TYPE_F16 : type;
+            case GGML_TYPE_F16:    return nrc_y >= 32 ? GGML_TYPE_F32_R8 : type;
             default: break;
         }
 #endif
@@ -279,6 +281,7 @@ struct MulMat {
             case GGML_TYPE_Q5_K_R4:
             case GGML_TYPE_Q8_KV:
             case GGML_TYPE_Q8_KV_R8:
+            case GGML_TYPE_F32_R8:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
             case GGML_TYPE_Q8_0_R8:
@@ -314,6 +317,7 @@ struct MulMat {
             case GGML_TYPE_Q8_0_R8:
             case GGML_TYPE_Q8_KV:
             case GGML_TYPE_Q8_KV_R8:
+            case GGML_TYPE_F32_R8:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
@@ -321,6 +325,20 @@ struct MulMat {
 #endif
     }
 };
+
+bool iqk_dequantize(int type, int n, const void * vx, size_t bx, void * vy, size_t stride_y, int nrc_x) {
+    switch (type) {
+        case GGML_TYPE_IQ2_KT:
+        case GGML_TYPE_IQ3_KT:
+        case GGML_TYPE_IQ4_KT:
+            return iqk_dequantize_ktquants(type, n, vx, bx, vy, stride_y, nrc_x);
+        case GGML_TYPE_F16:
+            // Note: we assume contiguous y in iqk_convert_repack_f16
+            iqk_convert_repack_f16(n, vx, bx, vy, nrc_x); return true;
+        default: break;
+    }
+    return false;
+}
 
 }
 
@@ -363,7 +381,7 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
             this_info.s += ix;
             int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
             if (f.size() < row_size_qx*this_nrc_x) f.resize(row_size_qx*this_nrc_x);
-            if (!iqk_dequantize_ktquants(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), ne00, this_nrc_x)) {
+            if (!iqk_dequantize(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), ne00, this_nrc_x)) {
                 GGML_ABORT("Fatal error");
             }
             mm.mul_mat_NxM(ne00, f.data(), row_size_qx, this_info, this_nrc_x, Ny);
@@ -559,6 +577,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_F32:
         case GGML_TYPE_BF16:
         case GGML_TYPE_BF16_R16:
+        case GGML_TYPE_F32_R8:
             return iqk_set_kernels_float(ne00, typeA, typeB, mm.funcs);
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:

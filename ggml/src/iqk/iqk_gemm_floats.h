@@ -10,4 +10,6 @@ bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t,
 
 void iqk_gemm_default_floats(int D, int nq, const char * vx, size_t bx, DataInfo& info, int k_step);
 
+void iqk_convert_repack_f16(int n, const void * vx, size_t bx, void * vy, int nrc_x);
+
 #endif

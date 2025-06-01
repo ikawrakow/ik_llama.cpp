@@ -477,6 +477,35 @@ void mul_mat_fX_fY_T(int n, const void * vx, size_t bx, const DataInfo& info, in
 }
 #endif
 
+template <int nrc_y>
+void mul_mat_f32_r8_f32_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    GGML_ASSERT(nrc_x%8 == 0);
+    GGML_ASSERT(n%8 == 0);
+    __m256 xv[8];
+    __m256 acc[nrc_y];
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        const float * x = (const float *)((const char *)vx + ix*bx);
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = _mm256_setzero_ps();
+        for (int i = 0; i < n/8; ++i) {
+            for (int k = 0; k < 8; ++k) xv[k] = _mm256_loadu_ps(x + 64*i + 8*k);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y1_128 = _mm_loadu_ps((const float *)info.src1_row(iy) + 8*i + 0);
+                auto y2_128 = _mm_loadu_ps((const float *)info.src1_row(iy) + 8*i + 4);
+                auto y1 = _mm256_set_m128(y1_128, y1_128);
+                auto y2 = _mm256_set_m128(y2_128, y2_128);
+                acc[iy] = _mm256_fmadd_ps(xv[0], _mm256_shuffle_ps(y1, y1, 0x00), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(xv[1], _mm256_shuffle_ps(y1, y1, 0x55), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(xv[2], _mm256_shuffle_ps(y1, y1, 0xaa), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(xv[3], _mm256_shuffle_ps(y1, y1, 0xff), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(xv[4], _mm256_shuffle_ps(y2, y2, 0x00), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(xv[5], _mm256_shuffle_ps(y2, y2, 0x55), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(xv[6], _mm256_shuffle_ps(y2, y2, 0xaa), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(xv[7], _mm256_shuffle_ps(y2, y2, 0xff), acc[iy]);
+            }
+        }
+        for (int iy = 0; iy < nrc_y; ++iy) info.store(ix, iy, acc[iy]);
+    }
+}
 
 template <typename FloatX, typename FloatY>
 void set_mul_mat_f(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
@@ -516,6 +545,12 @@ void set_mul_mat_bf16_r16(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
 } // namespace
 
 bool iqk_set_kernels_float(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels) {
+
+    if (typeA == GGML_TYPE_F32_R8) {
+        if (ne00%8 != 0 || typeB != GGML_TYPE_F32) return false;
+        IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_f32_r8_f32_avx2, kernels);
+        return true;
+    }
 
     if (typeA == GGML_TYPE_BF16) {
         if (ne00 % 32) return false;
@@ -623,6 +658,37 @@ void iqk_gemm_default_floats(int D, int nq, const char * cx, size_t bx, DataInfo
                 }
             } break;
 #endif
+        }
+    }
+}
+
+void iqk_convert_repack_f16(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(nrc_x%8 == 0);
+    GGML_ASSERT(n%8 == 0);
+    const ggml_half * x8[8];
+    __m256 m[8];
+    float * y = (float *)vy;
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) x8[k] = (const ggml_half *)((const char *)vx + (ix+k)*bx);
+        for (int i = 0; i < n/8; ++i) {
+            for (int k = 0; k < 8; ++k) m[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)x8[k] + i));
+            for (int k = 0; k < 8; k += 4) {
+                auto t0 = _mm256_unpacklo_ps(m[k+0], m[k+1]);
+                auto t1 = _mm256_unpacklo_ps(m[k+2], m[k+3]);
+                auto t2 = _mm256_unpackhi_ps(m[k+0], m[k+1]);
+                auto t3 = _mm256_unpackhi_ps(m[k+2], m[k+3]);
+                m[k+0] = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t1)));
+                m[k+1] = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t1)));
+                m[k+2] = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t2), _mm256_castps_pd(t3)));
+                m[k+3] = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t2), _mm256_castps_pd(t3)));
+            }
+            for (int k = 0; k < 4; ++k) {
+                auto t = _mm256_set_m128(_mm256_extractf128_ps(m[k+4], 1), _mm256_extractf128_ps(m[k], 1));
+                m[k+0] = _mm256_set_m128(_mm256_castps256_ps128(m[k+4]), _mm256_castps256_ps128(m[k+0]));
+                m[k+4] = t;
+            }
+            for (int k = 0; k < 8; ++k) _mm256_storeu_ps(y + 8*k, m[k]);
+            y += 64;
         }
     }
 }
@@ -1041,6 +1107,9 @@ void iqk_gemm_default_floats(int D, int nq, const char * cx, size_t bx, DataInfo
             default: mm_helper<3>(D, nq, cx, bx, info, k_step);
         }
     }
+}
+
+void iqk_convert_repack_f16([[maybe_unused]] int n, [[maybe_unused]] const void * vx, [[maybe_unused]] size_t bx, [[maybe_unused]] void * vy, [[maybe_unused]] size_t stride_y, [[maybe_unused]] int nrc_x) {
 }
 
 #endif
