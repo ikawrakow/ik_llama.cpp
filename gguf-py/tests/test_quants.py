@@ -64,7 +64,7 @@ class GGMLQuants:
         self.libggml.ggml_quantize_requires_imatrix.argtypes = (ctypes.c_int,)
 
         for t in (
-            "q4_0", "q4_1", "q5_0", "q5_1", "q8_0",
+            "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "q6_0"
             "q2_K", "q3_K", "q4_K", "q5_K", "q6_K",
             "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m",
             "iq4_nl", "iq4_xs",
