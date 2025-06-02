@@ -410,7 +410,7 @@ jobs:
             -DGGML_CUDA=ON ^
             -DLLAMA_CURL=OFF
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
-          cmake --build build --config Release -j %NINJA_JOBS% # --target ggml-cuda
+          cmake --build build --config Release -j %NINJA_JOBS%
 
       - name: Pack artifacts
         id: pack_artifacts
