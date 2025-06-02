@@ -407,7 +407,6 @@ jobs:
           call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DGGML_NATIVE=OFF ^
-            -DGGML_CPU=OFF ^
             -DGGML_CUDA=ON ^
             -DLLAMA_CURL=OFF
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
@@ -475,7 +474,7 @@ jobs:
             -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
-            -DGGML_CPU=OFF -DGGML_SYCL=ON ^
+            -DGGML_SYCL=ON ^
             -DLLAMA_CURL=OFF
           cmake --build build --target ggml-sycl -j
 
