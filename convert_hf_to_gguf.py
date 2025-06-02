@@ -420,10 +420,10 @@ class Model:
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
         
         logger.info("***********************************************************************************************")
-        logger.info("** quantizing to `q4_0`,`q4_1`,`q5_0`, `q5_1` or `q6_0` is not equiv to using `llama-quantize`.")
-        logger.info("** `q4_0`,`q4_1` are here using embeddings, output, attn_k and attn_v in q5_0.")
-        logger.info("** `q5_0`,`q5_1` are here using embeddings, output, attn_k and attn_v in q6_0.")
-        logger.info("** This, in order to generate a small but reliable conversion to create an iMatrix file.")
+        logger.info("** Converting to `q4_0`,`q4_1`,`q5_0`, `q5_1` or `q6_0` is not equiv to using `llama-quantize`!")
+        logger.info("** Ftype `q4_0`,`q4_1` are here converting embeddings, output, attn_k and attn_v/qkv in q5_0.")
+        logger.info("** Ftype `q5_0`,`q5_1` are here converting embeddings, output, attn_k and attn_v/qkv in q6_0.")
+        logger.info("** This, in order to create a small but viable conv. to then for example make an iMatrix file.")
         logger.info("***********************************************************************************************")
 
     def write(self):
