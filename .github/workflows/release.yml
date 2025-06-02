@@ -358,7 +358,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_CURL=OFF
+          cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF
           cmake --build build --config Release --target ${{ matrix.target }}
 
       - name: Pack artifacts
@@ -562,9 +562,7 @@ jobs:
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
             -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/ -Wno-ignored-attributes -Wno-nested-anon-types" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DGGML_BACKEND_DL=ON `
             -DGGML_NATIVE=OFF `
-            -DGGML_CPU=OFF `
             -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
