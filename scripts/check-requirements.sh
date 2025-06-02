@@ -137,7 +137,7 @@ EOF
     info "$py: imports OK"
 }
 
-readonly ignore_eq_eq='check_requirements: ignore "=="'
+#readonly ignore_eq_eq='check_requirements: ignore "=="'
 
 for req in */**/requirements*.txt; do
     # Make sure exact release versions aren't being pinned in the requirements
