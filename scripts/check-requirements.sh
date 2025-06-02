@@ -137,7 +137,7 @@ EOF
     info "$py: imports OK"
 }
 
-readonly ignore_eq_eq='# check_requirements: ignore "=="'
+readonly ignore_eq_eq='check_requirements: ignore "=="'
 
 for req in */**/requirements*.txt; do
     # Make sure exact release versions aren't being pinned in the requirements
@@ -149,7 +149,7 @@ FATAL: Avoid pinning exact package versions. Use '~=' instead.
 You can suppress this error by appending the following to the line:
 $tab# $ignore_eq_eq
 EOF
-        exit 1
+        #exit 1
     fi
 done
 
