@@ -268,7 +268,6 @@ jobs:
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
             -DGGML_NATIVE=OFF ^
-            -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
             -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
@@ -407,7 +406,6 @@ jobs:
         run: |
           call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake -S . -B build -G "Ninja Multi-Config" ^
-            -DGGML_BACKEND_DL=ON ^
             -DGGML_NATIVE=OFF ^
             -DGGML_CPU=OFF ^
             -DGGML_CUDA=ON ^
