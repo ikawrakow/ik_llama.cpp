@@ -22,6 +22,7 @@ env:
 
 jobs:
   macOS-arm64:
+    if: false
     runs-on: macos-14
 
     steps:
@@ -74,6 +75,7 @@ jobs:
           name: llama-bin-macos-arm64.zip
 
   macOS-x64:
+    if: false
     runs-on: macos-13
 
     steps:
@@ -126,6 +128,7 @@ jobs:
           name: llama-bin-macos-x64.zip
 
   ubuntu-22-cpu:
+    if: false
     strategy:
       matrix:
         include:
@@ -213,6 +216,7 @@ jobs:
           name: llama-bin-ubuntu-${{ matrix.build }}.zip
 
   ubuntu-22-vulkan:
+    if: false
     runs-on: ubuntu-22.04
 
     steps:
@@ -261,6 +265,7 @@ jobs:
           name: llama-bin-ubuntu-vulkan-x64.zip
 
   windows-cpu:
+    if: false
     runs-on: windows-latest
 
     strategy:
@@ -323,6 +328,7 @@ jobs:
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
 
   windows:
+    if: false
     runs-on: windows-latest
 
     env:
@@ -440,7 +446,7 @@ jobs:
           call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DGGML_NATIVE=OFF ^
-            -DGGML_CUDA=ON ^
+            -DGGML_CUDA=ON -DGGML_SCHED_MAX_COPIES=1 -DGGML_CUDA_IQK_FORCE_BF16=1 ^
             -DLLAMA_CURL=OFF
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS%
@@ -471,6 +477,7 @@ jobs:
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
 
   windows-sycl:
+    if: false
     runs-on: windows-latest
 
     defaults:
@@ -543,6 +550,7 @@ jobs:
           name: llama-bin-win-sycl-x64.zip
 
   windows-hip:
+    if: false
     runs-on: windows-latest
 
     strategy:
@@ -615,6 +623,7 @@ jobs:
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
   ios-xcode-build:
+    if: false
     runs-on: macos-latest
 
     steps:
@@ -741,7 +750,7 @@ jobs:
 
       - name: Create release
         id: create_release
-        uses: ggml-org/action-create-release@v1
+        uses: Thireus/action-create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
