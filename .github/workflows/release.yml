@@ -446,7 +446,7 @@ jobs:
           call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DGGML_NATIVE=OFF ^
-            -DGGML_CUDA=ON -DGGML_SCHED_MAX_COPIES=1 -DGGML_CUDA_IQK_FORCE_BF16=1 ^
+            -DGGML_CUDA=ON -DGGML_AVX512=ON -DGGML_SCHED_MAX_COPIES=1 -DGGML_CUDA_IQK_FORCE_BF16=1 ^
             -DLLAMA_CURL=OFF
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS%
@@ -717,36 +717,16 @@ jobs:
         run: |
           mkdir -p release
 
-          echo "Adding CPU backend files to existing zips..."
-          for arch in x64 arm64; do
-            cpu_zip="artifact/llama-bin-win-cpu-${arch}.zip"
-            temp_dir=$(mktemp -d)
-            echo "Extracting CPU backend for $arch..."
-            unzip "$cpu_zip" -d "$temp_dir"
-
-            echo "Adding CPU files to $arch zips..."
-            for target_zip in artifact/llama-bin-win-*-${arch}.zip; do
-              if [[ "$target_zip" == "$cpu_zip" ]]; then
-                continue
-              fi
-              echo "Adding CPU backend to $(basename "$target_zip")"
-              realpath_target_zip=$(realpath "$target_zip")
-              (cd "$temp_dir" && zip -r "$realpath_target_zip" .)
-            done
-
-            rm -rf "$temp_dir"
-          done
-
           echo "Renaming and moving zips to release..."
           for zip_file in artifact/llama-bin-win-*.zip; do
             base_name=$(basename "$zip_file" .zip)
-            zip_name="llama-${{ steps.tag.outputs.name }}-${base_name#llama-}.zip"
+            zip_name="ik_llama-${{ steps.tag.outputs.name }}-${base_name#llama-}.zip"
             echo "Moving $zip_file to release/$zip_name"
             mv "$zip_file" "release/$zip_name"
           done
 
-          echo "Moving other artifacts..."
-          mv -v artifact/*.zip release
+          echo "Moving any remaining artifacts..."
+          mv -v artifact/*.zip release/ || true
 
       - name: Create release
         id: create_release
