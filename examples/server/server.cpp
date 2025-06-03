@@ -33,6 +33,8 @@
 #include "prompt-formats.js.hpp"
 #include "json-schema-to-grammar.mjs.hpp"
 
+#include "lock-free.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -103,11 +105,13 @@ struct server_task_result {
     bool error;
 };
 
+using server_task_result_ptr = std::shared_ptr<server_task_result>;
+
 struct server_task_multi {
     int id = -1;
 
-    std::set<int> subtasks_remaining;
-    std::vector<server_task_result> results;
+    lock_free::hash_map<int, int> subtasks_remaining = {10000};
+    lock_free::hash_map<int, server_task_result_ptr> results = {10000};
 };
 
 struct slot_params {
@@ -378,14 +382,15 @@ struct server_metrics {
 };
 
 struct server_queue {
-    int id = 0;
+    std::atomic<int> id = 0;
     bool running;
 
     // queues
-    std::vector<server_task> queue_tasks;
-    std::vector<server_task> queue_tasks_deferred;
+    lock_free::linked_list<server_task> queue_tasks;
+    lock_free::linked_list<server_task> queue_tasks_deferred;
+    std::atomic<int> n_queue_tasks_deferred = 0;
 
-    std::vector<server_task_multi> queue_multitasks;
+    lock_free::linked_list<server_task_multi> queue_multitasks;
 
     std::mutex mutex_tasks;
     std::condition_variable condition_tasks;
@@ -397,25 +402,23 @@ struct server_queue {
 
     // Add a new task to the end of the queue
     int post(server_task task) {
-        std::unique_lock<std::mutex> lock(mutex_tasks);
         if (task.id == -1) {
             task.id = id++;
             LOG_VERBOSE("new task id", {{"new_id", task.id}});
         }
-        queue_tasks.push_back(std::move(task));
+        queue_tasks.insertHead(std::move(task));
         condition_tasks.notify_one();
         return task.id;
     }
 
     // Add a new task, but defer until one slot is available
     void defer(server_task task) {
-        std::unique_lock<std::mutex> lock(mutex_tasks);
-        queue_tasks_deferred.push_back(std::move(task));
+        queue_tasks_deferred.insertHead(std::move(task));
+        n_queue_tasks_deferred++;
     }
 
     // Get the next id for creating anew task
     int get_new_id() {
-        std::unique_lock<std::mutex> lock(mutex_tasks);
         int new_id = id++;
         LOG_VERBOSE("new task id", {{"new_id", new_id}});
         return new_id;
@@ -439,16 +442,14 @@ struct server_queue {
     // Call when the state of one slot is changed
     void notify_slot_changed() {
         // move deferred tasks back to main loop
-        std::unique_lock<std::mutex> lock(mutex_tasks);
-        for (auto & task : queue_tasks_deferred) {
-            queue_tasks.push_back(std::move(task));
-        }
-        queue_tasks_deferred.clear();
+        queue_tasks_deferred.sweep([&](server_task && task) {
+            queue_tasks.insertHead(std::move(task));
+        });
+        n_queue_tasks_deferred = 0;
     }
 
     // end the start_loop routine
     void terminate() {
-        std::unique_lock<std::mutex> lock(mutex_tasks);
         running = false;
         condition_tasks.notify_all();
     }
@@ -467,33 +468,27 @@ struct server_queue {
             LOG_VERBOSE("new task may arrive", {});
 
             while (true) {
-                std::unique_lock<std::mutex> lock(mutex_tasks);
                 if (queue_tasks.empty()) {
-                    lock.unlock();
                     break;
                 }
-                server_task task = queue_tasks.front();
-                queue_tasks.erase(queue_tasks.begin());
-                lock.unlock();
-                LOG_VERBOSE("callback_new_task", {{"id_task", task.id}});
-                callback_new_task(task);
+
+                queue_tasks.sweepOnce([&](server_task && task) {
+                    LOG_VERBOSE("callback_new_task", {{"id_task", task.id}});
+                    callback_new_task(task);
+                });
             }
 
             LOG_VERBOSE("update_multitasks", {});
 
             // check if we have any finished multitasks
-            auto queue_iterator = queue_multitasks.begin();
-            while (queue_iterator != queue_multitasks.end()) {
-                if (queue_iterator->subtasks_remaining.empty()) {
+            queue_multitasks.sweep([&](server_task_multi && multitask) {
+                if (multitask.subtasks_remaining.cbegin() == multitask.subtasks_remaining.cend()) {
                     // all subtasks done == multitask is done
-                    server_task_multi current_multitask = *queue_iterator;
-                    callback_finish_multitask(current_multitask);
-                    // remove this multitask
-                    queue_iterator = queue_multitasks.erase(queue_iterator);
+                    callback_finish_multitask(multitask);
                 } else {
-                    ++queue_iterator;
+                    queue_multitasks.insertHead(multitask);
                 }
-            }
+            });
 
             // all tasks in the current loop is processed, slots data is now ready
             LOG_VERBOSE("callback_update_slots", {});
@@ -501,17 +496,15 @@ struct server_queue {
             callback_update_slots();
 
             LOG_VERBOSE("wait for new task", {});
-            {
-                std::unique_lock<std::mutex> lock(mutex_tasks);
-                if (queue_tasks.empty()) {
-                    if (!running) {
-                        LOG_VERBOSE("ending start_loop", {});
-                        return;
-                    }
-                    condition_tasks.wait(lock, [&]{
-                        return (!queue_tasks.empty() || !running);
-                    });
+            if (queue_tasks.empty()) {
+                if (!running) {
+                    LOG_VERBOSE("ending start_loop", {});
+                    return;
                 }
+                std::unique_lock<std::mutex> lock(mutex_tasks);
+                condition_tasks.wait(lock, [&]{
+                    return (!queue_tasks.empty() || !running);
+                });
             }
         }
     }
@@ -522,34 +515,35 @@ struct server_queue {
 
     // add a multitask by specifying the id of all subtask (subtask is a server_task)
     void add_multitask(int id_multi, std::vector<int> & sub_ids) {
-        std::lock_guard<std::mutex> lock(mutex_tasks);
-        server_task_multi multi;
+        server_task_multi multi = {};
         multi.id = id_multi;
-        std::copy(sub_ids.begin(), sub_ids.end(), std::inserter(multi.subtasks_remaining, multi.subtasks_remaining.end()));
-        queue_multitasks.push_back(multi);
+        for (auto & id : sub_ids) {
+            multi.subtasks_remaining.insert(id, 0);
+        }
+        queue_multitasks.insertHead(multi);
     }
 
     // updatethe remaining subtasks, while appending results to multitask
-    void update_multitask(int id_multi, int id_sub, server_task_result & result) {
-        std::lock_guard<std::mutex> lock(mutex_tasks);
-        for (auto & multitask : queue_multitasks) {
+    void update_multitask(int id_multi, int id_sub, server_task_result_ptr & result) {
+        queue_multitasks.sweep([&](server_task_multi && multitask) {
             if (multitask.id == id_multi) {
                 multitask.subtasks_remaining.erase(id_sub);
-                multitask.results.push_back(result);
+                multitask.results.insert(id_sub, std::move(result));
             }
-        }
+            queue_multitasks.insertHead(multitask);
+        });
     }
 };
 
 struct server_response {
-    typedef std::function<void(int, int, server_task_result &)> callback_multitask_t;
+    typedef std::function<void(int, int, server_task_result_ptr &)> callback_multitask_t;
     callback_multitask_t callback_update_multitask;
 
     // for keeping track of all tasks waiting for the result
-    std::set<int> waiting_task_ids;
+    lock_free::hash_map<int, int> waiting_task_ids = {10000};
 
-    // the main result queue
-    std::vector<server_task_result> queue_results;
+    // the main result queue (using ptr for polymorphism)
+    lock_free::hash_map<int, server_task_result_ptr> queue_results = {10000};
 
     std::mutex mutex_results;
     std::condition_variable condition_results;
@@ -557,35 +551,31 @@ struct server_response {
     // add the id_task to the list of tasks waiting for response
     void add_waiting_task_id(int id_task) {
         LOG_VERBOSE("waiting for task id", {{"id_task", id_task}});
-
-        std::unique_lock<std::mutex> lock(mutex_results);
-        waiting_task_ids.insert(id_task);
+        waiting_task_ids.insert(id_task, 0);
     }
 
     // when the request is finished, we can remove task associated with it
     void remove_waiting_task_id(int id_task) {
         LOG_VERBOSE("remove waiting for task id", {{"id_task", id_task}});
-
-        std::unique_lock<std::mutex> lock(mutex_results);
         waiting_task_ids.erase(id_task);
+        // make sure to clean up all pending results
+        queue_results.erase(id_task);
     }
 
-    // This function blocks the thread until there is a response for this id_task
-    server_task_result recv(int id_task) {
+    // This function blocks the thread until there is a response for one of the id_tasks
+    server_task_result_ptr recv(int id_task) {
         while (true) {
+            auto iter = queue_results.find(id_task);
+            if (iter != queue_results.cend()) {
+                server_task_result_ptr res = iter->second;
+                queue_results.erase(id_task);
+                return res;
+            }
+
             std::unique_lock<std::mutex> lock(mutex_results);
             condition_results.wait(lock, [&]{
-                return !queue_results.empty();
+                return queue_results.cbegin() != queue_results.cend();
             });
-
-            for (int i = 0; i < (int) queue_results.size(); i++) {
-                if (queue_results[i].id == id_task) {
-                    assert(queue_results[i].id_multi == -1);
-                    server_task_result res = queue_results[i];
-                    queue_results.erase(queue_results.begin() + i);
-                    return res;
-                }
-            }
         }
 
         // should never reach here
@@ -597,25 +587,18 @@ struct server_response {
     }
 
     // Send a new result to a waiting id_task
-    void send(server_task_result result) {
-        LOG_VERBOSE("send new result", {{"id_task", result.id}});
+    void send(server_task_result_ptr result) {
+        LOG_VERBOSE("send new result", {{"id_task", result->id}});
 
-        std::unique_lock<std::mutex> lock(mutex_results);
-        for (const auto & id_task : waiting_task_ids) {
-            // LOG_TEE("waiting task id %i \n", id_task);
-            // for now, tasks that have associated parent multitasks just get erased once multitask picks up the result
-            if (result.id_multi == id_task) {
-                LOG_VERBOSE("callback_update_multitask", {{"id_task", id_task}});
-                callback_update_multitask(id_task, result.id, result);
-                continue;
-            }
+        if (waiting_task_ids.find(result->id_multi) != waiting_task_ids.cend()) {
+            LOG_VERBOSE("callback_update_multitask", {{"id_task", result->id_multi}});
+            callback_update_multitask(result->id_multi, result->id, result);
+        }
 
-            if (result.id == id_task) {
-                LOG_VERBOSE("queue_results.push_back", {{"id_task", id_task}});
-                queue_results.push_back(result);
-                condition_results.notify_all();
-                return;
-            }
+        if (waiting_task_ids.find(result->id) != waiting_task_ids.cend()) {
+            LOG_VERBOSE("queue_results.push_back", {{"id_task", result->id}});
+            queue_results.insert(result->id, std::move(result));
+            condition_results.notify_all();
         }
     }
 };
@@ -1380,23 +1363,23 @@ struct server_context {
             {"error", error},
         });
 
-        server_task_result res;
-        res.id       = id_task;
-        res.id_multi = id_multi;
-        res.stop     = false;
-        res.error    = true;
-        res.data     = format_error_response(error, type);
+        server_task_result_ptr res = std::make_shared<server_task_result>();
+        res->id       = id_task;
+        res->id_multi = id_multi;
+        res->stop     = false;
+        res->error    = true;
+        res->data     = format_error_response(error, type);
 
         queue_results.send(res);
     }
 
     void send_partial_response(server_slot & slot, completion_token_output tkn) {
-        server_task_result res;
-        res.id       = slot.id_task;
-        res.id_multi = slot.id_multi;
-        res.error    = false;
-        res.stop     = false;
-        res.data     = json {
+        server_task_result_ptr res = std::make_shared<server_task_result>();
+        res->id       = slot.id_task;
+        res->id_multi = slot.id_multi;
+        res->error    = false;
+        res->stop     = false;
+        res->data     = json {
             {"content",    tkn.text_to_send},
             {"stop",       false},
             {"id_slot",    slot.id},
@@ -1416,24 +1399,24 @@ struct server_context {
             }
             slot.n_sent_token_probs = probs_stop_pos;
 
-            res.data["completion_probabilities"] = probs_vector_to_json(ctx, probs_output);
+            res->data["completion_probabilities"] = probs_vector_to_json(ctx, probs_output);
         }
 
         if (slot.oaicompat) {
-            res.data["oaicompat_token_ctr"] = slot.n_decoded;
-            res.data["model"] = slot.oaicompat_model;
+            res->data["oaicompat_token_ctr"] = slot.n_decoded;
+            res->data["model"] = slot.oaicompat_model;
         }
 
         queue_results.send(res);
     }
 
     void send_final_response(const server_slot & slot) {
-        server_task_result res;
-        res.id       = slot.id_task;
-        res.id_multi = slot.id_multi;
-        res.error    = false;
-        res.stop     = true;
-        res.data     = json {
+        server_task_result_ptr res = std::make_shared<server_task_result>();
+        res->id       = slot.id_task;
+        res->id_multi = slot.id_multi;
+        res->error    = false;
+        res->stop     = true;
+        res->data     = json {
             {"content",             !slot.params.stream ? slot.generated_text : ""},
             {"id_slot",             slot.id},
             {"stop",                true},
@@ -1466,23 +1449,23 @@ struct server_context {
                         slot.generated_token_probs.end());
             }
 
-            res.data["completion_probabilities"] = probs_vector_to_json(ctx, probs);
+            res->data["completion_probabilities"] = probs_vector_to_json(ctx, probs);
         }
 
         if (slot.oaicompat) {
-            res.data["oaicompat_token_ctr"] = slot.n_decoded;
-            res.data["model"] = slot.oaicompat_model;
+            res->data["oaicompat_token_ctr"] = slot.n_decoded;
+            res->data["model"] = slot.oaicompat_model;
         }
 
         queue_results.send(res);
     }
 
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
-        server_task_result res;
-        res.id       = slot.id_task;
-        res.id_multi = slot.id_multi;
-        res.error    = false;
-        res.stop     = true;
+        server_task_result_ptr res = std::make_shared<server_task_result>();
+        res->id       = slot.id_task;
+        res->id_multi = slot.id_multi;
+        res->error    = false;
+        res->stop     = true;
 
         const int n_embd = llama_n_embd(model);
 
@@ -1504,7 +1487,7 @@ struct server_context {
                         {"seq_id", batch.seq_id[i][0]}
                 });
 
-                res.data = json {
+                res->data = json {
                     {"embedding", std::vector<float>(n_embd, 0.0f)},
                 };
 
@@ -1513,7 +1496,7 @@ struct server_context {
 
             llama_embd_normalize(embd, embd_res.data(), n_embd);
 
-            res.data = json {
+            res->data = json {
                 {"embedding", embd_res},
             };
         }
@@ -1704,15 +1687,15 @@ struct server_context {
                         {"slots",              slots_data}
                     });
 
-                    server_task_result res;
-                    res.id       = task.id;
-                    res.id_multi = task.id_multi;
-                    res.stop     = true;
-                    res.error    = false;
-                    res.data     = {
+                    server_task_result_ptr res = std::make_shared<server_task_result>();
+                    res->id       = task.id;
+                    res->id_multi = task.id_multi;
+                    res->stop     = true;
+                    res->error    = false;
+                    res->data     = {
                         { "idle",                            n_idle_slots       },
                         { "processing",                      n_processing_slots },
-                        { "deferred",                        queue_tasks.queue_tasks_deferred.size() },
+                        { "deferred",                        queue_tasks.n_queue_tasks_deferred.load() },
                         { "t_start",                         metrics.t_start},
 
                         { "n_prompt_tokens_processed_total", metrics.n_prompt_tokens_processed_total},
@@ -1762,11 +1745,11 @@ struct server_context {
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
 
-                    server_task_result result;
-                    result.id = task.id;
-                    result.stop = true;
-                    result.error = false;
-                    result.data = json {
+                    server_task_result_ptr result = std::make_shared<server_task_result>();
+                    result->id = task.id;
+                    result->stop = true;
+                    result->error = false;
+                    result->data = json {
                         { "id_slot",   id_slot },
                         { "filename",  filename },
                         { "n_saved",   token_count }, // tokens saved
@@ -1810,11 +1793,11 @@ struct server_context {
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
 
-                    server_task_result result;
-                    result.id = task.id;
-                    result.stop = true;
-                    result.error = false;
-                    result.data = json {
+                    server_task_result_ptr result = std::make_shared<server_task_result>();
+                    result->id = task.id;
+                    result->stop = true;
+                    result->error = false;
+                    result->data = json {
                         { "id_slot",    id_slot },
                         { "filename",   filename },
                         { "n_restored", token_count }, // tokens restored
@@ -1845,11 +1828,11 @@ struct server_context {
                     llama_kv_cache_seq_rm(ctx, slot->id + 1, -1, -1);
                     slot->cache_tokens.clear();
 
-                    server_task_result result;
-                    result.id = task.id;
-                    result.stop = true;
-                    result.error = false;
-                    result.data = json {
+                    server_task_result_ptr result = std::make_shared<server_task_result>();
+                    result->id = task.id;
+                    result->stop = true;
+                    result->error = false;
+                    result->data = json {
                         { "id_slot",  id_slot },
                         { "n_erased", n_erased }
                     };
@@ -1858,9 +1841,9 @@ struct server_context {
             case SERVER_TASK_TYPE_SET_LORA:
                 {
                     llama_lora_adapters_apply(ctx, lora_adapters);
-                    server_task_result result;
-                    result.id = task.id;
-                    result.data = json{{ "success", true }};
+                    server_task_result_ptr result = std::make_shared<server_task_result>();
+                    result->id = task.id;
+                    result->data = json{{ "success", true }};
                     queue_results.send(result);
                 } break;
         }
@@ -1868,18 +1851,18 @@ struct server_context {
 
     void on_finish_multitask(const server_task_multi & multitask) {
         // all subtasks done == multitask is done
-        server_task_result result;
-        result.id    = multitask.id;
-        result.stop  = true;
-        result.error = false;
+        server_task_result_ptr result = std::make_shared<server_task_result>();
+        result->id    = multitask.id;
+        result->stop  = true;
+        result->error = false;
 
         // collect json results into one json result
         std::vector<json> result_jsons;
-        for (const auto & subres : multitask.results) {
-            result_jsons.push_back(subres.data);
-            result.error = result.error && subres.error;
+        for (auto & pair : multitask.results) {
+            result_jsons.push_back(pair.second->data);
+            result->error = result->error && pair.second->error;
         }
-        result.data = json {
+        result->data = json {
             { "results", result_jsons }
         };
 
@@ -2732,11 +2715,11 @@ int main(int argc, char ** argv) {
                     ctx_server.queue_tasks.post(task);
 
                     // get the result
-                    server_task_result result = ctx_server.queue_results.recv(task.id);
+                    server_task_result_ptr result = ctx_server.queue_results.recv(task.id);
                     ctx_server.queue_results.remove_waiting_task_id(task.id);
 
-                    const int n_idle_slots       = result.data.at("idle");
-                    const int n_processing_slots = result.data.at("processing");
+                    const int n_idle_slots       = result->data.at("idle");
+                    const int n_processing_slots = result->data.at("processing");
 
                     json health = {
                         {"status",           "ok"},
@@ -2746,7 +2729,7 @@ int main(int argc, char ** argv) {
 
                     res.status = 200; // HTTP OK
                     if (params.endpoint_slots && req.has_param("include_slots")) {
-                        health["slots"] = result.data.at("slots");
+                        health["slots"] = result->data.at("slots");
                     }
 
                     if (n_idle_slots == 0) {
@@ -2787,10 +2770,10 @@ int main(int argc, char ** argv) {
         ctx_server.queue_tasks.post(task);
 
         // get the result
-        server_task_result result = ctx_server.queue_results.recv(task.id);
+        server_task_result_ptr result = ctx_server.queue_results.recv(task.id);
         ctx_server.queue_results.remove_waiting_task_id(task.id);
 
-        res.set_content(result.data.at("slots").dump(), "application/json");
+        res.set_content(result->data.at("slots").dump(), "application/json");
         res.status = 200; // HTTP OK
     };
 
@@ -2812,10 +2795,10 @@ int main(int argc, char ** argv) {
         ctx_server.queue_tasks.post(task);
 
         // get the result
-        server_task_result result = ctx_server.queue_results.recv(task.id);
+        server_task_result_ptr result = ctx_server.queue_results.recv(task.id);
         ctx_server.queue_results.remove_waiting_task_id(task.id);
 
-        json data = result.data;
+        json data = result->data;
 
         const uint64_t n_prompt_tokens_processed = data.at("n_prompt_tokens_processed");
         const uint64_t t_prompt_processing       = data.at("t_prompt_processing");
@@ -2915,13 +2898,13 @@ int main(int argc, char ** argv) {
         const int id_task = ctx_server.queue_tasks.post(task);
         ctx_server.queue_results.add_waiting_task_id(id_task);
 
-        server_task_result result = ctx_server.queue_results.recv(id_task);
+        server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
 
-        if (result.error) {
-            res_error(res, result.data);
+        if (result->error) {
+            res_error(res, result->data);
         } else {
-            res.set_content(result.data.dump(), "application/json");
+            res.set_content(result->data.dump(), "application/json");
         }
     };
 
@@ -2945,13 +2928,13 @@ int main(int argc, char ** argv) {
         const int id_task = ctx_server.queue_tasks.post(task);
         ctx_server.queue_results.add_waiting_task_id(id_task);
 
-        server_task_result result = ctx_server.queue_results.recv(id_task);
+        server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
 
-        if (result.error) {
-            res_error(res, result.data);
+        if (result->error) {
+            res_error(res, result->data);
         } else {
-            res.set_content(result.data.dump(), "application/json");
+            res.set_content(result->data.dump(), "application/json");
         }
     };
 
@@ -2965,13 +2948,13 @@ int main(int argc, char ** argv) {
         const int id_task = ctx_server.queue_tasks.post(task);
         ctx_server.queue_results.add_waiting_task_id(id_task);
 
-        server_task_result result = ctx_server.queue_results.recv(id_task);
+        server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
 
-        if (result.error) {
-            res_error(res, result.data);
+        if (result->error) {
+            res_error(res, result->data);
         } else {
-            res.set_content(result.data.dump(), "application/json");
+            res.set_content(result->data.dump(), "application/json");
         }
     };
 
@@ -3027,6 +3010,13 @@ int main(int argc, char ** argv) {
             return;
         }
 
+        // FIXME: ignore title summarization query
+        if (req.body.find("<chat_history>") != std::string::npos) {
+            res.set_content("{ \"success\", true }", "application/json");
+            res.status = 200; // HTTP OK
+            return;
+        }
+
         res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
 
         json data = json::parse(req.body);
@@ -3037,22 +3027,22 @@ int main(int argc, char ** argv) {
         ctx_server.request_completion(id_task, -1, data, false, false);
 
         if (!json_value(data, "stream", false)) {
-            server_task_result result = ctx_server.queue_results.recv(id_task);
-            if (!result.error && result.stop) {
-                res.set_content(result.data.dump(-1, ' ', false, json::error_handler_t::replace), "application/json; charset=utf-8");
+            server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
+            if (!result->error && result->stop) {
+                res.set_content(result->data.dump(-1, ' ', false, json::error_handler_t::replace), "application/json; charset=utf-8");
             } else {
-                res_error(res, result.data);
+                res_error(res, result->data);
             }
 
             ctx_server.queue_results.remove_waiting_task_id(id_task);
         } else {
             const auto chunked_content_provider = [id_task, &ctx_server](size_t, httplib::DataSink & sink) {
                 while (true) {
-                    server_task_result result = ctx_server.queue_results.recv(id_task);
-                    if (!result.error) {
+                    server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
+                    if (!result->error) {
                         const std::string str =
                             "data: " +
-                            result.data.dump(-1, ' ', false, json::error_handler_t::replace) +
+                            result->data.dump(-1, ' ', false, json::error_handler_t::replace) +
                             "\n\n";
 
                         LOG_VERBOSE("data stream", {
@@ -3064,13 +3054,13 @@ int main(int argc, char ** argv) {
                             return false;
                         }
 
-                        if (result.stop) {
+                        if (result->stop) {
                             break;
                         }
                     } else {
                         const std::string str =
                             "error: " +
-                            result.data.dump(-1, ' ', false, json::error_handler_t::replace) +
+                            result->data.dump(-1, ' ', false, json::error_handler_t::replace) +
                             "\n\n";
 
                         LOG_VERBOSE("data stream", {
@@ -3137,22 +3127,22 @@ int main(int argc, char ** argv) {
 
         const auto completion_id = gen_chatcmplid();
         if (!json_value(data, "stream", false)) {
-            server_task_result result = ctx_server.queue_results.recv(id_task);
+            server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
 
-            if (!result.error && result.stop) {
-                json result_oai = format_final_response_oaicompat(data, result.data, completion_id);
+            if (!result->error && result->stop) {
+                json result_oai = format_final_response_oaicompat(data, result->data, completion_id);
 
                 res.set_content(result_oai.dump(-1, ' ', false, json::error_handler_t::replace), "application/json; charset=utf-8");
             } else {
-                res_error(res, result.data);
+                res_error(res, result->data);
             }
             ctx_server.queue_results.remove_waiting_task_id(id_task);
         } else {
             const auto chunked_content_provider = [id_task, &ctx_server, completion_id](size_t, httplib::DataSink & sink) {
                 while (true) {
-                    server_task_result result = ctx_server.queue_results.recv(id_task);
-                    if (!result.error) {
-                        std::vector<json> result_array = format_partial_response_oaicompat(result.data, completion_id);
+                    server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
+                    if (!result->error) {
+                        std::vector<json> result_array = format_partial_response_oaicompat(result->data, completion_id);
 
                         for (auto it = result_array.begin(); it != result_array.end(); ++it) {
                             if (!it->empty()) {
@@ -3167,13 +3157,13 @@ int main(int argc, char ** argv) {
                                 }
                             }
                         }
-                        if (result.stop) {
+                        if (result->stop) {
                             break;
                         }
                     } else {
                         const std::string str =
                             "error: " +
-                            result.data.dump(-1, ' ', false, json::error_handler_t::replace) +
+                            result->data.dump(-1, ' ', false, json::error_handler_t::replace) +
                             "\n\n";
                         LOG_VERBOSE("data stream", {{"to_send", str}});
                         if (!sink.write(str.c_str(), str.size())) {
@@ -3214,22 +3204,22 @@ int main(int argc, char ** argv) {
         ctx_server.request_completion(id_task, -1, data, true, false);
 
         if (!json_value(data, "stream", false)) {
-            server_task_result result = ctx_server.queue_results.recv(id_task);
-            if (!result.error && result.stop) {
-                res.set_content(result.data.dump(-1, ' ', false, json::error_handler_t::replace), "application/json; charset=utf-8");
+            server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
+            if (!result->error && result->stop) {
+                res.set_content(result->data.dump(-1, ' ', false, json::error_handler_t::replace), "application/json; charset=utf-8");
             } else {
-                res_error(res, result.data);
+                res_error(res, result->data);
             }
 
             ctx_server.queue_results.remove_waiting_task_id(id_task);
         } else {
             const auto chunked_content_provider = [id_task, &ctx_server](size_t, httplib::DataSink & sink) {
                 while (true) {
-                    server_task_result result = ctx_server.queue_results.recv(id_task);
-                    if (!result.error) {
+                    server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
+                    if (!result->error) {
                         const std::string str =
                             "data: " +
-                            result.data.dump(-1, ' ', false, json::error_handler_t::replace) +
+                            result->data.dump(-1, ' ', false, json::error_handler_t::replace) +
                             "\n\n";
 
                         LOG_VERBOSE("data stream", {
@@ -3241,7 +3231,7 @@ int main(int argc, char ** argv) {
                             return false;
                         }
 
-                        if (result.stop) {
+                        if (result->stop) {
                             break;
                         }
                     } else {
@@ -3317,19 +3307,19 @@ int main(int argc, char ** argv) {
             ctx_server.request_completion(id_task, -1, {{"prompt", prompt}}, false, true);
 
             // get the result
-            server_task_result result = ctx_server.queue_results.recv(id_task);
+            server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
             ctx_server.queue_results.remove_waiting_task_id(id_task);
-            if (!result.error) {
-                if (result.data.count("results")) {
+            if (!result->error) {
+                if (result->data.count("results")) {
                     // result for multi-task
-                    responses = result.data.at("results");
+                    responses = result->data.at("results");
                 } else {
                     // result for single task
-                    responses = std::vector<json>{result.data};
+                    responses = std::vector<json>{result->data};
                 }
             } else {
                 // error received, ignore everything else
-                res_error(res, result.data);
+                res_error(res, result->data);
                 return;
             }
         }
@@ -3383,10 +3373,10 @@ int main(int argc, char ** argv) {
         const int id_task = ctx_server.queue_tasks.post(task);
         ctx_server.queue_results.add_waiting_task_id(id_task);
 
-        server_task_result result = ctx_server.queue_results.recv(id_task);
+        server_task_result_ptr result = ctx_server.queue_results.recv(id_task);
         ctx_server.queue_results.remove_waiting_task_id(id_task);
 
-        res.set_content(result.data.dump(), "application/json");
+        res.set_content(result->data.dump(), "application/json");
         res.status = 200; // HTTP OK
     };
 
