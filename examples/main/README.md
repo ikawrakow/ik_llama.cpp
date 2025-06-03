@@ -239,6 +239,17 @@ The `--mirostat-ent` option sets the Mirostat target entropy (tau), which repres
 
 Example usage: `--mirostat 2 --mirostat-lr 0.05 --mirostat-ent 3.0`
 
+### XTC Sampling
+
+-   --xtc-probability p: xtc probability (default: 0.0 => disabled)
+-   --xtc-threshold t  : xtc threshold   (default: 1.0 => disabled)
+
+### Top-n-sigma Sampling
+
+Sets all logits $L_i$ to $-\infty$ where $L_i < L_{\rm max} - n \sigma$. Here $L_{\rm max}$ is the maximum logit, $\sigma$ is the logit standard deviation, and $n$ is the top-n-sigma parameter.
+
+-   --top-n-sigma t          top-n-sigma parmeter (default: 0.0 => disabled)
+
 ### Logit Bias
 
 -   `-l TOKEN_ID(+/-)BIAS, --logit-bias TOKEN_ID(+/-)BIAS`: Modify the likelihood of a token appearing in the generated text completion.
