@@ -242,8 +242,9 @@ Example usage: `--mirostat 2 --mirostat-lr 0.05 --mirostat-ent 3.0`
 ### XTC Sampling (Exclude Top Choices)
 
 The function of this sampler is conrolled by `--xtc-probability` and `--xtc-threshold`. `--xtc-probability` takes values between
-0 and 0.5 (<0 or >0.5 turns this sampler off) and defines the probability for randomly invoking the sampler. `--xtc-threshold`
+0 and 1 (<=0 turns this sampler off) and defines the probability for randomly invoking the sampler. `--xtc-threshold`
 defines the token probability threshold. Tokens with probability greater than this threshold will be excluded from the sampling.
+The sampler is turned off for `threshold > 0.5`.
 
 -   --xtc-probability p: xtc probability (default: 0.0 => disabled)
 -   --xtc-threshold t  : xtc threshold   (default: 1.0 => disabled)
