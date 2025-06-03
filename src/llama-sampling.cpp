@@ -435,7 +435,7 @@ void llama_sample_temp_impl(struct llama_sampling * smpl, llama_token_data_array
 }
 
 void llama_sample_xtc_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, float probability, float threshold, size_t min_keep) {
-    if (probability < 0 || threshold > 0.5f || candidates->size < 2) {
+    if (probability <= 0 || threshold > 0.5f || candidates->size < 2) {
         return;
     }
     GGML_ASSERT(smpl);

@@ -1651,7 +1651,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --mirostat-lr N",        "Mirostat learning rate, parameter eta (default: %.1f)", (double)sparams.mirostat_eta });
     options.push_back({ "*",           "       --mirostat-ent N",       "Mirostat target entropy, parameter tau (default: %.1f)", (double)sparams.mirostat_tau });
     options.push_back({ "*",           "       --xtc-probability p",    "xtc probability (default: %.1f, 0.0 = disabled)", (double)sparams.xtc_probability });
-    options.push_back({ "*",           "       --xtc-threshold t",      "xtc threshold (default: %.1f, 0.0 = disabled)", (double)sparams.xtc_threshold});
+    options.push_back({ "*",           "       --xtc-threshold t",      "xtc threshold (default: %.1f, >0.5 = disabled)", (double)sparams.xtc_threshold});
     options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parmeter (default: %.1f, 0.0 = disabled)", (double)sparams.top_n_sigma});
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
