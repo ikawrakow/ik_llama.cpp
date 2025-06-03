@@ -23265,6 +23265,15 @@ void llama_sample_temp(struct llama_context * ctx, llama_token_data_array * cand
     llama_sample_temp_impl(ctx ? &ctx->sampling : nullptr, candidates_p, temp);
 }
 
+void llama_sample_xtc(struct llama_context * ctx, llama_token_data_array * candidates_p,
+                           float   probability, float threshold, size_t min_keep) {
+    llama_sample_xtc_impl(ctx ? &ctx->sampling : nullptr, candidates_p, probability, threshold, min_keep);
+}
+
+void llama_sample_top_n_sigma(struct llama_context * ctx, llama_token_data_array * candidates_p, float top_n_sigma) {
+    llama_sample_top_n_sigma_impl(ctx ? &ctx->sampling : nullptr, candidates_p, top_n_sigma);
+}
+
 void llama_sample_repetition_penalties(
             struct llama_context * ctx,
           llama_token_data_array * candidates,
