@@ -557,8 +557,6 @@ void quantize_row_q8_K64(const float * x, void * y, int64_t k) {
     quantize_row_q8_K64_ref(x, (block_q8_K64 *)y, k);
 }
 
-#include "iqk_common.h"   // <-- defines the global hsum_*/hmax_* functions
-
 #ifdef __AVX2__
 // Redirect all “hsum_…” and “hmax_…” calls to the local implementations:
 #define hsum_float_4     hsum_float_4_local
