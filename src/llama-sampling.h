@@ -32,6 +32,7 @@ void llama_sample_tail_free_impl(struct llama_sampling * smpl, llama_token_data_
 void llama_sample_typical_impl  (struct llama_sampling * smpl, llama_token_data_array * candidates, float p, size_t min_keep);
 void llama_sample_entropy_impl  (struct llama_sampling * smpl, llama_token_data_array * candidates, float min_temp, float max_temp, float exponent_val);
 void llama_sample_temp_impl     (struct llama_sampling * smpl, llama_token_data_array * candidates, float temp);
+void llama_sample_xtc_impl      (struct llama_sampling * smpl, llama_token_data_array * candidates, float probability, float threshold, size_t min_keep);
 
 void llama_sample_repetition_penalties_impl(
         struct llama_sampling * smpl,
