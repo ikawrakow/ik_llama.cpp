@@ -434,6 +434,40 @@ void llama_sample_temp_impl(struct llama_sampling * smpl, llama_token_data_array
     }
 }
 
+void llama_sample_xtc_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, float probability, float threshold, size_t min_keep) {
+    if (probability < 0 || threshold > 0.5f || candidates->size < 2) {
+        return;
+    }
+    GGML_ASSERT(smpl);
+    const int64_t t_start_sample_us = ggml_time_us();
+    if (probability < 1) {
+        std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
+        float chance = distribution(smpl->rng);
+        if (chance > probability) return;
+    }
+
+    llama_sample_softmax_impl(nullptr, candidates);
+
+    auto cur_size = candidates->size;
+
+    int pos_last = 0;
+
+    for (size_t i = 0; i < candidates->size; ++i) {
+        if (candidates->data[i].p >= threshold) {
+            pos_last = i;
+        } else break;
+    }
+
+    if (candidates->size - pos_last >= min_keep && pos_last > 0) {
+        candidates->data += pos_last;
+        candidates->size -= pos_last;
+    }
+
+    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+    smpl->n_sample++;
+
+}
+
 void llama_sample_repetition_penalties_impl(
         struct llama_sampling * smpl,
        llama_token_data_array * candidates,

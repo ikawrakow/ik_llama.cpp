@@ -649,6 +649,16 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.mirostat_tau = std::stof(argv[i]);
         return true;
     }
+    if (arg == "--xtc-probability") {
+        CHECK_ARG
+        sparams.xtc_probability = std::stof(argv[i]);
+        return true;
+    }
+    if (arg == "--xtc-threshold") {
+        CHECK_ARG
+        sparams.xtc_threshold = std::stof(argv[i]);
+        return true;
+    }
     if (arg == "--cfg-negative-prompt") {
         CHECK_ARG
         sparams.cfg_negative_prompt = argv[i];
@@ -1635,6 +1645,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "(default: %d, 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)", sparams.mirostat });
     options.push_back({ "*",           "       --mirostat-lr N",        "Mirostat learning rate, parameter eta (default: %.1f)", (double)sparams.mirostat_eta });
     options.push_back({ "*",           "       --mirostat-ent N",       "Mirostat target entropy, parameter tau (default: %.1f)", (double)sparams.mirostat_tau });
+    options.push_back({ "*",           "       --xtc-probability p",    "xtc probability (default: %.1f, 0.0 = disabled)", (double)sparams.xtc_probability });
+    options.push_back({ "*",           "       --xtc-threshold t",      "xtc threshold (default: %.1f, 0.0 = disabled)", (double)sparams.xtc_threshold});
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -3396,6 +3408,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
     fprintf(stream, "mirostat_ent: %f # default: 5.0\n", sparams.mirostat_tau);
     fprintf(stream, "mirostat_lr: %f # default: 0.1\n", sparams.mirostat_eta);
+    fprintf(stream, "xtc_probability: %f # default: 0.0\n", sparams.xtc_probability);
+    fprintf(stream, "xtc_threshold: %f # default: 0.0\n", sparams.xtc_threshold);
     fprintf(stream, "mlock: %s # default: false\n", params.use_mlock ? "true" : "false");
     fprintf(stream, "model: %s # default: %s\n", params.model.c_str(), DEFAULT_MODEL_PATH);
     fprintf(stream, "model_draft: %s # default:\n", params.model_draft.c_str());

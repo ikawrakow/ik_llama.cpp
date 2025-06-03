@@ -121,10 +121,12 @@ std::string llama_sampling_print(const llama_sampling_params & params) {
     snprintf(result, sizeof(result),
             "\trepeat_last_n = %d, repeat_penalty = %.3f, frequency_penalty = %.3f, presence_penalty = %.3f\n"
             "\ttop_k = %d, tfs_z = %.3f, top_p = %.3f, min_p = %.3f, typical_p = %.3f, temp = %.3f\n"
-            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f",
+            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f\n"
+            "\txtc_probability = %.3f, xtc_threshold = %.3f",
             params.penalty_last_n, params.penalty_repeat, params.penalty_freq, params.penalty_present,
             params.top_k, params.tfs_z, params.top_p, params.min_p, params.typical_p, params.temp,
-            params.mirostat, params.mirostat_eta, params.mirostat_tau);
+            params.mirostat, params.mirostat_eta, params.mirostat_tau,
+            params.xtc_probability, params.xtc_threshold);
 
     return std::string(result);
 }
@@ -153,6 +155,7 @@ std::string llama_sampling_type_to_str(llama_sampler_type sampler_type) {
         case llama_sampler_type::TOP_P:       return "top_p";
         case llama_sampler_type::MIN_P:       return "min_p";
         case llama_sampler_type::TEMPERATURE: return "temperature";
+        case llama_sampler_type::XTC        : return "xtc";
         default : return "";
     }
 }
@@ -164,6 +167,7 @@ std::vector<llama_sampler_type> llama_sampling_types_from_names(const std::vecto
         {"typical_p",   llama_sampler_type::TYPICAL_P},
         {"min_p",       llama_sampler_type::MIN_P},
         {"tfs_z",       llama_sampler_type::TFS_Z},
+        {"xtc",         llama_sampler_type::XTC},
         {"temperature", llama_sampler_type::TEMPERATURE}
     };
 
@@ -178,6 +182,7 @@ std::vector<llama_sampler_type> llama_sampling_types_from_names(const std::vecto
         {"min-p",       llama_sampler_type::MIN_P},
         {"tfs-z",       llama_sampler_type::TFS_Z},
         {"tfs",         llama_sampler_type::TFS_Z},
+        {"xtc",         llama_sampler_type::XTC},
         {"temp",        llama_sampler_type::TEMPERATURE}
     };
 
@@ -212,6 +217,7 @@ std::vector<llama_sampler_type> llama_sampling_types_from_chars(const std::strin
         {'y', llama_sampler_type::TYPICAL_P},
         {'m', llama_sampler_type::MIN_P},
         {'f', llama_sampler_type::TFS_Z},
+        {'x', llama_sampler_type::XTC},
         {'t', llama_sampler_type::TEMPERATURE}
     };
 
@@ -240,6 +246,8 @@ static void sampler_queue(
     const float         min_p             = params.min_p;
     const float         tfs_z             = params.tfs_z;
     const float         typical_p         = params.typical_p;
+    const float         xtc_probability   = params.xtc_probability;
+    const float         xtc_threshold     = params.xtc_threshold;
     const std::vector<llama_sampler_type> & samplers_sequence = params.samplers_sequence;
 
     for (auto sampler_type : samplers_sequence) {
@@ -249,6 +257,7 @@ static void sampler_queue(
             case llama_sampler_type::TYPICAL_P: llama_sample_typical  (ctx_main, &cur_p, typical_p, min_keep); break;
             case llama_sampler_type::TOP_P    : llama_sample_top_p    (ctx_main, &cur_p, top_p,     min_keep); break;
             case llama_sampler_type::MIN_P    : llama_sample_min_p    (ctx_main, &cur_p, min_p,     min_keep); break;
+            case llama_sampler_type::XTC      : llama_sample_xtc      (ctx_main, &cur_p, xtc_probability, xtc_threshold, min_keep); break;
             case llama_sampler_type::TEMPERATURE:
                 if (dynatemp_range > 0) {
                     float dynatemp_min = std::max(0.0f, temp - dynatemp_range);
