@@ -166,6 +166,39 @@ jobs:
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
+        
+      - name: Check workspace contents
+        run: |
+          echo "=== Working directory ==="
+          pwd
+      
+          echo
+          echo "=== Top-level files ==="
+          ls -la
+      
+          echo
+          echo "=== Recursive listing of entire repo ==="
+          ls -R .
+      
+          echo
+          echo "=== Locate LICENSE file(s) ==="
+          find . -type f -iname "LICENSE" -print || echo "No LICENSE file found"
+      
+          echo
+          echo "=== Contents of build/ ==="
+          if [[ -d build ]]; then
+            ls -R build
+          else
+            echo "No build/ directory exists"
+          fi
+      
+          echo
+          echo "=== Executable binaries under build/ ==="
+          if [[ -d build ]]; then
+            find build -type f -executable -print || echo "No executables found in build/"
+          else
+            echo "Skipping find (build/ not present)"
+          fi
 
       - name: Pack artifacts
         id: pack_artifacts
