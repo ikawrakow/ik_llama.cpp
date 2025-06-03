@@ -239,6 +239,22 @@ The `--mirostat-ent` option sets the Mirostat target entropy (tau), which repres
 
 Example usage: `--mirostat 2 --mirostat-lr 0.05 --mirostat-ent 3.0`
 
+### XTC Sampling (Exclude Top Choices)
+
+The function of this sampler is conrolled by `--xtc-probability` and `--xtc-threshold`. `--xtc-probability` takes values between
+0 and 1 (<=0 turns this sampler off) and defines the probability for randomly invoking the sampler. `--xtc-threshold`
+defines the token probability threshold. Tokens with probability greater than this threshold will be excluded from the sampling.
+The sampler is turned off for `threshold > 0.5`.
+
+-   --xtc-probability p: xtc probability (default: 0.0 => disabled)
+-   --xtc-threshold t  : xtc threshold   (default: 1.0 => disabled)
+
+### Top-n-sigma Sampling
+
+Sets all logits $L_i$ to $-\infty$ where $L_i < L_{\rm max} - n \sigma$. Here $L_{\rm max}$ is the maximum logit, $\sigma$ is the logit standard deviation, and $n$ (a floating point number) is the top-n-sigma parameter. Increasing $n$ increases the fraction of tokens considered for sampling. In the limit of $n$ close to zero, one effectively gets greedy sampling (only top probability token considered).
+
+-   --top-n-sigma t          top-n-sigma parmeter (default: 0.0 => disabled)
+
 ### Logit Bias
 
 -   `-l TOKEN_ID(+/-)BIAS, --logit-bias TOKEN_ID(+/-)BIAS`: Modify the likelihood of a token appearing in the generated text completion.
