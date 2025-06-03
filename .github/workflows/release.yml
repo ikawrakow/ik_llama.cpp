@@ -476,7 +476,7 @@ jobs:
             -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
             -DGGML_SYCL=ON ^
             -DLLAMA_CURL=OFF
-          cmake --build build --target ggml-sycl -j
+          cmake --build build -j
 
       - name: Build the release package
         id: pack_artifacts
