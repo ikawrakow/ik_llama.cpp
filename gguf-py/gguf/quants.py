@@ -377,6 +377,32 @@ class Q5_1(__Quant, qtype=GGMLQuantizationType.Q5_1):
         return (d * qs) + m
 
 
+class Q6_0(__Quant, qtype=GGMLQuantizationType.Q6_0):
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        imax = abs(blocks).argmax(axis=-1, keepdims=True)
+        max = np.take_along_axis(blocks, imax, axis=-1)
+
+        d = max / -32
+        with np.errstate(divide="ignore"):
+            id = np.where(d == 0, 0, 1 / d)
+        # Adapted from Q5_0
+        q = np.trunc((np.float64(blocks) * np.float64(id)) + np.float64(32.5), dtype=np.float32).astype(np.uint8).clip(0, 63)
+
+        qs = q.reshape((n_blocks, 2, cls.block_size // 2))
+        qs = (qs[..., 0, :] & np.uint8(0x0F)) | (qs[..., 1, :] << np.uint8(4))
+
+        qh = np.zeros((n_blocks, cls.block_size // 4), dtype=np.uint8)
+        for j in range(cls.block_size // 2):
+            h = ((q[:, j] >> 4) | ((q[:, j + cls.block_size // 2] >> 4) << 2)).astype(np.uint8)
+            qh[:, j % (cls.block_size // 4)] |= (h << 4 * (j // (cls.block_size // 4)))
+
+        d = d.astype(np.float16).view(np.uint8)
+
+        return np.concatenate([d, qh, qs], axis=-1)
+
 class Q8_0(__Quant, qtype=GGMLQuantizationType.Q8_0):
     @classmethod
     # Implementation of Q8_0 with bit-exact same results as reference implementation in ggml-quants.c
