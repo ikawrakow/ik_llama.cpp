@@ -564,7 +564,7 @@ jobs:
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
             -DLLAMA_CURL=OFF
-          cmake --build build --target ggml-hip -j ${env:NUMBER_OF_PROCESSORS}
+          cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
           cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
