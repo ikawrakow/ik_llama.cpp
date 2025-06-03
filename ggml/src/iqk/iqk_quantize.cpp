@@ -557,12 +557,16 @@ void quantize_row_q8_K64(const float * x, void * y, int64_t k) {
     quantize_row_q8_K64_ref(x, (block_q8_K64 *)y, k);
 }
 
+#include "iqk_common.h"   // <-- defines the global hsum_*/hmax_* functions
+
 #ifdef __AVX2__
-// Redirect all hsum_/hmax_ calls to our “_local” variants:
-#define hsum_float_4   hsum_float_4_local
-#define hsum_float_8   hsum_float_8_local
-#define hsum_i32_8     hsum_i32_8_local
-#define hmax_f32_8     hmax_f32_8_local
+// Redirect all “hsum_…” and “hmax_…” calls to the local implementations:
+#define hsum_float_4     hsum_float_4_local
+#define hsum_float_8     hsum_float_8_local
+#define hsum_i32_8       hsum_i32_8_local
+#define hmax_f32_8       hmax_f32_8_local
+#define hsum_float_8x8   hsum_float_8x8_local
+// (Add any other conflicting names here…)
 #endif
 
 #ifdef __AVX2__
@@ -572,30 +576,44 @@ namespace {
         x = _mm_add_ss(x, _mm_movehdup_ps(x));
         return _mm_cvtss_f32(x);
     }
+
     inline float hsum_float_8_local(__m256 x) {
-        // Notice: we call “hsum_float_4(…)” here, but that expands to
-        // hsum_float_4_local(…) because of the macro above.
-        return hsum_float_4(_mm_add_ps(
-            _mm256_castps256_ps128(x),
-            _mm256_extractf128_ps(x, 1)));
+        // Because of the #define above, this “hsum_float_4(…)”
+        // expands to “hsum_float_4_local(…)” automatically.
+        return hsum_float_4(
+            _mm_add_ps(
+                _mm256_castps256_ps128(x),
+                _mm256_extractf128_ps(x, 1)
+            )
+        );
     }
+
     inline int hsum_i32_8_local(const __m256i a) {
         const __m128i sum128 = _mm_add_epi32(
             _mm256_castsi256_si128(a),
-            _mm256_extractf128_si256(a, 1));
+            _mm256_extractf128_si256(a, 1)
+        );
         const __m128i hi64  = _mm_unpackhi_epi64(sum128, sum128);
         const __m128i sum64 = _mm_add_epi32(hi64, sum128);
-        const __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));
+        const __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2,3,0,1));
         return _mm_cvtsi128_si32(_mm_add_epi32(sum64, hi32));
     }
+
     inline float hmax_f32_8_local(__m256 x) {
         __m128 max4 = _mm_max_ps(
             _mm256_extractf128_ps(x, 1),
-            _mm256_castps256_ps128(x));
+            _mm256_castps256_ps128(x)
+        );
         max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
         max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
         return _mm_cvtss_f32(max4);
     }
+
+    inline __m256 hsum_float_8x8_local(__m256 * p) {
+        // (body of your local hsum_float_8x8 goes here)
+    }
+
+    // …and so on for any other helpers that clash with iqk_common.h…
 }
 #endif
 
