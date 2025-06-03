@@ -2269,6 +2269,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     if (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
         ggml_is_quantized(src0->type) &&
+        ggml_cuda_mmvq_type_supported(src0->type) &&
         ggml_backend_buffer_is_cuda(src0->buffer) &&
         ggml_backend_buffer_is_cuda(src1->buffer) &&
         ggml_backend_buffer_is_cuda(dst->buffer) &&
@@ -2442,8 +2443,8 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     const ggml_tensor * ids  = dst->src[3];
 
     if (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
-        ggml_is_quantized(src0_1->type) &&
-        ggml_is_quantized(src0_2->type) &&
+        ggml_is_quantized(src0_1->type) && ggml_cuda_mmvq_type_supported(src0_1->type) &&
+        ggml_is_quantized(src0_2->type) && ggml_cuda_mmvq_type_supported(src0_2->type) &&
         ggml_backend_buffer_is_cuda(src0_1->buffer) &&
         ggml_backend_buffer_is_cuda(src0_2->buffer) &&
         ggml_backend_buffer_is_cuda(src1->buffer) &&
@@ -2502,6 +2503,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             CUDA_CHECK(cudaGetLastError());
 
             if (next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
+                ggml_cuda_mmvq_type_supported(next->src[0]->type) &&
                 ggml_backend_buffer_is_cuda(next->src[0]->buffer) &&
                !ggml_backend_buffer_is_cuda_split(next->src[0]->buffer) &&
                 ((ggml_backend_cuda_buffer_context *)next->src[0]->buffer->context)->device == device_id &&
