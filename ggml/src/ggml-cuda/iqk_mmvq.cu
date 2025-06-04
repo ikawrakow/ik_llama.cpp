@@ -52,9 +52,9 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ5_KS_R4> {
 
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ1_S_R4> {
-    static constexpr int qk = QK_K;
-    static constexpr int qr = QR4_XS;
-    static constexpr int qi = QI4_XS;
+    static constexpr int qk = 32;
+    static constexpr int qr = 2;
+    static constexpr int qi = 4;
 };
 
 
@@ -364,32 +364,31 @@ __device__ __forceinline__ void vec_dot_iq4_ks_r4_q8_1(
 __device__ __forceinline__ void vec_dot_iq1_s_r4_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
 
-    *result = 0; return;
+    const half * dptr = (const half *)vbq;
+    const block_iq1_s_r4 * bq1 = (const block_iq1_s_r4 *)(dptr + 4) + kbx;
 
-    const float * dptr = (const float *)vbq;
-    const block_iq4_ks_r4 * bq4 = (const block_iq4_ks_r4 *)(dptr + 4) + kbx;
+    // iqs is 0 or 2
+    const float d8 = __low2float(bq8_1->ds);
+    const int32_t  * q8 = (const int *)bq8_1->qs;
 
-    // iqs is 0...28 in steps of 2
-    const int ib16 = iqs/2;
-    const float d8 = __low2float(bq8_1[ib16/2].ds);
-    const int32_t  * q8 = (const int *)bq8_1[ib16/2].qs + 4*(ib16%2);
+    int32_t grid32[2];
+    const int * igrid = (const int *)grid32;
 
-    int ib32 = ib16/2;
-    int is   = ib16%2;
-    const uint32_t * scales32 = (const uint32_t *)bq4->scales;
-    int scales = __vsub4(scales32[ib32] & 0xfefefefe, 0x7f7f7f7f);
-    const int8_t * s8 = (const int8_t *)&scales;
-    int2 val;
-    const int * q4 = (const int *)bq4->qs + 16*ib32;
+    int minus = 0;
+    for (int k = 0; k < 4; ++k) minus = ggml_cuda_dp4a(0x01010101, q8[4*(iqs/2)+k], minus);
+
     for (int i = 0; i < 4; ++i) {
-        auto values = iq4k_values + ((bq4->scales[4*ib32+i] & 1) << 4);
-        int sumi = 0;
-        val  = get_int_from_table_16(q4[i+4*is+0], values);
-        sumi = ggml_cuda_dp4a(val.x, q8[0], ggml_cuda_dp4a(val.y, q8[2], sumi));
-        val  = get_int_from_table_16(q4[i+4*is+8], values);
-        sumi = ggml_cuda_dp4a(val.x, q8[1], ggml_cuda_dp4a(val.y, q8[3], sumi));
-        const float d = dptr[i] * d8;
-        result[i] += d * sumi * s8[i];
+        float dl = (float)dptr[i]*(2*((bq1->qh[i] >> 12) & 7) + 1) * d8;
+        float ml = dl * (bq1->qh[i] & 0x8000 ? -1-IQ1S_DELTA : -1+IQ1S_DELTA);
+        grid32[0] = iq1s_grid_gpu[bq1->qs[4*iqs+i] | (((bq1->qh[i] >> 3*iqs) & 7) << 8)];
+        grid32[1] = (grid32[0] >> 4) & 0x0f0f0f0f;
+        grid32[0] &= 0x0f0f0f0f;
+        int sumi = ggml_cuda_dp4a(igrid[0], q8[4*(iqs/2)+0], ggml_cuda_dp4a(igrid[1], q8[4*(iqs/2)+1], 0));
+        grid32[0] = iq1s_grid_gpu[bq1->qs[4*iqs+i+4] | (((bq1->qh[i] >> (3*iqs+3)) & 7) << 8)];
+        grid32[1] = (grid32[0] >> 4) & 0x0f0f0f0f;
+        grid32[0] &= 0x0f0f0f0f;
+        sumi = ggml_cuda_dp4a(igrid[0], q8[4*(iqs/2)+2], ggml_cuda_dp4a(igrid[1], q8[4*(iqs/2)+3], sumi));
+        result[i] += dl * sumi + ml * minus;
     }
 }
 
