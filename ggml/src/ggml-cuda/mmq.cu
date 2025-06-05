@@ -103,6 +103,9 @@ void ggml_cuda_op_mul_mat_q(
         case GGML_TYPE_IQ5_KS:
             mul_mat_q_case<GGML_TYPE_IQ5_KS>(ctx, args, stream);
             break;
+        case GGML_TYPE_IQ5_KS_R4:
+            mul_mat_q_case<GGML_TYPE_IQ5_KS_R4>(ctx, args, stream);
+            break;
         case GGML_TYPE_IQ2_KS:
             mul_mat_q_case<GGML_TYPE_IQ2_KS>(ctx, args, stream);
             break;
@@ -162,6 +165,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
         case GGML_TYPE_IQ5_KS:
+        case GGML_TYPE_IQ5_KS_R4:
         case GGML_TYPE_IQ2_KS:
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ3_K:
