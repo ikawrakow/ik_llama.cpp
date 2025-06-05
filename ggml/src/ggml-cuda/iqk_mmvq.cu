@@ -36,6 +36,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ5_K_R4> {
     static constexpr int qi = QI5_XS;
 };
 
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ1_M_R4> {
+    static constexpr int qk = 32;
+    static constexpr int qr = 2;
+    static constexpr int qi = 4;
+};
+
 //  Reminder:
 //    constexpr int qk  = ggml_cuda_type_traits<type>::qk;
 //    constexpr int qi  = ggml_cuda_type_traits<type>::qi;
@@ -338,7 +345,6 @@ __device__ __forceinline__ void vec_dot_iq4_ks_r4_q8_1(
     }
 }
 
-// TODO
 __device__ __forceinline__ void vec_dot_iq1_s_r4_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
 
@@ -356,7 +362,7 @@ __device__ __forceinline__ void vec_dot_iq1_s_r4_q8_1(
     for (int k = 0; k < 4; ++k) minus = ggml_cuda_dp4a(0x01010101, q8[4*(iqs/2)+k], minus);
 
     for (int i = 0; i < 4; ++i) {
-        float dl = (float)dptr[i]*(2*((bq1->qh[i] >> 12) & 7) + 1) * d8;
+        float dl = __half2float(dptr[i])*(2*((bq1->qh[i] >> 12) & 7) + 1) * d8;
         float ml = dl * (bq1->qh[i] & 0x8000 ? -1-IQ1S_DELTA : -1+IQ1S_DELTA);
         grid32[0] = iq1s_grid_gpu[bq1->qs[4*iqs+i] | (((bq1->qh[i] >> 3*iqs) & 7) << 8)];
         grid32[1] = (grid32[0] >> 4) & 0x0f0f0f0f;
@@ -367,6 +373,38 @@ __device__ __forceinline__ void vec_dot_iq1_s_r4_q8_1(
         grid32[0] &= 0x0f0f0f0f;
         sumi = ggml_cuda_dp4a(igrid[0], q8[4*(iqs/2)+2], ggml_cuda_dp4a(igrid[1], q8[4*(iqs/2)+3], sumi));
         result[i] += dl * sumi + ml * minus;
+    }
+}
+
+__device__ __forceinline__ void vec_dot_iq1_m_r4_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float * result) {
+
+    const half * dptr = (const half *)vbq;
+    const block_iq1_m_r4 * bq1 = (const block_iq1_m_r4 *)(dptr + 4) + kbx;
+
+    // iqs is 0 or 2
+    const float d8 = __low2float(bq8_1->ds);
+    const int32_t  * q8 = (const int *)bq8_1->qs;
+
+    int32_t grid32[2];
+    const int * igrid = (const int *)grid32;
+
+    int minus1 = ggml_cuda_dp4a(0x01010101, q8[4*(iqs/2)+0], ggml_cuda_dp4a(0x01010101, q8[4*(iqs/2)+1], 0));
+    int minus2 = ggml_cuda_dp4a(0x01010101, q8[4*(iqs/2)+2], ggml_cuda_dp4a(0x01010101, q8[4*(iqs/2)+3], 0));
+
+    for (int i = 0; i < 4; ++i) {
+        float dl = __half2float(dptr[i])*((bq1->scales[i] >> 4*(iqs/2)) & 0xf) * d8;
+        float ml1 = dl * (bq1->qh[4*(iqs/2)+i] & 0x08 ? -1-IQ1M_DELTA : -1+IQ1M_DELTA);
+        float ml2 = dl * (bq1->qh[4*(iqs/2)+i] & 0x80 ? -1-IQ1M_DELTA : -1+IQ1M_DELTA);
+        grid32[0] = iq1s_grid_gpu[bq1->qs[4*iqs+i] | ((bq1->qh[4*(iqs/2)+i] & 0x07) << 8)];
+        grid32[1] = (grid32[0] >> 4) & 0x0f0f0f0f;
+        grid32[0] &= 0x0f0f0f0f;
+        int sumi = ggml_cuda_dp4a(igrid[0], q8[4*(iqs/2)+0], ggml_cuda_dp4a(igrid[1], q8[4*(iqs/2)+1], 0));
+        grid32[0] = iq1s_grid_gpu[bq1->qs[4*iqs+i+4] | ((bq1->qh[4*(iqs/2)+i] & 0x70) << 4)];
+        grid32[1] = (grid32[0] >> 4) & 0x0f0f0f0f;
+        grid32[0] &= 0x0f0f0f0f;
+        sumi = ggml_cuda_dp4a(igrid[0], q8[4*(iqs/2)+2], ggml_cuda_dp4a(igrid[1], q8[4*(iqs/2)+3], sumi));
+        result[i] += dl * sumi + ml1 * minus1 + ml2*minus2;
     }
 }
 
@@ -1129,6 +1167,14 @@ void mul_mat_vec_iq1_s_r4_q8_1_cuda(
     const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
 
     iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ1_S_R4, 2, vec_dot_iq1_s_r4_q8_1, 4>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
+}
+
+void mul_mat_vec_iq1_m_r4_q8_1_cuda(
+    const void * vx, const void * vy, float * dst, const char * ids_data,
+    const int ncols_x, const int nrows_x, const int nrows_y, const int ncols_y, const int nrows_dst,
+    const int ne2, const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, int64_t ids_nb0, cudaStream_t stream) {
+
+    iqk_mul_mat_vec_q_cuda<GGML_TYPE_IQ1_M_R4, 2, vec_dot_iq1_m_r4_q8_1, 4>(vx, vy, dst, ids_data, ncols_x, nrows_x, nrows_y, ncols_y, nrows_dst, ne2, nb02, nb12, nb2, ids_nb0, stream);
 }
 
 void mul_mat_vec_iq5_k_r4_q8_1_cuda(
