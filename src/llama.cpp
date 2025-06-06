@@ -2608,6 +2608,8 @@ struct llama_hparams {
     uint32_t n_vocab_type = 0; // for BERT-style token types
     uint32_t n_rel_attn_bkts = 0;
 
+    mutable  bool mla_attn = false;
+
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
@@ -2759,6 +2761,11 @@ struct llama_hparams {
     }
 
     uint32_t n_embd_k_gqa(uint32_t il = 0) const { // dimension of key embeddings across all k-v heads
+        if (mla_attn) {
+            const uint32_t n_embd_head_qk_rope = n_rot;
+            const uint32_t kv_lora_rank = n_lora_kv;
+            return kv_lora_rank + n_embd_head_qk_rope;
+        }
         const uint32_t n_head_kv = this->n_head_kv(il);
 
         return n_embd_head_k * n_head_kv;
@@ -3545,6 +3552,12 @@ static bool llama_kv_cache_init(
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
         LLAMA_LOG_ERROR("%s: bailing out\n", __func__);
         GGML_ABORT("fatal error");
+    }
+
+    if (model.arch == LLM_ARCH_DEEPSEEK2 && cparams.mla_attn) {
+        hparams.mla_attn = true;
+    } else {
+        hparams.mla_attn = false;
     }
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
