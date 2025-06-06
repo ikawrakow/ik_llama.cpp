@@ -1059,6 +1059,7 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
 #else  // IQK_IMPLEMENT
 
 extern "C" IQK_API bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
+    GGML_ABORT("=============================== Unsupported CPU");
     return false;
 }
 
@@ -1068,11 +1069,13 @@ extern "C" IQK_API bool iqk_mul_mat_4d(long /*Nx*/, long /*Ny*/, long /*ne00*/,
         int /*typeA*/, const void * /*A*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
         float * /*C*/, long /*stride_C*/, int /*ith*/, int /*nth*/) {
+    GGML_ABORT("=============================== Unsupported CPU");
     return false;
 }
 
 extern "C" IQK_API bool iqk_mul_mat_moe(long, long, long, int, int, const void *, long, int, const void *, long, float *, long, long,
         const void *, int, int) {
+    GGML_ABORT("=============================== Unsupported CPU");
     return false;
 }
 
@@ -1080,6 +1083,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*n
         int /*typeA*/, const void * /*Aup*/, const void * /*Agate*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
         float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, int /*ith*/, int /*nth*/) {
+    GGML_ABORT("=============================== Unsupported CPU");
     return false;
 }
 
