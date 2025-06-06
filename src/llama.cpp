@@ -3447,26 +3447,6 @@ static bool llama_kv_cache_init(
         buft_layer_count[llama_default_buffer_type_cpu(true)] = n_layer;
     }
 
-    if (cparams.fused_moe_up_gate) {
-        int nbad = 0;
-        for (int i = 0; i < (int) n_layer; i++) {
-            auto& layer = model.layers[i];
-            if (layer.ffn_gate_exps && layer.ffn_up_exps && layer.ffn_gate_exps->type != layer.ffn_up_exps->type) {
-                ++nbad;
-            }
-        }
-        if (nbad > 0) {
-            if (nbad == (int)n_layer) {
-                LLAMA_LOG_WARN("=============== ffn_up and ffn_gate are of different type => disabling fmoe\n");
-                const_cast<llama_cparams&>(cparams).fused_moe_up_gate = false;
-            }
-            else {
-                LLAMA_LOG_WARN("=============== ffn_up and ffn_gate are of different in %d out of %d layers, where fmoe will be disabled\n",
-                        nbad, (int)n_layer);
-            }
-        }
-    }
-
     // create a context for each buffer type
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
     for (auto & it : buft_layer_count) {
@@ -9861,7 +9841,7 @@ llm_expert_gating_func_type   gating_op,
     }
 
     ggml_tensor * par;
-    if (lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type) {
+    if (lctx.cparams.fused_moe_up_gate) {
         par = ggml_moe_up_gate(ctx, up_exps, gate_exps, cur, selected_experts, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
     } else {
         ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
