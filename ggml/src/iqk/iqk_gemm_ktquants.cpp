@@ -73,6 +73,12 @@ inline __m256 trellis_gen8(__m256i i8) {
     return _mm256_add_ps(fv1, fv2);
 }
 
+inline __m256 trellis_gen8_new(__m256i i8) {
+    auto f1 = _mm256_cvtph_ps(_mm256_extracti128_si256(i8, 0));
+    auto f2 = _mm256_cvtph_ps(_mm256_extracti128_si256(i8, 1));
+    return _mm256_add_ps(f1, f2);
+}
+
 struct Trellis2 {
     constexpr static uint32_t kmask = 0x8fff8fff;
     constexpr static uint32_t km32 = 0x3b603b60;
@@ -124,8 +130,8 @@ void iqk_dequantize_iq2_kt(int n, const void * vx, size_t bx, float * y, size_t 
                 auto scale1 = _mm256_set1_ps(s_helper.val[2*ib+0]);
                 auto scale2 = _mm256_set1_ps(s_helper.val[2*ib+1]);
                 for (int j = 0; j < 4; ++j) {
-                    auto xval1 = _mm256_mul_ps(scale1, trellis_gen8(trellis.next8(ql[8*ib+j+0]+4096)));
-                    auto xval2 = _mm256_mul_ps(scale2, trellis_gen8(trellis.next8(ql[8*ib+j+4]+4096)));
+                    auto xval1 = _mm256_mul_ps(scale1, trellis_gen8_new(trellis.next8(ql[8*ib+j+0]+4096)));
+                    auto xval2 = _mm256_mul_ps(scale2, trellis_gen8_new(trellis.next8(ql[8*ib+j+4]+4096)));
                     _mm256_storeu_ps(y + i*QK_K + 64*ib + 8*j +  0, xval1);
                     _mm256_storeu_ps(y + i*QK_K + 64*ib + 8*j + 32, xval2);
                 }
@@ -171,8 +177,8 @@ void mul_mat_iq2_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& inf
                 auto scale1 = _mm256_set1_ps(s_helper.val[2*ib+0]);
                 auto scale2 = _mm256_set1_ps(s_helper.val[2*ib+1]);
                 for (int j = 0; j < 4; ++j) {
-                    auto xval1 = _mm256_mul_ps(scale1, trellis_gen8(trellis.next8(ql[8*ib+j+0]+4096)));
-                    auto xval2 = _mm256_mul_ps(scale2, trellis_gen8(trellis.next8(ql[8*ib+j+4]+4096)));
+                    auto xval1 = _mm256_mul_ps(scale1, trellis_gen8_new(trellis.next8(ql[8*ib+j+0]+4096)));
+                    auto xval2 = _mm256_mul_ps(scale2, trellis_gen8_new(trellis.next8(ql[8*ib+j+4]+4096)));
                     if constexpr (nrc_y == 1) {
                         accd[0] = _mm256_fmadd_ps(_mm256_load_ps(y[0] + i*QK_K + 64*ib + 8*j +  0), xval1, accd[0]);
                         accd[1] = _mm256_fmadd_ps(_mm256_load_ps(y[0] + i*QK_K + 64*ib + 8*j + 32), xval2, accd[1]);

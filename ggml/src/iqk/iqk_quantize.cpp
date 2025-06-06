@@ -7459,12 +7459,30 @@ public:
         constexpr uint32_t kmask = 0x8fff8fff;
         constexpr uint32_t km32 = 0x3b603b60;
         uint32_t x = i + offset;
+        if constexpr (kGroupSize == 8 && !is_abs) {
+            uint32_t tmp[8];
+            for (int k = 0; k < kGroupSize; ++k) {
+                x = ka*x + kb;
+                tmp[k] = (x & kmask) ^ km32;
+            }
+#ifdef __AVX2__
+            auto f1 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)tmp+0));
+            auto f2 = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)tmp+1));
+            _mm256_storeu_ps(result, _mm256_mul_ps(_mm256_set1_ps(scale), _mm256_add_ps(f1, f2)));
+#else
+            const uint16_t * aux16 = (const uint16_t *)tmp;
+            for (int k = 0; k < kGroupSize; ++k) {
+                result[k] = scale*(GGML_FP16_TO_FP32(aux16[k]) + GGML_FP16_TO_FP32(aux16[k] + kGroupSize));
+            }
+#endif
+        } else {
         for (int k = 0; k < kGroupSize; ++k) {
             x = ka*x + kb;
             uint32_t s = (x & kmask) ^ km32;
             float val = GGML_FP16_TO_FP32(s & 65535) + GGML_FP16_TO_FP32(s >> 16);
             if constexpr (is_abs) result[k] = scale*std::abs(val);
             else result[k] = scale*val;
+        }
         }
     }
 

@@ -352,6 +352,25 @@ float __device__ __forceinline__ trellis_next(uint32_t& val) {
     return (float)(h[0]+h[1]);
 }
 
+template <typename dst_t>
+void __device__ __forceinline__ trellis_next8(uint32_t val, uint32_t * aux32, float scale, dst_t * result) {
+    constexpr uint32_t ka = 89226354;
+    constexpr uint32_t kb = 64248484;
+    constexpr uint32_t kmask = 0x8fff8fff;
+    constexpr uint32_t km32 = 0x3b603b60;
+    for (int i = 0; i < 8; ++i) {
+        val = ka*val + kb;
+        aux32[i] = (val & kmask) ^ km32;
+    }
+    const half2 * h2 = (const half2 *)aux32;
+    for (int i = 0; i < 4; ++i) {
+        auto h = h2[i] + h2[i+4];
+        auto f2 = __half22float2(h);
+        result[2*i+0] = (dst_t)(f2.x * scale);
+        result[2*i+1] = (dst_t)(f2.y * scale);
+    }
+}
+
 template<typename dst_t>
 static __global__ void dequantize_block_iq2_kt(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t n_per_row, int64_t row_size) {
 
@@ -368,9 +387,8 @@ static __global__ void dequantize_block_iq2_kt(const void * __restrict__ vx, dst
     const uint16_t * ql = (const uint16_t *)x[i].ql;
     uint32_t idx = ql[ib] + 4096;
     const float dl = scale * iq4k_values[((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf)] * 31.75f * 1.05f;
-    for (int j = 0; j < 8; ++j) {
-        y[j] = dl * trellis_next(idx);
-    }
+    uint32_t aux32[8];
+    trellis_next8(idx, aux32, dl, y);
 }
 
 template<typename dst_t>
