@@ -1273,7 +1273,8 @@ static void ggml_cuda_op_mul_mat_cublas(
 #ifdef GGML_CUDA_IQK_FORCE_BF16
     if (ggml_is_quantized(src0->type) && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
         to_bf16_cuda_t to_bf16_cuda = ggml_get_to_bf16_cuda(src0->type);
-        if (to_bf16_cuda) {
+        to_bf16_cuda_t to_bf16_cuda_1 = src1->type != GGML_TYPE_BF16 ? ggml_get_to_bf16_cuda(src1->type) : nullptr;
+        if (to_bf16_cuda && (src1->type == GGML_TYPE_BF16 || to_bf16_cuda_1)) {
             size_t ne = row_diff*ne00;
             ggml_cuda_pool_alloc<nv_bfloat16> src0_as_bf16(ctx.pool(id), ne);
             to_bf16_cuda(src0_dd_i, src0_as_bf16.get(), row_diff, ne00, stream);
@@ -1282,9 +1283,7 @@ static void ggml_cuda_op_mul_mat_cublas(
             if (src1->type != GGML_TYPE_BF16) {
                 size_t ne = src1_ncols*ne10;
                 src1_as_bf16.alloc(ne);
-                to_bf16_cuda = ggml_get_to_bf16_cuda(src1->type);
-                GGML_ASSERT(to_bf16_cuda != nullptr);
-                to_bf16_cuda(src1_ddf_i, src1_as_bf16.get(), src1_ncols, ne10, stream);
+                to_bf16_cuda_1(src1_ddf_i, src1_as_bf16.get(), src1_ncols, ne10, stream);
             }
             const nv_bfloat16 * src1_ptr = src1->type == GGML_TYPE_BF16 ? (const nv_bfloat16 *) src1_ddf_i : src1_as_bf16.get();
             const nv_bfloat16 * src0_ptr = src0_as_bf16.get();
