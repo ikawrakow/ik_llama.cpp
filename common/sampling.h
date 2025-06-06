@@ -17,6 +17,7 @@ enum class llama_sampler_type : char {
     TFS_Z       = 'f',
     XTC         = 'x',
     TOP_N_SIGMA = 'n',
+    DRY = 'd',
     TYPICAL_P   = 'y',
     TEMPERATURE = 't'
 };
@@ -44,6 +45,10 @@ typedef struct llama_sampling_params {
     float       xtc_probability       = 0.0f;               // xtc probability
     float       xtc_threshold         = 1.0f;               // xtc threshold, disabled if > 0.5
     float       top_n_sigma           = 0.0f;               // top-n-sigma
+    float   dry_multiplier     = 0.0f;  // 0.0 = disabled;      DRY repetition penalty for tokens extending repetition:
+    float   dry_base           = 1.75f; // 0.0 = disabled;      multiplier * base ^ (length of sequence before token - allowed length)
+    int32_t dry_allowed_length = 2;     // tokens extending repetitions beyond this receive penalty
+    int32_t dry_penalty_last_n = -1;    // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
 
@@ -55,6 +60,8 @@ typedef struct llama_sampling_params {
         llama_sampler_type::MIN_P,
         llama_sampler_type::TEMPERATURE
     };
+
+    std::vector<std::string> dry_sequence_breakers = {"\n", ":", "\"", "*"};     // default sequence breakers for DRY
 
     std::string grammar;  // optional BNF-like grammar to constrain sampling
 

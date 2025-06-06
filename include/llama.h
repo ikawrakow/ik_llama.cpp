@@ -1222,6 +1222,15 @@ extern "C" {
           llama_token_data_array * candidates_p,
                            float   top_n_sigma);
 
+    ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982Add
+    LLAMA_API struct llama_sampler *    llama_sampler_init_dry(
+            const struct llama_model *  model,
+                               float    dry_multiplier,
+                               float    dry_base,
+                             int32_t    dry_allowed_length,
+                             int32_t    dry_penalty_last_n,
+                          const char ** seq_breakers,
+                              size_t    num_breakers);
 
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
     /// @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.
