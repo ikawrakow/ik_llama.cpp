@@ -233,6 +233,24 @@ struct MulMat {
         }
     }
     static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
+    static inline ggml_type is_dequant_better(ggml_type type, int nrc_y) {
+#ifdef __AVX2__
+        switch (type) {
+            case GGML_TYPE_IQ2_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
+            case GGML_TYPE_IQ3_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
+            case GGML_TYPE_IQ4_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
+            default: break;
+        }
+#else
+        switch (type) {
+            case GGML_TYPE_IQ2_KT: return nrc_y >= 32 ? GGML_TYPE_F16 : type;
+            case GGML_TYPE_IQ3_KT: return nrc_y >= 32 ? GGML_TYPE_F16 : type;
+            case GGML_TYPE_IQ4_KT: return nrc_y >= 32 ? GGML_TYPE_F16 : type;
+            default: break;
+        }
+#endif
+        return type;
+    }
     static inline int num_rows(ggml_type type) {
 #ifdef HAVE_FANCY_SIMD
         switch (type) {
@@ -304,6 +322,11 @@ struct MulMat {
     }
 };
 
+static std::vector<char> & thread_local_work_buffer() {
+    thread_local std::vector<char> f;
+    return f;
+}
+
 }
 
 extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
@@ -312,6 +335,49 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         float * C, long stride_C, int ith, int nth) {
 
     MulMat mm;
+
+    auto etypeA = ggml_type(typeA);
+    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
+        if (!MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
+            return false;
+        }
+
+        constexpr int k_x_step = 32;
+
+        auto num_rows = MulMat::num_rows(ggml_type(dequant_type));
+        GGML_ASSERT(Nx%num_rows == 0);
+        auto nrc_x = (Nx/num_rows + nth - 1)/nth;
+        auto first_x = ith*nrc_x;
+        if (first_x + nrc_x > Nx/num_rows) nrc_x = Nx/num_rows - first_x;
+        first_x *= num_rows;
+        nrc_x   *= num_rows;
+
+        auto type_size = ggml_type_size(dequant_type);
+
+        size_t row_size_qx = ne00*type_size;
+        size_t row_size_qy = strideB;
+
+        //printf("Dequant mul mat %s x %s: ne00 = %d, row_size = %d\n", ggml_type_name(dequant_type), ggml_type_name(ggml_type(typeB)), (int)ne00, (int)row_size_qx);
+
+        DataInfo info{C + first_x, (const char *)B, (size_t)stride_C, row_size_qy, 0, 1, nullptr, 0};
+
+        auto& f = thread_local_work_buffer();
+
+        for (int ix = 0; ix < nrc_x; ix += k_x_step) {
+            auto this_info = info;
+            this_info.s += ix;
+            int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
+            if (f.size() < row_size_qx*this_nrc_x) f.resize(row_size_qx*this_nrc_x);
+            if (!iqk_dequantize_ktquants(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), ne00, this_nrc_x)) {
+                GGML_ABORT("Fatal error");
+            }
+            mm.mul_mat_NxM(ne00, f.data(), row_size_qx, this_info, this_nrc_x, Ny);
+        }
+
+        return true;
+
+    }
+
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
     }
@@ -440,6 +506,47 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
     assert(row_mapping != nullptr);
 
     MulMat mm;
+
+    auto etypeA = ggml_type(typeA);
+    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
+        if (!MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
+            return false;
+        }
+
+        constexpr int k_x_step = 32;
+
+        auto num_rows = MulMat::num_rows(ggml_type(dequant_type));
+        GGML_ASSERT(Nx%num_rows == 0);
+        auto nrc_x = (Nx/num_rows + nth - 1)/nth;
+        auto first_x = ith*nrc_x;
+        if (first_x + nrc_x > Nx/num_rows) nrc_x = Nx/num_rows - first_x;
+        first_x *= num_rows;
+        nrc_x   *= num_rows;
+
+        auto type_size = ggml_type_size(dequant_type);
+
+        size_t row_size_qx = ne00*type_size;
+        size_t row_size_qy = strideB;
+
+        DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float), row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
+
+        auto& f = thread_local_work_buffer();
+
+        for (int ix = 0; ix < nrc_x; ix += k_x_step) {
+            auto this_info = info;
+            this_info.s += ix;
+            int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
+            if (f.size() < row_size_qx*this_nrc_x) f.resize(row_size_qx*this_nrc_x);
+            if (!iqk_dequantize_ktquants(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), ne00, this_nrc_x)) {
+                GGML_ABORT("Fatal error");
+            }
+            mm.mul_mat_NxM(ne00, f.data(), row_size_qx, this_info, this_nrc_x, Ny);
+        }
+
+        return true;
+
+    }
+
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
     }
@@ -467,6 +574,52 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
     assert(row_mapping != nullptr);
 
     MulMat mm;
+
+    auto etypeA = ggml_type(typeA);
+    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
+        if (!MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
+            return false;
+        }
+
+        constexpr int k_x_step = 64;
+
+        auto num_rows = MulMat::num_rows(ggml_type(dequant_type));
+        GGML_ASSERT(Nx%num_rows == 0);
+        auto nrc_x = (Nx/num_rows + nth - 1)/nth;
+        auto first_x = ith*nrc_x;
+        if (first_x + nrc_x > Nx/num_rows) nrc_x = Nx/num_rows - first_x;
+        first_x *= num_rows;
+        nrc_x   *= num_rows;
+
+        auto type_size = ggml_type_size(dequant_type);
+
+        size_t row_size_qx = ne00*type_size;
+        size_t row_size_qy = strideB;
+
+        DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float), row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
+
+        auto& f = thread_local_work_buffer();
+
+        for (int ix = 0; ix < nrc_x; ix += k_x_step) {
+            auto this_info = info;
+            this_info.s += ix;
+            int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
+            if (f.size() < 2*row_size_qx*this_nrc_x) f.resize(2*row_size_qx*this_nrc_x);
+            auto Xu = f.data();
+            auto Xg = f.data() + row_size_qx*this_nrc_x;
+            if (!iqk_dequantize_ktquants(typeA, ne00, (const char *)Aup   + (first_x + ix)*strideA, strideA, Xu, ne00, this_nrc_x)) {
+                GGML_ABORT("Fatal error");
+            }
+            if (!iqk_dequantize_ktquants(typeA, ne00, (const char *)Agate + (first_x + ix)*strideA, strideA, Xg, ne00, this_nrc_x)) {
+                GGML_ABORT("Fatal error");
+            }
+            mm.mul_mat_up_gate_NxM(ne00, Xu, Xg, row_size_qx, this_info, this_nrc_x, Ny, unary_op);
+        }
+
+        return true;
+
+    }
+
     if (!MulMat::prepare(typeA, typeB, ne00, mm, Ny)) {
         return false;
     }
@@ -651,6 +804,10 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_IQ1_S_R4:
         case GGML_TYPE_IQ1_M_R4:
             return iqk_set_kernels_1bit(ne00, typeA, typeB, m.funcs, m.func16);
+        case GGML_TYPE_IQ2_KT:
+        case GGML_TYPE_IQ3_KT:
+        case GGML_TYPE_IQ4_KT:
+            return iqk_set_kernels_ktquants(ne00, typeA, typeB, m.funcs, m.func16);
         default:
             return false;
     }

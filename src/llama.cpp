@@ -18665,6 +18665,9 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
             case GGML_TYPE_IQ4_KS:
             case GGML_TYPE_IQ4_KS_R4:
             case GGML_TYPE_IQ4_XS_R8:
+            case GGML_TYPE_IQ2_KT:
+            case GGML_TYPE_IQ3_KT:
+            case GGML_TYPE_IQ4_KT:
             case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
             case GGML_TYPE_IQ4_K:
             case GGML_TYPE_IQ4_K_R4:
@@ -23265,6 +23268,15 @@ void llama_sample_entropy(struct llama_context * ctx, llama_token_data_array * c
 
 void llama_sample_temp(struct llama_context * ctx, llama_token_data_array * candidates_p, float temp) {
     llama_sample_temp_impl(ctx ? &ctx->sampling : nullptr, candidates_p, temp);
+}
+
+void llama_sample_xtc(struct llama_context * ctx, llama_token_data_array * candidates_p,
+                           float   probability, float threshold, size_t min_keep) {
+    llama_sample_xtc_impl(ctx ? &ctx->sampling : nullptr, candidates_p, probability, threshold, min_keep);
+}
+
+void llama_sample_top_n_sigma(struct llama_context * ctx, llama_token_data_array * candidates_p, float top_n_sigma) {
+    llama_sample_top_n_sigma_impl(ctx ? &ctx->sampling : nullptr, candidates_p, top_n_sigma);
 }
 
 void llama_sample_repetition_penalties(

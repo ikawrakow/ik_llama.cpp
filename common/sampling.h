@@ -15,6 +15,8 @@ enum class llama_sampler_type : char {
     TOP_P       = 'p',
     MIN_P       = 'm',
     TFS_Z       = 'f',
+    XTC         = 'x',
+    TOP_N_SIGMA = 'n',
     TYPICAL_P   = 'y',
     TEMPERATURE = 't'
 };
@@ -39,6 +41,9 @@ typedef struct llama_sampling_params {
     int32_t     mirostat              = 0;                  // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
     float       mirostat_tau          = 5.00f;              // target entropy
     float       mirostat_eta          = 0.10f;              // learning rate
+    float       xtc_probability       = 0.0f;               // xtc probability
+    float       xtc_threshold         = 1.0f;               // xtc threshold, disabled if > 0.5
+    float       top_n_sigma           = 0.0f;               // top-n-sigma
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
 

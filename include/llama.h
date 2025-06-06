@@ -1208,6 +1208,21 @@ extern "C" {
           llama_token_data_array * candidates,
                            float   temp);
 
+    /// @details XTC sampler as described in https://github.com/oobabooga/text-generation-webui/pull/6335
+    LLAMA_API void llama_sample_xtc(
+            struct llama_context * ctx,
+          llama_token_data_array * candidates_p,
+                           float   probability,
+                           float   threshold,
+                           size_t  min_keep);
+
+    /// @details Top n sigma sampling as described in academic paper "Top-nσ: Not All Logits Are You Need" https://arxiv.org/pdf/2411.07641
+    LLAMA_API void llama_sample_top_n_sigma(
+            struct llama_context * ctx,
+          llama_token_data_array * candidates_p,
+                           float   top_n_sigma);
+
+
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
     /// @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.
     /// @param tau  The target cross-entropy (or surprise) value you want to achieve for the generated text. A higher value corresponds to more surprising or less predictable text, while a lower value corresponds to less surprising or more predictable text.
