@@ -9841,7 +9841,7 @@ llm_expert_gating_func_type   gating_op,
     }
 
     ggml_tensor * par;
-    if (lctx.cparams.fused_moe_up_gate) {
+    if (lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type) {
         par = ggml_moe_up_gate(ctx, up_exps, gate_exps, cur, selected_experts, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
     } else {
         ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
