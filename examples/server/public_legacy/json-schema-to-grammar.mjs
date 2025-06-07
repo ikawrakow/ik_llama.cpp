@@ -1,7 +1,10 @@
 // WARNING: This file was ported from json_schema_to_grammar.py, please fix bugs / add features there first.
-const SPACE_RULE = '| " " | "\\n" [ \\t]{0,20}';
+const SPACE_RULE = '| " " | "\\n"{1,2} [ \\t]{0,20}';
 
 function _buildRepetition(itemRule, minItems, maxItems, opts={}) {
+  if (maxItems == 0) {
+    return '';
+  }
   if (minItems === 0 && maxItems === 1) {
     return `${itemRule}?`;
   }
@@ -529,7 +532,7 @@ export class SchemaConverter {
       return joinSeq();
     };
 
-    return this._addRule(name, "\"\\\"\" " + toRule(transform()) + " \"\\\"\" space")
+    return this._addRule(name, "\"\\\"\" (" + toRule(transform()) + ") \"\\\"\" space")
   }
 
   _notStrings(strings) {
