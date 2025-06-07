@@ -7397,7 +7397,7 @@ void dequantize_row_ms_i2s(const void * vx, float * y, int64_t k) {
 }
 
 namespace {
-template <int block_size, int group_size, int num_bits, bool is_abs = false>
+template <int block_size, int group_size, int num_bits, bool is_abs = false, bool is_int = false>
 class QuantizerIQKT {
     static_assert(group_size == 8 || group_size == 4);
     static_assert(block_size >= 8 && block_size%8 == 0);
@@ -7408,7 +7408,7 @@ public:
     constexpr static int kNg = kBlockSize/kGroupSize;
     constexpr static int kNblock = kSuperBlockSize/kBlockSize;
     constexpr static int kNumVal = 1 << num_bits; // i.e, 16 bits per group of 8
-    constexpr static float kScale = 1.f; //31.75f;
+    constexpr static float kScale = is_int ? 1.f : 31.75f;
     constexpr static bool kVerbose = false;
 
     QuantizerIQKT(int num_clusters, int num_neighbours, int offset = 4096);
@@ -7421,19 +7421,25 @@ public:
     static inline void set_values(uint32_t i, float * result, float scale, int offset = 4096) {
         constexpr uint32_t ka = 89226354;
         constexpr uint32_t kb = 64248484;
-        //constexpr uint32_t kmask = 0x8fff8fff;
-        //constexpr uint32_t km32 = 0x3b603b60;
         uint32_t x = i + offset;
-        uint32_t s;
-        auto i8 = (const int8_t *)&s;
-        for (int k = 0; k < kGroupSize; ++k) {
-            x = ka*x + kb;
-            s = x & 0x3f3f3f3f;
-            result[k] = scale*(i8[0] + i8[1] + i8[2] + i8[3] - 126.f);
-            //uint32_t s = (x & kmask) ^ km32;
-            //float val = GGML_FP16_TO_FP32(s & 65535) + GGML_FP16_TO_FP32(s >> 16);
-            //if constexpr (is_abs) result[k] = scale*std::abs(val);
-            //else result[k] = scale*val;
+        if constexpr (is_int) {
+            uint32_t s;
+            auto i8 = (const int8_t *)&s;
+            for (int k = 0; k < kGroupSize; ++k) {
+                x = ka*x + kb;
+                s = x & 0x3f3f3f3f;
+                result[k] = scale*(i8[0] + i8[1] + i8[2] + i8[3] - 126.f);
+            }
+        } else {
+            constexpr uint32_t kmask = 0x8fff8fff;
+            constexpr uint32_t km32 = 0x3b603b60;
+            for (int k = 0; k < kGroupSize; ++k) {
+                x = ka*x + kb;
+                uint32_t s = (x & kmask) ^ km32;
+                float val = GGML_FP16_TO_FP32(s & 65535) + GGML_FP16_TO_FP32(s >> 16);
+                if constexpr (is_abs) result[k] = scale*std::abs(val);
+                else result[k] = scale*val;
+            }
         }
     }
 
@@ -7482,8 +7488,8 @@ private:
     float m_mid[4*kGroupSize];
 };
 
-template <int block_size, int group_size, int num_bits, bool is_abs>
-QuantizerIQKT<block_size, group_size, num_bits, is_abs>::QuantizerIQKT(int num_clusters, int num_neighbours, int offset) {
+template <int block_size, int group_size, int num_bits, bool is_abs, bool is_int>
+QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int>::QuantizerIQKT(int num_clusters, int num_neighbours, int offset) {
     m_values.resize(kNumVal*kGroupSize);
     float * data = m_values.data();
     for (int i = 0; i < kNumVal; ++i) {
@@ -7499,8 +7505,8 @@ QuantizerIQKT<block_size, group_size, num_bits, is_abs>::QuantizerIQKT(int num_c
     m_in_cluster = finalize_clusters(num_neighbours, m_values, m_clusters, m_c_values);
 }
 
-template <int block_size, int group_size, int num_bits, bool is_abs>
-std::pair<float, float> QuantizerIQKT<block_size, group_size, num_bits, is_abs>::find_best_scale(
+template <int block_size, int group_size, int num_bits, bool is_abs, bool is_int>
+std::pair<float, float> QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int>::find_best_scale(
         const float * xb, const float * weight, const int * best_idx) const {
     float sumqx = 0, sumq2 = 0;
 #ifdef __AVX2__
@@ -7532,8 +7538,8 @@ std::pair<float, float> QuantizerIQKT<block_size, group_size, num_bits, is_abs>:
     return sumq2 > 0 ? std::make_pair(sumqx/sumq2, sumqx*sumqx/sumq2) : std::make_pair(0.f, 0.f);
 }
 
-template <int block_size, int group_size, int num_bits, bool is_abs>
-float QuantizerIQKT<block_size, group_size, num_bits, is_abs>::find_best_inverse_scale(
+template <int block_size, int group_size, int num_bits, bool is_abs, bool is_int>
+float QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int>::find_best_inverse_scale(
         const float * xb, const float * weight, const int * best_idx) const {
     float sumqx = 0, sumx2 = 0;
 #ifdef __AVX2__
@@ -7565,8 +7571,8 @@ float QuantizerIQKT<block_size, group_size, num_bits, is_abs>::find_best_inverse
     return sumx2 > 0 ? sumqx/sumx2 : 0.f;
 }
 
-template <int block_size, int group_size, int num_bits, bool is_abs>
-void QuantizerIQKT<block_size, group_size, num_bits, is_abs>::find_best_match(float d, const float * xb, const float * weight, int * best_idx) const {
+template <int block_size, int group_size, int num_bits, bool is_abs, bool is_int>
+void QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int>::find_best_match(float d, const float * xb, const float * weight, int * best_idx) const {
     if (!d) {
         std::memset(best_idx, 0, kNg*sizeof(int));
         return;
@@ -7744,8 +7750,8 @@ void QuantizerIQKT<block_size, group_size, num_bits, is_abs>::find_best_match(fl
 #endif
 }
 
-template <int block_size, int group_size, int num_bits, bool is_abs>
-std::vector<std::vector<int>> QuantizerIQKT<block_size, group_size, num_bits, is_abs>::finalize_clusters(int num_neighbours,
+template <int block_size, int group_size, int num_bits, bool is_abs, bool is_int>
+std::vector<std::vector<int>> QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int>::finalize_clusters(int num_neighbours,
         const std::vector<float>& values, const std::vector<float>& clusters, std::vector<std::vector<float>>& c_values) {
     int ncluster = clusters.size()/kGroupSize;
     std::vector<std::vector<int>> p_in_cluster(ncluster);
@@ -7831,8 +7837,8 @@ std::vector<std::vector<int>> QuantizerIQKT<block_size, group_size, num_bits, is
     return p_in_cluster;
 }
 
-template <int block_size, int group_size, int num_bits, bool is_abs>
-std::vector<float> QuantizerIQKT<block_size, group_size, num_bits, is_abs>::cluster_points(const std::vector<float>& points, int ncluster, int niter, float * mid) {
+template <int block_size, int group_size, int num_bits, bool is_abs, bool is_int>
+std::vector<float> QuantizerIQKT<block_size, group_size, num_bits, is_abs, is_int>::cluster_points(const std::vector<float>& points, int ncluster, int niter, float * mid) {
     constexpr int ndim = kGroupSize;
     GGML_ASSERT(points.size() % ndim == 0);
     int npoint = points.size() / ndim;
@@ -8526,7 +8532,7 @@ void vec_dot_iq3_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
 
 namespace{
 
-using QuantizerIQ4KT = QuantizerIQKT<32, 4, 15>;
+using QuantizerIQ4KT = QuantizerIQKT<32, 4, 15, false, true>;
 
 const QuantizerIQ4KT& iq4kt_quantizer(bool with_offset = false) {
     static std::mutex mutex;
