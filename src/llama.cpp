@@ -23279,30 +23279,121 @@ void llama_sample_top_n_sigma(struct llama_context * ctx, llama_token_data_array
     llama_sample_top_n_sigma_impl(ctx ? &ctx->sampling : nullptr, candidates_p, top_n_sigma);
 }
 
+//DRY
 
-struct llama_sampler * llama_sampler_init_dry(const struct llama_model * model, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
-    return llama_sampler_init_dry_impl(model->vocab, llama_n_ctx_train(model), dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, seq_breakers, num_breakers);
+static void get_overlapping_token_sequences(struct llama_context * ctx, const std::string& str,
+                                           std::unordered_multimap<llama_token, std::vector<llama_token>>& token_sequences,
+                                           int max_tail_len = -1) {
+    const llama_model * model = llama_get_model(ctx);
+
+    for (llama_token token_id = 0; token_id < llama_n_vocab(model); token_id++) {
+        // Get token text
+        char token_buf[256];
+        int len = llama_token_to_piece(model, token_id, token_buf, sizeof(token_buf), 0, false);
+        if (len <= 0) continue;
+
+        std::string word(token_buf, len);
+
+        if (word.find(str) != std::string::npos) {
+            token_sequences.emplace(token_id, std::vector<llama_token>());
+        } else {
+            size_t word_len = word.size(), str_len = str.size();
+            size_t pos = -1;
+            while ((pos = word.find(str[0], pos + 1)) != std::string::npos) {
+                bool match = true;
+                size_t i;
+                for (i = 1; i < str_len && i + pos < word_len; ++i) {
+                    if (word[pos + i] != str[i]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    // Tokenize the remaining part
+                    std::string remaining = str.substr(i);
+                    std::vector<llama_token> tokens;
+                    if (!remaining.empty()) {
+                        tokens.resize(remaining.size() + 16); // rough estimate
+                        int n_tokens = llama_tokenize(model, remaining.c_str(), remaining.length(),
+                                                    tokens.data(), tokens.size(), false, false);
+                        if (n_tokens > 0) {
+                            tokens.resize(n_tokens);
+                            if (max_tail_len >= 0 && tokens.size() > (size_t)max_tail_len) {
+                                tokens.resize(max_tail_len);
+                            }
+                        } else {
+                            tokens.clear();
+                        }
+                    }
+
+                    // Check for duplicates
+                    auto range = token_sequences.equal_range(token_id);
+                    bool found = false;
+                    for (auto it = range.first; it != range.second; ++it) {
+                        if (tokens == it->second) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        token_sequences.emplace(token_id, std::move(tokens));
+                    }
+                }
+            }
+        }
+    }
 }
-
 
 void llama_sample_dry(struct llama_context * ctx, llama_token_data_array * candidates_p,
                      float dry_multiplier, float dry_base, int32_t dry_allowed_length,
                      int32_t dry_penalty_last_n, const std::vector<std::string> & dry_sequence_breakers) {
-    llama_sample_dry_impl(ctx ? &ctx->sampling : nullptr, candidates_p, dry_multiplier, dry_base,
-                         dry_allowed_length, dry_penalty_last_n, dry_sequence_breakers);
+
+    if (!ctx) return;
+
+    // Process sequence breakers if not done yet
+    if (!ctx->sampling.dry_breakers_initialized && !dry_sequence_breakers.empty()) {
+        const int MAX_CHAR_LEN = 40;
+        const int MAX_SEQ_LEN = 20;
+
+        for (const auto& breaker : dry_sequence_breakers) {
+            if (breaker.empty()) continue;
+            std::string sequence_break = breaker;
+            if (sequence_break.size() > MAX_CHAR_LEN) {
+                sequence_break.resize(MAX_CHAR_LEN);
+            }
+            get_overlapping_token_sequences(ctx, sequence_break, ctx->sampling.dry_processed_breakers, MAX_SEQ_LEN);
+        }
+        ctx->sampling.dry_breakers_initialized = true;
+    }
+
+    llama_sample_dry_impl(&ctx->sampling, candidates_p, dry_multiplier, dry_base,
+                         dry_allowed_length, dry_penalty_last_n, dry_sequence_breakers);  // REMOVE ctx parameter
 }
 
 void llama_sample_dry_accept_token(struct llama_context * ctx, llama_token token) {
     if (!ctx) return;
+    ctx->sampling.dry_last_tokens.push_back(token);
 
-    auto& sampling = ctx->sampling;
-    sampling.dry_last_tokens.push_back(token);
-
-    // Keep history bounded to reasonable size
-    if (sampling.dry_last_tokens.size() > 4096) {
-        sampling.dry_last_tokens.erase(sampling.dry_last_tokens.begin());
+    // Only bound by actual context size to prevent infinite memory growth
+    int32_t max_ctx = llama_n_ctx(ctx);
+    if ((int)ctx->sampling.dry_last_tokens.size() > max_ctx) {
+        ctx->sampling.dry_last_tokens.erase(ctx->sampling.dry_last_tokens.begin(),
+                                           ctx->sampling.dry_last_tokens.begin() +
+                                           (ctx->sampling.dry_last_tokens.size() - max_ctx));
     }
 }
+
+void llama_sample_repetition_penalties(
+            struct llama_context * ctx,
+          llama_token_data_array * candidates,
+               const llama_token * last_tokens,
+                          size_t   penalty_last_n,
+                           float   penalty_repeat,
+                           float   penalty_freq,
+                           float   penalty_present) {
+    llama_sample_repetition_penalties_impl(ctx ? &ctx->sampling : nullptr, candidates, last_tokens, penalty_last_n, penalty_repeat, penalty_freq, penalty_present);
+}
+
 
 void llama_sample_apply_guidance(
           struct llama_context * ctx,

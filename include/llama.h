@@ -15,9 +15,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
-
+#ifdef __cplusplus
 #include <vector>
 #include <string>
+#endif
 
 #ifdef LLAMA_SHARED
 #    if defined(_WIN32) && !defined(__MINGW32__)
@@ -1224,7 +1225,7 @@ extern "C" {
             struct llama_context * ctx,
           llama_token_data_array * candidates_p,
                            float   top_n_sigma);
-
+#ifdef __cplusplus
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982Add
 LLAMA_API void llama_sample_dry(
         struct llama_context * ctx,
@@ -1234,7 +1235,7 @@ LLAMA_API void llama_sample_dry(
                      int32_t   dry_allowed_length,
                      int32_t   dry_penalty_last_n,
 const std::vector<std::string> & dry_sequence_breakers);
-
+#endif
 LLAMA_API void llama_sample_dry_accept_token(struct llama_context * ctx, llama_token token);
 
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.

@@ -1690,21 +1690,22 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --mirostat-lr N",        "Mirostat learning rate, parameter eta (default: %.1f)", (double)sparams.mirostat_eta });
     options.push_back({ "*",           "       --mirostat-ent N",       "Mirostat target entropy, parameter tau (default: %.1f)", (double)sparams.mirostat_tau });
     options.push_back({ "*",           "       --xtc-probability p",    "xtc probability (default: %.1f, 0.0 = disabled)", (double)sparams.xtc_probability });
-    options.push_back({ "*",           "       --xtc-threshold t",      "xtc threshold (default: %.1f, >0.5 = disabled)", (double)sparams.xtc_threshold});
-    options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parmeter (default: %.1f, 0.0 = disabled)", (double)sparams.top_n_sigma});
+    options.push_back({ "*",           "       --xtc-threshold t",      "xtc threshold (default: %.1f, >0.5 = disabled)", (double)sparams.xtc_threshold });
+    options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parmeter (default: %.1f, 0.0 = disabled)", (double)sparams.top_n_sigma });
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
-                                                                        "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
+                                                                        "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'",
 
-sparams.dry_allowed_length)});
+sparams.dry_allowed_length });
     options.push_back({ "*",           "       --dry-allowed-length N",        "dry_allowed_length: %d (default: 2\n)", 
-(double)sparams.dry_base});
+(double)sparams.dry_base });
     options.push_back({ "*",           "       --dry-base t",        "dry_base: %.2f (default: 1.75\n)", 
-(double)sparams.dry_multiplier);
+(double)sparams.dry_multiplier });
     options.push_back({ "*",           "       ---dry-multiplier t",        "dry_multiplier: %.1f (default: 0.0\n)", 
-sparams.dry_penalty_last_n});
-    options.push_back({ "*",           "       --dry-penalty-last-n N",        "dry_penalty_last_n: %d default: -1 (0 = disable, -1 = context size)\n", 
-    options.push_back({ "main",        "       --cfg-negative-prompt PROMPT",
+sparams.dry_penalty_last_n });
+    options.push_back({ "*",           "       --dry-penalty-last-n N",        "dry_penalty_last_n: %d default: -1 (0 = disable, -1 = context size)\n"}); 
+ 
+   options.push_back({ "main",         "       --cfg-negative-prompt PROMPT",
                                                                         "negative prompt to use for guidance (default: '%s')", sparams.cfg_negative_prompt.c_str() });
     options.push_back({ "main",        "       --cfg-negative-prompt-file FNAME",
                                                                         "negative prompt file to use for guidance" });
