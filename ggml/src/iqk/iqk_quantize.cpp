@@ -7525,6 +7525,7 @@ QuantizerIQKT<block_size, group_size, num_bits, is_abs>::QuantizerIQKT(int num_c
         set_values(i, data, kScale, offset);
         data += kGroupSize;
     }
+    if (num_clusters == 0) return;
     // Make 128 clusters.
     // Note: we get a slightly better result by using 64 clusters
     //       at the expense of almost doubling the quantization time.
@@ -8575,6 +8576,14 @@ const QuantizerIQ4KT& iq4kt_quantizer(bool with_offset = false) {
     return *quantizer1;
 }
 
+const QuantizerIQ4KT& iq4kt_dequantizer() {
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    static std::unique_ptr<QuantizerIQ4KT> dequantizer;
+    if (!dequantizer) dequantizer = std::make_unique<QuantizerIQ4KT>(0, 0, 4096);
+    return *dequantizer;
+}
+
 void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const float * quant_weights, float * all_scales, float * all_weights) {
 
     constexpr float kSigmaScale = 2.0f;
@@ -8776,7 +8785,7 @@ void dequantize_row_iq4_kt(const block_iq4_kt * x, float * y, int64_t k) {
     const float d = dptr[0] * Q::kScale;
     const float row_av = dptr[1];
     x = (const block_iq4_kt *)(dptr + 2);
-    auto& deq = iq4kt_quantizer();
+    auto& deq = iq4kt_dequantizer();
     for (int ibl = 0; ibl < nb; ++ibl) {
         auto shb = x[ibl].qs;
         auto ql = (const uint8_t *)(shb + Q::kNblock);
