@@ -573,6 +573,7 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
                           float dry_multiplier, float dry_base, int32_t dry_allowed_length,
                           int32_t dry_penalty_last_n, const std::vector<std::string> & dry_sequence_breakers) {
    
+#ifdef DRY_DEBUG
     // DEBUG: Print when DRY is called
     static int call_count = 0;
     if (++call_count <= 5) {
@@ -580,7 +581,7 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
                 call_count, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n,
                 smpl ? smpl->dry_last_tokens.size() : 0);
     }
-
+#endif
     if (dry_multiplier == 0.0f || dry_base < 1.0f || dry_penalty_last_n == 0 || !smpl) {
         return;
     }
@@ -715,11 +716,12 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
             }
         }
     }
-
+#ifdef DRY_DEBUG
     // DEBUG: Show penalties applied
     if (!smpl->dry_max_token_repeat.empty()) {
         fprintf(stderr, "DRY: Applied penalties to %zu tokens\n", smpl->dry_max_token_repeat.size());
     }
+#endif
     candidates->sorted = false;
 }
 

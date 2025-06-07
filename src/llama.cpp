@@ -23373,13 +23373,14 @@ void llama_sample_dry(struct llama_context * ctx, llama_token_data_array * candi
 void llama_sample_dry_accept_token(struct llama_context * ctx, llama_token token) {
     if (!ctx) return;
 
+#ifdef DRY_DEBUG
     //Debug
     static int accept_count = 0;
     if (++accept_count <= 5) {
         fprintf(stderr, "DRY ACCEPT %d: token=%d history_size=%zu\n",
                 accept_count, token, ctx->sampling.dry_last_tokens.size());
     }
-
+#endif
     ctx->sampling.dry_last_tokens.push_back(token);
 
     // Only bound by actual context size to prevent infinite memory growth
