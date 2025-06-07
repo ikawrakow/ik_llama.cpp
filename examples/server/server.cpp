@@ -904,30 +904,51 @@ struct server_context {
             slot.oaicompat_model = "";
         }
 
-        slot.params.stream             = json_value(data, "stream",            false);
-        slot.params.cache_prompt       = json_value(data, "cache_prompt",      true);
-        slot.params.n_predict          = json_value(data, "n_predict",         json_value(data, "max_tokens", default_params.n_predict));
-        slot.sparams.top_k             = json_value(data, "top_k",             default_sparams.top_k);
-        slot.sparams.top_p             = json_value(data, "top_p",             default_sparams.top_p);
-        slot.sparams.min_p             = json_value(data, "min_p",             default_sparams.min_p);
-        slot.sparams.tfs_z             = json_value(data, "tfs_z",             default_sparams.tfs_z);
-        slot.sparams.typical_p         = json_value(data, "typical_p",         default_sparams.typical_p);
-        slot.sparams.temp              = json_value(data, "temperature",       default_sparams.temp);
-        slot.sparams.dynatemp_range    = json_value(data, "dynatemp_range",    default_sparams.dynatemp_range);
-        slot.sparams.dynatemp_exponent = json_value(data, "dynatemp_exponent", default_sparams.dynatemp_exponent);
-        slot.sparams.penalty_last_n    = json_value(data, "repeat_last_n",     default_sparams.penalty_last_n);
-        slot.sparams.penalty_repeat    = json_value(data, "repeat_penalty",    default_sparams.penalty_repeat);
-        slot.sparams.penalty_freq      = json_value(data, "frequency_penalty", default_sparams.penalty_freq);
-        slot.sparams.penalty_present   = json_value(data, "presence_penalty",  default_sparams.penalty_present);
-        slot.sparams.mirostat          = json_value(data, "mirostat",          default_sparams.mirostat);
-        slot.sparams.mirostat_tau      = json_value(data, "mirostat_tau",      default_sparams.mirostat_tau);
-        slot.sparams.mirostat_eta      = json_value(data, "mirostat_eta",      default_sparams.mirostat_eta);
-        slot.sparams.penalize_nl       = json_value(data, "penalize_nl",       default_sparams.penalize_nl);
-        slot.params.n_keep             = json_value(data, "n_keep",            slot.params.n_keep);
-        slot.params.n_discard          = json_value(data, "n_discard",         default_params.n_discard);
-        slot.sparams.seed              = json_value(data, "seed",              default_sparams.seed);
-        slot.sparams.n_probs           = json_value(data, "n_probs",           default_sparams.n_probs);
-        slot.sparams.min_keep          = json_value(data, "min_keep",          default_sparams.min_keep);
+        slot.params.stream              = json_value(data, "stream",             false);
+        slot.params.cache_prompt        = json_value(data, "cache_prompt",       true);
+        slot.params.n_predict           = json_value(data, "n_predict",          json_value(data, "max_tokens", default_params.n_predict));
+        slot.sparams.top_k              = json_value(data, "top_k",              default_sparams.top_k);
+        slot.sparams.top_p              = json_value(data, "top_p",              default_sparams.top_p);
+        slot.sparams.min_p              = json_value(data, "min_p",              default_sparams.min_p);
+        slot.sparams.tfs_z              = json_value(data, "tfs_z",              default_sparams.tfs_z);
+        slot.sparams.typical_p          = json_value(data, "typical_p",          default_sparams.typical_p);
+        slot.sparams.temp               = json_value(data, "temperature",        default_sparams.temp);
+        slot.sparams.dynatemp_range     = json_value(data, "dynatemp_range",     default_sparams.dynatemp_range);
+        slot.sparams.dynatemp_exponent  = json_value(data, "dynatemp_exponent",  default_sparams.dynatemp_exponent);
+        slot.sparams.penalty_last_n     = json_value(data, "repeat_last_n",      default_sparams.penalty_last_n);
+        slot.sparams.penalty_repeat     = json_value(data, "repeat_penalty",     default_sparams.penalty_repeat);
+        slot.sparams.penalty_freq       = json_value(data, "frequency_penalty",  default_sparams.penalty_freq);
+        slot.sparams.penalty_present    = json_value(data, "presence_penalty",   default_sparams.penalty_present);
+        slot.sparams.mirostat           = json_value(data, "mirostat",           default_sparams.mirostat);
+        slot.sparams.mirostat_tau       = json_value(data, "mirostat_tau",       default_sparams.mirostat_tau);
+        slot.sparams.mirostat_eta       = json_value(data, "mirostat_eta",       default_sparams.mirostat_eta);
+        slot.sparams.xtc_probability    = json_value(data, "xtc_probability",    default_sparams.xtc_probability);
+        slot.sparams.xtc_threshold      = json_value(data, "xtc_threshold",      default_sparams.xtc_threshold);
+        slot.sparams.top_n_sigma        = json_value(data, "top_n_sigma",        default_sparams.top_n_sigma);
+        slot.sparams.dry_multiplier     = json_value(data, "dry_multiplier",     default_sparams.dry_multiplier);
+        slot.sparams.dry_base           = json_value(data, "dry_base",           default_sparams.dry_base);
+        slot.sparams.dry_allowed_length = json_value(data, "dry_allowed_length", default_sparams.dry_allowed_length);
+        slot.sparams.dry_penalty_last_n = json_value(data, "dry_penalty_last_n", default_sparams.dry_penalty_last_n);
+        slot.sparams.penalize_nl        = json_value(data, "penalize_nl",        default_sparams.penalize_nl);
+        slot.params.n_keep              = json_value(data, "n_keep",             slot.params.n_keep);
+        slot.params.n_discard           = json_value(data, "n_discard",          default_params.n_discard);
+        slot.sparams.seed               = json_value(data, "seed",               default_sparams.seed);
+        slot.sparams.n_probs            = json_value(data, "n_probs",            default_sparams.n_probs);
+        slot.sparams.min_keep           = json_value(data, "min_keep",           default_sparams.min_keep);
+
+        // Parse dry_sequence_breakers array
+        if (data.contains("dry_sequence_breakers") && data["dry_sequence_breakers"].is_array()) {
+            slot.sparams.dry_sequence_breakers.clear();
+            for (const auto& breaker : data["dry_sequence_breakers"]) {
+                if (breaker.is_string()) {
+                    slot.sparams.dry_sequence_breakers.push_back(breaker.get<std::string>());
+                }
+            }
+        } else {
+            // Use defaults if not provided
+            slot.sparams.dry_sequence_breakers = default_sparams.dry_sequence_breakers;
+        }
+
 
         // process "json_schema" and "grammar"
         if (data.contains("json_schema") && !data.at("json_schema").is_null() && data.contains("grammar") && !data.at("grammar").is_null()) {
@@ -1350,6 +1371,13 @@ struct server_context {
             {"mirostat",                  slot.sparams.mirostat},
             {"mirostat_tau",              slot.sparams.mirostat_tau},
             {"mirostat_eta",              slot.sparams.mirostat_eta},
+            {"xtc_probability",           slot.sparams.xtc_probability},
+            {"xtc_threshold",             slot.sparams.xtc_threshold},
+            {"top_n_sigma",               slot.sparams.top_n_sigma},
+            {"dry_multiplier",            slot.sparams.dry_multiplier},
+            {"dry_base",                  slot.sparams.dry_base},
+            {"dry_allowed_length",        slot.sparams.dry_allowed_length},
+            {"dry_penalty_last_n",        slot.sparams.dry_penalty_last_n},
             {"penalize_nl",               slot.sparams.penalize_nl},
             {"stop",                      slot.params.antiprompt},
             {"n_predict",                 slot.params.n_predict}, // TODO: fix duplicate key n_predict
