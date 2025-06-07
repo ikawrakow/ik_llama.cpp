@@ -117,7 +117,12 @@ struct Trellis3 {
     }
     inline __m256 gen8(uint32_t val1, uint32_t val2) const {
         auto v8 = _mm256_and_si256(next8(val1, val2), _mm256_set1_epi32(0x3f3f3f3f));
+#ifdef HAVE_FANCY_SIMD
         auto i8 = _mm256_dpbusd_epi32(_mm256_set1_epi32(-126), _mm256_set1_epi32(0x01010101), v8);
+#else
+        auto dot = _mm256_maddubs_epi16(v8, _mm256_set1_epi32(0x01010101));
+        auto i8  = _mm256_add_epi32(_mm256_set1_epi32(-126), _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
+#endif
         return _mm256_cvtepi32_ps(i8);
     }
     template <bool is_unsigned = false>
@@ -126,7 +131,12 @@ struct Trellis3 {
         __m256i aux[4];
         for (int i = 0; i < 4; ++i) {
             auto i8 = _mm256_and_si256(next8(val[2*i+0], val[2*i+1]), _mm256_set1_epi32(0x3f3f3f3f));
+#ifdef HAVE_FANCY_SIMD
             aux[i] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8);
+#else
+            auto dot = _mm256_maddubs_epi16(i8, _mm256_set1_epi32(0x01010101));
+            aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
+#endif
         }
         aux[0] = _mm256_packs_epi32(aux[0], aux[1]); //  0,  1,  2,  3,  8,  9, 10, 11,  4,  5,  6,  7, 12, 13, 14, 15
         aux[2] = _mm256_packs_epi32(aux[2], aux[3]); // 16, 17, 18, 19, 24, 25, 26, 27, 20, 21, 22, 23, 28, 29, 30, 31
@@ -487,8 +497,13 @@ void mul_mat_iq4_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     auto compute_dot = [&dot, &xv] (const int8_t * y) {
         for (int k = 0; k < 4; ++k) {
             auto yv = _mm256_loadu_si256((const __m256i *)y + k);
+#ifdef HAVE_FANCY_SIMD
             //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
             dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
+#else
+            auto p = _mm256_maddubs_epi16(_mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
+            dot[k] = _mm256_madd_epi16(p, _mm256_set1_epi16(1));
+#endif
         }
     };
 
