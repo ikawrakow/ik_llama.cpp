@@ -238,7 +238,7 @@ struct MulMat {
         switch (type) {
             case GGML_TYPE_IQ2_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
             case GGML_TYPE_IQ3_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
-            case GGML_TYPE_IQ4_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
+            case GGML_TYPE_IQ4_KT: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             default: break;
         }
 #else
@@ -352,9 +352,9 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         first_x *= num_rows;
         nrc_x   *= num_rows;
 
-        auto type_size = ggml_type_size(dequant_type);
+        //auto type_size = ggml_type_size(dequant_type);
 
-        size_t row_size_qx = ne00*type_size;
+        size_t row_size_qx = ggml_row_size(dequant_type, ne00);
         size_t row_size_qy = strideB;
 
         //printf("Dequant mul mat %s x %s: ne00 = %d, row_size = %d\n", ggml_type_name(dequant_type), ggml_type_name(ggml_type(typeB)), (int)ne00, (int)row_size_qx);

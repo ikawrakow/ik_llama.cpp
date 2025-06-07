@@ -7443,7 +7443,7 @@ public:
     constexpr static int kNg = kBlockSize/kGroupSize;
     constexpr static int kNblock = kSuperBlockSize/kBlockSize;
     constexpr static int kNumVal = 1 << num_bits; // i.e, 16 bits per group of 8
-    constexpr static float kScale = 31.75f;
+    constexpr static float kScale = 1.f; //31.75f;
     constexpr static bool kVerbose = false;
 
     QuantizerIQKT(int num_clusters, int num_neighbours, int offset = 4096);
@@ -7456,15 +7456,19 @@ public:
     static inline void set_values(uint32_t i, float * result, float scale, int offset = 4096) {
         constexpr uint32_t ka = 89226354;
         constexpr uint32_t kb = 64248484;
-        constexpr uint32_t kmask = 0x8fff8fff;
-        constexpr uint32_t km32 = 0x3b603b60;
+        //constexpr uint32_t kmask = 0x8fff8fff;
+        //constexpr uint32_t km32 = 0x3b603b60;
         uint32_t x = i + offset;
+        uint32_t s;
+        auto i8 = (const int8_t *)&s;
         for (int k = 0; k < kGroupSize; ++k) {
             x = ka*x + kb;
-            uint32_t s = (x & kmask) ^ km32;
-            float val = GGML_FP16_TO_FP32(s & 65535) + GGML_FP16_TO_FP32(s >> 16);
-            if constexpr (is_abs) result[k] = scale*std::abs(val);
-            else result[k] = scale*val;
+            s = x & 0x3f3f3f3f;
+            result[k] = scale*(i8[0] + i8[1] + i8[2] + i8[3] - 126.f);
+            //uint32_t s = (x & kmask) ^ km32;
+            //float val = GGML_FP16_TO_FP32(s & 65535) + GGML_FP16_TO_FP32(s >> 16);
+            //if constexpr (is_abs) result[k] = scale*std::abs(val);
+            //else result[k] = scale*val;
         }
     }
 
@@ -8244,7 +8248,7 @@ size_t quantize_iq2_kt(const float * src, void * dst, int64_t nrows, int64_t n_p
 void dequantize_row_iq2_kt(const block_iq2_kt * x, float * y, int64_t k) {
     assert(k % QuantizerIQ2KT::kSuperBlockSize == 0);
 #ifdef __AVX2__
-    if (iqk_dequantize_ktquants(GGML_TYPE_IQ2_KT, k, x, 0, y, 0, 1)) return;
+    //if (iqk_dequantize_ktquants(GGML_TYPE_IQ2_KT, k, x, 0, y, 0, 1)) return;
 #endif
     const int nb = k / QuantizerIQ2KT::kSuperBlockSize;
     const float * dptr = (const float *)x;
@@ -8595,7 +8599,10 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
         row_av += x[j];
         amax_row = std::max(amax_row, std::abs(x[j]));
     }
-    row_av /= n_per_row;
+    //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    //row_av /= n_per_row;
+    row_av = 0;
+    //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     dptr[1] = row_av;
     if (!amax_row) {
         dptr[0] = 0.f;
@@ -8628,7 +8635,7 @@ void quantize_row_iq4_kt_impl(const float * x, void * vy, int n_per_row, const f
                 continue;
             }
             float best = 0;
-            float scale_0 = std::max(92.f, 127.f*amax/amax_row);
+            float scale_0 = std::max(90.f, 124.f*amax/amax_row);
             for (int itry = -kNtry; itry <= kNtry; ++itry) {
                 quantizer1.find_best_match( amax/(8.f*itry + scale_0), xaux, weight, best_idx);
                 auto [dp, score_p] = quantizer1.find_best_scale(xaux, weight, best_idx);
@@ -8759,7 +8766,7 @@ size_t quantize_iq4_kt(const float * src, void * dst, int64_t nrows, int64_t n_p
 
 void dequantize_row_iq4_kt(const block_iq4_kt * x, float * y, int64_t k) {
 #ifdef __AVX2__
-    if (iqk_dequantize_ktquants(GGML_TYPE_IQ4_KT, k, x, 0, y, 0, 1)) return;
+    //if (iqk_dequantize_ktquants(GGML_TYPE_IQ4_KT, k, x, 0, y, 0, 1)) return;
 #endif
     using Q = QuantizerIQ4KT;
     assert(k % Q::kSuperBlockSize == 0);
