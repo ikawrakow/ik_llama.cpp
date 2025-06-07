@@ -223,6 +223,7 @@ struct gpt_params {
     int32_t timeout_read   = 600;          // http read timeout in seconds
     int32_t timeout_write  = timeout_read; // http write timeout in seconds
     int32_t n_threads_http = -1;           // number of threads to process HTTP requests
+    bool    send_done      = false;        // send done message as required for OAI compatibility
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";
