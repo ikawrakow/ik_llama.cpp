@@ -671,22 +671,35 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--dry-base") {
         CHECK_ARG
-        sparams.dry_base = std::stof(argv[i]);
-        return true;
+        float potential_base = std::stof(argv[i]);
+        if (potential_base >= 1.0f) {
+            sparams.dry_base = potential_base;
+        }
     }
     if (arg == "--dry-allowed-length") {
         CHECK_ARG
-        sparams.dry_allowed_length = std::stof(argv[i]);
+        sparams.dry_allowed_length = std::stoi(argv[i]);
         return true;
     }
     if (arg == "--dry-penalty-last-n") {
         CHECK_ARG
-        sparams.dry_penalty_last_n = std::stof(argv[i]);
+        sparams.dry_penalty_last_n = std::stoi(argv[i]);
         return true;
     }
     if (arg == "--dry-sequence-breaker") {
         CHECK_ARG
-        sparams.dry_sequence_breakers = std::stof(argv[i]);
+        static bool defaults_cleared = false;
+
+        if (!defaults_cleared) {
+            sparams.dry_sequence_breakers.clear();
+            defaults_cleared = true;
+        }
+
+        if (std::string(argv[i]) == "none") {
+            sparams.dry_sequence_breakers.clear();
+        } else {
+            sparams.dry_sequence_breakers.emplace_back(argv[i]);
+        }
         return true;
         //add input checking
     }
@@ -1685,18 +1698,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
 
 sparams.dry_allowed_length)});
     options.push_back({ "*",           "       --dry-allowed-length N",        "dry_allowed_length: %d (default: 2\n)", 
-(double)sparams.sparams.dry_base});
+(double)sparams.dry_base});
     options.push_back({ "*",           "       --dry-base t",        "dry_base: %.2f (default: 1.75\n)", 
-(double)sparams.sparams.dry_multiplier);
+(double)sparams.dry_multiplier);
     options.push_back({ "*",           "       ---dry-multiplier t",        "dry_multiplier: %.1f (default: 0.0\n)", 
-sparams.sparams.dry_penalty_last_n});
+sparams.dry_penalty_last_n});
     options.push_back({ "*",           "       --dry-penalty-last-n N",        "dry_penalty_last_n: %d default: -1 (0 = disable, -1 = context size)\n", 
-
-//sparams.xtc_threshold});
-//    options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parmeter (default: %.1f, 0.0 = disabled)", 
-
-
-
     options.push_back({ "main",        "       --cfg-negative-prompt PROMPT",
                                                                         "negative prompt to use for guidance (default: '%s')", sparams.cfg_negative_prompt.c_str() });
     options.push_back({ "main",        "       --cfg-negative-prompt-file FNAME",
@@ -3459,7 +3466,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "xtc_threshold: %f # default: 0.0\n", sparams.xtc_threshold);
     fprintf(stream, "top_n_sigma: %f # default: 0.0\n", sparams.top_n_sigma);
     fprintf(stream, "dry_allowed_length: %d # default: 2\n", sparams.dry_allowed_length);
-    fprintf(stream, "dry_base: %.2f # default: 1.75\n", sparams.dry_base);Add commentMore actions
+    fprintf(stream, "dry_base: %.2f # default: 1.75\n", sparams.dry_base);
     fprintf(stream, "dry_multiplier: %.1f # default: 0.0\n", sparams.dry_multiplier);
     fprintf(stream, "dry_penalty_last_n: %d # default: -1 (0 = disable, -1 = context size)\n", sparams.dry_penalty_last_n);
     fprintf(stream, "mlock: %s # default: false\n", params.use_mlock ? "true" : "false");

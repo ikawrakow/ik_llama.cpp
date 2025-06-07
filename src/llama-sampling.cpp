@@ -7,6 +7,10 @@
 #include <numeric>
 #include <unordered_map>
 
+#include "llama-vocab.h"
+#include <unordered_map>
+#include <cmath>
+
 static void llama_log_softmax(float * array, size_t size) {
     float max_l = *std::max_element(array, array + size);
     float sum = 0.f;
@@ -533,7 +537,7 @@ struct llama_sampler * llama_sampler_init_dry_impl(
                            float    dry_multiplier,
                            float    dry_base,
                          int32_t    dry_allowed_length,
-                         int32_t    dry_penalty_last_n,Add commentMore actions
+                         int32_t    dry_penalty_last_n,
                       const char ** seq_breakers,
                           size_t    num_breakers);
 
@@ -555,9 +559,14 @@ struct llama_sampler_dry {
 };
 
 // Ported from Koboldcpp, original PR: https://github.com/LostRuins/koboldcpp/pull/982 (Original author: pi6am)
-static void get_overlapping_token_sequences(const llama_vocab & vocab, const std::string& str, std::unordered_multimap<llama_token, std::vector<llama_token>>& token_sequences, int max_tail_len = -1) {
+static void get_overlapping_token_sequences(llama_context * ctx, const std::string& str, std::unordered_multimap<llama_token, std::vector<llama_token>>& token_sequences, int max_tail_len = -1) {
+
+    const llama_vocab & vocab = llama_get_model(ctx)->vocab;  // GET VOCAB FROM CTX
     for (llama_token token_id = 0; token_id < (llama_token)vocab.n_vocab; token_id++) {
-        std::string word = llama_detokenize(vocab, {token_id}, true);
+        std::string word = llama_detokenize(ctx, {token_id}, true);
+
+ //   for (llama_token token_id = 0; token_id < (llama_token)vocab.n_vocab; token_id++) {
+ //       std::string word = llama_detokenize(vocab, {token_id}, true);
         if (word.find(str) != std::string::npos) {
             token_sequences.emplace(token_id, std::vector<llama_token>());
         } else {

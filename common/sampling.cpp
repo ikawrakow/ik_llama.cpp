@@ -118,16 +118,17 @@ std::string llama_sampling_prev_str(llama_sampling_context * ctx_sampling, llama
 std::string llama_sampling_print(const llama_sampling_params & params) {
     char result[1024];
 
-    snprintf(result, sizeof(result),
-            "\trepeat_last_n = %d, repeat_penalty = %.3f, frequency_penalty = %.3f, presence_penalty = %.3f\n"
-            "\ttop_k = %d, tfs_z = %.3f, top_p = %.3f, min_p = %.3f, typical_p = %.3f, temp = %.3f\n"
-            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f\n"
-            "\txtc_probability = %.3f, xtc_threshold = %.3f, top_n_sigma = %.3f, 
-            "\tdry_multiplier = %.3f, dry_base = %.3f, dry_allowed_length = %d, dry_penalty_last_n = %d\n"",
-            params.penalty_last_n, params.penalty_repeat, params.penalty_freq, params.penalty_present,
-            params.top_k, params.tfs_z, params.top_p, params.min_p, params.typical_p, params.temp,
-            params.mirostat, params.mirostat_eta, params.mirostat_tau,
-            params.xtc_probability, params.xtc_threshold, params.top_n_sigma, params.dry_multiplier, params.dry_base, params.dry_allowed_length, params.dry_penalty_last_n);
+snprintf(result, sizeof(result),
+        "\trepeat_last_n = %d, repeat_penalty = %.3f, frequency_penalty = %.3f, presence_penalty = %.3f\n"
+        "\ttop_k = %d, tfs_z = %.3f, top_p = %.3f, min_p = %.3f, typical_p = %.3f, temp = %.3f\n"
+        "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f\n"
+        "\txtc_probability = %.3f, xtc_threshold = %.3f, top_n_sigma = %.3f\n"
+        "\tdry_multiplier = %.3f, dry_base = %.3f, dry_allowed_length = %d, dry_penalty_last_n = %d",
+        params.penalty_last_n, params.penalty_repeat, params.penalty_freq, params.penalty_present,
+        params.top_k, params.tfs_z, params.top_p, params.min_p, params.typical_p, params.temp,
+        params.mirostat, params.mirostat_eta, params.mirostat_tau,
+        params.xtc_probability, params.xtc_threshold, params.top_n_sigma,
+        params.dry_multiplier, params.dry_base, params.dry_allowed_length, params.dry_penalty_last_n);
 
     return std::string(result);
 }
@@ -258,7 +259,7 @@ static void sampler_queue(
     const float         xtc_probability    = params.xtc_probability;
     const float         xtc_threshold      = params.xtc_threshold;
     const float         top_n_sigma        = params.top_n_sigma;
-    const float         dry_multiplier     = params. dry_multiplier;
+    const float         dry_multiplier     = params.dry_multiplier;
     const float         dry_base           = params.dry_base; 
     const int32_t       dry_allowed_length = params.dry_allowed_length;
     const int32_t       dry_penalty_last_n = params.dry_penalty_last_n;
@@ -273,7 +274,10 @@ static void sampler_queue(
             case llama_sampler_type::TOP_P      : llama_sample_top_p    (ctx_main, &cur_p, top_p,     min_keep); break;
             case llama_sampler_type::MIN_P      : llama_sample_min_p    (ctx_main, &cur_p, min_p,     min_keep); break;
             case llama_sampler_type::XTC        : llama_sample_xtc      (ctx_main, &cur_p, xtc_probability, xtc_threshold, min_keep); break;
-            case llama_sampler_type::DRY        : llama_sample_dry      (ctx_main, &cur_p, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, min_keep); break;
+            case llama_sampler_type::DRY        : llama_sample_dry      (ctx_main, &cur_p, dry_multiplier, dry_base,
+                                                                         dry_allowed_length, dry_penalty_last_n,
+                                                                         params.dry_sequence_breakers);
+                                                                         break;
             case llama_sampler_type::TOP_N_SIGMA: llama_sample_top_n_sigma(ctx_main, &cur_p, top_n_sigma); break;
             case llama_sampler_type::TEMPERATURE:
                 if (dynatemp_range > 0) {
@@ -479,6 +483,8 @@ void llama_sampling_accept(
         bool apply_grammar) {
     ctx_sampling->prev.erase(ctx_sampling->prev.begin());
     ctx_sampling->prev.push_back(id);
+
+    llama_sample_dry_accept_token(ctx_main, id);
 
     if (ctx_sampling->grammar != NULL && apply_grammar) {
         llama_grammar_accept_token(ctx_sampling->grammar, ctx_main, id);

@@ -23279,15 +23279,29 @@ void llama_sample_top_n_sigma(struct llama_context * ctx, llama_token_data_array
     llama_sample_top_n_sigma_impl(ctx ? &ctx->sampling : nullptr, candidates_p, top_n_sigma);
 }
 
-void llama_sample_repetition_penalties(
-            struct llama_context * ctx,
-          llama_token_data_array * candidates,
-               const llama_token * last_tokens,
-                          size_t   penalty_last_n,
-                           float   penalty_repeat,
-                           float   penalty_freq,
-                           float   penalty_present) {
-    llama_sample_repetition_penalties_impl(ctx ? &ctx->sampling : nullptr, candidates, last_tokens, penalty_last_n, penalty_repeat, penalty_freq, penalty_present);
+
+struct llama_sampler * llama_sampler_init_dry(const struct llama_model * model, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
+    return llama_sampler_init_dry_impl(model->vocab, llama_n_ctx_train(model), dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, seq_breakers, num_breakers);
+}
+
+
+void llama_sample_dry(struct llama_context * ctx, llama_token_data_array * candidates_p,
+                     float dry_multiplier, float dry_base, int32_t dry_allowed_length,
+                     int32_t dry_penalty_last_n, const std::vector<std::string> & dry_sequence_breakers) {
+    llama_sample_dry_impl(ctx ? &ctx->sampling : nullptr, candidates_p, dry_multiplier, dry_base,
+                         dry_allowed_length, dry_penalty_last_n, dry_sequence_breakers);
+}
+
+void llama_sample_dry_accept_token(struct llama_context * ctx, llama_token token) {
+    if (!ctx) return;
+
+    auto& sampling = ctx->sampling;
+    sampling.dry_last_tokens.push_back(token);
+
+    // Keep history bounded to reasonable size
+    if (sampling.dry_last_tokens.size() > 4096) {
+        sampling.dry_last_tokens.erase(sampling.dry_last_tokens.begin());
+    }
 }
 
 void llama_sample_apply_guidance(
