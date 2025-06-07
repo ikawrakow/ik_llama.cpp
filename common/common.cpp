@@ -1697,13 +1697,13 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'",
 
 sparams.dry_allowed_length });
-    options.push_back({ "*",           "       --dry-allowed-length N",        "dry_allowed_length: %d (default: 2\n)", 
+    options.push_back({ "*",           "       --dry-allowed-length N",        "dry_allowed_length: (default: 2)", 
 (double)sparams.dry_base });
-    options.push_back({ "*",           "       --dry-base t",        "dry_base: %.2f (default: 1.75\n)", 
+    options.push_back({ "*",           "       --dry-base t",        "dry_base: (default: 1.75)", 
 (double)sparams.dry_multiplier });
-    options.push_back({ "*",           "       ---dry-multiplier t",        "dry_multiplier: %.1f (default: 0.0\n)", 
+    options.push_back({ "*",           "       ---dry-multiplier t",        "dry_multiplier: (default: 0.0)", 
 sparams.dry_penalty_last_n });
-    options.push_back({ "*",           "       --dry-penalty-last-n N",        "dry_penalty_last_n: %d default: -1 (0 = disable, -1 = context size)\n"}); 
+    options.push_back({ "*",           "       --dry-penalty-last-n N",        "dry_penalty_last_n: default: -1 (0 = disable, -1 = context size)"}); 
  
    options.push_back({ "main",         "       --cfg-negative-prompt PROMPT",
                                                                         "negative prompt to use for guidance (default: '%s')", sparams.cfg_negative_prompt.c_str() });
