@@ -12,42 +12,6 @@
 #include <cmath>
 #include <vector>
 
-
-template<typename T>
-class ring_buffer {
-private:
-    std::vector<T> buffer;
-    size_t head = 0;
-    size_t tail = 0;
-    size_t count = 0;
-    size_t capacity;
-
-public:
-    ring_buffer(size_t cap) : capacity(cap) {
-        if (cap > 0) buffer.resize(cap);
-    }
-
-    void push_back(const T& item) {
-        if (capacity == 0) return;
-        buffer[tail] = item;
-        tail = (tail + 1) % capacity;
-        if (count < capacity) {
-            count++;
-        } else {
-            head = (head + 1) % capacity;
-        }
-    }
-
-    T rat(size_t index) const {  // "reverse at" - indexing from the end
-        if (index >= count) return T{};
-        size_t actual_index = (tail - 1 - index + capacity) % capacity;
-        return buffer[actual_index];
-    }
-
-    size_t size() const { return count; }
-    void clear() { head = tail = count = 0; }
-};
-
 static void llama_log_softmax(float * array, size_t size) {
     float max_l = *std::max_element(array, array + size);
     float sum = 0.f;
