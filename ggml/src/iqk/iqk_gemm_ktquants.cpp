@@ -1353,7 +1353,6 @@ void mul_mat_iq4_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
         return vpaddq_s32(dot.val[0], dot.val[2]);
     };
 
-    //int32x4x2_t shifts = {int32x4_t{-8, -11, -14, -17}, int32x4_t{-20, -23, -26, -29}};
     int32x4x2_t shifts = {int32x4_t{4, 1, -2, -5}, int32x4_t{-8, -11, -14, -17}};
 
     float32x4x2_t scales;
@@ -1396,16 +1395,6 @@ void mul_mat_iq4_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
                 vst1q_u32(values +4, vaddq_u32(vmovl_u16(vget_high_u16(vql1)), oh1));
                 vst1q_u32(values +8, vaddq_u32(vmovl_u16(vget_low_u16 (vql2)), oh2));
                 vst1q_u32(values+12, vaddq_u32(vmovl_u16(vget_high_u16(vql2)), oh2));
-                //auto sh1 = vshlq_u32(vdupq_n_u32(shb[ib+0]), shifts);
-                //auto sh2 = vshlq_u32(vdupq_n_u32(shb[ib+4]), shifts);
-                //for (int j = 0; j < 4; ++j) {
-                //    const uint32_t sh1 = shb[ib+0] >> (8 + 6*j);
-                //    const uint32_t sh2 = shb[ib+4] >> (8 + 6*j);
-                //    values[2*j+0] = ql[8*ib+2*j+ 0] + ((qh[8*ib+2*j+0] << 8) & 0xf00) + ((sh1 & 7) << 12) + o_helper.val[ib+0];
-                //    values[2*j+1] = ql[8*ib+2*j+ 1] + ((qh[8*ib+2*j+1] << 8) & 0xf00) + ((sh1 & 56) << 9) + o_helper.val[ib+0];
-                //    values[2*j+8] = ql[8*ib+2*j+32] + ((qh[8*ib+2*j+0] << 4) & 0xf00) + ((sh2 & 7) << 12) + o_helper.val[ib+4];
-                //    values[2*j+9] = ql[8*ib+2*j+33] + ((qh[8*ib+2*j+1] << 4) & 0xf00) + ((sh2 & 56) << 9) + o_helper.val[ib+4];
-                //}
                 xv[ib+0] = trellis.next32(values+0);
                 xv[ib+4] = trellis.next32(values+8);
             }
@@ -1443,23 +1432,16 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
 
     if (ne00%QK_K !=  0) return false;
 
-    func16 = nullptr;
-
     if (ggml_type(typeA) == GGML_TYPE_IQ4_KT) {
         if (ggml_type(typeB) == GGML_TYPE_Q8_0_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq4_kt_q8_0_x4_T, kernels);
+            func16 = nullptr;
             return true;
         }
         return false;
     }
 
-    //if (ne00%QK_K == 0 && ggml_type(typeB) == GGML_TYPE_F32 && ggml_type(typeA) == GGML_TYPE_IQ4_KT) {
-    //    IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq4_kt_F32_T, kernels);
-    //    func16 = nullptr;
-    //    return true;
-    //}
-
-    if (ne00%QK_K != 0 || ggml_type(typeB) != GGML_TYPE_F16) {
+    if (ggml_type(typeB) != GGML_TYPE_F16) {
         return false;
     }
 
@@ -1476,6 +1458,8 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
         default:
             return false;
     }
+
+    func16 = nullptr;
 
     return true;
 }
