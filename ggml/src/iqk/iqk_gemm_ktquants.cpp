@@ -383,7 +383,7 @@ void iqk_dequantize_iq4_kt_q80_r8(int n, const void * vx, size_t bx, void * vy, 
         for (int k = 0; k < 8; ++k) {
             const float * dptr = (const float *)((const char*)vx + (ix+k)*bx);
             dkt[k] = dptr[0];
-            x8[k] = (const block_iq4_kt *)(dptr + 2);
+            x8[k] = (const block_iq4_kt *)(dptr + 1);
         }
         auto vd = _mm256_loadu_ps(dkt);
 
@@ -512,7 +512,7 @@ void mul_mat_iq4_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     for (int ix = 0; ix < nrc_x; ++ix) {
         const float * dptr = (const float *)((const char*)vx + ix*bx);
         auto d = _mm256_set1_ps(dptr[0]);
-        const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 2);
+        const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 1);
 
         for (int iy = 0; iy < k_acc; ++iy) accd[iy] = _mm256_setzero_ps();
 

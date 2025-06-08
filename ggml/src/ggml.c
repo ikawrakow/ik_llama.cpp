@@ -1622,13 +1622,8 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
 #else
         .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
-//#ifdef __ARM_NEON
-//        .vec_dot_type             = GGML_TYPE_F16,
-//#else
-//        .vec_dot_type             = GGML_TYPE_F32,
-//#endif
         .nrows                    = 1,
-        .row_meta_size            = 8,
+        .row_meta_size            = 4,
     },
     [GGML_TYPE_IQ3_K] = {
         .type_name                = "iq3_k",
