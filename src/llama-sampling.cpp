@@ -743,7 +743,6 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
     // Compute it from `penalty_base` and the approximate log of `std::numeric_limits<float>::max()`
     
     const float FLOAT_MAX_LOG = 88.7228391f;
-    const float FLOAT_MAX_LOG = 88.7228391f;
     int max_exponent = 0;
     if (dry_base > 1.000001f) {
         max_exponent = FLOAT_MAX_LOG / std::log(dry_base);
