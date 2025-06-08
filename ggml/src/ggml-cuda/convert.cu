@@ -409,7 +409,7 @@ static __global__ void dequantize_block_iq4_kt(const void * __restrict__ vx, dst
     int64_t row = (QK_K * ii) / n_per_row;
     const float * dptr = (const float *)((const char *)vx + row * row_size);
     float scale = dptr[0] * 1.00f;
-    const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 2);
+    const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 1);
     const int64_t i = ii - (row*n_per_row)/QK_K;
 
     constexpr int kNumGroups = 64;

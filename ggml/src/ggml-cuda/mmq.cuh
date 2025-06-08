@@ -2819,7 +2819,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             i = min(i, i_max);
         }
 
-        const block_iq4_kt * bxi = (const block_iq4_kt *)(x + i*stride + 2*sizeof(float)) + kbx0;
+        const block_iq4_kt * bxi = (const block_iq4_kt *)(x + i*stride + sizeof(float)) + kbx0;
 
         int ib32 = kqsx/4;
         int j    = kqsx%4;
@@ -2855,7 +2855,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         }
 
         const float * dptr = (const float *)(x + i*stride);
-        const block_iq4_kt * bxi = (const block_iq4_kt *)(dptr + 2) + kbx0;
+        const block_iq4_kt * bxi = (const block_iq4_kt *)(dptr + 1) + kbx0;
         const int ls = (bxi->qs[threadIdx.x % 8] & 0xff) >> 1;
 
 #ifdef INT8_MMA_AVAILABLE

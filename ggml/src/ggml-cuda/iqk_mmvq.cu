@@ -441,7 +441,7 @@ __device__ __forceinline__ void vec_dot_iq4_kt_q8_1(
     constexpr uint32_t km = 0x3f3f3f3f;
 
     float scale = *(const float *)vbq;
-    const block_iq4_kt * bq4 = (const block_iq4_kt *)((const char *)vbq + 2*sizeof(float)) + kbx;
+    const block_iq4_kt * bq4 = (const block_iq4_kt *)((const char *)vbq + sizeof(float)) + kbx;
 
     // iqs is 0...28
     const int ib32 = iqs/4; // Why iqs/4 ?
