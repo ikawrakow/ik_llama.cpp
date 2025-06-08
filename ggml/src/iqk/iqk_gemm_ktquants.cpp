@@ -1237,17 +1237,32 @@ struct Trellis3 {
     //    return result;
     //}
     // This works:
+    //inline int8x16x2_t next32(const uint32_t * val) const {
+    //    uint16x8_t aux[4];
+    //    for (int i = 0; i < 4; ++i) {
+    //        auto i8 = next8(val[2*i+0], val[2*i+1]);
+    //        i8.val[0] = vandq_u32(i8.val[0], vdupq_n_u32(0x3f3f3f3f));
+    //        i8.val[1] = vandq_u32(i8.val[1], vdupq_n_u32(0x3f3f3f3f));
+    //        auto s1 = vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[0]));
+    //        auto s2 = vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[1]));
+    //        aux[i] = vcombine_s16(vmovn_s32(s1), vmovn_s32(s2));
+    //    }
+    //    int8x16x2_t result = {vcombine_s8(vmovn_s16(aux[0]), vmovn_s16(aux[1])), vcombine_s8(vmovn_s16(aux[2]), vmovn_s16(aux[3]))};
+    //    return result;
+    //}
     inline int8x16x2_t next32(const uint32_t * val) const {
-        uint16x8_t aux[4];
-        for (int i = 0; i < 4; ++i) {
-            auto i8 = next8(val[2*i+0], val[2*i+1]);
+        int8x16x2_t result = {vdupq_n_s8(-126), vdupq_n_s8(-126)};
+        for (int i = 0; i < 2; ++i) {
+            auto i8 = next8(val[4*i+0], val[4*i+1]);
             i8.val[0] = vandq_u32(i8.val[0], vdupq_n_u32(0x3f3f3f3f));
             i8.val[1] = vandq_u32(i8.val[1], vdupq_n_u32(0x3f3f3f3f));
-            auto s1 = vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[0]));
-            auto s2 = vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[1]));
-            aux[i] = vcombine_s16(vmovn_s32(s1), vmovn_s32(s2));
+            auto s1 = vpaddq_s8(vreinterpretq_s8_u32(i8.val[0]), vreinterpretq_s8_u32(i8.val[1]));
+            i8 = next8(val[4*i+2], val[4*i+3]);
+            i8.val[0] = vandq_u32(i8.val[0], vdupq_n_u32(0x3f3f3f3f));
+            i8.val[1] = vandq_u32(i8.val[1], vdupq_n_u32(0x3f3f3f3f));
+            auto s2 = vpaddq_s8(vreinterpretq_s8_u32(i8.val[0]), vreinterpretq_s8_u32(i8.val[1]));
+            result.val[i] = vaddq_s8(result.val[i], vpaddq_s8(s1, s2));
         }
-        int8x16x2_t result = {vcombine_s8(vmovn_s16(aux[0]), vmovn_s16(aux[1])), vcombine_s8(vmovn_s16(aux[2]), vmovn_s16(aux[3]))};
         return result;
     }
     static uint8x16_t load_shuffle() {
