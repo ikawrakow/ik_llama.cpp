@@ -81,7 +81,9 @@
 #endif
 #define LLAMA_CURL_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 #endif // LLAMA_USE_CURL
-
+#ifdef GGML_USE_RPC
+#  include "ggml-rpc.h"
+#endif
 using json = nlohmann::ordered_json;
 
 //
@@ -1003,7 +1005,38 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--rpc") {
         CHECK_ARG
+#ifdef GGML_USE_RPC
         params.rpc_servers = argv[i];
+        std::string servers(params.rpc_servers);
+        size_t pos = 0;
+        while ((pos = servers.find(",")) != std::string::npos) {
+            std::string server = servers.substr(0, pos);
+            ggml_backend_rpc_buffer_type(server.c_str());            
+            servers.erase(0, pos + 1);
+        }
+        ggml_backend_rpc_buffer_type(servers.c_str());
+#endif
+        return true;
+    }
+    if (arg == "--override-kv") {
+        CHECK_ARG
+            if (!string_parse_kv_override(argv[i], params.kv_overrides)) {
+                fprintf(stderr, "error: Invalid type for KV override: %s\n", argv[i]);
+                invalid_param = true;
+                return true;
+            }
+        return true;
+    }
+    if (arg == "--override-tensor" || arg == "-ot") {
+        CHECK_ARG
+            /*for (auto endpoint : params.rpc_servers.split)
+            {
+
+            }*/
+        if (!parse_buft_overrides(std::string{ argv[i] }, params.tensor_buft_overrides)) {
+            fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
+            invalid_param = true;
+        }
         return true;
     }
     if (arg == "--no-mmap") {
@@ -1211,23 +1244,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.grammar = json_schema_to_grammar(json::parse(argv[i]));
         return true;
     }
-    if (arg == "--override-kv") {
-        CHECK_ARG
-        if (!string_parse_kv_override(argv[i], params.kv_overrides)) {
-            fprintf(stderr, "error: Invalid type for KV override: %s\n", argv[i]);
-            invalid_param = true;
-            return true;
-        }
-        return true;
-    }
-    if (arg == "--override-tensor" || arg == "-ot") {
-        CHECK_ARG
-        if (!parse_buft_overrides(std::string{argv[i]}, params.tensor_buft_overrides)) {
-            fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
-            invalid_param = true;
-        }
-        return true;
-    }
+
     if (arg == "--offload-policy" || arg == "-op") {
         CHECK_ARG
         auto p = string_split_pairs<int,int>(argv[i], ',');
