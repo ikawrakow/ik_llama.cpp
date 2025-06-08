@@ -568,7 +568,8 @@ void llama_sample_top_n_sigma_impl(struct llama_sampling * smpl, llama_token_dat
 //DRY
 
 
-
+// Ported from Koboldcpp, original PR: https://github.com/LostRuins/koboldcpp/pull/982 (Original author: pi6am) 
+//and added implementation of DRY sampler (post-refactor) (original author: wwoodsTM) https://github.com/ggml-org/llama.cpp/pull/9702
 void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array * candidates,
                           float dry_multiplier, float dry_base, int32_t dry_allowed_length,
                           int32_t dry_penalty_last_n, const std::vector<std::string> & dry_sequence_breakers) {
@@ -586,7 +587,27 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
         return;
     }
 
-    // Step 1: Get effective context size
+    // Step 1: Look for restart sequences to limit the maximum repetition length.
+    // Work backwards through the context looking for any token that begins a restart sequence.
+    //
+    // The collection `restart_sequences` is a mapping from a "head" token to all "tail"
+    // sequences that together comprise a restart sequence. This allows us to quickly check
+    // whether each token is the head of a complete sequence. Most restart sequences are actually
+    // a single token, and for these the "tail" is an empty vector.
+    //
+    // If the token is a "head", test all restart sequences that begin with this token
+    // (there will often only be one sequence for each token, but if sequences like 'aaaq1' and
+    // 'aaa1' are used as restart strings, both could start with 'aaa' when tokenized). The
+    // longest matching sequence (if any) is used to limit the maximum repetition length.
+    //
+    // Note that in the case case of a short sequence contained in a longer one, this might fail to
+    // find the smallest value for `rep_limit`. For example, if 'amniotic' and 'ni' are both used as
+    // restart sequences, 'ni' will be found first, and since it's shorter it will fail to suppress
+    // 'otic'. This is a minor issue since fully contained restart sequences are likely to be rare.
+    //
+    // This is theoretically worst-case O(N^2) for arbitrary restart sequences, which is why we
+    // have already clamped the maximum tail sequence length when generating `restart_sequences`.
+    // With clamping, this scan is O(N) in the context length.
     int32_t effective_dry_penalty_last_n = (dry_penalty_last_n == -1) ?
         smpl->dry_last_tokens.size() : std::max(dry_penalty_last_n, 0);
     int last_n_repeat = std::min((int)smpl->dry_last_tokens.size(), effective_dry_penalty_last_n);
@@ -613,7 +634,7 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
             if (seq_len > longest_match && seq_len <= (int)i) {
                 bool match = true;
                 for (int offset = 0; offset < seq_len; ++offset) {
-                    if (it->second[offset] != smpl->dry_last_tokens[smpl->dry_last_tokens.size() - 1 - i + offset + 1]) {
+                    if (it->second[offset] != smpl->dry_last_tokens[smpl->dry_last_tokens.size() - i + offset]) {
                         match = false;
                         break;
                     }
@@ -633,7 +654,28 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
         return;
     }
 
-    // Step 4: Z-algorithm for suffix matching
+    // Step 4: Iterate in reverse over the last N tokens of the context, using the "Z-algorithm" (in
+    // the reverse direction) to efficiently compute the positions and lengths of suffixes appearing
+    // elsewhere in the context. We limit the suffix length to `rep_limit` to respect restart sequences.
+    //
+    // This algorithm is not currently documented on Wikipedia, but there is a clear description here:
+    // https://ivanyu.me/blog/2014/10/15/z-algorithm/
+    //
+    // The code below is adapted from the public domain implementation by the same author here:
+    // https://github.com/ivanyu/string-algorithms/blob/master/z_algorithm.py
+    //
+    // Example:
+    // Last N tokens: a b c c b c y a b c
+    // Repeat counts: 0 0 3 1 0 2 0 0 0 0
+    //                    ^
+    //   This `3` means that the last three tokens of the context (a b c) also appear here.
+    //
+    // This step is worst case O(N) since the Z-algorithm is linear, despite the appearance of nested
+    // for/while loops. This can be seen by observing that the `lt` and `rt` bounds are set after each
+    // repeated suffix is detected (i.e. after each while loop when n > 0). These bound variables
+    // ensure that the inner while loops only examine each token in the context once as the outer
+    // for loop iterates over the context.
+
     const int last = last_n_repeat - 1;
     int rt = 0, lt = 0;
 
@@ -674,7 +716,17 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
         }
     }
 
-    // Step 5: Build penalty map
+    // Step 5: Iterate over dry_repeat_count and last_tokens, examining the maximum repeat length
+    // that would be generated by emitting each new token that would extend a sequence.
+    //
+    // Following the same example as above:
+    // Last N tokens: a b c c b c y a b c
+    // Repeat counts: 0 0 3 1 0 2 0 0 0 0
+    //
+    // For each non-zero, look ahead one token. This token, if emitted, would extend the repetition.
+    // c: 3 -> 4 (from `a b c` to `a b c c`)
+    // b: 1 -> 2 (from `c` to `c b`)
+    // y: 2 -> 3 (from `b c` to `b c y`)
     for (int i = 0; i < last_n_repeat - 1; ++i) {
         int repeat_len = smpl->dry_repeat_count[i];
         if (repeat_len >= dry_allowed_length) {
@@ -686,7 +738,10 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
         }
     }
 
-    // Step 6: Apply penalties
+    // Step 6: Apply logit penalties based on the maximum repeat length for relevant tokens.
+    // Prevent floating point overflow in `pow(penalty_base, exponent)` by clamping to `max_exponent`.
+    // Compute it from `penalty_base` and the approximate log of `std::numeric_limits<float>::max()`
+    
     const float FLOAT_MAX_LOG = 88.7228391f;
     int max_exponent = 0;
     if (dry_base > 1.000001f) {
