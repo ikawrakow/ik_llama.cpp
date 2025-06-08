@@ -23367,7 +23367,7 @@ void llama_sample_dry(struct llama_context * ctx, llama_token_data_array * candi
     }
 
     llama_sample_dry_impl(&ctx->sampling, candidates_p, dry_multiplier, dry_base,
-                         dry_allowed_length, dry_penalty_last_n, dry_sequence_breakers);  // REMOVE ctx parameter
+                         dry_allowed_length, dry_penalty_last_n);  // REMOVE ctx parameter
 }
 
 void llama_sample_dry_accept_token(struct llama_context * ctx, llama_token token) {

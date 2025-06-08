@@ -45,7 +45,7 @@ void llama_sample_top_n_sigma_impl(struct llama_sampling * smpl, llama_token_dat
 
 void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array * candidates,
                           float dry_multiplier, float dry_base, int32_t dry_allowed_length,
-                          int32_t dry_penalty_last_n, const std::vector<std::string> & dry_sequence_breakers);
+                          int32_t dry_penalty_last_n);
 
 
 
