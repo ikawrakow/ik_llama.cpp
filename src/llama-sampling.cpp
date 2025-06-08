@@ -634,7 +634,7 @@ void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array 
             if (seq_len > longest_match && seq_len <= (int)i) {
                 bool match = true;
                 for (int offset = 0; offset < seq_len; ++offset) {
-                    if (it->second[offset] != smpl->dry_last_tokens[smpl->dry_last_tokens.size() - 1 - i + offset + 1]) {
+                    if (it->second[offset] != smpl->dry_last_tokens[smpl->dry_last_tokens.size() - i + offset]) {
                         match = false;
                         break;
                     }
