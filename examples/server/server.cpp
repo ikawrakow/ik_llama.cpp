@@ -1,3 +1,4 @@
+#pragma warning(disable : 4996)
 #include "utils.hpp"
 
 #include "common.h"
@@ -15,23 +16,8 @@
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "json.hpp"
-
-// auto generated files (update with ./deps.sh)
-#include "colorthemes.css.hpp"
-#include "style.css.hpp"
-#include "theme-beeninorder.css.hpp"
-#include "theme-ketivah.css.hpp"
-#include "theme-mangotango.css.hpp"
-#include "theme-playground.css.hpp"
-#include "theme-polarnight.css.hpp"
-#include "theme-snowstorm.css.hpp"
-#include "index.html.hpp"
-#include "index-new.html.hpp"
-#include "index.js.hpp"
-#include "completion.js.hpp"
-#include "system-prompts.js.hpp"
-#include "prompt-formats.js.hpp"
-#include "json-schema-to-grammar.mjs.hpp"
+#include "index.html.gz.hpp"
+#include "loading.html.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -42,11 +28,13 @@
 #include <thread>
 #include <signal.h>
 #include <memory>
+#include <src/llama-impl.h>
 
 using json = nlohmann::ordered_json;
 
 bool server_verbose = false;
 bool server_log_json = true;
+
 
 enum stop_type {
     STOP_TYPE_FULL,
@@ -81,6 +69,44 @@ enum server_task_type {
     SERVER_TASK_TYPE_SET_LORA,
 };
 
+
+struct result_timings {
+    int32_t prompt_n = -1;
+    double prompt_ms;
+    double prompt_per_token_ms;
+    double prompt_per_second;
+
+    int32_t predicted_n = -1;
+    double predicted_ms;
+    double predicted_per_token_ms;
+    double predicted_per_second;
+
+    // Optional speculative metrics - only included when > 0
+    int32_t draft_n = 0;
+    int32_t draft_n_accepted = 0;
+
+    json to_json() const {
+        json base = {
+            {"prompt_n",               prompt_n},
+            {"prompt_ms",              prompt_ms},
+            {"prompt_per_token_ms",    prompt_per_token_ms},
+            {"prompt_per_second",      prompt_per_second},
+
+            {"predicted_n",            predicted_n},
+            {"predicted_ms",           predicted_ms},
+            {"predicted_per_token_ms", predicted_per_token_ms},
+            {"predicted_per_second",   predicted_per_second},
+        };
+
+        if (draft_n > 0) {
+            base["draft_n"] = draft_n;
+            base["draft_n_accepted"] = draft_n_accepted;
+        }
+
+        return base;
+    }
+};
+
 struct server_task {
     int id        = -1; // to be filled by server_queue
     int id_multi  = -1;
@@ -101,7 +127,12 @@ struct server_task_result {
 
     bool stop;
     bool error;
+    result_timings timings;
+
 };
+
+std::unordered_map<int, server_task_result > server_task_result_dict = {};
+
 
 struct server_task_multi {
     int id = -1;
@@ -120,6 +151,7 @@ struct slot_params {
 
     std::vector<std::string> antiprompt;
 
+    bool timings_per_token = false;
     json input_prefix;
     json input_suffix;
 };
@@ -262,6 +294,27 @@ struct server_slot {
         };
     }
 
+    result_timings get_timings() const {
+        result_timings timings;
+        timings.prompt_n = n_prompt_tokens_processed;
+        timings.prompt_ms = t_prompt_processing;
+        timings.prompt_per_token_ms = t_prompt_processing / n_prompt_tokens_processed;
+        timings.prompt_per_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
+
+          
+        timings.predicted_n = n_decoded;
+        timings.predicted_ms = (ggml_time_us() - t_start_generation) / 1e3;
+        timings.predicted_per_token_ms = t_token_generation / n_decoded;
+        timings.predicted_per_second = 1e3 / t_token_generation * n_decoded;
+
+        //// Add speculative metrics
+        //if (n_draft_total > 0) {
+        //    timings.draft_n = n_draft_total;
+        //    timings.draft_n_accepted = n_draft_accepted;
+        //}
+
+        return timings;
+    }
     size_t find_stopping_strings(const std::string & text, const size_t last_token_size, const stop_type type) {
         size_t stop_pos = std::string::npos;
 
@@ -903,7 +956,7 @@ struct server_context {
             slot.oaicompat = false;
             slot.oaicompat_model = "";
         }
-
+        slot.params.timings_per_token = json_value(data, "timings_per_token", false);
         slot.params.stream             = json_value(data, "stream",            false);
         slot.params.cache_prompt       = json_value(data, "cache_prompt",      true);
         slot.params.n_predict          = json_value(data, "n_predict",         json_value(data, "max_tokens", default_params.n_predict));
@@ -1423,8 +1476,13 @@ struct server_context {
             res.data["oaicompat_token_ctr"] = slot.n_decoded;
             res.data["model"] = slot.oaicompat_model;
         }
-
-        queue_results.send(res);
+        // populate timings if this is final response or timings_per_token is enabled
+        if (slot.params.timings_per_token) {
+            //res.data["timings"] = slot.get_formated_timings();
+            res.timings = slot.get_timings();
+        }
+        server_task_result_dict[slot.id_task] = res;
+        queue_results.send(std::move(res));
     }
 
     void send_final_response(const server_slot & slot) {
@@ -2465,6 +2523,188 @@ struct server_context {
     }
 };
 
+static json format_final_response_oaicompat(const json& request, json result, const std::string& completion_id, bool streaming = false) {
+    bool stopped_word = result.count("stopped_word") != 0;
+    bool stopped_eos = json_value(result, "stopped_eos", false);
+    int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
+    int num_prompt_tokens = json_value(result, "tokens_evaluated", 0);
+    std::string content = json_value(result, "content", std::string(""));
+
+    std::string finish_reason = "length";
+    if (stopped_word || stopped_eos) {
+        finish_reason = "stop";
+    }
+
+    json choices =
+        streaming ? json::array({ json{{"finish_reason", finish_reason},
+                                        {"index", 0},
+                                        {"delta", json::object()}} })
+        : json::array({ json{{"finish_reason", finish_reason},
+                              {"index", 0},
+                              {"message", json{{"content", content},
+                                               {"role", "assistant"}}}} });
+
+    std::time_t t = std::time(0);
+
+    json res = json{
+        {"choices", choices},
+        {"created", t},
+        {"model",
+            json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
+        {"object", streaming ? "chat.completion.chunk" : "chat.completion"},
+        {"usage", json {
+            {"completion_tokens", num_tokens_predicted},
+            {"prompt_tokens",     num_prompt_tokens},
+            {"total_tokens",      num_tokens_predicted + num_prompt_tokens}
+        }},
+        {"id", completion_id}
+    };
+
+    if (server_verbose) {
+        res["__verbose"] = result;
+    }
+
+    if (result.contains("completion_probabilities")) {
+        res["completion_probabilities"] = json_value(result, "completion_probabilities", json::array());
+    }
+
+    return res;
+}
+
+// return value is vector as there is one case where we might need to generate two responses
+static std::vector<json> format_partial_response_oaicompat(server_task_result task_result, const std::string& completion_id) {
+    json result = task_result.data;
+    if (!result.contains("model") || !result.contains("oaicompat_token_ctr")) {
+        return std::vector<json>({ result });
+    }
+
+    bool first = json_value(result, "oaicompat_token_ctr", 0) == 0;
+    std::string modelname = json_value(result, "model", std::string(DEFAULT_OAICOMPAT_MODEL));
+
+    bool stopped_word = json_value(result, "stopped_word", false);
+    bool stopped_eos = json_value(result, "stopped_eos", false);
+    bool stopped_limit = json_value(result, "stopped_limit", false);
+    std::string content = json_value(result, "content", std::string(""));
+
+    std::string finish_reason;
+    if (stopped_word || stopped_eos) {
+        finish_reason = "stop";
+    }
+    if (stopped_limit) {
+        finish_reason = "length";
+    }
+
+    std::time_t t = std::time(0);
+
+    json choices;
+
+    if (!finish_reason.empty()) {
+        choices = json::array({ json{{"finish_reason", finish_reason},
+                                    {"index", 0},
+                                    {"delta", json::object()}} });
+    }
+    else {
+        if (first) {
+            if (content.empty()) {
+                choices = json::array({ json{{"finish_reason", nullptr},
+                                            {"index", 0},
+                                            {"delta", json{{"role", "assistant"}}}} });
+            }
+            else {
+                // We have to send this as two updates to conform to openai behavior
+                json initial_ret = json{ {"choices", json::array({json{
+                                        {"finish_reason", nullptr},
+                                        {"index", 0},
+                                        {"delta", json{
+                                            {"role", "assistant"}
+                                        }}}})},
+                            {"created", t},
+                            {"id", completion_id},
+                            {"model", modelname},
+                            {"object", "chat.completion.chunk"} };
+
+                json second_ret = json{
+                            {"choices", json::array({json{{"finish_reason", nullptr},
+                                                            {"index", 0},
+                                                            {"delta", json{
+                                                            {"content", content}}}
+                                                            }})},
+                            {"created", t},
+                            {"id", completion_id},
+                            {"model", modelname},
+                            {"object", "chat.completion.chunk"} };
+
+                return std::vector<json>({ initial_ret, second_ret });
+            }
+        }
+        else {
+            // Some idiosyncrasy in task processing logic makes several trailing calls
+            // with empty content, we ignore these at the calee site.
+            if (content.empty()) {
+                return std::vector<json>({ json::object() });
+            }
+
+            choices = json::array({ json{
+                {"finish_reason", nullptr},
+                {"index", 0},
+                {"delta",
+                json{
+                    {"content", content},
+                }},
+            } });
+        }
+    }
+
+    json ret = json{
+        {"choices", choices},
+        {"created", t},
+        {"id",      completion_id},
+        {"model",   modelname},
+        {"object",  "chat.completion.chunk"}
+    };
+    if (server_task_result_dict.count(task_result.id) > 0)
+    {
+        ret.push_back({ "timings", server_task_result_dict[task_result.id].timings.to_json() });
+    }
+
+    //
+    if (!finish_reason.empty()) {
+        int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
+        int num_prompt_tokens = json_value(result, "tokens_evaluated", 0);
+        ret.push_back({ "usage", json {
+            {"completion_tokens", num_tokens_predicted},
+            {"prompt_tokens",     num_prompt_tokens},
+            {"total_tokens",      num_tokens_predicted + num_prompt_tokens}
+        } });
+    }
+
+    return std::vector<json>({ ret });
+}
+
+
+static json format_embeddings_response_oaicompat(const json& request, const json& embeddings) {
+    json data = json::array();
+    int i = 0;
+    for (auto& elem : embeddings) {
+        data.push_back(json{
+            {"embedding", json_value(elem, "embedding", json::array())},
+            {"index",     i++},
+            {"object",    "embedding"}
+            });
+    }
+
+    json res = json{
+        {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
+        {"object", "list"},
+        {"usage", json {
+            {"prompt_tokens", 0},
+            {"total_tokens", 0}
+        }},
+        {"data", data}
+    };
+
+    return res;
+}
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip GH copilot requests when using default port
     if (req.path == "/v1/health" || req.path == "/v1/completions") {
@@ -3121,6 +3361,7 @@ int main(int argc, char ** argv) {
         res.set_content(models.dump(), "application/json; charset=utf-8");
     };
 
+
     const auto handle_chat_completions = [&ctx_server, &params, &res_error](const httplib::Request & req, httplib::Response & res) {
         if (ctx_server.params.embedding) {
             res_error(res, format_error_response("This server does not support chat completions. Start it without `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
@@ -3152,7 +3393,7 @@ int main(int argc, char ** argv) {
                 while (true) {
                     server_task_result result = ctx_server.queue_results.recv(id_task);
                     if (!result.error) {
-                        std::vector<json> result_array = format_partial_response_oaicompat(result.data, completion_id);
+                        std::vector<json> result_array = format_partial_response_oaicompat(result, completion_id);
 
                         for (auto it = result_array.begin(); it != result_array.end(); ++it) {
                             if (!it->empty()) {
@@ -3449,25 +3690,33 @@ int main(int argc, char ** argv) {
         svr->set_base_dir(params.public_path);
     }
 
-    // using embedded static files
-    svr->Get("/",                           handle_static_file(index_html, index_html_len, "text/html; charset=utf-8"));
-    svr->Get("/index.js",                   handle_static_file(index_js, index_js_len, "text/javascript; charset=utf-8"));
-    svr->Get("/completion.js",              handle_static_file(completion_js, completion_js_len, "text/javascript; charset=utf-8"));
-    svr->Get("/json-schema-to-grammar.mjs", handle_static_file(json_schema_to_grammar_mjs, json_schema_to_grammar_mjs_len, "text/javascript; charset=utf-8"));
-
-    // add new-ui files
-    svr->Get("/colorthemes.css",       handle_static_file(colorthemes_css, colorthemes_css_len, "text/css; charset=utf-8"));
-    svr->Get("/style.css",             handle_static_file(style_css, style_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-beeninorder.css", handle_static_file(theme_beeninorder_css, theme_beeninorder_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-ketivah.css",     handle_static_file(theme_ketivah_css, theme_ketivah_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-mangotango.css",  handle_static_file(theme_mangotango_css, theme_mangotango_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-playground.css",  handle_static_file(theme_playground_css, theme_playground_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-polarnight.css",  handle_static_file(theme_polarnight_css, theme_polarnight_css_len, "text/css; charset=utf-8"));
-    svr->Get("/theme-snowstorm.css",   handle_static_file(theme_snowstorm_css, theme_snowstorm_css_len, "text/css; charset=utf-8"));
-    svr->Get("/index-new.html",        handle_static_file(index_new_html, index_new_html_len, "text/html; charset=utf-8"));
-    svr->Get("/system-prompts.js",     handle_static_file(system_prompts_js, system_prompts_js_len, "text/javascript; charset=utf-8"));
-    svr->Get("/prompt-formats.js",     handle_static_file(prompt_formats_js, prompt_formats_js_len, "text/javascript; charset=utf-8"));
-
+    {
+        // register static assets routes
+        if (!params.public_path.empty()) {
+            // Set the base directory for serving static files
+            bool is_found = svr->set_mount_point("/", params.public_path);
+            if (!is_found) {
+                GGML_ABORT("%s: static assets path not found: %s\n", __func__, params.public_path.c_str());
+                return 1;
+            }
+        }
+        else {
+            // using embedded static index.html
+            svr->Get("/", [](const httplib::Request& req, httplib::Response& res) {
+                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
+                }
+                else {
+                    res.set_header("Content-Encoding", "gzip");
+                    // COEP and COOP headers, required by pyodide (python interpreter)
+                    res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                    res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                    res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
+                }
+                return false;
+                });
+        }
+    }
     // register API routes
     svr->Get ("/health",              handle_health);
     svr->Get ("/metrics",             handle_metrics);
