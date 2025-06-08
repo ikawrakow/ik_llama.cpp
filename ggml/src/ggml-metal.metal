@@ -8951,7 +8951,7 @@ struct DequantizerKT4 {
     DequantizerKT4(device const char * cx, short il = 0) : il(il) {
         device const float * dptr = (device const float *)cx;
         d = dptr[0] * 1.01f;
-        x = (device const Block *)(dptr + 2);
+        x = (device const Block *)(dptr + 1);
     }
     inline void convert(thread T4x4& t) const {
         float4x4 tmp;
