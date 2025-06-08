@@ -1,6 +1,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#include "ggml-rpc.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -467,6 +468,10 @@ GGML_CALL static void ggml_backend_registry_init(void) {
 #ifdef GGML_USE_CANN
     extern GGML_CALL int ggml_backend_cann_reg_devices(void);
     ggml_backend_cann_reg_devices();
+#endif
+#ifdef GGML_USE_RPC
+    extern GGML_CALL void ggml_backend_rpc_reg_devices(void);
+    ggml_backend_rpc_reg_devices();
 #endif
 }
 
@@ -938,6 +943,13 @@ GGML_CALL ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, siz
 
 GGML_CALL static ggml_backend_t ggml_backend_reg_cpu_init(const char * params, void * user_data) {
     return ggml_backend_cpu_init();
+
+    GGML_UNUSED(params);
+    GGML_UNUSED(user_data);
+}
+
+GGML_CALL static ggml_backend_t ggml_backend_reg_rpc_init(const char* params, void* user_data) {
+    return ggml_backend_rpc_init((const char*)user_data);
 
     GGML_UNUSED(params);
     GGML_UNUSED(user_data);
