@@ -1218,38 +1218,6 @@ struct Trellis3 {
         result.val[1] = vmlaq_u32(mkb, mka, result.val[1]);
         return result;
     }
-    //inline int8x16x2_t next32(const uint32_t * val) const {
-    //    int8x16x4_t aux;
-    //    int8x16x2_t result;
-    //    for (int i = 0; i < 2; ++i) {
-    //        auto i8 = next8(val[4*i+0], val[4*i+1]);
-    //        i8.val[0] = vandq_u32(i8.val[0], vdupq_n_u32(0x3f3f3f3f));
-    //        i8.val[1] = vandq_u32(i8.val[1], vdupq_n_u32(0x3f3f3f3f));
-    //        aux.val[0] = vreinterpretq_s8_s32(vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[0])));
-    //        aux.val[1] = vreinterpretq_s8_s32(vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[1])));
-    //        i8 = next8(val[4*i+2], val[4*i+3]);
-    //        i8.val[0] = vandq_u32(i8.val[0], vdupq_n_u32(0x3f3f3f3f));
-    //        i8.val[1] = vandq_u32(i8.val[1], vdupq_n_u32(0x3f3f3f3f));
-    //        aux.val[2] = vreinterpretq_s8_s32(vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[0])));
-    //        aux.val[3] = vreinterpretq_s8_s32(vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[1])));
-    //        result.val[i] = vqtbl4q_s8(aux, shuffle);
-    //    }
-    //    return result;
-    //}
-    // This works:
-    //inline int8x16x2_t next32(const uint32_t * val) const {
-    //    uint16x8_t aux[4];
-    //    for (int i = 0; i < 4; ++i) {
-    //        auto i8 = next8(val[2*i+0], val[2*i+1]);
-    //        i8.val[0] = vandq_u32(i8.val[0], vdupq_n_u32(0x3f3f3f3f));
-    //        i8.val[1] = vandq_u32(i8.val[1], vdupq_n_u32(0x3f3f3f3f));
-    //        auto s1 = vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[0]));
-    //        auto s2 = vdotq_s32(vdupq_n_s32(-126), vdupq_n_s8(1), vreinterpretq_s8_u32(i8.val[1]));
-    //        aux[i] = vcombine_s16(vmovn_s32(s1), vmovn_s32(s2));
-    //    }
-    //    int8x16x2_t result = {vcombine_s8(vmovn_s16(aux[0]), vmovn_s16(aux[1])), vcombine_s8(vmovn_s16(aux[2]), vmovn_s16(aux[3]))};
-    //    return result;
-    //}
     inline int8x16x2_t next32(const uint32_t * val) const {
         int8x16x2_t result = {vdupq_n_s8(-126), vdupq_n_s8(-126)};
         for (int i = 0; i < 2; ++i) {
@@ -1290,7 +1258,7 @@ void iqk_dequantize_iq4_kt_q80_r8(int n, const void * vx, size_t bx, void * vy, 
         for (int k = 0; k < 8; ++k) {
             const float * dptr = (const float *)((const char*)vx + (ix+k)*bx);
             dkt[k] = dptr[0];
-            x8[k] = (const block_iq4_kt *)(dptr + 2);
+            x8[k] = (const block_iq4_kt *)(dptr + 1);
         }
         auto vd = vld1q_f32_x2(dkt);
 
@@ -1360,7 +1328,7 @@ void mul_mat_iq4_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     for (int ix = 0; ix < nrc_x; ++ix) {
         const float * dptr = (const float *)((const char*)vx + ix*bx);
         auto d = vdupq_n_f32(dptr[0]);
-        const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 2);
+        const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 1);
 
         for (int iy = 0; iy < k_acc; ++iy) accd[iy] = vdupq_n_f32(0);
 
