@@ -990,6 +990,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--rpc") {
         CHECK_ARG
+#ifdef GGML_USE_RPC
         params.rpc_servers = argv[i];
         std::string servers(params.rpc_servers);
         size_t pos = 0;
@@ -999,6 +1000,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             servers.erase(0, pos + 1);
         }
         ggml_backend_rpc_buffer_type(servers.c_str());
+#endif
         return true;
     }
     if (arg == "--override-kv") {
