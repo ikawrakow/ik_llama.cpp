@@ -181,6 +181,7 @@ class GGUFType:
 
 class MODEL_ARCH(IntEnum):
     LLAMA        = auto()
+    DECI         = auto()
     FALCON       = auto()
     BAICHUAN     = auto()
     GROK         = auto()
@@ -316,6 +317,7 @@ class MODEL_TENSOR(IntEnum):
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LLAMA:          "llama",
+    MODEL_ARCH.DECI:           "deci",
     MODEL_ARCH.FALCON:         "falcon",
     MODEL_ARCH.BAICHUAN:       "baichuan",
     MODEL_ARCH.GROK:           "grok",
@@ -451,6 +453,26 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.LLAMA: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.DECI: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
@@ -784,6 +806,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FACTORS_LONG,
+        MODEL_TENSOR.ROPE_FACTORS_SHORT,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_QKV,
         MODEL_TENSOR.ATTN_Q,
@@ -1149,6 +1173,10 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
     ],
+    MODEL_ARCH.DECI: [
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+    ],
     MODEL_ARCH.BAICHUAN: [
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
@@ -1262,6 +1290,10 @@ class GGMLQuantizationType(IntEnum):
     Q8_KR8    = 149
     Q8_K128   = 150
     Q8_KV     = 151
+    IQ5_KS    = 152
+    IQ2_KT    = 153
+    IQ3_KT    = 154
+    IQ4_KT    = 155
     Q4_0_R8   = 202
     Q5_0_R4   = 206
     Q8_0_R8   = 208
@@ -1287,6 +1319,7 @@ class GGMLQuantizationType(IntEnum):
     IQ4_K_R4  = 339
     IQ5_K_R4  = 340
     IQ4_KS_R4 = 344
+    IQ5_KS_R4 = 352
     Q8_KV_R8  = 398
     Q8_K_R8   = 399
 
@@ -1340,6 +1373,10 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ2_KS          = 138    #except 1d tensors
     MOSTLY_IQ4_KSS         = 139    #except 1d tensors
     MOSTLY_Q8_KV           = 140    #except 1d tensors
+    MOSTLY_IQ5_KS          = 141    #except 1d tensors
+    MOSTLY_IQ2_KT          = 142    #except 1d tensors
+    MOSTLY_IQ3_KT          = 143    #except 1d tensors
+    MOSTLY_IQ4_KT          = 144    #except 1d tensors
     MOSTLY_Q4_0_R8         = 202    #except 1d tensors
     MOSTLY_Q8_0_R8         = 207    #except 1d tensors
     MOSTLY_Q5_0_R4         = 208    #except 1d tensors
@@ -1365,6 +1402,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ4_K_R4        = 332    #except 1d tensors
     MOSTLY_IQ5_K_R4        = 333    #except 1d tensors
     MOSTLY_IQ4_KS_R4       = 337    #except 1d tensors
+    MOSTLY_IQ5_KS_R4       = 341    #except 1d tensors
     MOSTLY_Q8_KV_R8        = 398    #except 1d tensors
     MOSTLY_Q8_K_R8         = 399    #except 1d tensors
 
@@ -1467,6 +1505,10 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.Q8_KR8      : ( 256,  292),
     GGMLQuantizationType.Q8_K128     : ( 128,  140),
     GGMLQuantizationType.Q8_KV       : (  32,   32),
+    GGMLQuantizationType.IQ5_KS      : ( 256,  168),
+    GGMLQuantizationType.IQ2_KT      : ( 256,   68),
+    GGMLQuantizationType.IQ3_KT      : ( 256,  100),
+    GGMLQuantizationType.IQ4_KT      : ( 256,  128),
     GGMLQuantizationType.Q4_0_R8     : (  32,   18),
     GGMLQuantizationType.Q5_0_R4     : (  32,   22),
     GGMLQuantizationType.Q8_0_R8     : (  32,   34),
@@ -1492,6 +1534,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ4_K_R4    : ( 256,  144),
     GGMLQuantizationType.IQ5_K_R4    : ( 256,  176),
     GGMLQuantizationType.IQ4_KS_R4   : ( 256,  136),
+    GGMLQuantizationType.IQ5_KS_R4   : ( 256,  168),
     GGMLQuantizationType.Q8_KV_R8    : (  32,   32),
     GGMLQuantizationType.Q8_K_R8     : ( 256,  258),
 }
@@ -1558,7 +1601,7 @@ KEY_TOKENIZER_CLS_ID     = Keys.Tokenizer.CLS_ID
 KEY_TOKENIZER_MASK_ID    = Keys.Tokenizer.MASK_ID
 KEY_TOKENIZER_HF_JSON    = Keys.Tokenizer.HF_JSON
 KEY_TOKENIZER_RWKV       = Keys.Tokenizer.RWKV
-KEY_TOKENIZER_PRIFIX_ID  = Keys.Tokenizer.PREFIX_ID
+KEY_TOKENIZER_PREFIX_ID  = Keys.Tokenizer.PREFIX_ID
 KEY_TOKENIZER_SUFFIX_ID  = Keys.Tokenizer.SUFFIX_ID
 KEY_TOKENIZER_MIDDLE_ID  = Keys.Tokenizer.MIDDLE_ID
 KEY_TOKENIZER_EOT_ID     = Keys.Tokenizer.EOT_ID

@@ -81,7 +81,9 @@
 #endif
 #define LLAMA_CURL_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 #endif // LLAMA_USE_CURL
-
+#ifdef GGML_USE_RPC
+#  include "ggml-rpc.h"
+#endif
 using json = nlohmann::ordered_json;
 
 //
@@ -649,6 +651,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.mirostat_tau = std::stof(argv[i]);
         return true;
     }
+    if (arg == "--xtc-probability") {
+        CHECK_ARG
+        sparams.xtc_probability = std::stof(argv[i]);
+        return true;
+    }
+    if (arg == "--xtc-threshold") {
+        CHECK_ARG
+        sparams.xtc_threshold = std::stof(argv[i]);
+        return true;
+    }
+    if (arg == "--top-n-sigma") {
+        CHECK_ARG
+        sparams.top_n_sigma = std::stof(argv[i]);
+        return true;
+    }
     if (arg == "--cfg-negative-prompt") {
         CHECK_ARG
         sparams.cfg_negative_prompt = argv[i];
@@ -988,7 +1005,38 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--rpc") {
         CHECK_ARG
+#ifdef GGML_USE_RPC
         params.rpc_servers = argv[i];
+        std::string servers(params.rpc_servers);
+        size_t pos = 0;
+        while ((pos = servers.find(",")) != std::string::npos) {
+            std::string server = servers.substr(0, pos);
+            ggml_backend_rpc_buffer_type(server.c_str());            
+            servers.erase(0, pos + 1);
+        }
+        ggml_backend_rpc_buffer_type(servers.c_str());
+#endif
+        return true;
+    }
+    if (arg == "--override-kv") {
+        CHECK_ARG
+            if (!string_parse_kv_override(argv[i], params.kv_overrides)) {
+                fprintf(stderr, "error: Invalid type for KV override: %s\n", argv[i]);
+                invalid_param = true;
+                return true;
+            }
+        return true;
+    }
+    if (arg == "--override-tensor" || arg == "-ot") {
+        CHECK_ARG
+            /*for (auto endpoint : params.rpc_servers.split)
+            {
+
+            }*/
+        if (!parse_buft_overrides(std::string{ argv[i] }, params.tensor_buft_overrides)) {
+            fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
+            invalid_param = true;
+        }
         return true;
     }
     if (arg == "--no-mmap") {
@@ -1196,20 +1244,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.grammar = json_schema_to_grammar(json::parse(argv[i]));
         return true;
     }
-    if (arg == "--override-kv") {
+
+    if (arg == "--offload-policy" || arg == "-op") {
         CHECK_ARG
-        if (!string_parse_kv_override(argv[i], params.kv_overrides)) {
-            fprintf(stderr, "error: Invalid type for KV override: %s\n", argv[i]);
+        auto p = string_split_pairs<int,int>(argv[i], ',');
+        if (p.empty()) {
+            fprintf(stderr, "error: Invalid offload policy argument: %s\n", argv[i]);
             invalid_param = true;
-            return true;
-        }
-        return true;
-    }
-    if (arg == "--override-tensor" || arg == "-ot") {
-        CHECK_ARG
-        if (!parse_buft_overrides(std::string{argv[i]}, params.tensor_buft_overrides)) {
-            fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
-            invalid_param = true;
+        } else {
+            params.offload_policy.insert(params.offload_policy.end(), p.begin(), p.end());
         }
         return true;
     }
@@ -1457,6 +1500,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.warmup = false;
         return true;
     }
+    if (arg == "--warmup-batch" || arg == "-wb") {
+        params.batch_warmup = true;
+        return true;
+    }
     if (arg == "--output-format") {
         CHECK_ARG
         std::string value(argv[i]);
@@ -1620,6 +1667,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "(default: %d, 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)", sparams.mirostat });
     options.push_back({ "*",           "       --mirostat-lr N",        "Mirostat learning rate, parameter eta (default: %.1f)", (double)sparams.mirostat_eta });
     options.push_back({ "*",           "       --mirostat-ent N",       "Mirostat target entropy, parameter tau (default: %.1f)", (double)sparams.mirostat_tau });
+    options.push_back({ "*",           "       --xtc-probability p",    "xtc probability (default: %.1f, 0.0 = disabled)", (double)sparams.xtc_probability });
+    options.push_back({ "*",           "       --xtc-threshold t",      "xtc threshold (default: %.1f, >0.5 = disabled)", (double)sparams.xtc_threshold});
+    options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parmeter (default: %.1f, 0.0 = disabled)", (double)sparams.top_n_sigma});
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -2222,6 +2272,10 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         return iparams;
     }
 
+    for (auto [op, on_off] : params.offload_policy) {
+        llama_set_offload_policy(lctx, op, on_off);
+    }
+
     if (!params.control_vectors.empty()) {
         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
         if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_n_layer(model);
@@ -2319,6 +2373,7 @@ struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & 
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
     }
+    mparams.mla             = params.mla_attn;
     mparams.rpc_servers     = params.rpc_servers.c_str();
     mparams.main_gpu        = params.main_gpu;
     mparams.split_mode      = params.split_mode;
@@ -2417,6 +2472,8 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
+
+    if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
 
     return cparams;
 }
@@ -3374,6 +3431,9 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
     fprintf(stream, "mirostat_ent: %f # default: 5.0\n", sparams.mirostat_tau);
     fprintf(stream, "mirostat_lr: %f # default: 0.1\n", sparams.mirostat_eta);
+    fprintf(stream, "xtc_probability: %f # default: 0.0\n", sparams.xtc_probability);
+    fprintf(stream, "xtc_threshold: %f # default: 0.0\n", sparams.xtc_threshold);
+    fprintf(stream, "top_n_sigma: %f # default: 0.0\n", sparams.top_n_sigma);
     fprintf(stream, "mlock: %s # default: false\n", params.use_mlock ? "true" : "false");
     fprintf(stream, "model: %s # default: %s\n", params.model.c_str(), DEFAULT_MODEL_PATH);
     fprintf(stream, "model_draft: %s # default:\n", params.model_draft.c_str());

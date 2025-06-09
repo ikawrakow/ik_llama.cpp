@@ -516,6 +516,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ1_S> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ1_S_R4> {
+    static constexpr int qk = 32;
+    static constexpr int qr = 2;
+    static constexpr int qi = 4;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ1_M> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR1_M;
@@ -565,6 +572,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ2_KS> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ2_KT> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR4_XS;
+    static constexpr int qi = QI4_XS;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ3_K> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR4_XS;
@@ -586,6 +600,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KS> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KS_R4> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR4_XS;
+    static constexpr int qi = QI4_XS;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KSS> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR4_XS;
@@ -594,6 +615,20 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ4_KSS> {
 
 template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ5_K> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR5_XS;
+    static constexpr int qi = QI5_XS;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ5_KS> {
+    static constexpr int qk = QK_K;
+    static constexpr int qr = QR5_XS;
+    static constexpr int qi = QI5_XS;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ5_KS_R4> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR5_XS;
     static constexpr int qi = QI5_XS;

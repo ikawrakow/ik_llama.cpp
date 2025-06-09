@@ -1,6 +1,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#include "ggml-rpc.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -35,7 +36,7 @@ size_t ggml_backend_buft_get_max_size(ggml_backend_buffer_type_t buft) {
     return SIZE_MAX;
 }
 
-GGML_CALL size_t ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, struct ggml_tensor * tensor) {
+GGML_CALL size_t ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
     // get_alloc_size is optional, defaults to ggml_nbytes
     if (buft->iface.get_alloc_size) {
         size_t size = buft->iface.get_alloc_size(buft, tensor);
@@ -114,7 +115,7 @@ size_t ggml_backend_buffer_get_max_size(ggml_backend_buffer_t buffer) {
     return ggml_backend_buft_get_max_size(ggml_backend_buffer_get_type(buffer));
 }
 
-size_t ggml_backend_buffer_get_alloc_size(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
+size_t ggml_backend_buffer_get_alloc_size(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor) {
     return ggml_backend_buft_get_alloc_size(ggml_backend_buffer_get_type(buffer), tensor);
 }
 
@@ -467,6 +468,10 @@ GGML_CALL static void ggml_backend_registry_init(void) {
 #ifdef GGML_USE_CANN
     extern GGML_CALL int ggml_backend_cann_reg_devices(void);
     ggml_backend_cann_reg_devices();
+#endif
+#ifdef GGML_USE_RPC
+    extern GGML_CALL void ggml_backend_rpc_reg_devices(void);
+    ggml_backend_rpc_reg_devices();
 #endif
 }
 
@@ -943,6 +948,13 @@ GGML_CALL static ggml_backend_t ggml_backend_reg_cpu_init(const char * params, v
     GGML_UNUSED(user_data);
 }
 
+GGML_CALL static ggml_backend_t ggml_backend_reg_rpc_init(const char* params, void* user_data) {
+    return ggml_backend_rpc_init((const char*)user_data);
+
+    GGML_UNUSED(params);
+    GGML_UNUSED(user_data);
+}
+
 // multi-buffer buffer
 
 struct ggml_backend_multi_buffer_context {
@@ -1104,8 +1116,33 @@ struct ggml_backend_sched {
     char * context_buffer;
     size_t context_buffer_size;
 
+    uint32_t op_offload[(GGML_OP_COUNT + 31)/32];
+
     bool debug;
 };
+
+void ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op op, bool on_or_off) {
+    int int_op = (int)op;
+    if (!sched) return;
+    if (int_op < 0 || int_op >= (int)GGML_OP_COUNT) {
+        uint32_t mask = on_or_off ? 0xffffffff : 0;
+        for (int i = 0; i < (GGML_OP_COUNT + 31)/32; ++i) sched->op_offload[i] = mask;
+        return;
+    }
+    int i = int_op >> 5;
+    int j = int_op & 31;
+    if (on_or_off) {
+        sched->op_offload[i] |= (1u << j);
+    } else {
+        sched->op_offload[i] &= (~(1u << j));
+    }
+}
+
+static inline bool ggml_backend_sched_offload_enabled(ggml_backend_sched_t sched, enum ggml_op op) {
+    int int_op = (int)op;
+    if (!sched || op < 0 || op >= GGML_OP_COUNT) return false;
+    return sched->op_offload[int_op >> 5] & (1u << (int_op & 31));
+}
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
 #define tensor_backend_id(tensor) sched->hv_tensor_backend_ids[hash_id(tensor)]
@@ -1181,6 +1218,7 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
     }
 
     // operations with weights are preferably run on the same backend as the weights
+    bool offload_enabled = ggml_backend_sched_offload_enabled(sched, tensor->op);
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         const struct ggml_tensor * src = tensor->src[i];
         if (src == NULL) {
@@ -1189,7 +1227,7 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
         if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
             int src_backend_id = ggml_backend_sched_backend_from_buffer(sched, src, tensor);
             // check if a backend with higher prio wants to offload the op
-            if (src_backend_id == sched->n_backends - 1) {
+            if (offload_enabled && src_backend_id == sched->n_backends - 1) {
                 for (int b = 0; b < src_backend_id; b++) {
                     if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
                         SET_CAUSE(tensor, "1.off");
@@ -1887,6 +1925,8 @@ ggml_backend_sched_t ggml_backend_sched_new(
     GGML_ASSERT(ggml_backend_is_cpu(backends[n_backends - 1])); // last backend must be CPU
 
     struct ggml_backend_sched * sched = calloc(1, sizeof(struct ggml_backend_sched));
+
+    for (int i = 0; i < (GGML_OP_COUNT + 31)/32; ++i) sched->op_offload[i] = 0xffffffff;
 
     sched->debug = getenv("GGML_SCHED_DEBUG") != NULL;
     sched->n_backends = n_backends;

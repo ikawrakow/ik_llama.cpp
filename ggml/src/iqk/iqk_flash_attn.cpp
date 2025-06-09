@@ -8,7 +8,7 @@
 #include "iqk_mul_mat.h"
 #include "iqk_flash_impl.h"
 
-#ifdef IQK_IMPLEMENT
+#if defined IQK_IMPLEMENT && defined GGML_IQK_FLASH_ATTENTION
 
 #include <algorithm>
 #include <cstdio>

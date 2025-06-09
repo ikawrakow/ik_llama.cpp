@@ -131,6 +131,7 @@ option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"  
 option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashAttention"     OFF)
 option(GGML_CUDA_USE_GRAPHS                 "ggml: use CUDA graphs (llama.cpp only)"          OFF)
 
+option(GGML_IQK_FLASH_ATTENTION             "ggml: enable the IQK FlashAttention CPU kernels" ON)
 option(GGML_IQK_FA_ALL_QUANTS               "ggml: compile all quants for IQK FlashAttention" OFF)
 
 option(GGML_CURL                            "ggml: use libcurl to download model from an URL" OFF)

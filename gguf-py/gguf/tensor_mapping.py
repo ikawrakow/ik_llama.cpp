@@ -82,6 +82,9 @@ class TensorNameMap:
             "rope.freqs",  # llama-pth
             "rotary_pos_emb.inv_freq",  # chatglm
         ),
+
+        MODEL_TENSOR.ROPE_FACTORS_LONG: (),
+        MODEL_TENSOR.ROPE_FACTORS_SHORT: (),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -176,7 +179,8 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.out_proj",                       # mpt
             "transformer.h.{bid}.self_attention.dense",                     # falcon
             "h.{bid}.self_attention.dense",                                 # bloom
-            "model.layers.{bid}.self_attn.o_proj",                          # llama-hf
+            "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe olmo2
+            "model.layers.{bid}.self_attn.linear_attn",                     # deci
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert
             "transformer.h.{bid}.attn.out_proj",                            # gpt-j

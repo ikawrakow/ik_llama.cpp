@@ -98,6 +98,9 @@ sampling:
                                   (default: 0, 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)
          --mirostat-lr N          Mirostat learning rate, parameter eta (default: 0.1)
          --mirostat-ent N         Mirostat target entropy, parameter tau (default: 5.0)
+         --xtc-probability p      xtc probability (default: 0.0 => disabled)
+         --xtc-threshold t        xtc threshold (default: 1.0 => disabled)
+         --top-n-sigma t          top-n-sigma parmeter (default: 0.0 => disabled)
          -l TOKEN_ID(+/-)BIAS     modifies the likelihood of token appearing in the completion,
                                   i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',
                                   or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'
@@ -450,7 +453,7 @@ node index.js
 
     `id_slot`: Assign the completion task to an specific slot. If is -1 the task will be assigned to a Idle slot.  Default: `-1`
 
-    `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `false`
+    `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
 
     `system_prompt`: Change the system prompt (initial prompt of all slots), this is useful for chat applications. [See more](#change-system-prompt-on-runtime)
 
