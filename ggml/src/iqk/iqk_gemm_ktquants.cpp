@@ -168,6 +168,25 @@ struct Trellis3 {
         return _mm256_permutevar8x32_epi32(aux[0], shuffle);
     }
     template <bool is_unsigned = false>
+    inline __m256i next32(const uint16_t * val, uint32_t v0) const {
+        const __m256i offset = is_unsigned ? _mm256_setzero_si256() : _mm256_set1_epi32(-126);
+        __m256i aux[4];
+        for (int i = 0; i < 4; ++i) {
+            auto i8 = _mm256_and_si256(next8(v0 + val[i]), _mm256_set1_epi32(0x3f3f3f3f));
+#ifdef HAVE_FANCY_SIMD
+            aux[i] = _mm256_dpbusd_epi32(offset, _mm256_set1_epi32(0x01010101), i8);
+#else
+            auto dot = _mm256_maddubs_epi16(i8, _mm256_set1_epi32(0x01010101));
+            aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
+#endif
+        }
+        aux[0] = _mm256_packs_epi32(aux[0], aux[1]); //  0,  1,  2,  3,  8,  9, 10, 11,  4,  5,  6,  7, 12, 13, 14, 15
+        aux[2] = _mm256_packs_epi32(aux[2], aux[3]); // 16, 17, 18, 19, 24, 25, 26, 27, 20, 21, 22, 23, 28, 29, 30, 31
+        aux[0] = _mm256_packs_epi16(aux[0], aux[2]); //  0,  1,  2,  3,  8,  9, 10, 11, 16, 17, 18, 19, 24, 25, 26, 27
+                                                     //  4,  5,  6,  7, 12, 13, 14, 15, 20, 21, 22, 23, 28, 29, 30, 31
+        return _mm256_permutevar8x32_epi32(aux[0], shuffle);
+    }
+    template <bool is_unsigned = false>
     inline void next64(const uint32_t * val, __m256i * result) const {
         const __m256i offset = is_unsigned ? _mm256_setzero_si256() : _mm256_set1_epi32(-126);
         auto vka3 = _mm256_set1_epi32(ka3), vkb3 = _mm256_set1_epi32(kb3);
@@ -348,6 +367,93 @@ void mul_mat_iq2_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& inf
                 __m256 res = _mm256_mul_ps(_mm256_set1_ps(d), accd[iy]);
                 info.store(ix, iy, hsum_float_8(res));
             }
+        }
+    }
+}
+
+template <int nrc_y>
+void mul_mat_iq2_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%QK_K == 0);
+    const int nb = n/QK_K;
+
+    Trellis3<true> trellis;
+
+    auto shifts = _mm_set_epi32(0, 0, 4, 0);
+    auto values = _mm_loadu_si128((const __m128i *)iq4k_values);
+
+    constexpr int k_acc = nrc_y;
+
+    __m256  accd[k_acc];
+    const block_q8_2_x4 * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        y[iy] = (const block_q8_2_x4 *)info.src1_row(iy);
+    }
+
+    __m256i  xv[4], dot[4];
+    __m256   scales[2];
+
+    auto sum_4 = [&dot] () {
+        // dot[k] has 8 values from block k
+        // 0 1 0 1 0 1 0 1
+        dot[0] = _mm256_add_epi32(_mm256_unpacklo_epi32(dot[0], dot[1]), _mm256_unpackhi_epi32(dot[0], dot[1]));
+        // 2 3 2 3 2 3 2 3
+        dot[2] = _mm256_add_epi32(_mm256_unpacklo_epi32(dot[2], dot[3]), _mm256_unpackhi_epi32(dot[2], dot[3]));
+        // 0 1 2 3 0 1 2 3
+        dot[0] = _mm256_add_epi32(_mm256_unpacklo_epi64(dot[0], dot[2]), _mm256_unpackhi_epi64(dot[0], dot[2]));
+        return _mm256_cvtepi32_ps(dot[0]);
+    };
+
+    auto compute_dot = [&dot, &xv] (const int8_t * y) {
+        for (int k = 0; k < 4; ++k) {
+            auto yv = _mm256_loadu_si256((const __m256i *)y + k);
+#ifdef HAVE_FANCY_SIMD
+            //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
+            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), _mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
+#else
+            auto p = _mm256_maddubs_epi16(_mm256_sign_epi8(xv[k], xv[k]), _mm256_sign_epi8(yv, xv[k]));
+            dot[k] = _mm256_madd_epi16(p, _mm256_set1_epi16(1));
+#endif
+        }
+    };
+
+    //auto m126 = _mm256_set1_ps(-126.f);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        auto d = _mm256_set1_ps(dptr[0] * 1.05f);
+        const block_iq2_kt * x = (const block_iq2_kt *)(dptr + 1);
+
+        for (int iy = 0; iy < k_acc; ++iy) accd[iy] = _mm256_setzero_ps();
+
+        for (int i = 0; i < nb; ++i) {
+            const uint16_t * ql = (const uint16_t *)x[i].ql;
+            auto s8 = _mm_set1_epi32(*(const uint32_t *)x[i].scales);
+            s8 = _mm_and_si128(_mm_srlv_epi32(s8, shifts), _mm_set1_epi8(0xf));
+            s8 = _mm_shuffle_epi8(values, s8);
+            auto s32 = _mm256_cvtepi8_epi32(s8);
+            auto all_scales = _mm256_mul_ps(d, _mm256_cvtepi32_ps(s32));
+            auto scales_l = _mm256_castps256_ps128(all_scales);
+            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
+            scales[0] = _mm256_set_m128(scales_l, scales_l);
+            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            for (int i128 = 0; i128 < 2; ++i128) {
+                //for (int k = 0; k < 4; ++k) xv[k] = trellis.next32<true>(values + 32*i128 + 8*k);
+                for (int k = 0; k < 4; ++k) xv[k] = trellis.next32(ql + 16*i128 + 4*k, 4096);
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    const block_q8_2_x4& yb = y[iy][2*i+i128];
+                    auto dy = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)yb.d)), 16));
+                    dy = _mm256_mul_ps(scales[i128], dy);
+                    auto d8 = _mm256_set_m128(_mm256_castps256_ps128(dy), _mm256_castps256_ps128(dy));
+                    //auto m8 = _mm256_set_m128(_mm256_extractf128_ps(dy, 1), _mm256_extractf128_ps(dy, 1));
+                    compute_dot(yb.qs);
+                    accd[iy] = _mm256_fmadd_ps(d8, sum_4(), accd[iy]);
+                    //accd[iy] = _mm256_fmadd_ps(m8, m126,    accd[iy]);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, hsum_float_8(accd[iy]));
         }
     }
 }
@@ -760,13 +866,13 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
         return false;
     }
 
-    //if (typeA == GGML_TYPE_IQ2_KT) {
-    //    if (typeB == GGML_TYPE_Q8_2_X4) {
-    //        IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq2_kt_q8_2_x4_T, kernels);
-    //        return true;
-    //    }
-    //    return false;
-    //}
+    if (typeA == GGML_TYPE_IQ2_KT) {
+        if (typeB == GGML_TYPE_Q8_2_X4) {
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq2_kt_q8_2_x4_T, kernels);
+            return true;
+        }
+        return false;
+    }
 
     if (ggml_type(typeB) != GGML_TYPE_F32) {
         return false;
