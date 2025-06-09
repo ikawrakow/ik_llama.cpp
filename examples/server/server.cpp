@@ -12,6 +12,8 @@
 #endif
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
+// disable Nagle's algorithm
+#define CPPHTTPLIB_TCP_NODELAY true
 #include "httplib.h"
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
