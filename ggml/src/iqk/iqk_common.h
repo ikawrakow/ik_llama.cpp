@@ -248,8 +248,9 @@ static inline __m128 hsum_float_4x4(__m128 * accm) {
 }
 static inline __m256 hsum_float_8x8(__m256 * accm) {
     for (int i = 0; i < 4; ++i) {
-        accm[i] = _mm256_set_m128(_mm_add_ps(_mm256_castps256_ps128(accm[i + 4]), _mm256_extractf128_ps(accm[i + 4], 1)),
-            _mm_add_ps(_mm256_castps256_ps128(accm[i + 0]), _mm256_extractf128_ps(accm[i + 0], 1)));
+        accm[i] = _mm256_add_ps(_mm256_permute2f128_ps(accm[i], accm[i + 4], 0x20), _mm256_permute2f128_ps(accm[i], accm[i + 4], 0x31));
+        //accm[i] = _mm256_set_m128(_mm_add_ps(_mm256_castps256_ps128(accm[i+4]), _mm256_extractf128_ps(accm[i+4], 1)),
+        //                          _mm_add_ps(_mm256_castps256_ps128(accm[i+0]), _mm256_extractf128_ps(accm[i+0], 1)));
     }
     for (int i = 0; i < 2; ++i) accm[i] = _mm256_add_ps(_mm256_unpacklo_ps(accm[i], accm[i + 2]), _mm256_unpackhi_ps(accm[i], accm[i + 2]));
     return _mm256_add_ps(_mm256_unpacklo_ps(accm[0], accm[1]), _mm256_unpackhi_ps(accm[0], accm[1]));
