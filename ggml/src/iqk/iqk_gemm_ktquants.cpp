@@ -1759,6 +1759,30 @@ void mul_mat_iq2_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
             scales.val[0] = vmulq_f32(d, vcvtq_f32_s32(vmovl_s16(vget_low_s16 (s16))));
             scales.val[1] = vmulq_f32(d, vcvtq_f32_s32(vmovl_s16(vget_high_s16(s16))));
             const uint16_t * ql = (const uint16_t *)x[i].ql;
+            if constexpr (nrc_y == 1) {
+                const block_q8_0_x4& ybl = y[0][2*i+0];
+                const block_q8_0_x4& ybh = y[0][2*i+1];
+                auto dyl = vmulq_f32(scales.val[0], vcvt_f32_f16(vld1_f16((const float16_t *)ybl.d)));
+                auto dyh = vmulq_f32(scales.val[1], vcvt_f32_f16(vld1_f16((const float16_t *)ybh.d)));
+                int32x4x4_t suml = {};
+                int32x4x4_t sumh = {};
+                for (int ib = 0; ib < 4; ++ib) {
+                    auto xl = trellis.next32(ql + 4*ib +  0, 4096);
+                    auto xh = trellis.next32(ql + 4*ib + 16, 4096);
+                    auto yl = vld1q_s8_x2(ybl.qs + 32*ib);
+                    auto yh = vld1q_s8_x2(ybh.qs + 32*ib);
+                    suml.val[ib] = vdotq_s32(vdotq_s32(vdupq_n_s32(0), xl.val[0], yl.val[0]), xl.val[1], yl.val[1]);
+                    sumh.val[ib] = vdotq_s32(vdotq_s32(vdupq_n_s32(0), xh.val[0], yh.val[0]), xh.val[1], yh.val[1]);
+                }
+                auto sl1 = vpaddq_s32(suml.val[0], suml.val[1]);
+                auto sl2 = vpaddq_s32(suml.val[2], suml.val[3]);
+                auto sl  = vpaddq_s32(sl1, sl2);
+                auto sh1 = vpaddq_s32(sumh.val[0], sumh.val[1]);
+                auto sh2 = vpaddq_s32(sumh.val[2], sumh.val[3]);
+                auto sh  = vpaddq_s32(sh1, sh2);
+                accd[0] = vfmaq_f32(accd[0], dyl, vcvtq_f32_s32(sl));
+                accd[1] = vfmaq_f32(accd[1], dyh, vcvtq_f32_s32(sh));
+            } else {
             for (int k = 0; k < 8; ++k) xv[k] = trellis.next32(ql + 4*k, 4096);
             for (int iy = 0; iy < nrc_y; ++iy) {
                 const block_q8_0_x4& ybl = y[iy][2*i+0];
@@ -1774,6 +1798,7 @@ void mul_mat_iq2_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
                     accd[iy] = vfmaq_f32(accd[iy], dyl, vcvtq_f32_s32(sumil));
                     accd[iy] = vfmaq_f32(accd[iy], dyh, vcvtq_f32_s32(sumih));
                 }
+            }
             }
         }
 
