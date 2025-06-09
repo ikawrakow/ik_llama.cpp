@@ -236,7 +236,7 @@ struct MulMat {
     static inline ggml_type is_dequant_better(ggml_type type, int nrc_y) {
 #ifdef __AVX2__
         switch (type) {
-            case GGML_TYPE_IQ2_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
+            case GGML_TYPE_IQ2_KT: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_IQ3_KT: return nrc_y >= 32 ? GGML_TYPE_F32 : type;
             case GGML_TYPE_IQ4_KT: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             default: break;
