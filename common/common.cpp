@@ -677,6 +677,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         if (potential_base >= 1.0f) {
             sparams.dry_base = potential_base;
         }
+        return true;
     }
     if (arg == "--dry-allowed-length") {
         CHECK_ARG
@@ -1712,13 +1713,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'",
-
 sparams.dry_allowed_length });
     options.push_back({ "*",           "       --dry-allowed-length N",        "dry_allowed_length: (default: 2)", 
 (double)sparams.dry_base });
     options.push_back({ "*",           "       --dry-base t",        "dry_base: (default: 1.75)", 
 (double)sparams.dry_multiplier });
-    options.push_back({ "*",           "       ---dry-multiplier t",        "dry_multiplier: (default: 0.0)", 
+    options.push_back({ "*",           "       --dry-multiplier t",        "dry_multiplier: (default: 0.0)", 
 sparams.dry_penalty_last_n });
     options.push_back({ "*",           "       --dry-penalty-last-n N",        "dry_penalty_last_n: default: -1 (0 = disable, -1 = context size)"}); 
  

@@ -453,8 +453,6 @@ void llama_sample_xtc_impl(struct llama_sampling * smpl, llama_token_data_array 
 
     llama_sample_softmax_impl(nullptr, candidates);
 
-    auto cur_size = candidates->size;
-
     int pos_last = 0;
 
     for (size_t i = 0; i < candidates->size; ++i) {
