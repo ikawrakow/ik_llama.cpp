@@ -760,7 +760,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_IQ2_S_R4:
         case GGML_TYPE_IQ3_XXS_R4:
         case GGML_TYPE_IQ3_S_R4:
-            return ggml_type(typeB) == GGML_TYPE_Q8_K ? iqk_set_kernels_iquants(ne00, typeA, typeB, mm.funcs, mm.func16) : false;
+            return iqk_set_kernels_iquants(ne00, typeA, typeB, mm.funcs, mm.func16);
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ5_KS:
         case GGML_TYPE_IQ4_KSS:
