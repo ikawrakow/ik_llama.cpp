@@ -106,7 +106,7 @@ struct llama_sampling_context {
 #include "common.h"
 
 // Create a new sampling context instance.
-struct llama_sampling_context * llama_sampling_init(const struct llama_model* model, const struct llama_sampling_params & params);
+struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vocab, const struct llama_sampling_params & params);
 
 void llama_sampling_free(struct llama_sampling_context * ctx);
 

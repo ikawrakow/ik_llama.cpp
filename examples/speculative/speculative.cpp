@@ -179,7 +179,7 @@ int main(int argc, char ** argv) {
     bool has_eos = false;
 
     // target model sampling context
-    struct llama_sampling_context * ctx_sampling = llama_sampling_init(model_tgt, params.sparams);
+    struct llama_sampling_context * ctx_sampling = llama_sampling_init(llama_get_model_vocab(model_tgt), params.sparams);
 
     // draft sequence data
     std::vector<seq_draft> drafts(n_seq_dft);
@@ -190,7 +190,7 @@ int main(int argc, char ** argv) {
     }
 
     for (int s = 0; s < n_seq_dft; ++s) {
-        drafts[s].ctx_sampling = llama_sampling_init(model_dft, params.sparams);
+        drafts[s].ctx_sampling = llama_sampling_init(llama_get_model_vocab(model_dft), params.sparams);
     }
 
     llama_batch batch_dft = llama_batch_init(params.n_ctx, 0, 1);

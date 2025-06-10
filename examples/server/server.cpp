@@ -1193,7 +1193,7 @@ struct server_context {
             if (slot.ctx_sampling != nullptr) {
                 llama_sampling_free(slot.ctx_sampling);
             }
-            slot.ctx_sampling = llama_sampling_init(model,slot.sparams);
+            slot.ctx_sampling = llama_sampling_init(llama_get_model_vocab(model),slot.sparams);
             if (slot.ctx_sampling == nullptr) {
                 // for now, the only error that may happen here is invalid grammar
                 send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);

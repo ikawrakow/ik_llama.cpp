@@ -558,6 +558,7 @@ extern "C" {
     LLAMA_API enum llama_rope_type    llama_rope_type   (const struct llama_model * model);
 
     LLAMA_API int32_t llama_n_vocab    (const struct llama_model * model);
+    LLAMA_API const struct llama_vocab* llama_get_model_vocab(const struct llama_model* model);
     LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model);
     LLAMA_API int32_t llama_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_n_layer    (const struct llama_model * model);
@@ -1226,7 +1227,7 @@ extern "C" {
 
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
     LLAMA_API struct llama_sampler_dry * llama_sampler_init_dry(
-        const struct llama_model* model,
+        const struct llama_vocab* model,
         float    dry_multiplier,
         float    dry_base,
         int32_t    dry_allowed_length,

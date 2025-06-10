@@ -3,7 +3,7 @@
 #include "llama-vocab.h"
 #include <random>
 
-struct llama_sampling_context * llama_sampling_init(const struct llama_model* model, const struct llama_sampling_params & params) {
+struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vocab, const struct llama_sampling_params & params) {
     struct llama_sampling_context * result = new llama_sampling_context();
 
     result->params  = params;
@@ -54,7 +54,7 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_model* mo
                 {
                     c_breakers.push_back(str.c_str());
                 }
-                result->smpl=llama_sampler_init_dry(model, params.dry_multiplier, params.dry_base, params.dry_allowed_length, params.dry_penalty_last_n, c_breakers.data(), c_breakers.size());
+                result->smpl=llama_sampler_init_dry(vocab, params.dry_multiplier, params.dry_base, params.dry_allowed_length, params.dry_penalty_last_n, c_breakers.data(), c_breakers.size());
                 
                 break;
             }
