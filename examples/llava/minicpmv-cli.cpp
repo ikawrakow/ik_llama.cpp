@@ -218,7 +218,7 @@ static struct llama_sampling_context * llama_init(struct llava_context * ctx_lla
 
     LOG_TEE("\n");
 
-    struct llama_sampling_context * ctx_sampling = llama_sampling_init(params->sparams);
+    struct llama_sampling_context * ctx_sampling = llama_sampling_init(ctx_llava->model,params->sparams);
     return ctx_sampling;
 }
 

@@ -349,7 +349,7 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> embd;
 
-    struct llama_sampling_context * ctx_sampling = llama_sampling_init(sparams);
+    struct llama_sampling_context * ctx_sampling = llama_sampling_init(model, sparams);
 
     while (n_remain != 0 || params.interactive) {
         // predict
