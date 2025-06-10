@@ -23313,19 +23313,26 @@ static void get_overlapping_token_sequences(struct llama_context * ctx, const st
                     std::string remaining = str.substr(i);
                     std::vector<llama_token> tokens;
                     if (!remaining.empty()) {
-                        tokens.resize(remaining.size() + 16); // rough estimate
-                        int n_tokens = llama_tokenize(model, remaining.c_str(), remaining.length(),
-                                                    tokens.data(), tokens.size(), false, false);
+                    // First call to get actual token count needed
+                    int n_tokens = llama_tokenize(model, remaining.c_str(), remaining.length(),
+                                                nullptr, 0, false, false);
+                    if (n_tokens > 0) {
+                        tokens.resize(n_tokens);
+                        // Second call with properly sized buffer
+                        n_tokens = llama_tokenize(model, remaining.c_str(), remaining.length(),
+                                                tokens.data(), tokens.size(), false, false);
                         if (n_tokens > 0) {
-                            tokens.resize(n_tokens);
+                            tokens.resize(n_tokens); // Just in case it returned fewer
                             if (max_tail_len >= 0 && tokens.size() > (size_t)max_tail_len) {
                                 tokens.resize(max_tail_len);
                             }
                         } else {
                             tokens.clear();
                         }
+                    } else {
+                        tokens.clear();
+                        }
                     }
-
                     // Check for duplicates
                     auto range = token_sequences.equal_range(token_id);
                     bool found = false;
