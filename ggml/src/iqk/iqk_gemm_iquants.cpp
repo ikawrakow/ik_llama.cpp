@@ -87,13 +87,12 @@ struct EvenSignHelper {
     const __m256i shifts = _mm256_set_epi32(21, 14, 7, 0, 21, 14, 7, 0);
     const __m256i mask   = _mm256_set1_epi32(127);
     const __m256i mone   = _mm256_set1_epi32(1);
-#else
+#endif
     inline void sign_value(uint32_t aux32, __m256i& value) const {
         auto signs = _mm256_set_epi64x(keven_signs[(aux32 >> 21) & 127], keven_signs[(aux32 >> 14) & 127],
                                        keven_signs[(aux32 >>  7) & 127], keven_signs[(aux32 >>  0) & 127]);
         value = _mm256_sign_epi8(value, signs);
     }
-#endif
 };
 
 struct SignHelper {
@@ -1560,6 +1559,55 @@ static void mul_mat_iq3_s_r4_q8_k(int n, const void * vx, size_t bx, const DataI
     }
 }
 
+void iqk_convert_iq2_xxs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    int nb = n/QK_K;
+
+    const block_iq2_xxs * x8[8];
+
+    block_q8_0_r8 * y = (block_q8_0_r8 *)vy;
+
+    ggml_half dh[8];
+    uint16_t all_ls[64];
+    EvenSignHelper esh;
+
+    uint32_t block[8];
+    uint32_t aux32[2];
+    const uint8_t * aux8 = (const uint8_t *)aux32;
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) x8[k] = (const block_iq2_xxs *)((const char *)vx + (ix + k)*bx);
+        for (int i = 0; i < nb; ++i) {
+            // TODO: simdify
+            for (int k = 0; k < 8; ++k) {
+                dh[k] = x8[k][i].d;
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    std::memcpy(aux32, x8[k][i].qs + 4*ib32, 2*sizeof(uint32_t));
+                    all_ls[8*ib32 + k] = (2*(aux32[1] >> 28) + 1);
+                    auto value = _mm256_set_epi64x(iq2xxs_grid[aux8[3]], iq2xxs_grid[aux8[2]], iq2xxs_grid[aux8[1]], iq2xxs_grid[aux8[0]]);
+                    esh.sign_value(aux32[1], value);
+                    _mm256_storeu_si256((__m256i *)block, value);
+                    auto qs = (uint32_t *)y[ib32].qs;
+                    for (int l = 0; l < 4; ++l) {
+                        qs[8*l + k +  0] = block[l + 0];
+                        qs[8*l + k + 32] = block[l + 4];
+                    }
+                }
+            }
+            auto vd = _mm256_mul_ps(_mm256_set1_ps(0.125f), _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)dh)));
+            for (int ib32 = 0; ib32 < QK_K/32; ++ib32) {
+                auto iscales16 = _mm_loadu_si128((const __m128i *)all_ls + ib32);
+                auto iscales32 = _mm256_cvtepi16_epi32(iscales16);
+                auto scales = _mm256_mul_ps(vd, _mm256_cvtepi32_ps(iscales32));
+                _mm_storeu_si128((__m128i *)y[ib32].d, _mm256_cvtps_ph(scales, _MM_FROUND_TO_NEAREST_INT));
+            }
+            y += QK_K/32;
+        }
+    }
+}
+
 template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
     funcs[0] = mul_mat_qX_K_q8_K_IQ<Dequantizer, 1>;
     funcs[1] = mul_mat_qX_K_q8_K_IQ<Dequantizer, 2>;
@@ -1627,6 +1675,15 @@ bool iqk_set_kernels_iquants(int ne00, int typeA, int typeB, std::array<mul_mat_
 
     return true;
 
+}
+
+bool iqk_convert_iquants_q80_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    if (n%QK_K != 0 || nrc_x%8 != 0) return false;
+    switch (ggml_type(type)) {
+        case GGML_TYPE_IQ2_XXS: iqk_convert_iq2_xxs_q8_0_r8(n, vx, bx, vy, nrc_x); break;
+        default: return false;
+    }
+    return true;
 }
 
 #else
