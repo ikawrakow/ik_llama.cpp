@@ -3656,10 +3656,33 @@ GGML_CALL static bool ggml_backend_cuda_supports_buft(ggml_backend_t backend, gg
 }
 
 GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const ggml_tensor * op) {
-    const int min_batch_size = 32;
+    constexpr int min_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
 
-    return (op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS) ||
-           (op->ne[2] >= min_batch_size && (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE));
+    // Why do we want to do this? The heuristics that the batch must have more than min_batch_size tokens to be worth it
+    // offloading the required model weights comes from dense models. For MoE models, the average number of tokens
+    // each expert deals with in a batch is (active_experts / total_experts) * batch_size. Hence, according to the
+    // learned heuristics, we need (active_experts / total_experts) * batch_size >= min_batch_size.
+    // Rearranging we get
+    //
+    //           batch_size * active_experts >= min_batch_size * total_experts
+    //
+    // as the condition for offloading model weights resinding in RAM to the GPU.
+    // In this case, the number of tokens is not as usual in op->ne[1] but rather in op->ne[2].
+    if (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE) {
+        auto ids = op->op == GGML_OP_MUL_MAT_ID ? op->src[2] : op->src[3];
+        int64_t batch_size = op->ne[2];
+        if (batch_size < min_batch_size) return false;
+        int64_t n_experts_tot    = op->src[0]->ne[2];
+        int64_t n_experts_active = ids->ne[0];
+        //printf("%s(%s): op->ne[2] = %ld, n_experts_tot = %ld, n_experts_active = %ld, ids: %s, %ld x %ld x %ld x %ld\n", __func__, op->name, op->ne[2], n_experts_tot, n_experts_active, ids->name, ids->ne[0], ids->ne[1], ids->ne[2], ids->ne[3]);
+        return batch_size*n_experts_active >= min_batch_size*n_experts_tot;
+    }
+
+    return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
+
+    // Original:
+    //return (op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS) ||
+    //       (op->ne[2] >= min_batch_size && (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE));
 
     GGML_UNUSED(backend);
 }
