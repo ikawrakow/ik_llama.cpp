@@ -558,55 +558,28 @@ void quantize_row_q8_K64(const float * x, void * y, int64_t k) {
 }
 
 #ifdef __AVX2__
-// ————————————————————————————————————————————
-// 1) Redirect the “public” names to our private, local versions:
-#define hsum_float_4   hsum_float_4_local
-#define hsum_float_8   hsum_float_8_local
-#define hsum_i32_8     hsum_i32_8_local
-#define hmax_f32_8     hmax_f32_8_local
-// ————————————————————————————————————————————
-
 namespace {
-    // 2) Rename each inline helper by adding “_local” to its name:
-
-    inline float hsum_float_4_local(__m128 x) {
-        x = _mm_add_ps(x, _mm_movehl_ps(x, x));
-        x = _mm_add_ss(x, _mm_movehdup_ps(x));
-        return _mm_cvtss_f32(x);
-    }
-
-    inline float hsum_float_8_local(__m256 x) {
-        // Note: this calls “hsum_float_4(…)” on purpose,
-        // but because of the #define above, that actually expands to:
-        //    hsum_float_4_local(_mm_add_ps(…))
-        return hsum_float_4(
-            _mm_add_ps(
-                _mm256_castps256_ps128(x),
-                _mm256_extractf128_ps(x, 1)
-            )
-        );
-    }
-
-    inline int hsum_i32_8_local(const __m256i a) {
-        const __m128i sum128 = _mm_add_epi32(
-            _mm256_castsi256_si128(a),
-            _mm256_extractf128_si256(a, 1)
-        );
-        const __m128i hi64  = _mm_unpackhi_epi64(sum128, sum128);
-        const __m128i sum64 = _mm_add_epi32(hi64, sum128);
-        const __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));
-        return _mm_cvtsi128_si32(_mm_add_epi32(sum64, hi32));
-    }
-
-    inline float hmax_f32_8_local(__m256 x) {
-        __m128 max4 = _mm_max_ps(
-            _mm256_extractf128_ps(x, 1),
-            _mm256_castps256_ps128(x)
-        );
-        max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
-        max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
-        return _mm_cvtss_f32(max4);
-    }
+inline float hsum_float_4(__m128 x) {
+    x = _mm_add_ps(x, _mm_movehl_ps(x, x));
+    x = _mm_add_ss(x, _mm_movehdup_ps(x));
+    return _mm_cvtss_f32(x);
+}
+inline float hsum_float_8(__m256 x) {
+    return hsum_float_4(_mm_add_ps(_mm256_castps256_ps128(x), _mm256_extractf128_ps(x, 1))); 
+}
+inline int hsum_i32_8(const __m256i a) {
+    const __m128i sum128 = _mm_add_epi32(_mm256_castsi256_si128(a), _mm256_extractf128_si256(a, 1));
+    const __m128i hi64 = _mm_unpackhi_epi64(sum128, sum128);
+    const __m128i sum64 = _mm_add_epi32(hi64, sum128);
+    const __m128i hi32  = _mm_shuffle_epi32(sum64, _MM_SHUFFLE(2, 3, 0, 1));
+    return _mm_cvtsi128_si32(_mm_add_epi32(sum64, hi32));
+}
+inline float hmax_f32_8(__m256 x) {
+    __m128 max4 = _mm_max_ps(_mm256_extractf128_ps(x, 1), _mm256_castps256_ps128(x));
+    max4 = _mm_max_ps( max4, _mm_movehl_ps(max4, max4));
+    max4 = _mm_max_ss( max4, _mm_movehdup_ps( max4));
+    return  _mm_cvtss_f32(max4);
+}
 }
 #endif
 
@@ -7441,72 +7414,24 @@ void dequantize_row_ms_i2s(const void * vx, float * y, int64_t k) {
 
 namespace {
 #ifdef __AVX2__
-// ————————————————————————————————————————————————————————
-// Redirect each conflicting name to its “_local” version:
-#define hsum_float_4x4   hsum_float_4x4_local
-#define hsum_float_8x8   hsum_float_8x8_local
-#define hsum_float_4x8   hsum_float_4x8_local
-// ————————————————————————————————————————————————————————
-
-static __m128 hsum_float_4x4_local(__m128 * accm) {
-    accm[0] = _mm_add_ps(
-        _mm_unpacklo_ps(accm[0], accm[2]),
-        _mm_unpackhi_ps(accm[0], accm[2])
-    );
-    accm[1] = _mm_add_ps(
-        _mm_unpacklo_ps(accm[1], accm[3]),
-        _mm_unpackhi_ps(accm[1], accm[3])
-    );
-    return _mm_add_ps(
-        _mm_unpacklo_ps(accm[0], accm[1]),
-        _mm_unpackhi_ps(accm[0], accm[1])
-    );
+__m128 hsum_float_4x4(__m128 * accm) {
+     accm[0] = _mm_add_ps(_mm_unpacklo_ps(accm[0], accm[2]), _mm_unpackhi_ps(accm[0], accm[2]));
+     accm[1] = _mm_add_ps(_mm_unpacklo_ps(accm[1], accm[3]), _mm_unpackhi_ps(accm[1], accm[3]));
+     return _mm_add_ps(_mm_unpacklo_ps(accm[0], accm[1]), _mm_unpackhi_ps(accm[0], accm[1]));
 }
-
-static __m256 hsum_float_8x8_local(__m256 * accm) {
-    // Combine pairs of 256-bit lanes from accm[0..7] into accm[0..3]
-    for (int i = 0; i < 4; ++i) {
-        accm[i] = _mm256_set_m128(
-            _mm_add_ps(
-                _mm256_castps256_ps128(accm[i+4]),
-                _mm256_extractf128_ps(accm[i+4], 1)
-            ),
-            _mm_add_ps(
-                _mm256_castps256_ps128(accm[i+0]),
-                _mm256_extractf128_ps(accm[i+0], 1)
-            )
-        );
-    }
-    // Now accm[0..3] each hold two 128-bit halves summed. Next, reduce to accm[0..1].
-    for (int i = 0; i < 2; ++i) {
-        accm[i] = _mm256_add_ps(
-            _mm256_unpacklo_ps(accm[i], accm[i+2]),
-            _mm256_unpackhi_ps(accm[i], accm[i+2])
-        );
-    }
-    // Finally, combine accm[0] and accm[1] into a single __m256
-    return _mm256_add_ps(
-        _mm256_unpacklo_ps(accm[0], accm[1]),
-        _mm256_unpackhi_ps(accm[0], accm[1])
-    );
+__m256 hsum_float_8x8(__m256 * accm) {
+     for (int i = 0; i < 4; ++i) {
+         accm[i] = _mm256_set_m128(_mm_add_ps(_mm256_castps256_ps128(accm[i+4]), _mm256_extractf128_ps(accm[i+4], 1)),
+                                   _mm_add_ps(_mm256_castps256_ps128(accm[i+0]), _mm256_extractf128_ps(accm[i+0], 1)));
+     }
+     for (int i = 0; i < 2; ++i) accm[i] = _mm256_add_ps(_mm256_unpacklo_ps(accm[i], accm[i+2]), _mm256_unpackhi_ps(accm[i], accm[i+2]));
+     return _mm256_add_ps(_mm256_unpacklo_ps(accm[0], accm[1]), _mm256_unpackhi_ps(accm[0], accm[1]));
 }
-
-static __m256 hsum_float_4x8_local(__m256 * accm) {
-    // Reduce 4×8-vector block down to two __m256 registers in accm[0..1]
-    for (int i = 0; i < 2; ++i) {
-        accm[i] = _mm256_add_ps(
-            _mm256_unpacklo_ps(accm[i], accm[i+2]),
-            _mm256_unpackhi_ps(accm[i], accm[i+2])
-        );
-    }
-    // Then combine accm[0] and accm[1]
-    return _mm256_add_ps(
-        _mm256_unpacklo_ps(accm[0], accm[1]),
-        _mm256_unpackhi_ps(accm[0], accm[1])
-    );
+__m256 hsum_float_4x8(__m256 * accm) {
+     for (int i = 0; i < 2; ++i) accm[i] = _mm256_add_ps(_mm256_unpacklo_ps(accm[i], accm[i+2]), _mm256_unpackhi_ps(accm[i], accm[i+2]));
+     return _mm256_add_ps(_mm256_unpacklo_ps(accm[0], accm[1]), _mm256_unpackhi_ps(accm[0], accm[1]));
 }
 #endif
-
 template <int block_size, int group_size, int num_bits, bool is_abs = false>
 class QuantizerIQKT {
     static_assert(group_size == 8 || group_size == 4);
