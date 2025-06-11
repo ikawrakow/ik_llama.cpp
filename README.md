@@ -16,6 +16,12 @@ LlaMA-3-Nemotron [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377), Q
 
 #### Quantization additions
 
+##### Trellis quants (`IQ2_KT`, `IQ3_KT`, `IQ4_KT`)
+
+Information and the original CUDA implementation in [PR 113](https://github.com/ikawrakow/ik_llama.cpp/pull/113). Additional implementations: Metal [PR 475](https://github.com/ikawrakow/ik_llama.cpp/pull/475), Neon [PR 471](https://github.com/ikawrakow/ik_llama.cpp/pull/471), CPU [PR 441](https://github.com/ikawrakow/ik_llama.cpp/pull/441)
+
+##### IQK quants
+
 `IQ5_KS_R4` [PR 426](https://github.com/ikawrakow/ik_llama.cpp/pull/426), `IQ5_KS` [PR 422](https://github.com/ikawrakow/ik_llama.cpp/pull/422)
 
 #### Quantization improvements
@@ -28,7 +34,6 @@ LlaMA-3-Nemotron [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377), Q
 * CUDA implementation for `IQ1_S_R4` [PR 492](https://github.com/ikawrakow/ik_llama.cpp/pull/492), `IQ1_M_R4` [PR 494](https://github.com/ikawrakow/ik_llama.cpp/pull/494)
 * Faster CPU prompt processing for Trellis quants and MoE models. [PR 488](https://github.com/ikawrakow/ik_llama.cpp/pull/488)
 * Trellis quants: faster CPU prompt processing [PR 482](https://github.com/ikawrakow/ik_llama.cpp/pull/482).
-* Additional implementations for the trellis quants. Metal [PR 475](https://github.com/ikawrakow/ik_llama.cpp/pull/475), Neon [PR 471](https://github.com/ikawrakow/ik_llama.cpp/pull/471), CPU [PR 441](https://github.com/ikawrakow/ik_llama.cpp/pull/441)
 * Minor (~2%) `iq2_ks` TG performance improvement on CUDA [PR 468](https://github.com/ikawrakow/ik_llama.cpp/pull/468)
 * CUDA GEMM and GEMV for `IQ4_KS_R4` and `IQ5_KS_R4` [PR 462](https://github.com/ikawrakow/ik_llama.cpp/pull/462)
 * CUDA implementation for `IQ2_K_R4`, `IQ3_K_R4`, `IQ4_K_R4`, `IQ5_K_R4` [PR 461](https://github.com/ikawrakow/ik_llama.cpp/pull/461)
@@ -54,7 +59,6 @@ LlaMA-3-Nemotron [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377), Q
 * Feb 23 2025: `sweep-bench` - better performance benchmarking
 * Feb 19 2025: `Q8_KV` - new type for 8-bit KV-cache quantization
 * March 7 2025: Custom quantization mixes using regular expressions
-* Feb 25 2025: Tensor overrides for better control where model weights are stored (GPU or CPU)
 
 ### Performance improvements
 
@@ -70,7 +74,6 @@ LlaMA-3-Nemotron [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377), Q
 * March 10 2025: Better TG performance for MoE models on CUDA
 * Feb 23 2025: Fused FFN ops for faster MoE inference
 * Feb 20 2025: Fast GEMM/GEMV for `IQ1_S`
-
 
 ### Flash-MLA
 
@@ -93,9 +96,6 @@ LlaMA-3-Nemotron [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377), Q
 * Fix imatrix calculation for MLA models [PR 411](https://github.com/ikawrakow/ik_llama.cpp/pull/411)
 * Fix new CUDA FA on Touring [PR 413](https://github.com/ikawrakow/ik_llama.cpp/pull/413)
 * Fix SER. CPU: [PR 415](https://github.com/ikawrakow/ik_llama.cpp/pull/415) CUDA: [PR 416](https://github.com/ikawrakow/ik_llama.cpp/pull/416)
-
-
-
 
 ## Resources
 
