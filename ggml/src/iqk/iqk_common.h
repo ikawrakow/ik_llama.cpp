@@ -172,7 +172,6 @@ static inline void make_q4_scales(const uint8_t * scales8, uint32_t * aux32) {
     aux32[0] = a0 & 0x3f3f3f3f;
 }
 
-#if !(defined HAVE_FANCY_SIMD && defined __AVX512VPOPCNTDQ__)
 const uint64_t keven_signs[128] = {
     0x0101010101010101, 0xff010101010101ff, 0xff0101010101ff01, 0x010101010101ffff,
     0xff01010101ff0101, 0x0101010101ff01ff, 0x0101010101ffff01, 0xff01010101ffffff,
@@ -207,7 +206,6 @@ const uint64_t keven_signs[128] = {
     0x01ffffffff010101, 0xffffffffff0101ff, 0xffffffffff01ff01, 0x01ffffffff01ffff,
     0xffffffffffff0101, 0x01ffffffffff01ff, 0x01ffffffffffff01, 0xffffffffffffffff,
 };
-#endif
 
 #ifdef __AVX2__
 
@@ -539,6 +537,24 @@ struct Q4Bits {
 };
 
 #endif
+
+inline void iqk_transpose_8x8(__m256 * m) {
+    for (int k = 0; k < 8; k += 4) {
+        auto t0 = _mm256_unpacklo_ps(m[k+0], m[k+1]);
+        auto t1 = _mm256_unpacklo_ps(m[k+2], m[k+3]);
+        auto t2 = _mm256_unpackhi_ps(m[k+0], m[k+1]);
+        auto t3 = _mm256_unpackhi_ps(m[k+2], m[k+3]);
+        m[k+0] = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t1)));
+        m[k+1] = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t0), _mm256_castps_pd(t1)));
+        m[k+2] = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(t2), _mm256_castps_pd(t3)));
+        m[k+3] = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(t2), _mm256_castps_pd(t3)));
+    }
+    for (int k = 0; k < 4; ++k) {
+        auto t = _mm256_set_m128(_mm256_extractf128_ps(m[k+4], 1), _mm256_extractf128_ps(m[k], 1));
+        m[k+0] = _mm256_set_m128(_mm256_castps256_ps128(m[k+4]), _mm256_castps256_ps128(m[k+0]));
+        m[k+4] = t;
+    }
+}
 
 #else
 // ------------------------------------ __aarch64__ --------------------------------------------------
