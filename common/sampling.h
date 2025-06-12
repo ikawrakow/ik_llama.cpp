@@ -11,6 +11,7 @@
 
 // sampler types
 enum class llama_sampler_type : char {
+    DRY            ='d',
     TOP_K       = 'k',
     TOP_P       = 'p',
     MIN_P       = 'm',
@@ -53,6 +54,7 @@ typedef struct llama_sampling_params {
         llama_sampler_type::TYPICAL_P,
         llama_sampler_type::TOP_P,
         llama_sampler_type::MIN_P,
+        llama_sampler_type::TOP_N_SIGMA,
         llama_sampler_type::TEMPERATURE
     };
 
