@@ -49,7 +49,7 @@ LlaMA-3-Nemotron [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377), Q
 * May 12 2025: User can now control if/which operations with tensors held in RAM are offloaded to the GPU. See [PR 405](https://github.com/ikawrakow/ik_llama.cpp/pull/405) 
 * May 12 2025: Compatibility issues with mainline `llama.cpp` GGUFs for DeepSeek models with MLA enabled were resolved in [PR 394](https://github.com/ikawrakow/ik_llama.cpp/pull/394). The lower prompt processing performance resulting from using `llama.cpp`-style MLA GGUFs was recovered in [PR 409](https://github.com/ikawrakow/ik_llama.cpp/pull/409).
 * April 21 2025: ik_llama.cpp builds and runs successfully on Android (using termux), see [PR 336](https://github.com/ikawrakow/ik_llama.cpp/pull/336)
-* March 1 2025: Smart Expert Reduction for faster DeepSeek inference
+* March 1 2025: Smart Expert Reduction for faster DeepSeek inference 
 * Feb 25 2025: Tensor overrides for better control where model weights are stored (GPU or CPU)
 * Feb 23 2025: `sweep-bench` - better performance benchmarking
 * Feb 19 2025: `Q8_KV` - new type for 8-bit KV-cache quantization
@@ -64,26 +64,26 @@ LlaMA-3-Nemotron [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377), Q
 * May 4 2025: Significant token generation performance improvement on CUDA with Flash Attention for GQA models. For details and benchmarks. [PR 370](https://github.com/ikawrakow/ik_llama.cpp/pull/370) 
 * April 17 2025: Better CPU Flash Attention token generation performance. [PR 332](https://github.com/ikawrakow/ik_llama.cpp/pull/332)
 * April 3 2025: Much faster MoE implementation on Metal. [PR 307](https://github.com/ikawrakow/ik_llama.cpp/pull/307) 
-* March 25 2025: Better MoE performance on CUDA 
-* March 23 2025: Better batched processing speed for DeepSeek models
-* March 18 2025: Reduce compute buffer size
-* March 10 2025: Better TG performance for MoE models on CUDA
-* Feb 23 2025: Fused FFN ops for faster MoE inference
-* Feb 20 2025: Fast GEMM/GEMV for `IQ1_S`
+* March 25 2025: Better MoE performance on CUDA [PR 283](https://github.com/ikawrakow/ik_llama.cpp/pull/283)
+* March 23 2025: Better batched processing speed for DeepSeek models [PR 282](https://github.com/ikawrakow/ik_llama.cpp/pull/282)
+* March 18 2025: Reduce compute buffer size [PR 237](https://github.com/ikawrakow/ik_llama.cpp/pull/237)
+* March 10 2025: Better TG performance for MoE models on CUDA [PR 248](https://github.com/ikawrakow/ik_llama.cpp/pull/248)
+* Feb 23 2025: Fused FFN ops for faster MoE inference [PR 229](https://github.com/ikawrakow/ik_llama.cpp/pull/229)
+* Feb 20 2025: Fast GEMM/GEMV for `IQ1_S` [PR 212](https://github.com/ikawrakow/ik_llama.cpp/pull/212)
 
 
 ### Flash-MLA
 
-* March 21 2025: 🚀 FlashMLA-3: fastest CPU-only inference for DeepSeek models see 
-* March 17 2025: 🚀 FlashMLA-2 performance improvements
-* March 12 2025: Allow `Q8_0` KV cache with FlashMLA-2 on CUDA
-* March 9 2025: 🚀 FlashMLA on CUDA
-* March 8 2025: 🚀 Faster FlashMLA CPU implementation
-* March 3 2025: 🚀 Introducing FlashMLA - MLA with Flash Attention
-* Feb 27 2025: MLA without transposed cache
-* Feb 13 2025: Allow `Q8_0` quantized cache with MLA
-* Feb 11 2025: 🚀 Flash Attention support for DeepSeek models
-* Feb 9 2025: 🚀 MLA for DeepSeek models
+* March 21 2025: 🚀 FlashMLA-3: fastest CPU-only inference for DeepSeek models [PR 273](https://github.com/ikawrakow/ik_llama.cpp/pull/273)
+* March 17 2025: 🚀 FlashMLA-2 performance improvements [PR 253](https://github.com/ikawrakow/ik_llama.cpp/pull/253)
+* March 12 2025: Allow `Q8_0` KV cache with FlashMLA-2 on CUDA [PR 265](https://github.com/ikawrakow/ik_llama.cpp/pull/265)
+* March 9 2025: 🚀 FlashMLA on CUDA [PR 247](https://github.com/ikawrakow/ik_llama.cpp/pull/247)
+* March 8 2025: 🚀 Faster FlashMLA CPU implementation [PR 243](https://github.com/ikawrakow/ik_llama.cpp/pull/243)
+* March 3 2025: 🚀 Introducing FlashMLA - MLA with Flash Attention [PR 240](https://github.com/ikawrakow/ik_llama.cpp/pull/240)
+* Feb 27 2025: MLA without transposed cache [PR 235](https://github.com/ikawrakow/ik_llama.cpp/pull/235)
+* Feb 13 2025: Allow `Q8_0` quantized cache with MLA [PR 206](https://github.com/ikawrakow/ik_llama.cpp/pull/206)
+* Feb 11 2025: 🚀 Flash Attention support for DeepSeek models [PR 200](https://github.com/ikawrakow/ik_llama.cpp/pull/200)
+* Feb 9 2025: 🚀 MLA for DeepSeek models [PR 188](https://github.com/ikawrakow/ik_llama.cpp/pull/188)
 
 ### Fixes
 
