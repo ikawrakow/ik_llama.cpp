@@ -231,7 +231,7 @@ async function convertPDFToImage(file: File): Promise<string[]> {
     if (!ctx) {
       throw new Error('Failed to get 2D context from canvas');
     }
-    const task = page.render({ canvasContext: ctx, viewport: viewport });
+    const task = page.render({ canvasContext: ctx, canvas: canvas, viewport: viewport });
     pages.push(
       task.promise.then(() => {
         return canvas.toDataURL();

@@ -3,6 +3,8 @@ export interface TimingReport {
   prompt_ms: number;
   predicted_n: number;
   predicted_ms: number;
+  n_ctx: number;
+  n_past: number;
 }
 
 /**
@@ -42,6 +44,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timings?: TimingReport;
+  model_name:string;
   extra?: MessageExtra[];
   // node based system for branching
   parent: Message['id'];
@@ -103,6 +106,7 @@ export interface Conversation {
   lastModified: number; // timestamp from Date.now()
   currNode: Message['id']; // the current message node being viewed
   name: string;
+  model_name: string;
 }
 
 export interface ViewingChat {
@@ -136,6 +140,7 @@ export interface SettingsPreset {
 // a non-complete list of props, only contains the ones we need
 export interface LlamaCppServerProps {
   model_path: string;
+  model_name: string;
   n_ctx: number;
   modalities?: {
     vision: boolean;

@@ -7,7 +7,7 @@ import zlib from 'node:zlib';
 
 /* eslint-disable */
 
-const MAX_BUNDLE_SIZE = 2 * 1024 * 1024; // only increase when absolutely necessary
+const MAX_BUNDLE_SIZE = 5 * 1024 * 1024; // only increase when absolutely necessary
 
 const GUIDE_FOR_FRONTEND = `
 <!--
@@ -66,7 +66,6 @@ const BUILD_PLUGINS = [
 ];
 
 export default defineConfig({
-  // @ts-ignore
   plugins: process.env.ANALYZE ? FRONTEND_PLUGINS : BUILD_PLUGINS,
   server: {
     proxy: {

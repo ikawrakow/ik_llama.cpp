@@ -1,12 +1,14 @@
-import { ClipboardEvent, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 import { CallbackGeneratedChunk, useAppContext } from '../utils/app.context';
 import ChatMessage from './ChatMessage';
 import { CanvasType, Message, PendingMessage } from '../utils/types';
-import { classNames, cleanCurrentUrl, throttle } from '../utils/misc';
+import { classNames, cleanCurrentUrl } from '../utils/misc';
 import CanvasPyInterpreter from './CanvasPyInterpreter';
 import StorageUtils from '../utils/storage';
 import { useVSCodeContext } from '../utils/llama-vscode';
 import { useChatTextarea, ChatTextareaApi } from './useChatTextarea.ts';
+import { scrollToBottom, useChatScroll } from './useChatScroll.tsx';
 import {
   ArrowUpIcon,
   StopIcon,
@@ -82,23 +84,6 @@ function getListMessageDisplay(
   return res;
 }
 
-const scrollToBottom = throttle(
-  (requiresNearBottom: boolean, delay: number = 80) => {
-    const mainScrollElem = document.getElementById('main-scroll');
-    if (!mainScrollElem) return;
-    const spaceToBottom =
-      mainScrollElem.scrollHeight -
-      mainScrollElem.scrollTop -
-      mainScrollElem.clientHeight;
-    if (!requiresNearBottom || spaceToBottom < 50) {
-      setTimeout(
-        () => mainScrollElem.scrollTo({ top: mainScrollElem.scrollHeight }),
-        delay
-      );
-    }
-  },
-  80
-);
 
 export default function ChatScreen() {
   const {
@@ -116,9 +101,10 @@ export default function ChatScreen() {
 
   const extraContext = useChatExtraContext();
   useVSCodeContext(textarea, extraContext);
-  //const { extraContext, clearExtraContext } = useVSCodeContext(textarea);
+  
+  const msgListRef = useRef<HTMLDivElement>(null);
+  useChatScroll(msgListRef);
   // TODO: improve this when we have "upload file" feature
-
   // keep track of leaf node for rendering
   const [currNodeId, setCurrNodeId] = useState<number>(-1);
   const messages: MessageDisplay[] = useMemo(() => {
@@ -141,32 +127,44 @@ export default function ChatScreen() {
     if (currLeafNodeId) {
       setCurrNodeId(currLeafNodeId);
     }
-    scrollToBottom(true);
+    //useChatScroll will handle the auto scroll
   };
 
   const sendNewMessage = async () => {
-    const lastInpMsg = textarea.value();
-    if (lastInpMsg.trim().length === 0 || isGenerating(currConvId ?? ''))
+  
+  const lastInpMsg = textarea.value();
+  try {
+    const generate = isGenerating(currConvId ?? '');
+    console.log('IsGenerating', generate);
+    if (lastInpMsg.trim().length === 0 || generate)
       return;
+
     textarea.setValue('');
     scrollToBottom(false);
     setCurrNodeId(-1);
     // get the last message node
     const lastMsgNodeId = messages.at(-1)?.msg.id ?? null;
-    if (
-      !(await sendMessage(
+    const successSendMsg=await sendMessage(
         currConvId,
         lastMsgNodeId,
         lastInpMsg,
         extraContext.items,
         onChunk
-      ))
-    ) {
+      );
+    console.log('Send msg success:', successSendMsg);
+    if (!successSendMsg)
+    {
       // restore the input message if failed
       textarea.setValue(lastInpMsg);
     }
     // OK
     extraContext.clearItems();
+    } 
+     catch (err) {
+        //console.error('Error sending message:', error);
+        toast.error(err instanceof Error ? err.message : String(err));
+        textarea.setValue(lastInpMsg); // Restore input on error
+    }
   };
 
   const handleEditMessage = async (msg: Message, content: string) => {
@@ -182,6 +180,7 @@ export default function ChatScreen() {
     );
     setCurrNodeId(-1);
     scrollToBottom(false);
+
   };
 
   const handleRegenerateMessage = async (msg: Message) => {
@@ -197,9 +196,10 @@ export default function ChatScreen() {
     );
     setCurrNodeId(-1);
     scrollToBottom(false);
+
   };
 
-    const handleContinueMessage = async (msg: Message, content: string) => {
+  const handleContinueMessage = async (msg: Message, content: string) => {
     if (!viewingChat || !continueMessageAndGenerate) return;
     setCurrNodeId(msg.id);
     scrollToBottom(false);
@@ -211,6 +211,7 @@ export default function ChatScreen() {
     );
     setCurrNodeId(-1);
     scrollToBottom(false);
+
   };
 
   const hasCanvas = !!canvasData;
@@ -251,16 +252,29 @@ export default function ChatScreen() {
     >
       <div
         className={classNames({
-          'flex flex-col w-full max-w-[900px] mx-auto': true,
+          'flex flex-col w-[75vw] mx-auto': true,
           'hidden lg:flex': hasCanvas, // adapted for mobile
           flex: !hasCanvas,
         })}
       >
+	  <div className="flex items-center justify-center">
+		{viewingChat?.conv.model_name}
+	  </div>
         {/* chat messages */}
-        <div id="messages-list" className="grow">
+        <div id="messages-list" className="grow" ref={msgListRef}>
           <div className="mt-auto flex justify-center">
             {/* placeholder to shift the message to the bottom */}
-            {viewingChat ? '' : 'Send a message to start'}
+            <div>
+            {viewingChat ? '' : ''}
+            </div>
+            {viewingChat==null && (
+              <div className="w-full max-w-2xl px-4">
+                <div className="mb-8 text-center" >
+                  <p className="text-1xl text-muted-foreground">How can I help you today?</p>
+                </div>
+              </div>
+            )}
+
           </div>
           {[...messages, ...pendingMsgDisplay].map((msgDisplay) => {
             const actualMsgObject = msgDisplay.msg;
@@ -292,8 +306,7 @@ export default function ChatScreen() {
             );
           })}        
         </div>
-
-{/* chat input */}
+        {/* chat input */}
         <ChatInput
           textarea={textarea}
           extraContext={extraContext}
@@ -301,7 +314,7 @@ export default function ChatScreen() {
           onStop={() => stopGenerating(currConvId ?? '')}
           isGenerating={isGenerating(currConvId ?? '')}
         />
-      </div>
+        </div>
       <div className="w-full sticky top-[7em] h-[calc(100vh-9em)]">
         {canvasData?.type === CanvasType.PY_INTERPRETER && (
           <CanvasPyInterpreter />
@@ -311,38 +324,6 @@ export default function ChatScreen() {
   );
 }
 
-// function ServerInfo() {
-//   const { serverProps } = useAppContext();
-//   const modalities = [];
-//   if (serverProps?.modalities?.audio) {
-//     modalities.push('audio');
-//   }
-//   if (serverProps?.modalities?.vision) {
-//     modalities.push('vision');
-//   }
-//   return (
-//     <div
-//       className="card card-sm shadow-sm border-1 border-base-content/20 text-base-content/70 mb-6"
-//       tabIndex={0}
-//       aria-description="Server information"
-//     >
-//       <div className="card-body">
-//         <b>Server Info</b>
-//         <p>
-//           <b>Model</b>: {serverProps?.model_path?.split(/(\\|\/)/).pop()}
-//           <br />
-//           {modalities.length > 0 ? (
-//             <>
-//               <b>Supported modalities:</b> {modalities.join(', ')}
-//             </>
-//           ) : (
-//             ''
-//           )}
-//         </p>
-//       </div>
-//     </div>
-//   );
-// }
 
 function ChatInput({
   textarea,
@@ -384,7 +365,7 @@ function ChatInput({
             className="flex flex-col rounded-xl border-1 border-base-content/30 p-3 w-full"
             // when a file is pasted to the input, we handle it here
             // if a text is pasted, and if it is long text, we will convert it to a file
-            onPasteCapture={(e: ClipboardEvent<HTMLInputElement>) => {
+            onPasteCapture={(e: React.ClipboardEvent<HTMLInputElement>) => {
               const text = e.clipboardData.getData('text/plain');
               if (
                 text.length > 0 &&

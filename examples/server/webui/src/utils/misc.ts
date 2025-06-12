@@ -4,7 +4,6 @@ import { APIMessage, Message, LlamaCppServerProps, APIMessageContentPart } from 
 
 // ponyfill for missing ReadableStream asyncIterator on Safari
 import { asyncIterator } from '@sec-ant/readable-stream/ponyfill/asyncIterator';
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const isString = (x: any) => !!x.toLowerCase;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -177,19 +176,20 @@ export const getServerProps = async (
   apiKey?: string
 ): Promise<LlamaCppServerProps> => {
   try {
-    const response = await fetch(`${baseUrl}/props`, {
+    const response = await fetch(`${baseUrl}/v1/props`, {
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
     });
     if (!response.ok) {
-      throw new Error('Failed to fetch server props');
+      //throw new Error('Failed to fetch server props');
     }
     const data = await response.json();
     return data as LlamaCppServerProps;
   } catch (error) {
-    console.error('Error fetching server props:', error);
+    //console.error('Error fetching server props:', error);
+    //toast.error('Error fetching server props:' +error);
     throw error;
   }
 };

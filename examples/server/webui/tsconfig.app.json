@@ -6,6 +6,9 @@
     "lib": ["ES2021", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
+	  "sourceMap": false,
+    "inlineSources": false, // Add this
+    "inlineSourceMap": false, // Ensure this is false
 
     /* Bundler mode */
     "moduleResolution": "bundler",

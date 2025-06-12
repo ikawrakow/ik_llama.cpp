@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef} from 'react';
 import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
 import { isDev } from '../Config';
@@ -339,7 +339,7 @@ const SETTING_SECTIONS = (
       {
         type: SettingInputType.CHECKBOX,
         label:
-          'Exclude thought process when sending requests to API (Recommended for DeepSeek-R1)',
+          'Exclude thought process when sending requests to API (Recommended for Reasoning Models like Deepseek R1)',
         key: 'excludeThoughtOnReq',
       },
     ],
@@ -361,7 +361,7 @@ const SETTING_SECTIONS = (
             const demoConv = await res.json();
             StorageUtils.remove(demoConv.id);
             for (const msg of demoConv.messages) {
-              StorageUtils.appendMsg(demoConv.id, msg);
+              StorageUtils.appendMsg(demoConv.id, msg, msg.model_name);
             }
           };
           return (
@@ -422,7 +422,7 @@ const SETTING_SECTIONS = (
               toast.success('Import complete')
               window.location.reload();
             } catch (error) {
-              console.error('' + error);
+              //console.error('' + error);
               toast.error('' + error);
             }
           };
@@ -452,8 +452,13 @@ const SETTING_SECTIONS = (
 
       {
         type: SettingInputType.CHECKBOX,
-        label: 'Show tokens per second',
+        label: 'Show generation stats (model name, context size, prompt and token per second)',
         key: 'showTokensPerSecond',
+      },
+      {
+        type: SettingInputType.CHECKBOX,
+        label: 'Use server defaults for parameters (skip sending temp, top_k, top_p, min_p, typical p from WebUI)',
+        key: 'useServerDefaults',
       },
       {
         type: SettingInputType.LONG_INPUT,
@@ -582,7 +587,8 @@ export default function SettingDialog({
           return;
         }
       } else {
-        console.error(`Unknown default type for key ${key}`);
+        //console.error(`Unknown default type for key ${key}`);
+        toast.error(`Unknown default type for key ${key}`);
       }
     }
     if (isDev) console.log('Saving config', newConfig);
@@ -595,6 +601,7 @@ export default function SettingDialog({
     setLocalConfig({ ...localConfig, [key]: value });
   };
 
+  const detailsRef = useRef<HTMLDetailsElement>(null);  // <-- Add this line
   return (
     <dialog className={classNames({ modal: true, 'modal-open': show })}>
       <div className="modal-box w-11/12 max-w-3xl">
@@ -619,7 +626,7 @@ export default function SettingDialog({
 
           {/* Left panel, showing sections - Mobile version */}
           <div className="md:hidden flex flex-row gap-2 mb-4">
-            <details className="dropdown">
+            <details className="dropdown" ref={detailsRef}>
               <summary className="btn bt-sm w-full m-1">
                 {SETTING_SECTIONS_GENERATED[sectionIdx].title}
               </summary>
@@ -631,7 +638,9 @@ export default function SettingDialog({
                       'btn btn-ghost justify-start font-normal': true,
                       'btn-active': sectionIdx === idx,
                     })}
-                    onClick={() => setSectionIdx(idx)}
+                    onClick={() => {setSectionIdx(idx);
+                      detailsRef.current?.removeAttribute('open');
+                    }}
                     dir="auto"
                   >
                     {section.title}

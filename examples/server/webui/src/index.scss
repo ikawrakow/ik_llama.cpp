@@ -9,6 +9,7 @@ html {
   scrollbar-gutter: auto;
 }
 
+
 .markdown {
   h1,
   h2,
@@ -31,6 +32,7 @@ html {
   /* TODO: fix markdown table */
 }
 
+
 .show-on-hover {
   @apply md:opacity-0 md:group-hover:opacity-100;
 }
@@ -42,12 +44,16 @@ html {
 }
 
 .chat-bubble {
+  overflow-wrap: break-word;
+  word-break: break-word;
   @apply break-words;
 }
 
 .chat-bubble-base-300 {
   --tw-bg-opacity: 1;
   --tw-text-opacity: 1;
+  overflow-wrap: break-word;
+  word-break: break-word;
   @apply break-words bg-base-300 text-base-content;
 }
 
