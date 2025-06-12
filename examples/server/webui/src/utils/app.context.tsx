@@ -200,6 +200,7 @@ export const AppContextProvider = ({
         typical_p: config.typical_p,
         xtc_probability: config.xtc_probability,
         xtc_threshold: config.xtc_threshold,
+		top_n_sigma: config.top_n_sigma,
         repeat_last_n: config.repeat_last_n,
         repeat_penalty: config.repeat_penalty,
         presence_penalty: config.presence_penalty,

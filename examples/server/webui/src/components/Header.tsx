@@ -70,7 +70,7 @@ export default function Header() {
         </svg>
       </label>
 
-      <div className="grow text-2xl font-bold ml-2">llama.cpp</div>
+      <div className="grow text-2xl font-bold ml-2">ik_llama.cpp</div>
 
       {/* action buttons (top right) */}
       <div className="flex items-center">
