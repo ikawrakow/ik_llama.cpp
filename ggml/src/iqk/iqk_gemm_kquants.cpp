@@ -755,9 +755,7 @@ struct DequantizerQ4K_AVX2 final : public BaseDequantizer<block_q4_K> {
     inline void prepare(int i, int j) {
         bits.prepare(x[i].qs, j);
     }
-
     Q4Bits_AVX2 bits;
-    Scales8K s8k;
 };
 
 struct DequantizerQ5K_AVX2 final : public BaseDequantizer<block_q5_K> {
@@ -777,7 +775,6 @@ struct DequantizerQ5K_AVX2 final : public BaseDequantizer<block_q5_K> {
     const __m256i mh = _mm256_set1_epi8(0x10);
     Q4Bits_AVX2 bits;
     __m256i hbits;
-    Scales8K s8k;
 };
 
 template <typename Dequantizer, int nrc_y>
