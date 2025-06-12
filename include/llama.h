@@ -1237,7 +1237,7 @@ extern "C" {
 
     //LLAMA_API void llama_sample_dry(struct llama_context* ctx, llama_token_data_array* candidates_p, int32_t context_size, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers);
 
-    void llama_sample_dry(struct llama_context* ctx, llama_sampler_dry* smpl, llama_token_data_array* candidates_p);
+    void llama_sample_dry(struct llama_context* ctx, struct llama_sampler_dry* smpl, llama_token_data_array* candidates_p);
 
     void llama_sampler_dry_reset(struct llama_sampler_dry* smpl);
 

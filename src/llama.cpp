@@ -23284,7 +23284,7 @@ void llama_sample_top_n_sigma(struct llama_context * ctx, llama_token_data_array
 }
 
 
-void llama_sample_dry(struct llama_context* ctx, llama_sampler_dry* smpl,  llama_token_data_array* candidates_p) {
+void llama_sample_dry(struct llama_context* ctx, struct llama_sampler_dry* smpl,  llama_token_data_array* candidates_p) {
     llama_sampler_dry_apply(smpl, candidates_p);
 }
 
