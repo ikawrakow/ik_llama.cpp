@@ -29,6 +29,7 @@ const SAMPLER_KEYS: SettKey[] = [
   'typical_p',
   'xtc_probability',
   'xtc_threshold',
+  'top_n_sigma'
 ];
 const PENALTY_KEYS: SettKey[] = [
   'repeat_last_n',
@@ -196,7 +197,7 @@ const SETTING_SECTIONS: SettingSection[] = [
         label: (
           <>
             Custom JSON config (For more info, refer to{' '}
-            <OpenInNewTab href="https://github.com/ggerganov/llama.cpp/blob/master/examples/server/README.md">
+            <OpenInNewTab href="https://github.com/ikawrakow/ik_llama.cpp/tree/main/examples/server/README.md">
               server documentation
             </OpenInNewTab>
             )
@@ -224,7 +225,7 @@ const SETTING_SECTIONS: SettingSection[] = [
               <br />
               <br />
               If you encounter any problems, create a{' '}
-              <OpenInNewTab href="https://github.com/ggerganov/llama.cpp/issues/new?template=019-bug-misc.yml">
+              <OpenInNewTab href="https://github.com/ikawrakow/ik_llama.cpp/issues/new?template=019-bug-misc.yml">
                 Bug (misc.)
               </OpenInNewTab>{' '}
               report on Github. Please also specify <b>webui/experimental</b> on
@@ -456,11 +457,11 @@ function SettingsModalLongInput({
       <div className="label inline">{label || configKey}</div>
       <textarea
         className="textarea textarea-bordered h-24"
-        placeholder={`Default: ${CONFIG_DEFAULT[configKey] || 'none'}`}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </label>
+          placeholder={`Default: ${CONFIG_DEFAULT[configKey] || 'none'}`}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </label>
   );
 }
 
@@ -485,7 +486,7 @@ function SettingsModalShortInput({
         <div className="block md:hidden mb-1">
           <b>{label || configKey}</b>
           <br />
-          <p className="text-xs">{helpMsg}</p>
+          <p className="text-xs whitespace-normal">{helpMsg}</p>
         </div>
       )}
       <label className="input input-bordered join-item grow flex items-center gap-2 mb-2">
@@ -494,7 +495,7 @@ function SettingsModalShortInput({
             {label || configKey}
           </div>
           {helpMsg && (
-            <div className="dropdown-content menu bg-base-100 rounded-box z-10 w-64 p-2 shadow mt-4">
+            <div className="dropdown-content menu bg-base-100 rounded-box z-10 w-64 p-2 shadow mt-4 whitespace-normal break-words">
               {helpMsg}
             </div>
           )}

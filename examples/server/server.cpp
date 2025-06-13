@@ -1003,7 +1003,6 @@ struct server_context {
             // Use defaults if not provided
             slot.sparams.dry_sequence_breakers = default_sparams.dry_sequence_breakers;
         }
-
         // process "json_schema" and "grammar"
         if (data.contains("json_schema") && !data.at("json_schema").is_null() && data.contains("grammar") && !data.at("grammar").is_null()) {
             send_error(task, "Either \"json_schema\" or \"grammar\" can be specified, but not both", ERROR_TYPE_INVALID_REQUEST);
@@ -1155,17 +1154,17 @@ struct server_context {
         }
 
         {
-            const auto & samplers_sequence = data.find("samplers");
-            if (samplers_sequence != data.end() && samplers_sequence->is_array()) {
-                std::vector<std::string> sampler_names;
-                for (const auto & sampler_name : *samplers_sequence) {
-                    if (sampler_name.is_string()) {
-                        sampler_names.emplace_back(sampler_name);
-                    }
+            const auto samplers = data.find("samplers");
+            if (samplers != data.end()) {
+                if (samplers->is_array()) {
+                    slot.sparams.samplers_sequence = llama_sampling_types_from_names(*samplers, false);
                 }
-                slot.sparams.samplers_sequence = llama_sampling_types_from_names(sampler_names, false);
-            } else {
-                slot.sparams.samplers_sequence = default_sparams.samplers_sequence;
+                else if (samplers->is_string()) {
+                    slot.sparams.samplers_sequence = llama_sampling_types_from_chars(samplers->get<std::string>());
+                }
+                else {
+                    slot.sparams.samplers_sequence = default_sparams.samplers_sequence;
+                }
             }
         }
 
