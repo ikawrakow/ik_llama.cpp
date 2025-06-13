@@ -245,7 +245,8 @@ struct MulMat {
             case GGML_TYPE_IQ1_S  : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q5_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
-            case GGML_TYPE_Q6_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            //case GGML_TYPE_Q6_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_Q6_K   : return GGML_TYPE_Q8_0_R8;
             default: break;
         }
 #else
@@ -602,7 +603,12 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
     MulMat mm;
 
     auto etypeA = ggml_type(typeA);
-    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
+    //auto etypeB = ggml_type(typeB);
+    auto dequant_type = MulMat::is_dequant_better(etypeA, Ny);
+    //if (etypeB != GGML_TYPE_F32) {
+    //    if (ith == 0) printf("%s: typeA = %s, typeB = %s, dequant_type = %s\n", __func__, ggml_type_name(etypeA), ggml_type_name(etypeB), ggml_type_name(dequant_type));
+    //}
+    if (dequant_type != etypeA) {
         if (!MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
             return false;
         }
@@ -617,9 +623,7 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
         first_x *= num_rows;
         nrc_x   *= num_rows;
 
-        auto type_size = ggml_type_size(dequant_type);
-
-        size_t row_size_qx = ne00*type_size;
+        size_t row_size_qx = ggml_row_size(dequant_type, ne00);
         size_t row_size_qy = strideB;
 
         DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float), row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
@@ -631,7 +635,7 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
             this_info.s += ix;
             int this_nrc_x = ix + k_x_step <= nrc_x ? k_x_step : nrc_x - ix;
             if (f.size() < row_size_qx*this_nrc_x) f.resize(row_size_qx*this_nrc_x);
-            if (!iqk_dequantize_ktquants(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), ne00, this_nrc_x)) {
+            if (!iqk_convert_repack(typeA, ne00, (const char *)A + (first_x + ix)*strideA, strideA, f.data(), ne00, this_nrc_x)) {
                 GGML_ABORT("Fatal error");
             }
             mm.mul_mat_NxM(ne00, f.data(), row_size_qx, this_info, this_nrc_x, Ny);
@@ -685,9 +689,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
         first_x *= num_rows;
         nrc_x   *= num_rows;
 
-        auto type_size = ggml_type_size(dequant_type);
-
-        size_t row_size_qx = ne00*type_size;
+        size_t row_size_qx = ggml_row_size(dequant_type, ne00);
         size_t row_size_qy = strideB;
 
         DataInfo info{C + first_x, (const char *)B, nb1/sizeof(float), row_size_qy, 0, ne11, row_mapping, nb2/sizeof(float)};
@@ -701,10 +703,10 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
             if (f.size() < 2*row_size_qx*this_nrc_x) f.resize(2*row_size_qx*this_nrc_x);
             auto Xu = f.data();
             auto Xg = f.data() + row_size_qx*this_nrc_x;
-            if (!iqk_dequantize_ktquants(typeA, ne00, (const char *)Aup   + (first_x + ix)*strideA, strideA, Xu, ne00, this_nrc_x)) {
+            if (!iqk_convert_repack(typeA, ne00, (const char *)Aup   + (first_x + ix)*strideA, strideA, Xu, ne00, this_nrc_x)) {
                 GGML_ABORT("Fatal error");
             }
-            if (!iqk_dequantize_ktquants(typeA, ne00, (const char *)Agate + (first_x + ix)*strideA, strideA, Xg, ne00, this_nrc_x)) {
+            if (!iqk_convert_repack(typeA, ne00, (const char *)Agate + (first_x + ix)*strideA, strideA, Xg, ne00, this_nrc_x)) {
                 GGML_ABORT("Fatal error");
             }
             mm.mul_mat_up_gate_NxM(ne00, Xu, Xg, row_size_qx, this_info, this_nrc_x, Ny, unary_op);
