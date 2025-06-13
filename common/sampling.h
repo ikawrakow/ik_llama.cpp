@@ -11,7 +11,6 @@
 
 // sampler types
 enum class llama_sampler_type : char {
-    DRY            ='d',
     TOP_K       = 'k',
     TOP_P       = 'p',
     MIN_P       = 'm',
