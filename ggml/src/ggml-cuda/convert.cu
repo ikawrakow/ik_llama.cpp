@@ -341,9 +341,8 @@ inline __device__ int nearest_int(float fval) {
 }
 
 int __device__ __forceinline__ trellis_next_int(uint32_t& val) {
-    constexpr uint32_t ka = 89226354;
-    constexpr uint32_t kb = 64248484;
-    val = ka*val + kb;
+    constexpr uint32_t ka = 0xCBAC1FED;
+    val = ka*val;
     return ggml_cuda_dp4a(val & 0x3f3f3f3f, 0x01010101, -126);
 }
 
