@@ -1003,6 +1003,7 @@ struct server_context {
             // Use defaults if not provided
             slot.sparams.dry_sequence_breakers = default_sparams.dry_sequence_breakers;
         }
+
         // process "json_schema" and "grammar"
         if (data.contains("json_schema") && !data.at("json_schema").is_null() && data.contains("grammar") && !data.at("grammar").is_null()) {
             send_error(task, "Either \"json_schema\" or \"grammar\" can be specified, but not both", ERROR_TYPE_INVALID_REQUEST);
