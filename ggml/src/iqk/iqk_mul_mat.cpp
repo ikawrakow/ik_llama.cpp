@@ -421,6 +421,10 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
 
 }
 
+extern "C" IQK_API int iqk_dequant_type(int type, int Ny) {
+    return MulMat::is_dequant_better(ggml_type(type), Ny);
+}
+
 extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
         int typeA, const void * A, long strideA,
         int typeB, const void * B, long strideB,

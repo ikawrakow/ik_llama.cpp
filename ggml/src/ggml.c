@@ -1036,11 +1036,12 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q6_K,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q6_K_ref,
         .vec_dot                  = ggml_vec_dot_q6_K_q8_K,
-#ifdef __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
-#else
+//#ifdef __AVX2__
+//        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+//#else
+//        .vec_dot_type             = GGML_TYPE_Q8_K,
+//#endif
         .vec_dot_type             = GGML_TYPE_Q8_K,
-#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -14536,8 +14537,9 @@ static void ggml_compute_forward_mul_mat(
     const int nth = params->nth;
 
     const enum ggml_type type = src0->type;
+    const enum ggml_type dequant_type = iqk_dequant_type((int)type, src1->ne[1]);
 
-    enum ggml_type           const vec_dot_type         = type_traits[type].vec_dot_type;
+    enum ggml_type           const vec_dot_type         = type_traits[dequant_type].vec_dot_type;
     ggml_from_float_t        const from_float           = type_traits[vec_dot_type].from_float;
     int64_t                  const vec_dot_num_rows     = type_traits[type].nrows;
     int64_t                  const matmul_num_cols      = type_traits[type].ncols;
