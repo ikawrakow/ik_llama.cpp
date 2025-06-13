@@ -245,6 +245,7 @@ struct MulMat {
             case GGML_TYPE_IQ1_S  : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q5_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
+            case GGML_TYPE_Q6_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             default: break;
         }
 #else
@@ -347,7 +348,7 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
         //case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
-        //case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q6_K:
         //case GGML_TYPE_IQ4_XS:
         //case GGML_TYPE_Q2_K_R4:
         //case GGML_TYPE_Q3_K_R4:
