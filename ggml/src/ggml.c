@@ -976,7 +976,11 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q4_K,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4_K_ref,
         .vec_dot                  = ggml_vec_dot_q4_K_q8_K,
+#ifdef __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
         .vec_dot_type             = GGML_TYPE_Q8_K,
+#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1002,7 +1006,11 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q5_K,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q5_K_ref,
         .vec_dot                  = ggml_vec_dot_q5_K_q8_K,
+#ifdef __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
         .vec_dot_type             = GGML_TYPE_Q8_K,
+#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
