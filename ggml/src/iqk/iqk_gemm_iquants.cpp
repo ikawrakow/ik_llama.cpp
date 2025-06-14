@@ -1997,15 +1997,13 @@ static void mul_mat_iq2_xs_q8_2_X4(int n, const void * vx, size_t bx, const Data
                     sumi3 = _mm256_add_epi32(_mm256_unpacklo_epi32(sumi3, sumi4), _mm256_unpackhi_epi32(sumi3, sumi4));
                     sumi1 = _mm256_add_epi32(_mm256_unpacklo_epi64(sumi1, sumi3), _mm256_unpackhi_epi64(sumi1, sumi3));
 #else
-                    auto sumi1 = _mm256_maddubs_epi16(deq.bit.values[0], us[0]);
-                    auto sumi2 = _mm256_maddubs_epi16(deq.bit.values[1], us[1]);
-                    auto sumi3 = _mm256_maddubs_epi16(deq.bit.values[2], us[2]);
-                    auto sumi4 = _mm256_maddubs_epi16(deq.bit.values[3], us[3]);
-                    sumi1 = _mm256_add_epi16(_mm256_unpacklo_epi32(sumi1, sumi2), _mm256_unpackhi_epi32(sumi1, sumi2));
-                    sumi3 = _mm256_add_epi16(_mm256_unpacklo_epi32(sumi3, sumi4), _mm256_unpackhi_epi32(sumi3, sumi4));
-                    // This can overflow
-                    sumi1 = _mm256_add_epi16(_mm256_unpacklo_epi64(sumi1, sumi3), _mm256_unpackhi_epi64(sumi1, sumi3));
-                    sumi1 = _mm256_madd_epi16(_mm256_set1_epi16(1), sumi1);
+                    auto sumi1 = _mm256_maddubs_epi16(deq.bits.values[0], us[0]);
+                    auto sumi2 = _mm256_maddubs_epi16(deq.bits.values[1], us[1]);
+                    auto sumi3 = _mm256_maddubs_epi16(deq.bits.values[2], us[2]);
+                    auto sumi4 = _mm256_maddubs_epi16(deq.bits.values[3], us[3]);
+                    sumi1 = _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_add_epi16(_mm256_unpacklo_epi32(sumi1, sumi2), _mm256_unpackhi_epi32(sumi1, sumi2)));
+                    sumi3 = _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_add_epi16(_mm256_unpacklo_epi32(sumi3, sumi4), _mm256_unpackhi_epi32(sumi3, sumi4)));
+                    sumi1 = _mm256_add_epi32(_mm256_unpacklo_epi64(sumi1, sumi3), _mm256_unpackhi_epi64(sumi1, sumi3));
 #endif
                     accd[0] = _mm256_fmadd_ps(scales[j], _mm256_cvtepi32_ps(sumi1), accd[0]);
                 }
