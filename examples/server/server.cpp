@@ -3394,7 +3394,8 @@ int main(int argc, char ** argv) {
             }
             ctx_server.queue_results.remove_waiting_task_id(id_task);
         } else {
-            const auto chunked_content_provider = [id_task, &ctx_server, completion_id](size_t, httplib::DataSink & sink) {
+            const auto chunked_content_provider = [id_task, &ctx_server, completion_id, send_done = params.send_done](size_t, httplib::DataSink & sink) {
+                bool successful_completion = false;
                 while (true) {
                     server_task_result result = ctx_server.queue_results.recv(id_task);
                     if (!result.error) {
@@ -3414,6 +3415,7 @@ int main(int argc, char ** argv) {
                             }
                         }
                         if (result.stop) {
+                            successful_completion = true;
                             break;
                         }
                     } else {
@@ -3429,9 +3431,18 @@ int main(int argc, char ** argv) {
                         break;
                     }
                 }
+                bool ok = true;
+                if (send_done && successful_completion) {
+                    static const std::string done_message = "data: [DONE]\n\n";
+                    LOG_VERBOSE("data stream", {{"to_send", done_message}});
+                    if (!sink.write(done_message.c_str(), done_message.size())) {
+                        // If writing [DONE] fails, the stream is likely already problematic.
+                        ok = false;
+                    }
+                }
                 sink.done();
                 ctx_server.queue_results.remove_waiting_task_id(id_task);
-                return true;
+                return ok;
             };
 
             auto on_complete = [id_task, &ctx_server](bool) {
