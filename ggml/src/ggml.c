@@ -14537,9 +14537,8 @@ static void ggml_compute_forward_mul_mat(
     const int nth = params->nth;
 
     const enum ggml_type type = src0->type;
-    const enum ggml_type dequant_type = iqk_dequant_type((int)type, src1->ne[1]);
 
-    enum ggml_type           const vec_dot_type         = type_traits[dequant_type].vec_dot_type;
+    enum ggml_type           const vec_dot_type         = type_traits[type].vec_dot_type;
     ggml_from_float_t        const from_float           = type_traits[vec_dot_type].from_float;
     int64_t                  const vec_dot_num_rows     = type_traits[type].nrows;
     int64_t                  const matmul_num_cols      = type_traits[type].ncols;
@@ -14837,12 +14836,11 @@ static void ggml_compute_forward_mul_mat_id(
     const int nth = params->nth;
 
     const enum ggml_type type = src0->type;
-    const enum ggml_type dequant_type = iqk_dequant_type((int)type, src1->ne[2]);
 
     const bool src1_cont = ggml_is_contiguous(src1);
 
     ggml_vec_dot_t    const vec_dot         = type_traits[type].vec_dot;
-    enum ggml_type    const vec_dot_type    = type_traits[dequant_type].vec_dot_type;
+    enum ggml_type    const vec_dot_type    = type_traits[type].vec_dot_type;
     ggml_from_float_t const from_float      = type_traits[vec_dot_type].from_float;
     int64_t           const matmul_num_cols = type_traits[type].ncols;
     ggml_gemv_t       const gemv            = type_traits[type].gemv;
@@ -14934,12 +14932,6 @@ static void ggml_compute_forward_mul_mat_id(
 
         if (cne1 == 0) {
             continue;
-        }
-
-        enum ggml_type this_dequant_type = iqk_dequant_type((int)type, cne1);
-        if (this_dequant_type != dequant_type) {
-            printf("Oops: %s (%d) and %s (%d)\n", ggml_type_name(dequant_type), (int)src1->ne[2], ggml_type_name(this_dequant_type), (int)cne1);
-            GGML_ABORT("Fatal error");
         }
 
         const char * src0_cur = (const char *) src0->data + cur_a*nb02;
@@ -15112,8 +15104,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     const enum ggml_type type = src0->type;
 
-    enum ggml_type    const dequant_type    = iqk_dequant_type((int)type, src1->ne[1]);
-    enum ggml_type    const vec_dot_type    = type_traits[dequant_type].vec_dot_type;
+    enum ggml_type    const vec_dot_type    = type_traits[type].vec_dot_type;
 
     // we don't support permuted src0 or src1
     GGML_ASSERT(nb00 == ggml_type_size(type));
