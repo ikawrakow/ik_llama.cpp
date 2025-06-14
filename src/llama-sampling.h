@@ -1,16 +1,23 @@
 #pragma once
 
 #include "llama-impl.h"
+#include <vector>
+#include <unordered_map>
 
 struct llama_sampling {
     llama_sampling(int32_t n_vocab) : n_vocab(n_vocab) {}
 
     std::mt19937 rng;
-
     int32_t n_vocab = 0;
-
     mutable int64_t t_sample_us = 0;
     mutable int32_t n_sample = 0;
+
+    // DRY sampler state
+    std::unordered_multimap<llama_token, std::vector<llama_token>> dry_processed_breakers;
+    std::vector<llama_token> dry_last_tokens;
+    std::vector<int> dry_repeat_count;
+    std::unordered_map<llama_token, int> dry_max_token_repeat;
+    bool dry_breakers_initialized = false;
 
     void reset_timings() const {
         t_sample_us = 0;
@@ -34,6 +41,13 @@ void llama_sample_entropy_impl  (struct llama_sampling * smpl, llama_token_data_
 void llama_sample_temp_impl     (struct llama_sampling * smpl, llama_token_data_array * candidates, float temp);
 void llama_sample_xtc_impl      (struct llama_sampling * smpl, llama_token_data_array * candidates, float probability, float threshold, size_t min_keep);
 void llama_sample_top_n_sigma_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, float top_n_sigma);
+
+
+void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array * candidates,
+                          float dry_multiplier, float dry_base, int32_t dry_allowed_length,
+                          int32_t dry_penalty_last_n);
+
+
 
 void llama_sample_repetition_penalties_impl(
         struct llama_sampling * smpl,
