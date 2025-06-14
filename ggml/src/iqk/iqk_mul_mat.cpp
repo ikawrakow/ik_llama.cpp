@@ -245,8 +245,7 @@ struct MulMat {
             case GGML_TYPE_IQ1_S  : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q5_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
-            //case GGML_TYPE_Q6_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
-            case GGML_TYPE_Q6_K   : return GGML_TYPE_Q8_0_R8;
+            case GGML_TYPE_Q6_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             default: break;
         }
 #else
