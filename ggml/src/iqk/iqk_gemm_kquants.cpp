@@ -1839,7 +1839,7 @@ static void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataIn
                 }
             }
 #ifdef HAVE_FANCY_SIMD
-            auto m4 = _mm256_mul_ps(d4, _mm256_set1_ps(-128.f));
+            auto m4 = _mm256_mul_ps(d4, _mm256_set1_ps(-127.f));
 #endif
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto d4y = _mm256_mul_ps(d4, _mm256_set1_ps(q8.scale(iy, ibl)));
