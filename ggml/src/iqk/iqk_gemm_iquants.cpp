@@ -2460,6 +2460,47 @@ static void mul_mat_iq2_s_q8_2_X4(int n, const void * vx, size_t bx, const DataI
     }
 }
 
+void iqk_convert_iq3_xxs_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    int nb = n/QK_K;
+
+    const block_iq3_xxs * x8[8];
+
+    block_q8_k_r8 * y = (block_q8_k_r8 *)vy;
+
+    int16_t ls[16];
+    EvenSignHelper esh;
+
+    __m256i values[8];
+    uint32_t block[8];
+    uint32_t aux32;
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) x8[k] = (const block_iq3_xxs *)((const char *)vx + (ix + k)*bx);
+        for (int i = 0; i < nb; ++i) {
+            // TODO: simdify
+            for (int k = 0; k < 8; ++k) {
+                float d = 0.25f * GGML_FP16_TO_FP32(x8[k][i].d);
+                auto qs  = x8[k][i].qs;
+                auto sas = qs + QK_K/4;
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    std::memcpy(&aux32, sas + 4*ib32, sizeof(uint32_t));
+                    ls[2*ib32 + 0] = (2*(aux32 >> 28) + 1);
+                    ls[2*ib32 + 1] = ls[2*ib32 + 0];
+                    values[ib32] = _mm256_set_epi32(iq3xxs_grid[qs[7]], iq3xxs_grid[qs[6]], iq3xxs_grid[qs[5]], iq3xxs_grid[qs[4]],
+                                                    iq3xxs_grid[qs[3]], iq3xxs_grid[qs[2]], iq3xxs_grid[qs[1]], iq3xxs_grid[qs[0]]);
+                    esh.sign_value(aux32, values[ib32]);
+                    qs += 8;
+                }
+                float dnew = convert_to_q8_k_r8(k, 124, values, ls, block, y[i].qs);
+                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+            }
+        }
+        y += nb;
+    }
+}
 
 void iqk_convert_iq3_xxs_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
@@ -2611,14 +2652,14 @@ bool iqk_set_kernels_iquants(int ne00, int typeA, int typeB, std::array<mul_mat_
     //    return false;
     //}
 
-    if (ggml_type(typeA) == GGML_TYPE_IQ3_XXS) {
-        if (ggml_type(typeB) == GGML_TYPE_Q8_2_X4) {
-            IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_2_IQ_N, DequantizerIQ3XXS, kernels);
-            func16 = nullptr;
-            return true;
-        }
-        return false;
-    }
+    //if (ggml_type(typeA) == GGML_TYPE_IQ3_XXS) {
+    //    if (ggml_type(typeB) == GGML_TYPE_Q8_2_X4) {
+    //        IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_2_IQ_N, DequantizerIQ3XXS, kernels);
+    //        func16 = nullptr;
+    //        return true;
+    //    }
+    //    return false;
+    //}
 
     if (ggml_type(typeA) == GGML_TYPE_IQ3_S) {
         if (ggml_type(typeB) == GGML_TYPE_Q8_2_X4) {
@@ -2697,7 +2738,7 @@ bool iqk_convert_iquants_q80_r8(int type, int n, const void * vx, size_t bx, voi
         case GGML_TYPE_IQ2_XXS: iqk_convert_iq2_xxs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_XS : iqk_convert_iq2_xs_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_S  : iqk_convert_iq2_s_q8_k_r8  (n, vx, bx, vy, nrc_x); break;
-        case GGML_TYPE_IQ3_XXS: iqk_convert_iq3_xxs_q8_0_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ3_XXS: iqk_convert_iq3_xxs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_S  : iqk_convert_iq3_s_q8_0_r8  (n, vx, bx, vy, nrc_x); break;
         default: return false;
     }
