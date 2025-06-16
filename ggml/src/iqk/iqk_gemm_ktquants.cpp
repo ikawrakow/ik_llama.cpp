@@ -531,6 +531,92 @@ void iqk_dequantize_iq3_kt_q80_r8(int n, const void * vx, size_t bx, void * vy, 
     }
 }
 
+template <int nrc_y>
+void mul_mat_iq3_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n%QK_K == 0);
+    const int nb = n/QK_K;
+
+    Trellis3<true, true> trellis;
+
+    auto shifts = _mm_set_epi32(0, 0, 4, 0);
+
+    constexpr int k_acc = nrc_y;
+
+    __m256  accd[k_acc];
+    const block_q8_2_x4 * y[nrc_y];
+    for (int iy = 0; iy < nrc_y; ++iy) {
+        y[iy] = (const block_q8_2_x4 *)info.src1_row(iy);
+    }
+
+    __m256i  xv[4], sv[4], dot[4];
+    __m256   scales[2];
+
+    auto sum_4 = [&dot] () {
+        // dot[k] has 8 values from block k
+        // 0 1 0 1 0 1 0 1
+        dot[0] = _mm256_add_epi32(_mm256_unpacklo_epi32(dot[0], dot[1]), _mm256_unpackhi_epi32(dot[0], dot[1]));
+        // 2 3 2 3 2 3 2 3
+        dot[2] = _mm256_add_epi32(_mm256_unpacklo_epi32(dot[2], dot[3]), _mm256_unpackhi_epi32(dot[2], dot[3]));
+        // 0 1 2 3 0 1 2 3
+        dot[0] = _mm256_add_epi32(_mm256_unpacklo_epi64(dot[0], dot[2]), _mm256_unpackhi_epi64(dot[0], dot[2]));
+        return _mm256_cvtepi32_ps(dot[0]);
+    };
+
+    auto compute_dot = [&dot, &xv, &sv] (const int8_t * y) {
+        for (int k = 0; k < 4; ++k) {
+            auto yv = _mm256_loadu_si256((const __m256i *)y + k);
+#ifdef HAVE_FANCY_SIMD
+            //dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], yv);
+            dot[k] = _mm256_dpbusd_epi32(_mm256_setzero_si256(), xv[k], _mm256_sign_epi8(yv, sv[k]));
+#else
+            auto p = _mm256_maddubs_epi16(xv[k], _mm256_sign_epi8(yv, sv[k]));
+            dot[k] = _mm256_madd_epi16(p, _mm256_set1_epi16(1));
+#endif
+        }
+    };
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+        const float * dptr = (const float *)((const char*)vx + ix*bx);
+        auto d = _mm256_set1_ps(dptr[0] * 1.01f);
+        const block_iq3_kt * x = (const block_iq3_kt *)(dptr + 1);
+
+        for (int iy = 0; iy < k_acc; ++iy) accd[iy] = _mm256_setzero_ps();
+
+        for (int i = 0; i < nb; ++i) {
+            auto ql = (const uint16_t *)x[i].ql;
+            auto sign_bits = _mm256_loadu_si256((const __m256i *)x[i].qh);
+            auto s8 = _mm_set1_epi32(*(const uint32_t *)x[i].scales);
+            s8 = _mm_and_si128(_mm_srlv_epi32(s8, shifts), _mm_set1_epi8(0xf));
+            auto s32 = _mm256_cvtepi8_epi32(s8);
+            auto all_scales = _mm256_mul_ps(d, _mm256_cvtepi32_ps(s32));
+            auto scales_l = _mm256_castps256_ps128(all_scales);
+            auto scales_h = _mm256_extractf128_ps(all_scales, 1);
+            scales[0] = _mm256_set_m128(scales_l, scales_l);
+            scales[1] = _mm256_set_m128(scales_h, scales_h);
+            auto mask = _mm256_set1_epi8(1);
+            for (int i128 = 0; i128 < 2; ++i128) {
+                for (int k = 0; k < 4; ++k) {
+                    xv[k] = trellis.next32(ql + 16*i128 + 4*k, 4096);
+                    sv[k] = _mm256_or_si256(_mm256_cmpeq_epi8(_mm256_and_si256(sign_bits, mask), mask), _mm256_set1_epi8(1));
+                    mask = _mm256_slli_epi16(mask, 1);
+                }
+                for (int iy = 0; iy < nrc_y; ++iy) {
+                    const block_q8_2_x4& yb = y[iy][2*i+i128];
+                    auto dy = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)yb.d)), 16));
+                    dy = _mm256_mul_ps(scales[i128], dy);
+                    auto d8 = _mm256_set_m128(_mm256_castps256_ps128(dy), _mm256_castps256_ps128(dy));
+                    compute_dot(yb.qs);
+                    accd[iy] = _mm256_fmadd_ps(d8, sum_4(), accd[iy]);
+                }
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, hsum_float_8(accd[iy]));
+        }
+    }
+}
+
 inline __m256 abs_ps(__m256 vals) {
     // Clear sign-bit of all the 32-bit floats in vals
     __m256 sign_bit = _mm256_set1_ps(-0.0f);
@@ -942,6 +1028,14 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     if (typeA == GGML_TYPE_IQ2_KT) {
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq2_kt_q8_2_x4_T, kernels);
+            return true;
+        }
+        return false;
+    }
+
+    if (typeA == GGML_TYPE_IQ3_KT) {
+        if (typeB == GGML_TYPE_Q8_2_X4) {
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq3_kt_q8_2_x4_T, kernels);
             return true;
         }
         return false;
