@@ -7427,7 +7427,11 @@ public:
             for (int k = 0; k < kGroupSize; ++k) {
                 x = ka*x;
                 s = x & 0x3f3f3f3f;
-                result[k] = scale*(i8[0] + i8[1] + i8[2] + i8[3] - 126.f);
+                if constexpr (is_abs) {
+                    result[k] = scale*std::abs(i8[0] + i8[1] + i8[2] + i8[3] - 126.f);
+                } else {
+                    result[k] = scale*(i8[0] + i8[1] + i8[2] + i8[3] - 126.f);
+                }
             }
         } else {
             constexpr uint32_t ka = 89226354;
@@ -8289,7 +8293,7 @@ void vec_dot_iq2_kt_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
 
 namespace {
 
-using QuantizerIQ3KT = QuantizerIQKT<32, 8, 16, true>;
+using QuantizerIQ3KT = QuantizerIQKT<32, 8, 16, true, true>;
 const QuantizerIQ3KT& iq3kt_quantizer() {
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
@@ -8500,7 +8504,7 @@ size_t quantize_iq3_kt(const float * src, void * dst, int64_t nrows, int64_t n_p
 
 void dequantize_row_iq3_kt(const block_iq3_kt * x, float * y, int64_t k) {
 #ifdef __AVX2__
-    if (iqk_dequantize_ktquants(GGML_TYPE_IQ3_KT, k, x, 0, y, 0, 1)) return;
+    //if (iqk_dequantize_ktquants(GGML_TYPE_IQ3_KT, k, x, 0, y, 0, 1)) return;
 #endif
     using Q = QuantizerIQ3KT;
     constexpr int kNumGroups = Q::kSuperBlockSize/Q::kGroupSize;
