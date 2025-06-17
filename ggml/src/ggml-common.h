@@ -386,10 +386,11 @@ static_assert(sizeof(block_q6_k_r4) == 4*sizeof(ggml_half) + QK_K/4 + 3*QK_K, "w
 // This is only used for intermediate quantization and dot products
 typedef struct {
     float   d;              // delta
+    float   sum;            // sum of quants in the entire block
     int8_t  qs[QK_K];       // quants
     int16_t bsums[QK_K/16]; // sum of quants in groups of 16
 } block_q8_K;
-static_assert(sizeof(block_q8_K) == sizeof(float) + QK_K + QK_K/16*sizeof(int16_t), "wrong q8_K block size/padding");
+static_assert(sizeof(block_q8_K) == 2*sizeof(float) + QK_K + QK_K/16*sizeof(int16_t), "wrong q8_K block size/padding");
 typedef struct {
     float   d;            // delta
     int8_t  qs[64];       // quants
