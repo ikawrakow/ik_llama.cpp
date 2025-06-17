@@ -2106,50 +2106,100 @@ inline float convert_to_q8_k_r8(int k, float d0, const __m256i * qx, const int16
     return dnew;
 }
 
-//struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
-//    DequantizerIQ3K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), iqxk(4, -64), values(load_values()) {}
+//struct DequantizerIQ2K final : public BaseDequantizer<block_iq2_k> {
+//    DequantizerIQ2K(const void * vx, size_t bx) : BaseDequantizer(vx, bx), iqxk(5, -32), values(load_values()) {}
 //    template <typename Q8>
 //    inline void new_block(int i, const Q8& q8, __m256 * accm, __m256i * scales) {
 //        d = GGML_FP16_TO_FP32(x[i].d);
-//        iqxk.process(i, d, x[i].extra, make_scales(x[i].scales_h, x[i].scales_l), q8, accm, scales);
-//        hbits = _mm256_loadu_si256((const __m256i *)x[i].qh);
+//        iqxk.process(i, d, x[i].extra, make_scales(x[i].scales), q8, accm, scales);
 //    }
 //    inline void prepare(int i, int j) {
 //        bits.prepare(x[i].qs, j);
-//        auto h256 = j == 0 ? hbits : _mm256_srli_epi16(hbits, 4);
-//        bits.values[0] = _mm256_or_si256(bits.values[0], _mm256_and_si256(_mm256_slli_epi16(h256, 2), hmask));
-//        bits.values[1] = _mm256_or_si256(bits.values[1], _mm256_and_si256(_mm256_slli_epi16(h256, 1), hmask));
-//        bits.values[2] = _mm256_or_si256(bits.values[2], _mm256_and_si256(h256, hmask));
-//        bits.values[3] = _mm256_or_si256(bits.values[3], _mm256_and_si256(_mm256_srli_epi16(h256, 1), hmask));
 //        bits.values[0] = _mm256_shuffle_epi8(values, bits.values[0]);
 //        bits.values[1] = _mm256_shuffle_epi8(values, bits.values[1]);
 //        bits.values[2] = _mm256_shuffle_epi8(values, bits.values[2]);
 //        bits.values[3] = _mm256_shuffle_epi8(values, bits.values[3]);
 //    }
 //    static inline __m256i load_values() {
-//        static const uint8_t kvalues_iq3nl[16] = {1, 24, 41, 54, 65, 77, 92, 111, 5, 28, 45, 58, 69, 81, 96, 115};
-//        auto val128 = _mm_loadu_si128((const __m128i *)kvalues_iq3nl);
+//        static const uint8_t kvalues_iq2nl[16] = {1, 19, 33, 49, 0, 0, 0, 0,  6, 24, 38, 54, 0, 0, 0, 0};
+//        auto val128 = _mm_loadu_si128((const __m128i *)kvalues_iq2nl);
 //        return MM256_SET_M128I(val128, val128);
 //    }
-//    inline __m128i make_scales(uint16_t signs, const uint8_t * scales_l) const {
+//    inline __m128i make_scales(const uint8_t * scales_l) const {
 //        uint64_t aux64; std::memcpy(&aux64, scales_l, 8);
-//        auto scl = _mm_and_si128(_mm_set_epi64x(aux64 >> 4, aux64), _mm_set1_epi8(0xf));
-//        scl = _mm_add_epi8(_mm_slli_epi16(scl, 1), m1);
-//        const __m128i sc_signs = _mm_cmpeq_epi8(_mm_and_si128(_mm_set1_epi16(signs), sign_mask), sign_mask);
-//        const __m128i sch = _mm_shuffle_epi8(_mm_or_si128(sc_signs, _mm_set1_epi8(1)), hshuff);
-//        return _mm_sign_epi8(scl, sch);
+//        auto scl = _mm_and_si128(_mm_set_epi64x(aux64 >> 4, aux64), maskl);
+//        return _mm_add_epi8(scl, m8);
 //    }
 //
 //    Q2Bits bits;
 //    const IQXKScales iqxk;
 //    const __m256i values;
-//    __m256i hbits;
-//    const __m256i hmask  = _mm256_set1_epi8(4);
-//    const __m128i m1 = _mm_set1_epi8(1);
-//    const __m128i sign_mask = _mm_set_epi64x(0x8080404020201010, 0x0808040402020101);
-//    const __m128i hshuff = _mm_loadu_si128((const __m128i*)k_shuff);
-//    constexpr static uint8_t k_shuff[16] = {0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15};
+//    const __m128i m8       = _mm_set1_epi8(-8);
+//    const __m128i maskl    = _mm_set1_epi8(0xf);
 //};
+
+void iqk_convert_iq2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    int nb = n/QK_K;
+
+    const block_iq2_k * x8[8];
+
+    block_q8_k_r8 * y = (block_q8_k_r8 *)vy;
+
+    __m256i values;
+    {
+        auto v = _mm_loadl_epi64((const __m128i *)iq2nl_values);
+        values = MM256_SET_M128I(v, v);
+    }
+
+    __m256i  xv[8];
+    uint32_t block[8];
+
+    const __m128i scale_shuffle = _mm_set_epi32(0x0f070e06, 0x0d050c04, 0x0b030a02, 0x09010800);
+
+    union { __m256i vec; int16_t val[16]; } helper;
+
+    auto ml = _mm256_set1_epi8(0x03);
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) x8[k] = (const block_iq2_k *)((const char *)vx + (ix+k)*bx);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                float d = GGML_FP16_TO_FP32(x8[k][i].d);
+                uint64_t aux64; std::memcpy(&aux64, x8[k][i].scales, 8);
+                auto scl = _mm_and_si128(_mm_set_epi64x(aux64 >> 4, aux64), _mm_set1_epi8(0xf));
+                scl = _mm_add_epi8(scl, _mm_set1_epi8(-8));
+                helper.vec = _mm256_cvtepi8_epi16(_mm_shuffle_epi8(scl, scale_shuffle));
+                auto extra = x8[k][i].extra;
+                for (int i128 = 0; i128 < 2; ++i128) {
+                    auto bits = _mm256_loadu_si256((const __m256i *)x8[k][i].qs+i128);
+                    xv[4*i128+0] = _mm256_and_si256(bits, ml);
+                    xv[4*i128+1] = _mm256_and_si256(_mm256_srli_epi16(bits, 2), ml);
+                    xv[4*i128+2] = _mm256_and_si256(_mm256_srli_epi16(bits, 4), ml);
+                    xv[4*i128+3] = _mm256_and_si256(_mm256_srli_epi16(bits, 6), ml);
+                    auto shift1 = MM256_SET_M128I(_mm_set1_epi8((extra & 0x02) << 1), _mm_set1_epi8((extra & 0x01) << 2));
+                    auto shift2 = MM256_SET_M128I(_mm_set1_epi8((extra & 0x08) >> 1), _mm_set1_epi8((extra & 0x04) >> 0));
+                    auto shift3 = MM256_SET_M128I(_mm_set1_epi8((extra & 0x20) >> 3), _mm_set1_epi8((extra & 0x10) >> 2));
+                    auto shift4 = MM256_SET_M128I(_mm_set1_epi8((extra & 0x80) >> 5), _mm_set1_epi8((extra & 0x40) >> 4));
+                    xv[4*i128+0] = _mm256_add_epi8(xv[4*i128+0], shift1);
+                    xv[4*i128+1] = _mm256_add_epi8(xv[4*i128+1], shift2);
+                    xv[4*i128+2] = _mm256_add_epi8(xv[4*i128+2], shift3);
+                    xv[4*i128+3] = _mm256_add_epi8(xv[4*i128+3], shift4);
+                    xv[4*i128+0] = _mm256_shuffle_epi8(values, xv[4*i128+0]);
+                    xv[4*i128+1] = _mm256_shuffle_epi8(values, xv[4*i128+1]);
+                    xv[4*i128+2] = _mm256_shuffle_epi8(values, xv[4*i128+2]);
+                    xv[4*i128+3] = _mm256_shuffle_epi8(values, xv[4*i128+3]);
+                    extra >>= 8;
+                }
+                float dnew = convert_to_q8_k_r8(k, 1.f/120, xv, helper.val, block, y[i].qs);
+                y[i].d[k] = GGML_FP32_TO_FP16(d*dnew);
+            }
+        }
+        y += nb;
+    }
+}
 
 void iqk_convert_iq3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
@@ -2647,6 +2697,7 @@ void iqk_convert_iq6_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int
 bool iqk_convert_iqk_quants_q80_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     if (n%QK_K != 0 || nrc_x%8 != 0) return false;
     switch (ggml_type(type)) {
+        case GGML_TYPE_IQ2_K  : iqk_convert_iq2_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_K  : iqk_convert_iq3_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_KS : iqk_convert_iq4_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_K  : iqk_convert_iq4_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
