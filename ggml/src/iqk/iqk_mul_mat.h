@@ -34,6 +34,8 @@ IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int un
         int typeB, const void * B, long strideB,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
 
+IQK_API int iqk_dequant_type(int type, int Ny);
+
 typedef void (*barrier_t) (void *);
 
 IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
