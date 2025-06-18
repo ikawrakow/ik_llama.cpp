@@ -236,16 +236,15 @@ struct MulMat {
     static inline ggml_type is_dequant_better(ggml_type type, int nrc_y) {
 #ifdef __AVX2__
         switch (type) {
-            case GGML_TYPE_IQ2_KT : return nrc_y >= 32 ? GGML_TYPE_F32 : type;
-            case GGML_TYPE_IQ3_KT : return nrc_y >= 32 ? GGML_TYPE_F32 : type;
-            case GGML_TYPE_IQ4_KT : return nrc_y >= 32 ? GGML_TYPE_F32 : type;
             case GGML_TYPE_IQ2_XXS: return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ2_XS : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ2_S  : return nrc_y >= 16 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ3_XXS: return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
+            case GGML_TYPE_IQ4_XS : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ3_S  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ1_S  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ1_M  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
+            case GGML_TYPE_Q2_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_Q3_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q5_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
@@ -258,13 +257,23 @@ struct MulMat {
             case GGML_TYPE_IQ5_KS : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ5_K  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
             case GGML_TYPE_IQ6_K  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
+            case GGML_TYPE_Q4_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_Q4_1   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
+            case GGML_TYPE_Q5_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_Q5_1   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
+            case GGML_TYPE_Q6_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_IQ4_NL : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_Q8_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_IQ2_KT : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_IQ3_KT : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
+            case GGML_TYPE_IQ4_KT : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             default: break;
         }
 #else
         switch (type) {
-            case GGML_TYPE_IQ2_KT: return nrc_y >= 32 ? GGML_TYPE_F16 : type;
+            case GGML_TYPE_IQ2_KT: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_IQ3_KT: return nrc_y >= 32 ? GGML_TYPE_F16 : type;
-            case GGML_TYPE_IQ4_KT: return nrc_y >= 32 ? GGML_TYPE_F16 : type;
+            case GGML_TYPE_IQ4_KT: return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             default: break;
         }
 #endif
@@ -356,12 +365,12 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
         //case GGML_TYPE_BF16:
         //case GGML_TYPE_BF16_R16:
         //    return iqk_set_kernels_float(ne00, typeA, typeB, mm.funcs);
-        //case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
-        //case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ4_XS:
         //case GGML_TYPE_Q2_K_R4:
         //case GGML_TYPE_Q3_K_R4:
         //case GGML_TYPE_Q4_K_R4:
@@ -403,19 +412,19 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
             return iqk_dequantize_ktquants(typeA, n, vx, bx, vy, stride_y, nrc_x);
-        //case GGML_TYPE_Q4_0:
-        //case GGML_TYPE_Q4_1:
-        //case GGML_TYPE_Q5_0:
-        //case GGML_TYPE_Q5_1:
-        //case GGML_TYPE_Q6_0:
-        //case GGML_TYPE_Q8_0:
-        //case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q6_0:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
         //case GGML_TYPE_Q4_0_R8:
         //case GGML_TYPE_Q5_0_R4:
         //case GGML_TYPE_Q6_0_R4:
         //case GGML_TYPE_Q8_0_R8:
         //case GGML_TYPE_IQ4_NL_R4:
-        //    return iqk_set_kernels_legacy_quants(ne00, typeA, typeB, mm.funcs, mm.func16);
+            return iqk_convert_legacy_quants_q8_r8(typeA, n, vx, bx, vy, nrc_x);
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_M:
         //case GGML_TYPE_IQ1_S_R4:
@@ -806,7 +815,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
-            return ggml_type(typeB) == GGML_TYPE_F32 ? iqk_set_kernels_ktquants(ne00, typeA, typeB, mm.funcs, mm.func16) : false;
+            return iqk_set_kernels_ktquants(ne00, typeA, typeB, mm.funcs, mm.func16);
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
