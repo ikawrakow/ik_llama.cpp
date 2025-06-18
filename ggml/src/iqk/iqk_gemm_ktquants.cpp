@@ -1586,7 +1586,7 @@ void mul_mat_iq4_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& inf
 }
 
 struct Trellis3 {
-    constexpr static uint32_t ka = ;0xCBAC1FED;
+    constexpr static uint32_t ka = 0xCBAC1FED;
     constexpr static uint32_t ka1 = ka*ka;
     constexpr static uint32_t ka2 = ka1*ka;
     constexpr static uint32_t ka3 = ka2*ka;
