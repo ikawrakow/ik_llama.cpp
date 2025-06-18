@@ -976,7 +976,11 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q4_K,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q4_K_ref,
         .vec_dot                  = ggml_vec_dot_q4_K_q8_K,
+#ifdef __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
         .vec_dot_type             = GGML_TYPE_Q8_K,
+#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1002,7 +1006,11 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q5_K,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q5_K_ref,
         .vec_dot                  = ggml_vec_dot_q5_K_q8_K,
+#ifdef __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
         .vec_dot_type             = GGML_TYPE_Q8_K,
+#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1028,7 +1036,12 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q6_K,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q6_K_ref,
         .vec_dot                  = ggml_vec_dot_q6_K_q8_K,
+#ifdef __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+#else
         .vec_dot_type             = GGML_TYPE_Q8_K,
+#endif
+//        .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1054,7 +1067,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q8_k_r8,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q8_k_r8_ref,
         .vec_dot                  = vec_dot_q8_k_r8_q8_k,
-        .vec_dot_type             = GGML_TYPE_Q8_KR8,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1067,11 +1080,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq2_xxs,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq2_xxs_ref,
         .vec_dot                  = ggml_vec_dot_iq2_xxs_q8_K,
-#ifdef __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
-#else
         .vec_dot_type             = GGML_TYPE_Q8_K,
-#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1123,11 +1132,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq3_xxs,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq3_xxs_ref,
         .vec_dot                  = ggml_vec_dot_iq3_xxs_q8_K,
-#ifdef __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
-#else
         .vec_dot_type             = GGML_TYPE_Q8_K,
-#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1205,11 +1210,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq1_s,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq1_s_ref,
         .vec_dot                  = ggml_vec_dot_iq1_s_q8_K,
-#ifdef __AVX2__
-        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
-#else
         .vec_dot_type             = GGML_TYPE_Q8_K,
-#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },
@@ -1595,10 +1596,10 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq2_kt,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq2_kt_ref,
         .vec_dot                  = vec_dot_iq2_kt_q8_k,
-#ifdef __ARM_NEON
-        .vec_dot_type             = GGML_TYPE_F16,
+#if defined __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
-        .vec_dot_type             = GGML_TYPE_F32,
+        .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 4,
@@ -1612,11 +1613,16 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq3_kt,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq3_kt_ref,
         .vec_dot                  = vec_dot_iq3_kt_q8_k,
-#ifdef __ARM_NEON
-        .vec_dot_type             = GGML_TYPE_F16,
+#if defined __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
-        .vec_dot_type             = GGML_TYPE_F32,
+        .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
+//#ifdef __ARM_NEON
+//        .vec_dot_type             = GGML_TYPE_F16,
+//#else
+//        .vec_dot_type             = GGML_TYPE_F32,
+//#endif
         .nrows                    = 1,
         .row_meta_size            = 4,
     },
@@ -1629,13 +1635,13 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq4_kt,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq4_kt_ref,
         .vec_dot                  = vec_dot_iq4_kt_q8_k,
-#ifdef __ARM_NEON
-        .vec_dot_type             = GGML_TYPE_F16,
+#if defined __AVX2__
+        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
-        .vec_dot_type             = GGML_TYPE_F32,
+        .vec_dot_type             = GGML_TYPE_Q8_0_X4,
 #endif
         .nrows                    = 1,
-        .row_meta_size            = 8,
+        .row_meta_size            = 4,
     },
     [GGML_TYPE_IQ3_K] = {
         .type_name                = "iq3_k",
@@ -1698,7 +1704,11 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_iq5_k,
         .from_float_ref           = (ggml_from_float_t)quantize_row_iq5_k_ref,
         .vec_dot                  = vec_dot_iq5_k_q8_k,
+//#ifdef __AVX2__
+//        .vec_dot_type             = GGML_TYPE_Q8_2_X4,
+//#else
         .vec_dot_type             = GGML_TYPE_Q8_K,
+//#endif
         .nrows                    = 1,
         .row_meta_size            = 0,
     },

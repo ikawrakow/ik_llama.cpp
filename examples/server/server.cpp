@@ -970,6 +970,9 @@ struct server_context {
         slot.sparams.temp              = json_value(data, "temperature",       default_sparams.temp);
         slot.sparams.dynatemp_range    = json_value(data, "dynatemp_range",    default_sparams.dynatemp_range);
         slot.sparams.dynatemp_exponent = json_value(data, "dynatemp_exponent", default_sparams.dynatemp_exponent);
+        slot.sparams.xtc_probability = json_value(data, "xtc_probability", default_sparams.xtc_probability);
+        slot.sparams.xtc_threshold = json_value(data, "xtc_threshold", default_sparams.xtc_threshold);
+        slot.sparams.top_n_sigma = json_value(data, "top_n_sigma", default_sparams.top_n_sigma);
         slot.sparams.penalty_last_n    = json_value(data, "repeat_last_n",     default_sparams.penalty_last_n);
         slot.sparams.penalty_repeat    = json_value(data, "repeat_penalty",    default_sparams.penalty_repeat);
         slot.sparams.penalty_freq      = json_value(data, "frequency_penalty", default_sparams.penalty_freq);
@@ -1175,17 +1178,17 @@ struct server_context {
         }
 
         {
-            const auto & samplers_sequence = data.find("samplers");
-            if (samplers_sequence != data.end() && samplers_sequence->is_array()) {
-                std::vector<std::string> sampler_names;
-                for (const auto & sampler_name : *samplers_sequence) {
-                    if (sampler_name.is_string()) {
-                        sampler_names.emplace_back(sampler_name);
-                    }
+            const auto samplers = data.find("samplers");
+            if (samplers != data.end()) {
+                if (samplers->is_array()) {
+                    slot.sparams.samplers_sequence = llama_sampling_types_from_names(*samplers, false);
                 }
-                slot.sparams.samplers_sequence = llama_sampling_types_from_names(sampler_names, false);
-            } else {
-                slot.sparams.samplers_sequence = default_sparams.samplers_sequence;
+                else if (samplers->is_string()) {
+                    slot.sparams.samplers_sequence = llama_sampling_types_from_chars(samplers->get<std::string>());
+                }
+                else {
+                    slot.sparams.samplers_sequence = default_sparams.samplers_sequence;
+                }
             }
         }
 
@@ -3443,7 +3446,8 @@ int main(int argc, char ** argv) {
             }
             ctx_server.queue_results.remove_waiting_task_id(id_task);
         } else {
-            const auto chunked_content_provider = [id_task, &ctx_server, completion_id](size_t, httplib::DataSink & sink) {
+            const auto chunked_content_provider = [id_task, &ctx_server, completion_id, send_done = params.send_done](size_t, httplib::DataSink & sink) {
+                bool successful_completion = false;
                 while (true) {
                     server_task_result result = ctx_server.queue_results.recv(id_task);
                     if (!result.error) {
@@ -3463,6 +3467,7 @@ int main(int argc, char ** argv) {
                             }
                         }
                         if (result.stop) {
+                            successful_completion = true;
                             break;
                         }
                     } else {
@@ -3478,9 +3483,18 @@ int main(int argc, char ** argv) {
                         break;
                     }
                 }
+                bool ok = true;
+                if (send_done && successful_completion) {
+                    static const std::string done_message = "data: [DONE]\n\n";
+                    LOG_VERBOSE("data stream", {{"to_send", done_message}});
+                    if (!sink.write(done_message.c_str(), done_message.size())) {
+                        // If writing [DONE] fails, the stream is likely already problematic.
+                        ok = false;
+                    }
+                }
                 sink.done();
                 ctx_server.queue_results.remove_waiting_task_id(id_task);
-                return true;
+                return ok;
             };
 
             auto on_complete = [id_task, &ctx_server](bool) {

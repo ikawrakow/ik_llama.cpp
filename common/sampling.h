@@ -63,6 +63,7 @@ typedef struct llama_sampling_params {
         llama_sampler_type::TOP_P,
         llama_sampler_type::MIN_P,
         llama_sampler_type::XTC,
+        llama_sampler_type::TOP_N_SIGMA,
         llama_sampler_type::TEMPERATURE
     };
 
