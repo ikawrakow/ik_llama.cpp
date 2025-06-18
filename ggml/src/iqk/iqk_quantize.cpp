@@ -875,14 +875,12 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
                 y[i].d = GGML_FP32_TO_FP16(d);
             }
         } else {
+            auto t = GGML_FP32_TO_BF16(d);
+            d = ggml_bf16_to_fp32(t);
             if (i < nb4) {
-                auto t = GGML_FP32_TO_BF16(d);
                 y4[i4].d[ir] = t.bits;
-                d = ggml_bf16_to_fp32(t);
             } else {
-                auto t = GGML_FP32_TO_BF16(d);
                 y[i].d = t.bits;
-                d = ggml_bf16_to_fp32(t);
             }
         }
         const float id = d > 0 ? 1/d : 0.f;
@@ -916,9 +914,11 @@ void quantize_row_q8_1_x4_T(const float * x, Block * y, int64_t k) {
             }
         } else {
             if (i < nb4) {
-                y4[i4].d[ir+4] = GGML_FP32_TO_BF16(d * isum).bits;
+                auto i16 = (int16_t *)y4[i4].d;
+                i16[ir+4] = isum;
             } else {
-                y[i].s = GGML_FP32_TO_BF16(d * isum).bits;
+                auto i16 = (int16_t *)&y[i].s;
+                i16[0] = isum;
             }
         }
 
