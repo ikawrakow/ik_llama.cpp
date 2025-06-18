@@ -2073,7 +2073,7 @@ void iqk_convert_q2_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
                 auto max4 = _mm_max_ps(_mm256_extractf128_ps(block_max, 1), _mm256_castps256_ps128(block_max));
                 max4 = _mm_max_ps(max4, _mm_movehl_ps(max4, max4));
                 max4 = _mm_max_ss(max4, _mm_movehdup_ps(max4));
-                float d = _mm_cvtss_f32(max4/127.f);
+                float d = _mm_cvtss_f32(max4)/127.f;
                 auto id = _mm256_set1_ps(d != 0.0f ? 1/d : 0.0f);
                 y[i].d[k] = GGML_FP32_TO_FP16(d);
                 for (int ib32 = 0; ib32 < 8; ++ib32) {
