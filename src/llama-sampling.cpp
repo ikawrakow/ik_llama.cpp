@@ -7,6 +7,11 @@
 #include <numeric>
 #include <unordered_map>
 
+#include "llama-vocab.h"
+#include <unordered_map>
+#include <cmath>
+#include <vector>
+
 static void llama_log_softmax(float * array, size_t size) {
     float max_l = *std::max_element(array, array + size);
     float sum = 0.f;
@@ -448,8 +453,6 @@ void llama_sample_xtc_impl(struct llama_sampling * smpl, llama_token_data_array 
 
     llama_sample_softmax_impl(nullptr, candidates);
 
-    auto cur_size = candidates->size;
-
     int pos_last = 0;
 
     for (size_t i = 0; i < candidates->size; ++i) {
@@ -524,7 +527,222 @@ void llama_sample_top_n_sigma_impl(struct llama_sampling * smpl, llama_token_dat
         smpl->n_sample++;
     }
 }
+//DRY
 
+
+// Ported from Koboldcpp, original PR: https://github.com/LostRuins/koboldcpp/pull/982 (Original author: pi6am) 
+//and added implementation of DRY sampler (post-refactor) (original author: wwoodsTM) https://github.com/ggml-org/llama.cpp/pull/9702
+void llama_sample_dry_impl(struct llama_sampling * smpl, llama_token_data_array * candidates,
+                          float dry_multiplier, float dry_base, int32_t dry_allowed_length,
+                          int32_t dry_penalty_last_n) {
+   
+#ifdef DRY_DEBUG
+    // DEBUG: Print when DRY is called
+    static int call_count = 0;
+    if (++call_count <= 5) {
+        fprintf(stderr, "DRY CALL %d: mult=%.2f base=%.2f allowed=%d last_n=%d history_size=%zu\n",
+                call_count, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n,
+                smpl ? smpl->dry_last_tokens.size() : 0);
+    }
+#endif
+    if (dry_multiplier == 0.0f || dry_base < 1.0f || dry_penalty_last_n == 0 || !smpl) {
+        return;
+    }
+
+    // Step 1: Look for restart sequences to limit the maximum repetition length.
+    // Work backwards through the context looking for any token that begins a restart sequence.
+    //
+    // The collection `restart_sequences` is a mapping from a "head" token to all "tail"
+    // sequences that together comprise a restart sequence. This allows us to quickly check
+    // whether each token is the head of a complete sequence. Most restart sequences are actually
+    // a single token, and for these the "tail" is an empty vector.
+    //
+    // If the token is a "head", test all restart sequences that begin with this token
+    // (there will often only be one sequence for each token, but if sequences like 'aaaq1' and
+    // 'aaa1' are used as restart strings, both could start with 'aaa' when tokenized). The
+    // longest matching sequence (if any) is used to limit the maximum repetition length.
+    //
+    // Note that in the case case of a short sequence contained in a longer one, this might fail to
+    // find the smallest value for `rep_limit`. For example, if 'amniotic' and 'ni' are both used as
+    // restart sequences, 'ni' will be found first, and since it's shorter it will fail to suppress
+    // 'otic'. This is a minor issue since fully contained restart sequences are likely to be rare.
+    //
+    // This is theoretically worst-case O(N^2) for arbitrary restart sequences, which is why we
+    // have already clamped the maximum tail sequence length when generating `restart_sequences`.
+    // With clamping, this scan is O(N) in the context length.
+    int32_t effective_dry_penalty_last_n = (dry_penalty_last_n == -1) ?
+        smpl->dry_last_tokens.size() : std::max(dry_penalty_last_n, 0);
+    int last_n_repeat = std::min((int)smpl->dry_last_tokens.size(), effective_dry_penalty_last_n);
+
+    if (last_n_repeat <= dry_allowed_length) {
+        return;
+    }
+
+    // Step 2: Initialize working arrays
+    smpl->dry_repeat_count.assign(last_n_repeat, 0);
+    smpl->dry_max_token_repeat.clear();
+
+    // Step 3: Look for restart sequences (sequence breaker logic)
+    int rep_limit = last_n_repeat;
+    for (int i = 0; i < last_n_repeat; ++i) {
+        llama_token token = smpl->dry_last_tokens[smpl->dry_last_tokens.size() - 1 - i];
+        auto range = smpl->dry_processed_breakers.equal_range(token);
+        if (range.first == smpl->dry_processed_breakers.end()) {
+            continue;
+        }
+        int longest_match = -1;
+        for (auto it = range.first; it != range.second; ++it) {
+            int seq_len = (int)it->second.size();
+            if (seq_len > longest_match && seq_len <= (int)i) {
+                bool match = true;
+                for (int offset = 0; offset < seq_len; ++offset) {
+                    if (it->second[offset] != smpl->dry_last_tokens[smpl->dry_last_tokens.size() - i + offset]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    longest_match = seq_len;
+                }
+            }
+        }
+        if (longest_match >= 0) {
+            rep_limit = i - longest_match;
+            break;
+        }
+    }
+
+    if (rep_limit < dry_allowed_length) {
+        return;
+    }
+
+    // Step 4: Iterate in reverse over the last N tokens of the context, using the "Z-algorithm" (in
+    // the reverse direction) to efficiently compute the positions and lengths of suffixes appearing
+    // elsewhere in the context. We limit the suffix length to `rep_limit` to respect restart sequences.
+    //
+    // This algorithm is not currently documented on Wikipedia, but there is a clear description here:
+    // https://ivanyu.me/blog/2014/10/15/z-algorithm/
+    //
+    // The code below is adapted from the public domain implementation by the same author here:
+    // https://github.com/ivanyu/string-algorithms/blob/master/z_algorithm.py
+    //
+    // Example:
+    // Last N tokens: a b c c b c y a b c
+    // Repeat counts: 0 0 3 1 0 2 0 0 0 0
+    //                    ^
+    //   This `3` means that the last three tokens of the context (a b c) also appear here.
+    //
+    // This step is worst case O(N) since the Z-algorithm is linear, despite the appearance of nested
+    // for/while loops. This can be seen by observing that the `lt` and `rt` bounds are set after each
+    // repeated suffix is detected (i.e. after each while loop when n > 0). These bound variables
+    // ensure that the inner while loops only examine each token in the context once as the outer
+    // for loop iterates over the context.
+
+    const int last = last_n_repeat - 1;
+    int rt = 0, lt = 0;
+
+    for (int k = 1; k < last_n_repeat; ++k) {
+        if (k > rt) {
+            // If k is outside the current Z-box, do naive computation
+            int n = 0;
+            while (n + k < last_n_repeat &&
+                   smpl->dry_last_tokens[smpl->dry_last_tokens.size() - 1 - n] ==
+                   smpl->dry_last_tokens[smpl->dry_last_tokens.size() - 1 - (n + k)]) {
+                ++n;
+            }
+            smpl->dry_repeat_count[last - k] = std::min(n, rep_limit);
+            if (n > 0) {
+                lt = k;
+                rt = k + n - 1;
+            }
+        } else {
+            // If k is inside the current Z-box
+            int p = k - lt;
+            int right_part_len = rt - k + 1;
+
+            if (smpl->dry_repeat_count[last - p] < right_part_len) {
+                int n = std::min(smpl->dry_repeat_count[last - p], rep_limit);
+                smpl->dry_repeat_count[last - k] = n;
+            } else {
+                int i = rt + 1;
+                while (i < last_n_repeat &&
+                       smpl->dry_last_tokens[smpl->dry_last_tokens.size() - 1 - i] ==
+                       smpl->dry_last_tokens[smpl->dry_last_tokens.size() - 1 - (i - k)]) {
+                    i += 1;
+                }
+                int n = std::min(i - k, rep_limit);
+                smpl->dry_repeat_count[last - k] = n;
+                lt = k;
+                rt = i - 1;
+            }
+        }
+    }
+
+    // Step 5: Iterate over dry_repeat_count and last_tokens, examining the maximum repeat length
+    // that would be generated by emitting each new token that would extend a sequence.
+    //
+    // Following the same example as above:
+    // Last N tokens: a b c c b c y a b c
+    // Repeat counts: 0 0 3 1 0 2 0 0 0 0
+    //
+    // For each non-zero, look ahead one token. This token, if emitted, would extend the repetition.
+    // c: 3 -> 4 (from `a b c` to `a b c c`)
+    // b: 1 -> 2 (from `c` to `c b`)
+    // y: 2 -> 3 (from `b c` to `b c y`)
+    for (int i = 0; i < last_n_repeat - 1; ++i) {
+        int repeat_len = smpl->dry_repeat_count[i];
+        if (repeat_len >= dry_allowed_length) {
+            llama_token token = smpl->dry_last_tokens[smpl->dry_last_tokens.size() - 2 - i];
+            auto it = smpl->dry_max_token_repeat.find(token);
+            if (it == smpl->dry_max_token_repeat.end() || it->second < repeat_len) {
+                smpl->dry_max_token_repeat[token] = repeat_len;
+            }
+        }
+    }
+
+    // Step 6: Apply logit penalties based on the maximum repeat length for relevant tokens.
+    // Prevent floating point overflow in `pow(penalty_base, exponent)` by clamping to `max_exponent`.
+    // Compute it from `penalty_base` and the approximate log of `std::numeric_limits<float>::max()`
+    
+    const float FLOAT_MAX_LOG = 88.7228391f;
+    int max_exponent = 0;
+    if (dry_base > 1.000001f) {
+        max_exponent = FLOAT_MAX_LOG / std::log(dry_base);
+    }
+
+    for (size_t i = 0; i < candidates->size; ++i) {
+        auto it = smpl->dry_max_token_repeat.find(candidates->data[i].id);
+        if (it != smpl->dry_max_token_repeat.end()) {
+            // Check if it's a single-token sequence breaker
+            auto range = smpl->dry_processed_breakers.equal_range(candidates->data[i].id);
+            bool is_single_token_breaker = false;
+            for (auto br_it = range.first; br_it != range.second; ++br_it) {
+                if (br_it->second.empty()) {
+                    is_single_token_breaker = true;
+                    break;
+                }
+            }
+
+            if (!is_single_token_breaker) {
+                int repeat_exp = it->second - dry_allowed_length;
+                if (max_exponent > 0 && repeat_exp > max_exponent) {
+                    repeat_exp = max_exponent;
+                }
+                float penalty = dry_multiplier * std::pow(dry_base, repeat_exp);
+                candidates->data[i].logit -= penalty;
+            }
+        }
+    }
+#ifdef DRY_DEBUG
+    // DEBUG: Show penalties applied
+    if (!smpl->dry_max_token_repeat.empty()) {
+        fprintf(stderr, "DRY: Applied penalties to %zu tokens\n", smpl->dry_max_token_repeat.size());
+    }
+#endif
+    candidates->sorted = false;
+}
+
+ 
 
 void llama_sample_repetition_penalties_impl(
         struct llama_sampling * smpl,
