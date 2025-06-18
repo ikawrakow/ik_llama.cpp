@@ -6596,6 +6596,37 @@ void kernel_mul_mv_iq2_k_f32_impl(
     }
 }
 
+struct Trellis3 {
+    constexpr constant static uint32_t kmask = 0x3f3f3f3f;
+    constexpr constant static uint32_t ka  = 89226354;
+    constexpr constant static uint32_t kb  = 64248484;
+    constexpr constant static uint32_t ka1 = ka*ka;
+    constexpr constant static uint32_t kb1 = kb*ka+kb;
+    constexpr constant static uint32_t ka2 = ka1*ka;
+    constexpr constant static uint32_t kb2 = kb1*ka+kb;
+    constexpr constant static uint32_t ka3 = ka2*ka;
+    constexpr constant static uint32_t kb3 = kb2*ka+kb;
+    static inline char4 gen4(uint32_t val) {
+        thread uint32_t aux[4] = {(ka*val + kb) & kmask, (ka1*val + kb1) & kmask, (ka2*val + kb2) & kmask, (ka3*val + kb3) & kmask};
+        thread const int8_t * a8 = (thread const int8_t *)aux;
+        char4 result;
+        for (int i = 0; i < 4; ++i) result[i] = -126 + a8[4*i+0] + a8[4*i+1] + a8[4*i+2] + a8[4*i+3];
+        return result;
+    }
+    template <typename T4>
+    static inline void gen8(uint32_t val, thread T4& v1, thread T4& v2) {
+        thread uint32_t aux[4] = {ka*val + kb, ka1*val + kb1, ka2*val + kb2, ka3*val + kb3};
+        uint32_t aux32[2];
+        thread const int8_t * a8 = (thread const int8_t *)aux32;
+        for (int i = 0; i < 4; ++i) {
+            aux32[0] = aux[i] & kmask;
+            aux32[1] = (ka3*aux[i] + kb3) & kmask;
+            v1[i] = -126 + a8[0] + a8[1] + a8[2] + a8[3];
+            v2[i] = -126 + a8[4] + a8[5] + a8[6] + a8[7];
+        }
+    }
+};
+
 struct Trellis {
     constexpr constant static uint32_t kmask1 = 0x8fff8fff;
     constexpr constant static uint32_t kmask2 = 0x3b603b60;
@@ -6691,7 +6722,7 @@ void kernel_mul_mv_iq2_kt_f32_impl(
     float drow[N_DST];
     for (int row = 0; row < N_DST; ++row) {
         device const float * dptr = (device const float *)(cx + row*row_size);
-        drow[row] = dptr[0] * 31.75f * 1.05f;
+        drow[row] = dptr[0] * 1.05f;
     }
 
     device const block_iq2_kt * x = (device const block_iq2_kt *)(cx + sizeof(float));
@@ -6706,10 +6737,10 @@ void kernel_mul_mv_iq2_kt_f32_impl(
 
             const float ls = drow[row] * iq4k_values[(sc[(it/2)%4] >> 4*(it/8)) & 0xf];
 
-            Trellis::gen8(q2[2*it+0]+4096, v1, v2);
+            Trellis3::gen8(q2[2*it+0]+4096, v1, v2);
             auto sum = v1*y4[0] + v2*y4[1];
 
-            Trellis::gen8(q2[2*it+1]+4096, v1, v2);
+            Trellis3::gen8(q2[2*it+1]+4096, v1, v2);
             sum += v1*y4[2] + v2*y4[3];
 
             sum *= ls;
@@ -8542,19 +8573,18 @@ template <typename type4x4>
 void dequantize_iq2_kt(device const block_iq2_kt * x, short il, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256
     int ib32 = il/2;
-    half scale = iq4k_values[((x->scales[ib32%4] >> 4*(ib32/4)) & 0xf)] * 31.75h * 1.05h;
+    half scale = iq4k_values[((x->scales[ib32%4] >> 4*(ib32/4)) & 0xf)] * 1.05h;
     device const uint16_t * q2 = (device const uint16_t *)x->ql + 4*ib32 + 2*(il%2);
 
-    half4 v1, v2;
+    char4 v1, v2;
     for (int i = 0; i < 2; ++i) {
-        Trellis::gen8(q2[i]+4096, v1, v2);
-        v1 *= scale; v2 *= scale;
+        Trellis3::gen8(q2[i]+4096, v1, v2);
         if constexpr (is_same_v<type4x4, half4x4>) {
-            reg[2*i+0] = v1;
-            reg[2*i+1] = v2;
+            reg[2*i+0] = {scale*(half)v1[0], scale*(half)v1[1], scale*(half)v1[2], scale*(half)v1[3]};
+            reg[2*i+1] = {scale*(half)v2[0], scale*(half)v2[1], scale*(half)v2[2], scale*(half)v2[3]};
         } else {
-            reg[2*i+0] = {(float)v1[0], (float)v1[1], (float)v1[2], (float)v1[3]};
-            reg[2*i+1] = {(float)v2[0], (float)v2[1], (float)v2[2], (float)v2[3]};
+            reg[2*i+0] = {scale*(float)v1[0], scale*(float)v1[1], scale*(float)v1[2], scale*(float)v1[3]};
+            reg[2*i+1] = {scale*(float)v2[0], scale*(float)v2[1], scale*(float)v2[2], scale*(float)v2[3]};
         }
     }
 }
@@ -8586,20 +8616,20 @@ void dequantize_iq4_kt(device const block_iq4_kt * x, short il, float d, thread 
     device const uint32_t * shb = x->qs;
     device const uint8_t * ql = (device const uint8_t *)(shb + 8);
     device const uint8_t * qh = ql + 64;
-    float scale = d * (((shb[ib32] & 0xff) >> 1) - 64);
+    const int ls = (shb[ib32] & 0xff) >> 1;
+    const float scale = d * (ls - 64);
     const uint32_t offset = 4096 + ((shb[ib32] & 1) << 15);
 
-    const int jj = ib32*8 + 4*(il%2);
-    ql += jj;
-    qh += jj%32;
+    ql += 8*ib32;
+    qh += 8*(ib32%4);
 
     uint32_t sh = (shb[ib32] >> (8 + 12*(il%2))) << 12;
-    const int shift = 8 - 4*(jj/32);
+    const int shift = 8 - 4*(ib32/4);
 
     for (int i = 0; i < 4; ++i) {
         uint32_t idx = ql[i] + ((qh[i] << shift) & 0xf00) + ((sh >> 3*i) & 0x7000) + offset; 
-        auto v = (float4)Trellis::gen4(idx);
-        reg[i] = v * scale;
+        auto c4 = Trellis3::gen4(idx);
+        reg[i] = {scale*c4[0], scale*c4[1], scale*c4[2], scale*c4[3]};
     }
 }
 
@@ -8931,18 +8961,17 @@ struct DequantizerKT4 {
     using type4x4 = T4x4;
     DequantizerKT4(device const char * cx, short il = 0) : il(il) {
         device const float * dptr = (device const float *)cx;
-        d[0] = dptr[0] * 31.75f * 1.01f;
-        d[1] = dptr[1];
-        x = (device const Block *)(dptr + 2);
+        d = dptr[0] * 1.01f;
+        x = (device const Block *)(dptr + 1);
     }
     inline void convert(thread T4x4& t) const {
         float4x4 tmp;
-        dequantize_iq4_kt(x, il, d[0], tmp);
+        dequantize_iq4_kt(x, il, d, tmp);
         for (int i = 0; i < 4; ++i) for (int j = 0; j < 4; ++j) t[i][j] = tmp[i][j];
     }
     inline void convert(int64_t ind, thread T4x4& t) {
         float4x4 tmp;
-        dequantize_iq4_kt(x + ind/nl, ind%nl, d[0], tmp);
+        dequantize_iq4_kt(x + ind/nl, ind%nl, d, tmp);
         for (int i = 0; i < 4; ++i) for (int j = 0; j < 4; ++j) t[i][j] = tmp[i][j];
     }
     inline void next() {
@@ -8951,7 +8980,7 @@ struct DequantizerKT4 {
     }
     device const Block * x;
     short il;
-    float d[2];
+    float d;
 };
 
 template <typename T4x4, typename Block, typename Scale, int nl, void (*dequantize)(half d, device const Block *, short, thread T4x4&), bool may_not_be_aligned = false>
