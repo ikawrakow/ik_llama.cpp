@@ -172,27 +172,36 @@ struct ScaleHelperQ8_1 {
     }
 };
 
+inline __m256 convert_scales(const uint16_t * scales) {
+    auto aux_d = _mm_castsi128_ps(_mm_slli_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)scales)), 16));
+    auto aux_m = _mm_cvtepi32_ps(_mm_cvtepi16_epi32(_mm_loadl_epi64((const __m128i *)(scales+4))));
+    return _mm256_set_m128(_mm_mul_ps(aux_d, aux_m), aux_d);
+}
+
 struct ScaleHelperQ8_2 {
     template <typename Q>
     inline __m256 prepare4(const Q * y) {
         const block_q8_2_x4 * y4 = (const block_q8_2_x4 *)y;
-        auto aux = _mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)y4->d));
-        return _mm256_castsi256_ps(_mm256_slli_epi32(aux, 16));
+        return convert_scales((const uint16_t *)y4->d);
     }
     template <typename Q>
     inline __m256 prepare4(__m256 other_scales, const Q * y) {
         return _mm256_mul_ps(other_scales, prepare4<Q>(y));
     }
     template <typename Q> inline std::pair<float, float> prepare1(const Q * y) const {
-        return std::make_pair(GGML_BF16_TO_FP32(y->d), GGML_BF16_TO_FP32(y->m));
+        float   d = GGML_BF16_TO_FP32(y->d);
+        int16_t m = *(const int16_t *)&y->s;
+        return std::make_pair(d, d*m);
     }
     template <typename Q> inline std::pair<float, float> prepare1(const std::pair<float, float>& dm, const Q * y) const {
-        ggml_bf16_t d, s; d.bits = y->d; s.bits = y->s;
-        return std::make_pair(dm.first*GGML_BF16_TO_FP32(d), dm.second*GGML_BF16_TO_FP32(s));
+        float   d = GGML_BF16_TO_FP32(y->d);
+        int16_t m = *(const int16_t *)&y->s;
+        return std::make_pair(dm.first*d, dm.second*d*m);
     }
     std::pair<float, float> inline prepare1(const std::pair<float, float>& dm, const block_q8_2 * y) const {
-        ggml_bf16_t d, s; d.bits = y->d; s.bits = y->s;
-        return std::make_pair(dm.first*GGML_BF16_TO_FP32(d), dm.second*GGML_BF16_TO_FP32(s));
+        ggml_bf16_t dy; dy.bits = y->d; int16_t s = *(const int16_t *)&y->s;
+        float d = GGML_BF16_TO_FP32(dy);
+        return std::make_pair(dm.first*d, dm.second*d*s);
     }
 };
 
@@ -728,8 +737,7 @@ static void mul_mat_iq4_nl_r4_q8_2(int n, const void * vx, size_t bx, const Data
         const block_iq4_nl_r4 * iq4h = (const block_iq4_nl_r4 *)((const char *)vx + (ix+4)*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto aux = _mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16);
-                _mm256_storeu_ps(d8+8*iy, _mm256_castsi256_ps(aux));
+                _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
             }
             for (int k = 0; k < 4; ++k) {
                 auto scales = prepare(iq4l[4*ib4+k], iq4h[4*ib4+k]);
@@ -893,7 +901,7 @@ static void mul_mat_q4_0_r8_q8_2_avx2(int n, const void * vx, size_t bx, const D
             auto acc1 = _mm256_setzero_ps();
             auto acc2 = _mm256_setzero_ps();
             for (int ib4 = 0; ib4 < nb/4; ++ib4) {
-                helper.vec = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[0][ib4].d)), 16));
+                helper.vec = convert_scales((const uint16_t *)q8.y[0][ib4].d);
                 for (int k = 0; k < 4; ++k) {
                     auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[4*ib4+k].d));
                     prepare_q4_0_quants_avx2(iq4[4*ib4+k].qs, v, m4);
@@ -929,7 +937,7 @@ static void mul_mat_q4_0_r8_q8_2_avx2(int n, const void * vx, size_t bx, const D
                     d4[k] = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[4*ib4+k].d));
                 }
                 for (int iy = 0; iy < nrc_y; ++iy) {
-                    auto scales = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16));
+                    auto scales = convert_scales((const uint16_t *)q8.y[iy][ib4].d);
                     _mm256_storeu_ps(d8 + 8*iy, scales);
                     auto m4 = _mm256_extractf128_ps(scales, 1);
                     auto m8 = _mm256_set_m128(m4, m4);
@@ -1020,8 +1028,7 @@ static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
         const block_iq4_nl_r8 * iq4h = (const block_iq4_nl_r8 *)((const char *)vx + (ix+8)*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto aux = _mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16);
-                _mm256_storeu_ps(d8+8*iy, _mm256_castsi256_ps(aux));
+                _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
             }
             for (int k = 0; k < 4; ++k) {
                 auto scales = prepare(iq4l[4*ib4+k], iq4h[4*ib4+k]);
@@ -1108,7 +1115,7 @@ static void mul_mat_q5_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
         const block_q5_0_r4 * iq5 = (const block_q5_0_r4 *)((const char *)vx + ix*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto scales = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16));
+                auto scales = convert_scales((const uint16_t *)q8.y[iy][ib4].d);
                 _mm256_storeu_ps(d8 + 8*iy, _mm256_mul_ps(mscale, scales));
             }
             for (int k = 0; k < 4; ++k) {
@@ -1189,7 +1196,7 @@ static void mul_mat_q5_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
         const block_q5_0_r4 * iq5h = (const block_q5_0_r4 *)((const char *)vx + (ix+4)*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                _mm256_storeu_ps(d8+8*iy, _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16)));
+                _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
             }
             for (int k = 0; k < 4; ++k) {
                 auto scales = prepare(iq5l[4*ib4+k], iq5h[4*ib4+k]);
@@ -1278,8 +1285,8 @@ static void mul_mat_q6_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
         const block_q6_0_r4 * iq6 = (const block_q6_0_r4 *)((const char *)vx + ix*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto scales = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16));
-                _mm256_storeu_ps(d8 + 8*iy, _mm256_mul_ps(scales, mscale));
+                auto scales = convert_scales((const uint16_t *)q8.y[iy][ib4].d);
+                _mm256_storeu_ps(d8 + 8*iy,  _mm256_mul_ps(scales, mscale));
             }
             for (int k = 0; k < 4; ++k) {
                 auto scales = prepare(iq6[4*ib4+k]);
@@ -1358,7 +1365,7 @@ static void mul_mat_q6_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
         const block_q6_0_r4 * iq6h = (const block_q6_0_r4 *)((const char *)vx + (ix+4)*bx);
         for (int ib4 = 0; ib4 < nb/4; ++ib4) {
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto scales = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16));
+                auto scales = convert_scales((const uint16_t *)q8.y[iy][ib4].d);
                 _mm256_storeu_ps(d8 + 8*iy, scales);
             }
             for (int k = 0; k < 4; ++k) {
@@ -1453,8 +1460,7 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
         for (int ix = 0; ix < nrc_x; ix += 8) {
             const block_q8_0_r8 * iq8 = (const block_q8_0_r8 *)((const char *)vx + ix*bx);
             for (int ib4 = 0; ib4 < nb/4; ++ib4) {
-                auto aux = _mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[0][ib4].d)), 16);
-                _mm256_storeu_ps(d8, _mm256_castsi256_ps(aux));
+                _mm256_storeu_ps(d8, convert_scales((const uint16_t *)q8.y[0][ib4].d));
                 for (int k = 0; k < 4; ++k) {
                     auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq8[4*ib4+k].d));
                     auto sumi = q8_0_r8_dot_product((const uint8_t *)iq8[4*ib4+k].qs, q8.y[0][ib4].qs+32*k, qx);
@@ -1486,8 +1492,7 @@ static void mul_mat_q8_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
             const block_q8_0_r8 * q8h = (const block_q8_0_r8 *)((const char *)vx + (ix+8)*bx);
             for (int ib4 = 0; ib4 < nb/4; ++ib4) {
                 for (int iy = 0; iy < nrc_y; ++iy) {
-                    auto aux = _mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)q8.y[iy][ib4].d)), 16);
-                    _mm256_storeu_ps(d8+8*iy, _mm256_castsi256_ps(aux));
+                    _mm256_storeu_ps(d8+8*iy, convert_scales((const uint16_t *)q8.y[iy][ib4].d));
                 }
                 for (int k = 0; k < 4; ++k) {
                     auto scales1  = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)q8l[4*ib4+k].d));
