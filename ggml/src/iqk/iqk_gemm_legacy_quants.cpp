@@ -1690,6 +1690,73 @@ static void mul_mat_q8_1_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
     }
 }
 
+void iqk_convert_q80_q80_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    static_assert(QK4_0 == QK8_0);
+    GGML_ASSERT(n%QK4_0 == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    const int nb = n/QK4_0;
+
+    block_q8_0_r8 * y = (block_q8_0_r8 *)vy;
+
+    const block_q8_0 * x8[8];
+
+    uint32_t block[8];
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+
+        for (int k = 0; k < 8; ++k) x8[k] = (const block_q8_0 *)((const char *)vx + (ix + k)*bx);
+
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                y[i].d[k] = x8[k][i].d;
+                _mm256_storeu_si256((__m256i *)block, _mm256_loadu_si256((const __m256i *)x8[k][i].qs));
+                auto qs = (uint32_t *)y[i].qs;
+                for (int l = 0; l < 4; ++l) {
+                    qs[8*l + k +  0] = block[l + 0];
+                    qs[8*l + k + 32] = block[l + 4];
+                }
+            }
+        }
+        y += nb;
+    }
+}
+
+void iqk_convert_q40_q80_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    static_assert(QK4_0 == QK8_0);
+    GGML_ASSERT(n%QK4_0 == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    const int nb = n/QK4_0;
+
+    block_q8_0_r8 * y = (block_q8_0_r8 *)vy;
+
+    const block_q4_0 * x8[8];
+
+    uint32_t block[8];
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+
+        for (int k = 0; k < 8; ++k) x8[k] = (const block_q4_0 *)((const char *)vx + (ix + k)*bx);
+
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                y[i].d[k] = x8[k][i].d;
+                auto bits = _mm_loadu_si128((const __m128i *)x8[k][i].qs);
+                auto val  = _mm256_and_si256(MM256_SET_M128I(_mm_srli_epi16(bits, 4), bits), _mm256_set1_epi8(0xf));
+                val = _mm256_add_epi8(val, _mm256_set1_epi8(-8));
+                _mm256_storeu_si256((__m256i *)block, val);
+                auto qs = (uint32_t *)y[i].qs;
+                for (int l = 0; l < 4; ++l) {
+                    qs[8*l + k +  0] = block[l + 0];
+                    qs[8*l + k + 32] = block[l + 4];
+                }
+            }
+        }
+        y += nb;
+    }
+}
+
 template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX_NY>& funcs) {
     if constexpr (std::is_same_v<Dequantizer, Q4_0_Unpacker> || std::is_same_v<Dequantizer, Q5_0_Unpacker> ||
             std::is_same_v<Dequantizer, Q8_0_Unpacker>) {
@@ -1712,6 +1779,15 @@ template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX
 }
 
 } // namespace
+
+bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    switch (type) {
+        case GGML_TYPE_Q4_0: iqk_convert_q40_q80_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q8_0: iqk_convert_q80_q80_r8(n, vx, bx, vy, nrc_x); break;
+        default: return false;
+    }
+    return true;
+}
 
 bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
 
