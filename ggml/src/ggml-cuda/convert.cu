@@ -340,6 +340,12 @@ inline __device__ int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
+int __device__ __forceinline__ trellis_next_int(uint32_t& val) {
+    constexpr uint32_t ka = 0xCBAC1FED;
+    val = ka*val;
+    return ggml_cuda_dp4a(val & 0x3f3f3f3f, 0x01010101, -126);
+}
+
 float __device__ __forceinline__ trellis_next(uint32_t& val) {
     constexpr uint32_t ka = 89226354;
     constexpr uint32_t kb = 64248484;
@@ -367,9 +373,9 @@ static __global__ void dequantize_block_iq2_kt(const void * __restrict__ vx, dst
     dst_t * y = yy + ii*QK_K + 8*ib;
     const uint16_t * ql = (const uint16_t *)x[i].ql;
     uint32_t idx = ql[ib] + 4096;
-    const float dl = scale * iq4k_values[((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf)] * 31.75f * 1.05f;
+    const float dl = scale * iq4k_values[((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf)] * 1.05f;
     for (int j = 0; j < 8; ++j) {
-        y[j] = dl * trellis_next(idx);
+        y[j] = dl * trellis_next_int(idx);
     }
 }
 
@@ -388,10 +394,10 @@ static __global__ void dequantize_block_iq3_kt(const void * __restrict__ vx, dst
     dst_t * y = yy + ii*QK_K + 8*ib;
     const uint16_t * ql = (const uint16_t *)x[i].ql;
     uint32_t idx = ql[ib] + 4096;
-    const float dl = scale * ((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf) * 31.75f * 1.01f; //1.015f;
+    const float dl = scale * ((x[i].scales[(ib/4)%4] >> 4*(ib/16)) & 0xf) * 1.01f; //1.015f;
     uint8_t mask = 1 << (ib/4);
     for (int j = 0; j < 8; ++j) {
-        y[j] = dl * std::abs(trellis_next(idx)) * (x[i].qh[(8*ib+j)%32] & mask ? -1.f : 1.f);
+        y[j] = dl * std::abs(trellis_next_int(idx)) * (x[i].qh[(8*ib+j)%32] & mask ? -1.f : 1.f);
     }
 }
 
@@ -401,9 +407,8 @@ static __global__ void dequantize_block_iq4_kt(const void * __restrict__ vx, dst
     int64_t ii  = blockIdx.x;
     int64_t row = (QK_K * ii) / n_per_row;
     const float * dptr = (const float *)((const char *)vx + row * row_size);
-    float scale = dptr[0] * 31.75f * 1.01f;
-    float row_av = dptr[1];
-    const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 2);
+    float scale = dptr[0] * 1.00f;
+    const block_iq4_kt * x = (const block_iq4_kt *)(dptr + 1);
     const int64_t i = ii - (row*n_per_row)/QK_K;
 
     constexpr int kNumGroups = 64;
@@ -423,8 +428,8 @@ static __global__ void dequantize_block_iq4_kt(const void * __restrict__ vx, dst
     int ls = ((shb[ib32] & 0xff) >> 1) - 64;
     const float dl = scale * ls;
     for (int j = 0; j < 4; ++j) {
-        y[j+0] = dl * trellis_next(idx1) + row_av;
-        y[j+4] = dl * trellis_next(idx2) + row_av;
+        y[j+0] = dl * trellis_next_int(idx1);
+        y[j+4] = dl * trellis_next_int(idx2);
     }
 }
 
