@@ -606,6 +606,12 @@ struct Q6_0_1_Dequantizer {
         return _mm256_or_si256(b4.dequant(x->qs), _mm256_and_si256(_mm256_srlv_epi64(h256, shift2), mh));
     }
 };
+struct Q6_0_Dequantizer {
+    Q6_0_1_Dequantizer deq;
+    inline __m256i dequant(const block_q6_0 * x) const {
+        return _mm256_add_epi8(deq.dequant(x), _mm256_set1_epi8(-32));
+    }
+};
 
 template <typename Q, typename Scales, typename Dequantizer>
 struct Q_Unpacker {
@@ -1788,7 +1794,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
     switch (type) {
         case GGML_TYPE_Q4_0: iqk_convert_qX_q80_r8<block_q4_0, Q4_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q5_0: iqk_convert_qX_q80_r8<block_q5_0, Q5_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
-        //case GGML_TYPE_Q6_0: iqk_convert_qX_q80_r8<block_q6_0, Q6_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q6_0: iqk_convert_qX_q80_r8<block_q6_0, Q6_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0: iqk_convert_q80_q80_r8(n, vx, bx, vy, nrc_x); break;
         default: return false;
     }
