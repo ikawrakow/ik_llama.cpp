@@ -1382,6 +1382,7 @@ if (EMSCRIPTEN)
 endif()
 
 target_compile_definitions(ggml PUBLIC  ${GGML_CDEF_PUBLIC})
+target_compile_definitions(ggml PRIVATE $<$<CONFIG:Release>:NDEBUG>)
 target_include_directories(ggml PUBLIC ../include)
 target_include_directories(ggml PRIVATE . ${GGML_EXTRA_INCLUDES})
 target_link_directories(ggml PRIVATE ${GGML_EXTRA_LIBDIRS})
