@@ -40,6 +40,8 @@
 
 #define LLAMA_DEFAULT_SEED 0xFFFFFFFF
 
+#define LLAMA_TOKEN_NULL -1
+
 #define LLAMA_FILE_MAGIC_GGLA 0x67676c61u // 'ggla'
 #define LLAMA_FILE_MAGIC_GGSN 0x6767736eu // 'ggsn'
 #define LLAMA_FILE_MAGIC_GGSQ 0x67677371u // 'ggsq'
@@ -556,6 +558,7 @@ extern "C" {
     LLAMA_API enum llama_rope_type    llama_rope_type   (const struct llama_model * model);
 
     LLAMA_API int32_t llama_n_vocab    (const struct llama_model * model);
+    LLAMA_API const struct llama_vocab* llama_get_model_vocab(const struct llama_model* model);
     LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model);
     LLAMA_API int32_t llama_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_n_layer    (const struct llama_model * model);
@@ -1221,6 +1224,30 @@ extern "C" {
             struct llama_context * ctx,
           llama_token_data_array * candidates_p,
                            float   top_n_sigma);
+
+    ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
+    LLAMA_API struct llama_sampler_dry * llama_sampler_init_dry(
+        const struct llama_vocab* model,
+        float    dry_multiplier,
+        float    dry_base,
+        int32_t    dry_allowed_length,
+        int32_t    dry_penalty_last_n,
+        const char** seq_breakers,
+        size_t    num_breakers);
+
+    //LLAMA_API void llama_sample_dry(struct llama_context* ctx, llama_token_data_array* candidates_p, int32_t context_size, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers);
+
+    void llama_sample_dry(struct llama_context* ctx, struct llama_sampler_dry* smpl, llama_token_data_array* candidates_p);
+
+    void llama_sampler_dry_reset(struct llama_sampler_dry* smpl);
+
+    void llama_sampler_dry_free(struct llama_sampler_dry* smpl);
+
+    struct llama_sampler_dry* llama_sampler_dry_clone(struct llama_sampler_dry* smpl);
+
+    void llama_sampler_dry_accept(struct llama_sampler_dry* smpl, llama_token token);
+
+    ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
 
 
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.

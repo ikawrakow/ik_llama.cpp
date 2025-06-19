@@ -23,6 +23,8 @@ struct llama_vocab {
 
     int max_token_len = 0; // used for optimizing longest token search
 
+    uint32_t n_tokens() const;
+
     std::unordered_map<token, id> token_to_id;
     std::vector<token_data>       id_to_token;
 
@@ -130,3 +132,8 @@ int32_t llama_detokenize_impl(
                          int32_t   text_len_max,
                             bool   remove_special,
                             bool   unparse_special);
+
+std::string llama_detokenize(
+    const struct llama_vocab& vocab,
+    const std::vector<llama_token>& tokens,
+    bool   special);
