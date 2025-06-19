@@ -1615,17 +1615,17 @@ struct Trellis3 {
         return result;
     }
     inline int8x16x2_t next32(const uint16_t * val, uint32_t v0) const {
-        auto vka3 = vdupq_n_u32(ka3), vkb3 = vdupq_n_u32(kb3);
+        auto vka3 = vdupq_n_u32(ka3);
         int8x16x2_t result = {vdupq_n_s8(-126), vdupq_n_s8(-126)};
         int8x16x2_t i8;
         for (int i = 0; i < 2; ++i) {
             i8.val[0] = vmulq_u32(mka, vdupq_n_u32(val[2*i+0]+v0));
-            i8.val[1] = vmlaq_u32(vkb3, vka3, i8.val[0]);
+            i8.val[1] = vmulq_u32(vka3, i8.val[0]);
             i8.val[0] = vandq_u32(i8.val[0], vdupq_n_u32(0x3f3f3f3f));
             i8.val[1] = vandq_u32(i8.val[1], vdupq_n_u32(0x3f3f3f3f));
             auto s1 = vpaddq_s8(vreinterpretq_s8_u32(i8.val[0]), vreinterpretq_s8_u32(i8.val[1]));
             i8.val[0] = vmulq_u32(mka, vdupq_n_u32(val[2*i+1]+v0));
-            i8.val[1] = vmlaq_u32(vkb3, vka3, i8.val[0]);
+            i8.val[1] = vmulq_u32(vka3, i8.val[0]);
             i8.val[0] = vandq_u32(i8.val[0], vdupq_n_u32(0x3f3f3f3f));
             i8.val[1] = vandq_u32(i8.val[1], vdupq_n_u32(0x3f3f3f3f));
             auto s2 = vpaddq_s8(vreinterpretq_s8_u32(i8.val[0]), vreinterpretq_s8_u32(i8.val[1]));
@@ -1634,11 +1634,11 @@ struct Trellis3 {
         return result;
     }
     inline int8x16x4_t next64(const uint32_t * val) const {
-        auto vka3 = vdupq_n_u32(ka3), vkb3 = vdupq_n_u32(kb3);
+        auto vka3 = vdupq_n_u32(ka3);
         int8x16x4_t result = {vdupq_n_s8(-126), vdupq_n_s8(-126), vdupq_n_s8(-126), vdupq_n_s8(-126)};
         for (int i = 0; i < 2; ++i) {
             auto i8_1 = next8(val[4*i+0], val[4*i+1]);
-            int8x16x2_t i8_2{vmlaq_u32(vkb3, vka3, i8_1.val[0]), vmlaq_u32(vkb3, vka3, i8_1.val[1])};
+            int8x16x2_t i8_2{vmulq_u32(vka3, i8_1.val[0]), vmulq_u32(vka3, i8_1.val[1])};
             i8_1.val[0] = vandq_u32(i8_1.val[0], vdupq_n_u32(0x3f3f3f3f));
             i8_1.val[1] = vandq_u32(i8_1.val[1], vdupq_n_u32(0x3f3f3f3f));
             i8_2.val[0] = vandq_u32(i8_2.val[0], vdupq_n_u32(0x3f3f3f3f));
@@ -1646,8 +1646,8 @@ struct Trellis3 {
             auto s1_1 = vpaddq_s8(vreinterpretq_s8_u32(i8_1.val[0]), vreinterpretq_s8_u32(i8_1.val[1]));
             auto s1_2 = vpaddq_s8(vreinterpretq_s8_u32(i8_2.val[0]), vreinterpretq_s8_u32(i8_2.val[1]));
             i8_1 = next8(val[4*i+2], val[4*i+3]);
-            i8_2.val[0] = vmlaq_u32(vkb3, vka3, i8_1.val[0]);
-            i8_2.val[1] = vmlaq_u32(vkb3, vka3, i8_1.val[1]);
+            i8_2.val[0] = vmulq_u32(vka3, i8_1.val[0]);
+            i8_2.val[1] = vmulq_u32(vka3, i8_1.val[1]);
             i8_1.val[0] = vandq_u32(i8_1.val[0], vdupq_n_u32(0x3f3f3f3f));
             i8_1.val[1] = vandq_u32(i8_1.val[1], vdupq_n_u32(0x3f3f3f3f));
             i8_2.val[0] = vandq_u32(i8_2.val[0], vdupq_n_u32(0x3f3f3f3f));
