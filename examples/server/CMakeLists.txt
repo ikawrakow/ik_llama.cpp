@@ -37,7 +37,13 @@ install(TARGETS ${TARGET} RUNTIME)
 target_compile_definitions(${TARGET} PRIVATE
     SERVER_VERBOSE=$<BOOL:${LLAMA_SERVER_VERBOSE}>
 )
-
+if (MSVC)
+	target_link_options(${TARGET} PRIVATE
+	 $<$<CONFIG:DEBUG>:/STACK:20971520,1048576 >
+	  $<$<CONFIG:RELEASE>:/STACK:20971520,1048576>
+	  )
+endif()
+# target_link_libraries(${TARGET} PRIVATE "/STACK:104857600")
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})																	 
 target_link_libraries(${TARGET} PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
 
