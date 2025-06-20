@@ -1088,6 +1088,9 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     if (typeA == GGML_TYPE_IQ4_KT) {
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq4_kt_q8_2_x4_T, kernels);
+#ifdef HAVE_FANCY_SIMD
+            func16 = mul_mat_iq4_kt_q8_2_x4_T<16>;
+#endif
             return true;
         }
         return false;
@@ -1096,6 +1099,9 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     if (typeA == GGML_TYPE_IQ2_KT) {
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq2_kt_q8_2_x4_T, kernels);
+#ifdef HAVE_FANCY_SIMD
+            func16 = mul_mat_iq2_kt_q8_2_x4_T<16>;
+#endif
             return true;
         }
         return false;
@@ -1104,6 +1110,9 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
     if (typeA == GGML_TYPE_IQ3_KT) {
         if (typeB == GGML_TYPE_Q8_2_X4) {
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_iq3_kt_q8_2_x4_T, kernels);
+#ifdef HAVE_FANCY_SIMD
+            func16 = mul_mat_iq3_kt_q8_2_x4_T<16>;
+#endif
             return true;
         }
         return false;
