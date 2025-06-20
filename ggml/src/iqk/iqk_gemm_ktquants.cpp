@@ -171,8 +171,7 @@ struct Trellis3 {
         }
     }
     IQK_ALWAYS_INLINE inline void next_128(const uint32_t * val, __m256i * result) const {
-#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
-        // On AVX2 we don't have enough vector registers to do this
+        // Even though we only have 16 vector registers nn AVX2, this is still faster
         __m256i aux[16];
         auto perm = _mm256_setr_epi32(0, 2, 4, 6, 1, 3, 5, 7);
         for (int k = 0; k < 4; ++k) {
@@ -191,9 +190,16 @@ struct Trellis3 {
             aux[i] = _mm256_and_si256(aux[i], mask);
         }
         auto offset = _mm256_set1_epi32(-126);
+#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
         auto m1     = _mm256_set1_epi32(0x01010101);
+#endif
         for (int i = 0; i < 16; ++i) {
+#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
             aux[i] = _mm256_dpbusd_epi32(offset, aux[i], m1);
+#else
+            auto dot = _mm256_maddubs_epi16(aux[i], _mm256_set1_epi32(0x01010101));
+            aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
+#endif
         }
         for (int k = 0; k < 4; ++k) {
             auto v1 = _mm256_packs_epi32(aux[4*k+0], aux[4*k+1]);
@@ -205,13 +211,9 @@ struct Trellis3 {
                 result[k] = _mm256_sign_epi8(result[k], result[k]);
             }
         }
-#else
-        for (int k = 0; k < 4; ++k) result[k] = next32(val + 8*k);
-#endif
     }
     IQK_ALWAYS_INLINE inline void next_128(const uint16_t * val, uint32_t v0, __m256i * result) const {
-#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
-        // On AVX2 we don't have enough vector registers to do this
+        // Even though we only have 16 vector registers nn AVX2, this is still faster
         __m256i aux[16];
         for (int k = 0; k < 4; ++k) {
             auto v128 = _mm_add_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)(val + 4*k))), _mm_set1_epi32(v0));
@@ -229,9 +231,16 @@ struct Trellis3 {
             aux[i] = _mm256_and_si256(aux[i], mask);
         }
         auto offset = _mm256_set1_epi32(-126);
+#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
         auto m1     = _mm256_set1_epi32(0x01010101);
+#endif
         for (int i = 0; i < 16; ++i) {
+#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
             aux[i] = _mm256_dpbusd_epi32(offset, aux[i], m1);
+#else
+            auto dot = _mm256_maddubs_epi16(aux[i], _mm256_set1_epi32(0x01010101));
+            aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
+#endif
         }
         for (int k = 0; k < 4; ++k) {
             auto v1 = _mm256_packs_epi32(aux[4*k+0], aux[4*k+1]);
@@ -243,9 +252,6 @@ struct Trellis3 {
                 result[k] = _mm256_sign_epi8(result[k], result[k]);
             }
         }
-#else
-        for (int k = 0; k < 4; ++k) result[k] = next32(val + 4*k, v0);
-#endif
     }
     inline __m256i next32(const uint16_t * val, uint32_t v0) const {
         const __m256i offset = _mm256_set1_epi32(-126);
