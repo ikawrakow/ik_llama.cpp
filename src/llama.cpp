@@ -18742,7 +18742,7 @@ static std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
         { GGML_TYPE_IQ5_KS_R4,   { GGML_TYPE_IQ5_KS, 4} },
         { GGML_TYPE_IQ5_K_R4,    { GGML_TYPE_IQ5_K, 4} },
         { GGML_TYPE_Q8_KV_R8,    { GGML_TYPE_Q8_KV, 8} },
-        { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_K, 8} },
+        { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_0, 8} },
         { GGML_TYPE_BF16_R16,    { GGML_TYPE_BF16, 16} },
     };
     if (auto it = k_map.find(type); it != k_map.end()) return it->second;
