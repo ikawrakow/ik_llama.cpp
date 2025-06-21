@@ -10,11 +10,9 @@
 
 #include "ggml-quants.h"
 #include "ggml-impl.h"
-#if GGML_USE_IQK_MULMAT
 #include "iqk/iqk_config.h"
 #include "iqk/iqk_mul_mat.h"
 #include "iqk/iqk_quantize.h"
-#endif
 
 
 #include <math.h>
@@ -3933,11 +3931,7 @@ void dequantize_row_q8_K(const block_q8_K * restrict x, float * restrict y, int6
 }
 
 void quantize_row_q8_K(const float * restrict x, void * restrict y, int64_t k) {
-#ifdef GGML_USE_IQK_MULMAT
     iqk_quantize_row_q8_K(x, y, k);
-#else
-    quantize_row_q8_K_ref(x, y, k);
-#endif
 }
 
 //===================================== Dot ptoducts =================================
@@ -4023,11 +4017,9 @@ static inline __m128i get_scale_shuffle(int i) {
 #endif
 
 void ggml_vec_dot_q4_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
-#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q4_0, vx, bx, GGML_TYPE_Q8_0, vy, by, s, bs, 0, 1)) {
         return;
     }
-#endif
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -4510,11 +4502,9 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * restrict s, size_t bs, const void * r
 }
 
 void ggml_vec_dot_q4_1_q8_1(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
-#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q4_1, vx, bx, GGML_TYPE_Q8_1, vy, by, s, bs, 0, 1)) {
         return;
     }
-#endif
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -4802,7 +4792,6 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * restrict s, size_t bs, const void * r
 }
 
 void ggml_vec_dot_q5_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
-#if GGML_USE_IQK_MULMAT
 #ifdef __AVX2__
     const enum ggml_type vec_dot_type = GGML_TYPE_Q8_1;
 #else
@@ -4811,7 +4800,6 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * restrict s, size_t bs, const void * r
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q5_0, vx, bx, vec_dot_type, vy, by, s, bs, 0, 1)) {
         return;
     }
-#endif
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -5167,11 +5155,9 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * restrict s, size_t bs, const void * r
 }
 
 void ggml_vec_dot_q5_1_q8_1(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
-#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q5_1, vx, bx, GGML_TYPE_Q8_1, vy, by, s, bs, 0, 1)) {
         return;
     }
-#endif
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -5546,7 +5532,6 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * restrict s, size_t bs, const void * r
 }
 
 void ggml_vec_dot_q6_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
-#if GGML_USE_IQK_MULMAT
 #ifdef __AVX2__
     const enum ggml_type vec_dot_type = GGML_TYPE_Q8_1;
 #else
@@ -5555,13 +5540,11 @@ void ggml_vec_dot_q6_0_q8_0(int n, float * restrict s, size_t bs, const void * r
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q6_0, vx, bx, vec_dot_type, vy, by, s, bs, 0, 1)) {
         return;
     }
-#endif
     // TODO
     *s = 0;
 }
 
 void ggml_vec_dot_q8_0_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
-#if GGML_USE_IQK_MULMAT
 #ifdef HAVE_FANCY_SIMD
     enum ggml_type dot_type = GGML_TYPE_Q8_1_X4;
 #else
@@ -5570,7 +5553,6 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * restrict s, size_t bs, const void * r
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_Q8_0, vx, bx, dot_type, vy, by, s, bs, 0, 1)) {
         return;
     }
-#endif
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -11940,11 +11922,9 @@ void ggml_vec_dot_iq1_m_q8_K  (int n, float * restrict s, size_t bs, const void 
 }
 
 void ggml_vec_dot_iq4_nl_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {
-#if GGML_USE_IQK_MULMAT
     if (iqk_mul_mat(nrc, nrc, n, GGML_TYPE_IQ4_NL, vx, bx, GGML_TYPE_Q8_0, vy, by, s, bs, 0, 1)) {
         return;
     }
-#endif
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
