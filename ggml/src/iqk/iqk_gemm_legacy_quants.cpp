@@ -2782,21 +2782,63 @@ void mul_mat_q8_0_r8_q8_0(int n, const void * vx, size_t bx, const DataInfo& inf
     }
 }
 
+struct DeqQ40 {
+    const int8x16_t m8 = vdupq_n_s8(-8);
+    const int8x16_t ml = vdupq_n_s8(0xf);
+    inline int8x16x2_t dequant(const block_q4_0& x) const {
+        auto bits = vld1q_u8(x.qs);
+        return { vaddq_s8(vreinterpretq_s8_u8(vandq_u8(bits, ml)), m8), vaddq_s8(vreinterpretq_s8_u8(vshrq_n_u8(bits, 4)), m8) };
+    }
+};
+
+template <typename Block, typename Dequantizer>
+void iqk_convert_qX_q80_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK4_0 == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    const int nb = n/QK8_0;
+
+    block_q8_0_r8 * y = (block_q8_0_r8 *)vy;
+
+    const Block * x8[8];
+
+    uint32_t block[8];
+
+    Dequantizer deq;
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+
+        for (int k = 0; k < 8; ++k) x8[k] = (const Block *)((const char *)vx + (ix + k)*bx);
+
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                y[i].d[k] = x8[k][i].d;
+                vst1q_s8_x2((int8_t *)block, deq.dequant(x8[k][i]));
+                auto qs = (uint32_t *)y[i].qs;
+                for (int l = 0; l < 4; ++l) {
+                    qs[8*l + k +  0] = block[l + 0];
+                    qs[8*l + k + 32] = block[l + 4];
+                }
+            }
+        }
+        y += nb;
+    }
 }
 
-bool iqk_convert_legacy_quants_q8_r8([[maybe_unused]] int type, [[maybe_unused]] int n, [[maybe_unused]] const void * vx, [[maybe_unused]] size_t bx, [[maybe_unused]] void * vy, [[maybe_unused]] int nrc_x) {
-    return false;
-    //switch (type) {
-    //    case GGML_TYPE_Q4_0  : iqk_convert_qX_q80_r8<block_q4_0, Q4_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
+}
+
+bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    switch (type) {
+        case GGML_TYPE_Q4_0  : iqk_convert_qX_q80_r8<block_q4_0, DeqQ40>(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_Q4_1  : iqk_convert_qX_1_q8_1_r8<block_q4_1, Q4_1_Dequantizer>(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_Q5_0  : iqk_convert_qX_q80_r8<block_q5_0, Q5_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_Q5_1  : iqk_convert_qX_1_q8_1_r8<block_q5_1, Q5_1_Dequantizer<block_q5_1>>(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r8<block_q6_0, Q6_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, IQ4_NL0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_Q8_0  : iqk_convert_q80_q80_r8(n, vx, bx, vy, nrc_x); break;
-    //    default: return false;
-    //}
-    //return true;
+        default: return false;
+    }
+    return true;
 }
 
 bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, mul_mat_t& func16) {
