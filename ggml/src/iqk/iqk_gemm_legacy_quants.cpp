@@ -2783,12 +2783,22 @@ void mul_mat_q8_0_r8_q8_0(int n, const void * vx, size_t bx, const DataInfo& inf
 }
 
 struct DeqQ40 {
-    const int8x16_t m8 = vdupq_n_s8(-8);
-    const int8x16_t ml = vdupq_n_s8(0xf);
+    const int8x16_t m8  = vdupq_n_s8(-8);
+    const uint8x16_t ml = vdupq_n_s8(0xf);
     inline int8x16x2_t dequant(const block_q4_0& x) const {
         auto bits = vld1q_u8(x.qs);
         return { vaddq_s8(vreinterpretq_s8_u8(vandq_u8(bits, ml)), m8), vaddq_s8(vreinterpretq_s8_u8(vshrq_n_u8(bits, 4)), m8) };
     }
+};
+
+struct DeqIQ4NL {
+    const int8x16_t mt  = load_values();
+    const uint8x16_t ml = vdupq_n_s8(0xf);
+    inline int8x16x2_t dequant(const block_iq4_nl& x) const {
+        auto bits = vld1q_u8(x.qs);
+        return { vqtbl1q_s8(mt, vandq_u8(bits, ml)), vqtbl1q_s8(mt, vshrq_n_u8(bits, 4)) };
+    }
+    static inline int8x16_t load_values() { return vld1q_s8(iq4k_values); }
 };
 
 struct DeqQ50 {
@@ -2873,7 +2883,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q5_0  : iqk_convert_qX_q80_r8<block_q5_0, DeqQ50>(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_Q5_1  : iqk_convert_qX_1_q8_1_r8<block_q5_1, Q5_1_Dequantizer<block_q5_1>>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r8<block_q6_0, DeqQ60>(n, vx, bx, vy, nrc_x); break;
-    //    case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, IQ4_NL0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, DeqIQ4NL>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0  : iqk_convert_qX_q80_r8<block_q8_0, DeqQ80>(n, vx, bx, vy, nrc_x); break;
         default: return false;
     }
