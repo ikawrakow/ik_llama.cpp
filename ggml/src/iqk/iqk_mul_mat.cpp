@@ -1184,6 +1184,8 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
 
 #else  // IQK_IMPLEMENT
 
+#include "ggml-impl.h"
+
 extern "C" IQK_API bool iqk_mul_mat(int, long, long, long, int, const void *, long, int, const void *, long, float *, long, int, int) {
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
