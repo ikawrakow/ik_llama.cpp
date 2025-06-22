@@ -3906,23 +3906,192 @@ void mul_mat_iq5_k_r4_q8_k(int n, const void * vx, size_t bx, const DataInfo& in
     }
 }
 
+inline float convert_to_q8_k_r8(float d0, const int8x16x2_t * qx, const int8_t * scales, uint32_t * block, uint32_t * q8_k) {
+    auto max_i16 = vdupq_n_u16(0);
+    int16x8x4_t q[8];
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        auto scale_l = vdup_n_s8(scales[2*ib32+0]);
+        auto scale_h = vdup_n_s8(scales[2*ib32+1]);
+        q[ib32].val[0] = vmull_s8(scale_l, vget_low_s8 (qx[ib32].val[0]));
+        q[ib32].val[1] = vmull_s8(scale_l, vget_high_s8(qx[ib32].val[0]));
+        q[ib32].val[2] = vmull_s8(scale_h, vget_low_s8 (qx[ib32].val[1]));
+        q[ib32].val[3] = vmull_s8(scale_h, vget_high_s8(qx[ib32].val[1]));
+        max_i16 = vmaxq_u16(max_i16, vmaxq_u16(vabsq_s16(q[ib32].val[0]), vabsq_s16(q[ib32].val[1])));
+        max_i16 = vmaxq_u16(max_i16, vmaxq_u16(vabsq_s16(q[ib32].val[2]), vabsq_s16(q[ib32].val[3])));
+    }
+    uint16_t imax = vmaxvq_u16(max_i16);
+    if (!imax) {
+        for (int ib32 = 0; ib32 < 8; ++ib32) for (int l = 0; l < 8; ++l) q8_k[64*ib32 + 8*l] = 0;
+        return 0.f;
+    }
+    float dnew = float(imax) * d0;
+    //auto max_u32 = vmaxq_u32(vmovl_u16(vget_low_u16(max_i16)), vmovl_u16(vget_high_u16(max_i16)));
+    //auto max_f32 = vcvtq_f32_u32(max_u32);
+    //auto dnew = vmaxvq_f32(max_f32) * d0;
+    bool needs_scaling = true;
+    if (dnew <= 1.f) {
+        dnew = 1.f; needs_scaling = false;
+    }
+    auto scale = vdupq_n_f32(1/dnew);
+    for (int ib32 = 0; ib32 < 8; ++ib32) {
+        if (needs_scaling) {
+            for (int l = 0; l < 4; ++l) {
+                auto i1 = vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_low_s16 (q[ib32].val[l])))));
+                auto i2 = vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_high_s16(q[ib32].val[l])))));
+                q[ib32].val[l] = vcombine_s16(vmovn_s32(i1), vmovn_s32(i2));
+            }
+        }
+        for (int l = 0; l < 2; ++l) {
+            auto s8 = vcombine_s8(vmovn_s16(q[ib32].val[2*l+0]), vmovn_s16(q[ib32].val[2*l+1]));
+            vst1q_s8((int8_t *)block + 16*l, s8);
+        }
+        auto qb = q8_k + 64*ib32;
+        for (int l = 0; l < 8; ++l) {
+            qb[8*l] = block[l];
+        }
+    }
+    return dnew;
 }
 
-bool iqk_convert_iqk_quants_q80_r8([[maybe_unused]] int type, int n, [[maybe_unused]] const void * vx, [[maybe_unused]] size_t bx, [[maybe_unused]] void * vy, int nrc_x) {
+void iqk_convert_iq2_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    int nb = n/QK_K;
+
+    const block_iq2_ks * x8[8];
+
+    block_q8_k_r8 * y = (block_q8_k_r8 *)vy;
+
+    int8x16_t values;
+    {
+        auto v = vld1_s8(iq2nl_values);
+        values = vcombine_s8(v, v);
+    }
+
+    ggml_half dh[8];
+    float     dnew[8];
+    uint32_t  block[8];
+    int8_t    ls[16];
+
+    int8x16x2_t xv[8];
+
+    auto ml = vdupq_n_u8(0x03);
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) {
+            const ggml_half * dptr = (const ggml_half *)((const char *)vx + (ix+k)*bx);
+            dh[k] = dptr[0];
+            x8[k] = (const block_iq2_ks *)(dptr + 1);
+        }
+        float32x4x2_t vd{vcvt_f32_f16(vld1_f16((const float16_t *)dh+0)), vcvt_f32_f16(vld1_f16((const float16_t *)dh+4))};
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                auto extra = x8[k][i].extra;
+                for (int i128 = 0; i128 < 2; ++i128) {
+                    ls[8*i128+0] = ls[8*i128+1] = ((x8[k][i].scales[2*i128+0] & 0xf) | ((extra >> 4) & 0x10)) - 16;
+                    ls[8*i128+2] = ls[8*i128+3] = ((x8[k][i].scales[2*i128+0] >>  4) | ((extra >> 5) & 0x10)) - 16;
+                    ls[8*i128+4] = ls[8*i128+5] = ((x8[k][i].scales[2*i128+1] & 0xf) | ((extra >> 6) & 0x10)) - 16;
+                    ls[8*i128+6] = ls[8*i128+7] = ((x8[k][i].scales[2*i128+1] >>  4) | ((extra >> 7) & 0x10)) - 16;
+                    auto bits = vld1q_u8_x2(x8[k][i].qs+32*i128);
+                    xv[4*i128+0].val[0] = vandq_u8(bits.val[0], ml);
+                    xv[4*i128+0].val[1] = vandq_u8(bits.val[1], ml);
+                    xv[4*i128+1].val[0] = vandq_u8(vshrq_n_u8(bits.val[0], 2), ml);
+                    xv[4*i128+1].val[1] = vandq_u8(vshrq_n_u8(bits.val[1], 2), ml);
+                    xv[4*i128+2].val[0] = vandq_u8(vshrq_n_u8(bits.val[0], 4), ml);
+                    xv[4*i128+2].val[1] = vandq_u8(vshrq_n_u8(bits.val[1], 4), ml);
+                    xv[4*i128+3].val[0] = vshrq_n_u8(bits.val[0], 6);
+                    xv[4*i128+3].val[1] = vshrq_n_u8(bits.val[1], 6);
+                    auto shift = vdupq_n_u8((extra << 2) & 0x04);
+                    xv[4*i128+0].val[0] = vqtbl1q_s8(values, vaddq_u8(xv[4*i128+0].val[0], shift));
+                    xv[4*i128+0].val[1] = vqtbl1q_s8(values, vaddq_u8(xv[4*i128+0].val[1], shift));
+                    shift = vdupq_n_u8((extra << 1) & 0x04);
+                    xv[4*i128+1].val[0] = vqtbl1q_s8(values, vaddq_u8(xv[4*i128+1].val[0], shift));
+                    xv[4*i128+1].val[1] = vqtbl1q_s8(values, vaddq_u8(xv[4*i128+1].val[1], shift));
+                    shift = vdupq_n_u8((extra >> 0) & 0x04);
+                    xv[4*i128+2].val[0] = vqtbl1q_s8(values, vaddq_u8(xv[4*i128+2].val[0], shift));
+                    xv[4*i128+2].val[1] = vqtbl1q_s8(values, vaddq_u8(xv[4*i128+2].val[1], shift));
+                    shift = vdupq_n_u8((extra >> 1) & 0x04);
+                    xv[4*i128+3].val[0] = vqtbl1q_s8(values, vaddq_u8(xv[4*i128+3].val[0], shift));
+                    xv[4*i128+3].val[1] = vqtbl1q_s8(values, vaddq_u8(xv[4*i128+3].val[1], shift));
+                    extra >>= 4;
+                }
+                dnew[k] = convert_to_q8_k_r8(1.f/125, xv, ls, block, (uint32_t *)y[i].qs + k);
+            }
+            auto d = vld1q_f32_x2(dnew);
+            d.val[0] = vmulq_f32(d.val[0], vd.val[0]);
+            d.val[1] = vmulq_f32(d.val[1], vd.val[1]);
+            vst1_f16((float16_t *)y[i].d + 0,vcvt_f16_f32(d.val[0]));
+            vst1_f16((float16_t *)y[i].d + 4,vcvt_f16_f32(d.val[1]));
+        }
+        y += nb;
+    }
+}
+
+void iqk_convert_iq4_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    int nb = n/QK_K;
+
+    const block_iq4_ks * x8[8];
+
+    block_q8_k_r8 * y = (block_q8_k_r8 *)vy;
+
+    auto values = vld1q_s8_x2(iq4k_values);
+
+    float drow[8];
+    float dnew[8];
+    int8_t ls[16];
+
+    int8x16x2_t xv[8];
+    uint32_t block[8];
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) {
+            const float * dptr = (const float *)((const char *)vx + (ix + k)*bx);
+            drow[k] = dptr[0];
+            x8[k] = (const block_iq4_ks *)(dptr + 1);
+        }
+        auto vd = vld1q_f32_x2(drow);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    ls[2*ib32+0] = ((x8[k][i].scales[ib32] & 254) - 127);
+                    ls[2*ib32+1] = ls[2*ib32+0];
+                    auto aux128 = vld1q_u8(x8[k][i].qs+16*ib32);
+                    auto& block_values = values.val[x8[k][i].scales[ib32] & 1];
+                    xv[ib32].val[0] = vqtbl1q_s8(block_values, vandq_u8(aux128, vdupq_n_u8(0xf)));
+                    xv[ib32].val[1] = vqtbl1q_s8(block_values, vshrq_n_u8(aux128, 4));
+                }
+                dnew[k] = convert_to_q8_k_r8(1.f/127, xv, ls, block, (uint32_t *)y[i].qs + k);
+            }
+            auto d = vld1q_f32_x2(dnew);
+            d.val[0] = vmulq_f32(d.val[0], vd.val[0]);
+            d.val[1] = vmulq_f32(d.val[1], vd.val[1]);
+            vst1_f16((float16_t *)y[i].d + 0, vcvt_f16_f32(d.val[0]));
+            vst1_f16((float16_t *)y[i].d + 4, vcvt_f16_f32(d.val[1]));
+        }
+        y += nb;
+    }
+}
+
+}
+
+bool iqk_convert_iqk_quants_q80_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     if (n%QK_K != 0 || nrc_x%8 != 0) return false;
-    return false;
-    //switch (ggml_type(type)) {
-    //    case GGML_TYPE_IQ2_KS : iqk_convert_iq2_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
+    switch (ggml_type(type)) {
+        case GGML_TYPE_IQ2_KS : iqk_convert_iq2_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_IQ2_K  : iqk_convert_iq2_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_IQ3_K  : iqk_convert_iq3_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
-    //    case GGML_TYPE_IQ4_KS : iqk_convert_iq4_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ4_KS : iqk_convert_iq4_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_IQ4_K  : iqk_convert_iq4_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_IQ5_KS : iqk_convert_iq5_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_IQ5_K  : iqk_convert_iq5_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_IQ6_K  : iqk_convert_iq6_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
-    //    default: return false;
-    //}
-    //return true;
+        default: return false;
+    }
+    return true;
 }
 
 bool iqk_set_kernels_iqk_quants(int ne00, int typeA, int typeB, std::array<mul_mat_t, IQK_MAX_NY>& kernels, [[maybe_unused]] mul_mat_t& func16) {
