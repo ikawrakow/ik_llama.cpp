@@ -1,6 +1,10 @@
 set(ARCH_FLAGS "")
 if (NOT MSVC)
-    list(APPEND ARCH_FLAGS -march=native)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    else()
+        list(APPEND ARCH_FLAGS -march=native)
+    endif()
+
 endif()
 message(STATUS "ARCH_FLAGS = ${ARCH_FLAGS}")
 #if (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LWR MATCHES "^(x86_64|i686|amd64|x64|win32)$" OR

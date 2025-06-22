@@ -9,6 +9,26 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(CMAKE_VERBOSE_MAKEFILE ON)
+
+    #best performance for Snapdragon 8Elite
+    set(OPT_FLAG " -O3 -march=armv8.7-a+dotprod+fp16 -mcpu=cortex-x1 -mtune=cortex-x1 -flto -D_GNU_SOURCE -fvectorize -ffp-model=fast -fno-finite-math-only")
+    #set(OPT_FLAG " -O3 -march=armv8.7-a+dotprod+fp16 -mcpu=cortex-x1 -mtune=cortex-x1 -flto -D_GNU_SOURCE -ffp-model=fast -fno-finite-math-only")
+    #set(OPT_FLAG " -O3 -march=armv8.7-a -mcpu=cortex-x1 -mtune=cortex-x1 -flto -D_GNU_SOURCE -ffp-model=fast -fno-finite-math-only")
+    #build failed for Snapdragon 8Elite
+    #set(OPT_FLAG " -O3 -march=armv8.7-a -flto -D_GNU_SOURCE -ffp-model=fast -fno-finite-math-only")
+    #set(OPT_FLAG " -O3 -march=armv8.7-a+dotprod+fp16 -flto -D_GNU_SOURCE -ffp-model=fast -fno-finite-math-only")
+    #set(OPT_FLAG " -O3 -march=armv8.2-a+dotprod+fp16 -flto -D_GNU_SOURCE -ffp-model=fast -fno-finite-math-only")
+    #set(OPT_FLAG " -O3 -flto -D_GNU_SOURCE -ffp-model=fast -fno-finite-math-only")
+    message("OPT_FLAG:${OPT_FLAG}")
+
+    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   ${OPT_FLAG}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OPT_FLAG}")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} ${OPT_FLAG}")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${OPT_FLAG}")
+endif()
+
 set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES 0)
 set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_LIBRARIES 0)
 set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_OBJECTS 0)
