@@ -3469,12 +3469,13 @@ void mul_mat_q8_k_r8_q8_k(int n, const void * vx, size_t bx, const DataInfo& inf
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto d8 = vdupq_n_f32(q8.scale(iy, ibl));
-                const float * bsum = (const float *)q8.y[iy][ibl].bsums;
-                auto m8 = vdupq_n_f32(-128.f*bsum[0]);
                 acc[2*iy+0] = vfmaq_f32(acc[2*iy+0], vmulq_f32(d4l, d8), vcvtq_f32_s32(isum[2*iy+0]));
                 acc[2*iy+1] = vfmaq_f32(acc[2*iy+1], vmulq_f32(d4h, d8), vcvtq_f32_s32(isum[2*iy+1]));
-                acc[2*iy+0] = vfmaq_f32(acc[2*iy+0], d4l, m8);
-                acc[2*iy+1] = vfmaq_f32(acc[2*iy+1], d4l, m8);
+                // Why did I have this? It is plain wrong!
+                //const float * bsum = (const float *)q8.y[iy][ibl].bsums;
+                //auto m8 = vdupq_n_f32(-128.f*bsum[0]);
+                //acc[2*iy+0] = vfmaq_f32(acc[2*iy+0], d4l, m8);
+                //acc[2*iy+1] = vfmaq_f32(acc[2*iy+1], d4l, m8);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
