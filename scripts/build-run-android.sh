@@ -109,7 +109,7 @@ function check_and_download_ndk()
 
 function build_arm64
 {
-    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DLLAMA_CURL=OFF -DGGML_IQK_FLASH_ATTENTION=${ENABLE_GGML_IQK_FLASH_ATTENTION}
+    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DLLAMA_CURL=OFF -DGGML_IQK_FLASH_ATTENTION=${ENABLE_GGML_IQK_FLASH_ATTENTION} -DGGML_ARCH_FLAGS="-march=armv8.2-a+dotprod+fp16"
     cd out/android
     make -j${HOST_CPU_COUNTS}
     show_pwd
@@ -120,7 +120,7 @@ function build_arm64
 
 function build_arm64_debug
 {
-    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Debug -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DLLAMA_CURL=OFF -DGGML_IQK_FLASH_ATTENTION=${ENABLE_GGML_IQK_FLASH_ATTENTION}
+    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Debug -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DLLAMA_CURL=OFF -DGGML_IQK_FLASH_ATTENTION=${ENABLE_GGML_IQK_FLASH_ATTENTION} -DGGML_ARCH_FLAGS="-march=armv8.2-a+dotprod+fp16"
     cd out/android
     make -j${HOST_CPU_COUNTS}
     show_pwd
