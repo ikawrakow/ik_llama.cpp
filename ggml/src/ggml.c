@@ -979,7 +979,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
 #ifdef __AVX2__
         .vec_dot_type             = GGML_TYPE_Q8_2_X4,
 #else
-        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_1_X4,
 #endif
         .nrows                    = 1,
         .row_meta_size            = 0,
