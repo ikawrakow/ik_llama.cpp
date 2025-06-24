@@ -1,4 +1,5 @@
 #include "iqk_gemm_kquants.h"
+#include <cstring>
 
 #ifdef IQK_IMPLEMENT
 
@@ -2868,6 +2869,18 @@ struct DequantizerQ6K final : public BaseDequantizer<block_q6_K> {
         d = GGML_FP16_TO_FP32(x[i].d);
         return process_scales_mins_16(vld1q_s8(x[i].scales), q8, acc, i, -32.f*d);
     }
+    inline float32x4x4_t new_block(int i) {
+        d = GGML_FP16_TO_FP32(x[i].d);
+        auto vd = vdupq_n_f32(d);
+        auto scales8 = vld1q_s8(x[i].scales);
+        auto scales16_1 = vmovl_s8(vget_low_s8 (scales8));
+        auto scales16_2 = vmovl_s8(vget_high_s8(scales8));
+        return { vmulq_f32(vd, vcvtq_f32_s32(vmovl_s16(vget_low_s16 (scales16_1)))),
+                 vmulq_f32(vd, vcvtq_f32_s32(vmovl_s16(vget_high_s16(scales16_1)))),
+                 vmulq_f32(vd, vcvtq_f32_s32(vmovl_s16(vget_low_s16 (scales16_2)))),
+                 vmulq_f32(vd, vcvtq_f32_s32(vmovl_s16(vget_high_s16(scales16_2)))) };
+    }
+
     inline void prepare(int i, int j) {
 
         auto hbits = vld1q_u8_x2(x[i].qh + 32*j);
@@ -2883,6 +2896,15 @@ struct DequantizerQ6K final : public BaseDequantizer<block_q6_K> {
         bits.b2.val[2] = vorrq_u8(bits.b2.val[2], vandq_u8(vshrq_n_u8(hbits.val[0], 2), mhb));
         bits.b2.val[3] = vorrq_u8(bits.b2.val[3], vandq_u8(vshrq_n_u8(hbits.val[1], 2), mhb));
 
+    }
+
+    inline void prepare_signed(int i, int j) {
+        prepare(i, j);
+        auto m32 = vdupq_n_s8(-32);
+        for (int k = 0; k < 4; ++k) {
+            bits.b1.val[k] = vaddq_s8(bits.b1.val[k], m32);
+            bits.b2.val[k] = vaddq_s8(bits.b2.val[k], m32);
+        }
     }
 
     Q4bits bits;
@@ -3903,6 +3925,155 @@ void iqk_convert_q3_k_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int 
     }
 }
 
+void iqk_convert_q6_k_q8_0_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    int nb = n/QK_K;
+
+    const block_q6_K * x8[8];
+
+    block_q8_0_r8 * y = (block_q8_0_r8 *)vy;
+
+    float all_s[64];
+    uint32_t block[8];
+    int8x16x2_t xv[8];
+
+    auto ml  = vdupq_n_u8(0x0f);
+    auto mh  = vdupq_n_u8(0x30);
+    auto m32 = vdupq_n_s8(-32);
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) x8[k] = (const block_q6_K *)((const char *)vx + (ix + k)*bx);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                float d = GGML_FP16_TO_FP32(x8[k][i].d);
+                auto ql = x8[k][i].ql;
+                auto qh = x8[k][i].qh;
+                for (int i128 = 0; i128 < 2; ++i128) {
+                    auto lbits1 = vld1q_u8_x2(ql + 64*i128 +  0);
+                    auto lbits2 = vld1q_u8_x2(ql + 64*i128 + 32);
+                    auto hbits  = vld1q_u8_x2(qh + 32*i128);
+                    xv[4*i128+0].val[0] = vaddq_s8(m32, vorrq_u8(vandq_u8(lbits1.val[0],  ml), vandq_u8(vshlq_n_u8(hbits.val[0], 4), mh)));
+                    xv[4*i128+0].val[1] = vaddq_s8(m32, vorrq_u8(vandq_u8(lbits1.val[1],  ml), vandq_u8(vshlq_n_u8(hbits.val[1], 4), mh)));
+                    xv[4*i128+1].val[0] = vaddq_s8(m32, vorrq_u8(vandq_u8(lbits2.val[0],  ml), vandq_u8(vshlq_n_u8(hbits.val[0], 2), mh)));
+                    xv[4*i128+1].val[1] = vaddq_s8(m32, vorrq_u8(vandq_u8(lbits2.val[1],  ml), vandq_u8(vshlq_n_u8(hbits.val[1], 2), mh)));
+                    xv[4*i128+2].val[0] = vaddq_s8(m32, vorrq_u8(vshrq_n_u8(lbits1.val[0], 4), vandq_u8(hbits.val[0], mh)));
+                    xv[4*i128+2].val[1] = vaddq_s8(m32, vorrq_u8(vshrq_n_u8(lbits1.val[1], 4), vandq_u8(hbits.val[1], mh)));
+                    xv[4*i128+3].val[0] = vaddq_s8(m32, vorrq_u8(vshrq_n_u8(lbits2.val[0], 4), vandq_u8(vshrq_n_u8(hbits.val[0], 2), mh)));
+                    xv[4*i128+3].val[1] = vaddq_s8(m32, vorrq_u8(vshrq_n_u8(lbits2.val[1], 4), vandq_u8(vshrq_n_u8(hbits.val[1], 2), mh)));
+                }
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    // We have two blocks of 16 with different scales
+                    // We multiply the quants with the scales, find the max value, and convert to 8-bit quants with a single block scale.
+                    auto s1 = vdup_n_s8(x8[k][i].scales[2*ib32+0]);
+                    auto s2 = vdup_n_s8(x8[k][i].scales[2*ib32+1]);
+                    int16x8x4_t i16{vmull_s8(s1, vget_low_s8(xv[ib32].val[0])), vmull_s8(s1, vget_high_s8(xv[ib32].val[0])),
+                                    vmull_s8(s2, vget_low_s8(xv[ib32].val[1])), vmull_s8(s2, vget_high_s8(xv[ib32].val[1]))};
+                    auto imax16 = vmaxq_u16(vmaxq_u16(vabsq_s16(i16.val[0]), vabsq_s16(i16.val[1])), vmaxq_u16(vabsq_s16(i16.val[2]), vabsq_s16(i16.val[3])));
+                    auto imax = vmaxvq_u16(imax16);
+                    float max = float(imax) / 127;
+                    all_s[8*ib32+k] = d*max;
+                    if (max > 1e-9f) {
+                        auto scale = vdupq_n_f32(1/max);
+                        int32x4x4_t i32_1 = {vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_low_s16 (i16.val[0]))))),
+                                             vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_high_s16(i16.val[0]))))),
+                                             vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_low_s16 (i16.val[1]))))),
+                                             vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_high_s16(i16.val[1])))))};
+                        int32x4x4_t i32_2 = {vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_low_s16 (i16.val[2]))))),
+                                             vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_high_s16(i16.val[2]))))),
+                                             vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_low_s16 (i16.val[3]))))),
+                                             vcvtnq_s32_f32(vmulq_f32(scale, vcvtq_f32_s32(vmovl_s16(vget_high_s16(i16.val[3])))))};
+                        i16.val[0] = vcombine_s16(vmovn_s32(i32_1.val[0]), vmovn_s32(i32_1.val[1]));
+                        i16.val[1] = vcombine_s16(vmovn_s32(i32_1.val[2]), vmovn_s32(i32_1.val[3]));
+                        i16.val[2] = vcombine_s16(vmovn_s32(i32_2.val[0]), vmovn_s32(i32_2.val[1]));
+                        i16.val[3] = vcombine_s16(vmovn_s32(i32_2.val[2]), vmovn_s32(i32_2.val[3]));
+                        vst1q_s8((int8_t *)block +  0, vcombine_s8(vmovn_s16(i16.val[0]), vmovn_s16(i16.val[1])));
+                        vst1q_s8((int8_t *)block + 16, vcombine_s8(vmovn_s16(i16.val[2]), vmovn_s16(i16.val[3])));
+                    } else {
+                        std::memset(block, 0, 8*sizeof(uint32_t));
+                    }
+                    auto qs = (uint32_t *)y[ib32].qs;
+                    for (int l = 0; l < 4; ++l) {
+                        qs[8*l + k +  0] = block[l + 0];
+                        qs[8*l + k + 32] = block[l + 4];
+                    }
+                }
+            }
+            for (int ib32 = 0; ib32 < 8; ++ib32) {
+                vst1_f16((float16_t *)y[ib32].d + 0, vcvt_f16_f32(vld1q_f32(all_s + 8*ib32 + 0)));
+                vst1_f16((float16_t *)y[ib32].d + 4, vcvt_f16_f32(vld1q_f32(all_s + 8*ib32 + 4)));
+            }
+            y += QK_K/32;
+        }
+    }
+}
+
+template <int nrc_y>
+static void mul_mat_q6_k_q8_0_x4(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
+    assert(n % QK_K == 0);
+    const int nb = n / QK_K;
+
+    Q8<nrc_y, block_q8_0_x4> q8(info);
+
+    DequantizerQ6K deq(vx, bx, nrc_y);
+
+    for (int ix = 0; ix < nrc_x; ++ix) {
+
+        deq.new_row(ix);
+
+        float32x4_t acc[nrc_y];
+        for (int iy = 0; iy < nrc_y; ++iy) acc[iy] = vdupq_n_f32(0.f);
+
+        for (int i = 0; i < nb; ++i) {
+
+            auto scales = deq.new_block(i);
+
+            deq.prepare_signed(i, 0);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y = vld1q_s8_x2(q8.y[iy][2*i+0].qs);
+                auto dot1 = vpaddq_s32(ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b1.val[0], y.val[0]), ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b1.val[1], y.val[1]));
+                y = vld1q_s8_x2(q8.y[iy][2*i+0].qs+32);
+                auto dot2 = vpaddq_s32(ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b1.val[2], y.val[0]), ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b1.val[3], y.val[1]));
+                auto dot12 = vpaddq_s32(dot1, dot2); // 0, 1, 2, 3
+                y = vld1q_s8_x2(q8.y[iy][2*i+0].qs+64);
+                auto dot3 = vpaddq_s32(ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b2.val[0], y.val[0]), ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b2.val[1], y.val[1]));
+                y = vld1q_s8_x2(q8.y[iy][2*i+0].qs+96);
+                auto dot4 = vpaddq_s32(ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b2.val[2], y.val[0]), ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b2.val[3], y.val[1]));
+                auto dot34 = vpaddq_s32(dot3, dot4); // 4, 5, 6, 7
+                auto d8 = vcvt_f32_f16(vld1_f16((const float16_t *)q8.y[iy][2*i+0].d));
+                auto d8_1 = vzip1q_f32(d8, d8);
+                auto d8_2 = vzip2q_f32(d8, d8);
+                acc[iy]   = vfmaq_f32(acc[iy], vmulq_f32(scales.val[0], d8_1), vcvtq_f32_s32(dot12));
+                acc[iy]   = vfmaq_f32(acc[iy], vmulq_f32(scales.val[1], d8_2), vcvtq_f32_s32(dot34));
+            }
+
+            deq.prepare_signed(i, 1);
+            for (int iy = 0; iy < nrc_y; ++iy) {
+                auto y = vld1q_s8_x2(q8.y[iy][2*i+1].qs);
+                auto dot1 = vpaddq_s32(ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b1.val[0], y.val[0]), ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b1.val[1], y.val[1]));
+                y = vld1q_s8_x2(q8.y[iy][2*i+1].qs+32);
+                auto dot2 = vpaddq_s32(ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b1.val[2], y.val[0]), ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b1.val[3], y.val[1]));
+                auto dot12 = vpaddq_s32(dot1, dot2); // 0, 1, 2, 3
+                y = vld1q_s8_x2(q8.y[iy][2*i+1].qs+64);
+                auto dot3 = vpaddq_s32(ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b2.val[0], y.val[0]), ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b2.val[1], y.val[1]));
+                y = vld1q_s8_x2(q8.y[iy][2*i+1].qs+96);
+                auto dot4 = vpaddq_s32(ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b2.val[2], y.val[0]), ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b2.val[3], y.val[1]));
+                auto dot34 = vpaddq_s32(dot3, dot4); // 4, 5, 6, 7
+                auto d8 = vcvt_f32_f16(vld1_f16((const float16_t *)q8.y[iy][2*i+1].d));
+                auto d8_1 = vzip1q_f32(d8, d8);
+                auto d8_2 = vzip2q_f32(d8, d8);
+                acc[iy]   = vfmaq_f32(acc[iy], vmulq_f32(scales.val[2], d8_1), vcvtq_f32_s32(dot12));
+                acc[iy]   = vfmaq_f32(acc[iy], vmulq_f32(scales.val[3], d8_2), vcvtq_f32_s32(dot34));
+            }
+        }
+
+        for (int iy = 0; iy < nrc_y; ++iy) {
+            info.store(ix, iy, vaddvq_f32(acc[iy]));
+        }
+    }
+}
+
 }
 
 bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, void * vy, int nrc_x) {
@@ -3911,7 +4082,7 @@ bool iqk_convert_kquants_q8X_r8(int type, int n, const void * vx, size_t bx, voi
         case GGML_TYPE_Q3_K: iqk_convert_q3_k_q8_k_r8(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_Q4_K: iqk_convert_q4_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_Q5_K: iqk_convert_q5_k_q8_1_r8(n, vx, bx, vy, nrc_x); break;
-    //    case GGML_TYPE_Q6_K: iqk_convert_q6_k_q8_0_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_Q6_K: iqk_convert_q6_k_q8_0_r8(n, vx, bx, vy, nrc_x); break;
     //    case GGML_TYPE_IQ4_XS: iqk_convert_iq4_xs_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         default: return false;
     }
@@ -3924,6 +4095,7 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
     auto expected_type_B = etypeA == GGML_TYPE_IQ4_XS_R8 || etypeA == GGML_TYPE_Q4_K_R4 || etypeA == GGML_TYPE_Q5_K_R4 ? GGML_TYPE_Q8_K32
                          //: etypeA == GGML_TYPE_Q8_K_R8 ? GGML_TYPE_Q8_KR8
                          : etypeA == GGML_TYPE_Q8_KV || etypeA == GGML_TYPE_Q8_KV_R8 ? GGML_TYPE_Q8_KV
+                         : etypeA == GGML_TYPE_Q6_K ? GGML_TYPE_Q8_0_X4
                          : GGML_TYPE_Q8_K;
 
     if (ne00%QK_K != 0 || ggml_type(typeB) != expected_type_B) {
@@ -3946,7 +4118,7 @@ bool iqk_set_kernels_kquants(int ne00, int typeA, int typeB, std::array<mul_mat_
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_K_T, DequantizerQ5K, kernels)
             break;
         case GGML_TYPE_Q6_K:
-            IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_K_T, DequantizerQ6K, kernels)
+            IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q6_k_q8_0_x4, kernels)
             break;
         case GGML_TYPE_IQ4_XS:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_K_T, DequantizerIQ4XS, kernels)
