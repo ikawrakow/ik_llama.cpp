@@ -9,13 +9,6 @@
 typedef void (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs, float *);
 
 template<>
-struct ggml_cuda_type_traits<GGML_TYPE_IQ2_K_R4> {
-    static constexpr int qk = QK_K;
-    static constexpr int qr = QR4_XS;
-    static constexpr int qi = QI4_XS;
-};
-
-template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ3_K_R4> {
     static constexpr int qk = QK_K;
     static constexpr int qr = QR4_XS;
