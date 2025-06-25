@@ -6,30 +6,6 @@
 
 This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) with better CPU and hybrid GPU/CPU performance, new SOTA quantization types, first-class Bitnet support, better DeepSeek performance via MLA, FlashMLA, fused MoE operations and tensor overrides for hybrid GPU/CPU inference, row-interleaved quant packing, etc.
 
-## Quickstart
-
-```
-# Install build dependencies and cuda toolkit as needed
-# Clone
-git clone https://github.com/ikawrakow/ik_llama.cpp
-cd ik_llama.cpp
-
-# Configure CUDA+CPU Backend
-cmake -B ./build -DGGML_CUDA=ON -DGGML_BLAS=OFF
-
-# *or* Configure CPU Only Backend
-cmake -B ./build -DGGML_CUDA=OFF -DGGML_BLAS=OFF
-
-# Build
-cmake --build ./build --config Release -j $(nproc)
-
-# Confirm
-./build/bin/llama-server --version
-version: 3597 (68a5b604)
-```
-
-See [this discussion](https://github.com/ikawrakow/ik_llama.cpp/discussions/258) for ik-llama specific parameters and enhancements.
-
 ## Latest News
 
 ### Model Support
@@ -119,6 +95,30 @@ Cuda implementations:  `IQ4_KS_R4` and `IQ5_KS_R4` [PR 493](https://github.com/i
 * Fix imatrix calculation for MLA models [PR 411](https://github.com/ikawrakow/ik_llama.cpp/pull/411)
 * Fix new CUDA FA on Touring [PR 413](https://github.com/ikawrakow/ik_llama.cpp/pull/413)
 * Fix SER. CPU: [PR 415](https://github.com/ikawrakow/ik_llama.cpp/pull/415) CUDA: [PR 416](https://github.com/ikawrakow/ik_llama.cpp/pull/416)
+
+## Quickstart
+
+```
+# Install build dependencies and cuda toolkit as needed
+# Clone
+git clone https://github.com/ikawrakow/ik_llama.cpp
+cd ik_llama.cpp
+
+# Configure CUDA+CPU Backend
+cmake -B ./build -DGGML_CUDA=ON -DGGML_BLAS=OFF
+
+# *or* Configure CPU Only Backend
+cmake -B ./build -DGGML_CUDA=OFF -DGGML_BLAS=OFF
+
+# Build
+cmake --build ./build --config Release -j $(nproc)
+
+# Confirm
+./build/bin/llama-server --version
+version: 3597 (68a5b604)
+```
+
+See [this discussion](https://github.com/ikawrakow/ik_llama.cpp/discussions/258) for ik-llama specific parameters and enhancements, and [BUILD.md](https://github.com/ikawrakow/ik_llama.cpp/blob/main/docs/build.md) for more detailed instructions.
 
 ## Resources
 
