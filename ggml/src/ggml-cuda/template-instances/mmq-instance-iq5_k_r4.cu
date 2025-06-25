@@ -2,7 +2,7 @@
 
 #include "../mmq.cuh"
 
-template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq4_k_r4(
+template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinline__ void load_tiles_iq5_k_r4(
     const char * __restrict__ x, int * __restrict__ x_tile, const int & kbx0, const int & i_max, const int & stride) {
 
 #ifdef INT8_MMA_AVAILABLE
@@ -28,21 +28,23 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         int i4 = i/4;
         int ir = i%4;
 
-        const block_iq4_k_r4 * bxi = (const block_iq4_k_r4 *)(x + 4*i4*stride) + kbx0;
+        const block_iq5_k_r4 * bxi = (const block_iq5_k_r4 *)(x + 4*i4*stride) + kbx0;
 
         const float d = __half2float(bxi->d[ir]);
+
+        int qh = get_int_b4(bxi->qh, 4*kqsx + ir);
 
     #pragma unroll
         for (int l = 0; l < 2; ++l) {
 
-            auto values_l = iq4k_values + (((bxi->extra[ir+4*l] >> kqsx) & 1) << 4);
+            auto values_l = iq5nl_values + (((bxi->extra[ir+4*l] >> kqsx) & 1) << 5);
 
             const int ql1 = get_int_b4(bxi->qs, 16*kqsx + ir + 4*l + 0);
             const int ql2 = get_int_b4(bxi->qs, 16*kqsx + ir + 4*l + 8);
-            aux32[0] = (ql1 >> 0) & 0x0f0f0f0f;
-            aux32[1] = (ql1 >> 4) & 0x0f0f0f0f;
-            aux32[2] = (ql2 >> 0) & 0x0f0f0f0f;
-            aux32[3] = (ql2 >> 4) & 0x0f0f0f0f;
+            aux32[0] = ((ql1 >> 0) & 0x0f0f0f0f) | ((qh << 4) & 0x10101010);
+            aux32[1] = ((ql1 >> 4) & 0x0f0f0f0f) | ((qh << 3) & 0x10101010);
+            aux32[2] = ((ql2 >> 0) & 0x0f0f0f0f) | ((qh >> 0) & 0x10101010);
+            aux32[3] = ((ql2 >> 4) & 0x0f0f0f0f) | ((qh >> 1) & 0x10101010);
 
             const char4 val0  = make_char4(values_l[aux8[ 0]], values_l[aux8[ 1]], values_l[aux8[ 2]], values_l[aux8[ 3]]);
             const char4 val1  = make_char4(values_l[aux8[ 4]], values_l[aux8[ 5]], values_l[aux8[ 6]], values_l[aux8[ 7]]);
@@ -61,6 +63,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 3] = *(const int *)&val3;
 #endif // INT8_MMA_AVAILABLE
 
+            qh >>= 2;
         }
 
         int is = 8*kqsx + ir;
@@ -79,10 +82,10 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 }
 
 template <int mmq_x, int mmq_y, int nwarps, bool need_check>
-struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ4_K_R4> {
-    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq4_k_r4<mmq_y, nwarps, need_check>;
+struct mmq_type_traits<mmq_x, mmq_y, nwarps, need_check, GGML_TYPE_IQ5_K_R4> {
+    static constexpr load_tiles_mmq_t load_tiles   = load_tiles_iq5_k_r4<mmq_y, nwarps, need_check>;
     static constexpr vec_dot_mmq_t    vec_dot_mma  = vec_dot_q8_0_16_q8_1_mma<mmq_x, mmq_y, nwarps>;
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_16_q8_1_dp4a<mmq_x, mmq_y, nwarps>;
 };
 
-DECL_MMQ_CASE(GGML_TYPE_IQ4_K_R4);
+DECL_MMQ_CASE(GGML_TYPE_IQ5_K_R4);
