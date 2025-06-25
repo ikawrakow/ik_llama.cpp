@@ -13,12 +13,16 @@ This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp)
 # Clone
 git clone https://github.com/ikawrakow/ik_llama.cpp
 cd ik_llama.cpp
+
 # Configure CUDA+CPU Backend
 cmake -B ./build -DGGML_CUDA=ON -DGGML_BLAS=OFF
+
 # *or* Configure CPU Only Backend
 cmake -B ./build -DGGML_CUDA=OFF -DGGML_BLAS=OFF
+
 # Build
 cmake --build ./build --config Release -j $(nproc)
+
 # Confirm
 ./build/bin/llama-server --version
 version: 3597 (68a5b604)
