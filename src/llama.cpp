@@ -1615,6 +1615,7 @@ enum llm_chat_template {
     LLM_CHAT_TEMPLATE_MISTRAL_V7,
     LLM_CHAT_TEMPLATE_PHI_3,
     LLM_CHAT_TEMPLATE_FALCON_3,
+    LLM_CHAT_TEMPLATE_FALCON_E,
     LLM_CHAT_TEMPLATE_ZEPHYR,
     LLM_CHAT_TEMPLATE_MONARCH,
     LLM_CHAT_TEMPLATE_GEMMA,
@@ -1652,6 +1653,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "mistral-v7",        LLM_CHAT_TEMPLATE_MISTRAL_V7        },
     { "phi3",              LLM_CHAT_TEMPLATE_PHI_3             },
     { "falcon3",           LLM_CHAT_TEMPLATE_FALCON_3          },
+    { "falcon_e",          LLM_CHAT_TEMPLATE_FALCON_E          },
     { "zephyr",            LLM_CHAT_TEMPLATE_ZEPHYR            },
     { "monarch",           LLM_CHAT_TEMPLATE_MONARCH           },
     { "gemma",             LLM_CHAT_TEMPLATE_GEMMA             },
@@ -6191,8 +6193,7 @@ static void llm_load_vocab(
             } else if (
                     tokenizer_pre == "llama3"   ||
                     tokenizer_pre == "llama-v3" ||
-                    tokenizer_pre == "llama-bpe"||
-                    tokenizer_pre == "falcon3") {
+                    tokenizer_pre == "llama-bpe") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_LLAMA3;
                 vocab.tokenizer_ignore_merges = true;
                 vocab.tokenizer_add_bos = true;
@@ -6211,6 +6212,10 @@ static void llm_load_vocab(
             } else if (
                     tokenizer_pre == "falcon") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_FALCON;
+            } else if (tokenizer_pre == "falcon3") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_FALCON_3;
+            } else if (tokenizer_pre == "falcon_e") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_FALCON_E;
             } else if (
                     tokenizer_pre == "mpt") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_MPT;
@@ -22672,6 +22677,8 @@ static llm_chat_template llama_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_PHI_3;
     } else if (tmpl_contains("<|assistant|>") && tmpl_contains("<|user|>")) {
         return LLM_CHAT_TEMPLATE_FALCON_3;
+    } else if (tmpl == "falcon_e" && (tmpl_contains("assistant") && tmpl_contains("user"))) {
+        return LLM_CHAT_TEMPLATE_FALCON_E;
     } else if (tmpl_contains("<|user|>") && tmpl_contains("<|endoftext|>")) {
         return LLM_CHAT_TEMPLATE_ZEPHYR;
     } else if (tmpl_contains("bos_token + message['role']")) {
@@ -22837,6 +22844,15 @@ static int32_t llama_chat_apply_template_internal(
         }
         if (add_ass) {
             ss << "<|assistant|>\n";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_FALCON_E) {
+        // Falcon Edge
+        for (auto message : chat) {
+            std::string role(message->role);
+            ss << role << message->content << "\n";
+        }
+        if (add_ass) {
+            ss << "assistant\n";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_ZEPHYR) {
         // zephyr template
