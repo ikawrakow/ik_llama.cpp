@@ -1405,6 +1405,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--sql-save-file") {
+        CHECK_ARG
+        params.sql_save_file = argv[i];
+        return true;
+    }
     if (arg == "--chat-template") {
         CHECK_ARG
         if (!llama_chat_verify_template(argv[i])) {
