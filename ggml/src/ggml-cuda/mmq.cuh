@@ -2789,7 +2789,6 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         for (int j = 0; j < 4; ++j) {
             const int aux_q4 = get_int_b4(bxi->qs, 4*kqsx+j);
             const int2 v = get_int_from_table_16(aux_q4, values);
-            const int k0 = 8 * (threadIdx.x / 4) + threadIdx.x % 4;
 #ifdef INT8_MMA_AVAILABLE
             x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 8*kqsx + j + 0] = v.x;
             x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 8*kqsx + j + 4] = v.y;
