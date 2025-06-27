@@ -37,10 +37,6 @@ struct DatabaseHandle {
     sqlite::database db;
 
     DatabaseHandle(const std::string& path) : db(path) {
-
-        sqlite3_enable_load_extension(db.connection().get(), 1);
-        db << "SELECT load_extension('/home/saood06/mikupadStuff/libsqlite_zstd.so')";
-
         db << "CREATE TABLE IF NOT EXISTS sessions (key TEXT PRIMARY KEY, data TEXT)";
         db << "CREATE TABLE IF NOT EXISTS templates (key TEXT PRIMARY KEY, data TEXT)";
         db << "CREATE TABLE IF NOT EXISTS names (key TEXT PRIMARY KEY, data TEXT)";
@@ -2937,7 +2933,23 @@ int main(int argc, char ** argv) {
     ctx_server.slot_prompt_similarity = params.slot_prompt_similarity;
 
     auto db_handle = std::make_shared<DatabaseHandle>(params.sql_save_file);
-
+    if (!params.sqlite_zstd_ext_file.empty()) {
+        auto* conn = db_handle->db.connection().get();
+        sqlite3_enable_load_extension(conn, 1);
+        char* errmsg = nullptr;
+        const int rc = sqlite3_load_extension(
+            conn,
+            params.sqlite_zstd_ext_file.c_str(),
+            nullptr,
+            &errmsg
+        );
+        if(rc != SQLITE_OK) {
+            const std::string err = errmsg ? errmsg : "Unknown extension error";
+            sqlite3_free(errmsg);
+            LOG_WARNING("Failed to load extension", {{"err", err}});
+        }
+        sqlite3_enable_load_extension(conn, 0);
+    }
     // load the model
     if (!ctx_server.load_model(params)) {
         state.store(SERVER_STATE_ERROR);

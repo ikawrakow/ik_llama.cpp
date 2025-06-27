@@ -243,6 +243,7 @@ struct gpt_params {
 
     std::string slot_save_path;
     std::string sql_save_file;
+    std::string sqlite_zstd_ext_file;
 
     float slot_prompt_similarity = 0.5f;
 
