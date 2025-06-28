@@ -3943,9 +3943,9 @@ int main(int argc, char ** argv) {
         svr->Post("/slots/:id_slot",  handle_slots_action);
         svr->Get ("/list",            list_saved_prompts);
     }
+    svr->Get ("/version", handle_version);
     if (!params.sql_save_file.empty()) {
         // these endpoints rely on sql_save_file existing
-        svr->Get ("/version", handle_version);
         svr->Post("/load", handle_load);
         svr->Post("/save", handle_save);
         svr->Post("/rename", handle_rename);
