@@ -4076,9 +4076,12 @@ class ServerDBAdapter {
 		});
 		if (!res.ok)
 			throw new Error("Not a mikupad server or version mismatch.");
-		const { version } = await res.json();
-		if (version !== 2)
+		const { version, features } = await res.json();
+		if (version !== 4)
 			throw new Error("Mikupad server version mismatch.");
+		if (!features?.sql)
+                        throw new Error("Server does not support SQL methods which are required");
+
 	}
 
 	async openDatabase() {

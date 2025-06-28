@@ -2933,6 +2933,7 @@ int main(int argc, char ** argv) {
     ctx_server.slot_prompt_similarity = params.slot_prompt_similarity;
 
     auto db_handle = std::make_shared<DatabaseHandle>(params.sql_save_file);
+    bool sqlite_extension_loaded = false;
     if (!params.sqlite_zstd_ext_file.empty()) {
         auto* conn = db_handle->db.connection().get();
         sqlite3_enable_load_extension(conn, 1);
@@ -2947,6 +2948,9 @@ int main(int argc, char ** argv) {
             const std::string err = errmsg ? errmsg : "Unknown extension error";
             sqlite3_free(errmsg);
             LOG_WARNING("Failed to load extension", {{"err", err}});
+        }
+	else {
+            sqlite_extension_loaded = true;
         }
         sqlite3_enable_load_extension(conn, 0);
     }
@@ -3778,8 +3782,12 @@ int main(int argc, char ** argv) {
     };
 
 
-    const auto handle_version = [](const httplib::Request&, httplib::Response& res) {
-        res.set_content(json{{"version", 2}}.dump(), "application/json");
+    const auto handle_version = [&params, sqlite_extension_loaded](const httplib::Request&, httplib::Response& res) {
+        res.set_content(
+            json{{"version", 4},
+            {"features", {{"sql", !params.sql_save_file.empty()}, {"zstd_compression", sqlite_extension_loaded}}}}.dump(),
+            "application/json"
+        );
     };
 
     auto db_handler = [db_handle](auto func) {
@@ -3945,6 +3953,9 @@ int main(int argc, char ** argv) {
         svr->Post("/sessions", handle_sessions_post);
         svr->Get ("/sessions", handle_sessions_get);
         svr->Post("/delete", handle_delete);
+        if (sqlite_extension_loaded) {
+            //TODO: add endpoints that do zstd_enable_transparent, zstd_incremental_maintenance, and maybe VACUUM
+	}
     }
 
     //
