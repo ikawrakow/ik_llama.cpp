@@ -4347,8 +4347,16 @@ class SessionStorage extends AbstractStorage {
 
 	async init() {
 		const db = await this.openDatabase();
-		this.nextId = (await this.loadFromDatabase(db, 'nextSessionId')) || 0;
-		this.selectedSession = (await this.loadFromDatabase(db, 'selectedSessionId')) || 0;
+		try {
+			this.nextId = (await this.loadFromDatabase(db, 'nextSessionId'))
+		} catch {
+			this.nextId = 0;
+		}
+		try {
+                        this.selectedSession = (await this.loadFromDatabase(db, 'selectedSessionId'))
+                } catch {
+                        this.selectedSession = 0;
+                }
 		await this.loadSessions(db);
 		this.startSaveTimer(async (sessionId) => await this.saveSessionToDB(sessionId));
 	}
