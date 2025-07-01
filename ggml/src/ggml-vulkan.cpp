@@ -637,6 +637,7 @@ struct vk_flash_attn_push_constants {
     uint32_t nev2;
     uint32_t nev3;
     uint32_t nem1;
+    uint32_t nem2;
 
     uint32_t nb01;
     uint32_t nb02;
@@ -647,7 +648,6 @@ struct vk_flash_attn_push_constants {
     uint32_t nb21;
     uint32_t nb22;
     uint32_t nb23;
-    uint32_t nb31;
 
     float scale;
     float max_bias;
@@ -662,6 +662,7 @@ struct vk_flash_attn_push_constants {
     uint32_t split_kv;
     uint32_t k_num;
 };
+static_assert(sizeof(vk_flash_attn_push_constants) <= 128, "sizeof(vk_flash_attn_push_constants) must be <= 128");
 
 struct vk_op_push_constants {
     uint32_t KX;
@@ -760,6 +761,14 @@ struct vk_op_rope_push_constants {
 struct vk_op_soft_max_push_constants {
     uint32_t KX;
     uint32_t KY;
+    uint32_t ne00;
+    uint32_t ne01;
+    uint32_t ne02;
+    uint32_t ne12;
+    uint32_t ne13;
+    uint32_t nb11;
+    uint32_t nb12;
+    uint32_t nb13;
     float scale;
     float max_bias;
     float m0;
@@ -6060,7 +6069,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     GGML_TENSOR_LOCALS(size_t,  nb,  dst, nb)
 
     const uint32_t nem1 = mask ? mask->ne[1] : 0;
-    const uint32_t nbm1 = mask ? mask->nb[1] : 0;
+    const uint32_t nem2 = mask ? mask->ne[2] : 0;
 
     const uint32_t HSK = nek0;
     const uint32_t HSV = nev0;
@@ -6303,11 +6312,10 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                               (uint32_t)neq2, (uint32_t)neq3,
                                               (uint32_t)nek2, (uint32_t)nek3,
                                               (uint32_t)nev2, (uint32_t)nev3,
-                                              nem1,
+                                              nem1, nem2,
                                               q_stride, (uint32_t)nbq2, (uint32_t)nbq3,
                                               k_stride, (uint32_t)nbk2, (uint32_t)nbk3,
                                               v_stride, (uint32_t)nbv2, (uint32_t)nbv3,
-                                              nbm1,
                                               scale, max_bias, logit_softcap,
                                               mask != nullptr, n_head_log2, m0, m1,
                                               gqa_ratio, split_kv, split_k };
@@ -6336,7 +6344,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                         vk_subbuffer{ctx->prealloc_split_k, 0, VK_WHOLE_SIZE},
                                         vk_subbuffer{d_D, d_buf_offset, VK_WHOLE_SIZE},
                                     },
-                                    pc2.size() * uint32_t{sizeof(uint32_t)}, pc2.data(), { (uint32_t)ne1, 1, 1 });
+                                    pc2.size() * uint32_t{sizeof(uint32_t)}, pc2.data(), { (uint32_t)ne1, 1, (uint32_t)ne3 });
     } else {
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
                                     {
@@ -7351,7 +7359,13 @@ static void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, 
     const uint32_t nrows_x = (uint32_t)ggml_nrows(src0);
     const uint32_t nrows_y = (uint32_t)src0->ne[1];
 
-    const uint32_t n_head_kv   = nrows_x/nrows_y;
+    const uint32_t ne12 = src1 ? (uint32_t)(src1->ne[2]) : 0u;
+    const uint32_t ne13 = src1 ? (uint32_t)(src1->ne[3]) : 0u;
+    const uint32_t nb11 = src1 ? (uint32_t)(src1->nb[1] / src1->nb[0]) : 0u;
+    const uint32_t nb12 = src1 ? (uint32_t)(src1->nb[2] / src1->nb[0]) : 0u;
+    const uint32_t nb13 = src1 ? (uint32_t)(src1->nb[3] / src1->nb[0]) : 0u;
+
+    const uint32_t n_head_kv   = src0->ne[2];
     const uint32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head_kv));
 
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
@@ -7360,6 +7374,9 @@ static void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, 
     ggml_vk_op_f32<vk_op_soft_max_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_SOFT_MAX, {
         ncols,
         src1 != nullptr ? nrows_y : (uint32_t)0,
+        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],
+        ne12, ne13,
+        nb11, nb12, nb13,
         scale, max_bias,
         m0, m1,
         n_head_log2,

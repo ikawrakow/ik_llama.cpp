@@ -100,6 +100,10 @@ void main() {
     uint32_t k_offset = (ik2*p.nb12 + ik3*p.nb13) / 2;
     uint32_t v_offset = (iv2*p.nb22 + iv3*p.nb23) / 2;
 #endif
+    uint32_t m_offset = 0;
+    if (p.nem2 != 1) {
+        m_offset = (iq3 % p.nem2) * p.nem1 * KV;
+    }
 
     [[dont_unroll]]
     for (uint32_t j = start_j; j < end_j; ++j) {
@@ -151,7 +155,7 @@ void main() {
                 uint32_t c = (idx + tid) % Bc;
                 uint32_t r = (idx + tid) / Bc;
                 if (idx + tid < Bc * Br) {
-                    masksh[c][r] = float(data_m[(i * Br + r) * m_stride + (j * Bc + c)]);
+                    masksh[c][r] = float(data_m[m_offset + (i * Br + r) * m_stride + (j * Bc + c)]);
                 }
             }
             barrier();
