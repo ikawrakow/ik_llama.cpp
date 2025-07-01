@@ -6436,8 +6436,6 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         {
             const int mode = ((const int32_t *) dst->op_params)[2];
             const bool is_neox = mode & 2;
-            const bool is_mrope = mode & 8;
-            const bool is_vision = mode == 24;
 
             if (is_neox) {
                 if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
@@ -6445,20 +6443,6 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 }
                 if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
                     return ctx->device->pipeline_rope_neox_f16;
-                }
-            } else if (is_mrope && !is_vision) {
-                if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-                    return ctx->device->pipeline_rope_multi_f32;
-                }
-                if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
-                    return ctx->device->pipeline_rope_multi_f16;
-                }
-            } else if (is_vision) {
-                if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-                    return ctx->device->pipeline_rope_vision_f32;
-                }
-                if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
-                    return ctx->device->pipeline_rope_vision_f16;
                 }
             } else {
                 if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {

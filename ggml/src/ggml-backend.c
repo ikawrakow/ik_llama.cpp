@@ -1016,6 +1016,7 @@ static struct ggml_backend_buffer_i ggml_backend_multi_buffer_context_interface(
         /* .free_buffer     = */ ggml_backend_multi_buffer_free_buffer,
         /* .get_base        = */ NULL,
         /* .init_tensor     = */ NULL,
+        /* .memset_tensor   = */ NULL,
         /* .set_tensor      = */ NULL,
         /* .get_tensor      = */ NULL,
         /* .cpy_tensor      = */ NULL,

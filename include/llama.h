@@ -119,8 +119,6 @@ extern "C" {
         LLAMA_ROPE_TYPE_NORM =  0,
         LLAMA_ROPE_TYPE_NEOX = 2,
         LLAMA_ROPE_TYPE_GLM  =  4,
-        LLAMA_ROPE_TYPE_MROPE = 8,
-        LLAMA_ROPE_TYPE_VISION = 24,
     };
 
     enum llama_token_type { //TODO: remove, required until per token attributes are available from GGUF file
