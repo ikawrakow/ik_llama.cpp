@@ -1,4 +1,5 @@
 #include "iqk_gemm_iqk_quants.h"
+#include <cstring>
 
 #ifdef IQK_IMPLEMENT
 
@@ -3240,6 +3241,58 @@ struct DequantizerIQ3K final : public BaseDequantizer<block_iq3_k> {
 
 };
 
+struct DequantizerIQ3KS final : public BaseDequantizer<block_iq3_ks, true, true> {
+
+    DequantizerIQ3KS(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc), values(load_values()) {}
+
+    constexpr static int num_blocks() { return 8; }
+    constexpr static bool should_scale_quants() { return false; }
+
+    template <typename Q8>
+    inline int32x4x2_t new_block(int i, const Q8& q8, float32x4_t * acc) {
+        (void)q8;
+        (void)acc;
+        uint32_t aux32; std::memcpy(&aux32, x[i].scales, 4);
+        auto scl8 = vand_s8(vreinterpret_s8_u32(uint32x2_t{aux32, aux32 >> 4}), vdup_n_s8(0xf));
+        auto sch8 = vdup_n_u8(x[i].extra & 0xff);
+        sch8 = vand_u8(vceq_u8(vand_u8(sch8, shmask), shmask), vdup_n_u8(16));
+        scl8 = vsub_s8(vadd_s8(scl8, vreinterpret_s8_u8(sch8)), vdup_n_s8(16));
+        auto scales16 = vmovl_s8(scl8);
+        int32x4x2_t scales = {vmovl_s16(vget_low_s16(scales16)), vmovl_s16(vget_high_s16(scales16))};
+        return scales;
+    }
+    inline void prepare(int i, int j) {
+        bits.prepare(x[i].qs+32*j);
+        if (j == 0) {
+            hbits = vld1q_u8_x2(x[i].qh);
+        }
+        else {
+            hbits.val[0] = vshrq_n_u8(hbits.val[0], 4);
+            hbits.val[1] = vshrq_n_u8(hbits.val[1], 4);
+        }
+        uint8_t extra = x[i].extra >> (8 + 4*j);
+        bits.b1.val[0] = vqtbl1q_s8(values.val[extra & 1], vorrq_u8(bits.b1.val[0], vandq_u8(vshlq_n_u8(hbits.val[0], 2), hmask)));
+        bits.b1.val[1] = vqtbl1q_s8(values.val[extra & 1], vorrq_u8(bits.b1.val[1], vandq_u8(vshlq_n_u8(hbits.val[1], 2), hmask))); extra >>= 1;
+        bits.b1.val[2] = vqtbl1q_s8(values.val[extra & 1], vorrq_u8(bits.b1.val[2], vandq_u8(vshlq_n_u8(hbits.val[0], 1), hmask)));
+        bits.b1.val[3] = vqtbl1q_s8(values.val[extra & 1], vorrq_u8(bits.b1.val[3], vandq_u8(vshlq_n_u8(hbits.val[1], 1), hmask))); extra >>= 1;
+        bits.b2.val[0] = vqtbl1q_s8(values.val[extra & 1], vorrq_u8(bits.b2.val[0], vandq_u8(hbits.val[0], hmask)));
+        bits.b2.val[1] = vqtbl1q_s8(values.val[extra & 1], vorrq_u8(bits.b2.val[1], vandq_u8(hbits.val[1], hmask))); extra >>= 1;
+        bits.b2.val[2] = vqtbl1q_s8(values.val[extra & 1], vorrq_u8(bits.b2.val[2], vandq_u8(vshrq_n_u8(hbits.val[0], 1), hmask)));
+        bits.b2.val[3] = vqtbl1q_s8(values.val[extra & 1], vorrq_u8(bits.b2.val[3], vandq_u8(vshrq_n_u8(hbits.val[1], 1), hmask)));
+    }
+    static int8x16x2_t load_values() {
+        auto v1 = vld1_s8(iq3nl_values + 0);
+        auto v2 = vld1_s8(iq3nl_values + 8);
+        return { vcombine_s8(v1, v1), vcombine_s8(v2, v2) };
+    }
+
+    Q2bits bits;
+    uint8x16x2_t hbits;
+    const int8x16x2_t values;
+    const uint8x16_t hmask = vdupq_n_u8(4);
+    const uint8x8_t shmask = vreinterpret_u8_u64(vdup_n_u64(0x8040201008040201));
+};
+
 struct DequantizerIQ4KS final : public BaseDequantizer<block_iq4_ks, true> {
 
     DequantizerIQ4KS(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc), values(vld1q_s8_x2(iq4k_values)) {}
@@ -4590,6 +4643,9 @@ bool iqk_set_kernels_iqk_quants(int ne00, int typeA, int typeB, std::array<mul_m
             break;
         case GGML_TYPE_IQ2_K:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_K_T, DequantizerIQ2K, kernels);
+            break;
+        case GGML_TYPE_IQ3_KS:
+            IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_K_T, DequantizerIQ3KS, kernels);
             break;
         case GGML_TYPE_IQ3_K:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_K_q8_K_T, DequantizerIQ3K, kernels);
