@@ -422,6 +422,7 @@ bool iqk_convert_repack(int typeA, int n, const void * vx, size_t bx, void * vy,
             return iqk_convert_iquants_q80_r8(typeA, n, vx, bx, vy, nrc_x);
         case GGML_TYPE_IQ2_KS:
         case GGML_TYPE_IQ2_K:
+        case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ4_KSS:
         case GGML_TYPE_IQ4_KS:
@@ -824,6 +825,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_IQ3_XXS_R4:
         case GGML_TYPE_IQ3_S_R4:
             return iqk_set_kernels_iquants(ne00, typeA, typeB, mm.funcs, mm.func16);
+        case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ5_KS:
         case GGML_TYPE_IQ4_KSS:
