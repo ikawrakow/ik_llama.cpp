@@ -266,7 +266,7 @@ GGML_CALL void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void *
 #endif
 }
 
-GGML_CALL void ggml_backend_tensor_memset(struct ggml_tensor* tensor, uint8_t value, size_t offset, size_t size) {
+static void ggml_backend_tensor_memset(struct ggml_tensor* tensor, uint8_t value, size_t offset, size_t size) {
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
     if (size == 0) {
