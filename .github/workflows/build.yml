@@ -627,7 +627,7 @@ jobs:
           ./build-xcframework.sh
 
   windows-msys2:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     strategy:
       fail-fast: false
@@ -677,7 +677,7 @@ jobs:
             cmake --build build --config ${{ matrix.build }} -j $(nproc)
 
   windows-latest-cmake:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     env:
       OPENBLAS_VERSION: 0.3.23
@@ -840,7 +840,7 @@ jobs:
             cmake --build build
 
   windows-2019-cmake-cuda:
-    runs-on: windows-2019
+    runs-on: windows-2022
 
     strategy:
       matrix:
@@ -891,7 +891,7 @@ jobs:
           cmake --build build --config Release
 
   windows-latest-cmake-sycl:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     defaults:
       run:
@@ -925,7 +925,7 @@ jobs:
 
   windows-latest-cmake-hip:
     if: ${{ github.event.inputs.create_release != 'true' }}
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - name: Clone
