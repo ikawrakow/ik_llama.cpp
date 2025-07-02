@@ -429,6 +429,7 @@ extern "C" {
         GGML_TYPE_IQ2_KT  = 153,
         GGML_TYPE_IQ3_KT  = 154,
         GGML_TYPE_IQ4_KT  = 155,
+        GGML_TYPE_IQ3_KS  = 156,
 
         GGML_TYPE_Q4_0_R8   = 202,
         GGML_TYPE_Q5_0_R4   = 206,
@@ -521,6 +522,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ2_KT  = 142, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ3_KT  = 143, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_KT  = 144, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ3_KS  = 145, // except 1d tensors
                                          //
         GGML_FTYPE_MOSTLY_Q4_0_R8   = 202, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q8_0_R8   = 207, // except 1d tensors
@@ -628,7 +630,6 @@ extern "C" {
         GGML_OP_WIN_UNPART,
         GGML_OP_GET_REL_POS,
         GGML_OP_ADD_REL_POS,
-
         GGML_OP_UNARY,
 
         GGML_OP_MAP_UNARY,
@@ -644,7 +645,6 @@ extern "C" {
 
         GGML_OP_CROSS_ENTROPY_LOSS,
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
-
         GGML_OP_COUNT,
     };
 
@@ -1129,6 +1129,7 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_argmax(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+
 
     // if a is the same shape as b, and a is not parameter, return a
     // otherwise, return a new tensor: repeat(a) to fit in b

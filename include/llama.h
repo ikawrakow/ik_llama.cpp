@@ -117,7 +117,7 @@ extern "C" {
     enum llama_rope_type {
         LLAMA_ROPE_TYPE_NONE = -1,
         LLAMA_ROPE_TYPE_NORM =  0,
-        LLAMA_ROPE_TYPE_NEOX =  2,
+        LLAMA_ROPE_TYPE_NEOX = 2,
         LLAMA_ROPE_TYPE_GLM  =  4,
     };
 
@@ -201,6 +201,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ2_KT        = 151, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ3_KT        = 152, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KT        = 153, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ3_KS        = 154, // except 1d tensors
                                                 //
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
