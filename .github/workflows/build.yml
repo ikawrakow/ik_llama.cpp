@@ -627,7 +627,7 @@ jobs:
           ./build-xcframework.sh
 
   windows-msys2:
-    runs-on: windows-2022
+    runs-on: windows-2025
 
     strategy:
       fail-fast: false
@@ -677,7 +677,7 @@ jobs:
             cmake --build build --config ${{ matrix.build }} -j $(nproc)
 
   windows-latest-cmake:
-    runs-on: windows-2022
+    runs-on: windows-2025
 
     env:
       OPENBLAS_VERSION: 0.3.23
