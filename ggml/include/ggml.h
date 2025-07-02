@@ -628,7 +628,6 @@ extern "C" {
         GGML_OP_WIN_UNPART,
         GGML_OP_GET_REL_POS,
         GGML_OP_ADD_REL_POS,
-
         GGML_OP_UNARY,
 
         GGML_OP_MAP_UNARY,
@@ -644,7 +643,6 @@ extern "C" {
 
         GGML_OP_CROSS_ENTROPY_LOSS,
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
-
         GGML_OP_COUNT,
     };
 
@@ -1129,6 +1127,7 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_argmax(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+
 
     // if a is the same shape as b, and a is not parameter, return a
     // otherwise, return a new tensor: repeat(a) to fit in b
