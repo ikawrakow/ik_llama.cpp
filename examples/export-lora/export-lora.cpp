@@ -251,8 +251,8 @@ struct lora_merge_ctx {
             fout.write((const char *)data.data(), data.size());
         }
 
-        printf("%s : merged %ld tensors with lora adapters\n", __func__, n_merged);
-        printf("%s : wrote %ld tensors to output file\n", __func__, base_to_out_tensors.size());
+        printf("%s : merged %zu tensors with lora adapters\n", __func__, n_merged);
+        printf("%s : wrote %zu tensors to output file\n", __func__, base_to_out_tensors.size());
     }
 
     void copy_tensor(struct ggml_tensor * base) {
@@ -334,7 +334,7 @@ struct lora_merge_ctx {
                 const float scale = alpha ? adapters[i]->scale * alpha / rank : adapters[i]->scale;
                 delta = ggml_scale(ctx0, delta, scale);
                 cur = ggml_add(ctx0, delta, cur);
-                printf("%s :   + merging from adapter[%ld] type=%s\n", __func__, i, ggml_type_name(inp_a[i]->type));
+                printf("%s :   + merging from adapter[%zu] type=%s\n", __func__, i, ggml_type_name(inp_a[i]->type));
                 printf("%s :     input_scale=%f calculated_scale=%f rank=%d\n", __func__, adapters[i]->scale, scale, (int) inp_b[i]->ne[0]);
             }
             cur = ggml_cast(ctx0, cur, out->type);
