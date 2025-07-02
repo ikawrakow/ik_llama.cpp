@@ -9473,9 +9473,6 @@ GGML_CALL static bool ggml_backend_vk_supports_op(ggml_backend_t backend, const 
         case GGML_OP_FLASH_ATTN_EXT:
             {
                 ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
-                if (!ctx->device->coopmat2) {
-                    return false;
-                }
                 bool coopmat2 = ctx->device->coopmat2;
                 switch (op->src[0]->ne[0]) {
                 case 64:
