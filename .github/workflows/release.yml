@@ -266,7 +266,7 @@ jobs:
 
   windows-cpu:
     if: false
-    runs-on: windows-latest
+    runs-on: windows-2025
 
     strategy:
       matrix:
@@ -329,7 +329,7 @@ jobs:
 
   windows:
     if: false
-    runs-on: windows-latest
+    runs-on: windows-2025
 
     env:
       OPENBLAS_VERSION: 0.3.23
@@ -411,7 +411,7 @@ jobs:
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
-    runs-on: windows-2019
+    runs-on: windows-2022
 
     strategy:
       matrix:
@@ -478,7 +478,7 @@ jobs:
 
   windows-sycl:
     if: false
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     defaults:
       run:
@@ -551,7 +551,7 @@ jobs:
 
   windows-hip:
     if: false
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     strategy:
       matrix:
