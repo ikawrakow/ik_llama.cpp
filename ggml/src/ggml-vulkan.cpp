@@ -99,7 +99,6 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #else
 #define VK_LOG_DEBUG(msg) ((void) 0)
 #endif // GGML_VULKAN_DEBUG
-
 #define GGML_DEBUG 0
 #if (GGML_DEBUG >= 1)
 #define GGML_LOG_DEBUG(...) printf(__VA_ARGS__)
@@ -3554,12 +3553,12 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     std::string matrix_cores = coopmat2_support ? "NV_coopmat2" : coopmat_support ? "KHR_coopmat" : "none";
 
     std::string device_name = props2.properties.deviceName.data();
-    GGML_LOG_DEBUG("ggml_vulkan: %zu = %s (%s) | uma: %d | fp16: %d | warp size: %zu | shared memory: %d | int dot: %d | matrix cores: %s\n",
+    GGML_LOG_INFO("ggml_vulkan: %zu = %s (%s) | uma: %d | fp16: %d | warp size: %zu | shared memory: %d | int dot: %d | matrix cores: %s\n",
               idx, device_name.c_str(), driver_props.driverName.data(), uma, fp16, subgroup_size,
               props2.properties.limits.maxComputeSharedMemorySize, integer_dot_product, matrix_cores.c_str());
 
     if (props2.properties.deviceType == vk::PhysicalDeviceType::eCpu) {
-        GGML_LOG_DEBUG("ggml_vulkan: Warning: Device type is CPU. This is probably not the device you want.\n");
+        GGML_LOG_INFO("ggml_vulkan: Warning: Device type is CPU. This is probably not the device you want.\n");
     }
 }
 
