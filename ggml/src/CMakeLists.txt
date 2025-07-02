@@ -643,8 +643,6 @@ if (GGML_RPC)
     set(GGML_SOURCES_RPC ggml-rpc.cpp)
 endif()
 
-find_package(Vulkan COMPONENTS glslc REQUIRED)
-
 function(detect_host_compiler)
     if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
         find_program(HOST_C_COMPILER NAMES cl gcc clang NO_CMAKE_FIND_ROOT_PATH)
