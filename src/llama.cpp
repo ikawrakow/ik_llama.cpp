@@ -9595,7 +9595,12 @@ static struct ggml_tensor * llm_build_norm(
          const llm_build_cb & cb,
                         int   il, float scale_eps = 1) {
 
-    if (false && type == LLM_NORM_RMS && mw) {
+#ifdef GGML_USE_VULKAN
+    constexpr bool use_fused_rms_norm = false;
+#else
+    constexpr bool use_fused_rms_norm = true;
+#endif
+    if (use_fused_rms_norm && type == LLM_NORM_RMS && mw) {
         cur = ggml_fused_rms_norm(ctx, cur, mw, scale_eps * hparams.f_norm_rms_eps);
         if (mb) {
             cb(cur, "fused_norm", il);
@@ -9686,7 +9691,13 @@ static struct ggml_tensor * llm_build_ffn(
         cur = tmp;
     }
 
-    if (false && type_gate == LLM_FFN_PAR &&
+#ifdef GGML_USE_VULKAN
+    constexpr bool use_fused_mul_unary = false;
+#else
+    constexpr bool use_fused_mul_unary = true;
+#endif
+
+    if (use_fused_mul_unary && type_gate == LLM_FFN_PAR &&
        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
         cur = ggml_fused_mul_unary(ctx, cur, tmp, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                                                   type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU);
