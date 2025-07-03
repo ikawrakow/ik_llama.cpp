@@ -9597,12 +9597,7 @@ static struct ggml_tensor * llm_build_norm(
          const llm_build_cb & cb,
                         int   il, float scale_eps = 1) {
 
-#ifdef GGML_USE_VULKAN
-    constexpr bool use_fused_rms_norm = false;
-#else
-    constexpr bool use_fused_rms_norm = true;
-#endif
-    if (use_fused_rms_norm && type == LLM_NORM_RMS && mw) {
+    if (type == LLM_NORM_RMS && mw) {
         cur = ggml_fused_rms_norm(ctx, cur, mw, scale_eps * hparams.f_norm_rms_eps);
         if (mb) {
             cb(cur, "fused_norm", il);
