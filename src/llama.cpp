@@ -9688,13 +9688,7 @@ static struct ggml_tensor * llm_build_ffn(
         cur = tmp;
     }
 
-#ifdef GGML_USE_VULKAN
-    constexpr bool use_fused_mul_unary = false;
-#else
-    constexpr bool use_fused_mul_unary = true;
-#endif
-
-    if (use_fused_mul_unary && type_gate == LLM_FFN_PAR &&
+    if (type_gate == LLM_FFN_PAR &&
        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
         cur = ggml_fused_mul_unary(ctx, cur, tmp, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                                                   type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU);
