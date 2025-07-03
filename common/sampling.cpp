@@ -55,7 +55,7 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
                     c_breakers.push_back(str.c_str());
                 }
                 result->smpl=llama_sampler_init_dry(vocab, params.dry_multiplier, params.dry_base, params.dry_allowed_length, params.dry_penalty_last_n, c_breakers.data(), c_breakers.size());
-                
+
                 break;
             }
             default:
@@ -502,5 +502,7 @@ void llama_sampling_accept(
     if (ctx_sampling->grammar != NULL && apply_grammar) {
         llama_grammar_accept_token(ctx_sampling->grammar, ctx_main, id);
     }
-    llama_sampler_dry_accept(ctx_sampling->smpl, id);
+    if (ctx_sampling->smpl) {
+        llama_sampler_dry_accept(ctx_sampling->smpl, id);
+    }
 }
