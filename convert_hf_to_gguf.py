@@ -1520,6 +1520,17 @@ class LlamaModel(Model):
             special_vocab._set_special_token("eot",    32010)
             special_vocab.add_to_gguf(self.gguf_writer)
 
+        # Apply to Seed-Coder only (and ignore otherwise)
+        if self.hparams.get("vocab_size", 32000) == 155136:
+            special_vocab = gguf.SpecialVocab(
+                self.dir_model, load_merges=False,
+                special_token_types = ['prefix', 'suffix', 'middle', 'eot']
+            )
+            special_vocab._set_special_token("prefix", 124)
+            special_vocab._set_special_token("suffix", 125)
+            special_vocab._set_special_token("middle", 126)
+            special_vocab.add_to_gguf(self.gguf_writer)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
