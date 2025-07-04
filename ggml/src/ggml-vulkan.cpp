@@ -9665,9 +9665,8 @@ GGML_CALL static bool ggml_backend_vk_supports_op(ggml_backend_t backend, const 
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
-                ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
-                auto device = ggml_vk_get_device(ctx->device);
-                bool coopmat2 = device->coopmat2;
+                ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+                bool coopmat2 = ctx->device->coopmat2;
                 FaHeadSizes head_sizes = fa_get_head_sizes(op->src[1]->ne[0], op->src[2]->ne[0]);
                 if (head_sizes == FA_HEAD_SIZE_UNSUPPORTED) {
                     return false;
