@@ -6302,6 +6302,10 @@ static void llm_load_vocab(
                 tokenizer_pre == "bailingmoe") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_BAILINGMOE;
                 vocab.tokenizer_clean_spaces = false;
+	    } else if (
+		tokenizer_pre == "seed-coder") {
+	    	vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_SEED_CODER;
+		vocab.tokenizer_clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
