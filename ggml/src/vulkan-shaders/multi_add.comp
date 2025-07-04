@@ -1,0 +1,37 @@
+#version 450
+
+#include "types.comp"
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_control_flow_attributes : enable
+
+layout (push_constant) uniform parameter
+{
+    uint ne;
+    uint ne0;
+    uint ne1;
+    uint nb1;
+    uint nb01;
+    uint nadd;
+} p;
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer X {A_TYPE data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
+
+void main() {
+    const uint i = gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
+
+    if (i >= p.ne) {
+        return;
+    }
+
+    uint i1 = i / p.ne0;
+    uint i0 = i % p.ne0;
+
+    float sum = data_a[i1*p.nb01 + i0] + data_a[i1*p.nb01 + i0 + p.ne0];
+    for (int j = 2; j < p.nadd; ++j) sum += data_a[i1*p.nb01 + i0 + j*p.ne0];
+
+    data_d[i1*p.nb1 + i0] = D_TYPE(sum);
+}

@@ -447,6 +447,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_fused_mul_silu[2];
     vk_pipeline pipeline_fused_mul_relu[2];
 
+    vk_pipeline pipeline_multi_add_f32;
+
     vk_pipeline pipeline_leaky_relu_f32;
     vk_pipeline pipeline_silu_back_f32;
     vk_pipeline pipeline_diag_mask_inf_f32;
@@ -682,6 +684,13 @@ struct vk_op_unary_push_constants {
     uint32_t ne1_0mp;   uint32_t ne1_0L;
 };
 static_assert(sizeof(vk_op_unary_push_constants) <= 128, "sizeof(vk_op_unary_push_constants) must be <= 128");
+
+struct vk_op_multiadd_push_constants {
+    uint32_t ne;
+    uint32_t ne0, ne1;
+    uint32_t nb0, nb01;
+    uint32_t nadd;
+};
 
 // See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
 // Precompute mp (m' in the paper) and L such that division
@@ -2758,6 +2767,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_fused_mul_gelu[1], "fused_mul_gelu_f16", fused_mul_gelu_f16_len, fused_mul_gelu_f16_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_fused_mul_relu[0], "fused_mul_relu_f32", fused_mul_relu_f32_len, fused_mul_relu_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_fused_mul_relu[1], "fused_mul_relu_f16", fused_mul_relu_f16_len, fused_mul_relu_f16_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
+
+    ggml_vk_create_pipeline(device, device->pipeline_multi_add_f32, "multi_add_f32", multi_add_f32_len, multi_add_f32_data, "main", 2, sizeof(vk_op_multiadd_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_leaky_relu_f32, "leaky_relu_f32", leaky_relu_f32_len, leaky_relu_f32_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_silu_back_f32, "silu_back_f32", silu_back_f32_len, silu_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
@@ -6451,6 +6462,12 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             }
             return nullptr;
         }
+    case GGML_OP_MULTI_ADD:
+        if (src0->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F32 ||
+            dst->ne[2] == 1 || dst->ne[3] == 1) {
+            return ctx->device->pipeline_multi_add_f32;
+        }
+        return nullptr;
     case GGML_OP_UNARY:
         if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
             (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) ||
@@ -6588,6 +6605,7 @@ static bool ggml_vk_op_supports_incontiguous(ggml_op op) {
     case GGML_OP_RMS_NORM:
     case GGML_OP_FUSED_RMS_NORM:
     case GGML_OP_IM2COL:
+    case GGML_OP_MULTI_ADD:
         return true;
     default:
         return false;
@@ -6889,6 +6907,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONCAT:
     case GGML_OP_UPSCALE:
     case GGML_OP_FUSED_MUL_UNARY:
+    case GGML_OP_MULTI_ADD:
     case GGML_OP_UNARY:
         {
             uint32_t ne = ggml_nelements(dst);
@@ -7276,6 +7295,12 @@ static void ggml_vk_fused_mul_unary(ggml_backend_vk_context * ctx, vk_context& s
     GGML_ASSERT(ggml_are_same_shape(src0, src1));
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_FUSED_MUL_UNARY, { (uint32_t)ggml_nelements(src0), 0, 0.0f, 0.0f }, dryrun);
+}
+
+static void ggml_vk_multi_add(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
+    uint32_t nadd = (uint32_t)dst->op_params[0];
+    ggml_vk_op_f32<vk_op_multiadd_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_MULTI_ADD,
+            { (uint32_t)ggml_nelements(dst), (uint32_t)dst->ne[0], (uint32_t)dst->ne[1], (uint32_t)(dst->nb[1]/sizeof(float)), (uint32_t)(src0->nb[1]/sizeof(float)), nadd }, dryrun);
 }
 
 static void ggml_vk_diag_mask_inf(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
@@ -8463,6 +8488,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         }
         break;
     case GGML_OP_FUSED_MUL_UNARY:
+    case GGML_OP_MULTI_ADD:
     case GGML_OP_REPEAT:
     case GGML_OP_REPEAT_BACK:
     case GGML_OP_GET_ROWS:
@@ -8546,6 +8572,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         case GGML_OP_RMS_NORM_BACK:
         case GGML_OP_UNARY:
         case GGML_OP_FUSED_MUL_UNARY:
+        case GGML_OP_MULTI_ADD:
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_MAX_BACK:
@@ -8661,6 +8688,9 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         break;
     case GGML_OP_FUSED_MUL_UNARY:
         ggml_vk_fused_mul_unary(ctx, compute_ctx, src0, src1, node, dryrun);
+        break;
+    case GGML_OP_MULTI_ADD:
+        ggml_vk_multi_add(ctx, compute_ctx, src0, node, dryrun);
         break;
     case GGML_OP_UNARY:
         switch (ggml_get_unary_op(node)) {
@@ -8834,6 +8864,7 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
     case GGML_OP_REPEAT:
     case GGML_OP_REPEAT_BACK:
     case GGML_OP_FUSED_MUL_UNARY:
+    case GGML_OP_MULTI_ADD:
         buf = tensor->buffer;
 
         break;
@@ -9530,6 +9561,8 @@ GGML_CALL static bool ggml_backend_vk_supports_op(ggml_backend_t backend, const 
                     return false;
             }
             break;
+        case GGML_OP_MULTI_ADD:
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 && op->ne[2] == 1 && op->ne[3] == 1;
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {
@@ -10266,6 +10299,8 @@ static void ggml_vk_check_results_0(ggml_tensor * tensor) {
         }
     } else if (tensor->op == GGML_OP_FUSED_MUL_UNARY) {
         tensor_clone = ggml_fused_mul_unary(ggml_ctx, src_clone[0], src_clone[1], (ggml_unary_op)tensor->op_params[0]);
+    } else if (tensor->op == GGML_OP_MULTI_ADD) {
+        tensor_clone = ggml_multi_add(ggml_ctx, src_clone[0], tensor->op_params[0]);
     } else if (tensor->op == GGML_OP_CPY || tensor->op == GGML_OP_DUP) {
         if (src1 == nullptr) {
             tensor_clone = ggml_dup(ggml_ctx, src_clone[0]);

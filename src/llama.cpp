@@ -9899,28 +9899,28 @@ llm_expert_gating_func_type   gating_op,
         cb(cur, "ffn_moe_weighted", il);
     }
 
-#ifdef GGML_USE_VULKAN
-    // aggregate experts
-    ggml_tensor * moe_out = nullptr;
-    //ggml_tensor * first_expert = nullptr;
-    for (int i = 0; i < n_expert_used; ++i) {
-        ggml_tensor * cur_expert = ggml_view_2d(ctx, experts, n_embd, n_tokens,
-                experts->nb[2], i*experts->nb[1]);
-
-        if (i == 0) {
-            moe_out = cur_expert;
-        } else {
-            moe_out = ggml_add(ctx, moe_out, cur_expert);
-        }
-    }
-
-    if (n_expert_used == 1) {
-        // avoid returning a non-contiguous tensor
-        moe_out = ggml_cont(ctx, moe_out);
-    }
-
-    return moe_out;
-#else
+//#ifdef GGML_USE_VULKAN
+//    // aggregate experts
+//    ggml_tensor * moe_out = nullptr;
+//    //ggml_tensor * first_expert = nullptr;
+//    for (int i = 0; i < n_expert_used; ++i) {
+//        ggml_tensor * cur_expert = ggml_view_2d(ctx, experts, n_embd, n_tokens,
+//                experts->nb[2], i*experts->nb[1]);
+//
+//        if (i == 0) {
+//            moe_out = cur_expert;
+//        } else {
+//            moe_out = ggml_add(ctx, moe_out, cur_expert);
+//        }
+//    }
+//
+//    if (n_expert_used == 1) {
+//        // avoid returning a non-contiguous tensor
+//        moe_out = ggml_cont(ctx, moe_out);
+//    }
+//
+//    return moe_out;
+//#else
     if (n_expert_used == 1) {
         return ggml_cont(ctx, ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], 0));
     }
@@ -9929,7 +9929,7 @@ llm_expert_gating_func_type   gating_op,
                              ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], experts->nb[1]));
     }
     return ggml_multi_add(ctx, ggml_view_2d(ctx, experts, n_embd, n_tokens, experts->nb[2], 0), n_expert_used);
-#endif
+//#endif
 
 }
 
