@@ -4552,6 +4552,7 @@ const defaultPresets = {
 	dryAllowedLength: 2,
 	dryPenaltyRange: 1024,
 	drySequenceBreakers: "[\"\\n\", \":\", \"\\\"\", \"*\"]",
+	top_n_sigma: 1,
 	bannedTokens: "[]",
 	stoppingStrings: "[]",
 	ignoreEos: false,
@@ -4892,6 +4893,7 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 	const [typicalP, setTypicalP] = useSessionState('typicalP', defaultPresets.typicalP);
 	const [minP, setMinP] = useSessionState('minP', defaultPresets.minP);
 	const [tfsZ, setTfsZ] = useSessionState('tfsZ', defaultPresets.tfsZ);
+	const [top_n_sigma, setTop_n_sigma] = useSessionState('top_n_sigma', defaultPresets.top_n_sigma);
 	const [mirostat, setMirostat] = useSessionState('mirostat', defaultPresets.mirostat);
 	const [mirostatTau, setMirostatTau] = useSessionState('mirostatTau', defaultPresets.mirostatTau);
 	const [mirostatEta, setMirostatEta] = useSessionState('mirostatEta', defaultPresets.mirostatEta);
@@ -5606,6 +5608,9 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 						...(enabledSamplers.includes('ban_tokens') ? {
 							banned_tokens: JSON.parse(bannedTokens),
 						}: {}),
+						...(enabledSamplers.includes('top_n_sigma') ? {
+                                                        top_n_sigma: top_n_sigma
+                                                } : {}),
 					})
 				}),
 				n_predict: maxPredictTokens,
@@ -6662,6 +6667,12 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 						onValueChange=${(v) => enabledSamplers.indexOf('ban_tokens') === -1
 											  ? setEnabledSamplers((es) => [...es, 'ban_tokens'])
 											  : setEnabledSamplers((es) => es.filter((s) => s !== 'ban_tokens'))}/>
+					<${Checkbox} label="Top-nσ"
+                                                disabled=${!!cancel}
+                                                value=${enabledSamplers.includes('top_n_sigma')}
+                                                onValueChange=${(v) => enabledSamplers.indexOf('top_n_sigma') === -1
+                                                                                          ? setEnabledSamplers((es) => [...es, 'top_n_sigma'])
+                                                                                          : setEnabledSamplers((es) => es.filter((s) => s !== 'top_n_sigma'))}/>
 				`}>
 				<${InputSlider} label="Temperature" type="number" step="0.01" max="5"
 					hidden=${!enabledSamplers.includes('temperature')}
@@ -6755,7 +6766,7 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 										hidden=${!enabledSamplers.includes('min_p')}
 										readOnly=${!!cancel} value=${minP} onValueChange=${setMinP}/>`}
 							</div>`}
-						${(enabledSamplers.includes('typical_p') || enabledSamplers.includes('tfs_z')) && html`
+						${(enabledSamplers.includes('typical_p') || enabledSamplers.includes('tfs_z') || enabledSamplers.includes('top_n_sigma')) && html`
 							<div className="hbox">
 								<${InputSlider} label="Typical P" type="number" step="0.01" max="1"
 									hidden=${!enabledSamplers.includes('typical_p')}
@@ -6763,6 +6774,9 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 								<${InputSlider} label="TFS z" type="number" step="0.01" max="1"
 									hidden=${!enabledSamplers.includes('tfs_z')}
 									readOnly=${!!cancel} value=${tfsZ} onValueChange=${setTfsZ}/>
+								<${InputSlider} label="Top-nσ" type="number" step="0.5" max="20"
+                                                                        hidden=${!enabledSamplers.includes('top_n_sigma')}
+									readOnly=${!!cancel} value=${top_n_sigma} onValueChange=${setTop_n_sigma}/>
 							</div>`}
 					`}
 				`}
