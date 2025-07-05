@@ -4080,7 +4080,7 @@ class ServerDBAdapter {
 		if (version !== 4)
 			throw new Error("Mikupad server version mismatch.");
 		if (!features?.sql)
-                        throw new Error("Server does not support SQL methods which are required");
+		throw new Error("ik_llama.cpp was launched without providing a sql file.\nAdd \"--sql-save-file [PATH]\" in order to use mikupad.\nIf [PATH] is an existing file it is used, else a new SQL file will be created at [PATH]");
 
 	}
 
@@ -7137,7 +7137,15 @@ async function main() {
 	try {
 		await dbAdapter.init();
 	} catch (e) {
-		reportError(e);
+		createRoot(document.body).render(html`
+                        <div className="modal-overlay">
+                                <div id="error-bar">
+                                        <div>
+						<pre>${e.message}</pre>
+                                        </div>
+                                </div>
+                        </div>`);
+		return;
 	}
 
 	const sessionStorage = new SessionStorage(dbAdapter);
