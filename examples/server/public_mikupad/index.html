@@ -6774,7 +6774,7 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 								<${InputSlider} label="TFS z" type="number" step="0.01" max="1"
 									hidden=${!enabledSamplers.includes('tfs_z')}
 									readOnly=${!!cancel} value=${tfsZ} onValueChange=${setTfsZ}/>
-								<${InputSlider} label="Top-nσ" type="number" step="0.5" max="20"
+								<${InputSlider} label="Top-nσ" type="number" step="0.01" max="2"
                                                                         hidden=${!enabledSamplers.includes('top_n_sigma')}
 									readOnly=${!!cancel} value=${top_n_sigma} onValueChange=${setTop_n_sigma}/>
 							</div>`}
