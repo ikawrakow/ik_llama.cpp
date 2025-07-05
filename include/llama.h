@@ -110,6 +110,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
         LLAMA_VOCAB_PRE_TYPE_FALCON_3       = 34,
         LLAMA_VOCAB_PRE_TYPE_FALCON_E       = 35,
+        LLAMA_VOCAB_PRE_TYPE_HUNYUAN        = 36,
     };
 
     // note: these values should be synchronized with ggml_rope
