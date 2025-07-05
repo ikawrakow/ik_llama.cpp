@@ -31,6 +31,17 @@
 #include <signal.h>
 #include <memory>
 #include <src/llama-impl.h>
+#include <sqlite_modern_cpp.h>
+
+struct DatabaseHandle {
+    sqlite::database db;
+
+    DatabaseHandle(const std::string& path) : db(path) {
+        db << "CREATE TABLE IF NOT EXISTS sessions (key TEXT PRIMARY KEY, data TEXT)";
+        db << "CREATE TABLE IF NOT EXISTS templates (key TEXT PRIMARY KEY, data TEXT)";
+        db << "CREATE TABLE IF NOT EXISTS names (key TEXT PRIMARY KEY, data TEXT)";
+    }
+};
 
 using json = nlohmann::ordered_json;
 
@@ -2921,6 +2932,28 @@ int main(int argc, char ** argv) {
     // Necessary similarity of prompt for slot selection
     ctx_server.slot_prompt_similarity = params.slot_prompt_similarity;
 
+    auto db_handle = std::make_shared<DatabaseHandle>(params.sql_save_file);
+    bool sqlite_extension_loaded = false;
+    if (!params.sqlite_zstd_ext_file.empty()) {
+        auto* conn = db_handle->db.connection().get();
+        sqlite3_enable_load_extension(conn, 1);
+        char* errmsg = nullptr;
+        const int rc = sqlite3_load_extension(
+            conn,
+            params.sqlite_zstd_ext_file.c_str(),
+            nullptr,
+            &errmsg
+        );
+        if(rc != SQLITE_OK) {
+            const std::string err = errmsg ? errmsg : "Unknown extension error";
+            sqlite3_free(errmsg);
+            LOG_WARNING("Failed to load extension", {{"err", err}});
+        }
+	else {
+            sqlite_extension_loaded = true;
+        }
+        sqlite3_enable_load_extension(conn, 0);
+    }
     // load the model
     if (!ctx_server.load_model(params)) {
         state.store(SERVER_STATE_ERROR);
@@ -3748,6 +3781,105 @@ int main(int argc, char ** argv) {
         };
     };
 
+
+    const auto handle_version = [&params, sqlite_extension_loaded](const httplib::Request&, httplib::Response& res) {
+        res.set_content(
+            json{{"version", 4},
+            {"features", {{"sql", !params.sql_save_file.empty()}, {"zstd_compression", sqlite_extension_loaded}}}}.dump(),
+            "application/json"
+        );
+    };
+
+    auto db_handler = [db_handle](auto func) {
+        return [func, db_handle](const httplib::Request& req, httplib::Response& res) {
+            res.set_header("Access-Control-Allow-Origin", "*");
+	    try {
+                const json body = !req.body.empty() ? json::parse(req.body) : json::object();
+                func(*db_handle, body, req, res);
+            } catch(const std::exception& e) {
+                res.status = 500;
+                res.set_content(
+                    json{{"ok", false}, {"message", e.what()}}.dump(),
+                    "application/json"
+                );
+            }
+        };
+    };
+
+    const auto normalize_store_name = [](const std::string& storeName) {
+        if(storeName.empty()) return std::string("sessions");
+
+        std::string normalized;
+        normalized.reserve(storeName.size());
+
+        for(char c : storeName) {
+            if(std::isalpha(static_cast<unsigned char>(c))) {
+                normalized.push_back(std::tolower(static_cast<unsigned char>(c)));
+            }
+        }
+
+        return normalized.empty() ? "sessions" : normalized;
+    };
+
+    const auto get_key_string = [](const json& j) {
+        return j.is_string() ? j.get<std::string>() : j.dump();
+    };
+
+
+    const auto handle_load = db_handler([normalize_store_name, get_key_string](auto& db, const json& body, auto&, auto& res) {
+        std::string data;
+	const std::string store = normalize_store_name(body["storeName"]);
+	db.db << "SELECT data FROM " + store + " WHERE key = ?" << get_key_string(body["key"]) >> data;
+	if(data.empty()) {
+            res.status = 404;
+            res.set_content(json{{"ok", false}, {"message", "Key not found"}}.dump(), "application/json");
+        } else {
+            json response{{"ok", true}};
+	    response["result"] = (store == "names") ? json(data) : json::parse(data);
+            res.set_content(response.dump(), "application/json");
+        }
+    });
+
+    const auto handle_save = db_handler([normalize_store_name, get_key_string](auto& db, const json& body, auto&, auto& res) {
+        const std::string store = normalize_store_name(body["storeName"]);
+        const std::string data = (store == "names") ? body["data"].get<std::string>() : body["data"].dump();
+        db.db << "INSERT OR REPLACE INTO " + store + " (key, data) VALUES (?, ?)" << get_key_string(body["key"]) << data;
+        res.set_content(json{{"ok", true}, {"result", "Data saved successfully"}}.dump(), "application/json");
+    });
+
+    const auto handle_rename = db_handler([get_key_string](auto& db, const json& body, auto&, auto& res) {
+        db.db << "UPDATE names SET data = ? WHERE key = ?"
+            << body["newName"].get<std::string>()
+            << get_key_string(body["key"]);
+        res.set_content(json{{"ok", true}, {"result", "Session renamed successfully"}}.dump(), "application/json");
+    });
+
+    const auto handle_all = db_handler([normalize_store_name](auto& db, const json& body, auto&, auto& res) {
+        json result = json::object();
+        db.db << "SELECT key, data FROM " + normalize_store_name(body["storeName"]) >>
+            [&](const std::string& key, const std::string& data) {
+                result[key] = json::parse(data);
+            };
+        res.set_content(json{{"ok", true}, {"result", result}}.dump(), "application/json");
+    });
+
+    const auto session_handler = [](auto& db, auto& res) {
+        json result = json::object();
+        db.db << "SELECT key, data FROM names" >> [&](const std::string& key, const std::string& data) {
+            result[key] = data;
+        };
+        res.set_content(json{{"ok", true}, {"result", result}}.dump(), "application/json");
+    };
+
+    const auto handle_sessions_post = db_handler([session_handler](auto& db, const json&, auto&, auto& res) { session_handler(db, res); });
+    const auto handle_sessions_get = db_handler([session_handler](auto& db, const json&, auto&, auto& res) { session_handler(db, res); });
+
+    const auto handle_delete = db_handler([normalize_store_name, get_key_string](auto& db, const json& body, auto&, auto& res) {
+        db.db << "DELETE FROM " + normalize_store_name(body["storeName"]) + " WHERE key = ?"
+            << get_key_string(body["key"]);
+        res.set_content(json{{"ok", true}, {"result", "Session deleted successfully"}}.dump(), "application/json");
+    });
+
     //
     // Router
     //
@@ -3810,6 +3942,20 @@ int main(int argc, char ** argv) {
         // these endpoints rely on slot_save_path existing
         svr->Post("/slots/:id_slot",  handle_slots_action);
         svr->Get ("/list",            list_saved_prompts);
+    }
+    svr->Get ("/version", handle_version);
+    if (!params.sql_save_file.empty()) {
+        // these endpoints rely on sql_save_file existing
+        svr->Post("/load", handle_load);
+        svr->Post("/save", handle_save);
+        svr->Post("/rename", handle_rename);
+        svr->Post("/all", handle_all);
+        svr->Post("/sessions", handle_sessions_post);
+        svr->Get ("/sessions", handle_sessions_get);
+        svr->Post("/delete", handle_delete);
+        if (sqlite_extension_loaded) {
+            //TODO: add endpoints that do zstd_enable_transparent, zstd_incremental_maintenance, and maybe VACUUM
+	}
     }
 
     //
