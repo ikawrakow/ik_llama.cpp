@@ -33,6 +33,19 @@ set(warn_c_flags
    -Wno-gnu-zero-variadic-macro-arguments"
 )
 
+# Instruction set extensions based on GGML options
+if(DEFINED GGML_AVX2)
+  set(arch_c_flags "${arch_c_flags} -mavx2 -mfma -mf16c -mpopcnt")
+endif()
+
+if(DEFINED GGML_AVX512)
+  set(arch_c_flags "${arch_c_flags} -mavx512f -mavx512vl -mavx512bw -mavx512dq")
+endif()
+
+if(DEFINED GGML_BF16)
+  set(arch_c_flags "${arch_c_flags} -mavx512bf16")
+endif()
+
 # Initialize flags for C and C++
 set(CMAKE_C_FLAGS_INIT   "${arch_c_flags} ${warn_c_flags}")
 set(CMAKE_CXX_FLAGS_INIT "${arch_c_flags} ${warn_c_flags}")
