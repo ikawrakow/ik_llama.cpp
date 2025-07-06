@@ -326,7 +326,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: llama-win-${{ matrix.arch }}-${{ matrix.instr }}.zip
-          path: ik_llama-win-${{ matrix.instr }}.zip
+          path: llama-win-${{ matrix.instr }}.zip
 
   windows:
     if: false
