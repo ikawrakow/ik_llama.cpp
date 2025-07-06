@@ -50,7 +50,7 @@ constexpr int popcount(uint64_t x) { return __builtin_popcountll(x); }
 #endif
 
 #if !defined(__AVX2__) && !defined(__ARM_NEON)
-#include "iqk_fa_templates.h"      // for HelperQ8KVR8<D>::block_q8_KV_r8
+#include "fa/iqk_fa_templates.h"      // for HelperQ8KVR8<D>::block_q8_KV_r8
 using block_q8_KV_r8 = HelperQ8KVR8<16>::block_q8_KV_r8;
 #endif
 
