@@ -6267,15 +6267,28 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
             vst1q_s8_x2(qy + 64 + 128*ib, m2);
             vst1q_s8_x2(qy + 96 + 128*ib, m3);
 #else
-            // TODO - DONE by THIREUS
-            const int base = ib*128;     // each block is 128 bytes
-            for (int l = 0; l < 4; ++l) {
-              for (int k2 = 0; k2 < 8; ++k2) {
-                for (int i2 = 0; i2 < 4; ++i2) {
-                  // lower half
-                  qy[base + 32*l + 4*k2 + i2 +   0] = x8[k2][ib].qs[i2 + 4*l +   0];
-                  // upper half
-                  qy[base + 32*l + 4*k2 + i2 + 128] = x8[k2][ib].qs[i2 + 4*l +  16];
+            // Pure‑C fallback: copy 16‑byte blocks directly from x8[k2] into qy
+            // Each block has 16 bytes of q, so for block index ib the start is ib*16
+            // Destination is qy, 128 bytes per block, so ib*128
+        
+            const int src_stride = 16;
+            const int dst_stride = 128;
+            for (int ib = 0; ib < nblock; ++ib) {
+                const int base_dst = ib * dst_stride;
+                const int base_src = ib * src_stride;
+                for (int k2 = 0; k2 < 8; ++k2) {
+                    // copy 16 bytes at x8[k2] + base_src into the 128‑byte frame at base_dst + k2*16
+                    // Note: Q8_KV packs the 16 quant bytes for each of the 8 rows in interleaved fashion,
+                    // so the layout within each block is exactly 8×16 bytes sequentially.
+                    const int8_t *src = x8[k2] + base_src;
+                    // position within the 128‑byte output:
+                    const int out_offset = k2 * 16;
+                    // copy:
+                    for (int j = 0; j < 16; ++j) {
+                        qy[base_dst + out_offset + j] = src[j];
+                    }
+                }
+            }
 #endif
 
         }
