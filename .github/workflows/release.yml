@@ -308,6 +308,8 @@ jobs:
             -DGGML_NATIVE=OFF ^
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
+            -DGGML_AVX2=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
+            -DGGML_FMA=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
