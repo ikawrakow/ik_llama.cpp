@@ -412,70 +412,84 @@ jobs:
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
-    runs-on: windows-2022
+    runs-on: windows-2025
 
     strategy:
       matrix:
-        cuda: ['12.8'] # , '11.7'
+        cuda: ['12.8']
+        instr: ['avx2', 'avx512', 'avx512bf16']
 
     steps:
       - name: Clone
-        id: checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
-          key: windows-cuda-${{ matrix.cuda }}
+          key: windows-cuda-${{ matrix.cuda }}-${{ matrix.instr }}
           variant: ccache
           evict-old-files: 1d
 
-      - name: Install Cuda Toolkit
+      - name: Install CUDA Toolkit
         uses: ./.github/actions/windows-setup-cuda
         with:
           cuda_version: ${{ matrix.cuda }}
 
       - name: Install Ninja
-        id: install_ninja
-        run: |
-          choco install ninja
+        run: choco install ninja
 
-      - name: Build
-        id: cmake_build
+      - name: Configure & Build
         shell: cmd
+        env:
+          CUDA_PATH: ${{ env.CUDA_PATH }}
         run: |
+          rem Initialize VS + Clang environment
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+
+          rem Configure CMake with CUDA + chosen ISA variant
           cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
             -DGGML_NATIVE=OFF ^
-            -DGGML_CUDA=ON -DGGML_AVX512=ON -DGGML_SCHED_MAX_COPIES=1 -DGGML_CUDA_IQK_FORCE_BF16=1 ^
+            -DGGML_OPENMP=ON ^
+            -DGGML_USE_AVX2=${{ matrix.instr == 'avx2' && 'ON' || 'OFF' }} ^
+            -DGGML_USE_AVX512=${{ matrix.instr == 'avx512' && 'ON' || 'OFF' }} ^
+            -DGGML_USE_BF16=${{ matrix.instr == 'avx512bf16' && 'ON' || 'OFF' }} ^
+            -DGGML_CUDA=ON ^
+            -DGGML_SCHED_MAX_COPIES=1 ^
+            -DGGML_CUDA_IQK_FORCE_BF16=1 ^
             -DLLAMA_CURL=OFF
+
+          rem Build with one fewer than CPU cores
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS%
 
-      - name: Pack artifacts
-        id: pack_artifacts
+      - name: Pack llama binary
+        shell: cmd
         run: |
-          7z a llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip .\build\bin\Release\*
+          7z a llama-win-cuda-${{ matrix.cuda }}-${{ matrix.instr }}.zip build\\bin\\Release\\*
 
-      - name: Upload artifacts
+      - name: Upload llama binary
         uses: actions/upload-artifact@v4
         with:
-          path: llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
-          name: llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
+          name: llama-win-cuda-${{ matrix.cuda }}-${{ matrix.instr }}.zip
+          path: llama-win-cuda-${{ matrix.cuda }}-${{ matrix.instr }}.zip
 
-      - name: Copy and pack Cuda runtime
+      - name: Copy & pack CUDA runtime
+        shell: cmd
         run: |
-          echo "Cuda install location: ${{ env.CUDA_PATH }}"
-          $dst='.\build\bin\cudart\'
-          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip $dst\*
+          echo Cuda install location: %CUDA_PATH%
+          set dst=build\\bin\\cudart\\
+          robocopy "%CUDA_PATH%\\bin" "%dst%" cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "%CUDA_PATH%\\lib" "%dst%" cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-llama-win-cuda-${{ matrix.cuda }}.zip "%dst%\\*"
 
-      - name: Upload Cuda runtime
+      - name: Upload CUDA runtime
         uses: actions/upload-artifact@v4
         with:
-          path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
-          name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
+          name: cudart-llama-win-cuda-${{ matrix.cuda }}.zip
+          path: cudart-llama-win-cuda-${{ matrix.cuda }}.zip
 
   windows-sycl:
     if: false
