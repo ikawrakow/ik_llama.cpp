@@ -9,11 +9,6 @@ set(CMAKE_SYSTEM_PROCESSOR x86_64)
 set(CMAKE_C_COMPILER   clang)
 set(CMAKE_CXX_COMPILER clang++)
 
-# Target triple for MSVC ABI compatibility
-set(target x86_64-pc-windows-msvc)
-set(CMAKE_C_COMPILER_TARGET   ${target})
-set(CMAKE_CXX_COMPILER_TARGET ${target})
-
 # Common architecture tuning flags (no ISA extensions here)
 # - Base x86_64 instruction set
 # - Fast vectorization and FP model
