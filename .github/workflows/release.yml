@@ -404,13 +404,13 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          7z a llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
+          7z a llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}-${{ matrix.instr }}.zip .\build\bin\Release\${{ matrix.target }}.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
-          name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
+          path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}-${{ matrix.instr }}.zip
+          name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}-${{ matrix.instr }}.zip
 
   windows-cuda:
     runs-on: windows-2022
@@ -479,13 +479,13 @@ jobs:
           $dst='.\build\bin\cudart\'
           robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
           robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip $dst\*
+          7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip $dst\*
 
       - name: Upload Cuda runtime
         uses: actions/upload-artifact@v4
         with:
-          path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
-          name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
+          path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip
+          name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip
 
   windows-sycl:
     if: false
