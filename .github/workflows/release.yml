@@ -265,7 +265,7 @@ jobs:
           name: llama-bin-ubuntu-vulkan-x64.zip
 
   windows-cpu:
-    if: false
+    #if: false
     runs-on: windows-2025
 
     strategy:
@@ -684,7 +684,7 @@ jobs:
 
     needs:
       #- windows
-      #- windows-cpu
+      - windows-cpu
       - windows-cuda
       #- windows-sycl
       #- windows-hip
