@@ -1,33 +1,38 @@
-# Tell CMake we’re cross‑compiling (even though it’s Windows→Windows, 
+# Base Clang→MSVC toolchain for x86_64-windows
+# This file sets up the compiler and target triple, plus common tuning flags.
 
-set( CMAKE_SYSTEM_NAME      Windows )
-set( CMAKE_SYSTEM_PROCESSOR x86_64 )
+# Cross‑compile to Windows x86_64
+set(CMAKE_SYSTEM_NAME      Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
-set( CMAKE_C_COMPILER   clang )
-set( CMAKE_CXX_COMPILER clang++ )
+# Use Clang from Visual Studio's LLVM toolchain
+set(CMAKE_C_COMPILER   clang)
+set(CMAKE_CXX_COMPILER clang++)
 
-set( target x86_64-pc-windows-msvc )
-set( CMAKE_C_COMPILER_TARGET   ${target} )
-set( CMAKE_CXX_COMPILER_TARGET ${target} )
+# Target triple for MSVC ABI compatibility
+set(target x86_64-pc-windows-msvc)
+set(CMAKE_C_COMPILER_TARGET   ${target})
+set(CMAKE_CXX_COMPILER_TARGET ${target})
 
-# Split the extensions into -m<feature> flags, not +features in -march.
-set( arch_c_flags
+# Common architecture tuning flags (no ISA extensions here)
+# - Base x86_64 instruction set
+# - Fast vectorization and FP model
+# - Disable finite-math-only
+set(arch_c_flags
   "-march=x86-64 \
-   -mavx2 \
-   -mfma \
-   -mf16c \
-   -mpopcnt \
    -fvectorize \
    -ffp-model=fast \
    -fno-finite-math-only"
 )
 
-set( warn_c_flags
+# Warning suppression for this codebase
+set(warn_c_flags
   "-Wno-format \
    -Wno-unused-variable \
    -Wno-unused-function \
    -Wno-gnu-zero-variadic-macro-arguments"
 )
 
-set( CMAKE_C_FLAGS_INIT   "${arch_c_flags} ${warn_c_flags}" )
-set( CMAKE_CXX_FLAGS_INIT "${arch_c_flags} ${warn_c_flags}" )
+# Initialize flags for C and C++
+set(CMAKE_C_FLAGS_INIT   "${arch_c_flags} ${warn_c_flags}")
+set(CMAKE_CXX_FLAGS_INIT "${arch_c_flags} ${warn_c_flags}")
