@@ -272,7 +272,7 @@ jobs:
       matrix:
         include:
           - arch: 'x64'
-          - arch: 'arm64'
+          #- arch: 'arm64'
 
     steps:
       - name: Clone
