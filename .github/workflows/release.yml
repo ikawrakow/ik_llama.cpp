@@ -418,8 +418,8 @@ jobs:
     strategy:
       matrix:
         cuda: ['12.8'] # , '11.7'
-        instr: ['noavx', 'avx', 'avx2'] # , 'avx512', 'avx512bf16' don't compile due to https://github.com/Thireus/ik_llama.cpp/blob/main/ggml/src/iqk/iqk_quantize.cpp#L6270-L6276
-
+        instr: ['noavx', 'avx', 'avx2', 'avx512', 'avx512bf16']
+        
     steps:
       - name: Clone
         id: checkout
