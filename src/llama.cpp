@@ -23392,6 +23392,9 @@ struct llama_sampler_dry * llama_sampler_init_dry(const struct llama_vocab* voca
 }
 
 void llama_sampler_dry_reset(struct llama_sampler_dry* smpl) {
+    if (!smpl) {
+        return;
+    }
     smpl->last_tokens.clear();
     smpl->dry_repeat_count.clear();
     smpl->dry_max_token_repeat.clear();
