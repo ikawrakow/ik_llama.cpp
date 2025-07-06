@@ -265,14 +265,12 @@ jobs:
           name: llama-bin-ubuntu-vulkan-x64.zip
 
   windows-cpu:
-    #if: false
     runs-on: windows-2025
 
     strategy:
       matrix:
-        include:
-          - arch: 'x64'
-          #- arch: 'arm64'
+        arch: ['x64']
+        instr: ['avx2', 'avx512', 'avx512bf16']
 
     steps:
       - name: Clone
@@ -283,51 +281,52 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-cpu-${{ matrix.arch }}
+          key: windows-latest-cmake-cpu-${{ matrix.arch }}-${{ matrix.instr }}
           variant: ccache
           evict-old-files: 1d
 
       - name: Install Ninja
-        run: |
-          choco install ninja
+        run: choco install ninja
 
       - name: libCURL
         id: get_libcurl
         uses: ./.github/actions/windows-setup-curl
         with:
-          architecture: ${{ matrix.arch == 'x64' && 'win64' || 'win64a' }}
+          architecture: win64
 
       - name: Build
         shell: cmd
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
+          rem Initialize VS + Clang environment
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+
+          rem Configure with the right instruction‐set flags
           cmake -S . -B build -G "Ninja Multi-Config" ^
-            -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
             -DGGML_NATIVE=OFF ^
-            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
-            -DGGML_AVX2=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
-            -DGGML_FMA=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
-            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
+            -DGGML_USE_AVX2=${{ matrix.instr == 'avx2' && 'ON' || 'OFF' }} ^
+            -DGGML_USE_AVX512=${{ matrix.instr == 'avx512' && 'ON' || 'OFF' }} ^
+            -DGGML_USE_BF16=${{ matrix.instr == 'avx512bf16' && 'ON' || 'OFF' }} ^
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" ^
+            -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
             ${{ env.CMAKE_ARGS }}
+
           cmake --build build --config Release
 
-      - name: Pack artifacts
-        id: pack_artifacts
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
+      - name: Package
+        shell: cmd
         run: |
-          Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll .\build\bin\Release\
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
-          7z a llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
+          copy "%CURL_PATH%\\bin\\libcurl-x64.dll" build\\bin\\Release\\
+          7z a llama-win-${{ matrix.instr }}.zip build\\bin\\Release\\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: llama-bin-win-cpu-${{ matrix.arch }}.zip
-          name: llama-bin-win-cpu-${{ matrix.arch }}.zip
+          name: llama-win-${{ matrix.arch }}-${{ matrix.instr }}.zip
+          path: ik_llama-win-${{ matrix.instr }}.zip
 
   windows:
     if: false
