@@ -49,13 +49,6 @@ constexpr int popcount(uint32_t x) { return __builtin_popcount(x); }
 constexpr int popcount(uint64_t x) { return __builtin_popcountll(x); }
 #endif
 
-#if !defined(__AVX2__) && !defined(__ARM_NEON)
-struct block_q8_KV_r8 {
-    float  d[8];      // header floats
-    int8_t qs[8 * 16]; // 128 quantized bytes
-};
-#endif
-
 namespace {
 
 inline int nearest_int(float fval) {
@@ -6220,10 +6213,6 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
     for (int row = 0; row < nrows; row += 8) {
         auto dy = (float *)cy;
         auto qy = (int8_t *)(dy + 8);
-        // Pure‑C fallback needs a block pointer; only define if used
-        #if !defined(__AVX2__) && !defined(__ARM_NEON)
-                auto y = reinterpret_cast<block_q8_KV_r8 *>(qy);
-        #endif
         for (int k = 0; k < 8; ++k) {
             auto dx = (const float *)(cx + k*row_size_x);
             dy[k] = dx[0];
@@ -6279,12 +6268,14 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
             vst1q_s8_x2(qy + 96 + 128*ib, m3);
 #else
             // TODO - DONE by THIREUS
+            const int base = ib*128;     // each block is 128 bytes
             for (int l = 0; l < 4; ++l) {
-                for (int k = 0; k < 8; ++k) for (int i = 0; i < 4; ++i) {
-                    y[ib].qs[32*l+4*k+i+  0] = x8[k][ib].qs[i+4*l+ 0];
-                    y[ib].qs[32*l+4*k+i+128] = x8[k][ib].qs[i+4*l+16];
-                }
-            }
+              for (int k2 = 0; k2 < 8; ++k2) {
+                for (int i2 = 0; i2 < 4; ++i2) {
+                  // lower half
+                  qy[base + 32*l + 4*k2 + i2 +   0] = x8[k2][ib].qs[i2 + 4*l +   0];
+                  // upper half
+                  qy[base + 32*l + 4*k2 + i2 + 128] = x8[k2][ib].qs[i2 + 4*l +  16];
 #endif
 
         }
