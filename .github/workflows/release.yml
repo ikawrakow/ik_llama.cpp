@@ -729,7 +729,7 @@ jobs:
           mkdir -p release
 
           echo "Renaming and moving zips to release..."
-          for zip_file in artifact/llama-bin-win-*.zip; do
+          for zip_file in artifact/llama-bin-win-*.zip artifact/cudart-llama-bin-win-*.zip; do
             base_name=$(basename "$zip_file" .zip)
             zip_name="ik_llama-${{ steps.tag.outputs.name }}-${base_name#llama-}.zip"
             echo "Moving $zip_file to release/$zip_name"
