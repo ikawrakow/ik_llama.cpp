@@ -6207,6 +6207,9 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
     auto row_size_x = ggml_row_size(GGML_TYPE_Q8_KV,    n_per_row);
     auto row_size_y = ggml_row_size(GGML_TYPE_Q8_KV_R8, n_per_row);
     const int8_t * x8[8];
+#if !defined(__AVX2__) && !defined(__ARM_NEON)
+    const int nblock    = n_per_row / 16;
+#endif
 #ifdef __ARM_NEON
     int8x16x2_t m0, m1, m2, m3;
 #endif
