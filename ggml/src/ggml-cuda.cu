@@ -2719,6 +2719,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             if (use_quantized_src1) {
                 quantize_mmq_q8_1_id_cuda((const float *)src1->data, src1_quantized.get(), (const char *)(dev_row_mapping.get() + mapping_offset),
                         src1->ne[0], num_src1_rows, src1_padded_num_cols, src0_1->type, stream);
+                CUDA_CHECK(cudaGetLastError());
                 src1_row.data = src1_quantized.get();
             }
             else {
@@ -2744,13 +2745,6 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             dst_row.nb[1] = nb1;
             dst_row.nb[2] = num_src1_rows*nb1;
             dst_row.nb[3] = num_src1_rows*nb1;
-
-            //if (use_quantized_src1) {
-            //     quantize_mmq_q8_1_cuda((const float *)src1_contiguous.get(), src1_quantized.get(), src1->ne[0], num_src1_rows, 1,
-            //             src1_padded_num_cols, src0_1->type, stream);
-            //     CUDA_CHECK(cudaGetLastError());
-            //     src1_row.data = src1_quantized.get();
-            //}
 
             dst_row.data  =  dst_up_contiguous.get();
             if (use_quantized_src1) {
