@@ -418,7 +418,7 @@ jobs:
     strategy:
       matrix:
         cuda: ['12.8'] # , '11.7'
-        instr: ['noavx', 'avx', 'avx2', 'avx512', 'avx512bf16']
+        instr: ['avx', 'avx2', 'avx512', 'avx512bf16'] # 'noavx' won't compile because missing declarations all over the place
         
     steps:
       - name: Clone
