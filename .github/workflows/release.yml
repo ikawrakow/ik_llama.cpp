@@ -269,7 +269,7 @@ jobs:
 
     strategy:
       matrix:
-        arch: ['x64']
+        arch: ['x64'] #, 'arm64'
         instr: ['noavx', 'avx', 'avx2', 'avx512', 'avx512bf16']
 
     steps:
@@ -286,48 +286,48 @@ jobs:
           evict-old-files: 1d
 
       - name: Install Ninja
-        run: choco install ninja
+        run: |
+          choco install ninja
 
       - name: libCURL
         id: get_libcurl
         uses: ./.github/actions/windows-setup-curl
         with:
-          architecture: win64
+          architecture: ${{ matrix.arch == 'x64' && 'win64' || 'win64a' }}
 
       - name: Build
         shell: cmd
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          rem Initialize VS + Clang environment
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-
-          rem Configure with the right instruction‐set flags
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
           cmake -S . -B build -G "Ninja Multi-Config" ^
-            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
             -DGGML_NATIVE=OFF ^
+            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
             -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} ^
             -DGGML_AVX2=${{ matrix.instr == 'avx2' && 'ON' || 'OFF' }} ^
             -DGGML_AVX512=${{ matrix.instr == 'avx512' && 'ON' || 'OFF' }} ^
             -DGGML_AVX512_BF16=${{ matrix.instr == 'avx512bf16' && 'ON' || 'OFF' }} ^
-            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" ^
-            -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
             ${{ env.CMAKE_ARGS }}
-
           cmake --build build --config Release
 
-      - name: Package
-        shell: cmd
+      - name: Pack artifacts
+        id: pack_artifacts
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          copy "%CURL_PATH%\\bin\\libcurl-x64.dll" build\\bin\\Release\\
-          7z a llama-win-${{ matrix.instr }}.zip build\\bin\\Release\\*
+          Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll .\build\bin\Release\
+          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
+          7z a llama-bin-win-cpu-${{ matrix.arch }}-${{ matrix.instr }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: llama-win-${{ matrix.arch }}-${{ matrix.instr }}.zip
-          path: llama-win-${{ matrix.instr }}.zip
+          path: llama-bin-win-cpu-${{ matrix.arch }}-${{ matrix.instr }}.zip
+          name: llama-bin-win-cpu-${{ matrix.arch }}-${{ matrix.instr }}.zip
 
   windows:
     if: false
@@ -413,18 +413,17 @@ jobs:
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
-    runs-on: windows-2025
+    runs-on: windows-2022
 
     strategy:
       matrix:
-        cuda: ['12.8']
+        cuda: ['12.8'] # , '11.7'
         instr: ['noavx', 'avx', 'avx2', 'avx512', 'avx512bf16']
 
     steps:
       - name: Clone
+        id: checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Install ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
@@ -439,19 +438,16 @@ jobs:
           cuda_version: ${{ matrix.cuda }}
 
       - name: Install Ninja
-        run: choco install ninja
-
-      - name: Configure & Build
-        shell: cmd
-        env:
-          CUDA_PATH: ${{ env.CUDA_PATH }}
+        id: install_ninja
         run: |
-          rem Initialize VS + Clang environment
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          choco install ninja
 
-          rem Configure CMake with CUDA + chosen ISA variant
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
-            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
             -DGGML_NATIVE=OFF ^
             -DGGML_OPENMP=ON ^
             -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} ^
@@ -463,35 +459,33 @@ jobs:
             -DGGML_CUDA_IQK_FORCE_BF16=1 ^
             -DLLAMA_CURL=OFF
 
-          rem Build with one fewer than CPU cores
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS%
 
-      - name: Pack llama binary
-        shell: cmd
+      - name: Pack artifacts
+        id: pack_artifacts
         run: |
-          7z a llama-win-cuda-${{ matrix.cuda }}-${{ matrix.instr }}.zip build\\bin\\Release\\*
+          7z a llama-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip .\build\bin\Release\*
 
-      - name: Upload llama binary
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: llama-win-cuda-${{ matrix.cuda }}-${{ matrix.instr }}.zip
-          path: llama-win-cuda-${{ matrix.cuda }}-${{ matrix.instr }}.zip
+          path: llama-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip
+          name: llama-bin-win-cuda-${{ matrix.cuda }}-x64-${{ matrix.instr }}.zip
 
-      - name: Copy & pack CUDA runtime
-        shell: cmd
+      - name: Copy and pack Cuda runtime
         run: |
-          echo Cuda install location: %CUDA_PATH%
-          set dst=build\\bin\\cudart\\
-          robocopy "%CUDA_PATH%\\bin" "%dst%" cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          robocopy "%CUDA_PATH%\\lib" "%dst%" cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          7z a cudart-llama-win-cuda-${{ matrix.cuda }}.zip "%dst%\\*"
+          echo "Cuda install location: ${{ env.CUDA_PATH }}"
+          $dst='.\build\bin\cudart\'
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip $dst\*
 
-      - name: Upload CUDA runtime
+      - name: Upload Cuda runtime
         uses: actions/upload-artifact@v4
         with:
-          name: cudart-llama-win-cuda-${{ matrix.cuda }}.zip
-          path: cudart-llama-win-cuda-${{ matrix.cuda }}.zip
+          path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
+          name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
 
   windows-sycl:
     if: false
