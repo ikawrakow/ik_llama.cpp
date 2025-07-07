@@ -4352,13 +4352,11 @@ class SessionStorage extends AbstractStorage {
 		} catch {
 			this.nextId = 0;
 		}
-		try {
-                        this.selectedSession = (await this.loadFromDatabase(db, 'selectedSessionId'))
-                } catch {
-                        this.selectedSession = 0;
-                }
+		//Maybe set to maximum value from DB instead of 0?
+		this.selectedSession = parseInt(window.location.hash.substring(1), 10) || 0;
 		await this.loadSessions(db);
 		this.startSaveTimer(async (sessionId) => await this.saveSessionToDB(sessionId));
+		window.addEventListener('hashchange', () => {this.switchSession(window.location.hash.substring(1))});
 	}
 
 	async saveToDatabase(db, key, data) {
@@ -4370,6 +4368,7 @@ class SessionStorage extends AbstractStorage {
 
 	async loadFromDatabase(db, key) {
 		const data = (await super.loadFromDatabase(db, key));
+		//selectedSessionId is no longer used but databases may still have it
 		if(!['selectedSessionId', 'nextSessionId'].includes(key)){
 			data['name'] = (await this.nameStorage.loadFromDatabase(db, key));		
 		}
@@ -4432,10 +4431,11 @@ class SessionStorage extends AbstractStorage {
 		if (this.sessions[this.selectedSession] && this.sessions[this.selectedSession]['name'])
 			this.sessions[this.selectedSession] = { name: this.sessions[this.selectedSession]['name'], inactive: true };
 
-		const db = await this.openDatabase();
-		await this.saveToDatabase(db, 'selectedSessionId', +sessionId);
 
 		this.selectedSession = +sessionId;
+		window.location.hash = this.selectedSession;
+
+		const db = await this.openDatabase();
 		this.sessions[this.selectedSession] = (await this.loadFromDatabase(db, this.selectedSession));
 
 		this.dispatchChangeEvent();
