@@ -10,7 +10,6 @@ This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp)
 
 ### Model Support
 
-### Model Implementations
 | LlaMA-3-Nemotron | Qwen3 | GLM-4 | Command-A | bitnet-b1.58-2B-4T | LLaMA-4 | Gemma3 | DeepSeek-V3 |
 |:----------------:|:-----:|:-----:|:---------:|:------------------:|:-------:|:------:|:-----------:|
 [PR 377](https://github.com/ikawrakow/ik_llama.cpp/pull/377) | [PR 355](https://github.com/ikawrakow/ik_llama.cpp/pull/355) | [PR 344](https://github.com/ikawrakow/ik_llama.cpp/pull/344) | [PR 341](https://github.com/ikawrakow/ik_llama.cpp/pull/341) | [PR 337](https://github.com/ikawrakow/ik_llama.cpp/pull/337) | [PR 321](https://github.com/ikawrakow/ik_llama.cpp/pull/321) | [PR 276](https://github.com/ikawrakow/ik_llama.cpp/pull/276) | [PR 176](https://github.com/ikawrakow/ik_llama.cpp/pull/176) |
