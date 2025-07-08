@@ -1041,7 +1041,6 @@ __device__ __forceinline__ void vec_dot_iq3_ks_q8_1(
     const int ib128 = iqs/4;  // 0 or 1. 0 works on quants 0...127, 1 on quants 128...255
                               // Each thread processes 8 quants in each of the 4 32-blocks
     const int il8   = iqs%4;  // 0...3. 0 works on quants 0...7, 1 on quants 8...15, 2 on 16...23, 3 on 24...31
-    const int shift = 4*(il8/2);
 
     const uint16_t * ql = (const uint16_t *)bq3->qs + 16*ib128 + 4*il8;
     const uint16_t * qh = (const uint16_t *)bq3->qh + 4*il8;
