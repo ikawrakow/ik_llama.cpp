@@ -1952,6 +1952,19 @@ function Sessions({ sessionStorage, disabled }) {
 		exportText(`${sessionStorage.getProperty('name')}.json`, JSON.stringify(sessionObj));
 	};
 
+	const exportAll = async () => {
+		alert("Warning: This can take a lot of time and space. Leave the page now if you do not want to proceed.")
+		const db = await sessionStorage.openDatabase();
+		const sessionKeys = Object.keys(sessionStorage.sessions);
+		for (const sessionKey of sessionKeys) {
+			const processedSession = await sessionStorage.loadFromDatabase(db, sessionKey);
+			for (const [key, value] of Object.entries(processedSession)) {
+				processedSession[key] = JSON.stringify(value);
+			}
+			exportText(`${processedSession.name}.json`, JSON.stringify(processedSession));
+		}
+	};
+
 	const cloneSession = async () => {
 		const sessionObj = { ...sessionStorage.sessions[sessionStorage.selectedSession] };
 		for (const [key, value] of Object.entries(sessionObj)) {
@@ -2087,6 +2100,7 @@ function Sessions({ sessionStorage, disabled }) {
 				<button disabled=${disabled} onClick=${startCreateSession}>Create</button>
 				<button disabled=${disabled} onClick=${importSession}>Import</button>
 				<button disabled=${disabled} onClick=${exportSession}>Export</button>
+				<button disabled=${disabled} onClick=${exportAll}>Export All</button>
 				<button disabled=${disabled} onClick=${cloneSession}>Clone</button>
 			</div>
 		</div>`;
