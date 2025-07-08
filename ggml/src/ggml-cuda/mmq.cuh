@@ -10,6 +10,7 @@
 #include "common.cuh"
 #include "vecdotq.cuh"
 #include "mma.cuh"
+#include "iqk_cuda_common.h"
 
 #include <climits>
 #include <cstdint>
@@ -2492,12 +2493,10 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     float * x_df = (float *) (x_qs + txs.qs);
 #endif // INT8_MMA_AVAILABLE
 
-    const static int minus[2] = {0x1f1f1f1f, 0x1a1a1a1a};
+    const int * all_values = (const int *)iq2k_table;
 
     const int kqsx = threadIdx.x%16;
 
-    uint32_t aux32[4];
-    const int * i32 = (const int *)aux32;
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += 2*nwarps) {
         int i = i0 + 2*threadIdx.y + threadIdx.x/16;
@@ -2511,26 +2510,16 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         uint16_t extra = bxi->extra >> 4*(kqsx/8);
         int q2 = get_int_b2(bxi->qs, kqsx);
 
-        aux32[0] = ((q2 >> 0) & 0x03030303);
-        aux32[1] = ((q2 >> 2) & 0x03030303);
-        aux32[2] = ((q2 >> 4) & 0x03030303);
-        aux32[3] = ((q2 >> 6) & 0x03030303);
-        // 0, 16, 32, 48 -> 0, 18, 32, 48 -> -31, -13, 1, 17
-        #pragma unroll
-        for (int j = 0; j < 4; ++j) {
-            auto mask = __vcmpeq4(aux32[j], 0x01010101);
-            aux32[j]  = __vadd4(aux32[j] << 4, mask & 0x02020202);
-        }
 #ifdef INT8_MMA_AVAILABLE
-        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx%8 + 32*(kqsx/8) +  0] = __vsubss4(i32[0], minus[(extra >> 0) & 1]);
-        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx%8 + 32*(kqsx/8) +  8] = __vsubss4(i32[1], minus[(extra >> 1) & 1]);
-        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx%8 + 32*(kqsx/8) + 16] = __vsubss4(i32[2], minus[(extra >> 2) & 1]);
-        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx%8 + 32*(kqsx/8) + 24] = __vsubss4(i32[3], minus[(extra >> 3) & 1]);
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx%8 + 32*(kqsx/8) +  0] = int_from_table_4((q2 >> 0) & 0x03030303, all_values + ((extra & 1) << 8));
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx%8 + 32*(kqsx/8) +  8] = int_from_table_4((q2 >> 2) & 0x03030303, all_values + ((extra & 2) << 7));
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx%8 + 32*(kqsx/8) + 16] = int_from_table_4((q2 >> 4) & 0x03030303, all_values + ((extra & 4) << 6));
+        x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + kqsx%8 + 32*(kqsx/8) + 24] = int_from_table_4((q2 >> 6) & 0x03030303, all_values + ((extra & 8) << 5));
 #else
-        x_qs[i*(2*WARP_SIZE + 1)     + kqsx%8 + 32*(kqsx/8) +  0] = __vsubss4(i32[0], minus[(extra >> 0) & 1]);
-        x_qs[i*(2*WARP_SIZE + 1)     + kqsx%8 + 32*(kqsx/8) +  8] = __vsubss4(i32[1], minus[(extra >> 1) & 1]);
-        x_qs[i*(2*WARP_SIZE + 1)     + kqsx%8 + 32*(kqsx/8) + 16] = __vsubss4(i32[2], minus[(extra >> 2) & 1]);
-        x_qs[i*(2*WARP_SIZE + 1)     + kqsx%8 + 32*(kqsx/8) + 24] = __vsubss4(i32[3], minus[(extra >> 3) & 1]);
+        x_qs[i*(2*WARP_SIZE + 1)     + kqsx%8 + 32*(kqsx/8) +  0] = int_from_table_4((q2 >> 0) & 0x03030303, all_values + ((extra & 1) << 8));
+        x_qs[i*(2*WARP_SIZE + 1)     + kqsx%8 + 32*(kqsx/8) +  8] = int_from_table_4((q2 >> 2) & 0x03030303, all_values + ((extra & 2) << 7));
+        x_qs[i*(2*WARP_SIZE + 1)     + kqsx%8 + 32*(kqsx/8) + 16] = int_from_table_4((q2 >> 4) & 0x03030303, all_values + ((extra & 4) << 6));
+        x_qs[i*(2*WARP_SIZE + 1)     + kqsx%8 + 32*(kqsx/8) + 24] = int_from_table_4((q2 >> 6) & 0x03030303, all_values + ((extra & 8) << 5));
 #endif // INT8_MMA_AVAILABLE
     }
 
@@ -2570,13 +2559,9 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     float * x_df = (float *) (x_qs + txs.qs);
 #endif // INT8_MMA_AVAILABLE
 
-    const static int minus[2] = {0x1f1f1f1f, 0x1a1a1a1a};
-
     constexpr int qstep = 8;
     const int kqsx = threadIdx.x % qstep;
 
-    uint32_t aux32[4];
-    const int * i32 = (const int *)aux32;
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * WARP_SIZE/qstep) {
         int i = i0 + threadIdx.y*(WARP_SIZE/qstep) + threadIdx.x/qstep;
@@ -2587,6 +2572,8 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 
         const block_iq2_k * bxi = (const block_iq2_k *)(x + i*stride) + kbx0;
 
+        auto all_values = (const int *)iq2k_table;
+
         const float d = bxi->d;
 
         uint16_t extra = bxi->extra >> (kqsx/4);
@@ -2595,27 +2582,17 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         for (int l = 0; l < qstep/4; ++l) {
 
             const int ql = get_int_b4(bxi->qs, kqsx + qstep*l);
-            aux32[0] = ((ql >> 0) & 0x03030303);
-            aux32[1] = ((ql >> 2) & 0x03030303);
-            aux32[2] = ((ql >> 4) & 0x03030303);
-            aux32[3] = ((ql >> 6) & 0x03030303);
-            // 0, 16, 32, 48 -> 0, 18, 32, 48 -> -31, -13, 1, 17
-            #pragma unroll
-            for (int j = 0; j < 4; ++j) {
-                auto mask = __vcmpeq4(aux32[j], 0x01010101);
-                aux32[j]  = __vadd4(aux32[j] << 4, mask & 0x02020202);
-            }
 
 #ifdef INT8_MMA_AVAILABLE
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l +  0] = __vsubss4(i32[0], minus[(extra >> 0) & 1]);
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l +  8] = __vsubss4(i32[1], minus[(extra >> 2) & 1]);
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l + 16] = __vsubss4(i32[2], minus[(extra >> 4) & 1]);
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l + 24] = __vsubss4(i32[3], minus[(extra >> 6) & 1]);
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l +  0] = int_from_table_4((ql >> 0) & 0x03030303, all_values + ((extra & 0x01) << 8));
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l +  8] = int_from_table_4((ql >> 2) & 0x03030303, all_values + ((extra & 0x04) << 6));
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l + 16] = int_from_table_4((ql >> 4) & 0x03030303, all_values + ((extra & 0x10) << 4));
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l + 24] = int_from_table_4((ql >> 6) & 0x03030303, all_values + ((extra & 0x40) << 2));
 #else
-            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l +  0] = __vsubss4(i32[0], minus[(extra >> 0) & 1]);
-            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l +  8] = __vsubss4(i32[1], minus[(extra >> 2) & 1]);
-            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l + 16] = __vsubss4(i32[2], minus[(extra >> 4) & 1]);
-            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l + 24] = __vsubss4(i32[3], minus[(extra >> 6) & 1]);
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l +  0] = int_from_table_4((ql >> 0) & 0x03030303, all_values + ((extra & 0x01) << 8));
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l +  8] = int_from_table_4((ql >> 2) & 0x03030303, all_values + ((extra & 0x04) << 6));
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l + 16] = int_from_table_4((ql >> 4) & 0x03030303, all_values + ((extra & 0x10) << 4));
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l + 24] = int_from_table_4((ql >> 6) & 0x03030303, all_values + ((extra & 0x40) << 2));
 #endif // INT8_MMA_AVAILABLE
 
             extra >>= 8;
