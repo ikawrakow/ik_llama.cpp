@@ -23,12 +23,16 @@ Information and the original CUDA implementation in [PR 113](https://github.com/
 
 ##### IQK quants
 
-Information can be found in [Discussion 8](https://github.com/ikawrakow/ik_llama.cpp/discussions/8).
+Information about them can be found in [Discussion 8](https://github.com/ikawrakow/ik_llama.cpp/discussions/8). The table below contains the quants (sorted by bpw) with the PRs that implement them.
 
 |  | IQ2_KS | IQ2_K (R4) | IQ3_K (R4) | IQ4_KSS | IQ4_KS (R4) | IQ4_K (R4) | IQ5_KS (R4) | IQ5_K (R4) | IQ6_K |
 |---------------------|:------:|:----------:|:----------:|:-------:|:-----------:|:----------:|:-----------:|:----------:|:-----:|
 | CPU     | [85](https://github.com/ikawrakow/ik_llama.cpp/pull/85) | [7](https://github.com/ikawrakow/ik_llama.cpp/pull/7) ([146](https://github.com/ikawrakow/ik_llama.cpp/pull/146)) | [7](https://github.com/ikawrakow/ik_llama.cpp/pull/7) ([145](https://github.com/ikawrakow/ik_llama.cpp/pull/145)) | [89](https://github.com/ikawrakow/ik_llama.cpp/pull/89) | [83](https://github.com/ikawrakow/ik_llama.cpp/pull/83) ([150](https://github.com/ikawrakow/ik_llama.cpp/pull/150)) | [6](https://github.com/ikawrakow/ik_llama.cpp/pull/6) ([138](https://github.com/ikawrakow/ik_llama.cpp/pull/138)) | [422](https://github.com/ikawrakow/ik_llama.cpp/pull/422) ([426](https://github.com/ikawrakow/ik_llama.cpp/pull/426)) | [7](https://github.com/ikawrakow/ik_llama.cpp/pull/7) ([149](https://github.com/ikawrakow/ik_llama.cpp/pull/149)) | [14](https://github.com/ikawrakow/ik_llama.cpp/pull/14) |
 | CUDA         | [418](https://github.com/ikawrakow/ik_llama.cpp/pull/418) | [418](https://github.com/ikawrakow/ik_llama.cpp/pull/418) ([461](https://github.com/ikawrakow/ik_llama.cpp/pull/461)) | [418](https://github.com/ikawrakow/ik_llama.cpp/pull/418) ([461](https://github.com/ikawrakow/ik_llama.cpp/pull/461)) | [89](https://github.com/ikawrakow/ik_llama.cpp/pull/89) | [83](https://github.com/ikawrakow/ik_llama.cpp/pull/493) ([493](https://github.com/ikawrakow/ik_llama.cpp/pull/493), [462](https://github.com/ikawrakow/ik_llama.cpp/pull/462)) | [417](https://github.com/ikawrakow/ik_llama.cpp/pull/417) ([461](https://github.com/ikawrakow/ik_llama.cpp/pull/461)) | [422](https://github.com/ikawrakow/ik_llama.cpp/pull/422) ([493](https://github.com/ikawrakow/ik_llama.cpp/pull/493), [462](https://github.com/ikawrakow/ik_llama.cpp/pull/462)) | [417](https://github.com/ikawrakow/ik_llama.cpp/pull/417) ([461](https://github.com/ikawrakow/ik_llama.cpp/pull/461)) | [417](https://github.com/ikawrakow/ik_llama.cpp/pull/417) |
+
+##### Misc
+
+`IQ1_S_R4`/`IQ1_M_R4`. (CPU: [PR 185](https://github.com/ikawrakow/ik_llama.cpp/pull/185)/[PR 187](https://github.com/ikawrakow/ik_llama.cpp/pull/187), CUDA: [PR 492](https://github.com/ikawrakow/ik_llama.cpp/pull/492)/[PR 494](https://github.com/ikawrakow/ik_llama.cpp/pull/494)). These differ (and thus cannot be repacked) from `IQ1_S`/`IQ1_M`.
 
 #### Quantization improvements
 
