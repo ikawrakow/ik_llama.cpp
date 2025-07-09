@@ -110,6 +110,8 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
         LLAMA_VOCAB_PRE_TYPE_FALCON_3       = 34,
         LLAMA_VOCAB_PRE_TYPE_FALCON_E       = 35,
+        LLAMA_VOCAB_PRE_TYPE_SEED_CODER     = 36, //llama.cpp lists this as 35
+        LLAMA_VOCAB_PRE_TYPE_HUNYUAN        = 37, //llama.cpp lists this as 36
     };
 
     // note: these values should be synchronized with ggml_rope

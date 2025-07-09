@@ -636,6 +636,9 @@ class Model:
         if chkhsh == "877081d19cf6996e2c4ff0e1236341e9b7bde288f5311a56a937f0afbbb3aeb5":
             # ref: https://huggingface.co/deepseek-ai/DeepSeek-V3
             res = "deepseek-v3"
+        if chkhsh == "d5f1dd6f980fec569fb218a81a7658ac45fc56b38c5a0adeb1c232fbe04ef5ec":
+            # ref: https://huggingface.co/ByteDance-Seed/Seed-Coder-8B-Base
+            res = "seed-coder"
 
         if res is None:
             logger.warning("\n")
@@ -1518,6 +1521,17 @@ class LlamaModel(Model):
             special_vocab._set_special_token("suffix", 32008)
             special_vocab._set_special_token("middle", 32009)
             special_vocab._set_special_token("eot",    32010)
+            special_vocab.add_to_gguf(self.gguf_writer)
+
+        # Apply to Seed-Coder only (and ignore otherwise)
+        if self.hparams.get("vocab_size", 32000) == 155136:
+            special_vocab = gguf.SpecialVocab(
+                self.dir_model, load_merges=False,
+                special_token_types = ['prefix', 'suffix', 'middle', 'eot']
+            )
+            special_vocab._set_special_token("prefix", 124)
+            special_vocab._set_special_token("suffix", 125)
+            special_vocab._set_special_token("middle", 126)
             special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
