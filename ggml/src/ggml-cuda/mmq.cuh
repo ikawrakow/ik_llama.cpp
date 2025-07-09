@@ -3161,25 +3161,26 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         const block_iq4_k * bxi = (const block_iq4_k *)(x + i*stride) + kbx0;
         const uint16_t extra = bxi->extra >> 2*kqsx;
 
-        auto values_l = iq4k_values + ((extra & 1) << 4);
-        auto values_h = iq4k_values + ((extra & 2) << 3);
+        auto values_l = iq4k_table + ((extra & 1) << 8);
+        auto values_h = iq4k_table + ((extra & 2) << 7);
 
     #pragma unroll
         for (int l = 0; l < qstep/2; ++l) {
 
             const int q4 = get_int_b4(bxi->qs, (qstep/2)*kqsx + l);
+
             aux32[0] = (q4 >> 0) & 0x0f0f0f0f;
             aux32[1] = (q4 >> 4) & 0x0f0f0f0f;
 
-            const char4 val0  = make_char4(values_l[aux8[0]], values_l[aux8[1]], values_l[aux8[2]], values_l[aux8[3]]);
-            const char4 val1  = make_char4(values_h[aux8[4]], values_h[aux8[5]], values_h[aux8[6]], values_h[aux8[7]]);
+            int val0 = int_from_table_x(aux8+0, values_l);
+            int val1 = int_from_table_x(aux8+4, values_h);
 
 #ifdef INT8_MMA_AVAILABLE
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + l + 0] = *(const int *)&val0;
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + l + 4] = *(const int *)&val1;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + l + 0] = val0;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + l + 4] = val1;
 #else
-            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + l + 0] = *(const int *)&val0;
-            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + l + 4] = *(const int *)&val1;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + l + 0] = val0;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + l + 4] = val1;
 #endif // INT8_MMA_AVAILABLE
         }
 
