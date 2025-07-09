@@ -23,7 +23,7 @@ Information and the original CUDA implementation in [PR 113](https://github.com/
 
 ##### IQK quants
 
-Information about them can be found in [Discussion 8](https://github.com/ikawrakow/ik_llama.cpp/discussions/8). The table below contains the quants (sorted by bpw) with the PRs that implement them.
+Information about them can be found in [Discussion 8](https://github.com/ikawrakow/ik_llama.cpp/discussions/8).
 
 |  | IQ2_KS | IQ2_K (R4) | IQ3_K (R4) | IQ4_KSS | IQ4_KS (R4) | IQ4_K (R4) | IQ5_KS (R4) | IQ5_K (R4) | IQ6_K |
 |---------------------|:------:|:----------:|:----------:|:-------:|:-----------:|:----------:|:-----------:|:----------:|:-----:|
@@ -32,7 +32,8 @@ Information about them can be found in [Discussion 8](https://github.com/ikawrak
 
 ##### Misc
 
-`IQ1_S_R4`/`IQ1_M_R4`. (CPU: [PR 185](https://github.com/ikawrakow/ik_llama.cpp/pull/185)/[PR 187](https://github.com/ikawrakow/ik_llama.cpp/pull/187), CUDA: [PR 492](https://github.com/ikawrakow/ik_llama.cpp/pull/492)/[PR 494](https://github.com/ikawrakow/ik_llama.cpp/pull/494)). These differ (and thus cannot be repacked) from `IQ1_S`/`IQ1_M`.
+`IQ1_S_R4`/`IQ1_M_R4`. (CPU: [PR 185](https://github.com/ikawrakow/ik_llama.cpp/pull/185)/[PR 187](https://github.com/ikawrakow/ik_llama.cpp/pull/187), CUDA: [PR 492](https://github.com/ikawrakow/ik_llama.cpp/pull/492)/[PR 494](https://github.com/ikawrakow/ik_llama.cpp/pull/494)). 
+Note: These differ (and thus cannot be repacked) from `IQ1_S`/`IQ1_M`.
 
 #### Quantization improvements
 
