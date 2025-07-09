@@ -1627,6 +1627,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_EXP_PROBS_B,    "blk.%d.exp_probs_b" },
         }
     },
+    {
         LLM_ARCH_HUNYUAN_MOE,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
