@@ -6177,7 +6177,12 @@ static void llm_load_vocab(
             }
 
             // default special tokens
-            vocab.special_bos_id  = 11;
+            if(model.arch == LLM_ARCH_DOTS1) {
+                vocab.special_bos_id = -1;
+            }
+            else {
+                vocab.special_bos_id  = 11;
+            }
             vocab.special_eos_id  = 11;
             vocab.special_unk_id  = -1;
             vocab.special_sep_id  = -1;
@@ -17009,7 +17014,7 @@ struct llm_build_context {
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                //Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
                 Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
                 cb(Qcur, "Qcur_normed", il);
@@ -17031,7 +17036,7 @@ struct llm_build_context {
 
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
-                cb(Vcur, "Vcur", il);
+                //cb(Vcur, "Vcur", il);
 
 		cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
@@ -17217,7 +17222,7 @@ static struct ggml_cgraph * llama_build_graph(
     const llama_vocab * vocab = llama_get_vocab(&lctx);
     llama_token bos = llama_token_bos_impl(*vocab);
     llama_token eos = llama_token_eos_impl(*vocab);
-    bool is_warming_up = (batch.n_tokens == 1 && batch.token[0] == bos);
+    bool is_warming_up = (batch.n_tokens == 1 && (batch.token[0] == ((bos != -1) ? bos : eos)));
     struct llm_build_context llm(lctx, batch, cb, worst_case, is_warming_up);
 
     llm.init();
