@@ -1339,7 +1339,7 @@ static __global__ void dequantize_block_iq2_kl(const void * __restrict__ vx, dst
     int64_t ii  = blockIdx.x;
     int64_t row = (QK_K * ii) / n_per_row;
     const char * cx = (const char *)vx + row * row_size;
-    float scale = (float)*(const ggml_half *)cx * 1.025f;
+    float scale = (float)*(const ggml_half *)cx;
     const block_iq2_kl * x = (const block_iq2_kl *)(cx + sizeof(ggml_half));
     const int64_t i   = ii - (row*n_per_row)/QK_K;
 

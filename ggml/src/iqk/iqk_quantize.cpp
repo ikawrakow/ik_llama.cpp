@@ -1534,6 +1534,7 @@ inline int best_index_iq3nl(const int8_t * values, float x) {
 
 void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const float * quant_weights, float * all_scales) {
     constexpr int kBlockSize = 32;
+    constexpr float kSigmaFactor = 2.25f;
     constexpr int ntry = 5;
     static const int k_index[64] = {-1, -2, 0, -3, -4, 1, -5, -6, 2, -7, -8, 3, -9, 4, -10, 5, -11, 6, 7, -12, 8, 9, 10, -13, 11, -14, -15, -16, 12, 13, -17,
         14, -18, -19, 15, 16, 17, 18, 19, -20, -21, 20, 21, 22, 23, 24, -22, -23, 25, -24, 26, -25, 27, -26, 28, 29, -27, -28, 30, -29, -30, 31, -31, -32};
@@ -1615,7 +1616,7 @@ void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const f
         auto xbl = x + ibl*QK_K;
         float sigma2 = 0;
         for (int j = 0; j < QK_K; ++j) sigma2 += xbl[j]*xbl[j];
-        sigma2 *= 2.f/QK_K;
+        sigma2 *= kSigmaFactor/QK_K;
         for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
             auto xb = xbl + ib*kBlockSize;
             if (quant_weights) {
@@ -1705,7 +1706,7 @@ void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const f
         auto xbl = x + ibl*QK_K;
         float sigma2 = 0;
         for (int j = 0; j < QK_K; ++j) sigma2 += xbl[j]*xbl[j];
-        sigma2 *= 2.f/QK_K;
+        sigma2 *= kSigmaFactor/QK_K;
         for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
             auto xb = xbl + ib*kBlockSize;
             if (quant_weights) {
@@ -1716,6 +1717,28 @@ void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const f
             }
             int ls = nearest_int(id*scales[ib]);
             ls = std::max(-32, std::min(31, ls));
+            int lsmin = std::max(-32, ls-1);
+            int lsmax = std::min( 31, ls+1);
+            float best_score = std::numeric_limits<float>::max();
+            int best_ls = ls;
+            for (int ils = lsmin; ils <= lsmax; ++ils) {
+                float dl = d*ils;
+                float idl = dl ? 1/dl : 0.f;
+                float score = 0;
+                for (int j = 0; j < kBlockSize/2; ++j) {
+                    float w1 = weight[2*j+0];
+                    float w2 = weight[2*j+1];
+                    int idx = index(idl, xb[2*j+0], xb[2*j+1], w1, w2);
+                    float diff1 = dl*grid[idx].first  - xb[2*j+0];
+                    float diff2 = dl*grid[idx].second - xb[2*j+1];
+                    score += w1*diff1*diff1 + w2*diff2*diff2;
+                }
+                if (score < best_score) {
+                    best_score = score;
+                    best_ls = ils;
+                }
+            }
+            ls = best_ls;
             int uls = ls + 32;
             y[ibl].scales_l[ib%4] |= ((uls & 0xf) << 4*(ib/4));
             y[ibl].scales_h |= ((uls >> 4) << 2*ib);
@@ -1737,7 +1760,7 @@ void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const f
     }
     if (sumq2 > 0) d = sumqx/sumq2;
 
-    dptr[0] = GGML_FP32_TO_FP16(d);
+    dptr[0] = GGML_FP32_TO_FP16(1.025f * d);
 
 }
 }
