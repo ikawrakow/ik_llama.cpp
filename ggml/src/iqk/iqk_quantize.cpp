@@ -1515,9 +1515,10 @@ void vec_dot_iq2_ks_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx
 }
 
 //
-// ============================================== iq3_k
+// ======================================== iq2_kl
 //
 namespace {
+
 const int8_t iq3nl_index[111] = {
   0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  8,  8,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  9,
   9,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 10, 10,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 11, 11,  4,  4,  4,  4,
@@ -1530,6 +1531,294 @@ inline int best_index_iq3nl(const int8_t * values, float x) {
     ix = iq3nl_index[ix];
     return ix < 8 ? ix : x - values[ix-8] < values[ix-7] - x ? ix-8 : ix-7;
 }
+
+void quantize_row_iq2_kl_impl(const float * x, void * vy, int n_per_row, const float * quant_weights, float * all_scales) {
+    constexpr int kBlockSize = 32;
+    constexpr int ntry = 5;
+    static const int k_index[64] = {-1, -2, 0, -3, -4, 1, -5, -6, 2, -7, -8, 3, -9, 4, -10, 5, -11, 6, 7, -12, 8, 9, 10, -13, 11, -14, -15, -16, 12, 13, -17,
+        14, -18, -19, 15, 16, 17, 18, 19, -20, -21, 20, 21, 22, 23, 24, -22, -23, 25, -24, 26, -25, 27, -26, 28, 29, -27, -28, 30, -29, -30, 31, -31, -32};
+    static const std::vector<std::vector<int>> k_neighbours = {
+        { 2, 0, 6, 11, 7, 3, 8, 15,  },
+        { 0, 2, 3, 6, 7, 1, 8, 4,  },
+        { 0, 1, 3, 4, 8, 7, 9, 6,  },
+        { 1, 0, 3, 4, 8, 9, 7, 10,  },
+        { 1, 4, 5, 10, 9, 3, 8, 0,  },
+        { 5, 1, 4, 10, 9, 14, 8, 3,  },
+        { 6, 2, 7, 0, 3, 11, 8, 15,  },
+        { 3, 7, 0, 6, 8, 4, 12, 9,  },
+        { 3, 4, 8, 9, 1, 7, 12, 10,  },
+        { 4, 10, 5, 9, 1, 8, 13, 14,  },
+        { 11, 2, 6, 7, 20, 15, 25, 21,  },
+        { 8, 7, 3, 12, 9, 16, 17, 13,  },
+        { 14, 5, 10, 19, 9, 13, 4, 18,  },
+        { 6, 15, 7, 11, 20, 21, 16, 2,  },
+        { 15, 7, 16, 6, 21, 12, 17, 22,  },
+        { 12, 16, 17, 8, 15, 7, 13, 22,  },
+        { 19, 10, 13, 18, 14, 9, 12, 24,  },
+        { 11, 20, 25, 6, 15, 2, 21, 7,  },
+        { 20, 15, 21, 6, 11, 7, 16, 26,  },
+        { 14, 19, 29, 10, 28, 18, 13, 24,  },
+        { 25, 11, 20, 21, 15, 6, 26, 30,  },
+        { 19, 24, 28, 18, 29, 23, 13, 17,  },
+        { 29, 19, 14, 28, 24, 18, 10, 13,  },
+        { 20, 26, 21, 25, 30, 15, 22, 16,  },
+        { 27, 26, 22, 23, 21, 30, 16, 24,  },
+        { 27, 24, 28, 31, 23, 18, 22, 17,  },
+        { 25, 30, 20, 26, 21, 11, 15, 22,  },
+        { 30, 26, 25, 20, 21, 27, 22, 15,  },
+        { 30, 27, 31, 26, 22, 23, 21, 24,  },
+        { 31, 27, 30, 26, 28, 23, 22, 24,  },
+        { 31, 28, 29, 27, 24, 23, 19, 18,  },
+        { 29, 28, 31, 24, 19, 27, 14, 18,  },
+    };
+    auto values = iq3nl_values;
+    std::pair<int8_t, int8_t> grid[32];
+    for (int j = 0; j < 64; ++j) {
+        if (int i = k_index[j]; i >= 0) {
+            int i1 = j/8, i2 = j%8;
+            grid[i] = {values[i1], values[i2]};
+        }
+    }
+
+    ggml_half * dptr = (ggml_half *)vy;
+    auto y = (block_iq2_kl *)(dptr + 1);
+
+    float weight[kBlockSize];
+
+    auto index = [&grid, values] (float id, float x1, float x2, float w1, float w2) {
+        float sx1 = id*x1;
+        float sx2 = id*x2;
+        int l1 = best_index_iq3nl(values, sx1);
+        int l2 = best_index_iq3nl(values, sx2);
+        int i = k_index[8*l1 + l2];
+        if (i >= 0) return i;
+        auto& neigh = k_neighbours[-i-1];
+        float best = std::numeric_limits<float>::max();
+        int ibest = -1;
+        for (auto& n : neigh) {
+            float diff1 = grid[n].first  - sx1;
+            float diff2 = grid[n].second - sx2;
+            float score = w1*diff1*diff1 + w2*diff2*diff2;
+            if (score < best) {
+                best = score; ibest = n;
+            }
+        }
+        GGML_ASSERT(ibest >= 0);
+        return ibest;
+    };
+
+    float max_scale = 0, max_abs_scale = 0;
+
+    for (int ibl = 0; ibl < n_per_row/QK_K; ++ibl) {
+        std::memset(&y[ibl], 0, sizeof(block_iq2_kl));
+        auto scales = all_scales + ibl*(QK_K/kBlockSize);
+        auto xbl = x + ibl*QK_K;
+        float sigma2 = 0;
+        for (int j = 0; j < QK_K; ++j) sigma2 += xbl[j]*xbl[j];
+        sigma2 *= 2.f/QK_K;
+        for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
+            auto xb = xbl + ib*kBlockSize;
+            if (quant_weights) {
+                auto qw = quant_weights + ibl*QK_K + ib*kBlockSize;
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = qw[j]*sqrt(sigma2 + xb[j]*xb[j]);
+            } else {
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = std::abs(xb[j]); //xb[j]*xb[j];
+            }
+            float amax = 0, max = 0;
+            for (int j = 0; j < kBlockSize; ++j) {
+                float ax = std::abs(xb[j]);
+                if (ax > amax) {
+                    amax = ax; max = xb[j];
+                }
+            }
+            if (!amax) {
+                scales[ib] = 0;
+                continue;
+            }
+            float d = ntry > 0 ? -max/values[0] : max/values[0];
+            float id = 1/d;
+            float sumqx_p = 0, sumq2_p = 0;
+            float sumqx_m = 0, sumq2_m = 0;
+            for (int j = 0; j < kBlockSize; j += 2) {
+                float w1 = weight[j+0];
+                float w2 = weight[j+1];
+                int idx = index(id, xb[j+0], xb[j+1], w1, w2);
+                float q1 = grid[idx].first ;
+                float q2 = grid[idx].second;
+                sumqx_p += w1*q1*xb[j] + w2*q2*xb[j+1];
+                sumq2_p += w1*q1*q1 + w2*q2*q2;
+                idx = index(-id, xb[j+0], xb[j+1], w1, w2);
+                q1 = grid[idx].first ;
+                q2 = grid[idx].second;
+                sumqx_m += w1*q1*xb[j] + w2*q2*xb[j+1];
+                sumq2_m += w1*q1*q1 + w2*q2*q2;
+            }
+            d = sumqx_p/sumq2_p;
+            float best = d*sumqx_p;
+            if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+                d = sumqx_m/sumq2_m; best = d*sumqx_m;
+            }
+            for (int itry = -ntry; itry <= ntry; ++itry) {
+                id = (itry + values[0])/max;
+                sumqx_p = sumq2_p = 0;
+                sumqx_m = sumq2_m = 0;
+                for (int j = 0; j < kBlockSize; j += 2) {
+                    float w1 = weight[j+0];
+                    float w2 = weight[j+1];
+                    int idx = index(id, xb[j+0], xb[j+1], w1, w2);
+                    float q1 = grid[idx].first ;
+                    float q2 = grid[idx].second;
+                    sumqx_p += w1*q1*xb[j] + w2*q2*xb[j+1];
+                    sumq2_p += w1*q1*q1 + w2*q2*q2;
+                    idx = index(-id, xb[j+0], xb[j+1], w1, w2);
+                    q1 = grid[idx].first ;
+                    q2 = grid[idx].second;
+                    sumqx_m += w1*q1*xb[j] + w2*q2*xb[j+1];
+                    sumq2_m += w1*q1*q1 + w2*q2*q2;
+                }
+                if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
+                    d = sumqx_p/sumq2_p; best = d * sumqx_p;
+                }
+                if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+                    d = sumqx_m/sumq2_m; best = d * sumqx_m;
+                }
+            }
+            scales[ib] = d;
+            float ad = std::abs(d);
+            if (ad > max_abs_scale) {
+                max_abs_scale = ad; max_scale = d;
+            }
+        }
+    }
+
+    if (!max_abs_scale) {
+        dptr[0] = GGML_FP32_TO_FP16(0.f);
+        return;
+    }
+
+    float d = -max_scale/32;
+    float id = 1/d;
+
+    float sumqx = 0, sumq2 = 0;
+    for (int ibl = 0; ibl < n_per_row/QK_K; ++ibl) {
+        auto scales = all_scales + ibl*(QK_K/kBlockSize);
+        auto xbl = x + ibl*QK_K;
+        float sigma2 = 0;
+        for (int j = 0; j < QK_K; ++j) sigma2 += xbl[j]*xbl[j];
+        sigma2 *= 2.f/QK_K;
+        for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
+            auto xb = xbl + ib*kBlockSize;
+            if (quant_weights) {
+                auto qw = quant_weights + ibl*QK_K + ib*kBlockSize;
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = qw[j]*sqrt(sigma2 + xb[j]*xb[j]);
+            } else {
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = std::abs(xb[j]); //xb[j]*xb[j];
+            }
+            int ls = nearest_int(id*scales[ib]);
+            ls = std::max(-32, std::min(31, ls));
+            int uls = ls + 32;
+            y[ibl].scales_l[ib%4] |= ((uls & 0xf) << 4*(ib/4));
+            y[ibl].scales_h |= ((uls >> 4) << 2*ib);
+            if (ls == 0) continue;
+            float dl = d*ls;
+            float idl = 1/dl;
+            for (int j = 0; j < kBlockSize/2; ++j) {
+                float w1 = weight[2*j+0];
+                float w2 = weight[2*j+1];
+                int idx = index(idl, xb[2*j+0], xb[2*j+1], w1, w2);
+                y[ibl].qs[16*(ib/2) + j] |= ((idx & 0xf) << 4*(ib%2));
+                y[ibl].qh[j] |= ((idx >> 4) << ib);
+                float q1 = ls*grid[idx].first ;
+                float q2 = ls*grid[idx].second;
+                sumqx += w1*q1*xb[2*j] + w2*q2*xb[2*j+1];
+                sumq2 += w1*q1*q1 + w2*q2*q2;
+            }
+        }
+    }
+    if (sumq2 > 0) d = sumqx/sumq2;
+
+    dptr[0] = GGML_FP32_TO_FP16(d);
+
+}
+}
+
+void quantize_row_iq2_kl_ref(const float * x, block_iq2_kl * y, int64_t k) {
+    assert(k % QK_K == 0);
+    quantize_iq2_kl(x, (void *)y, 1, k, nullptr);
+}
+
+void quantize_row_iq2_kl(const float * x, void * vy, int64_t k) {
+    assert(k % QK_K == 0);
+    block_iq2_kl * y = (block_iq2_kl *)vy;
+    quantize_row_iq2_kl_ref(x, y, k);
+}
+
+size_t quantize_iq2_kl(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
+    constexpr int kBlockSize = 32;
+    GGML_ASSERT(n_per_row%QK_K == 0);
+    auto row_size = ggml_row_size(GGML_TYPE_IQ2_KL, n_per_row);
+    int nblock = n_per_row/QK_K;
+    std::vector<float> all_scales(nblock*(QK_K/kBlockSize));
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrows; ++row) {
+        quantize_row_iq2_kl_impl(src, (void *)qrow, n_per_row, imatrix, all_scales.data());
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrows * row_size;
+}
+
+void dequantize_row_iq2_kl(const block_iq2_kl  * x, float * y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    const ggml_half * dptr = (const ggml_half *)x;
+    const float d = GGML_FP16_TO_FP32(*dptr);
+    x = (const block_iq2_kl *)(dptr + 1);
+
+    for (int i = 0; i < nb; i++) {
+
+        auto qs = x[i].qs;
+        auto qh = x[i].qh;
+        auto scales_h = x[i].scales_h;
+
+        for (int ib64 = 0; ib64 < QK_K/64; ++ib64) {
+            float dl1 = d * (int(((x[i].scales_l[(2*ib64+0)%4] >> 4*(ib64/2)) & 0xf) | (((scales_h >> (4*ib64+0)) & 3) << 4)) - 32);
+            float dl2 = d * (int(((x[i].scales_l[(2*ib64+1)%4] >> 4*(ib64/2)) & 0xf) | (((scales_h >> (4*ib64+2)) & 3) << 4)) - 32);
+            for (int j = 0; j < 16; ++j) {
+                const int8_t * val1 = (const int8_t *)(iq2kl_values + ((qs[j] & 0xf) | (((qh[j] >> (2*ib64+0)) & 1) << 4)));
+                const int8_t * val2 = (const int8_t *)(iq2kl_values + ((qs[j] >>  4) | (((qh[j] >> (2*ib64+1)) & 1) << 4)));
+                y[2*j+ 0] = dl1 * val1[0];
+                y[2*j+ 1] = dl1 * val1[1];
+                y[2*j+32] = dl2 * val2[0];
+                y[2*j+33] = dl2 * val2[1];
+            }
+            y  += 64;
+            qs += 16;
+        }
+
+    }
+}
+
+void vec_dot_iq2_kl_q8_k(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    GGML_UNUSED(nrc);
+    GGML_UNUSED(bx);
+    GGML_UNUSED(by);
+    GGML_UNUSED(bs);
+
+#if GGML_USE_IQK_MULMAT
+    if (iqk_mul_mat(1, 1, n, GGML_TYPE_IQ2_KL, vx, 0, GGML_TYPE_Q8_K, vy, 0, s, 0, 0, 1)) {
+        return;
+    }
+#endif
+}
+
+//
+// ============================================== iq3_k
+//
+namespace {
 
 static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, const float * quant_weights) {
 
