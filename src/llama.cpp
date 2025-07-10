@@ -17089,7 +17089,6 @@ struct llm_build_context {
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                //Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
                 Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
                 cb(Qcur, "Qcur_normed", il);
@@ -17111,7 +17110,6 @@ struct llm_build_context {
 
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
-                //cb(Vcur, "Vcur", il);
 
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
