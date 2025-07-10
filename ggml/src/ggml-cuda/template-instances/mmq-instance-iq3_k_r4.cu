@@ -37,7 +37,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     #pragma unroll
         for (int l = 0; l < 2; ++l) {
 
-            auto values_l = iq3nl_values + (((bxi->extra[ir+4*l] >> kqsx) & 1) << 3);
+            auto values_l = iq3k_table + (((bxi->extra[ir+4*l] >> kqsx) & 1) << 6);
 
             const int ql = get_int_b4(bxi->qs, 8*kqsx + ir + 4*l);
             aux32[0] = ((ql >> 0) & 0x03030303) | ((qh << 2) & 0x04040404);
@@ -45,21 +45,21 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             aux32[2] = ((ql >> 4) & 0x03030303) | ((qh >> 0) & 0x04040404);
             aux32[3] = ((ql >> 6) & 0x03030303) | ((qh >> 1) & 0x04040404);
 
-            const char4 val0  = make_char4(values_l[aux8[ 0]], values_l[aux8[ 1]], values_l[aux8[ 2]], values_l[aux8[ 3]]);
-            const char4 val1  = make_char4(values_l[aux8[ 4]], values_l[aux8[ 5]], values_l[aux8[ 6]], values_l[aux8[ 7]]);
-            const char4 val2  = make_char4(values_l[aux8[ 8]], values_l[aux8[ 9]], values_l[aux8[10]], values_l[aux8[11]]);
-            const char4 val3  = make_char4(values_l[aux8[12]], values_l[aux8[13]], values_l[aux8[14]], values_l[aux8[15]]);
+            int val0  = int_from_table_2(aux8+ 0, values_l);
+            int val1  = int_from_table_2(aux8+ 4, values_l);
+            int val2  = int_from_table_2(aux8+ 8, values_l);
+            int val3  = int_from_table_2(aux8+12, values_l);
 
 #ifdef INT8_MMA_AVAILABLE
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 0] = *(const int *)&val0;
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 1] = *(const int *)&val1;
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 2] = *(const int *)&val2;
-            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 3] = *(const int *)&val3;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 0] = val0;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 1] = val1;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 2] = val2;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 3] = val3;
 #else
-            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 0] = *(const int *)&val0;
-            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 1] = *(const int *)&val1;
-            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 2] = *(const int *)&val2;
-            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 3] = *(const int *)&val3;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 0] = val0;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 1] = val1;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 2] = val2;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 3] = val3;
 #endif // INT8_MMA_AVAILABLE
 
             qh >>= 4;
