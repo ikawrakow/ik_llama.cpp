@@ -4582,6 +4582,142 @@ void iqk_convert_iq2_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
     }
 }
 
+//struct DequantizerIQ2KL final : public BaseDequantizer<block_iq2_kl, true, true> {
+//    DequantizerIQ2KL(const void * vx, size_t bx, int nrc) : BaseDequantizer(vx, bx, nrc), shuff(load_shuffle()), shifts(load_shift()) { load_values(values); }
+//
+//    constexpr static int num_blocks() { return 8; }
+//    constexpr static bool should_scale_quants() { return false; }
+//
+//    template <typename Q8>
+//    inline int32x4x2_t new_block(int i, [[maybe_unused]] const Q8& q8, [[maybe_unused]] float32x4_t * acc) {
+//        uint32_t aux32; std::memcpy(&aux32, x[i].scales_l, 4);
+//        auto scl = vand_u8(vdup_n_u8(0xf), vreinterpret_u8_u32(uint32x2_t{aux32, aux32 >> 4}));
+//        auto sch = vandq_u16(vshlq_u16(vdupq_n_u16(x[i].scales_h), shifts), vdupq_n_u16(0x30));
+//        auto scales16 = vsubq_s16(vreinterpretq_s16_u16(vorrq_u16(sch, vmovl_u8(scl))), vdupq_n_s16(32));
+//        int32x4x2_t scales = {vmovl_s16(vget_low_s16(scales16)), vmovl_s16(vget_high_s16(scales16))};
+//        return scales;
+//    }
+//    inline void prepare(int i, int j) {
+//        hbits = j == 0 ? vld1q_u8(x[i].qh) : vshrq_n_u8(hbits, 4);
+//        auto lbits = vld1q_u8_x2(x[i].qs+32*j);
+//
+//        uint8x16x4_t aux;
+//        aux.val[0] = vorrq_u8(vandq_u8(m10, vshlq_n_u8(hbits, 4)), vandq_u8(lbits.val[0], vdupq_n_u8(0xf)));
+//        aux.val[1] = vorrq_u8(vandq_u8(m10, vshlq_n_u8(hbits, 3)), vshrq_n_u8(lbits.val[0], 4));
+//        aux.val[2] = vorrq_u8(vandq_u8(m10, vshlq_n_u8(hbits, 2)), vandq_u8(lbits.val[1], vdupq_n_u8(0xf)));
+//        aux.val[3] = vorrq_u8(vandq_u8(m10, vshlq_n_u8(hbits, 1)), vshrq_n_u8(lbits.val[1], 4));
+//
+//        process_pair(aux.val[0], bits.b1.val+0);
+//        process_pair(aux.val[1], bits.b1.val+2);
+//        process_pair(aux.val[2], bits.b2.val+0);
+//        process_pair(aux.val[3], bits.b2.val+2);
+//
+//    }
+//    static inline int16x8_t load_shift() {
+//    }
+//    static inline void load_values(int8x16x2_t * values) {
+//    }
+//    static uint8x16x2_t load_shuffle() {
+//        return vld1q_u8_x2(k_shuff);
+//    }
+//
+//    struct { uint8x16x4_t b1, b2; } bits;
+//    uint8x16_t hbits;
+//    const uint8x16x2_t shuff;
+//    const int16x8_t shifts;
+//    const uint8x16_t m10 = vdupq_n_u8(0x10);
+//    int8x16x2_t values[2];
+//
+//};
+
+void iqk_convert_iq2_kl_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    int nb = n/QK_K;
+
+    const block_iq2_kl * x8[8];
+
+    block_q8_k_r8 * y = (block_q8_k_r8 *)vy;
+
+    ggml_half dh[8];
+    float     dnew[8];
+    uint32_t  block[8];
+    int8_t    ls[16];
+
+    int8x16x2_t xv[8];
+
+    const uint8x16_t m10 = vdupq_n_u8(0x10);
+    static const uint8_t k_shuff[32] = {
+        0, 16, 1, 17,  2, 18,  3, 19,  4, 20,  5, 21,  6, 22,  7, 23,
+        8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31
+    };
+    auto shuff = vld1q_u8_x2(k_shuff);
+
+    int8x16x2_t values[2];
+    static const int8_t k_values[64] = {
+        -63, -63, -40, -40, -40, -40, -23, -23, -23, -23, -23, -10, -10, -10, -10, 1, 1, 1, 1, 1, 13, 13, 13, 13, 13, 28, 28, 28, 28, 28, 47, 47,
+        -23, 13, -63, -10, 13, 47, -40, -23, 1, 13, 28, -63, 1, 13, 47, -23, -10, 1, 13, 28, -40, -23, -10, 1, 13, -63, -23, 1, 28, 47, -23, 13,
+    };
+    values[0] = vld1q_s8_x2(k_values+ 0);
+    values[1] = vld1q_s8_x2(k_values+32);
+
+    auto process_pair = [&values, &shuff] (uint8x16_t x, int8x16_t * val) {
+        int8x16x2_t aux{ vqtbl2q_s8(values[0], x), vqtbl2q_s8(values[1], x) };
+        val[0] = vqtbl2q_s8(aux, shuff.val[0]);
+        val[1] = vqtbl2q_s8(aux, shuff.val[1]);
+    };
+
+    uint32_t sl32;
+    auto s8 = (const int8_t *)&sl32;
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) {
+            const ggml_half * dptr = (const ggml_half *)((const char *)vx + (ix+k)*bx);
+            dh[k] = dptr[0];
+            x8[k] = (const block_iq2_kl *)(dptr + 1);
+        }
+        float32x4x2_t vd{vcvt_f32_f16(vld1_f16((const float16_t *)dh+0)), vcvt_f32_f16(vld1_f16((const float16_t *)dh+4))};
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                uint32_t aux32; std::memcpy(&aux32, x8[k][i].scales_l, 4);
+                auto sh = x8[k][i].scales_h;
+                auto hbits = vld1q_u8(x8[k][i].qh);
+                for (int i128 = 0; i128 < 2; ++i128) {
+
+                    sl32 = aux32 & 0x0f0f0f0f;
+                    ls[8*i128+0] = ls[8*i128+1] = (s8[0] | ((sh << 4) & 0x30)) - 32;
+                    ls[8*i128+2] = ls[8*i128+3] = (s8[1] | ((sh << 2) & 0x30)) - 32;
+                    ls[8*i128+4] = ls[8*i128+5] = (s8[2] | ((sh >> 0) & 0x30)) - 32;
+                    ls[8*i128+6] = ls[8*i128+7] = (s8[3] | ((sh >> 2) & 0x30)) - 32;
+                    sh >>= 8; aux32 >>= 4;
+
+                    auto lbits = vld1q_u8_x2(x8[k][i].qs+32*i128);
+
+                    uint8x16x4_t aux;
+                    aux.val[0] = vorrq_u8(vandq_u8(m10, vshlq_n_u8(hbits, 4)), vandq_u8(lbits.val[0], vdupq_n_u8(0xf)));
+                    aux.val[1] = vorrq_u8(vandq_u8(m10, vshlq_n_u8(hbits, 3)), vshrq_n_u8(lbits.val[0], 4));
+                    aux.val[2] = vorrq_u8(vandq_u8(m10, vshlq_n_u8(hbits, 2)), vandq_u8(lbits.val[1], vdupq_n_u8(0xf)));
+                    aux.val[3] = vorrq_u8(vandq_u8(m10, vshlq_n_u8(hbits, 1)), vshrq_n_u8(lbits.val[1], 4));
+                    hbits = vshrq_n_u8(hbits, 4);
+
+                    process_pair(aux.val[0], xv[4*i128+0].val);
+                    process_pair(aux.val[1], xv[4*i128+1].val);
+                    process_pair(aux.val[2], xv[4*i128+2].val);
+                    process_pair(aux.val[3], xv[4*i128+3].val);
+                }
+                dnew[k] = convert_to_q8_k_r8(1.f/125, xv, ls, block, (uint32_t *)y[i].qs + k);
+            }
+            auto d = vld1q_f32_x2(dnew);
+            d.val[0] = vmulq_f32(d.val[0], vd.val[0]);
+            d.val[1] = vmulq_f32(d.val[1], vd.val[1]);
+            vst1_f16((float16_t *)y[i].d + 0,vcvt_f16_f32(d.val[0]));
+            vst1_f16((float16_t *)y[i].d + 4,vcvt_f16_f32(d.val[1]));
+        }
+        y += nb;
+    }
+}
+
 void iqk_convert_iq4_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
@@ -5024,6 +5160,7 @@ bool iqk_convert_iqk_quants_q80_r8(int type, int n, const void * vx, size_t bx, 
     switch (ggml_type(type)) {
         case GGML_TYPE_IQ2_KS : iqk_convert_iq2_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ2_K  : iqk_convert_iq2_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ2_KL : iqk_convert_iq2_kl_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_KS : iqk_convert_iq3_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_K  : iqk_convert_iq3_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_KS : iqk_convert_iq4_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
