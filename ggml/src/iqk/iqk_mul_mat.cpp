@@ -912,6 +912,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
             return iqk_set_kernels_kquants(ne00, typeA, typeB, m.funcs, m.func16);
         case GGML_TYPE_IQ2_KS:
         case GGML_TYPE_IQ2_K:
+        case GGML_TYPE_IQ2_KL:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ4_KSS:
