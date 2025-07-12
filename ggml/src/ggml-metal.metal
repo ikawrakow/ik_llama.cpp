@@ -8975,12 +8975,15 @@ void dequantize_iq2_kl(device const block_iq2_kl * xb, short il, thread type4x4 
 
     half d = (int16_t(((xb->scales_l[ib32%4] >> 4*(ib32/4)) & 0xf) | (((xb->scales_h >> 2*ib32) & 0x3) << 4)) - 32);
 
-    thread uint16_t aux16;
-    thread const uint8_t * aux8 = (thread const uint8_t *)&aux16;
+    uint32_t aux32[2];
+    thread const uint8_t * aux8 = (thread const uint8_t *)aux32;
+
+    aux32[0] = (((ql[0] | (ql[1] << 16)) >> 4*(ib32%2)) & 0x0f0f0f0f) | ((((qh[0] | (qh[1] << 16)) >> ib32) & 0x01010101) << 4);
+    aux32[1] = (((ql[2] | (ql[3] << 16)) >> 4*(ib32%2)) & 0x0f0f0f0f) | ((((qh[2] | (qh[3] << 16)) >> ib32) & 0x01010101) << 4);
+
     for (int i = 0; i < 4; ++i) {
-        aux16 = ((ql[i] >> 4*(ib32%2)) & 0x0f0f) | (((qh[i] >> ib32) & 0x0101) << 4);
-        constant const int8_t * val1 = (constant const int8_t *)(iq2kl_values + aux8[0]);
-        constant const int8_t * val2 = (constant const int8_t *)(iq2kl_values + aux8[1]);
+        constant const int8_t * val1 = (constant const int8_t *)(iq2kl_values + aux8[2*i+0]);
+        constant const int8_t * val2 = (constant const int8_t *)(iq2kl_values + aux8[2*i+1]);
         reg[i][0] = d * val1[0];
         reg[i][1] = d * val1[1];
         reg[i][2] = d * val2[0];
