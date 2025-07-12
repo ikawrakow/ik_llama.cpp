@@ -4002,6 +4002,13 @@ constexpr constant static half  kvalues_iq2k_h[8] = { -31.h, -13.h, 1.h, 17.h, -
 constexpr constant static float kvalues_iq3k_f[16] = { -63.f, -40.f, -23.f, -10.f, 1.f, 13.f, 28.f,  47.f, -59.f, -36.f, -19.f,  -6.f, 5.f, 17.f, 32.f,  51.f };
 constexpr constant static half  kvalues_iq3k_h[16] = { -63.h, -40.h, -23.h, -10.h, 1.h, 13.h, 28.h,  47.h, -59.h, -36.h, -19.h,  -6.h, 5.h, 17.h, 32.h,  51.h };
 
+constexpr constant static half2 kvalues_iq2kl_h[32] = {
+    {-63.h, -23.h}, {-63.h, 13.h}, {-40.h, -63.h}, {-40.h, -10.h}, {-40.h, 13.h}, {-40.h, 47.h}, {-23.h, -40.h}, {-23.h, -23.h},
+    {-23.h, 1.h}, {-23.h, 13.h}, {-23.h, 28.h}, {-10.h, -63.h}, {-10.h, 1.h}, {-10.h, 13.h}, {-10.h, 47.h}, {1.h, -23.h}, {1.h, -10.h},
+    {1.h, 1.h}, {1.h, 13.h}, {1.h, 28.h}, {13.h, -40.h}, {13.h, -23.h}, {13.h, -10.h}, {13.h, 1.h}, {13.h, 13.h}, {28.h, -63.h},
+    {28.h, -23.h}, {28.h, 1.h}, {28.h, 28.h}, {28.h, 47.h}, {47.h, -23.h}, {47.h, 13.h},
+};
+
 kernel void kernel_cpy_f32_iq4_nl(
         device const float * src0,
         device        void * dst,
@@ -8982,8 +8989,8 @@ void dequantize_iq2_kl(device const block_iq2_kl * xb, short il, thread type4x4 
     aux32[1] = (((ql[2] | (ql[3] << 16)) >> 4*(ib32%2)) & 0x0f0f0f0f) | ((((qh[2] | (qh[3] << 16)) >> ib32) & 0x01010101) << 4);
 
     for (int i = 0; i < 4; ++i) {
-        constant const int8_t * val1 = (constant const int8_t *)(iq2kl_values + aux8[2*i+0]);
-        constant const int8_t * val2 = (constant const int8_t *)(iq2kl_values + aux8[2*i+1]);
+        constant const half2 & val1 = *(constant const half2 *)(kvalues_iq2kl_h + aux8[2*i+0]);
+        constant const half2 & val2 = *(constant const half2 *)(kvalues_iq2kl_h + aux8[2*i+1]);
         reg[i][0] = d * val1[0];
         reg[i][1] = d * val1[1];
         reg[i][2] = d * val2[0];
