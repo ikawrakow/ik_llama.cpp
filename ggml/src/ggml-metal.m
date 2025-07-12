@@ -2577,7 +2577,8 @@ static void ggml_metal_encode_node(
                             }
                             else if (src0t == GGML_TYPE_IQ2_KS || src0t == GGML_TYPE_IQ2_K || src0t == GGML_TYPE_IQ3_K || src0t == GGML_TYPE_IQ3_KS ||
                                      src0t == GGML_TYPE_IQ2_KL) {
-                                const int mem_size = src0t == GGML_TYPE_IQ2_KS ? 64*sizeof(float)
+                                const int mem_size = src0t == GGML_TYPE_IQ2_KL ? 128*sizeof(float)
+                                                   : src0t == GGML_TYPE_IQ2_KS ? 64*sizeof(float)
                                                    : src0t == GGML_TYPE_IQ3_K || src0t == GGML_TYPE_IQ3_KS ? 32*sizeof(float) : 16*sizeof(float);
                                 [encoder setThreadgroupMemoryLength:mem_size atIndex:0];
                                 [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 7)/8, ne11, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
@@ -3025,7 +3026,8 @@ static void ggml_metal_encode_node(
                     }
                     else if (src0t == GGML_TYPE_IQ2_KS || src0t == GGML_TYPE_IQ2_K || src0t == GGML_TYPE_IQ3_K || src0t == GGML_TYPE_IQ3_KS ||
                              src0t == GGML_TYPE_IQ2_KL) {
-                        const int mem_size = src0t == GGML_TYPE_IQ2_KS ? 64*sizeof(float)
+                        const int mem_size = src0t == GGML_TYPE_IQ2_KL ? 128*sizeof(float)
+                                           : src0t == GGML_TYPE_IQ2_KS ? 64*sizeof(float)
                                            : src0t == GGML_TYPE_IQ3_K || src0t == GGML_TYPE_IQ3_KS ? 32*sizeof(float) : 16*sizeof(float);
                         [encoder setThreadgroupMemoryLength:mem_size atIndex:0];
                         [encoder dispatchThreadgroups:MTLSizeMake((ne01 + 7)/8, _ne1, tgz) threadsPerThreadgroup:MTLSizeMake(nth0, nth1, 1)];
