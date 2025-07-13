@@ -3863,21 +3863,50 @@ int main(int argc, char ** argv) {
         res.set_content(json{{"ok", true}, {"result", result}}.dump(), "application/json");
     });
 
-    const auto session_handler = [](auto& db, auto& res) {
+    const auto handle_sessions = db_handler([](auto& db, const json& body, auto&, auto& res) {
         json result = json::object();
         db.db << "SELECT key, data FROM names" >> [&](const std::string& key, const std::string& data) {
             result[key] = data;
         };
         res.set_content(json{{"ok", true}, {"result", result}}.dump(), "application/json");
-    };
-
-    const auto handle_sessions_post = db_handler([session_handler](auto& db, const json&, auto&, auto& res) { session_handler(db, res); });
-    const auto handle_sessions_get = db_handler([session_handler](auto& db, const json&, auto&, auto& res) { session_handler(db, res); });
+    });
 
     const auto handle_delete = db_handler([normalize_store_name, get_key_string](auto& db, const json& body, auto&, auto& res) {
         db.db << "DELETE FROM " + normalize_store_name(body["storeName"]) + " WHERE key = ?"
             << get_key_string(body["key"]);
         res.set_content(json{{"ok", true}, {"result", "Session deleted successfully"}}.dump(), "application/json");
+    });
+
+    const auto handle_vacuum = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        json result = json::object();
+        db.db << "VACUUM";
+        res.set_content(json{"ok", true}.dump(), "application/json");
+    });
+
+    const auto handle_zstd_get_configs = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        json result = json::object();
+        db.db << "SELECT id, config FROM _zstd_configs" >> [&](const std::string id, const std::string& config) {
+            result[id] = config;
+        };
+        res.set_content(json{{"ok", true}, {"configs", result}}.dump(), "application/json");
+    });
+
+    const auto handle_zstd_maintenance = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        std::string data;
+        if (body["duration"].is_null()) {
+            db.db << "select zstd_incremental_maintenance(?, ?)" <<  nullptr << body["db_load"].get<double>() >> data;
+        }
+	else {
+            db.db << "select zstd_incremental_maintenance(?, ?)" << body["duration"].get<double>() << body["db_load"].get<double>() >> data;
+        }
+        json response{{"ok", true}};
+        response["result"] = json::parse(data);
+        res.set_content(response.dump(), "application/json");
+    });
+
+    const auto handle_zstd_enable = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        db.db << "select zstd_enable_transparent('{\"table\": \"" + body["table"].get<std::string>() + "\",\"column\": \"" + body["column"].get<std::string>() + "\", \"compression_level\": " + std::to_string(body["compression_level"].get<int>()) + ", \"dict_chooser\": \"''a''\", \"train_dict_samples_ratio\": " + std::to_string(body["train_dict_samples_ratio"].get<int>()) + "}')";
+        res.set_content(json{"ok", true}.dump(), "application/json");
     });
 
     //
@@ -3950,11 +3979,15 @@ int main(int argc, char ** argv) {
         svr->Post("/save", handle_save);
         svr->Post("/rename", handle_rename);
         svr->Post("/all", handle_all);
-        svr->Post("/sessions", handle_sessions_post);
-        svr->Get ("/sessions", handle_sessions_get);
+        svr->Post("/sessions", handle_sessions);
+        svr->Get ("/sessions", handle_sessions);
         svr->Post("/delete", handle_delete);
+	//VACUUM is there for the extension but does not require the extension
+	svr->Get ("/vacuum", handle_vacuum);
         if (sqlite_extension_loaded) {
-            //TODO: add endpoints that do zstd_enable_transparent, zstd_incremental_maintenance, and maybe VACUUM
+            svr->Get ("/zstd_get_configs", handle_zstd_get_configs);
+            svr->Post("/zstd_incremental_maintenance", handle_zstd_maintenance);
+            svr->Post("/zstd_enable_transparent", handle_zstd_enable);
 	}
     }
 
