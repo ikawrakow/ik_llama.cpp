@@ -116,7 +116,7 @@
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
-#define LLAMA_MAX_EXPERTS 256  // DeepSeekV2
+#define LLAMA_MAX_EXPERTS 384  // Kimi-K2
 
 //
 // helpers
@@ -6401,6 +6401,10 @@ static void llm_load_vocab(
             } else if (
                 tokenizer_pre == "hunyuan") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_HUNYUAN;
+                vocab.tokenizer_clean_spaces = false;
+            } else if (
+                tokenizer_pre == "kimi-k2") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_KIMI_K2;
                 vocab.tokenizer_clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
