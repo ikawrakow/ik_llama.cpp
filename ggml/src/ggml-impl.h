@@ -748,6 +748,16 @@ static size_t ggml_hash_find_or_insert(struct ggml_hash_set * hash_set, struct g
     GGML_ABORT("fatal error");
 }
 
+static int32_t ggml_get_op_params_i32(const struct ggml_tensor * tensor, uint32_t i) {
+    assert(i < GGML_MAX_OP_PARAMS / sizeof(int32_t));
+    return ((const int32_t *)(tensor->op_params))[i];
+}
+
+static float ggml_get_op_params_f32(const struct ggml_tensor * tensor, uint32_t i) {
+    assert(i < GGML_MAX_OP_PARAMS / sizeof(float));
+    return ((const float *)(tensor->op_params))[i];
+}
+
 #ifdef __cplusplus
 }
 #endif
