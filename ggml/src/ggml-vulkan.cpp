@@ -4177,8 +4177,8 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
     }
 
     if (!(src1_type == GGML_TYPE_F32 || (ctx->device->coopmat2 && src1_type == GGML_TYPE_F16))) {
-        printf("Oops: %s, %s, prec = %d, ctx->device->fp16 = %d, ctx->device->coopmat_support = %d, ctx->device->coopmat_acc_f16_support = %d\n",
-                ggml_type_name(src0_type), ggml_type_name(src1_type), prec, ctx->device->fp16, ctx->device->coopmat_support, ctx->device->coopmat_acc_f16_support);
+        // Better we return a nullptr than assert below
+        return nullptr;
     }
 
     GGML_ASSERT(src1_type == GGML_TYPE_F32 || (ctx->device->coopmat2 && src1_type == GGML_TYPE_F16));
@@ -6157,9 +6157,15 @@ static void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx
             src2_copy.view_offs = src2->view_offs + token_start * src2_copy.nb[1];
             dst_copy.view_offs = dst->view_offs + token_start * dst_copy.nb[2];
 
+            // Note: we do need to update the nb members, else the copies are interpreted as being non-contiguous,
+            //       triggers an assert
             src1_copy.ne[2] = n_tokens;
+            src1_copy.nb[3] = src1_copy.nb[2] * src1_copy.ne[2];
             src2_copy.ne[1] = n_tokens;
+            src2_copy.nb[2] = src2_copy.nb[1] * src2_copy.ne[1];
+            src2_copy.nb[3] = src2_copy.nb[2] * src2_copy.ne[2];
             dst_copy.ne[2] = n_tokens;
+            dst_copy.nb[3] = dst_copy.nb[2] * dst_copy.ne[2];
 
             ggml_vk_mul_mat_id_q_f16(ctx, subctx, src0, &src1_copy, &src2_copy, &dst_copy, dryrun);
         }
