@@ -112,6 +112,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_FALCON_E       = 35,
         LLAMA_VOCAB_PRE_TYPE_SEED_CODER     = 36, //llama.cpp lists this as 35
         LLAMA_VOCAB_PRE_TYPE_HUNYUAN        = 37, //llama.cpp lists this as 36
+        LLAMA_VOCAB_PRE_TYPE_KIMI_K2        = 38, //llama.cpp lists this as 37
     };
 
     // note: these values should be synchronized with ggml_rope
@@ -204,6 +205,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_IQ3_KT        = 152, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ4_KT        = 153, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ3_KS        = 154, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_IQ2_KL        = 155, // except 1d tensors
                                                 //
         LLAMA_FTYPE_MOSTLY_Q4_0_R8       = 202, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q8_0_R8       = 207, // except 1d tensors
