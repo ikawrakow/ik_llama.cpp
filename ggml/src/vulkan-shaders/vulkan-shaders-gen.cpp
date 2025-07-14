@@ -655,6 +655,21 @@ void process_shaders() {
 
     string_to_spv("roll_f32", "roll.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
 
+    // ============================== ik_llama.cpp
+    //
+    string_to_spv("fused_rms_norm_f32", "fused_rms_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
+
+    string_to_spv("fused_mul_gelu_f16",   "fused_mul_gelu.comp",   {{"A_TYPE", "float16_t"},   {"B_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}});
+    string_to_spv("fused_mul_gelu_f32",   "fused_mul_gelu.comp",   {{"A_TYPE", "float"},       {"B_TYPE", "float"},     {"D_TYPE", "float"}});
+    string_to_spv("fused_mul_silu_f16",   "fused_mul_silu.comp",   {{"A_TYPE", "float16_t"},   {"B_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}});
+    string_to_spv("fused_mul_silu_f32",   "fused_mul_silu.comp",   {{"A_TYPE", "float"},       {"B_TYPE", "float"},     {"D_TYPE", "float"}});
+    string_to_spv("fused_mul_relu_f16",   "fused_mul_relu.comp",   {{"A_TYPE", "float16_t"},   {"B_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}});
+    string_to_spv("fused_mul_relu_f32",   "fused_mul_relu.comp",   {{"A_TYPE", "float"},       {"B_TYPE", "float"},     {"D_TYPE", "float"}});
+
+    string_to_spv("multi_add_f32", "multi_add.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
+    //
+    // ============================== end ik_llama.cpp
+
     for (auto &c : compiles) {
         c.wait();
     }
