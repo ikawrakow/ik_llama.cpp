@@ -831,6 +831,477 @@ static void analyze_x(const char * name, int nrows, int n_per_row, const float *
             sqrt(mse_q/(n_per_row*nrows)), sqrt(tot_mse_q/tot_elements));
 }
 
+static const int8_t iq3nl_index[111] = {
+  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  8,  8,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  9,
+  9,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2,  2, 10, 10,  3,  3,  3,  3,  3,  3,  3,  3,  3,  3, 11, 11,  4,  4,  4,  4,
+  4,  4,  4,  4,  4,  4, 12,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5, 13, 13,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,
+  6,  6,  6,  6, 14, 14,  7,  7,  7,  7,  7,  7,  7,  7, 7
+};
+static inline int best_index_iq3nl(const int8_t * values, float x) {
+    int ix = (int)x - values[0];
+    if (ix < 0 || ix >= 111) return ix < 0 ? 0 : 7;
+    ix = iq3nl_index[ix];
+    return ix < 8 ? ix : x - values[ix-8] < values[ix-7] - x ? ix-8 : ix-7;
+}
+
+static void analyze_iq2kl(const char * name, int nrows, int n_per_row, const float * x_values, const float * imatrix, float& tot_mse, float& tot_elements) {
+    constexpr int kBlockSize = 32;
+    constexpr int ntry = 5;
+    static const int k_index[64] = {-1, 0, -2, 1, -3, -4, 2, -5, -6, -7, -8, 3, -9, 4, -10, -11, 5, 6, 7, -12, 8, 9, 10, 11, -13, -14, -15, -16, 12, 13,
+        -17, -18, -19, -20, 14, 15, 16, 17, 18, -21, 19, 20, 21, 22, 23, 24, -22, 25, -23, -24, 26, -25, 27, -26, 28, -27, -28, 29, -29, 30, -30, -31, 31, -32,};
+    static const std::vector<std::vector<int>> k_neighbours = {
+        { 0, 5, 6, 1, 7, 3, 8, 14,  },
+        { 1, 0, 3, 7, 4, 6, 8, 2,  },
+        { 1, 3, 4, 2, 8, 0, 9, 7,  },
+        { 2, 1, 4, 3, 9, 8, 10, 11,  },
+        { 2, 11, 4, 10, 9, 1, 8, 3,  },
+        { 5, 6, 0, 7, 3, 19, 14, 1,  },
+        { 6, 0, 7, 5, 3, 1, 8, 14,  },
+        { 3, 7, 6, 1, 0, 8, 4, 12,  },
+        { 3, 4, 8, 9, 1, 7, 12, 10,  },
+        { 4, 10, 9, 2, 11, 8, 13, 3,  },
+        { 11, 10, 2, 4, 9, 18, 13, 8,  },
+        { 8, 7, 3, 12, 9, 15, 16, 13,  },
+        { 5, 19, 6, 20, 14, 7, 21, 15,  },
+        { 6, 14, 7, 20, 5, 21, 15, 19,  },
+        { 14, 7, 15, 6, 21, 12, 16, 22,  },
+        { 12, 15, 16, 8, 14, 7, 13, 22,  },
+        { 18, 10, 13, 17, 9, 11, 12, 24,  },
+        { 11, 18, 25, 10, 13, 17, 9, 24,  },
+        { 19, 5, 20, 6, 14, 21, 7, 26,  },
+        { 20, 14, 21, 6, 19, 7, 15, 26,  },
+        { 25, 18, 11, 10, 28, 17, 13, 24,  },
+        { 18, 24, 28, 25, 17, 23, 13, 16,  },
+        { 19, 20, 29, 26, 21, 14, 5, 22,  },
+        { 20, 26, 29, 21, 19, 14, 22, 30,  },
+        { 27, 26, 22, 23, 30, 21, 15, 24,  },
+        { 27, 24, 28, 23, 31, 17, 22, 16,  },
+        { 25, 28, 31, 18, 24, 17, 27, 23,  },
+        { 29, 19, 20, 26, 21, 30, 14, 22,  },
+        { 30, 29, 26, 27, 21, 22, 20, 23,  },
+        { 30, 27, 31, 26, 28, 23, 22, 24,  },
+        { 31, 27, 30, 28, 24, 23, 26, 22,  },
+        { 31, 28, 25, 24, 18, 27, 30, 17,  },
+    };
+    //static const int k_index[64] = {-1, -2, -3, 0, -4, -5, -6, -7, -8, 1, -9, -10, -11, 2, 3, -12, -13, -14, 4, 5, 6, 7, 8, -15, 9, -16, 10, 11, 12, 13, 14,
+    //    -17, -18, -19, 15, 16, 17, 18, 19, -20, -21, 20, 21, 22, 23, 24, 25, -22, -23, 26, 27, 28, 29, 30, 31, -24, -25, -26, -27, -28, -29, -30, -31, -32,};
+    //static const std::vector<std::vector<int>> k_neighbours = {
+    //    { 1, 4,  },
+    //    { 1, 0, 4, 5,  },
+    //    { 0, 1, 4, 5, 6,  },
+    //    { 0, 2, 6, 3, 5, 7, 4, 8,  },
+    //    { 2, 3, 0, 7, 6, 8, 5,  },
+    //    { 3, 2, 8, 7, 6,  },
+    //    { 3, 2, 8, 7,  },
+    //    { 1, 9, 4, 10,  },
+    //    { 1, 4, 0, 5, 10, 6, 11, 9,  },
+    //    { 0, 5, 4, 6, 1, 2, 11, 7,  },
+    //    { 2, 6, 0, 5, 7, 3, 12, 4,  },
+    //    { 3, 8, 2, 7, 14, 13,  },
+    //    { 9, 1, 4, 10, 15,  },
+    //    { 1, 4, 9, 10, 5, 11, 15, 0,  },
+    //    { 8, 3, 14, 7, 2, 13, 19, 18,  },
+    //    { 9, 10, 4, 15, 1, 11, 20, 5,  },
+    //    { 14, 8, 19, 13, 3, 7, 18, 25,  },
+    //    { 9, 20, 15, 10, 21, 26, 4, 27,  },
+    //    { 15, 20, 9, 10, 21, 16, 26, 4,  },
+    //    { 19, 14, 25, 18, 8, 13, 24, 31,  },
+    //    { 20, 26, 9, 21, 15, 27, 10,  },
+    //    { 25, 19, 31, 24, 14, 18, 30, 13,  },
+    //    { 26, 20, 27, 21, 15,  },
+    //    { 31, 25, 30, 19, 24, 18,  },
+    //    { 26, 20, 27, 21,  },
+    //    { 26, 27, 20, 21, 28, 22,  },
+    //    { 27, 26, 28, 21, 20, 22, 29, 23,  },
+    //    { 28, 27, 29, 22, 21, 23, 26, 30,  },
+    //    { 29, 28, 30, 23, 22, 24, 27, 31,  },
+    //    { 30, 29, 31, 24, 23, 25, 28, 22,  },
+    //    { 31, 30, 25, 24, 29, 23,  },
+    //    { 31, 25, 30, 24,  },
+    //};
+    auto values = iq3nl_values;
+    std::vector<std::pair<int8_t, int8_t>> grid(32);
+    for (int j = 0; j < 64; ++j) {
+        if (int i = k_index[j]; i >= 0) {
+            int i1 = j/8, i2 = j%8;
+            grid[i] = {values[i1], values[i2]};
+        }
+    }
+    auto index = [&grid, values] (float id, float x1, float x2, float w1, float w2) {
+        float sx1 = id*x1;
+        float sx2 = id*x2;
+        int l1 = best_index_iq3nl(values, sx1);
+        int l2 = best_index_iq3nl(values, sx2);
+        int i = k_index[8*l1 + l2];
+        if (i >= 0) return i;
+        auto& neigh = k_neighbours[-i-1];
+        // d*q - x1 = d*(q - x1/d)
+        float best = std::numeric_limits<float>::max();
+        int ibest = -1;
+        //printf("sx1 = %g, sx2 = %g, l1 = %d, l2 = %d, %d neighbours\n", sx1, sx2, l1, l2, int(neigh.size()));
+        for (auto& n : neigh) {
+            //printf("  neigh %d,%d: %d %d\n", grid[n].first, grid[n].second, values[grid[n].first ], values[grid[n].second]);
+            float diff1 = grid[n].first  - sx1;
+            float diff2 = grid[n].second - sx2;
+            float score = w1*diff1*diff1 + w2*diff2*diff2;
+            if (score < best) {
+                best = score; ibest = n;
+            }
+        }
+        GGML_ASSERT(ibest >= 0);
+        return ibest;
+    };
+    auto compute_1row = [&] (const float * xr) {
+        float weight[kBlockSize];
+        int nblock = n_per_row/kBlockSize;
+        int last_ibl = -1;
+        float sigma2 = 0;
+        float mse = 0, sum_x2 = 0;
+        for (int ib = 0; ib < nblock; ++ib) {
+            auto xb = xr + ib*kBlockSize;
+            int ibl = ib/8;
+            if (ibl != last_ibl) {
+                int n = std::min(256, n_per_row - ib*kBlockSize);
+                float sumx2 = 0;
+                for (int j = 0; j < n; ++j) sumx2 += xb[j]*xb[j];
+                sigma2 = 2*sumx2/n;
+                last_ibl = ibl;
+            }
+            if (imatrix) {
+                auto qw = imatrix + ib*kBlockSize;
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = qw[j]*sqrt(sigma2 + xb[j]*xb[j]);
+            } else {
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = std::abs(xb[j]); //xb[j]*xb[j];
+            }
+            float amax = 0, max = 0;
+            for (int j = 0; j < kBlockSize; ++j) {
+                float ax = std::abs(xb[j]);
+                if (ax > amax) {
+                    amax = ax; max = xb[j];
+                }
+            }
+            if (!amax) {
+                continue;
+            }
+            float d = ntry > 0 ? -max/values[0] : max/values[0];
+            float id = 1/d;
+            float sumqx_p = 0, sumq2_p = 0;
+            float sumqx_m = 0, sumq2_m = 0;
+            for (int j = 0; j < kBlockSize; j += 2) {
+                float w1 = weight[j+0];
+                float w2 = weight[j+1];
+                int idx = index(id, xb[j+0], xb[j+1], w1, w2);
+                float q1 = grid[idx].first ;
+                float q2 = grid[idx].second;
+                sumqx_p += w1*q1*xb[j] + w2*q2*xb[j+1];
+                sumq2_p += w1*q1*q1 + w2*q2*q2;
+                idx = index(-id, xb[j+0], xb[j+1], w1, w2);
+                q1 = grid[idx].first ;
+                q2 = grid[idx].second;
+                sumqx_m += w1*q1*xb[j] + w2*q2*xb[j+1];
+                sumq2_m += w1*q1*q1 + w2*q2*q2;
+            }
+            d = sumqx_p/sumq2_p;
+            float best = d*sumqx_p;
+            if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+                d = sumqx_m/sumq2_m; best = d*sumqx_m;
+            }
+            for (int itry = -ntry; itry <= ntry; ++itry) {
+                id = (itry + values[0])/max;
+                sumqx_p = sumq2_p = 0;
+                sumqx_m = sumq2_m = 0;
+                for (int j = 0; j < kBlockSize; j += 2) {
+                    float w1 = weight[j+0];
+                    float w2 = weight[j+1];
+                    int idx = index(id, xb[j+0], xb[j+1], w1, w2);
+                    float q1 = grid[idx].first ;
+                    float q2 = grid[idx].second;
+                    sumqx_p += w1*q1*xb[j] + w2*q2*xb[j+1];
+                    sumq2_p += w1*q1*q1 + w2*q2*q2;
+                    idx = index(-id, xb[j+0], xb[j+1], w1, w2);
+                    q1 = grid[idx].first ;
+                    q2 = grid[idx].second;
+                    sumqx_m += w1*q1*xb[j] + w2*q2*xb[j+1];
+                    sumq2_m += w1*q1*q1 + w2*q2*q2;
+                }
+                if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
+                    d = sumqx_p/sumq2_p; best = d * sumqx_p;
+                }
+                if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+                    d = sumqx_m/sumq2_m; best = d * sumqx_m;
+                }
+            }
+            id = 1/d;
+            float block_mse = 0;
+            for (int j = 0; j < kBlockSize; j += 2) {
+                int idx = index(id, xb[j+0], xb[j+1], weight[j], weight[j+1]);
+                float q1 = grid[idx].first ;
+                float q2 = grid[idx].second;
+                float diff1 = d*q1 - xb[j+0];
+                float diff2 = d*q2 - xb[j+1];
+                block_mse += diff1*diff1 + diff2*diff2;
+                sum_x2 += xb[j+0]*xb[j+0] + xb[j+1]*xb[j+1];
+            }
+            mse += block_mse;
+        }
+        return std::make_pair(mse, sum_x2);
+    };
+    std::mutex mutex;
+    int counter = 0;
+    float mse = 0, sum_x2 = 0;
+    auto compute = [&mutex, &counter, &compute_1row, &mse, &sum_x2, x_values, nrows, n_per_row] () {
+        float local_mse = 0, local_x2 = 0;
+        while (true) {
+            std::unique_lock<std::mutex> lock(mutex);
+            int row = counter++;
+            if (row >= nrows) {
+                mse += local_mse; sum_x2 += local_x2;
+                return;
+            }
+            lock.unlock();
+            auto [row_mse, row_x2] = compute_1row(x_values + row*n_per_row);
+            local_mse += row_mse;
+            local_x2  += row_x2;
+        }
+    };
+    int nthread = std::thread::hardware_concurrency()/2;
+    std::vector<std::thread> workers(nthread-1);
+    for (auto& w : workers) w = std::thread(compute);
+    compute();
+    for (auto& w : workers) w.join();
+    //float weight[kBlockSize];
+    //int nblock = n_per_row/kBlockSize;
+    //int last_ibl = -1;
+    //float sigma2 = 0;
+    //auto shifted_values = values + 8;
+    //float mse = 0, sum_x2 = 0;
+    //for (int row = 0; row < nrows; ++row) {
+    //    auto xr = x_values + row*n_per_row;
+    //    for (int ib = 0; ib < nblock; ++ib) {
+    //        auto xb = xr + ib*kBlockSize;
+    //        int ibl = ib/8;
+    //        if (ibl != last_ibl) {
+    //            int n = std::min(256, n_per_row - ib*kBlockSize);
+    //            float sumx2 = 0;
+    //            for (int j = 0; j < n; ++j) sumx2 += xb[j]*xb[j];
+    //            sigma2 = 2*sumx2/n;
+    //            last_ibl = ibl;
+    //        }
+    //        if (imatrix) {
+    //            auto qw = imatrix + ib*kBlockSize;
+    //            for (int j = 0; j < kBlockSize; ++j) weight[j] = qw[j]*sqrt(sigma2 + xb[j]*xb[j]);
+    //        } else {
+    //            for (int j = 0; j < kBlockSize; ++j) weight[j] = xb[j]*xb[j];
+    //        }
+    //        float amax = 0, max = 0;
+    //        for (int j = 0; j < kBlockSize; ++j) {
+    //            float ax = std::abs(xb[j]);
+    //            if (ax > amax) {
+    //                amax = ax; max = xb[j];
+    //            }
+    //        }
+    //        if (!amax) {
+    //            continue;
+    //        }
+    //        float d = ntry > 0 ? -max/values[0] : max/values[0];
+    //        float id = 1/d;
+    //        float sumqx_p = 0, sumq2_p = 0;
+    //        float sumqx_m = 0, sumq2_m = 0;
+    //        for (int j = 0; j < kBlockSize; j += 2) {
+    //            float w1 = weight[j+0];
+    //            float w2 = weight[j+1];
+    //            int idx = index(id, xb[j+0], xb[j+1], w1, w2);
+    //            float q1 = grid[idx].first ;
+    //            float q2 = grid[idx].second;
+    //            sumqx_p += w1*q1*xb[j] + w2*q2*xb[j+1];
+    //            sumq2_p += w1*q1*q1 + w2*q2*q2;
+    //            idx = index(-id, xb[j+0], xb[j+1], w1, w2);
+    //            q1 = grid[idx].first ;
+    //            q2 = grid[idx].second;
+    //            sumqx_m += w1*q1*xb[j] + w2*q2*xb[j+1];
+    //            sumq2_m += w1*q1*q1 + w2*q2*q2;
+    //        }
+    //        d = sumqx_p/sumq2_p;
+    //        float best = d*sumqx_p;
+    //        if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+    //            d = sumqx_m/sumq2_m; best = d*sumqx_m;
+    //        }
+    //        for (int itry = -ntry; itry <= ntry; ++itry) {
+    //            id = (itry + values[0])/max;
+    //            sumqx_p = sumq2_p = 0;
+    //            sumqx_m = sumq2_m = 0;
+    //            for (int j = 0; j < kBlockSize; j += 2) {
+    //                float w1 = weight[j+0];
+    //                float w2 = weight[j+1];
+    //                int idx = index(id, xb[j+0], xb[j+1], w1, w2);
+    //                float q1 = grid[idx].first ;
+    //                float q2 = grid[idx].second;
+    //                sumqx_p += w1*q1*xb[j] + w2*q2*xb[j+1];
+    //                sumq2_p += w1*q1*q1 + w2*q2*q2;
+    //                idx = index(-id, xb[j+0], xb[j+1], w1, w2);
+    //                q1 = grid[idx].first ;
+    //                q2 = grid[idx].second;
+    //                sumqx_m += w1*q1*xb[j] + w2*q2*xb[j+1];
+    //                sumq2_m += w1*q1*q1 + w2*q2*q2;
+    //            }
+    //            if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
+    //                d = sumqx_p/sumq2_p; best = d * sumqx_p;
+    //            }
+    //            if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+    //                d = sumqx_m/sumq2_m; best = d * sumqx_m;
+    //            }
+    //        }
+    //        id = 1/d;
+    //        float block_mse = 0;
+    //        for (int j = 0; j < kBlockSize; j += 2) {
+    //            int idx = index(id, xb[j+0], xb[j+1], weight[j], weight[j+1]);
+    //            float q1 = grid[idx].first ;
+    //            float q2 = grid[idx].second;
+    //            float diff1 = d*q1 - xb[j+0];
+    //            float diff2 = d*q2 - xb[j+1];
+    //            block_mse += diff1*diff1 + diff2*diff2;
+    //            sum_x2 += xb[j+0]*xb[j+0] + xb[j+1]*xb[j+1];
+    //        }
+    //        mse += block_mse;
+    //    }
+    //}
+    tot_mse += mse;
+    tot_elements += sum_x2;
+    printf("%s:  %g, %g  %g\n", name, sqrt(mse/(nrows*n_per_row)), sqrt(mse/sum_x2), sqrt(tot_mse/tot_elements));
+}
+
+
+static void analyze_iq3ks(const char * name, int nrows, int n_per_row, const float * x_values, const float * imatrix, float& tot_mse, float& tot_elements,
+        std::vector<int64_t>& Htot) {
+    constexpr int kBlockSize = 32;
+    constexpr int ntry = 5;
+    float weight[kBlockSize];
+    int nblock = n_per_row/kBlockSize;
+    int last_ibl = -1;
+    float sigma2 = 0;
+    auto values = iq3nl_values;
+    auto shifted_values = values + 8;
+    std::vector<int64_t> H(64, 0);
+    float mse = 0;
+    for (int row = 0; row < nrows; ++row) {
+        auto xr = x_values + row*n_per_row;
+        for (int ib = 0; ib < nblock; ++ib) {
+            auto xb = xr + ib*kBlockSize;
+            int ibl = ib/8;
+            if (ibl != last_ibl) {
+                int n = std::min(256, n_per_row - ib*kBlockSize);
+                float sumx2 = 0;
+                for (int j = 0; j < n; ++j) sumx2 += xb[j]*xb[j];
+                sigma2 = 2*sumx2/n;
+                last_ibl = ibl;
+            }
+            if (imatrix) {
+                auto qw = imatrix + ib*kBlockSize;
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = qw[j]*sqrt(sigma2 + xb[j]*xb[j]);
+            } else {
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = xb[j]*xb[j];
+            }
+            float amax = 0, max = 0;
+            for (int j = 0; j < kBlockSize; ++j) {
+                float ax = std::abs(xb[j]);
+                if (ax > amax) {
+                    amax = ax; max = xb[j];
+                }
+            }
+            if (!amax) {
+                continue;
+            }
+            float d = ntry > 0 ? -max/values[0] : max/values[0];
+            float id = 1/d;
+            float sumqx_p = 0, sumq2_p = 0;
+            float sumqx_m = 0, sumq2_m = 0;
+            for (int j = 0; j < kBlockSize; ++j) {
+                float w = weight[j];
+                float al = id*xb[j];
+                int l = best_index_iq3nl(values, al);
+                float q = values[l];
+                sumqx_p += w*q*xb[j];
+                sumq2_p += w*q*q;
+                l = best_index_iq3nl(values, -al);
+                q = values[l];
+                sumqx_m += w*q*xb[j];
+                sumq2_m += w*q*q;
+            }
+            d = sumqx_p/sumq2_p;
+            bool is_shifted = false;
+            float best = d*sumqx_p;
+            if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+                d = sumqx_m/sumq2_m; best = d*sumqx_m;
+            }
+            for (int itry = -ntry; itry <= ntry; ++itry) {
+                id = (itry + values[0])/max;
+                sumqx_p = sumq2_p = 0;
+                sumqx_m = sumq2_m = 0;
+                for (int j = 0; j < kBlockSize; ++j) {
+                    float w = weight[j];
+                    float al = id*xb[j];
+                    int l = best_index_iq3nl(values, al);
+                    float q = values[l];
+                    sumqx_p += w*q*xb[j];
+                    sumq2_p += w*q*q;
+                    l = best_index_iq3nl(values, -al);
+                    q = values[l];
+                    sumqx_m += w*q*xb[j];
+                    sumq2_m += w*q*q;
+                }
+                if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
+                    d = sumqx_p/sumq2_p; best = d * sumqx_p; is_shifted = false;
+                }
+                if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+                    d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = false;
+                }
+                //id = (itry + shifted_values[0])/max;
+                //sumqx_p = sumq2_p = 0;
+                //sumqx_m = sumq2_m = 0;
+                //for (int j = 0; j < kBlockSize; ++j) {
+                //    float w = weight[j];
+                //    float al = id*xb[j];
+                //    int l = best_index_iq3nl(shifted_values, al);
+                //    float q = shifted_values[l];
+                //    sumqx_p += w*q*xb[j];
+                //    sumq2_p += w*q*q;
+                //    l = best_index_iq3nl(shifted_values, -al);
+                //    q = shifted_values[l];
+                //    sumqx_m += w*q*xb[j];
+                //    sumq2_m += w*q*q;
+                //}
+                //if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
+                //    d = sumqx_p/sumq2_p; best = d * sumqx_p; is_shifted = true;
+                //}
+                //if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
+                //    d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = true;
+                //}
+            }
+            auto block_values = is_shifted ? shifted_values : values;
+            id = 1/d;
+            float block_mse = 0;
+            for (int j = 0; j < kBlockSize; j += 2) {
+                int l1 = best_index_iq3nl(block_values, id*xb[j+0]);
+                int l2 = best_index_iq3nl(block_values, id*xb[j+1]);
+                float diff1 = d*block_values[l1] - xb[j+0];
+                float diff2 = d*block_values[l2] - xb[j+1];
+                block_mse += diff1*diff1 + diff2*diff2;
+                ++H[8*l1+l2];
+            }
+            mse += block_mse;
+        }
+    }
+    tot_mse += mse;
+    tot_elements += nrows*n_per_row;
+    printf("%s:  %g  %f\n", name, sqrt(mse/(nrows*n_per_row)), sqrt(tot_mse/tot_elements));
+
+    if (Htot.empty()) Htot = std::move(H);
+    else {
+        if (Htot.size() != H.size()) printf("Oops: inconsistent H sizes %zu vs %zu\n", H.size(), Htot.size());
+        else for (int j = 0; j < (int)H.size(); ++j) Htot[j] += H[j];
+    }
+}
+
 static void analyze_iq4ks(const char * name, int nrows, int n_per_row, const float * values, float& tot_mse, float& tot_elements) {
     int row_size = ggml_row_size(GGML_TYPE_IQ4_KS, n_per_row);
     int nblock = n_per_row/QK_K;
@@ -926,6 +1397,40 @@ static void analyze_iq4ks(const ggml_tensor * t, float& tot_mse, float& tot_mse_
             ggml_bf16_to_fp32_row((const ggml_bf16_t *)t->data, aux.data(), aux.size());
         }
         analyze_x_v2(t->name, t->ne[1], t->ne[0], aux.data(), tot_mse, tot_mse_q, tot_elements);
+    }
+}
+
+static void analyze_iq2kl(const ggml_tensor * t, float& tot_mse, float& tot_elements) {
+    if (!ggml_is_contiguous(t) || (t->type != GGML_TYPE_F32 && t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_BF16)) {
+        return;
+    }
+    if (t->type == GGML_TYPE_F32) {
+        analyze_iq2kl(t->name, t->ne[1], t->ne[0], (const float *)t->data, nullptr, tot_mse, tot_elements);
+    } else {
+        std::vector<float> aux(t->ne[0]*t->ne[1]);
+        if (t->type == GGML_TYPE_F16) {
+            ggml_fp16_to_fp32_row((const ggml_fp16_t *)t->data, aux.data(), aux.size());
+        } else {
+            ggml_bf16_to_fp32_row((const ggml_bf16_t *)t->data, aux.data(), aux.size());
+        }
+        analyze_iq2kl(t->name, t->ne[1], t->ne[0], aux.data(), nullptr, tot_mse, tot_elements);
+    }
+}
+
+static void analyze_iq3ks(const ggml_tensor * t, float& tot_mse, float& tot_elements, std::vector<int64_t>& Htot) {
+    if (!ggml_is_contiguous(t) || (t->type != GGML_TYPE_F32 && t->type != GGML_TYPE_F16 && t->type != GGML_TYPE_BF16)) {
+        return;
+    }
+    if (t->type == GGML_TYPE_F32) {
+        analyze_iq3ks(t->name, t->ne[1], t->ne[0], (const float *)t->data, nullptr, tot_mse, tot_elements, Htot);
+    } else {
+        std::vector<float> aux(t->ne[0]*t->ne[1]);
+        if (t->type == GGML_TYPE_F16) {
+            ggml_fp16_to_fp32_row((const ggml_fp16_t *)t->data, aux.data(), aux.size());
+        } else {
+            ggml_bf16_to_fp32_row((const ggml_bf16_t *)t->data, aux.data(), aux.size());
+        }
+        analyze_iq3ks(t->name, t->ne[1], t->ne[0], aux.data(), nullptr, tot_mse, tot_elements, Htot);
     }
 }
 
@@ -1107,6 +1612,30 @@ int main(int argc, char ** argv) {
     std::vector<float> input_scratch;
     std::vector<char> quantized_scratch;
     std::vector<float> output_scratch;
+
+    if (analyze) {
+        float tot_mse = 0, tot_elements = 0;
+        //std::vector<int64_t> Htot;
+        for (const auto& kv_tensor : tensors) {
+            if (!layer_included(params, kv_tensor.first)) {
+                continue;
+            }
+            if (kv_tensor.second->ne[0] == 1 || kv_tensor.second->ne[1] == 1) {
+                // we never quantize those
+                continue;
+            }
+            //analyze_iq3ks(kv_tensor.second, tot_mse, tot_elements, Htot);
+            analyze_iq2kl(kv_tensor.second, tot_mse, tot_elements);
+        }
+        //if (!Htot.empty()) {
+        //    printf("=============================== pair histogram\n");
+        //    for (int i = 0; i < (int)Htot.size(); ++i) {
+        //        int i1 = i/8, i2 = i%8;
+        //        printf("%d  %d  %d    %g\n", i, i1, i2, 1.*Htot[i]);
+        //    }
+        //}
+        return 0;
+    }
 
     if (analyze) {
         float tot_mse = 0, tot_mse_q = 0, tot_elements = 0;
