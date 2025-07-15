@@ -884,6 +884,15 @@ extern "C" {
     GGML_API GGML_CALL bool ggml_is_contiguous_1(const struct ggml_tensor * tensor); // contiguous for dims >= 1
     GGML_API GGML_CALL bool ggml_is_contiguous_2(const struct ggml_tensor * tensor); // contiguous for dims >= 2
 
+    // returns whether the tensor elements are allocated as one contiguous block of memory (no gaps, but permutation ok)
+    GGML_API bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor);
+
+    // true for tensor that is stored in memory as CxWxHxN and has been permuted to WxHxCxN
+    GGML_API bool ggml_is_contiguous_channels(const struct ggml_tensor * tensor);
+
+    // true if the elements in dimension 0 are contiguous, or there is just 1 block of elements
+    GGML_API bool ggml_is_contiguous_rows(const struct ggml_tensor * tensor);
+
     GGML_API bool ggml_are_same_shape (const struct ggml_tensor * t0, const struct ggml_tensor * t1);
     GGML_API bool ggml_are_same_stride(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
 

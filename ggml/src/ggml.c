@@ -4682,6 +4682,24 @@ GGML_CALL bool ggml_is_permuted(const struct ggml_tensor * tensor) {
     return tensor->nb[0] > tensor->nb[1] || tensor->nb[1] > tensor->nb[2] || tensor->nb[2] > tensor->nb[3];
 }
 
+GGML_CALL bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor) {
+    return ggml_nbytes(tensor) == ggml_nelements(tensor) * ggml_type_size(tensor->type)/ggml_blck_size(tensor->type);
+}
+
+GGML_CALL bool ggml_is_contiguous_channels(const struct ggml_tensor * tensor) {
+    return
+        tensor->nb[0] > tensor->nb[2] &&
+        tensor->nb[1] > tensor->nb[0] &&
+        tensor->nb[2] == ggml_type_size(tensor->type);
+}
+
+GGML_CALL bool ggml_is_contiguous_rows(const struct ggml_tensor * tensor) {
+    return
+        tensor->ne[0] == ggml_blck_size(tensor->type) ||
+        tensor->nb[0] == ggml_type_size(tensor->type);
+}
+
+
 static inline bool ggml_is_padded_1d(const struct ggml_tensor * tensor) {
     static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
 
@@ -5193,16 +5211,6 @@ static void ggml_set_op_params(struct ggml_tensor * tensor, const void * params,
     GGML_ASSERT(tensor != NULL); // silence -Warray-bounds warnings
     assert(params_size <= GGML_MAX_OP_PARAMS);
     memcpy(tensor->op_params, params, params_size);
-}
-
-static int32_t ggml_get_op_params_i32(const struct ggml_tensor * tensor, uint32_t i) {
-    assert(i < GGML_MAX_OP_PARAMS / sizeof(int32_t));
-    return ((const int32_t *)(tensor->op_params))[i];
-}
-
-static float ggml_get_op_params_f32(const struct ggml_tensor * tensor, uint32_t i) {
-    assert(i < GGML_MAX_OP_PARAMS / sizeof(float));
-    return ((const float *)(tensor->op_params))[i];
 }
 
 static void ggml_set_op_params_i32(struct ggml_tensor * tensor, uint32_t i, int32_t value) {
