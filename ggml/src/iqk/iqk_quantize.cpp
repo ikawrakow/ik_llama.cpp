@@ -8615,9 +8615,24 @@ void quantize_row_iq1_kt_impl(const float * x, void * vy, int n_per_row, const f
             auto idx = best_idx;
             if (score_p > score_m) scales[ib] = dp;
             else {
-                scales[ib] = dm; idx += Q::kNg;
+                scales[ib] = dm; idx += Q::kNg; score_p = score_m;
             }
             for (int ig = 0; ig < Q::kNg; ++ig) all_idx[(ibl*Q::kSuperBlockSize + ib*Q::kBlockSize)/Q::kGroupSize + ig] = idx[ig];
+
+            scale_0 -= 8;
+            quantizer.find_best_match( amax/scale_0, xb, weight, best_idx);
+            auto [dp1, score_p1] = quantizer.find_best_scale(xb, weight, best_idx);
+            quantizer.find_best_match(-amax/scale_0, xb, weight, best_idx + Q::kNg);
+            auto [dm1, score_m1] = quantizer.find_best_scale(xb, weight, best_idx + Q::kNg);
+
+            if (score_p1 > score_p || score_m1 > score_p) {
+                idx = best_idx;
+                if (score_p1 > score_m1) scales[ib] = dp1;
+                else {
+                    scales[ib] = dm1; idx += Q::kNg;
+                }
+                for (int ig = 0; ig < Q::kNg; ++ig) all_idx[(ibl*Q::kSuperBlockSize + ib*Q::kBlockSize)/Q::kGroupSize + ig] = idx[ig];
+            }
 
             float abs_scale = std::abs(scales[ib]);
             if (abs_scale > amax_scale) {
@@ -8726,7 +8741,7 @@ void quantize_row_iq1_kt_impl(const float * x, void * vy, int n_per_row, const f
         }
         if (sumq2 > 0) {
             d = sumqx/sumq2;
-            *dptr = d;
+            *dptr = d * 1.07f;
             if (!d) return;
         } else {
             break;
