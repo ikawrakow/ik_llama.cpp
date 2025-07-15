@@ -23716,6 +23716,9 @@ static int32_t llama_chat_apply_template_internal(
                 ss << "<|im_assistant|>assistant<|im_middle|>" << message->content << "<|im_end|>";
             }
         }
+        if (add_ass) {
+            ss << "<|im_assistant|>assistant<|im_middle|>";
+        }
     } else {
         // template not supported
         return -1;
