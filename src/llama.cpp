@@ -1695,6 +1695,7 @@ enum llm_chat_template {
     LLM_CHAT_TEMPLATE_BITNET,
     LLM_CHAT_TEMPLATE_DOTS1,
     LLM_CHAT_TEMPLATE_HUNYUAN_MOE,
+    LLM_CHAT_TEMPLATE_KIMI_K2,
     LLM_CHAT_TEMPLATE_UNKNOWN,
 };
 
@@ -1733,6 +1734,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "megrez",            LLM_CHAT_TEMPLATE_MEGREZ            },
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
     { "hunyuan-moe",       LLM_CHAT_TEMPLATE_HUNYUAN_MOE       },
+    { "kimi-k2",           LLM_CHAT_TEMPLATE_KIMI_K2           },
     { "bitnet",            LLM_CHAT_TEMPLATE_BITNET            },
 };
 
@@ -23270,6 +23272,8 @@ static llm_chat_template llama_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_DOTS1;
     } else if (tmpl_contains("<|startoftext|>") && tmpl_contains("<|extra_4|>")) {
         return LLM_CHAT_TEMPLATE_HUNYUAN_MOE;
+    } else if (tmpl_contains("<|im_middle|>") && tmpl_contains("<|im_end|>")) {
+        return LLM_CHAT_TEMPLATE_KIMI_K2;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -23714,6 +23718,21 @@ static int32_t llama_chat_apply_template_internal(
             } else {
                 ss << "<|startoftext|>" << message->content << "<|extra_0|>";
             }
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_KIMI_K2) {
+        // moonshotai/Kimi-K2-Instruct
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                ss << "<|im_system|>system<|im_middle|>" << message->content << "<|im_end|>";
+            } else if (role == "assistant") {
+                ss << "<|im_user|>user<|im_middle|>" << message->content << "<|im_end|>";
+            } else {
+                ss << "<|im_assistant|>assistant<|im_middle|>" << message->content << "<|im_end|>";
+            }
+        }
+        if (add_ass) {
+            ss << "<|im_assistant|>assistant<|im_middle|>";
         }
     } else {
         // template not supported

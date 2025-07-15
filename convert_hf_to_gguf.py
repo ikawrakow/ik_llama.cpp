@@ -639,6 +639,9 @@ class Model:
         if chkhsh == "d5f1dd6f980fec569fb218a81a7658ac45fc56b38c5a0adeb1c232fbe04ef5ec":
             # ref: https://huggingface.co/ByteDance-Seed/Seed-Coder-8B-Base
             res = "seed-coder"
+        if chkhsh == "81212dc7cdb7e0c1074ca62c5aeab0d43c9f52b8a737be7b12a777c953027890":
+            # ref: https://huggingface.co/moonshotai/Kimi-K2-Base
+            res = "kimi-k2"
 
         if res is None:
             logger.warning("\n")
@@ -3379,6 +3382,60 @@ class DeepseekV2Model(Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 
     def set_vocab(self):
+
+        if self.hparams["vocab_size"] == 163840:  # Kimi-K2 model
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.dir_model, trust_remote_code=True
+            )
+            tokpre = self.get_vocab_base_pre(tokenizer)
+
+            # Build merges list using the approach similar to HunYuanMoE
+            merges = []
+            vocab = {}
+            mergeable_ranks = tokenizer.model._mergeable_ranks
+            for token, rank in mergeable_ranks.items():
+                vocab[QwenModel.token_bytes_to_string(token)] = rank
+                if len(token) == 1:
+                    continue
+                merged = QwenModel.bpe(mergeable_ranks, token, max_rank=rank)
+                if len(merged) == 2:
+                    merges.append(
+                        " ".join(map(QwenModel.token_bytes_to_string, merged))
+                    )
+
+            # Build token list
+            vocab_size = self.hparams["vocab_size"]
+            special_tokens = tokenizer.special_tokens
+            reverse_vocab = {
+                id_: encoded_tok
+                for encoded_tok, id_ in {**vocab, **special_tokens}.items()
+            }
+            tokens: list[str] = []
+            toktypes: list[int] = []
+
+            for i in range(vocab_size):
+                if i not in reverse_vocab:
+                    tokens.append(f"[PAD{i}]")
+                    toktypes.append(gguf.TokenType.UNUSED)
+                else:
+                    token = reverse_vocab[i]
+                    tokens.append(token)
+                    if i in special_tokens.values():
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.NORMAL)
+
+            self.gguf_writer.add_tokenizer_model("gpt2")
+            self.gguf_writer.add_tokenizer_pre(tokpre)
+            self.gguf_writer.add_token_list(tokens)
+            self.gguf_writer.add_token_types(toktypes)
+            self.gguf_writer.add_token_merges(merges)
+
+            special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
+            special_vocab.add_to_gguf(self.gguf_writer)
+        else:
         self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
