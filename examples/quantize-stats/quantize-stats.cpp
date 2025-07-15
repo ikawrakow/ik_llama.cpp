@@ -952,7 +952,7 @@ static void analyze_iq2kl(const char * name, int nrows, int n_per_row, const flo
         return ibest;
     };
     auto compute_1row = [&] (const float * xr) {
-        float weight[kBlockSize];
+        std::vector<float> weight(kBlockSize); // float weight[kBlockSize]; - Fix for error C2131: expression did not evaluate to a constant
         int nblock = n_per_row/kBlockSize;
         int last_ibl = -1;
         float sigma2 = 0;
