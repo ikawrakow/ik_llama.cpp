@@ -463,6 +463,58 @@ void mul_mat_iq2_kt_F32_T(int n, const void * vx, size_t bx, const DataInfo& inf
     }
 }
 
+void iqk_dequantize_iq1_kt_q80_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+    const int nb = n/QK_K;
+
+    Trellis3 trellis;
+
+    auto values = _mm_loadu_si128((const __m128i *)iq4k_values);
+
+    block_q8_0_r8 * y = (block_q8_0_r8 *)vy;
+
+    const block_iq1_kt * x8[8];
+    float dkt[8];
+    float ls[8];
+    float ls_all[64];
+    uint32_t idx[8];
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) {
+            const float * dptr = (const float *)((const char*)vx + (ix+k)*bx);
+            dkt[k] = dptr[0];
+            x8[k] = (const block_iq1_kt *)(dptr + 1);
+        }
+        auto vd = _mm256_loadu_ps(dkt);
+
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                auto sh = _mm_loadl_epi64((const __m128i *)x8[k][i].sh);
+                auto s8 = _mm_shuffle_epi8(values, _mm_and_si128(sh, _mm_set1_epi8(0xf)));
+                auto s32 = _mm256_cvtepi8_epi32(s8);
+                _mm256_storeu_ps(ls_all + 8*k, _mm256_cvtepi32_ps(s32));
+            }
+            for (int ib = 0; ib < QK_K/32; ++ib) {
+                for (int k = 0; k < 8; ++k) ls[k] = ls_all[8*k+ib];
+                auto scales = _mm256_mul_ps(vd, _mm256_loadu_ps(ls));
+                _mm_storeu_si128((__m128i *)y[ib].d, _mm256_cvtps_ph(scales, _MM_FROUND_TO_NEAREST_INT));
+                for (int j = 0; j < 4; ++j) {
+                    int jj = 4*ib + j;
+                    for (int k = 0; k < 8; ++k) {
+                        idx[k] = (x8[k][i].ql[jj] | ((x8[k][i].qh[jj%16] << (8 - 4*(jj/16))) & 0xf00) | ((x8[k][i].sh[jj/4] << (8 - (jj%4))) & 0x1000)) + 4096;
+                    }
+                    __m256i packed[2];
+                    trellis.next64(idx, packed);
+                    _mm256_storeu_si256((__m256i *)y[ib].qs+2*j+0, packed[0]);
+                    _mm256_storeu_si256((__m256i *)y[ib].qs+2*j+1, packed[1]);
+                }
+            }
+            y += 8; // = QK_K/32;
+        }
+    }
+}
+
 template <int nrc_y>
 void mul_mat_iq1_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     assert(n%QK_K == 0);
@@ -1251,6 +1303,7 @@ bool iqk_set_kernels_ktquants(int ne00, int typeA, int typeB, std::array<mul_mat
 
 bool iqk_dequantize_ktquants(int type, int n, const void * vx, size_t bx, void * y, [[maybe_unused]] size_t stride_y, int nrc_x) {
     switch (type) {
+        case GGML_TYPE_IQ1_KT: iqk_dequantize_iq1_kt_q80_r8(n, vx, bx, y, nrc_x); break;
         case GGML_TYPE_IQ2_KT: iqk_dequantize_iq2_kt_q80_r8(n, vx, bx, y, nrc_x); break;
         case GGML_TYPE_IQ3_KT: iqk_dequantize_iq3_kt_q80_r8(n, vx, bx, y, nrc_x); break;
         case GGML_TYPE_IQ4_KT: iqk_dequantize_iq4_kt_q80_r8(n, vx, bx, y, nrc_x); break;
