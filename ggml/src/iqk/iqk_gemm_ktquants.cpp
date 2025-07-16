@@ -212,6 +212,56 @@ struct Trellis3 {
             }
         }
     }
+    IQK_ALWAYS_INLINE inline void next_128(__m256i val, __m256i * result) const {
+        // Even though we only have 16 vector registers nn AVX2, this is still faster
+        __m256i aux[16];
+        __m256i tmp[2];
+        tmp[0] = _mm256_cvtepu16_epi32(_mm256_castsi256_si128(val));
+        tmp[1] = _mm256_cvtepu16_epi32(_mm256_extracti128_si256(val, 1));
+        for (int k = 0; k < 2; ++k) {
+            auto vl = _mm256_castsi256_si128(tmp[k]);
+            auto v  = MM256_SET_M128I(vl, vl);
+            aux[8*k+0] = _mm256_shuffle_epi32(v, 0x00);
+            aux[8*k+1] = _mm256_shuffle_epi32(v, 0x55);
+            aux[8*k+2] = _mm256_shuffle_epi32(v, 0xaa);
+            aux[8*k+3] = _mm256_shuffle_epi32(v, 0xff);
+            auto vh = _mm256_extracti128_si256(tmp[k], 1);
+            v  = MM256_SET_M128I(vh, vh);
+            aux[8*k+4] = _mm256_shuffle_epi32(v, 0x00);
+            aux[8*k+5] = _mm256_shuffle_epi32(v, 0x55);
+            aux[8*k+6] = _mm256_shuffle_epi32(v, 0xaa);
+            aux[8*k+7] = _mm256_shuffle_epi32(v, 0xff);
+        }
+        for (int i = 0; i < 16; ++i) {
+            aux[i] = _mm256_mullo_epi32(aux[i], mka);
+        }
+        auto mask = _mm256_set1_epi32(0x3f3f3f3f);
+        for (int i = 0; i < 16; ++i) {
+            aux[i] = _mm256_and_si256(aux[i], mask);
+        }
+        auto offset = _mm256_set1_epi32(-126);
+#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
+        auto m1     = _mm256_set1_epi32(0x01010101);
+#endif
+        for (int i = 0; i < 16; ++i) {
+#if defined(__AVX512F__) && defined(__AVX512VNNI__) && defined(__AVX512VL__)
+            aux[i] = _mm256_dpbusd_epi32(offset, aux[i], m1);
+#else
+            auto dot = _mm256_maddubs_epi16(aux[i], _mm256_set1_epi32(0x01010101));
+            aux[i] = _mm256_add_epi32(offset, _mm256_madd_epi16(dot, _mm256_set1_epi16(1)));
+#endif
+        }
+        for (int k = 0; k < 4; ++k) {
+            auto v1 = _mm256_packs_epi32(aux[4*k+0], aux[4*k+1]);
+            auto v2 = _mm256_packs_epi32(aux[4*k+2], aux[4*k+3]);
+            result[k] = _mm256_permutevar8x32_epi32(_mm256_packs_epi16(v1, v2), shuffle);
+        }
+        if constexpr (is_abs) {
+            for (int k = 0; k < 4; ++k) {
+                result[k] = _mm256_sign_epi8(result[k], result[k]);
+            }
+        }
+    }
     IQK_ALWAYS_INLINE inline void next_128(const uint16_t * val, uint32_t v0, __m256i * result) const {
         // Even though we only have 16 vector registers nn AVX2, this is still faster
         __m256i aux[16];
@@ -560,7 +610,6 @@ void mul_mat_iq1_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     };
 
     __m256i idx[2];
-    uint16_t index[16];
 
     for (int ix = 0; ix < nrc_x; ++ix) {
         const float * dptr = (const float *)((const char*)vx + ix*bx);
@@ -582,15 +631,14 @@ void mul_mat_iq1_kt_q8_2_x4_T(int n, const void * vx, size_t bx, const DataInfo&
             auto qh16 = _mm256_cvtepu8_epi16(_mm_loadu_si128((const __m128i *)x[i].qh));
             idx[0] = _mm256_or_si256(_mm256_cvtepu8_epi16(qs8l), _mm256_and_si256(_mm256_set1_epi16(0xf00), _mm256_slli_epi16(qh16, 8)));
             idx[1] = _mm256_or_si256(_mm256_cvtepu8_epi16(qs8h), _mm256_and_si256(_mm256_set1_epi16(0xf00), _mm256_slli_epi16(qh16, 4)));
-            //idx[0] = _mm256_add_epi16(idx[0], _mm256_set1_epi16(4096));
-            //idx[1] = _mm256_add_epi16(idx[1], _mm256_set1_epi16(4096));
-            auto sh32 = _mm256_and_si256(_mm256_srli_epi32(_mm256_cvtepu8_epi32(sh), 4), _mm256_set1_epi32(0xf));
-            sh32 = _mm256_and_si256(_mm256_mullo_epi32(sh32, _mm256_set1_epi32(0x01020408)), _mm256_set1_epi8(8));
-            idx[0] = _mm256_add_epi16(idx[0], _mm256_slli_epi16(_mm256_cvtepu8_epi16(_mm256_castsi256_si128(sh32)), 9));
-            idx[1] = _mm256_add_epi16(idx[1], _mm256_slli_epi16(_mm256_cvtepu8_epi16(_mm256_extracti128_si256(sh32, 1)), 9));
+            idx[0] = _mm256_add_epi16(idx[0], _mm256_set1_epi16(4096));
+            idx[1] = _mm256_add_epi16(idx[1], _mm256_set1_epi16(4096));
+            auto sh32 = _mm256_and_si256(_mm256_cvtepu8_epi32(sh), _mm256_set1_epi32(0xf0));
+            sh32 = _mm256_and_si256(_mm256_mullo_epi32(sh32, _mm256_set1_epi32(0x01020408)), _mm256_set1_epi8(-128));
+            idx[0] = _mm256_add_epi16(idx[0], _mm256_slli_epi16(_mm256_cvtepu8_epi16(_mm256_castsi256_si128(sh32)), 5));
+            idx[1] = _mm256_add_epi16(idx[1], _mm256_slli_epi16(_mm256_cvtepu8_epi16(_mm256_extracti128_si256(sh32, 1)), 5));
             for (int i128 = 0; i128 < 2; ++i128) {
-                _mm256_storeu_si256((__m256i *)index, idx[i128]);
-                trellis.next_128(index, 4096, xv);
+                trellis.next_128(idx[i128], xv);
                 for (int iy = 0; iy < nrc_y; ++iy) {
                     const block_q8_2_x4& yb = y[iy][2*i+i128];
                     auto dy4 = _mm_castsi128_ps(_mm_slli_epi32(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)yb.d)), 16));
