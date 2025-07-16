@@ -2267,6 +2267,7 @@ void iqk_dequantize_iq1_kt_q80_r8(int n, const void * vx, size_t bx, void * vy, 
     const block_iq1_kt * x8[8];
     float dkt[8];
     float ls[8], ls_all[64];
+    uint16_t all_idx[256];
     uint32_t idx[8];
 
     for (int ix = 0; ix < nrc_x; ix += 8) {
@@ -2283,6 +2284,24 @@ void iqk_dequantize_iq1_kt_q80_r8(int n, const void * vx, size_t bx, void * vy, 
                 auto s16 = vmovl_s8(vqtbl1_s8(values, vand_u8(sh, vdup_n_u8(0xf))));
                 vst1q_f32(ls_all + 8*k + 0, vcvtq_f32_s32(vmovl_s16(vget_low_s16(s16))));
                 vst1q_f32(ls_all + 8*k + 4, vcvtq_f32_s32(vmovl_s16(vget_high_s16(s16))));
+                auto ql = vld1q_u8_x2(x8[k][i].ql);
+                auto qh = vld1q_u8(x8[k][i].qh);
+                auto qhl = vmovl_u8(vget_low_u8(qh));
+                auto qhh = vmovl_u8(vget_high_u8(qh));
+                uint16x8x4_t idx;
+                idx.val[0] = vaddq_u16(vmovl_u8(vget_low_u8 (ql.val[0])), vandq_u16(vdupq_n_u16(0xf00), vshlq_n_u16(qhl, 8)));
+                idx.val[1] = vaddq_u16(vmovl_u8(vget_high_u8(ql.val[0])), vandq_u16(vdupq_n_u16(0xf00), vshlq_n_u16(qhh, 8)));
+                idx.val[2] = vaddq_u16(vmovl_u8(vget_low_u8 (ql.val[1])), vandq_u16(vdupq_n_u16(0xf00), vshlq_n_u16(qhl, 4)));
+                idx.val[3] = vaddq_u16(vmovl_u8(vget_high_u8(ql.val[1])), vandq_u16(vdupq_n_u16(0xf00), vshlq_n_u16(qhh, 4)));
+                for (int k = 0; k < 4; ++k) idx.val[k] = vaddq_u16(idx.val[k], vdupq_n_u16(4096));
+                auto sh16  = vandq_u16(vmovl_u8(sh), vdupq_n_u16(0xf0));
+                auto sh32l = vandq_u8(vreinterpretq_u8_u32(vmulq_u32(vmovl_u16(vget_low_u16 (sh16)), vdupq_n_u32(0x01020408))), vdupq_n_u8(0x80));
+                auto sh32h = vandq_u8(vreinterpretq_u8_u32(vmulq_u32(vmovl_u16(vget_high_u16(sh16)), vdupq_n_u32(0x01020408))), vdupq_n_u8(0x80));
+                idx.val[0] = vaddq_u16(idx.val[0], vshlq_n_u16(vmovl_u8(vget_low_u8 (sh32l)), 5));
+                idx.val[1] = vaddq_u16(idx.val[1], vshlq_n_u16(vmovl_u8(vget_high_u8(sh32l)), 5));
+                idx.val[2] = vaddq_u16(idx.val[2], vshlq_n_u16(vmovl_u8(vget_low_u8 (sh32h)), 5));
+                idx.val[3] = vaddq_u16(idx.val[3], vshlq_n_u16(vmovl_u8(vget_high_u8(sh32h)), 5));
+                vst1q_u16_x4(all_idx + 32*k, idx);
             }
             for (int ib = 0; ib < QK_K/32; ++ib) {
                 for (int k = 0; k < 8; ++k) ls[k] = ls_all[8*k+ib];
@@ -2291,10 +2310,7 @@ void iqk_dequantize_iq1_kt_q80_r8(int n, const void * vx, size_t bx, void * vy, 
                 vst1_f16((float16_t *)y[ib].d+0, vcvt_f16_f32(scales1));
                 vst1_f16((float16_t *)y[ib].d+4, vcvt_f16_f32(scales2));
                 for (int j = 0; j < 4; ++j) {
-                    int jj = 4*ib + j;
-                    for (int k = 0; k < 8; ++k) {
-                        idx[k] =  (x8[k][i].ql[jj] | ((x8[k][i].qh[4*(ib%4)+j] << (8 - 4*(ib/4))) & 0xf00) | ((x8[k][i].sh[ib] << (8 - j)) & 0x1000)) + 4096;
-                    }
+                    for (int k = 0; k < 8; ++k) idx[k] = all_idx[32*k + 4*ib + j];
                     vst1q_s8_x4(y[ib].qs+64*j, trellis.next64(idx));
                 }
             }
