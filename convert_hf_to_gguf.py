@@ -3436,7 +3436,7 @@ class DeepseekV2Model(Model):
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
             special_vocab.add_to_gguf(self.gguf_writer)
         else:
-        self._set_vocab_gpt2()
+            self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
