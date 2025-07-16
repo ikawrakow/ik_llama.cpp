@@ -4,6 +4,7 @@
 import { CONFIG_DEFAULT } from '../Config';
 import { Conversation, Message, TimingReport, SettingsPreset } from './types';
 import Dexie, { Table } from 'dexie';
+import { exportDB as exportDexieDB } from 'dexie-export-import';
 
 const event = new EventTarget();
 
@@ -33,6 +34,16 @@ db.version(1).stores({
 // convId is a string prefixed with 'conv-'
 const StorageUtils = {
 	
+  async exportDB() {
+    return await exportDexieDB(db);
+  },
+
+  async importDB(file: File) {
+    await db.delete();
+    await db.open();
+    return await db.import(file);
+  },
+
   /**
    * update the name of a conversation
    */
