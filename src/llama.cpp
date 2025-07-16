@@ -4245,6 +4245,15 @@ struct llama_model_loader {
             trace = atoi(getenv("LLAMA_TRACE"));
         }
 
+        #ifdef _WIN32
+        int _setmaxstdio_ret = _setmaxstdio(2048); // 8,192 may be supported - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setmaxstdio?view=msvc-160
+        if (_setmaxstdio_ret == -1) {
+            LLAMA_LOG_INFO("%s: failed to set max stdio to 2048.\n", __func__);
+        } else {
+            LLAMA_LOG_INFO("%s: Max stdio successfully set to %d\n", __func__, _setmaxstdio_ret);
+        }
+        #endif
+
         if (param_overrides_p != nullptr) {
             for (const struct llama_model_kv_override * p = param_overrides_p; p->key[0] != 0; p++) {
                 kv_overrides.insert({std::string(p->key), *p});
