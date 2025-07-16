@@ -1905,6 +1905,27 @@ struct Trellis3 {
         }
         return result;
     }
+    inline int8x16x2_t next32(uint16x4_t val16) const {
+        auto vka3 = vdupq_n_u32(ka3);
+        int8x16x2_t result = {vdupq_n_s8(-126), vdupq_n_s8(-126)};
+        auto val32 = vmovl_u16(val16);
+        uint32x4x4_t aux32 = { vmulq_laneq_u32(mka, val32, 0), vmulq_laneq_u32(mka, val32, 1), vmulq_laneq_u32(mka, val32, 2), vmulq_laneq_u32(mka, val32, 3) };
+        int8x16x2_t i8;
+        auto mask = vdupq_n_u32(0x3f3f3f3f);
+        for (int i = 0; i < 2; ++i) {
+            i8.val[0] = vandq_u32(mask, aux32.val[2*i+0]);
+            i8.val[1] = vandq_u32(mask, vmulq_u32(vka3, aux32.val[2*i+0]));
+            auto s1 = vpaddq_s8(vreinterpretq_s8_u32(i8.val[0]), vreinterpretq_s8_u32(i8.val[1]));
+            i8.val[0] = vandq_u32(mask, aux32.val[2*i+1]);
+            i8.val[1] = vandq_u32(mask, vmulq_u32(vka3, aux32.val[2*i+1]));
+            auto s2 = vpaddq_s8(vreinterpretq_s8_u32(i8.val[0]), vreinterpretq_s8_u32(i8.val[1]));
+            result.val[i] = vaddq_s8(result.val[i], vpaddq_s8(s1, s2));
+            if constexpr (is_abs) {
+                result.val[i] = vreinterpretq_s8_u8(vabsq_s8(result.val[i]));
+            }
+        }
+        return result;
+    }
     inline int8x16x2_t next32(const uint16_t * val, uint32_t v0) const {
         auto vka3 = vdupq_n_u32(ka3);
         int8x16x2_t result = {vdupq_n_s8(-126), vdupq_n_s8(-126)};
@@ -2253,7 +2274,6 @@ void mul_mat_iq1_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
     int8x16x2_t xv[8];
     uint16x8x4_t idx;
     int32x4x4_t dot;
-    uint16_t aux16[8];
 
     auto compute_dot = [&dot] (const int8_t * y, const int8x16x2_t * xv) {
         for (int k = 0; k < 4; ++k) {
@@ -2287,7 +2307,7 @@ void mul_mat_iq1_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
             idx.val[1] = vaddq_u16(vmovl_u8(vget_high_u8(ql.val[0])), vandq_u16(vdupq_n_u16(0xf00), vshlq_n_u16(qhh, 8)));
             idx.val[2] = vaddq_u16(vmovl_u8(vget_low_u8 (ql.val[1])), vandq_u16(vdupq_n_u16(0xf00), vshlq_n_u16(qhl, 4)));
             idx.val[3] = vaddq_u16(vmovl_u8(vget_high_u8(ql.val[1])), vandq_u16(vdupq_n_u16(0xf00), vshlq_n_u16(qhh, 4)));
-            //for (int k = 0; k < 4; ++k) idx.val[k] = vaddq_u16(idx.val[k], vdupq_n_u16(4096));
+            for (int k = 0; k < 4; ++k) idx.val[k] = vaddq_u16(idx.val[k], vdupq_n_u16(4096));
             auto sh16  = vandq_u16(vmovl_u8(sh), vdupq_n_u16(0xf0));
             auto sh32l = vandq_u8(vreinterpretq_u8_u32(vmulq_u32(vmovl_u16(vget_low_u16 (sh16)), vdupq_n_u32(0x01020408))), vdupq_n_u8(0x80));
             auto sh32h = vandq_u8(vreinterpretq_u8_u32(vmulq_u32(vmovl_u16(vget_high_u16(sh16)), vdupq_n_u32(0x01020408))), vdupq_n_u8(0x80));
@@ -2320,9 +2340,8 @@ void mul_mat_iq1_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
             //    accd[1] = vfmaq_f32(accd[1], dyh, vcvtq_f32_s32(sh));
             //} else {
             for (int k = 0; k < 4; ++k) {
-                vst1q_u16(aux16, idx.val[k]);
-                xv[2*k+0] = trellis.next32(aux16+0, 4096);
-                xv[2*k+1] = trellis.next32(aux16+4, 4096);
+                xv[2*k+0] = trellis.next32(vget_low_u16 (idx.val[k]));
+                xv[2*k+1] = trellis.next32(vget_high_u16(idx.val[k]));
             }
             for (int iy = 0; iy < nrc_y; ++iy) {
                 const block_q8_0_x4& ybl = y[iy][2*i+0];
@@ -2331,24 +2350,24 @@ void mul_mat_iq1_kt_q8_0_x4_T(int n, const void * vx, size_t bx, const DataInfo&
                 auto dyh = vmulq_f32(scales.val[1], vcvt_f32_f16(vld1_f16((const float16_t *)ybh.d)));
                 auto sumil = compute_dot(ybl.qs, xv+0);
                 auto sumih = compute_dot(ybh.qs, xv+4);
-                //if constexpr (nrc_y == 1) {
-                //    accd[2*iy+0] = vfmaq_f32(accd[2*iy+0], dyl, vcvtq_f32_s32(sumil));
-                //    accd[2*iy+1] = vfmaq_f32(accd[2*iy+1], dyh, vcvtq_f32_s32(sumih));
-                //} else {
+                if constexpr (nrc_y == 1) {
+                    accd[2*iy+0] = vfmaq_f32(accd[2*iy+0], dyl, vcvtq_f32_s32(sumil));
+                    accd[2*iy+1] = vfmaq_f32(accd[2*iy+1], dyh, vcvtq_f32_s32(sumih));
+                } else {
                     accd[iy] = vfmaq_f32(accd[iy], dyl, vcvtq_f32_s32(sumil));
                     accd[iy] = vfmaq_f32(accd[iy], dyh, vcvtq_f32_s32(sumih));
-                //}
+                }
             }
             //}
         }
 
-        //if constexpr (nrc_y == 1) {
-        //    info.store(ix, 0, vaddvq_f32(vaddq_f32(accd[0], accd[1])));
-        //} else {
+        if constexpr (nrc_y == 1) {
+            info.store(ix, 0, vaddvq_f32(vaddq_f32(accd[0], accd[1])));
+        } else {
             for (int iy = 0; iy < nrc_y; ++iy) {
                 info.store(ix, iy, vaddvq_f32(accd[iy]));
             }
-        //}
+        }
     }
 }
 
