@@ -234,7 +234,12 @@
 
 #define GGML_MAX_DIMS           4
 #define GGML_MAX_PARAMS         2048
-#define GGML_MAX_CONTEXTS       2048 // Bump from 64 to allow loading more than 64 model shards - https://github.com/ggml-org/whisper.cpp/discussions/2520
+#ifndef GGML_MAX_CONTEXTS
+// Maximum number of model contexts (e.g., for model shards). 
+// Increase this value using -DGGML_MAX_CONTEXTS=<value> in CMake 
+// if you need to load more than 64 model shards.
+#define GGML_MAX_CONTEXTS 64
+#endif
 #define GGML_MAX_SRC            10
 #ifndef GGML_MAX_NAME
 #define GGML_MAX_NAME           64
