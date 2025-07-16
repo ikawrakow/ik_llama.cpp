@@ -52,7 +52,8 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
@@ -92,7 +93,8 @@ jobs:
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL=OFF \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
@@ -134,7 +136,8 @@ jobs:
         run: |
           cmake -B build \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(nproc)
 
       - name: Test
@@ -199,7 +202,8 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DGGML_OPENMP=OFF
+            -DGGML_OPENMP=OFF \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
 
       - name: Test
@@ -229,7 +233,8 @@ jobs:
           cd build
           cmake .. \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_LLGUIDANCE=ON
+            -DLLAMA_LLGUIDANCE=ON \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build . --config Release -j $(nproc)
 
       - name: Test
@@ -264,7 +269,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(nproc)
 
       - name: Test
@@ -299,7 +305,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
-            -DGGML_VULKAN=ON
+            -DGGML_VULKAN=ON \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(nproc)
 
       - name: Test
@@ -346,7 +353,8 @@ jobs:
             -DCMAKE_C_COMPILER=hipcc \
             -DCMAKE_CXX_COMPILER=hipcc \
             -DGGML_HIP_ROCWMMA_FATTN=ON \
-            -DGGML_HIP=ON
+            -DGGML_HIP=ON \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build2 --config Release -j $(nproc)
 
   ubuntu-22-cmake-musa:
@@ -374,7 +382,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -S . \
-            -DGGML_MUSA=ON
+            -DGGML_MUSA=ON \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl:
@@ -422,7 +431,8 @@ jobs:
           cmake -B build \
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
-            -DCMAKE_CXX_COMPILER=icpx
+            -DCMAKE_CXX_COMPILER=icpx \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl-fp16:
@@ -471,7 +481,8 @@ jobs:
             -DGGML_SYCL=ON \
             -DCMAKE_C_COMPILER=icx \
             -DCMAKE_CXX_COMPILER=icpx \
-            -DGGML_SYCL_F16=ON
+            -DGGML_SYCL_F16=ON \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(nproc)
 
   build-linux-cross:
@@ -511,7 +522,8 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-cmake-tvos:
@@ -548,7 +560,8 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=tvOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-cmake-visionos:
@@ -579,7 +592,8 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=visionOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=1.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-swift:
@@ -618,7 +632,8 @@ jobs:
             -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: xcodebuild for swift package
@@ -689,22 +704,22 @@ jobs:
         include:
           - build: 'cpu-x64 (static)'
             arch: 'x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_MAX_CONTEXTS=2048'
           - build: 'openblas-x64'
             arch: 'x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib" -DGGML_MAX_CONTEXTS=2048'
           - build: 'vulkan-x64'
             arch: 'x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON -DGGML_MAX_CONTEXTS=2048'
           - build: 'llvm-arm64'
             arch: 'arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_MAX_CONTEXTS=2048'
           - build: 'llvm-arm64-opencl-adreno'
             arch: 'arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON -DGGML_MAX_CONTEXTS=2048'
          # - build: 'kompute-x64'
          #   arch: 'x64'
-         #   defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON'
+         #   defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON -DGGML_MAX_CONTEXTS=2048'
 
     steps:
       - name: Clone
@@ -845,7 +860,8 @@ jobs:
               -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
               -DLLAMA_FATAL_WARNINGS=ON \
               -DGGML_NATIVE=OFF \
-              -DGGML_CUDA=ON
+              -DGGML_CUDA=ON \
+            -DGGML_MAX_CONTEXTS=2048
             cmake --build build
 
   windows-2022-cmake-cuda:
@@ -894,7 +910,8 @@ jobs:
             -DGGML_CPU_ALL_VARIANTS=ON ^
             -DGGML_CUDA=ON ^
             -DGGML_RPC=ON ^
-            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include"
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" \
+            -DGGML_MAX_CONTEXTS=2048
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
@@ -986,7 +1003,8 @@ jobs:
             -DGGML_HIP=ON `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_RPC=ON `
-            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
+            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include" \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
   ios-xcode-build:
@@ -1010,7 +1028,8 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
+            -DGGML_MAX_CONTEXTS=2048
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
       - name: xcodebuild for swift package
@@ -1082,5 +1101,6 @@ jobs:
           cmake -S . -B build \
               -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
               -DGGML_CANN=on \
-              -DSOC_TYPE=${{ matrix.device }}
+              -DSOC_TYPE=${{ matrix.device }} \
+              -DGGML_MAX_CONTEXTS=2048
           cmake --build build -j $(nproc)
