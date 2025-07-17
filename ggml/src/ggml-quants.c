@@ -2425,7 +2425,7 @@ static void quantize_row_q2_K_impl(const float * restrict x, block_q2_K * restri
         memset(sw, 0, QK_K/16*sizeof(float));
         float sumx2 = 0;
         for (int j = 0; j < QK_K; ++j) sumx2 += x[j]*x[j];
-        float sigma2 = 0.75f*sumx2/QK_K;
+        float sigma2 = 0.5f*sumx2/QK_K;
         for (int j = 0; j < QK_K/16; ++j) {
             const float * restrict qw = quant_weights + QK_K * i + 16*j;
             for (int l = 0; l < 16; ++l) weight[l] = qw[l] * sqrtf(sigma2 + x[16*j + l]*x[16*j + l]);
@@ -2440,6 +2440,30 @@ static void quantize_row_q2_K_impl(const float * restrict x, block_q2_K * restri
         y[i].dmin = GGML_FP32_TO_FP16(mm);
 
         for (int j = 0; j < QK_K/16; ++j) {
+            const float * restrict qw = quant_weights + QK_K * i + 16*j;
+            for (int l = 0; l < 16; ++l) weight[l] = qw[l] * sqrtf(sigma2 + x[16*j + l]*x[16*j + l]);
+            int lmin = MAX(Ls[j]-1, 0);
+            int lmax = MIN(Ls[j]+1,15);
+            int mmin = MAX(Lm[j]-1, 0);
+            int mmax = MIN(Lm[j]+1,15);
+            float best_score = INFINITY;
+            for (int il = lmin; il <= lmax; ++il) {
+                float d = dm*il;
+                float id = d ? 1/d : 0.f;
+                for (int im = mmin; im <= mmax; ++im) {
+                    float m = mm*im;
+                    float score = 0;
+                    for (int ii = 0; ii < 16; ++ii) {
+                        int q = nearest_int((x[16*j + ii] + m)*id);
+                        q = MAX(0, MIN(3, q));
+                        float diff = d*q - m - x[16*j + ii];
+                        score += weight[ii] * diff * diff;
+                    }
+                    if (score < best_score) {
+                        best_score = score; Ls[j] = il; Lm[j] = im;
+                    }
+                }
+            }
             float d = dm*Ls[j];
             float m = mm*Lm[j];
             float id = d ? 1/d : 0.f;
