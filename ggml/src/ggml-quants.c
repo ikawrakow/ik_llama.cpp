@@ -3146,10 +3146,37 @@ static void quantize_row_q5_K_impl(const float * restrict x, block_q5_K * restri
         float m_block = make_qp_quants(QK_K/32, 63, mins,   Lm, sw);
 
         for (int j = 0; j < QK_K/32; ++j) {
+            if (quant_weights) {
+                const float * qw = quant_weights + QK_K*i + 32*j;
+                for (int l = 0; l < 32; ++l) weights[l] = qw[l] * sqrtf(sigma2 + x[32*j + l]*x[32*j + l]);
+            } else {
+                for (int l = 0; l < 32; ++l) weights[l] = av_x + fabsf(x[32*j + l]);
+            }
+            int lmin = MAX( 0, Ls[j] - 2);
+            int lmax = MIN(63, Ls[j] + 2);
+            int mmin = MAX( 0, Lm[j] - 2);
+            int mmax = MIN(63, Lm[j] + 2);
+            float best_score = INFINITY;
+            for (int il = lmin; il <= lmax; ++il) {
+                float dl = d_block * il;
+                float idl = dl ? 1/dl : 0.f;
+                for (int im = mmin; im <= mmax; ++im) {
+                    float dm = m_block * im;
+                    float score = 0;
+                    for (int ii = 0; ii < 32; ++ii) {
+                        int q = nearest_int((x[32*j + ii] + dm)*idl);
+                        q = MAX(0, MIN(31, q));
+                        float diff = dl * q - dm - x[32*j + ii];
+                        score += weights[ii] * diff * diff;
+                    }
+                    if (score < best_score) {
+                        best_score = score;
+                        Ls[j] = il; Lm[j] = im;
+                    }
+                }
+            }
             uint8_t ls = Ls[j];
             uint8_t lm = Lm[j];
-            ls = MIN(63, ls);
-            lm = MIN(63, lm);
             if (j < 4) {
                 y[i].scales[j] = ls;
                 y[i].scales[j+4] = lm;
@@ -3165,9 +3192,9 @@ static void quantize_row_q5_K_impl(const float * restrict x, block_q5_K * restri
         uint8_t sc, m;
         for (int j = 0; j < QK_K/32; ++j) {
             get_scale_min_k4(j, y[i].scales, &sc, &m);
-            const float d = GGML_FP16_TO_FP32(y[i].d) * sc;
+            const float d = d_block * sc;
             if (!d) continue;
-            const float dm = GGML_FP16_TO_FP32(y[i].dmin) * m;
+            const float dm = m_block * m;
             for (int ii = 0; ii < 32; ++ii) {
                 int l = nearest_int((x[32*j + ii] + dm)/d);
                 l = MAX(0, MIN(31, l));
