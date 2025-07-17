@@ -2670,6 +2670,30 @@ static void quantize_row_q3_K_impl(const float * restrict x, block_q3_K * restri
 
         float d_block = make_qx_quants(QK_K/16, 32, scales, Ls, 1, sw);
         for (int j = 0; j < QK_K/16; ++j) {
+            // Somehow this does not help
+            //if (quant_weights) {
+            //    const float * qw = quant_weights + QK_K * i + 16*j;
+            //    for (int l = 0; l < 16; ++l) weight[l] = qw[l] * sqrtf(sigma2 + x[16*j+l]*x[16*j+l]);
+            //} else {
+            //    for (int l = 0; l < 16; ++l) weight[l] = x[16*j+l]*x[16*j+l];
+            //}
+            //int lmin = MAX( 0, Ls[j]-1);
+            //int lmax = MIN(63, Ls[j]+1);
+            //float best_score = INFINITY;
+            //for (int ls = lmin; ls <= lmax; ++ls) {
+            //    float dl = d_block * (ls - 32);
+            //    float idl = dl ? 1/dl : 0.f;
+            //    float score = 0;
+            //    for (int ii = 0; ii < 16; ++ii) {
+            //        int q = nearest_int(idl*x[16*j + ii]);
+            //        q = MAX(-4, MIN(3, q));
+            //        float diff = dl*q - x[16*j + ii];
+            //        score += weight[ii] * diff * diff;
+            //    }
+            //    if (score < best_score) {
+            //        best_score = score; Ls[j] = ls;
+            //    }
+            //}
             int l = Ls[j];
             if (j < 8) {
                 y[i].scales[j] = l & 0xF;
@@ -2685,7 +2709,8 @@ static void quantize_row_q3_K_impl(const float * restrict x, block_q3_K * restri
         for (int j = 0; j < QK_K/16; ++j) {
             sc = j < 8 ? y[i].scales[j] & 0xF : y[i].scales[j-8] >> 4;
             sc = (sc | (((y[i].scales[8 + j%4] >> (2*(j/4))) & 3) << 4)) - 32;
-            float d = GGML_FP16_TO_FP32(y[i].d) * sc;
+            //float d = GGML_FP16_TO_FP32(y[i].d) * sc;
+            float d = d_block * sc;
             if (!d) {
                 continue;
             }
@@ -2714,6 +2739,8 @@ static void quantize_row_q3_K_impl(const float * restrict x, block_q3_K * restri
                 y[i].qs[j/4 + l] = L[j + l] | (L[j + l + 32] << 2) | (L[j + l + 64] << 4) | (L[j + l + 96] << 6);
             }
         }
+
+        y[i].d = GGML_FP32_TO_FP16(1.015f*d_block);
 
         x += QK_K;
     }
