@@ -1179,8 +1179,6 @@ void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const f
     constexpr int kBlockSize = 32;
     constexpr int kMax_i1 = 3*kBlockSize/4;
     constexpr int kMin_i3 = kBlockSize/4;
-    //constexpr int kNtry = 5;
-    //constexpr float kStep = 1.f;
 
     ggml_half * dptr = (ggml_half *)vy;
     *dptr = GGML_FP32_TO_FP16(0.f);
@@ -1226,83 +1224,6 @@ void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const f
                 sw[ib] += weight[j];
                 pairs[j] = {xb[j], j};
             }
-            //float amax = 0, max = 0;
-            //for (int j = 0; j < kBlockSize; ++j) {
-            //    float ax = fabsf(xb[j]);
-            //    if (ax > amax) {
-            //        amax = ax; max = xb[j];
-            //    }
-            //}
-            //if (!amax) {
-            //    scales[ib] = 0;
-            //    continue;
-            //}
-            //float d = kNtry > 0 ? -max/iq2nl_values[0] : max/iq2nl_values[0];
-            //float id = 1/d;
-            //float sumqx_p = 0, sumq2_p = 0;
-            //float sumqx_m = 0, sumq2_m = 0;
-            //for (int j = 0; j < kBlockSize; ++j) {
-            //    float w = weight[j];
-            //    float al = id*xb[j];
-            //    int l = best_index_iq2nl(iq2nl_values, al);
-            //    float q = iq2nl_values[l];
-            //    sumqx_p += w*q*xb[j];
-            //    sumq2_p += w*q*q;
-            //    l = best_index_iq2nl(iq2nl_values, -al);
-            //    q = iq2nl_values[l];
-            //    sumqx_m += w*q*xb[j];
-            //    sumq2_m += w*q*q;
-            //}
-            //d = sumqx_p/sumq2_p;
-            //float best = d*sumqx_p;
-            //if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
-            //    d = sumqx_m/sumq2_m; best = d*sumqx_m;
-            //}
-            //bool is_shifted = false;
-            //for (int itry = -kNtry; itry <= kNtry; ++itry) {
-            //    id = (kStep*itry + iq2nl_values[0])/max;
-            //    sumqx_p = sumq2_p = 0;
-            //    sumqx_m = sumq2_m = 0;
-            //    for (int j = 0; j < kBlockSize; ++j) {
-            //        float w = weight[j];
-            //        float al = id*xb[j];
-            //        int l = best_index_iq2nl(iq2nl_values, al);
-            //        float q = iq2nl_values[l];
-            //        sumqx_p += w*q*xb[j];
-            //        sumq2_p += w*q*q;
-            //        l = best_index_iq2nl(iq2nl_values, -al);
-            //        q = iq2nl_values[l];
-            //        sumqx_m += w*q*xb[j];
-            //        sumq2_m += w*q*q;
-            //    }
-            //    if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
-            //        d = sumqx_p/sumq2_p; best = d * sumqx_p; is_shifted = false;
-            //    }
-            //    if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
-            //        d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = false;
-            //    }
-            //    id = (kStep*itry + shifted_values[0])/max;
-            //    sumqx_p = sumq2_p = 0;
-            //    sumqx_m = sumq2_m = 0;
-            //    for (int j = 0; j < kBlockSize; ++j) {
-            //        float w = weight[j];
-            //        float al = id*xb[j];
-            //        int l = best_index_iq2nl(shifted_values, al);
-            //        float q = shifted_values[l];
-            //        sumqx_p += w*q*xb[j];
-            //        sumq2_p += w*q*q;
-            //        l = best_index_iq2nl(shifted_values, -al);
-            //        q = shifted_values[l];
-            //        sumqx_m += w*q*xb[j];
-            //        sumq2_m += w*q*q;
-            //    }
-            //    if (sumq2_p > 0 && sumqx_p*sumqx_p > best*sumq2_p) {
-            //        d = sumqx_p/sumq2_p; best = d * sumqx_p; is_shifted = true;
-            //    }
-            //    if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
-            //        d = sumqx_m/sumq2_m; best = d * sumqx_m; is_shifted = true;
-            //    }
-            //}
             std::sort(pairs.begin(), pairs.end());
             sumx[0] = sumw[0] = 0;
             for (int j = 0; j < kBlockSize; ++j) {
@@ -1368,19 +1289,37 @@ void quantize_row_iq2_ks_impl(const float * x, void * vy, int n_per_row, const f
         auto Ls = all_Ls + ibl*(QK_K/kBlockSize);
         for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
             int ls = Ls[ib];
+            const int8_t * block_values = y[ibl].extra & (1 << ib) ? shifted_values : iq2nl_values;
+            const float * xb = xbl + kBlockSize*ib;
+            int lsmin = std::max(ls-1, 0);
+            int lsmax = std::min(ls+1, 31);
+            if (quant_weights) {
+                const float * qw = quant_weights + ibl*QK_K + ib*kBlockSize;
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+            } else {
+                for (int j = 0; j < kBlockSize; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
+            }
+            int best_ls = ls;
+            float best_score = std::numeric_limits<float>::max();
+            for (int ils = lsmin; ils <= lsmax; ++ils) {
+                float dl = d * (ils - 16);
+                float idl = std::abs(dl) > 1e-13f ? 1/dl : 0.f;
+                float score = 0;
+                for (int j = 0; j < 32; ++j) {
+                    int ibest = best_index_iq2nl(block_values, idl*xb[j]);
+                    float diff = xb[j] - dl*block_values[ibest];
+                    score += weight[j]*diff*diff;
+                }
+                if (score < best_score) {
+                    best_score = score; best_ls = ils;
+                }
+            }
+            ls = best_ls;
             y[ibl].scales[ib/2] |= ((ls & 0xf) << 4*(ib%2));
             y[ibl].extra |= ((ls >> 4) << (8 + ib));
             ls -= 16;
             float dl = d * ls;
             if (dl) {
-                const int8_t * block_values = y[ibl].extra & (1 << ib) ? shifted_values : iq2nl_values;
-                const float * xb = xbl + kBlockSize*ib;
-                if (quant_weights) {
-                    const float * qw = quant_weights + ibl*QK_K + ib*kBlockSize;
-                    for (int j = 0; j < kBlockSize; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
-                } else {
-                    for (int j = 0; j < kBlockSize; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
-                }
                 float idl = 1/dl;
                 uint8_t * qs = y[ibl].qs + 32*(ib/4);
                 for (int j = 0; j < 32; ++j) {
