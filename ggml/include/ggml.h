@@ -238,7 +238,7 @@
 // Maximum number of model contexts (e.g., for model shards). 
 // Increase this value using -DGGML_MAX_CONTEXTS=<value> in CMake 
 // if you need to load more than 64 model shards.
-#define GGML_MAX_CONTEXTS 64
+#define GGML_MAX_CONTEXTS 2048 // Was 64, but I prefer to force it to 2048 on my fork just in case users forget to set -DGGML_MAX_CONTEXTS=2048 at compilation
 #endif
 #define GGML_MAX_SRC            10
 #ifndef GGML_MAX_NAME
