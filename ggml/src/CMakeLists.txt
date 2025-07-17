@@ -3,6 +3,9 @@ include(CheckCXXCompilerFlag)
 unset(GGML_CDEF_PUBLIC)
 
 add_compile_definitions(GGML_SCHED_MAX_COPIES=${GGML_SCHED_MAX_COPIES})
+if (GGML_MAX_CONTEXTS)
+  add_compile_definitions(GGML_MAX_CONTEXTS=${GGML_MAX_CONTEXTS})
+endif()
 
 # enable libstdc++ assertions for debug builds
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
