@@ -26,6 +26,12 @@ enum error_type {
     ERROR_TYPE_NOT_SUPPORTED, // custom error
 };
 
+enum tool_choice_type {
+    TOOL_CHOICE_AUTO,
+    TOOL_CHOICE_REQUIRED,
+    TOOL_CHOICE_NONE,
+};
+
 extern bool server_verbose;
 extern bool server_log_json;
 
@@ -348,6 +354,23 @@ static json probs_vector_to_json(const llama_context * ctx, const std::vector<co
 #include "function_calls.hpp"
 
 //
+// tool_choice utils
+//
+
+static tool_choice_type tool_choice_parse_oaicompat(const std::string & tool_choice) {
+    if (tool_choice == "auto") {
+        return TOOL_CHOICE_AUTO;
+    }
+    if (tool_choice == "none") {
+        return TOOL_CHOICE_NONE;
+    }
+    if (tool_choice == "required") {
+        return TOOL_CHOICE_REQUIRED;
+    }
+    throw std::runtime_error("Invalid tool_choice: " + tool_choice);
+}
+
+//
 // OAI utils
 //
 
@@ -394,9 +417,16 @@ static json oaicompat_completion_params_parse(
         throw std::runtime_error("top_logprobs requires logprobs to be set to true");
     }
 
+    // Handle tool_choice parameter
+    if (body.contains("tool_choice")) {
+        auto tool_choice_str = json_value(body, "tool_choice", std::string("auto"));
+        auto tool_choice = tool_choice_parse_oaicompat(tool_choice_str);
+        llama_params["tool_choice"] = static_cast<int>(tool_choice);
+    }
+
     // Accept tools and tool_choice parameters for function calling support
     // Other unsupported params still rejected
-    static const std::vector<std::string> unsupported_params {  "tool_choice"};
+    static const std::vector<std::string> unsupported_params {  };
     for (auto & param : unsupported_params) {
         if (body.contains(param)) {
             throw std::runtime_error("Unsupported param: " + param);
