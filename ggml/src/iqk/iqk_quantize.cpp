@@ -1784,7 +1784,7 @@ namespace {
 
 static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, const float * quant_weights) {
 
-    constexpr int ntry = 3;
+    constexpr int ntry = 4;
 
     block_iq3_k * y = (block_iq3_k *)vy;
 
@@ -1850,7 +1850,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
             }
             bool is_shifted = false;
             for (int itry = -ntry; itry <= ntry; ++itry) {
-                id = (2*itry + iq3nl_values[0])/max;
+                id = (1.5f*itry + iq3nl_values[0])/max;
                 sumqx_p = sumq2_p = 0;
                 sumqx_m = sumq2_m = 0;
                 for (int j = 0; j < 16; ++j) {
@@ -1958,21 +1958,38 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
 
         float sumqx = 0, sumq2 = 0;
         for (int ib = 0; ib < QK_K/16; ++ib) {
+            const int8_t * block_values = y[ibl].extra & (1 << ib) ? shifted_values : iq3nl_values;
+            const float * xb = xbl + 16*ib;
+            if (quant_weights) {
+                const float * qw = quant_weights + ibl*QK_K + ib*16;
+                for (int j = 0; j < 16; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+            } else {
+                for (int j = 0; j < 16; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
+            }
             int ls = nearest_int(0.5f*(id*fabsf(scales[ib])-1));
             ls = MAX(0, MIN(15, ls));
+            int lsmin = std::max( 0, ls-1);
+            int lsmax = std::min(16, ls+1);
+            int best_ls = ls;
+            float best_score = std::numeric_limits<float>::max();
+            for (int il = lsmin; il < lsmax; ++il) {
+                float dl = d * (2*il + 1) * (scales[ib] < 0 ? -1 : 1);
+                float idl = dl ? 1/dl : 0.f;
+                float score = 0;
+                for (int j = 0; j < 16; ++j) {
+                    float diff = dl * block_values[best_index_iq3nl(block_values, idl*xb[j])] - xb[j];
+                    score += weight[j] * diff * diff;
+                }
+                if (score < best_score) {
+                    best_score = score; best_ls = il;
+                }
+            }
+            ls = best_ls;
             y[ibl].scales_l[ib/2] |= (ls << 4*(ib%2));
             if (scales[ib] < 0) y[ibl].scales_h |= (1 << ib);
             ls = (2*ls + 1) * (scales[ib] < 0 ? -1 : 1);
             float dl = d * ls;
             if (dl) {
-                const int8_t * block_values = y[ibl].extra & (1 << ib) ? shifted_values : iq3nl_values;
-                const float * xb = xbl + 16*ib;
-                if (quant_weights) {
-                    const float * qw = quant_weights + ibl*QK_K + ib*16;
-                    for (int j = 0; j < 16; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
-                } else {
-                    for (int j = 0; j < 16; ++j) weight[j] = 0.25f*sigma2 + xb[j]*xb[j];
-                }
                 float idl = 1/dl;
                 int ib32 = ib/2;
                 int offset = 16*(ib%2);
