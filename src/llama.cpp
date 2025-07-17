@@ -4266,13 +4266,22 @@ struct llama_model_loader {
         }
 
         #ifdef _WIN32
-        int _setmaxstdio_ret = _setmaxstdio(2048); // 8,192 may be supported - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setmaxstdio?view=msvc-160
-        if (_setmaxstdio_ret == -1) {
-            LLAMA_LOG_INFO("%s: failed to set max stdio to 2048.\n", __func__);
-        } else {
-            LLAMA_LOG_INFO("%s: Max stdio successfully set to %d\n", __func__, _setmaxstdio_ret);
-        }
-        #endif
+            // Only bump maxstdio if the user really wants large contexts:
+            #if defined(GGML_MAX_CONTEXTS) && (GGML_MAX_CONTEXTS > 512)
+                // Cap at MSVC's hard limit of 8192 - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/setmaxstdio?view=msvc-160
+                #if (GGML_MAX_CONTEXTS > 8192)
+                    #define _GGML_STDIO_TARGET 8192
+                #else
+                    #define _GGML_STDIO_TARGET GGML_MAX_CONTEXTS
+                #endif
+                int _setmaxstdio_ret = _setmaxstdio(_GGML_STDIO_TARGET);
+                if (_setmaxstdio_ret == -1) {
+                    LLAMA_LOG_INFO("%s: failed to set max stdio to %d. (setmaxstdio returned -1)\n", __func__, _GGML_STDIO_TARGET);
+                } else {
+                    LLAMA_LOG_INFO("%s: max stdio successfully set to %d\n", __func__, _setmaxstdio_ret);
+                }
+            #endif // GGML_MAX_CONTEXTS > 512
+        #endif // _WIN32
 
         if (param_overrides_p != nullptr) {
             for (const struct llama_model_kv_override * p = param_overrides_p; p->key[0] != 0; p++) {
