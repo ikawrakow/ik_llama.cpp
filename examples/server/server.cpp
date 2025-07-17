@@ -2587,9 +2587,37 @@ static json format_final_response_oaicompat(const json& request, json result, co
     int num_prompt_tokens = json_value(result, "tokens_evaluated", 0);
     std::string content = json_value(result, "content", std::string(""));
 
+    // Check for Kimi-K2 tool calls in response
+    json tool_calls = parse_kimi_k2_tool_calls(content);
+    bool has_tool_calls = !tool_calls.empty();
+    
+    // Remove tool call tokens from content for display
+    if (has_tool_calls) {
+        size_t section_start = content.find("<|tool_calls_section_begin|>");
+        if (section_start != std::string::npos) {
+            size_t section_end = content.find("<|tool_calls_section_end|>");
+            if (section_end != std::string::npos) {
+                content = content.substr(0, section_start) + 
+                         content.substr(section_end + 26);
+            }
+        }
+    }
+
     std::string finish_reason = "length";
-    if (stopped_word || stopped_eos) {
+    if (has_tool_calls) {
+        finish_reason = "tool_calls";
+    } else if (stopped_word || stopped_eos) {
         finish_reason = "stop";
+    }
+
+    json message = json{{"role", "assistant"}};
+    if (!content.empty()) {
+        message["content"] = content;
+    } else {
+        message["content"] = nullptr;
+    }
+    if (has_tool_calls) {
+        message["tool_calls"] = tool_calls;
     }
 
     json choices =
@@ -2598,8 +2626,7 @@ static json format_final_response_oaicompat(const json& request, json result, co
                                         {"delta", json::object()}} })
         : json::array({ json{{"finish_reason", finish_reason},
                               {"index", 0},
-                              {"message", json{{"content", content},
-                                               {"role", "assistant"}}}} });
+                              {"message", message}} });
 
     std::time_t t = std::time(0);
 

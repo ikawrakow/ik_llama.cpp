@@ -343,6 +343,11 @@ static json probs_vector_to_json(const llama_context * ctx, const std::vector<co
 }
 
 //
+// Function calling support
+//
+#include "function_calls.hpp"
+
+//
 // OAI utils
 //
 
@@ -389,8 +394,9 @@ static json oaicompat_completion_params_parse(
         throw std::runtime_error("top_logprobs requires logprobs to be set to true");
     }
 
-    // Params supported by OAI but unsupported by llama.cpp
-    static const std::vector<std::string> unsupported_params { "tools", "tool_choice" };
+    // Accept tools and tool_choice parameters for function calling support
+    // Other unsupported params still rejected
+    static const std::vector<std::string> unsupported_params {  "tool_choice"};
     for (auto & param : unsupported_params) {
         if (body.contains(param)) {
             throw std::runtime_error("Unsupported param: " + param);
