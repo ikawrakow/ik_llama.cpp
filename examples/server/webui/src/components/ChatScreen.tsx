@@ -99,6 +99,7 @@ export default function ChatScreen() {
     pendingMessages,
     canvasData,
     replaceMessageAndGenerate,
+    continueMessageAndGenerate,
   } = useAppContext();
 
   const textarea: ChatTextareaApi = useChatTextarea(prefilledMsg.content());
@@ -187,6 +188,20 @@ export default function ChatScreen() {
     scrollToBottom(false);
   };
 
+    const handleContinueMessage = async (msg: Message, content: string) => {
+    if (!viewingChat || !continueMessageAndGenerate) return;
+    setCurrNodeId(msg.id);
+    scrollToBottom(false);
+    await continueMessageAndGenerate(
+      viewingChat.conv.id,
+      msg.id,
+      content,
+      onChunk
+    );
+    setCurrNodeId(-1);
+    scrollToBottom(false);
+  };
+
   const hasCanvas = !!canvasData;
 
   useEffect(() => {
@@ -204,7 +219,7 @@ export default function ChatScreen() {
 
   // due to some timing issues of StorageUtils.appendMsg(), we need to make sure the pendingMsg is not duplicated upon rendering (i.e. appears once in the saved conversation and once in the pendingMsg)
   const pendingMsgDisplay: MessageDisplay[] =
-    pendingMsg && messages.at(-1)?.msg.id !== pendingMsg.id
+    pendingMsg && !messages.some((m) => m.msg.id === pendingMsg.id) // Only show if pendingMsg is not an existing message being continued
       ? [
           {
             msg: pendingMsg,
@@ -236,17 +251,35 @@ export default function ChatScreen() {
             {/* placeholder to shift the message to the bottom */}
             {viewingChat ? '' : 'Send a message to start'}
           </div>
-          {[...messages, ...pendingMsgDisplay].map((msg) => (
-            <ChatMessage
-              key={msg.msg.id}
-              msg={msg.msg}
-              siblingLeafNodeIds={msg.siblingLeafNodeIds}
-              siblingCurrIdx={msg.siblingCurrIdx}
-              onRegenerateMessage={handleRegenerateMessage}
-              onEditMessage={handleEditMessage}
-              onChangeSibling={setCurrNodeId}
-            />
-          ))}
+          {[...messages, ...pendingMsgDisplay].map((msgDisplay) => {
+            const actualMsgObject = msgDisplay.msg;
+            // Check if the current message from the list is the one actively being generated/continued
+            const isThisMessageTheActivePendingOne =
+              pendingMsg?.id === actualMsgObject.id;
+
+            return (
+              <ChatMessage
+                key={actualMsgObject.id}
+                // If this message is the active pending one, use the live object from pendingMsg state (which has streamed content).
+                // Otherwise, use the version from the messages array (from storage).
+                msg={
+                  isThisMessageTheActivePendingOne
+                    ? pendingMsg
+                    : actualMsgObject
+                }
+                siblingLeafNodeIds={msgDisplay.siblingLeafNodeIds}
+                siblingCurrIdx={msgDisplay.siblingCurrIdx}
+                onRegenerateMessage={handleRegenerateMessage}
+                onEditMessage={handleEditMessage}
+                onChangeSibling={setCurrNodeId}
+                // A message is pending if it's the actively streaming one OR if it came from pendingMsgDisplay (for new messages)
+                isPending={
+                  isThisMessageTheActivePendingOne || msgDisplay.isPending
+                }
+                onContinueMessage={handleContinueMessage}
+              />
+            );
+          })}        
         </div>
 
         {/* chat input */}

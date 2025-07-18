@@ -20,6 +20,7 @@ export default function ChatMessage({
   onEditMessage,
   onChangeSibling,
   isPending,
+  onContinueMessage,
 }: {
   msg: Message | PendingMessage;
   siblingLeafNodeIds: Message['id'][];
@@ -27,6 +28,7 @@ export default function ChatMessage({
   id?: string;
   onRegenerateMessage(msg: Message): void;
   onEditMessage(msg: Message, content: string): void;
+  onContinueMessage(msg: Message, content: string): void;
   onChangeSibling(sibling: Message['id']): void;
   isPending?: boolean;
 }) {
@@ -112,7 +114,11 @@ export default function ChatMessage({
                 onClick={() => {
                   if (msg.content !== null) {
                     setEditingContent(null);
-                    onEditMessage(msg as Message, editingContent);
+                    if (msg.role === 'user') {
+                      onEditMessage(msg as Message, editingContent);
+                    } else {
+                      onContinueMessage(msg as Message, editingContent);
+                    }
                   }
                 }}
               >
@@ -281,6 +287,15 @@ export default function ChatMessage({
                   disabled={msg.content === null}
                 >
                   🔄 Regenerate
+                </button>
+              )}
+              {!isPending && (
+                <button
+                  className="badge btn-mini show-on-hover"
+                  onClick={() => setEditingContent(msg.content)}
+                  disabled={msg.content === null}
+                >
+                   ✍️ Edit
                 </button>
               )}
             </>

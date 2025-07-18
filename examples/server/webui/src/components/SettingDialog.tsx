@@ -3,16 +3,21 @@ import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
 import { isDev } from '../Config';
 import StorageUtils from '../utils/storage';
+import { useModals } from './ModalProvider';
 import { classNames, isBoolean, isNumeric, isString } from '../utils/misc';
 import {
   BeakerIcon,
+  BookmarkIcon,
   ChatBubbleOvalLeftEllipsisIcon,
   Cog6ToothIcon,
   FunnelIcon,
   HandRaisedIcon,
   SquaresPlusIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { OpenInNewTab } from '../utils/common';
+import { SettingsPreset } from '../utils/types';
+import toast from 'react-hot-toast'
 
 type SettKey = keyof typeof CONFIG_DEFAULT;
 
@@ -74,7 +79,155 @@ interface SettingSection {
 
 const ICON_CLASSNAME = 'w-4 h-4 mr-1 inline';
 
-const SETTING_SECTIONS: SettingSection[] = [
+// Presets Component
+function PresetsManager({
+  currentConfig,
+  onLoadPreset,
+}: {
+  currentConfig: typeof CONFIG_DEFAULT;
+  onLoadPreset: (config: typeof CONFIG_DEFAULT) => void;
+}) {
+  const [presets, setPresets] = useState<SettingsPreset[]>(() =>
+    StorageUtils.getPresets()
+  );
+  const [presetName, setPresetName] = useState('');
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  const { showConfirm, showAlert } = useModals();
+
+  const handleSavePreset = async () => {
+    if (!presetName.trim()) {
+      await showAlert('Please enter a preset name');
+      return;
+    }
+
+    // Check if preset name already exists
+    const existingPreset = presets.find((p) => p.name === presetName.trim());
+    if (existingPreset) {
+      if (
+        await showConfirm(
+          `Preset "${presetName}" already exists. Do you want to overwrite it?`
+        )
+      ) {
+        StorageUtils.updatePreset(existingPreset.id, currentConfig);
+        setPresets(StorageUtils.getPresets());
+        setPresetName('');
+        await showAlert('Preset updated successfully');
+      }
+    } else {
+      const newPreset = StorageUtils.savePreset(
+        presetName.trim(),
+        currentConfig
+      );
+      setPresets([...presets, newPreset]);
+      setPresetName('');
+      await showAlert('Preset saved successfully');
+    }
+  };
+
+  const handleLoadPreset = async (preset: SettingsPreset) => {
+    if (
+      await showConfirm(
+        `Load preset "${preset.name}"? Current settings will be replaced.`
+      )
+    ) {
+      onLoadPreset(preset.config as typeof CONFIG_DEFAULT);
+      setSelectedPresetId(preset.id);
+    }
+  };
+
+  const handleDeletePreset = async (preset: SettingsPreset) => {
+    if (await showConfirm(`Delete preset "${preset.name}"?`)) {
+      StorageUtils.deletePreset(preset.id);
+      setPresets(presets.filter((p) => p.id !== preset.id));
+      if (selectedPresetId === preset.id) {
+        setSelectedPresetId(null);
+      }
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Save current settings as preset */}
+      <div className="form-control">
+        <label className="label">
+          <span className="label-text">Save current settings as preset</span>
+        </label>
+        <div className="join">
+          <input
+            type="text"
+            placeholder="Enter preset name"
+            className="input input-bordered join-item flex-1"
+            value={presetName}
+            onChange={(e) => setPresetName(e.target.value)}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleSavePreset();
+              }
+            }}
+          />
+          <button
+            className="btn btn-primary join-item"
+            onClick={handleSavePreset}
+          >
+            Save Preset
+          </button>
+        </div>
+      </div>
+
+      {/* List of saved presets */}
+      <div className="form-control">
+        <label className="label">
+          <span className="label-text">Saved presets</span>
+        </label>
+        {presets.length === 0 ? (
+          <div className="alert">
+            <span>No presets saved yet</span>
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {presets.map((preset) => (
+              <div
+                key={preset.id}
+                className={classNames({
+                  'card bg-base-200 p-3': true,
+                  'ring-2 ring-primary': selectedPresetId === preset.id,
+                })}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-semibold">{preset.name}</h4>
+                    <p className="text-sm opacity-70">
+                      Created: {new Date(preset.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={() => handleLoadPreset(preset)}
+                    >
+                      Load
+                    </button>
+                    <button
+                      className="btn btn-sm btn-error"
+                      onClick={() => handleDeletePreset(preset)}
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const SETTING_SECTIONS = (
+  localConfig: typeof CONFIG_DEFAULT,
+  setLocalConfig: (config: typeof CONFIG_DEFAULT) => void
+): SettingSection[] => [
   {
     title: (
       <>
@@ -188,6 +341,85 @@ const SETTING_SECTIONS: SettingSection[] = [
         },
       },
       {
+        type: SettingInputType.CUSTOM,
+        key: 'custom', // dummy key, won't be used
+        component: () => {
+          const exportDB = async () => {
+            const blob = await StorageUtils.exportDB();
+            const a = document.createElement('a');
+            document.body.appendChild(a);
+            a.href = URL.createObjectURL(blob);
+            document.body.appendChild(a);
+            a.download = `llamawebui_dump.json`;
+            a.click();
+            document.body.removeChild(a);
+          };
+          return (
+            <button className="btn" onClick={exportDB}>
+              Export conversation database
+            </button>
+          );
+        },
+      },
+     {
+        type: SettingInputType.CUSTOM,
+        key: 'custom', // dummy key, won't be used
+        component: () => {
+          const importDB = async (e: React.ChangeEvent<HTMLInputElement>) => {
+            console.log(e);
+            if (!e.target.files) {
+              toast.error('Target.files cant be null');
+              throw new Error('e.target.files cant be null');
+            }
+            if (e.target.files.length != 1)
+            {
+              toast.error(
+                'Number of selected files for DB import must be 1 but was ' +
+                  e.target.files.length +
+                  '.');
+              throw new Error(
+                'Number of selected files for DB import must be 1 but was ' +
+                  e.target.files.length +
+                  '.'
+              );
+            }
+            const file = e.target.files[0];
+            try {
+              if (!file) throw new Error('No DB found to import.');
+              console.log('Importing DB ' + file.name);
+              await StorageUtils.importDB(file);
+              toast.success('Import complete')
+              window.location.reload();
+            } catch (error) {
+              console.error('' + error);
+              toast.error('' + error);
+            }
+          };
+          return (
+            <div>
+              <label
+                htmlFor="db-import"
+                className="btn"
+                role="button"
+                tabIndex={0}
+              >
+                {' '}
+                Reset and import conversation database{' '}
+              </label>
+              <input
+                id="db-import"
+                type="file"
+                accept=".json"
+                className="file-upload"
+                onInput={importDB}
+                hidden
+              />
+            </div>
+          );
+        },
+      },
+
+      {
         type: SettingInputType.CHECKBOX,
         label: 'Show tokens per second',
         key: 'showTokensPerSecond',
@@ -257,6 +489,26 @@ const SETTING_SECTIONS: SettingSection[] = [
       },
     ],
   },
+  {
+    title: (
+      <>
+        <BookmarkIcon className={ICON_CLASSNAME} />
+        Presets
+      </>
+    ),
+    fields: [
+      {
+        type: SettingInputType.CUSTOM,
+        key: 'custom', // dummy key for presets
+        component: () => (
+          <PresetsManager
+            currentConfig={localConfig}
+            onLoadPreset={setLocalConfig}
+          />
+        ),
+      },
+    ],
+  },
 ];
 
 export default function SettingDialog({
@@ -272,6 +524,12 @@ export default function SettingDialog({
   // clone the config object to prevent direct mutation
   const [localConfig, setLocalConfig] = useState<typeof CONFIG_DEFAULT>(
     JSON.parse(JSON.stringify(config))
+  );
+
+    // Generate sections with access to local state
+  const SETTING_SECTIONS_GENERATED = SETTING_SECTIONS(
+    localConfig,
+    setLocalConfig
   );
 
   const resetConfig = () => {
@@ -332,7 +590,7 @@ export default function SettingDialog({
         <div className="flex flex-col md:flex-row h-[calc(90vh-12rem)]">
           {/* Left panel, showing sections - Desktop version */}
           <div className="hidden md:flex flex-col items-stretch pr-4 mr-4 border-r-2 border-base-200">
-            {SETTING_SECTIONS.map((section, idx) => (
+            {SETTING_SECTIONS_GENERATED.map((section, idx) => (
               <div
                 key={idx}
                 className={classNames({
@@ -351,10 +609,10 @@ export default function SettingDialog({
           <div className="md:hidden flex flex-row gap-2 mb-4">
             <details className="dropdown">
               <summary className="btn bt-sm w-full m-1">
-                {SETTING_SECTIONS[sectionIdx].title}
+                {SETTING_SECTIONS_GENERATED[sectionIdx].title}
               </summary>
               <ul className="menu dropdown-content bg-base-100 rounded-box z-[1] w-52 p-2 shadow">
-                {SETTING_SECTIONS.map((section, idx) => (
+                {SETTING_SECTIONS_GENERATED.map((section, idx) => (
                   <div
                     key={idx}
                     className={classNames({
@@ -373,7 +631,7 @@ export default function SettingDialog({
 
           {/* Right panel, showing setting fields */}
           <div className="grow overflow-y-auto px-4">
-            {SETTING_SECTIONS[sectionIdx].fields.map((field, idx) => {
+            {SETTING_SECTIONS_GENERATED[sectionIdx].fields.map((field, idx) => {
               const key = `${sectionIdx}-${idx}`;
               if (field.type === SettingInputType.SHORT_INPUT) {
                 return (
