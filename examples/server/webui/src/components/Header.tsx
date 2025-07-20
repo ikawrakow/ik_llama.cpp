@@ -5,6 +5,14 @@ import { classNames } from '../utils/misc';
 import daisyuiThemes from 'daisyui/theme/object';
 import { THEMES } from '../Config';
 import { useNavigate } from 'react-router';
+import toast from 'react-hot-toast';
+import { useModals } from './ModalProvider';
+import {
+  ArrowUpTrayIcon,
+  ArrowDownTrayIcon,
+  PencilIcon,
+  TrashIcon,
+} from '@heroicons/react/24/outline';
 
 export default function Header() {
   const navigate = useNavigate();
@@ -24,9 +32,11 @@ export default function Header() {
     );
   }, [selectedTheme]);
 
+  const {showPrompt } = useModals();
   const { isGenerating, viewingChat } = useAppContext();
   const isCurrConvGenerating = isGenerating(viewingChat?.conv.id ?? '');
 
+  // remove conversation
   const removeConversation = () => {
     if (isCurrConvGenerating || !viewingChat) return;
     const convId = viewingChat?.conv.id;
@@ -34,6 +44,37 @@ export default function Header() {
       StorageUtils.remove(convId);
       navigate('/');
     }
+  };
+  
+  // rename conversation 
+  async function renameConversation() {  
+	if (isGenerating(viewingChat?.conv.id ?? '')) {
+	  toast.error(
+		'Cannot rename conversation while generating'
+	  );
+	  return;
+	}
+	const newName = await showPrompt(
+	  'Enter new name for the conversation',
+	  viewingChat?.conv.name
+	);
+	if (newName && newName.trim().length > 0) {
+	  StorageUtils.updateConversationName(viewingChat?.conv.id ?? '', newName);
+	}
+    //const importedConv = await StorageUtils.updateConversationName();
+  //if (importedConv) {
+    //console.log('Successfully imported:', importedConv.name);
+    // Refresh UI or navigate to conversation
+  //}
+  };
+  
+  // at the top of your file, alongside ConversationExport:
+  async function importConversation() {  
+    const importedConv = await StorageUtils.importConversationFromFile();
+  if (importedConv) {
+    console.log('Successfully imported:', importedConv.name);
+    // Refresh UI or navigate to conversation
+  }
   };
 
   const downloadConversation = () => {
@@ -99,12 +140,45 @@ export default function Header() {
               tabIndex={0}
               className="dropdown-content menu bg-base-100 rounded-box z-[1] w-52 p-2 shadow"
             >
-              <li onClick={downloadConversation}>
-                <a>Download</a>
-              </li>
-              <li className="text-error" onClick={removeConversation}>
-                <a>Delete</a>
-              </li>
+              {/* Always show Upload when viewingChat is false */}
+              {!viewingChat && (
+                <li onClick={importConversation}>
+                  <a>
+				  <ArrowUpTrayIcon className="w-4 h-4" />
+				  Upload
+				  </a>
+                </li>
+              )}
+
+              {/* Show all three when viewingChat is true */}
+              {viewingChat && (
+                <>
+                  <li onClick={importConversation}>
+                    <a>				  
+					<ArrowUpTrayIcon className="w-4 h-4" />
+					Upload
+					</a>
+                  </li>
+				  <li onClick={renameConversation} tabIndex={0}>
+					<a>
+					  <PencilIcon className="w-4 h-4" />
+					  Rename
+					</a>
+				  </li>
+                  <li onClick={downloadConversation}>
+                    <a>
+					<ArrowDownTrayIcon className="w-4 h-4" />
+					Download
+					</a>
+                  </li>
+                  <li className="text-error" onClick={removeConversation}>
+                    <a>
+					<TrashIcon className="w-4 h-4" />
+					Delete
+					</a>
+                  </li>
+                </>
+              )}
             </ul>
           </div>
         )}
