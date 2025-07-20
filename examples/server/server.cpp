@@ -20,6 +20,8 @@
 #include "json.hpp"
 #include "index.html.gz.hpp"
 #include "loading.html.hpp"
+#include "function_calls.hpp"
+#include "streaming_chat.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -135,6 +137,74 @@ struct server_task_result {
 
 std::unordered_map<int, server_task_result > server_task_result_dict = {};
 
+// Helper functions for content cleaning
+static std::string remove_simple_function_calls(const std::string& content) {
+    std::string cleaned = content;
+    const std::string func_pattern = "functions.";
+    size_t pos = 0;
+    while ((pos = cleaned.find(func_pattern, pos)) != std::string::npos) {
+        size_t func_start = pos;
+        
+        // Find the opening brace for arguments
+        size_t brace_pos = cleaned.find('{', pos);
+        if (brace_pos == std::string::npos) {
+            pos += func_pattern.length();
+            continue;
+        }
+        
+        // Find the matching closing brace
+        int brace_count = 1;
+        size_t end_pos = brace_pos + 1;
+        while (end_pos < cleaned.length() && brace_count > 0) {
+            if (cleaned[end_pos] == '{') brace_count++;
+            else if (cleaned[end_pos] == '}') brace_count--;
+            end_pos++;
+        }
+        
+        if (brace_count == 0) {
+            // Remove the entire function call
+            cleaned.erase(func_start, end_pos - func_start);
+            pos = func_start;
+        } else {
+            pos += func_pattern.length();
+        }
+    }
+    return cleaned;
+}
+
+static std::string remove_xml_function_calls(const std::string& content) {
+    std::string cleaned = content;
+    size_t pos = 0;
+    while ((pos = cleaned.find("<tool_call>", pos)) != std::string::npos) {
+        size_t tool_call_start = pos;
+        size_t tool_call_end = cleaned.find("</tool_call>", tool_call_start);
+        if (tool_call_end == std::string::npos) {
+            pos = tool_call_start + 11;
+            continue;
+        }
+        
+        // Remove the entire XML tool call block
+        cleaned.erase(tool_call_start, tool_call_end - tool_call_start + 12);
+        pos = tool_call_start;
+    }
+    return cleaned;
+}
+
+static std::string clean_all_function_call_formats(const std::string& content) {
+    std::string cleaned = content;
+    
+    // Remove XML format first
+    cleaned = remove_xml_function_calls(cleaned);
+    
+    // Then remove simple format
+    cleaned = remove_simple_function_calls(cleaned);
+    
+    // Trim whitespace from cleaned content
+    cleaned.erase(0, cleaned.find_first_not_of(" \t\n\r"));
+    cleaned.erase(cleaned.find_last_not_of(" \t\n\r") + 1);
+    
+    return cleaned;
+}
 
 struct server_task_multi {
     int id = -1;
@@ -191,6 +261,11 @@ struct server_slot {
     std::vector<llama_token> cache_tokens;
     std::vector<completion_token_output> generated_token_probs;
 
+    // Streaming tool call state
+    ik_chat_msg previous_msg;
+    ik_chat_msg current_msg;
+    std::vector<std::string> tool_call_ids;
+
     bool infill         = false;
     bool embedding      = false;
     bool has_next_token = true;
@@ -242,6 +317,11 @@ struct server_slot {
         n_past_se          = 0;
 
         generated_token_probs.clear();
+        
+        // Reset streaming tool call state
+        previous_msg = ik_chat_msg();
+        current_msg = ik_chat_msg();
+        tool_call_ids.clear();
     }
 
     bool has_budget(gpt_params &global_params) {
@@ -2601,6 +2681,8 @@ static json format_final_response_oaicompat(const json& request, json result, co
                          content.substr(section_end + 26);
             }
         }
+        // Clean all function call formats (XML and simple formats)
+        content = clean_all_function_call_formats(content);
     }
 
     std::string finish_reason = "length";
@@ -2611,10 +2693,11 @@ static json format_final_response_oaicompat(const json& request, json result, co
     }
 
     json message = json{{"role", "assistant"}};
-    if (!content.empty()) {
-        message["content"] = content;
+    // Follow EXACT original llama.cpp pattern: content is null only when content is empty AND tool calls exist
+    if (content.empty() && has_tool_calls) {
+        message["content"] = nullptr;  // Original: json() when content empty AND tool calls exist
     } else {
-        message["content"] = nullptr;
+        message["content"] = content.empty() ? nullptr : content;  // Original: use actual content otherwise
     }
     if (has_tool_calls) {
         message["tool_calls"] = tool_calls;
@@ -2680,6 +2763,34 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
 
     std::time_t t = std::time(0);
 
+    // Follow original llama.cpp pattern: Always process diffs and add final chunk
+    std::vector<json> streaming_chunks;
+    
+    // Process diffs (could be empty, like original llama.cpp)
+    // if (slot) { // slot is always available now
+        streaming_chunks = generate_streaming_chunks(diffs, completion_id, modelname);
+    // }
+    
+    // Always add final chunk (like original llama.cpp)
+    if (!finish_reason.empty()) {
+        json finish_chunk = {
+            {"choices", json::array({json{{"finish_reason", finish_reason},
+                                        {"index", 0},
+                                        {"delta", json::object()}}})},
+            {"created", t},
+            {"id", completion_id},
+            {"model", modelname},
+            {"object", "chat.completion.chunk"}
+        };
+        streaming_chunks.push_back(finish_chunk);
+    }
+    
+    // Return streaming chunks (could be just final chunk if no diffs)
+    if (!streaming_chunks.empty()) {
+        return streaming_chunks;
+    }
+
+    // Fallback to original streaming logic for non-tool calls
     json choices;
 
     if (!finish_reason.empty()) {

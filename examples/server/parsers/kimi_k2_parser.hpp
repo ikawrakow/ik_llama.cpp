@@ -1,0 +1,599 @@
+#pragma once
+
+#include "json.hpp"
+#include <string>
+#include <regex>
+
+using json = nlohmann::ordered_json;
+
+//
+// Kimi-K2 Function Calling Parser
+// Handles both native token format and simple format
+//
+
+namespace kimi_k2 {
+
+// Helper function to trim whitespace and quotes
+static std::string trim_and_unquote(const std::string& str) {
+    std::string result = str;
+    
+    // Trim whitespace
+    result.erase(0, result.find_first_not_of(" \t\n\r"));
+    result.erase(result.find_last_not_of(" \t\n\r") + 1);
+    
+    // Remove surrounding quotes if present
+    if (result.length() >= 2 && result.front() == '"' && result.back() == '"') {
+        result = result.substr(1, result.length() - 2);
+    }
+    
+    return result;
+}
+
+// Parse Kimi-K2 native token format (format: <|tool_calls_section_begin|>...<|tool_calls_section_end|>)
+static json parse_token_function_calls(const std::string& text) {
+    json tool_calls = json::array();
+    
+    try {
+        // Look for tool calls section
+        size_t section_start = text.find("<|tool_calls_section_begin|>");
+        if (section_start == std::string::npos) {
+            return tool_calls;
+        }
+        
+        size_t section_end = text.find("<|tool_calls_section_end|>", section_start);
+        if (section_end == std::string::npos) {
+            return tool_calls;
+        }
+        
+        // Extract section content
+        std::string section = text.substr(section_start + 27, section_end - section_start - 27);
+        
+        // Parse individual tool calls
+        size_t pos = 0;
+        while (pos < section.length()) {
+            size_t call_start = section.find("<|tool_call_begin|>", pos);
+            if (call_start == std::string::npos) break;
+            
+            size_t call_end = section.find("<|tool_call_end|>", call_start);
+            if (call_end == std::string::npos) break;
+            
+            std::string call_content = section.substr(call_start + 19, call_end - call_start - 19);
+            
+            // Parse tool call content
+            size_t arg_start = call_content.find("<|tool_call_argument_begin|>");
+            if (arg_start != std::string::npos) {
+                std::string tool_id_raw = call_content.substr(0, arg_start);
+                std::string arguments_raw = call_content.substr(arg_start + 28);
+                
+                // Clean tool_id and arguments
+                std::string tool_id = tool_id_raw;
+                std::string arguments = arguments_raw;
+                
+                // Trim whitespace but preserve the ID format
+                tool_id.erase(0, tool_id.find_first_not_of(" \t\n\r"));
+                tool_id.erase(tool_id.find_last_not_of(" \t\n\r") + 1);
+                arguments.erase(0, arguments.find_first_not_of(" \t\n\r"));
+                arguments.erase(arguments.find_last_not_of(" \t\n\r") + 1);
+                
+                // Extract function name from tool_id (format: functions.{name}:{idx})
+                std::string func_name = "";
+                size_t dot_pos = tool_id.find('.');
+                size_t colon_pos = tool_id.find(':', dot_pos);
+                if (dot_pos != std::string::npos && colon_pos != std::string::npos) {
+                    func_name = tool_id.substr(dot_pos + 1, colon_pos - dot_pos - 1);
+                }
+                
+                // Skip if function name is empty
+                if (func_name.empty()) {
+                    pos = call_end + 18;
+                    continue;
+                }
+                
+                // Validate arguments is valid JSON
+                try {
+                    auto parsed = json::parse(arguments);
+                    (void)parsed; // Suppress unused variable warning
+                } catch (const std::exception&) {
+                    pos = call_end + 18;
+                    continue;
+                }
+                
+                // Create tool call object
+                json tool_call = {
+                    {"id", tool_id},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", func_name},
+                        {"arguments", arguments}
+                    }}
+                };
+                
+                tool_calls.push_back(tool_call);
+            }
+            
+            pos = call_end + 18;
+        }
+    } catch (const std::exception&) {
+        // Return empty array on any parsing error
+        return json::array();
+    }
+    
+    return tool_calls;
+}
+
+// Parse XML-style function calls: <tool_call><invoke name="..."><parameter name="..." >...</parameter></invoke></tool_call>
+static json parse_xml_function_calls(const std::string& text) {
+    json tool_calls = json::array();
+    
+    try {
+        size_t pos = 0;
+        while ((pos = text.find("<tool_call>", pos)) != std::string::npos) {
+            size_t tool_call_start = pos;
+            size_t tool_call_end = text.find("</tool_call>", tool_call_start);
+            if (tool_call_end == std::string::npos) {
+                pos = tool_call_start + 11;
+                continue;
+            }
+            
+            std::string tool_call_content = text.substr(tool_call_start + 11, tool_call_end - tool_call_start - 11);
+            
+            // Look for <invoke name="function_name">
+            size_t invoke_start = tool_call_content.find("<invoke name=\"");
+            if (invoke_start == std::string::npos) {
+                pos = tool_call_end + 12;
+                continue;
+            }
+            
+            size_t name_start = invoke_start + 13;
+            size_t name_end = tool_call_content.find("\"", name_start);
+            if (name_end == std::string::npos) {
+                pos = tool_call_end + 12;
+                continue;
+            }
+            
+            std::string func_name = tool_call_content.substr(name_start, name_end - name_start);
+            if (func_name.empty()) {
+                pos = tool_call_end + 12;
+                continue;
+            }
+            
+            // Look for closing >
+            size_t invoke_close = tool_call_content.find(">", name_end);
+            if (invoke_close == std::string::npos) {
+                pos = tool_call_end + 12;
+                continue;
+            }
+            
+            // Find </invoke>
+            size_t invoke_end = tool_call_content.find("</invoke>");
+            if (invoke_end == std::string::npos) {
+                pos = tool_call_end + 12;
+                continue;
+            }
+            
+            // Extract parameters
+            std::string params_section = tool_call_content.substr(invoke_close + 1, invoke_end - invoke_close - 1);
+            
+            // Parse parameters and build JSON arguments
+            json args = json::object();
+            size_t param_pos = 0;
+            while ((param_pos = params_section.find("<parameter name=\"", param_pos)) != std::string::npos) {
+                size_t param_name_start = param_pos + 17;
+                size_t param_name_end = params_section.find("\"", param_name_start);
+                if (param_name_end == std::string::npos) break;
+                
+                std::string param_name = params_section.substr(param_name_start, param_name_end - param_name_start);
+                
+                size_t param_content_start = params_section.find(">", param_name_end);
+                if (param_content_start == std::string::npos) break;
+                param_content_start++;
+                
+                size_t param_content_end = params_section.find("</parameter>", param_content_start);
+                if (param_content_end == std::string::npos) break;
+                
+                std::string param_value = params_section.substr(param_content_start, param_content_end - param_content_start);
+                
+                // Clean up parameter value (trim whitespace)
+                param_value.erase(0, param_value.find_first_not_of(" \t\n\r"));
+                param_value.erase(param_value.find_last_not_of(" \t\n\r") + 1);
+                
+                args[param_name] = param_value;
+                param_pos = param_content_end + 12;
+            }
+            
+            // Generate tool call ID
+            static int xml_call_counter = 0;
+            std::string tool_id = "call_xml_" + std::to_string(++xml_call_counter);
+            
+            // Create tool call object
+            json tool_call = {
+                {"id", tool_id},
+                {"type", "function"},
+                {"function", {
+                    {"name", func_name},
+                    {"arguments", args.dump()}
+                }}
+            };
+            
+            tool_calls.push_back(tool_call);
+            pos = tool_call_end + 12;
+        }
+    } catch (const std::exception&) {
+        // Return empty array on any parsing error
+        return json::array();
+    }
+    
+    return tool_calls;
+}
+
+// Parse simple function call format: functions.function_name:index{json_args}
+static json parse_simple_function_calls(const std::string& text) {
+    json tool_calls = json::array();
+    
+    try {
+        // Look for patterns like "functions.function_name:index{json_args}"
+        std::string pattern = "functions.";
+        size_t pos = 0;
+        
+        while ((pos = text.find(pattern, pos)) != std::string::npos) {
+            size_t func_start = pos + pattern.length();
+            
+            // Find the colon that separates function name from index
+            size_t colon_pos = text.find(':', func_start);
+            if (colon_pos == std::string::npos) {
+                pos = func_start;
+                continue;
+            }
+            
+            // Extract function name
+            std::string func_name = text.substr(func_start, colon_pos - func_start);
+            
+            // Skip if function name is empty
+            if (func_name.empty()) {
+                pos = colon_pos;
+                continue;
+            }
+            
+            // Extract index
+            size_t index_start = colon_pos + 1;
+            size_t brace_pos = text.find('{', index_start);
+            if (brace_pos == std::string::npos) {
+                pos = colon_pos;
+                continue;
+            }
+            
+            std::string index_str = text.substr(index_start, brace_pos - index_start);
+            
+            // Find the matching closing brace
+            int brace_count = 1;
+            size_t end_pos = brace_pos + 1;
+            while (end_pos < text.length() && brace_count > 0) {
+                if (text[end_pos] == '{') brace_count++;
+                else if (text[end_pos] == '}') brace_count--;
+                end_pos++;
+            }
+            
+            if (brace_count == 0) {
+                // Extract arguments JSON
+                std::string args_json = text.substr(brace_pos, end_pos - brace_pos);
+                
+                // Validate arguments is valid JSON
+                try {
+                    auto parsed = json::parse(args_json);
+                    (void)parsed; // Suppress unused variable warning
+                } catch (const std::exception&) {
+                    pos = end_pos;
+                    continue;
+                }
+                
+                // Generate tool call ID with actual index from the call
+                std::string tool_id = "functions." + func_name + ":" + index_str;
+                
+                // Create tool call object
+                json tool_call = {
+                    {"id", tool_id},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", func_name},
+                        {"arguments", args_json}
+                    }}
+                };
+                
+                tool_calls.push_back(tool_call);
+            }
+            
+            pos = end_pos;
+        }
+    } catch (const std::exception&) {
+        // Return empty array on any parsing error
+        return json::array();
+    }
+    
+    return tool_calls;
+}
+
+// Main function to parse Kimi-K2 native tool calls
+static json parse_tool_calls(const std::string& text) {
+    try {
+        // Check if we have token format markers
+        bool has_token_start = text.find("<|tool_calls_section_begin|>") != std::string::npos;
+        bool has_token_end = text.find("<|tool_calls_section_end|>") != std::string::npos;
+        bool has_token_section = has_token_start && has_token_end;
+        
+        json result = json::array();
+        
+        // If we have a token start but no end, it's malformed - return empty
+        if (has_token_start && !has_token_end) {
+            return result;
+        }
+        
+        if (has_token_section) {
+            // Parse token format
+            json token_calls = parse_token_function_calls(text);
+            
+            // For mixed format, also check for simple calls outside the token section
+            std::string content_for_simple = text;
+            size_t section_start = content_for_simple.find("<|tool_calls_section_begin|>");
+            size_t section_end = content_for_simple.find("<|tool_calls_section_end|>");
+            if (section_start != std::string::npos && section_end != std::string::npos) {
+                // Remove the token section to avoid double-parsing
+                content_for_simple = content_for_simple.substr(0, section_start) + 
+                                   content_for_simple.substr(section_end + 26);
+            }
+            
+            json simple_calls = parse_simple_function_calls(content_for_simple);
+            
+            // Combine results
+            result = token_calls;
+            for (const auto& call : simple_calls) {
+                result.push_back(call);
+            }
+        } else {
+            // No token format, try both XML and simple formats
+            json xml_calls = parse_xml_function_calls(text);
+            json simple_calls = parse_simple_function_calls(text);
+            
+            // Combine results (XML takes precedence if both exist)
+            result = xml_calls;
+            for (const auto& call : simple_calls) {
+                result.push_back(call);
+            }
+        }
+        
+        return result;
+    } catch (const std::exception&) {
+        // Return empty array on any error
+        return json::array();
+    }
+}
+
+// Clean function call syntax from content while preserving readable text
+static std::string clean_content(const std::string& content) {
+    std::string cleaned = content;
+    
+    // Remove simple function call format: functions.name:id{json}
+    const std::string func_pattern = "functions.";
+    size_t pos = 0;
+    while ((pos = cleaned.find(func_pattern, pos)) != std::string::npos) {
+        size_t func_start = pos;
+        
+        // Find the opening brace for arguments
+        size_t brace_pos = cleaned.find('{', pos);
+        if (brace_pos == std::string::npos) {
+            pos += func_pattern.length();
+            continue;
+        }
+        
+        // Find matching closing brace
+        int brace_count = 1;
+        size_t end_pos = brace_pos + 1;
+        while (end_pos < cleaned.length() && brace_count > 0) {
+            if (cleaned[end_pos] == '{') brace_count++;
+            else if (cleaned[end_pos] == '}') brace_count--;
+            end_pos++;
+        }
+        
+        if (brace_count == 0) {
+            // Remove the entire function call
+            cleaned.erase(func_start, end_pos - func_start);
+            pos = func_start;
+        } else {
+            pos += func_pattern.length();
+        }
+    }
+    
+    // Remove token format sections
+    size_t section_start = cleaned.find("<|tool_calls_section_begin|>");
+    if (section_start != std::string::npos) {
+        size_t section_end = cleaned.find("<|tool_calls_section_end|>");
+        if (section_end != std::string::npos) {
+            cleaned.erase(section_start, section_end - section_start + 26);
+        }
+    }
+    
+    // Trim whitespace
+    cleaned.erase(0, cleaned.find_first_not_of(" \t\n\r"));
+    cleaned.erase(cleaned.find_last_not_of(" \t\n\r") + 1);
+    
+    return cleaned;
+}
+
+// Helper: Find matching closing brace 
+static size_t find_matching_brace(const std::string& content, size_t start_pos) {
+    if (start_pos >= content.length() || content[start_pos] != '{') {
+        return std::string::npos;
+    }
+    
+    int brace_count = 1;
+    bool in_string = false;
+    bool escaped = false;
+    
+    for (size_t i = start_pos + 1; i < content.length() && brace_count > 0; i++) {
+        char c = content[i];
+        
+        if (!in_string) {
+            if (c == '{') brace_count++;
+            else if (c == '}') brace_count--;
+            else if (c == '"') in_string = true;
+        } else {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+        }
+        
+        if (brace_count == 0) return i;
+    }
+    
+    return std::string::npos;
+}
+
+// Helper: Check if JSON starting at position is incomplete (like original healing detection)
+static bool is_incomplete_json(const std::string& json_str) {
+    if (json_str.empty() || json_str[0] != '{') return true;
+    
+    try {
+        // Try to parse as-is first
+        auto parsed = json::parse(json_str);
+        return false; // Complete JSON
+    } catch (const std::exception&) {
+        // Failed to parse - likely incomplete
+        
+        // Check for common incomplete patterns
+        std::string trimmed = json_str;
+        trimmed.erase(0, trimmed.find_first_not_of(" \t\n\r"));
+        trimmed.erase(trimmed.find_last_not_of(" \t\n\r") + 1);
+        
+        // Incomplete patterns that should be detected as partial
+        if (trimmed == "{") return true;
+        if (trimmed.back() == ':') return true;
+        if (trimmed.back() == ',') return true;
+        if (trimmed.back() == '"' && trimmed.find('"', 1) == trimmed.length() - 1) return true;
+        
+        // Count braces to detect imbalance
+        int brace_count = 0;
+        bool in_string = false;
+        bool escaped = false;
+        
+        for (char c : trimmed) {
+            if (!in_string) {
+                if (c == '{') brace_count++;
+                else if (c == '}') brace_count--;
+                else if (c == '"') in_string = true;
+            } else {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    in_string = false;
+                }
+            }
+        }
+        
+        return brace_count > 0 || in_string; // Unbalanced or incomplete string
+    }
+}
+
+// Helper: Check if JSON starting at specific position is complete
+static bool is_json_complete_from_position(const std::string& content, size_t start_pos) {
+    if (start_pos >= content.length() || content[start_pos] != '{') return false;
+    
+    size_t end_pos = find_matching_brace(content, start_pos);
+    if (end_pos == std::string::npos) return false;
+    
+    std::string json_part = content.substr(start_pos, end_pos - start_pos + 1);
+    return !is_incomplete_json(json_part);
+}
+
+// Enhanced partial detection based on original llama.cpp patterns
+// Detects various streaming edge cases that indicate incomplete content
+static bool is_partial_content_advanced(const std::string& content) {
+    if (content.empty()) return false;
+    
+    // 1. Basic function syntax partials (like original llama.cpp partial JSON detection)
+    if (content == "functions" || content == "func") {
+        return true;
+    }
+    
+    // Check if content ends with incomplete function syntax (anywhere in content)
+    if (content.find("functions") != std::string::npos) {
+        // Find last occurrence of "functions" 
+        size_t last_func_pos = content.rfind("functions");
+        std::string suffix = content.substr(last_func_pos);
+        
+        // Check if it's an incomplete pattern at the end
+        if (suffix == "functions" || suffix == "func") {
+            return true;
+        }
+    }
+    
+    // 2. Incomplete function call patterns (check last occurrence in content)
+    size_t func_pos = content.rfind("functions.");
+    if (func_pos != std::string::npos) {
+        // Extract the function call part from the last occurrence
+        std::string func_call_part = content.substr(func_pos);
+        
+        // functions. (just the prefix)
+        if (func_call_part == "functions.") return true;
+        
+        // functions.name (no colon)
+        size_t colon_pos = func_call_part.find(':');
+        if (colon_pos == std::string::npos) return true;
+        
+        // functions.name: (no id)
+        if (func_call_part.back() == ':') return true;
+        
+        // functions.name:id (no opening brace)
+        size_t brace_pos = func_call_part.find('{');
+        if (brace_pos == std::string::npos) return true;
+        
+        // Incomplete JSON detection (like original healing marker approach)
+        if (brace_pos != std::string::npos) {
+            std::string json_part = func_call_part.substr(brace_pos);
+            if (is_incomplete_json(json_part)) return true;
+        }
+    }
+    
+    // 3. Token format partials
+    if (content.find("<|tool_calls_section_begin|>") != std::string::npos) {
+        // Check if section is incomplete
+        size_t end_pos = content.find("<|tool_calls_section_end|>");
+        if (end_pos == std::string::npos) {
+            // Section not closed, check if it has incomplete calls
+            if (content.find("<|tool_call_begin|>") != std::string::npos) {
+                size_t call_end = content.find("<|tool_call_end|>");
+                if (call_end == std::string::npos) return true; // Incomplete call
+            }
+            return true; // Section not closed
+        }
+    }
+    
+    // 4. Mixed format detection - look for incomplete function calls after complete ones
+    size_t last_complete = 0;
+    while (true) {
+        size_t func_pos = content.find("functions.", last_complete);
+        if (func_pos == std::string::npos) break;
+        
+        // Check if this function call is complete
+        size_t brace_pos = content.find('{', func_pos);
+        if (brace_pos == std::string::npos) return true; // No opening brace
+        
+        // Find matching closing brace
+        if (!is_json_complete_from_position(content, brace_pos)) {
+            return true; // Incomplete JSON
+        }
+        
+        // Move past this function call
+        size_t closing_brace = find_matching_brace(content, brace_pos);
+        if (closing_brace == std::string::npos) return true;
+        last_complete = closing_brace + 1;
+    }
+    
+    return false;
+}
+
+} // namespace kimi_k2 
