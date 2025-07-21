@@ -2768,6 +2768,7 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
     
     // Process diffs (could be empty, like original llama.cpp)
     // if (slot) { // slot is always available now
+        std::vector<ik_chat_msg_diff> diffs;
         streaming_chunks = generate_streaming_chunks(diffs, completion_id, modelname);
     // }
     

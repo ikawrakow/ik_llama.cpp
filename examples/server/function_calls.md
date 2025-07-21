@@ -1,117 +1,16 @@
 # Function Calling Support
 
-This document describes the function calling formats supported by the ik_llama.cpp server implementation.
+This document describes the function calling format supported by the ik_llama.cpp server implementation.
 
 ## Overview
 
-The server supports multiple function calling formats to accommodate different model types and training approaches. All formats are automatically detected and converted to OpenAI-compatible responses.
+The server supports the native Kimi-K2 function calling format. All function calls are automatically detected and converted to OpenAI-compatible responses.
+
+**⚠️ Model Requirement**: Function calling support is **only enabled for models containing "kimi-k2" or "kimi_k2" in the model name**. Other models will not have tool injection or function call parsing enabled.
 
 ## Supported Formats
 
-### 1. AnythingLLM Format
-
-**Detection Pattern:** `<anythingllm:function_calls>...</anythingllm:function_calls>`
-
-The AnythingLLM format supports two variants:
-
-#### Variant A: JSON Array Format
-```
-<anythingllm:function_calls>
-[
-  {
-    "name": "function_name",
-    "parameters": {
-      "param1": "value1",
-      "param2": "value2"
-    }
-  }
-]
-</anythingllm:function_calls>
-```
-
-#### Variant B: XML Structure Format
-```
-<anythingllm:function_calls>
-<anythingllm:invoke name="function_name">
-<anythingllm:parameter_name name="param1">value1</anythingllm:parameter_name>
-<anythingllm:parameter_name name="param2">value2</anythingllm:parameter_name>
-</anythingllm:invoke>
-</anythingllm:function_calls>
-```
-
-**Example (JSON Array with "parameters"):**
-```
-<anythingllm:function_calls>
-[
-  {
-    "name": "get_weather",
-    "parameters": {
-      "location": "Tokyo"
-    }
-  }
-]
-</anythingllm:function_calls>
-```
-
-**Example (JSON Array with "arguments" - Kimi-K2 format):**
-```
-<anythingllm:function_calls>
-[
-  {
-    "name": "get_weather",
-    "arguments": {
-      "location": "Tokyo"
-    }
-  }
-]
-</anythingllm:function_calls>
-```
-
-**Example (XML Structure):**
-```
-<anythingllm:function_calls>
-<anythingllm:invoke name="get_weather">
-<anythingllm:parameter_name name="location">Tokyo</anythingllm:parameter_name>
-</anythingllm:invoke>
-</anythingllm:function_calls>
-```
-
-**Notes:**
-- Parser tries JSON format first, falls back to XML structure
-- Multiple function calls supported in both variants
-- XML structure uses `anythingllm:invoke` and `anythingllm:parameter_name` tags
-- **JSON format supports both "parameters" and "arguments" fields** for compatibility
-- Kimi-K2 models typically use "arguments" instead of "parameters"
-
-### 2. XML Function Calls Format
-
-**Detection Pattern:** `<function_calls>...</function_calls>`
-
-**Structure:**
-```
-<function_calls>
-<invoke name="function_name">
-<parameter name="param1">value1</parameter>
-<parameter name="param2">value2</parameter>
-</invoke>
-</function_calls>
-```
-
-**Example:**
-```
-<function_calls>
-<invoke name="get_weather">
-<parameter name="location">Tokyo</parameter>
-</invoke>
-</function_calls>
-```
-
-**Notes:**
-- XML-based structure similar to Claude format
-- Multiple function calls supported with multiple `<invoke>` blocks
-- Parameters are individual XML elements
-
-### 3. Kimi-K2 Token Format
+### Kimi-K2 Native Token Format
 
 **Detection Pattern:** `<|tool_calls_section_begin|>...<|tool_calls_section_end|>`
 
@@ -119,8 +18,8 @@ The AnythingLLM format supports two variants:
 ```
 <|tool_calls_section_begin|>
 <|tool_call_begin|>
-functions.function_name:index<|tool_call_argument_begin|>
-{"param1": "value1", "param2": "value2"}
+functions.{name}:{index}<|tool_call_argument_begin|>
+{JSON arguments}
 <|tool_call_end|>
 <|tool_calls_section_end|>
 ```
@@ -136,14 +35,43 @@ functions.get_weather:0<|tool_call_argument_begin|>
 ```
 
 **Notes:**
-- Uses special tokens for structure
-- Function ID format: `functions.{name}:{index}`
-- Arguments are JSON-encoded strings
-- Multiple function calls supported with multiple `<|tool_call_begin|>` blocks
+- Native Kimi-K2 token format
+- Multiple function calls supported with different indices
+- Arguments are JSON objects
+- Function names follow `functions.{name}:{index}` pattern
+
+### XML-Style Format (Fallback)
+
+**Detection Pattern:** `<tool_call>...<invoke name="...">...<parameter name="...">...</parameter>...</invoke></tool_call>`
+
+**Structure:**
+```xml
+<tool_call>
+<invoke name="{function_name}">
+<parameter name="{param_name}">{param_value}</parameter>
+<parameter name="{param_name}">{param_value}</parameter>
+</invoke>
+</tool_call>
+```
+
+**Example:**
+```xml
+<tool_call>
+<invoke name="Write">
+<parameter name="file_path">/path/to/file.txt</parameter>
+<parameter name="content">File content here</parameter>
+</invoke>
+</tool_call>
+```
+
+**Notes:**
+- XML-style format as fallback when model generates this format instead of token format
+- Parameters are extracted as key-value pairs
+- Automatically converted to JSON arguments
 
 ## OpenAI-Compatible Output
 
-All formats are converted to the standard OpenAI function calling response:
+The native format is converted to the standard OpenAI function calling response:
 
 ```json
 {
@@ -155,7 +83,7 @@ All formats are converted to the standard OpenAI function calling response:
         "content": "filtered_content_without_function_calls",
         "tool_calls": [
           {
-            "id": "call_0",
+            "id": "functions.get_weather:0",
             "type": "function",
             "function": {
               "name": "get_weather",
@@ -171,26 +99,18 @@ All formats are converted to the standard OpenAI function calling response:
 
 ## Implementation Details
 
-### Parser Priority
-
-The parser tries formats in this order:
-1. **AnythingLLM format** (most common with current models)
-2. **XML format** (fallback for Claude-style responses)
-3. **Token format** (original Kimi-K2 specification)
-
 ### Content Filtering
 
 When function calls are detected:
-- The function call markup is removed from the displayed content
-- `finish_reason` is set to `"tool_calls"`
-- The `tool_calls` array is populated with parsed function calls
+- Function call syntax is removed from content
+- Tool calls are extracted into separate array
+- Content is cleaned for display
 
 ### Error Handling
 
-- Invalid JSON in AnythingLLM format returns empty array
-- Malformed XML structure returns empty array
-- Missing tokens in token format returns empty array
-- Parser gracefully degrades to next format on failure
+- Missing tokens in format returns empty array
+- Malformed structure returns empty array
+- Parser gracefully handles invalid JSON in arguments
 
 ## Usage with Tools Parameter
 
@@ -198,25 +118,28 @@ To enable function calling, include the `tools` parameter in your request:
 
 ```json
 {
-  "model": "gpt-3.5-turbo",
+  "model": "kimi-k2",
   "messages": [
-    {"role": "user", "content": "What's the weather in Tokyo?"}
+    {
+      "role": "user",
+      "content": "What's the weather in Tokyo?"
+    }
   ],
   "tools": [
     {
       "type": "function",
       "function": {
         "name": "get_weather",
-        "description": "Get weather information",
+        "description": "Get weather information for a location",
         "parameters": {
           "type": "object",
-          "required": ["location"],
           "properties": {
             "location": {
               "type": "string",
-              "description": "City name"
+              "description": "The city and state, e.g. San Francisco, CA"
             }
-          }
+          },
+          "required": ["location"]
         }
       }
     }
@@ -226,37 +149,19 @@ To enable function calling, include the `tools` parameter in your request:
 
 ## Model Compatibility
 
-- **Kimi-K2 models**: 
-  - Primarily use AnythingLLM JSON format with "arguments" field
-  - Support all three formats depending on prompting
-  - May fallback to XML or token formats
-- **Generic models**: May use XML or AnythingLLM formats with "parameters" field
-- **Fine-tuned models**: Typically use one specific format consistently
-
-## Field Compatibility
-
-The parser handles both parameter field names for maximum compatibility:
-
-| Model Type | Field Name | Example |
-|------------|------------|---------|
-| Standard models | `"parameters"` | `{"name": "func", "parameters": {...}}` |
-| Kimi-K2 models | `"arguments"` | `{"name": "func", "arguments": {...}}` |
-| Both supported | Either field | Parser automatically detects and processes both |
+- **Kimi-K2 models**: Native support with token format
+- **Other models**: May work with proper prompting to use the token format
 
 ## Testing
 
 Test files are provided to verify function calling:
-- `test_kimi_k2.py` - End-to-end API testing with Kimi-K2 format
-- `test-function-calls.cpp` - Comprehensive unit tests for all parser functions
-  - Tests AnythingLLM JSON format with "parameters" field
-  - Tests AnythingLLM JSON format with "arguments" field (Kimi-K2)
-  - Tests AnythingLLM XML format
-  - Tests standard XML format
-  - Tests Kimi-K2 token format
+- `test-function-calls.cpp` - Unit tests for the native Kimi-K2 format
+  - Tests native token format parsing
+  - Tests multiple function calls
   - Tests error handling and malformed input
 
 ## File Structure
 
-- `function_calls.hpp` - Parser implementations
+- `function_calls.hpp` - Parser implementation for native Kimi-K2 format
 - `utils.hpp` - Integration with server (includes function_calls.hpp)
 - `server.cpp` - Response formatting and content filtering

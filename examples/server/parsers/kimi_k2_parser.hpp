@@ -131,43 +131,51 @@ static json parse_xml_function_calls(const std::string& text) {
             size_t tool_call_start = pos;
             size_t tool_call_end = text.find("</tool_call>", tool_call_start);
             if (tool_call_end == std::string::npos) {
-                pos = tool_call_start + 11;
+                pos = tool_call_start + std::string("<tool_call>").length();
                 continue;
             }
             
-            std::string tool_call_content = text.substr(tool_call_start + 11, tool_call_end - tool_call_start - 11);
+            std::string tool_call_content = text.substr(tool_call_start + std::string("<tool_call>").length(), tool_call_end - tool_call_start - std::string("<tool_call>").length());
             
             // Look for <invoke name="function_name">
             size_t invoke_start = tool_call_content.find("<invoke name=\"");
             if (invoke_start == std::string::npos) {
-                pos = tool_call_end + 12;
+                pos = tool_call_end + std::string("</tool_call>").length();
                 continue;
             }
             
-            size_t name_start = invoke_start + 13;
-            size_t name_end = tool_call_content.find("\"", name_start);
-            if (name_end == std::string::npos) {
-                pos = tool_call_end + 12;
+            // Find the opening quote after "name="
+            size_t quote_start = tool_call_content.find("\"", invoke_start);
+            if (quote_start == std::string::npos) {
+                pos = tool_call_end + std::string("</tool_call>").length();
                 continue;
             }
             
-            std::string func_name = tool_call_content.substr(name_start, name_end - name_start);
+            // Find the closing quote
+            size_t quote_end = tool_call_content.find("\"", quote_start + 1);
+            if (quote_end == std::string::npos) {
+                pos = tool_call_end + std::string("</tool_call>").length();
+                continue;
+            }
+            
+            // Extract function name between quotes
+            std::string func_name = tool_call_content.substr(quote_start + 1, quote_end - quote_start - 1);
             if (func_name.empty()) {
-                pos = tool_call_end + 12;
+                pos = tool_call_end + std::string("</tool_call>").length();
                 continue;
             }
             
             // Look for closing >
-            size_t invoke_close = tool_call_content.find(">", name_end);
+            size_t invoke_close = tool_call_content.find(">", quote_end);
             if (invoke_close == std::string::npos) {
-                pos = tool_call_end + 12;
+                pos = tool_call_end + std::string("</tool_call>").length();
                 continue;
             }
             
             // Find </invoke>
             size_t invoke_end = tool_call_content.find("</invoke>");
             if (invoke_end == std::string::npos) {
-                pos = tool_call_end + 12;
+                pos = tool_call_end + std::string("</tool_call>").length();
                 continue;
             }
             
@@ -178,13 +186,17 @@ static json parse_xml_function_calls(const std::string& text) {
             json args = json::object();
             size_t param_pos = 0;
             while ((param_pos = params_section.find("<parameter name=\"", param_pos)) != std::string::npos) {
-                size_t param_name_start = param_pos + 17;
-                size_t param_name_end = params_section.find("\"", param_name_start);
-                if (param_name_end == std::string::npos) break;
+                // Find the opening quote after "name="
+                size_t param_quote_start = params_section.find("\"", param_pos);
+                if (param_quote_start == std::string::npos) break;
                 
-                std::string param_name = params_section.substr(param_name_start, param_name_end - param_name_start);
+                // Find the closing quote
+                size_t param_quote_end = params_section.find("\"", param_quote_start + 1);
+                if (param_quote_end == std::string::npos) break;
                 
-                size_t param_content_start = params_section.find(">", param_name_end);
+                std::string param_name = params_section.substr(param_quote_start + 1, param_quote_end - param_quote_start - 1);
+                
+                size_t param_content_start = params_section.find(">", param_quote_end);
                 if (param_content_start == std::string::npos) break;
                 param_content_start++;
                 
@@ -198,7 +210,7 @@ static json parse_xml_function_calls(const std::string& text) {
                 param_value.erase(param_value.find_last_not_of(" \t\n\r") + 1);
                 
                 args[param_name] = param_value;
-                param_pos = param_content_end + 12;
+                param_pos = param_content_end + std::string("</parameter>").length();
             }
             
             // Generate tool call ID
@@ -216,7 +228,7 @@ static json parse_xml_function_calls(const std::string& text) {
             };
             
             tool_calls.push_back(tool_call);
-            pos = tool_call_end + 12;
+            pos = tool_call_end + std::string("</tool_call>").length();
         }
     } catch (const std::exception&) {
         // Return empty array on any parsing error
@@ -370,6 +382,17 @@ static json parse_tool_calls(const std::string& text) {
 // Clean function call syntax from content while preserving readable text
 static std::string clean_content(const std::string& content) {
     std::string cleaned = content;
+    
+    // Remove XML-style tool calls: <tool_call>...</tool_call>
+    size_t xml_pos = 0;
+    while ((xml_pos = cleaned.find("<tool_call>", xml_pos)) != std::string::npos) {
+        size_t xml_end = cleaned.find("</tool_call>", xml_pos);
+        if (xml_end != std::string::npos) {
+            cleaned.erase(xml_pos, xml_end - xml_pos + 12);
+        } else {
+            xml_pos += 11;
+        }
+    }
     
     // Remove simple function call format: functions.name:id{json}
     const std::string func_pattern = "functions.";

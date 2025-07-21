@@ -436,14 +436,14 @@ void test_simple_multiple_calls() {
 
 // Test streaming incremental parsing
 void test_streaming_incremental() {
-    ik_chat_msg msg1 = parse_chat_message_incremental(streaming_incremental_1, true, "kimi-k2");
+    ik_chat_msg msg1 = parse_chat_message_incremental(streaming_incremental_1, true);
     test_assert(msg1.tool_calls.empty(), "Streaming 1: No tool calls");
     test_assert(!msg1.content.empty(), "Streaming 1: Has content");
     
-    ik_chat_msg msg2 = parse_chat_message_incremental(streaming_incremental_2, true, "kimi-k2");
+    ik_chat_msg msg2 = parse_chat_message_incremental(streaming_incremental_2, true);
     test_assert(msg2.tool_calls.empty(), "Streaming 2: No complete tool calls yet");
     
-    ik_chat_msg msg3 = parse_chat_message_incremental(streaming_incremental_3, false, "kimi-k2");
+    ik_chat_msg msg3 = parse_chat_message_incremental(streaming_incremental_3, false);
     test_assert(msg3.tool_calls.size() == 1, "Streaming 3: One complete tool call");
     test_assert(msg3.tool_calls[0].name == "ping", "Streaming 3: Correct function name");
 }
@@ -476,14 +476,14 @@ void test_error_handling() {
     test_assert(result2.size() == 0, "Error: Empty function name handled gracefully");
     
     // Test incremental parsing with error
-    ik_chat_msg msg = parse_chat_message_incremental(malformed_simple_call, false, "kimi-k2");
+    ik_chat_msg msg = parse_chat_message_incremental(malformed_simple_call, false);
     test_assert(msg.tool_calls.empty(), "Error: Incremental parsing handles errors gracefully");
     test_assert(!msg.content.empty(), "Error: Falls back to content-only");
 }
 
 // Test content cleaning
 void test_content_cleaning() {
-    ik_chat_msg msg = parse_chat_message_incremental(content_cleaning_simple, false, "kimi-k2");
+    ik_chat_msg msg = parse_chat_message_incremental(content_cleaning_simple, false);
     test_assert(msg.tool_calls.size() == 1, "Cleaning: Tool call parsed");
     test_assert(msg.tool_calls[0].name == "ping", "Cleaning: Correct function name");
     
@@ -499,7 +499,7 @@ void test_contamination_reproduction() {
     std::cout << "🚨 TDD: Testing exact contamination reproduction from server logs..." << std::endl;
     
     // Test 1: Exact issue from manual_logs/kimi-k2/ls/test_case_ls_logs_claude-code-ui.log:5
-    ik_chat_msg msg = parse_chat_message_incremental(contamination_ls_issue, false, "kimi-k2");
+    ik_chat_msg msg = parse_chat_message_incremental(contamination_ls_issue, false);
     
     // Verify tool call is extracted correctly
     test_assert(msg.tool_calls.size() == 1, "TDD Contamination: Tool call should be extracted");
@@ -519,7 +519,7 @@ void test_contamination_reproduction() {
     test_assert(msg.content == expected_clean_ls, "TDD Contamination: Content matches expected clean version");
     
     // Test 2: Mixed content with multiple function calls
-    ik_chat_msg msg2 = parse_chat_message_incremental(contamination_mixed_content, false, "kimi-k2");
+    ik_chat_msg msg2 = parse_chat_message_incremental(contamination_mixed_content, false);
     test_assert(msg2.tool_calls.size() == 2, "TDD Contamination: Multiple tool calls extracted");
     test_assert(msg2.content.find("functions.") == std::string::npos, "TDD Contamination: No function syntax in mixed content");
     test_assert(msg2.content == contamination_mixed_expected_clean, "TDD Contamination: Mixed content cleaned correctly");
@@ -568,7 +568,7 @@ void test_validation_robustness() {
     test_assert(parse_kimi_k2_tool_calls(streaming_missing_brace).empty(), "Validation: Missing brace handled");
     
     // Test partial parsing mode
-    ik_chat_msg partial_msg = parse_chat_message_incremental(streaming_incomplete_json, true, "kimi-k2");
+    ik_chat_msg partial_msg = parse_chat_message_incremental(streaming_incomplete_json, true);
     test_assert(partial_msg.tool_calls.empty(), "Validation: Incomplete JSON in partial mode handled");
 }
 
@@ -658,7 +658,7 @@ void test_streaming_vs_nonstreaming_consistency() {
     }
     
     // Test 2: Incremental streaming parsing (simulates the issue)
-    ik_chat_msg streaming_msg = parse_chat_message_incremental(tool_call_content, false, "kimi-k2");
+    ik_chat_msg streaming_msg = parse_chat_message_incremental(tool_call_content, false);
     
     test_assert(!streaming_msg.tool_calls.empty(), "Streaming: Tool calls detected in incremental parsing");
     test_assert(streaming_msg.tool_calls.size() == 1, "Streaming: Single tool call in incremental parsing");
@@ -673,7 +673,7 @@ void test_streaming_vs_nonstreaming_consistency() {
     ik_chat_msg empty_msg;
     empty_msg.role = "assistant";
     
-    ik_chat_msg complete_msg = parse_chat_message_incremental(tool_call_content, false, "kimi-k2");
+    ik_chat_msg complete_msg = parse_chat_message_incremental(tool_call_content, false);
     
     // This simulates what should happen in streaming but currently fails
     std::vector<ik_chat_msg_diff> diffs = ik_chat_msg_diff::compute_diffs(empty_msg, complete_msg);
@@ -681,7 +681,7 @@ void test_streaming_vs_nonstreaming_consistency() {
     test_assert(!diffs.empty(), "Streaming: Diffs generated for tool calls");
     
     // Test 4: Demonstrate the issue - streaming chunks generation
-    std::vector<json> streaming_chunks = generate_streaming_chunks(diffs, "test-completion-id", "Kimi-K2");
+    std::vector<json> streaming_chunks = generate_streaming_chunks(diffs, "test-completion-id", "test-model");
     
     bool has_tool_call_delta = false;
     bool has_content_delta = false;
@@ -734,7 +734,7 @@ void test_server_integration_requirements() {
     // this test would catch it during integration testing
     try {
         // Test incremental parsing availability
-        ik_chat_msg msg = parse_chat_message_incremental(test_content, false, "kimi-k2");
+        ik_chat_msg msg = parse_chat_message_incremental(test_content, false);
         test_assert(true, "Integration: parse_chat_message_incremental available");
         
         // Test diff computation availability  
@@ -770,7 +770,7 @@ void test_server_integration_requirements() {
     test_assert(!parsed_calls.empty(), "Integration: Tool calls parsed successfully");
     
     // 2. Convert to streaming message format
-    ik_chat_msg server_msg = parse_chat_message_incremental(test_content, false, "kimi-k2");
+    ik_chat_msg server_msg = parse_chat_message_incremental(test_content, false);
     test_assert(!server_msg.tool_calls.empty(), "Integration: Converted to streaming format");
     
     // 3. Generate diffs (what server streaming should do)
@@ -812,7 +812,7 @@ void test_compilation_dependencies() {
         json result = parse_kimi_k2_tool_calls(test_input);
         test_assert(!result.empty(), "Dependencies: parse_kimi_k2_tool_calls works");
         
-        ik_chat_msg msg = parse_chat_message_incremental(test_input, false, "kimi-k2");
+        ik_chat_msg msg = parse_chat_message_incremental(test_input, false);
         test_assert(!msg.tool_calls.empty(), "Dependencies: parse_chat_message_incremental works");
         
         std::cout << "✅ All required dependencies are available in test environment" << std::endl;
@@ -844,7 +844,7 @@ void test_http_endpoint_simulation() {
         mock_slot slot;
         
         // Step 2: Parse incremental message (what server does)
-        slot.current_msg = parse_chat_message_incremental(tool_call_content, false, "kimi-k2");
+        slot.current_msg = parse_chat_message_incremental(tool_call_content, false);
         bool has_tool_calls = !slot.current_msg.tool_calls.empty();
         
         test_assert(has_tool_calls, "HTTP Sim: Tool calls detected in server workflow");
@@ -979,7 +979,7 @@ void test_actual_http_endpoint() {
     
     // Test 2: Content parsing that HTTP test would validate
     std::string test_content = "functions.WebFetch:1{\"url\": \"https://google.de\"}";
-    ik_chat_msg parsed_msg = parse_chat_message_incremental(test_content, false, "kimi-k2");
+    ik_chat_msg parsed_msg = parse_chat_message_incremental(test_content, false);
     
     if (parsed_msg.tool_calls.empty()) {
         std::cout << "   ❌ ISSUE: Tool call parsing failed in incremental mode" << std::endl;
@@ -1072,7 +1072,7 @@ void test_sparc_partial_parsing_fix() {
             std::cout << "       parse_kimi_k2_tool_calls threw exception: " << e.what() << std::endl;
         }
         
-        ik_chat_msg msg = parse_chat_message_incremental(partial, true, "kimi-k2");
+        ik_chat_msg msg = parse_chat_message_incremental(partial, true);
         
         std::cout << "       Content: \"" << msg.content << "\"" << std::endl;
         std::cout << "       Tool calls: " << msg.tool_calls.size() << std::endl;
@@ -1086,7 +1086,7 @@ void test_sparc_partial_parsing_fix() {
     std::cout << "   Testing complete tool call parsing (is_partial=false):" << std::endl;
     
     // Complete tool call should work correctly
-    ik_chat_msg complete_msg = parse_chat_message_incremental(complete_tool_call, false, "kimi-k2");
+    ik_chat_msg complete_msg = parse_chat_message_incremental(complete_tool_call, false);
     
     test_assert(!complete_msg.tool_calls.empty(), "SPARC Fix: Complete tool call detected");
     test_assert(complete_msg.tool_calls.size() == 1, "SPARC Fix: Single complete tool call");
@@ -1103,7 +1103,7 @@ void test_sparc_partial_parsing_fix() {
     
     // Step 1: During streaming, partial content should not generate diffs
     for (const auto& partial : partial_tool_calls) {
-        ik_chat_msg partial_msg = parse_chat_message_incremental(partial, true, "kimi-k2");
+        ik_chat_msg partial_msg = parse_chat_message_incremental(partial, true);
         auto diffs = ik_chat_msg_diff::compute_diffs(empty_msg, partial_msg);
         
         // Our fix: no diffs for partial tool calls = no content streaming
@@ -1111,7 +1111,7 @@ void test_sparc_partial_parsing_fix() {
     }
     
     // Step 2: Only complete tool call should generate tool call diffs
-    ik_chat_msg final_msg = parse_chat_message_incremental(complete_tool_call, false, "kimi-k2");
+    ik_chat_msg final_msg = parse_chat_message_incremental(complete_tool_call, false);
     auto final_diffs = ik_chat_msg_diff::compute_diffs(empty_msg, final_msg);
     
     test_assert(!final_diffs.empty(), "SPARC Fix: Complete tool call generates diffs");
@@ -1174,7 +1174,7 @@ void test_format_partial_response_scenario() {
     // Step 4: Test our incremental parsing fix
     std::cout << "   • Testing incremental parsing with 'functions' (is_partial=true):" << std::endl;
     
-    slot.current_msg = parse_chat_message_incremental(slot.generated_text, true, "kimi-k2");
+    slot.current_msg = parse_chat_message_incremental(slot.generated_text, true);
     
     std::cout << "     - Current msg content: '" << slot.current_msg.content << "'" << std::endl;
     std::cout << "     - Current msg tool_calls: " << slot.current_msg.tool_calls.size() << std::endl;
@@ -1229,7 +1229,7 @@ void test_advanced_partial_detection() {
         
         // These should be detected as partial content when is_partial=true
         auto test_partial = [](const std::string& content, const std::string& name) {
-            ik_chat_msg msg = parse_chat_message_incremental(content, true, "kimi-k2");  // is_partial=true
+            ik_chat_msg msg = parse_chat_message_incremental(content, true);  // is_partial=true
             // When partial content is detected with is_partial=true, result should be empty (like original llama.cpp)
             bool is_empty_result = msg.content.empty() && msg.tool_calls.empty();
             test_assert(is_empty_result, "Partial: " + name + " - empty result when is_partial=true");
@@ -1250,7 +1250,7 @@ void test_advanced_partial_detection() {
         
         // When is_partial=false, partial content should fallback to preserving original content
         auto test_fallback = [](const std::string& content, const std::string& name) {
-            ik_chat_msg msg = parse_chat_message_incremental(content, false, "kimi-k2");  // is_partial=false
+            ik_chat_msg msg = parse_chat_message_incremental(content, false);  // is_partial=false
             // Should preserve original content unchanged (like original llama.cpp fallback)
             test_assert(msg.content == content, "Fallback: " + name + " - preserved original content");
             test_assert(msg.tool_calls.empty(), "Fallback: " + name + " - no tool calls extracted");
@@ -1266,15 +1266,15 @@ void test_advanced_partial_detection() {
         std::cout << "Test 3: Complex streaming edge cases" << std::endl;
         
         // Unicode and special characters should be handled correctly
-        ik_chat_msg msg1 = parse_chat_message_incremental(partial_unicode_edge_case, true, "kimi-k2");
+        ik_chat_msg msg1 = parse_chat_message_incremental(partial_unicode_edge_case, true);
         test_assert(msg1.content.empty() && msg1.tool_calls.empty(), "Partial: Unicode edge case - empty result");
         
         // Nested braces should be handled correctly
-        ik_chat_msg msg2 = parse_chat_message_incremental(partial_nested_braces, true, "kimi-k2");
+        ik_chat_msg msg2 = parse_chat_message_incremental(partial_nested_braces, true);
         test_assert(msg2.content.empty() && msg2.tool_calls.empty(), "Partial: Nested braces - empty result");
         
         // Escaped JSON should be handled correctly
-        ik_chat_msg msg3 = parse_chat_message_incremental(partial_escaped_json, true, "kimi-k2");
+        ik_chat_msg msg3 = parse_chat_message_incremental(partial_escaped_json, true);
         test_assert(msg3.content.empty() && msg3.tool_calls.empty(), "Partial: Escaped JSON - empty result");
     }
     
@@ -1283,13 +1283,13 @@ void test_advanced_partial_detection() {
         std::cout << "Test 4: Token format partial detection" << std::endl;
         
         // Token format partials should be detected
-        ik_chat_msg msg1 = parse_chat_message_incremental(partial_token_opening, true, "kimi-k2");
+        ik_chat_msg msg1 = parse_chat_message_incremental(partial_token_opening, true);
         test_assert(msg1.content.empty() && msg1.tool_calls.empty(), "Partial: Token opening - empty result");
         
-        ik_chat_msg msg2 = parse_chat_message_incremental(partial_token_call_start, true, "kimi-k2");
+        ik_chat_msg msg2 = parse_chat_message_incremental(partial_token_call_start, true);
         test_assert(msg2.content.empty() && msg2.tool_calls.empty(), "Partial: Token call start - empty result");
         
-        ik_chat_msg msg3 = parse_chat_message_incremental(partial_token_incomplete, true, "kimi-k2");
+        ik_chat_msg msg3 = parse_chat_message_incremental(partial_token_incomplete, true);
         test_assert(msg3.content.empty() && msg3.tool_calls.empty(), "Partial: Token incomplete - empty result");
     }
     
@@ -1298,7 +1298,7 @@ void test_advanced_partial_detection() {
         std::cout << "Test 5: Multiple function calls with partial" << std::endl;
         
         // Should detect that the second function call is incomplete
-        ik_chat_msg msg = parse_chat_message_incremental(partial_multiple_incomplete, true, "kimi-k2");
+        ik_chat_msg msg = parse_chat_message_incremental(partial_multiple_incomplete, true);
         test_assert(msg.content.empty() && msg.tool_calls.empty(), "Partial: Multiple with incomplete - empty result");
     }
     
@@ -1334,7 +1334,7 @@ void test_original_llama_cpp_compatibility() {
     std::cout << "   Input: " << partial_content.substr(0, 50) << "..." << std::endl;
     
     // Current behavior
-    ik_chat_msg current_result = parse_chat_message_incremental(partial_content, true, "kimi-k2");  // is_partial=true
+    ik_chat_msg current_result = parse_chat_message_incremental(partial_content, true);  // is_partial=true
     
     std::cout << "   CURRENT Result:" << std::endl;
     std::cout << "     - Content: '" << current_result.content << "'" << std::endl;
@@ -1377,7 +1377,7 @@ void test_original_llama_cpp_compatibility() {
     std::string complete_content = "I'll help you.functions.WebFetch:1{\"url\":\"https://google.de\"}";
     std::cout << "   Input: " << complete_content << std::endl;
     
-    ik_chat_msg complete_result = parse_chat_message_incremental(complete_content, false, "kimi-k2");  // is_partial=false
+    ik_chat_msg complete_result = parse_chat_message_incremental(complete_content, false);  // is_partial=false
     
     std::cout << "   CURRENT Result:" << std::endl;
     std::cout << "     - Content: '" << complete_result.content << "'" << std::endl;
@@ -1524,7 +1524,7 @@ void test_task4_validation_and_testing() {
     // Test each step should either be detected as partial or properly cleaned
     for (size_t i = 0; i < streaming_sequence.size() - 1; ++i) {
         bool is_partial = true;
-        ik_chat_msg msg = parse_chat_message_incremental(streaming_sequence[i], is_partial, "kimi-k2");
+        ik_chat_msg msg = parse_chat_message_incremental(streaming_sequence[i], is_partial);
         
         // During streaming, content should be clean (no function call syntax)
         bool has_contamination = msg.content.find("functions.") != std::string::npos;
@@ -1534,7 +1534,7 @@ void test_task4_validation_and_testing() {
     }
     
     // Final complete step should extract tool call
-    ik_chat_msg final_msg = parse_chat_message_incremental(streaming_sequence.back(), false, "kimi-k2");
+    ik_chat_msg final_msg = parse_chat_message_incremental(streaming_sequence.back(), false);
     test_assert(!final_msg.tool_calls.empty(), "Task 4: Tool call extracted in final step");
     test_assert(final_msg.content.find("functions.") == std::string::npos, "Task 4: Final content is clean");
     test_assert(final_msg.content == "I'll help you examine the workspace. Let me list the current directory contents.", "Task 4: Final content is correct");
@@ -1546,19 +1546,19 @@ void test_task4_validation_and_testing() {
     
     // Test 1: Normal content without function calls
     std::string normal_content = "Hello, how can I help you today?";
-    ik_chat_msg normal_msg = parse_chat_message_incremental(normal_content, false, "kimi-k2");
+    ik_chat_msg normal_msg = parse_chat_message_incremental(normal_content, false);
     test_assert(normal_msg.content == normal_content, "Task 4: Normal content unchanged");
     test_assert(normal_msg.tool_calls.empty(), "Task 4: No tool calls for normal content");
     
     // Test 2: Content with JSON-like strings (but not function calls)
     std::string json_like = "Here's some data: {\"name\": \"value\", \"count\": 42}";
-    ik_chat_msg json_msg = parse_chat_message_incremental(json_like, false, "kimi-k2");
+    ik_chat_msg json_msg = parse_chat_message_incremental(json_like, false);
     test_assert(json_msg.content == json_like, "Task 4: JSON-like content preserved");
     test_assert(json_msg.tool_calls.empty(), "Task 4: No false tool call detection");
     
     // Test 3: Content with the word "functions" but not function calls
     std::string functions_word = "I can help with various functions and operations.";
-    ik_chat_msg functions_msg = parse_chat_message_incremental(functions_word, false, "kimi-k2");
+    ik_chat_msg functions_msg = parse_chat_message_incremental(functions_word, false);
     test_assert(functions_msg.content == functions_word, "Task 4: Word 'functions' preserved");
     test_assert(functions_msg.tool_calls.empty(), "Task 4: No false positive for word 'functions'");
     
@@ -1568,20 +1568,20 @@ void test_task4_validation_and_testing() {
     std::cout << "\n⚠️ Task 4.4: Edge Case Validation" << std::endl;
     
     // Test 1: Empty content
-    ik_chat_msg empty_msg = parse_chat_message_incremental("", false, "kimi-k2");
+    ik_chat_msg empty_msg = parse_chat_message_incremental("", false);
     test_assert(empty_msg.content.empty(), "Task 4: Empty content handled");
     test_assert(empty_msg.tool_calls.empty(), "Task 4: No tool calls for empty content");
     
     // Test 2: Very long content with function calls
     std::string long_content = std::string(1000, 'a') + "functions.TEST:1{\"data\":\"test\"}" + std::string(1000, 'b');
-    ik_chat_msg long_msg = parse_chat_message_incremental(long_content, false, "kimi-k2");
+    ik_chat_msg long_msg = parse_chat_message_incremental(long_content, false);
     bool long_content_clean = long_msg.content.find("functions.") == std::string::npos;
     test_assert(long_content_clean, "Task 4: Long content cleaned properly");
     test_assert(!long_msg.tool_calls.empty(), "Task 4: Tool call extracted from long content");
     
     // Test 3: Unicode content with function calls
     std::string unicode_content = "Testing 测试 functions.TEST:1{\"message\":\"こんにちは🌍\"} done";
-    ik_chat_msg unicode_msg = parse_chat_message_incremental(unicode_content, false, "kimi-k2");
+    ik_chat_msg unicode_msg = parse_chat_message_incremental(unicode_content, false);
     bool unicode_clean = unicode_msg.content.find("functions.") == std::string::npos;
     test_assert(unicode_clean, "Task 4: Unicode content cleaned properly");
     test_assert(!unicode_msg.tool_calls.empty(), "Task 4: Tool call extracted from unicode content");
@@ -1596,7 +1596,7 @@ void test_task4_validation_and_testing() {
     // Run 1000 iterations of partial parsing
     for (int i = 0; i < 1000; i++) {
         std::string test_content = "I'll help you.functions.TEST:1{\"iteration\":" + std::to_string(i) + "}";
-        ik_chat_msg msg = parse_chat_message_incremental(test_content, false, "kimi-k2");
+        ik_chat_msg msg = parse_chat_message_incremental(test_content, false);
         // Just ensure it doesn't crash
     }
     
@@ -1625,7 +1625,7 @@ void test_task4_validation_and_testing() {
     ik_chat_msg previous_state = empty_state;
     for (size_t i = 0; i < progressive_content.size(); i++) {
         bool is_partial = (i < progressive_content.size() - 1);
-        ik_chat_msg current_state = parse_chat_message_incremental(progressive_content[i], is_partial, "kimi-k2");
+        ik_chat_msg current_state = parse_chat_message_incremental(progressive_content[i], is_partial);
         
         // Compute diffs
         std::vector<ik_chat_msg_diff> diffs = ik_chat_msg_diff::compute_diffs(previous_state, current_state);
@@ -1688,7 +1688,7 @@ void test_regression_contamination_issue() {
     std::cout << "\n📊 Testing Current Implementation:" << std::endl;
     
     // Simulate partial parsing (is_partial=true) - this should return empty
-    ik_chat_msg partial_result = parse_chat_message_incremental(raw_generated_text, true, "kimi-k2");
+    ik_chat_msg partial_result = parse_chat_message_incremental(raw_generated_text, true);
     
     std::cout << "   Partial parsing (is_partial=true):" << std::endl;
     std::cout << "     - Content: '" << partial_result.content << "'" << std::endl;
@@ -1696,7 +1696,7 @@ void test_regression_contamination_issue() {
     std::cout << "     - Content empty: " << (partial_result.content.empty() ? "YES" : "NO") << std::endl;
     
     // Simulate complete parsing (is_partial=false) - this should clean and extract
-    ik_chat_msg complete_result = parse_chat_message_incremental(raw_generated_text, false, "kimi-k2");
+    ik_chat_msg complete_result = parse_chat_message_incremental(raw_generated_text, false);
     
     std::cout << "   Complete parsing (is_partial=false):" << std::endl;
     std::cout << "     - Content: '" << complete_result.content << "'" << std::endl;
@@ -1866,9 +1866,9 @@ void test_regression_contamination_issue() {
     std::string multi_pass_content = raw_generated_text;
     
     // First pass
-    ik_chat_msg first_pass = parse_chat_message_incremental(multi_pass_content, false, "kimi-k2");
+    ik_chat_msg first_pass = parse_chat_message_incremental(multi_pass_content, false);
     // Second pass (simulate reprocessing same content)
-    ik_chat_msg second_pass = parse_chat_message_incremental(first_pass.content + "functions.TEST:1{\"data\":\"test\"}", false, "kimi-k2");
+    ik_chat_msg second_pass = parse_chat_message_incremental(first_pass.content + "functions.TEST:1{\"data\":\"test\"}", false);
     
     std::cout << "   First pass result: '" << first_pass.content << "'" << std::endl;
     std::cout << "   Second pass input: '" << (first_pass.content + "functions.TEST:1{\"data\":\"test\"}").substr(0, 60) << "...'" << std::endl;
@@ -1901,7 +1901,7 @@ void test_content_duplication_bug() {
     std::string raw_content_with_function = "I'll create the debug_test.2txt file with the current timestamp.functions.Write:3{\"file_path\": \"/root/ik_llama.cpp/debug_test.2txt\", \"content\": \"2025-07-20 08:30:46 UTC\"}";
     
     // Parse the message as it would be in the server
-    ik_chat_msg parsed_msg = parse_chat_message_incremental(raw_content_with_function, false, "kimi-k2");
+    ik_chat_msg parsed_msg = parse_chat_message_incremental(raw_content_with_function, false);
     
     // EXPECTED: Content should be cleaned (no function call syntax)
     std::string expected_clean_content = "I'll create the debug_test.2txt file with the current timestamp.";
@@ -1940,7 +1940,7 @@ void test_content_duplication_bug() {
     ik_chat_msg previous_msg;
     for (size_t i = 0; i < streaming_steps.size(); ++i) {
         bool is_partial = (i < streaming_steps.size() - 1);
-        ik_chat_msg current_msg = parse_chat_message_incremental(streaming_steps[i], is_partial, "kimi-k2");
+        ik_chat_msg current_msg = parse_chat_message_incremental(streaming_steps[i], is_partial);
         
         // Compute diff like the server does
         std::vector<ik_chat_msg_diff> diffs = ik_chat_msg_diff::compute_diffs(previous_msg, current_msg);
@@ -2016,7 +2016,7 @@ void test_xml_tool_call_parsing() {
     std::cout << "   Input: " << xml_content << std::endl;
     
     // Parse the XML tool call
-    ik_chat_msg parsed_msg = parse_chat_message_incremental(xml_content, false, "kimi-k2");
+    ik_chat_msg parsed_msg = parse_chat_message_incremental(xml_content, false);
     
     std::cout << "   Tool calls detected: " << parsed_msg.tool_calls.size() << std::endl;
     std::cout << "   Cleaned content: '" << parsed_msg.content << "'" << std::endl;

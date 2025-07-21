@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../common/common.h"
 #include "json.hpp"
 #include <string>
 #include <vector>
@@ -79,9 +80,7 @@ struct ik_chat_msg_diff {
     }
 };
 
-static bool string_starts_with(const std::string & str, const std::string & prefix) {
-    return str.rfind(prefix, 0) == 0;
-}
+
 
 // Helper functions for string diffing
 static std::string string_diff(const std::string & last, const std::string & current) {

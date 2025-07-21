@@ -3,6 +3,8 @@
 #include "json.hpp"
 #include "streaming_chat.hpp"
 #include "parsers/kimi_k2_parser.hpp"
+#include "../../common/chat.h"
+#include "../../common/chat-parser.h"
 #include <string>
 #include <regex>
 
@@ -52,7 +54,7 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
                     tc.name = tc_json["function"]["name"];
                     if (tc.name.empty()) {
                         continue;
-                    }
+    }
                     
                     tc.arguments = tc_json["function"]["arguments"];
                     
@@ -73,15 +75,24 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
             }
             
             msg.content = clean_function_calls_from_content(content);
-        } else {
-            msg.content = clean_function_calls_from_content(content);
+    } else {
+            msg.content = content;
         }
         
     } catch (const std::exception& e) {
         if (!is_partial) {
-            // Fallback: preserve original content unchanged
+            // Original llama.cpp builder fallback pattern
+            common_chat_syntax syntax;
+            syntax.format = COMMON_CHAT_FORMAT_KIMI_K2;
+            common_chat_msg_parser builder(content, is_partial, syntax);
+            builder.clear_tools();
+            builder.move_to(0);
+            common_chat_parse_content_only(builder);
+            
+            // Convert builder result back to ik_chat_msg
+            auto builder_result = builder.result();
             msg.tool_calls.clear();
-            msg.content = content;
+            msg.content = builder_result.content;
         }
         // If is_partial=true, keep empty result (no content chunks during streaming)
     }

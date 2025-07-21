@@ -123,9 +123,12 @@ static inline void server_log(const char * level, const char * function, int lin
 //
 
 // Format given chat. If tmpl is empty, we take the template from model metadata
-inline std::string format_chat(const struct llama_model * model, const std::string & tmpl, const std::vector<json> & messages) {
+inline std::string format_chat(const struct llama_model * model, const std::string & tmpl, const std::vector<json> & messages, const json & tools = json::array(), const std::string & model_name = "") {
     std::vector<llama_chat_msg> chat;
 
+    // Inject tools into the first system message, or create one if none exists
+    bool tools_injected = false;
+    
     for (size_t i = 0; i < messages.size(); ++i) {
         const auto & curr_msg = messages[i];
 
@@ -146,6 +149,20 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
             }
         } else {
             throw std::runtime_error("Missing 'content' (ref: https://github.com/ggerganov/llama.cpp/issues/8367)");
+        }
+        // Inject tools into the first system message, or create one if none exists
+        // Only applies to Kimi-K2 models (checked by kimi_k2_should_inject_tools)
+        if (kimi_k2_should_inject_tools(tools, model_name) && !tools_injected) {
+            if (role == "system") {
+                // Add tools to existing system message
+                content = kimi_k2_inject_tools_to_system(content, tools);
+                tools_injected = true;
+            } else if (i == 0) {
+                // Create system message with tools if no system message exists
+                std::string tools_prompt = kimi_k2_create_system_with_tools(tools);
+                chat.push_back({"system", tools_prompt});
+                tools_injected = true;
+            }
         }
 
         chat.push_back({role, content});
@@ -383,8 +400,14 @@ static json oaicompat_completion_params_parse(
 
     llama_params["__oaicompat"] = true;
 
-    // Apply chat template to the list of messages
-    llama_params["prompt"] = format_chat(model, chat_template, body.at("messages"));
+    // Extract tools from the request body
+    json tools = json_value(body, "tools", json::array());
+
+    // Extract model name from the request body
+    std::string model_name = json_value(body, "model", std::string(DEFAULT_OAICOMPAT_MODEL));
+
+    // Apply chat template to the list of messages with tools
+    llama_params["prompt"] = format_chat(model, chat_template, body.at("messages"), tools, model_name);
 
     // Handle "stop" field
     if (body.contains("stop") && body.at("stop").is_string()) {
