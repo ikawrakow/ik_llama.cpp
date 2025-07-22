@@ -13,6 +13,41 @@ using json = nlohmann::ordered_json;
 
 namespace kimi_k2 {
 
+// Constants for token format markers
+static constexpr const char* TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
+static constexpr const char* TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
+static constexpr const char* TOOL_CALL_BEGIN = "<|tool_call_begin|>";
+static constexpr const char* TOOL_CALL_END = "<|tool_call_end|>";
+static constexpr const char* TOOL_CALL_ARGUMENT_BEGIN = "<|tool_call_argument_begin|>";
+
+// Constants for XML format markers
+static constexpr const char* XML_TOOL_CALL_OPEN = "<tool_call>";
+static constexpr const char* XML_TOOL_CALL_CLOSE = "</tool_call>";
+static constexpr const char* XML_INVOKE_OPEN_PREFIX = "<invoke name=\"";
+static constexpr const char* XML_INVOKE_CLOSE = "</invoke>";
+static constexpr const char* XML_PARAMETER_OPEN_PREFIX = "<parameter name=\"";
+static constexpr const char* XML_PARAMETER_CLOSE = "</parameter>";
+
+// Constants for simple format patterns
+static constexpr const char* FUNCTIONS_PREFIX = "functions.";
+
+// Helper functions to get marker lengths at compile time
+static constexpr size_t get_marker_length(const char* marker) {
+    size_t len = 0;
+    while (marker[len] != '\0') ++len;
+    return len;
+}
+
+static constexpr size_t TOOL_CALLS_SECTION_BEGIN_LEN = get_marker_length(TOOL_CALLS_SECTION_BEGIN);
+static constexpr size_t TOOL_CALLS_SECTION_END_LEN = get_marker_length(TOOL_CALLS_SECTION_END);
+static constexpr size_t TOOL_CALL_BEGIN_LEN = get_marker_length(TOOL_CALL_BEGIN);
+static constexpr size_t TOOL_CALL_END_LEN = get_marker_length(TOOL_CALL_END);
+static constexpr size_t TOOL_CALL_ARGUMENT_BEGIN_LEN = get_marker_length(TOOL_CALL_ARGUMENT_BEGIN);
+static constexpr size_t XML_TOOL_CALL_OPEN_LEN = get_marker_length(XML_TOOL_CALL_OPEN);
+static constexpr size_t XML_TOOL_CALL_CLOSE_LEN = get_marker_length(XML_TOOL_CALL_CLOSE);
+static constexpr size_t XML_PARAMETER_CLOSE_LEN = get_marker_length(XML_PARAMETER_CLOSE);
+static constexpr size_t FUNCTIONS_PREFIX_LEN = get_marker_length(FUNCTIONS_PREFIX);
+
 // Helper function to trim whitespace and quotes
 static std::string trim_and_unquote(const std::string& str) {
     std::string result = str;
@@ -35,35 +70,37 @@ static json parse_token_function_calls(const std::string& text) {
     
     try {
         // Look for tool calls section
-        size_t section_start = text.find("<|tool_calls_section_begin|>");
+        size_t section_start = text.find(TOOL_CALLS_SECTION_BEGIN);
         if (section_start == std::string::npos) {
             return tool_calls;
         }
         
-        size_t section_end = text.find("<|tool_calls_section_end|>", section_start);
+        size_t section_end = text.find(TOOL_CALLS_SECTION_END, section_start);
         if (section_end == std::string::npos) {
             return tool_calls;
         }
         
         // Extract section content
-        std::string section = text.substr(section_start + 27, section_end - section_start - 27);
+        std::string section = text.substr(section_start + TOOL_CALLS_SECTION_BEGIN_LEN, 
+                                        section_end - section_start - TOOL_CALLS_SECTION_BEGIN_LEN);
         
         // Parse individual tool calls
         size_t pos = 0;
         while (pos < section.length()) {
-            size_t call_start = section.find("<|tool_call_begin|>", pos);
+            size_t call_start = section.find(TOOL_CALL_BEGIN, pos);
             if (call_start == std::string::npos) break;
             
-            size_t call_end = section.find("<|tool_call_end|>", call_start);
+            size_t call_end = section.find(TOOL_CALL_END, call_start);
             if (call_end == std::string::npos) break;
             
-            std::string call_content = section.substr(call_start + 19, call_end - call_start - 19);
+            std::string call_content = section.substr(call_start + TOOL_CALL_BEGIN_LEN, 
+                                                    call_end - call_start - TOOL_CALL_BEGIN_LEN);
             
             // Parse tool call content
-            size_t arg_start = call_content.find("<|tool_call_argument_begin|>");
+            size_t arg_start = call_content.find(TOOL_CALL_ARGUMENT_BEGIN);
             if (arg_start != std::string::npos) {
                 std::string tool_id_raw = call_content.substr(0, arg_start);
-                std::string arguments_raw = call_content.substr(arg_start + 28);
+                std::string arguments_raw = call_content.substr(arg_start + TOOL_CALL_ARGUMENT_BEGIN_LEN);
                 
                 // Clean tool_id and arguments
                 std::string tool_id = tool_id_raw;
@@ -85,7 +122,7 @@ static json parse_token_function_calls(const std::string& text) {
                 
                 // Skip if function name is empty
                 if (func_name.empty()) {
-                    pos = call_end + 18;
+                    pos = call_end + TOOL_CALL_END_LEN;
                     continue;
                 }
                 
@@ -94,7 +131,7 @@ static json parse_token_function_calls(const std::string& text) {
                     auto parsed = json::parse(arguments);
                     (void)parsed; // Suppress unused variable warning
                 } catch (const std::exception&) {
-                    pos = call_end + 18;
+                    pos = call_end + TOOL_CALL_END_LEN;
                     continue;
                 }
                 
@@ -111,7 +148,7 @@ static json parse_token_function_calls(const std::string& text) {
                 tool_calls.push_back(tool_call);
             }
             
-            pos = call_end + 18;
+            pos = call_end + TOOL_CALL_END_LEN;
         }
     } catch (const std::exception&) {
         // Return empty array on any parsing error
@@ -127,55 +164,56 @@ static json parse_xml_function_calls(const std::string& text) {
     
     try {
         size_t pos = 0;
-        while ((pos = text.find("<tool_call>", pos)) != std::string::npos) {
+        while ((pos = text.find(XML_TOOL_CALL_OPEN, pos)) != std::string::npos) {
             size_t tool_call_start = pos;
-            size_t tool_call_end = text.find("</tool_call>", tool_call_start);
+            size_t tool_call_end = text.find(XML_TOOL_CALL_CLOSE, tool_call_start);
             if (tool_call_end == std::string::npos) {
-                pos = tool_call_start + std::string("<tool_call>").length();
+                pos = tool_call_start + XML_TOOL_CALL_OPEN_LEN;
                 continue;
             }
             
-            std::string tool_call_content = text.substr(tool_call_start + std::string("<tool_call>").length(), tool_call_end - tool_call_start - std::string("<tool_call>").length());
+            std::string tool_call_content = text.substr(tool_call_start + XML_TOOL_CALL_OPEN_LEN, 
+                                                      tool_call_end - tool_call_start - XML_TOOL_CALL_OPEN_LEN);
             
             // Look for <invoke name="function_name">
-            size_t invoke_start = tool_call_content.find("<invoke name=\"");
+            size_t invoke_start = tool_call_content.find(XML_INVOKE_OPEN_PREFIX);
             if (invoke_start == std::string::npos) {
-                pos = tool_call_end + std::string("</tool_call>").length();
+                pos = tool_call_end + XML_TOOL_CALL_CLOSE_LEN;
                 continue;
             }
             
             // Find the opening quote after "name="
             size_t quote_start = tool_call_content.find("\"", invoke_start);
             if (quote_start == std::string::npos) {
-                pos = tool_call_end + std::string("</tool_call>").length();
+                pos = tool_call_end + XML_TOOL_CALL_CLOSE_LEN;
                 continue;
             }
             
             // Find the closing quote
             size_t quote_end = tool_call_content.find("\"", quote_start + 1);
             if (quote_end == std::string::npos) {
-                pos = tool_call_end + std::string("</tool_call>").length();
+                pos = tool_call_end + XML_TOOL_CALL_CLOSE_LEN;
                 continue;
             }
             
             // Extract function name between quotes
             std::string func_name = tool_call_content.substr(quote_start + 1, quote_end - quote_start - 1);
             if (func_name.empty()) {
-                pos = tool_call_end + std::string("</tool_call>").length();
+                pos = tool_call_end + XML_TOOL_CALL_CLOSE_LEN;
                 continue;
             }
             
             // Look for closing >
             size_t invoke_close = tool_call_content.find(">", quote_end);
             if (invoke_close == std::string::npos) {
-                pos = tool_call_end + std::string("</tool_call>").length();
+                pos = tool_call_end + XML_TOOL_CALL_CLOSE_LEN;
                 continue;
             }
             
             // Find </invoke>
-            size_t invoke_end = tool_call_content.find("</invoke>");
+            size_t invoke_end = tool_call_content.find(XML_INVOKE_CLOSE);
             if (invoke_end == std::string::npos) {
-                pos = tool_call_end + std::string("</tool_call>").length();
+                pos = tool_call_end + XML_TOOL_CALL_CLOSE_LEN;
                 continue;
             }
             
@@ -185,7 +223,7 @@ static json parse_xml_function_calls(const std::string& text) {
             // Parse parameters and build JSON arguments
             json args = json::object();
             size_t param_pos = 0;
-            while ((param_pos = params_section.find("<parameter name=\"", param_pos)) != std::string::npos) {
+            while ((param_pos = params_section.find(XML_PARAMETER_OPEN_PREFIX, param_pos)) != std::string::npos) {
                 // Find the opening quote after "name="
                 size_t param_quote_start = params_section.find("\"", param_pos);
                 if (param_quote_start == std::string::npos) break;
@@ -200,7 +238,7 @@ static json parse_xml_function_calls(const std::string& text) {
                 if (param_content_start == std::string::npos) break;
                 param_content_start++;
                 
-                size_t param_content_end = params_section.find("</parameter>", param_content_start);
+                size_t param_content_end = params_section.find(XML_PARAMETER_CLOSE, param_content_start);
                 if (param_content_end == std::string::npos) break;
                 
                 std::string param_value = params_section.substr(param_content_start, param_content_end - param_content_start);
@@ -210,7 +248,7 @@ static json parse_xml_function_calls(const std::string& text) {
                 param_value.erase(param_value.find_last_not_of(" \t\n\r") + 1);
                 
                 args[param_name] = param_value;
-                param_pos = param_content_end + std::string("</parameter>").length();
+                param_pos = param_content_end + XML_PARAMETER_CLOSE_LEN;
             }
             
             // Generate tool call ID
@@ -228,7 +266,7 @@ static json parse_xml_function_calls(const std::string& text) {
             };
             
             tool_calls.push_back(tool_call);
-            pos = tool_call_end + std::string("</tool_call>").length();
+            pos = tool_call_end + XML_TOOL_CALL_CLOSE_LEN;
         }
     } catch (const std::exception&) {
         // Return empty array on any parsing error
@@ -244,11 +282,10 @@ static json parse_simple_function_calls(const std::string& text) {
     
     try {
         // Look for patterns like "functions.function_name:index{json_args}"
-        std::string pattern = "functions.";
         size_t pos = 0;
         
-        while ((pos = text.find(pattern, pos)) != std::string::npos) {
-            size_t func_start = pos + pattern.length();
+        while ((pos = text.find(FUNCTIONS_PREFIX, pos)) != std::string::npos) {
+            size_t func_start = pos + FUNCTIONS_PREFIX_LEN;
             
             // Find the colon that separates function name from index
             size_t colon_pos = text.find(':', func_start);
@@ -328,8 +365,8 @@ static json parse_simple_function_calls(const std::string& text) {
 static json parse_tool_calls(const std::string& text) {
     try {
         // Check if we have token format markers
-        bool has_token_start = text.find("<|tool_calls_section_begin|>") != std::string::npos;
-        bool has_token_end = text.find("<|tool_calls_section_end|>") != std::string::npos;
+        bool has_token_start = text.find(TOOL_CALLS_SECTION_BEGIN) != std::string::npos;
+        bool has_token_end = text.find(TOOL_CALLS_SECTION_END) != std::string::npos;
         bool has_token_section = has_token_start && has_token_end;
         
         json result = json::array();
@@ -345,12 +382,12 @@ static json parse_tool_calls(const std::string& text) {
             
             // For mixed format, also check for simple calls outside the token section
             std::string content_for_simple = text;
-            size_t section_start = content_for_simple.find("<|tool_calls_section_begin|>");
-            size_t section_end = content_for_simple.find("<|tool_calls_section_end|>");
+            size_t section_start = content_for_simple.find(TOOL_CALLS_SECTION_BEGIN);
+            size_t section_end = content_for_simple.find(TOOL_CALLS_SECTION_END);
             if (section_start != std::string::npos && section_end != std::string::npos) {
                 // Remove the token section to avoid double-parsing
                 content_for_simple = content_for_simple.substr(0, section_start) + 
-                                   content_for_simple.substr(section_end + 26);
+                                   content_for_simple.substr(section_end + TOOL_CALLS_SECTION_END_LEN);
             }
             
             json simple_calls = parse_simple_function_calls(content_for_simple);
@@ -386,27 +423,27 @@ static std::string extract_content_during_parsing(const std::string& text, bool 
     
     // Process XML-style tool calls first: <tool_call>...</tool_call>
     size_t xml_pos = 0;
-    while ((xml_pos = text.find("<tool_call>", xml_pos)) != std::string::npos) {
+    while ((xml_pos = text.find(XML_TOOL_CALL_OPEN, xml_pos)) != std::string::npos) {
         // Add content before this tool call
         content += text.substr(last_content_end, xml_pos - last_content_end);
         
         // Skip to end of tool call
-        size_t tool_call_end = text.find("</tool_call>", xml_pos);
+        size_t tool_call_end = text.find(XML_TOOL_CALL_CLOSE, xml_pos);
         if (tool_call_end != std::string::npos) {
-            xml_pos = tool_call_end + 12; // "</tool_call>".length()
+            xml_pos = tool_call_end + XML_TOOL_CALL_CLOSE_LEN;
             last_content_end = xml_pos;
         } else {
             // Incomplete tool call - stop here if partial
             if (is_partial) {
                 return string_strip(content);
             }
-            xml_pos += 11; // "<tool_call>".length()
+            xml_pos += XML_TOOL_CALL_OPEN_LEN;
         }
     }
     
     // Process simple function calls: functions.name:id{json}
     size_t func_pos = last_content_end;
-    while ((func_pos = text.find("functions.", func_pos)) != std::string::npos) {
+    while ((func_pos = text.find(FUNCTIONS_PREFIX, func_pos)) != std::string::npos) {
         // Add content before this function call
         content += text.substr(last_content_end, func_pos - last_content_end);
         
@@ -418,7 +455,7 @@ static std::string extract_content_during_parsing(const std::string& text, bool 
                 // This might be incomplete function call - stop here
                 return string_strip(content);
             }
-            func_pos += 10; // "functions.".length()
+            func_pos += FUNCTIONS_PREFIX_LEN;
             continue;
         }
         
@@ -447,15 +484,15 @@ static std::string extract_content_during_parsing(const std::string& text, bool 
     }
     
     // Process token format sections: <|tool_calls_section_begin|>...<|tool_calls_section_end|>
-    size_t section_start = text.find("<|tool_calls_section_begin|>", last_content_end);
+    size_t section_start = text.find(TOOL_CALLS_SECTION_BEGIN, last_content_end);
     if (section_start != std::string::npos) {
         // Add content before section
         content += text.substr(last_content_end, section_start - last_content_end);
         
-        size_t section_end = text.find("<|tool_calls_section_end|>");
+        size_t section_end = text.find(TOOL_CALLS_SECTION_END);
         if (section_end != std::string::npos) {
             // Skip entire section
-            last_content_end = section_end + 26; // "<|tool_calls_section_end|>".length()
+            last_content_end = section_end + TOOL_CALLS_SECTION_END_LEN;
         } else if (is_partial) {
             // Incomplete section during streaming - stop here
             return string_strip(content);
@@ -590,13 +627,13 @@ static bool is_partial_content_advanced(const std::string& content) {
     }
     
     // 2. Incomplete function call patterns (check last occurrence in content)
-    size_t func_pos = content.rfind("functions.");
+    size_t func_pos = content.rfind(FUNCTIONS_PREFIX);
     if (func_pos != std::string::npos) {
         // Extract the function call part from the last occurrence
         std::string func_call_part = content.substr(func_pos);
         
         // functions. (just the prefix)
-        if (func_call_part == "functions.") return true;
+        if (func_call_part == FUNCTIONS_PREFIX) return true;
         
         // functions.name (no colon)
         size_t colon_pos = func_call_part.find(':');
@@ -617,13 +654,13 @@ static bool is_partial_content_advanced(const std::string& content) {
     }
     
     // 3. Token format partials
-    if (content.find("<|tool_calls_section_begin|>") != std::string::npos) {
+    if (content.find(TOOL_CALLS_SECTION_BEGIN) != std::string::npos) {
         // Check if section is incomplete
-        size_t end_pos = content.find("<|tool_calls_section_end|>");
+        size_t end_pos = content.find(TOOL_CALLS_SECTION_END);
         if (end_pos == std::string::npos) {
             // Section not closed, check if it has incomplete calls
-            if (content.find("<|tool_call_begin|>") != std::string::npos) {
-                size_t call_end = content.find("<|tool_call_end|>");
+            if (content.find(TOOL_CALL_BEGIN) != std::string::npos) {
+                size_t call_end = content.find(TOOL_CALL_END);
                 if (call_end == std::string::npos) return true; // Incomplete call
             }
             return true; // Section not closed
@@ -633,7 +670,7 @@ static bool is_partial_content_advanced(const std::string& content) {
     // 4. Mixed format detection - look for incomplete function calls after complete ones
     size_t last_complete = 0;
     while (true) {
-        size_t func_pos = content.find("functions.", last_complete);
+        size_t func_pos = content.find(FUNCTIONS_PREFIX, last_complete);
         if (func_pos == std::string::npos) break;
         
         // Check if this function call is complete
