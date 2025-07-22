@@ -6,8 +6,6 @@
 
 This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) with better CPU and hybrid GPU/CPU performance, new SOTA quantization types, first-class Bitnet support, better DeepSeek performance via MLA, FlashMLA, fused MoE operations and tensor overrides for hybrid GPU/CPU inference, row-interleaved quant packing, etc.
 
-**NOTE:** Under construction. All links below are broken as they refer to the now suspended `ik_llama.cpp` repository on GitHub.
-
 ## Latest News
 
 ### Model Support
