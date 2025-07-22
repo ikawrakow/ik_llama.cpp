@@ -131,13 +131,15 @@ enum common_chat_tool_choice {
 enum common_chat_format {
     COMMON_CHAT_FORMAT_CONTENT_ONLY,
     COMMON_CHAT_FORMAT_GENERIC,
-    COMMON_CHAT_FORMAT_KIMI_K2,  // Our custom format
+    COMMON_CHAT_FORMAT_DEEPSEEK_R1,
+    COMMON_CHAT_FORMAT_KIMI_K2,  // Our custom format (keep last for backward compatibility)
 };
 
 struct common_chat_syntax {
     common_chat_format format = COMMON_CHAT_FORMAT_KIMI_K2;
     bool enable_thinking = false;
     bool enable_tool_calls = true;
+    bool enable_progressive_parsing = false; // Phase 4E: Progressive parsing feature flag
 };
 
 // Exception for partial parsing
@@ -151,5 +153,15 @@ class common_chat_msg_partial_exception : public std::runtime_error {
 // common_chat_msg ik_to_common_msg(const struct ik_chat_msg & ik_msg);
 // struct ik_chat_msg common_to_ik_msg(const common_chat_msg & common_msg);
 
+// Format detection from chat template
+common_chat_format common_chat_format_detect(const std::string & chat_template);
+const char* common_chat_format_name(common_chat_format format);
+
 // Main parsing function (entry point for original llama.cpp compatibility)
 common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+
+// Forward declare parser class  
+class common_chat_msg_parser;
+
+// Content-only parsing wrapper for compatibility
+void common_chat_parse_content_only(common_chat_msg_parser & builder);

@@ -6,6 +6,11 @@
 // Include the function calling parser and streaming support
 #include "../examples/server/function_calls.hpp"
 #include "../examples/server/streaming_chat.hpp"
+#include "../common/chat-parser.h"
+
+// Stub definitions for server variables (needed for json-partial.cpp)
+bool server_verbose = false;
+bool server_log_json = false;
 
 // Test data for native Kimi-K2 token format
 const std::string token_response = R"(I'll help you check the weather.
@@ -2044,6 +2049,162 @@ void test_xml_tool_call_parsing() {
     std::cout << "   ✅ XML tool call parsing works correctly!" << std::endl;
 }
 
+// Test the streaming tool calls fix implementation
+void test_streaming_tool_calls_fix() {
+    std::cout << "\n=== Streaming Tool Calls Fix Validation ===" << std::endl;
+    std::cout << "🧪 Testing fix for streaming tool calls returning as content instead of tool_calls array..." << std::endl;
+    
+    // Test case that reproduces the exact bug from the GitHub issue
+    const std::string tool_call_content = R"(functions.LS:1{"path": "."})";
+    
+    std::cout << "🎯 Input: " << tool_call_content << std::endl;
+    std::cout << "🎯 Expected: Tool calls should appear in 'tool_calls' array, NOT as 'content' text" << std::endl;
+    
+    // Test 1: Verify non-streaming parsing still works (baseline)
+    std::cout << "\n1️⃣ Testing non-streaming parsing (baseline)..." << std::endl;
+    json non_streaming_result = parse_kimi_k2_tool_calls(tool_call_content);
+    
+    test_assert(non_streaming_result.is_array(), "Non-streaming: Result is array");
+    test_assert(non_streaming_result.size() == 1, "Non-streaming: Single tool call detected");
+    
+    if (non_streaming_result.size() > 0) {
+        json tool_call = non_streaming_result[0];
+        test_assert(tool_call["type"] == "function", "Non-streaming: Correct type");
+        test_assert(tool_call["function"]["name"] == "LS", "Non-streaming: Correct function name");
+        std::cout << "   ✅ Non-streaming parsing works correctly (baseline established)" << std::endl;
+    }
+    
+    // Test 2: Verify incremental parsing used by streaming
+    std::cout << "\n2️⃣ Testing incremental parsing (streaming component)..." << std::endl;
+    ik_chat_msg streaming_msg = parse_chat_message_incremental(tool_call_content, false);
+    
+    test_assert(!streaming_msg.tool_calls.empty(), "Incremental: Tool calls detected");
+    test_assert(streaming_msg.tool_calls.size() == 1, "Incremental: Single tool call");
+    test_assert(streaming_msg.tool_calls[0].name == "LS", "Incremental: Correct function name");
+    test_assert(streaming_msg.tool_calls[0].arguments == R"({"path": "."})", "Incremental: Correct arguments");
+    
+    std::cout << "   ✅ Incremental parsing works correctly" << std::endl;
+    std::cout << "   Function: " << streaming_msg.tool_calls[0].name << std::endl;
+    std::cout << "   Arguments: " << streaming_msg.tool_calls[0].arguments << std::endl;
+    
+    // Test 3: Verify differential streaming (core of the fix)
+    std::cout << "\n3️⃣ Testing differential streaming (fix core logic)..." << std::endl;
+    
+    ik_chat_msg previous_msg;
+    previous_msg.role = "assistant";
+    previous_msg.content = "";
+    
+    ik_chat_msg current_msg = streaming_msg;
+    
+    // Generate diffs (this is what update_chat_msg does in server.cpp)
+    std::vector<ik_chat_msg_diff> diffs = ik_chat_msg_diff::compute_diffs(previous_msg, current_msg);
+    
+    std::cout << "   Generated " << diffs.size() << " diff(s)" << std::endl;
+    
+    bool has_tool_call_delta = false;
+    bool has_content_delta = false;
+    
+    for (const auto& diff : diffs) {
+        if (!diff.content_delta.empty()) {
+            has_content_delta = true;
+            std::cout << "   Content delta: '" << diff.content_delta << "'" << std::endl;
+        }
+        
+        if (diff.tool_call_index != std::string::npos) {
+            has_tool_call_delta = true;
+            std::cout << "   Tool call delta at index " << diff.tool_call_index << std::endl;
+            std::cout << "     Name: " << diff.tool_call_delta.name << std::endl;
+            std::cout << "     Arguments: " << diff.tool_call_delta.arguments << std::endl;
+            std::cout << "     ID: " << diff.tool_call_delta.id << std::endl;
+        }
+    }
+    
+    test_assert(has_tool_call_delta, "Differential streaming: Tool call deltas generated");
+    std::cout << "   ✅ Tool call diffs are being generated correctly" << std::endl;
+    
+    // Test 4: Verify streaming chunk generation (final output)
+    std::cout << "\n4️⃣ Testing streaming chunk generation (final OpenAI format)..." << std::endl;
+    
+    std::vector<json> streaming_chunks = generate_streaming_chunks(diffs, "test-completion", "test-model");
+    
+    std::cout << "   Generated " << streaming_chunks.size() << " streaming chunk(s)" << std::endl;
+    
+    bool found_tool_calls_delta = false;
+    bool found_content_as_tool_calls = false;
+    std::string found_content_text = "";
+    
+    for (const auto& chunk : streaming_chunks) {
+        if (chunk.contains("choices") && chunk["choices"].is_array() && !chunk["choices"].empty()) {
+            auto& choice = chunk["choices"][0];
+            if (choice.contains("delta")) {
+                auto& delta = choice["delta"];
+                
+                // Check for proper tool_calls structure
+                if (delta.contains("tool_calls")) {
+                    found_tool_calls_delta = true;
+                    std::cout << "   ✅ Found tool_calls in delta: " << delta["tool_calls"].dump() << std::endl;
+                }
+                
+                // Check for incorrect content field containing tool calls
+                if (delta.contains("content") && delta["content"].is_string()) {
+                    std::string content_str = delta["content"];
+                    found_content_text = content_str;
+                    if (content_str.find("functions.") != std::string::npos) {
+                        found_content_as_tool_calls = true;
+                        std::cout << "   ❌ Found tool call syntax in content: '" << content_str << "'" << std::endl;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Test 5: Validate the fix
+    std::cout << "\n5️⃣ Fix validation results:" << std::endl;
+    
+    if (found_tool_calls_delta && !found_content_as_tool_calls) {
+        std::cout << "   ✅ SUCCESS: Tool calls properly structured in streaming response!" << std::endl;
+        std::cout << "   ✅ Tool calls appear in 'tool_calls' field, not 'content' field" << std::endl;
+        std::cout << "   ✅ Fix is working correctly!" << std::endl;
+    } else if (!found_tool_calls_delta && found_content_as_tool_calls) {
+        std::cout << "   ❌ FAILURE: Tool calls appear as text content (original bug still present)" << std::endl;
+        std::cout << "   ❌ This indicates the server.cpp fix is not working" << std::endl;
+    } else if (!found_tool_calls_delta && !found_content_as_tool_calls) {
+        std::cout << "   ❌ FAILURE: No tool calls found in streaming response" << std::endl;
+        std::cout << "   ❌ Possible issue with diff generation or chunk creation" << std::endl;
+    } else {
+        std::cout << "   ⚠️  WARNING: Mixed behavior detected (both formats present)" << std::endl;
+    }
+    
+    // Test assertions
+    test_assert(found_tool_calls_delta, "Fix validation: Tool calls must appear in tool_calls array");
+    test_assert(!found_content_as_tool_calls, "Fix validation: Tool calls must NOT appear as content text");
+    
+    std::cout << "\n🎯 Test Summary (Streaming Fix):" << std::endl;
+    std::cout << "   • Non-streaming parsing: ✅" << std::endl;
+    std::cout << "   • Incremental parsing: ✅" << std::endl;
+    std::cout << "   • Diff generation: " << (has_tool_call_delta ? "✅" : "❌") << std::endl;
+    std::cout << "   • Streaming chunks: " << (found_tool_calls_delta ? "✅" : "❌") << std::endl;
+    std::cout << "   • Bug fixed: " << (found_tool_calls_delta && !found_content_as_tool_calls ? "✅" : "❌") << std::endl;
+    
+    std::cout << "\n📋 Expected vs Actual Output:" << std::endl;
+    std::cout << "   Expected: {\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"...\", \"function\": {...}}]}}" << std::endl;
+    std::cout << "   Actual: " << (found_tool_calls_delta ? "✅ Correct format" : "❌ Wrong format") << std::endl;
+    
+    if (found_content_as_tool_calls) {
+        std::cout << "   ❌ Bug format: {\"delta\": {\"content\": \"" << found_content_text << "\"}}" << std::endl;
+    }
+    
+    std::cout << "\n🔧 Implementation Notes:" << std::endl;
+    std::cout << "   This test validates the complete fix chain:" << std::endl;
+    std::cout << "   1. server.cpp:send_partial_response() calls slot.update_chat_msg()" << std::endl;
+    std::cout << "   2. update_chat_msg() uses parse_chat_message_incremental()" << std::endl;
+    std::cout << "   3. Computed diffs are stored in task result" << std::endl;
+    std::cout << "   4. format_partial_response_oaicompat() uses diffs with generate_streaming_chunks()" << std::endl;
+    std::cout << "   5. Result: proper OpenAI streaming format with tool_calls array" << std::endl;
+    
+    std::cout << "   ✅ Streaming tool calls fix validation completed!" << std::endl;
+}
+
 
 int main() {
     std::cout << "🧪 Running Comprehensive Kimi-K2 Function Calling Tests" << std::endl;
@@ -2120,6 +2281,10 @@ int main() {
         // Add XML tool call parsing test
         test_xml_tool_call_parsing();
         
+        // Add streaming tool calls fix validation test  
+        std::cout << "\n🔧 Streaming Fix Validation:" << std::endl;
+        test_streaming_tool_calls_fix();
+        
         std::cout << std::endl;
         std::cout << "✅ All tests passed!" << std::endl;
         std::cout << "🚀 Kimi-K2 function calling implementation is robust and production-ready!" << std::endl;
@@ -2137,6 +2302,60 @@ int main() {
         std::cout << "   • Server integration requirements validation" << std::endl;
         std::cout << "   • HTTP endpoint workflow simulation" << std::endl;
         std::cout << "   • Compilation dependency verification" << std::endl;
+        std::cout << "   • Streaming tool calls fix validation" << std::endl;
+        
+        // Test format detection (quick verification)
+        std::cout << std::endl;
+        std::cout << "🔍 Testing Format Detection:" << std::endl;
+        
+        // Test DeepSeek R1 detection
+        auto deepseek_format = common_chat_format_detect("<think>reasoning</think>");
+        assert(deepseek_format == COMMON_CHAT_FORMAT_DEEPSEEK_R1);
+        std::cout << "✅ PASS: DeepSeek R1 format detected correctly" << std::endl;
+        
+        // Test Kimi K2 detection
+        auto kimi_format = common_chat_format_detect("functions.get_weather");
+        assert(kimi_format == COMMON_CHAT_FORMAT_KIMI_K2);
+        std::cout << "✅ PASS: Kimi K2 format detected correctly" << std::endl;
+        
+        // Test generic fallback
+        auto generic_format = common_chat_format_detect("hello world");
+        assert(generic_format == COMMON_CHAT_FORMAT_GENERIC);
+        std::cout << "✅ PASS: Generic format fallback works" << std::endl;
+        
+        // Test format names
+        assert(std::string(common_chat_format_name(COMMON_CHAT_FORMAT_DEEPSEEK_R1)) == "deepseek_r1");
+        assert(std::string(common_chat_format_name(COMMON_CHAT_FORMAT_KIMI_K2)) == "kimi_k2");
+        std::cout << "✅ PASS: Format names work correctly" << std::endl;
+        
+        // Test DeepSeek R1 format parsing
+        std::cout << std::endl;
+        std::cout << "🧠 Testing DeepSeek R1 Format Parsing:" << std::endl;
+        
+        // Test basic reasoning content
+        std::string deepseek_reasoning = "<think>Let me analyze this request.</think>I'll help you with that.";
+        common_chat_syntax deepseek_syntax;
+        deepseek_syntax.format = COMMON_CHAT_FORMAT_DEEPSEEK_R1;
+        
+        auto deepseek_msg = common_chat_parse(deepseek_reasoning, false, deepseek_syntax);
+        assert(!deepseek_msg.reasoning_content.empty());
+        assert(deepseek_msg.reasoning_content == "Let me analyze this request.");
+        assert(deepseek_msg.content == "I'll help you with that.");
+        std::cout << "✅ PASS: DeepSeek R1 reasoning content parsed correctly" << std::endl;
+        
+        // Test partial reasoning content
+        std::string partial_reasoning = "<think>I'm still thinking about this...";
+        auto partial_msg = common_chat_parse(partial_reasoning, true, deepseek_syntax);
+        assert(!partial_msg.reasoning_content.empty());
+        assert(partial_msg.reasoning_content == "I'm still thinking about this...");
+        std::cout << "✅ PASS: DeepSeek R1 partial reasoning content handled" << std::endl;
+        
+        // Test content without reasoning
+        std::string no_reasoning = "Just a simple response.";
+        auto simple_msg = common_chat_parse(no_reasoning, false, deepseek_syntax);
+        assert(simple_msg.reasoning_content.empty());
+        assert(simple_msg.content == "Just a simple response.");
+        std::cout << "✅ PASS: DeepSeek R1 regular content works" << std::endl;
         
     } catch (const std::exception& e) {
         std::cout << std::endl;

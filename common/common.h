@@ -304,6 +304,7 @@ std::string gpt_params_get_system_info(const gpt_params & params);
 //
 
 std::vector<std::string> string_split(std::string input, char separator);
+std::string string_join(const std::vector<std::string> & strs, const std::string & delimiter);
 
 std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();

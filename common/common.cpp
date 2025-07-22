@@ -1977,6 +1977,21 @@ std::vector<std::string> string_split(std::string input, char separator) {
     return parts;
 }
 
+std::string string_join(const std::vector<std::string> & strs, const std::string & delimiter) {
+    if (strs.empty()) {
+        return "";
+    }
+    
+    std::ostringstream oss;
+    for (size_t i = 0; i < strs.size(); ++i) {
+        if (i > 0) {
+            oss << delimiter;
+        }
+        oss << strs[i];
+    }
+    return oss.str();
+}
+
 std::string string_strip(const std::string & str) {
     size_t start = 0;
     size_t end = str.size();

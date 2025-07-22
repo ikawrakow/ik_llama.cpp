@@ -19,6 +19,11 @@ static std::string clean_function_calls_from_content(const std::string& content)
     return kimi_k2::clean_content(content);
 }
 
+// New llama.cpp-style content extraction with streaming support
+static std::string extract_content_from_mixed_input(const std::string& content, bool is_partial) {
+    return kimi_k2::extract_content_during_parsing(content, is_partial);
+}
+
 // Incremental parsing for streaming tool calls
 static ik_chat_msg parse_chat_message_incremental(const std::string& content, bool is_partial = false) {
     ik_chat_msg msg;
@@ -74,9 +79,10 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
                 }
             }
             
-            msg.content = clean_function_calls_from_content(content);
+            // Use llama.cpp-style content extraction that handles streaming properly
+            msg.content = extract_content_from_mixed_input(content, is_partial);
     } else {
-            msg.content = content;
+            msg.content = extract_content_from_mixed_input(content, is_partial);
         }
         
     } catch (const std::exception& e) {

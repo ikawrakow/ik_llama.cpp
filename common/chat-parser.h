@@ -2,9 +2,13 @@
 #pragma once
 
 #include "chat.h"
+#include "json-partial.h"
+#include "regex-partial.h"
 #include <optional>
 #include <string>
 #include <vector>
+
+using json = nlohmann::ordered_json;
 
 class common_chat_msg_parser {
     std::string input_;
@@ -14,8 +18,14 @@ class common_chat_msg_parser {
 
     size_t pos_ = 0;
     common_chat_msg result_;
+    bool use_progressive_parsing_ = false;
 
   public:
+    struct find_regex_result {
+        std::string prelude;
+        std::vector<common_string_range> groups;
+    };
+    
     common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
     
     // Accessors
@@ -50,12 +60,30 @@ class common_chat_msg_parser {
     
     // Tool call manipulation
     void add_tool_call(const common_chat_tool_call & tool_call);
+    bool add_tool_call(const std::string & name, const std::string & id, const std::string & arguments);
+    bool add_tool_call(const json & tool_call);
+    bool add_tool_calls(const json & arr);
     void clear_tools();
     
     // Parsing utilities
     std::string consume_rest();
     bool try_consume_literal(const std::string & literal);
+    void consume_literal(const std::string & literal);
     bool try_parse_reasoning(const std::string & start_think, const std::string & end_think);
+    
+    // Regex-based parsing methods (new)
+    std::optional<find_regex_result> try_find_regex(const common_regex & regex, size_t from = std::string::npos, bool add_prelude_to_content = true);
+    find_regex_result consume_regex(const common_regex & regex);
+    std::optional<find_regex_result> try_consume_regex(const common_regex & regex);
+    
+    // Progressive parsing primitives (for Phase 4)
+    std::optional<find_regex_result> try_find_literal(const std::string & literal);
+    bool consume_spaces();
+    void set_healing_marker(const std::string & marker);
+    
+    // Progressive parsing mode control
+    void enable_progressive_parsing(bool enable = true) { use_progressive_parsing_ = enable; }
+    bool is_progressive_mode() const { return use_progressive_parsing_; }
     
     // Main parsing entry point
     void parse();
@@ -65,18 +93,54 @@ class common_chat_msg_parser {
     
     // Result extraction
     common_chat_msg result_and_reset();
-
-    struct find_regex_result {
-        std::string prelude;
-        std::vector<common_string_range> groups;
+    
+    // Advanced JSON parsing (following original llama.cpp patterns)
+    struct consume_json_result {
+        json value;
+        bool is_partial;
     };
+    
+    std::optional<common_json> try_consume_json();
+    common_json consume_json();
+    consume_json_result consume_json_with_dumped_args(
+        const std::vector<std::vector<std::string>>& args_paths = {},
+        const std::vector<std::vector<std::string>>& content_paths = {}
+    );
+    std::optional<consume_json_result> try_consume_json_with_dumped_args(
+        const std::vector<std::vector<std::string>>& args_paths = {},
+        const std::vector<std::vector<std::string>>& content_paths = {}
+    );
 
 private:
     // Internal parsing helpers
     void parse_kimi_k2_format();
+    void parse_deepseek_r1_format();
     void parse_generic_format();
-    std::optional<find_regex_result> try_find_literal(const std::string & literal);
+    
+    // Progressive parsing implementations (Phase 4)
+    void parse_kimi_k2_format_progressive();
+    void parse_kimi_k2_token_format_progressive();
+    void parse_kimi_k2_simple_format_progressive();
+    void parse_kimi_k2_xml_format_progressive();
+    
+    // JSON parsing utilities (enhanced streaming support)
+    struct json_parse_result {
+        json value;
+        bool success;
+        bool is_partial;
+        std::string healing_marker;
+    };
+    json_parse_result consume_json_args_progressive();
+    
+    bool try_parse_simple_function_call_progressive();
+    void parse_xml_tool_call_progressive();
+    
+    // Partial detection utilities
+    bool detect_partial_function_call(const std::string& content);
+    void handle_partial_detection();
+    
+    // Legacy find_literal for compatibility
+    std::optional<find_regex_result> try_find_literal_legacy(const std::string & literal);
 };
 
-// Content-only parsing for fallback scenarios  
-void common_chat_parse_content_only(common_chat_msg_parser & builder);
+// Content-only parsing for fallback scenarios (implemented in chat.cpp as static)

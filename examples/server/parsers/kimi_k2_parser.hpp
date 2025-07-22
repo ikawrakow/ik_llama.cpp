@@ -379,66 +379,101 @@ static json parse_tool_calls(const std::string& text) {
     }
 }
 
-// Clean function call syntax from content while preserving readable text
-static std::string clean_content(const std::string& content) {
-    std::string cleaned = content;
+// llama.cpp-style content extraction: separate content during parsing
+static std::string extract_content_during_parsing(const std::string& text, bool is_partial) {
+    std::string content;
+    size_t last_content_end = 0;
     
-    // Remove XML-style tool calls: <tool_call>...</tool_call>
+    // Process XML-style tool calls first: <tool_call>...</tool_call>
     size_t xml_pos = 0;
-    while ((xml_pos = cleaned.find("<tool_call>", xml_pos)) != std::string::npos) {
-        size_t xml_end = cleaned.find("</tool_call>", xml_pos);
-        if (xml_end != std::string::npos) {
-            cleaned.erase(xml_pos, xml_end - xml_pos + 12);
+    while ((xml_pos = text.find("<tool_call>", xml_pos)) != std::string::npos) {
+        // Add content before this tool call
+        content += text.substr(last_content_end, xml_pos - last_content_end);
+        
+        // Skip to end of tool call
+        size_t tool_call_end = text.find("</tool_call>", xml_pos);
+        if (tool_call_end != std::string::npos) {
+            xml_pos = tool_call_end + 12; // "</tool_call>".length()
+            last_content_end = xml_pos;
         } else {
-            xml_pos += 11;
+            // Incomplete tool call - stop here if partial
+            if (is_partial) {
+                return string_strip(content);
+            }
+            xml_pos += 11; // "<tool_call>".length()
         }
     }
     
-    // Remove simple function call format: functions.name:id{json}
-    const std::string func_pattern = "functions.";
-    size_t pos = 0;
-    while ((pos = cleaned.find(func_pattern, pos)) != std::string::npos) {
-        size_t func_start = pos;
+    // Process simple function calls: functions.name:id{json}
+    size_t func_pos = last_content_end;
+    while ((func_pos = text.find("functions.", func_pos)) != std::string::npos) {
+        // Add content before this function call
+        content += text.substr(last_content_end, func_pos - last_content_end);
         
         // Find the opening brace for arguments
-        size_t brace_pos = cleaned.find('{', pos);
+        size_t brace_pos = text.find('{', func_pos);
         if (brace_pos == std::string::npos) {
-            pos += func_pattern.length();
+            // No opening brace found
+            if (is_partial) {
+                // This might be incomplete function call - stop here
+                return string_strip(content);
+            }
+            func_pos += 10; // "functions.".length()
             continue;
         }
         
         // Find matching closing brace
         int brace_count = 1;
         size_t end_pos = brace_pos + 1;
-        while (end_pos < cleaned.length() && brace_count > 0) {
-            if (cleaned[end_pos] == '{') brace_count++;
-            else if (cleaned[end_pos] == '}') brace_count--;
+        while (end_pos < text.length() && brace_count > 0) {
+            if (text[end_pos] == '{') brace_count++;
+            else if (text[end_pos] == '}') brace_count--;
             end_pos++;
         }
         
         if (brace_count == 0) {
-            // Remove the entire function call
-            cleaned.erase(func_start, end_pos - func_start);
-            pos = func_start;
+            // Complete function call - skip it
+            func_pos = end_pos;
+            last_content_end = func_pos;
         } else {
-            pos += func_pattern.length();
+            // Incomplete function call
+            if (is_partial) {
+                // During streaming, stop at incomplete function call
+                return string_strip(content);
+            }
+            // Not streaming, skip partial pattern
+            func_pos = brace_pos + 1;
         }
     }
     
-    // Remove token format sections
-    size_t section_start = cleaned.find("<|tool_calls_section_begin|>");
+    // Process token format sections: <|tool_calls_section_begin|>...<|tool_calls_section_end|>
+    size_t section_start = text.find("<|tool_calls_section_begin|>", last_content_end);
     if (section_start != std::string::npos) {
-        size_t section_end = cleaned.find("<|tool_calls_section_end|>");
+        // Add content before section
+        content += text.substr(last_content_end, section_start - last_content_end);
+        
+        size_t section_end = text.find("<|tool_calls_section_end|>");
         if (section_end != std::string::npos) {
-            cleaned.erase(section_start, section_end - section_start + 26);
+            // Skip entire section
+            last_content_end = section_end + 26; // "<|tool_calls_section_end|>".length()
+        } else if (is_partial) {
+            // Incomplete section during streaming - stop here
+            return string_strip(content);
         }
     }
     
-    // Trim whitespace
-    cleaned.erase(0, cleaned.find_first_not_of(" \t\n\r"));
-    cleaned.erase(cleaned.find_last_not_of(" \t\n\r") + 1);
+    // Add any remaining content after all tool calls
+    if (last_content_end < text.length()) {
+        content += text.substr(last_content_end);
+    }
     
-    return cleaned;
+    return string_strip(content);
+}
+
+// Legacy cleaning function - kept for compatibility
+static std::string clean_content(const std::string& content) {
+    // Use the new extraction method with is_partial=false for backward compatibility
+    return extract_content_during_parsing(content, false);
 }
 
 // Helper: Find matching closing brace 

@@ -22,6 +22,7 @@
 #include "loading.html.hpp"
 #include "function_calls.hpp"
 #include "streaming_chat.hpp"
+#include "../../common/chat-parser.h"
 
 #include <atomic>
 #include <chrono>
@@ -32,12 +33,61 @@
 #include <thread>
 #include <signal.h>
 #include <memory>
+#include <random>
+#include <algorithm>
 #include <src/llama-impl.h>
 
 using json = nlohmann::ordered_json;
 
 bool server_verbose = false;
 bool server_log_json = true;
+
+// Progressive parsing configuration (Phase 4E)
+struct ProgressiveParsingConfig {
+    bool enable_progressive = false;
+    std::vector<std::string> enabled_formats = {"KIMI_K2"};
+    bool force_legacy = false; // Override for testing
+    double rollout_percentage = 0.0; // Gradual rollout 0-100%
+    
+    bool should_use_progressive(common_chat_format format) const {
+        if (force_legacy) return false;
+        if (!enable_progressive) return false;
+        
+        std::string format_name = common_chat_format_name(format);
+        return std::find(enabled_formats.begin(), enabled_formats.end(), format_name) 
+               != enabled_formats.end();
+    }
+    
+    // Initialize from environment
+    void load_from_environment() {
+        const char* env_progressive = std::getenv("LLAMA_PROGRESSIVE_PARSING");
+        if (env_progressive && std::string(env_progressive) == "1") {
+            enable_progressive = true;
+        }
+        
+        const char* env_percentage = std::getenv("LLAMA_PROGRESSIVE_PERCENTAGE");
+        if (env_percentage) {
+            rollout_percentage = std::clamp(std::stod(env_percentage), 0.0, 100.0);
+        }
+        
+        const char* env_force_legacy = std::getenv("LLAMA_FORCE_LEGACY_PARSING");
+        if (env_force_legacy && std::string(env_force_legacy) == "1") {
+            force_legacy = true;
+        }
+    }
+    
+    // Gradual rollout decision
+    bool should_use_progressive_random() const {
+        if (!enable_progressive || force_legacy) return false;
+        
+        static std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
+        std::uniform_real_distribution<double> dist(0.0, 100.0);
+        return dist(rng) < rollout_percentage;
+    }
+};
+
+// Global progressive parsing configuration
+static ProgressiveParsingConfig g_progressive_config;
 
 
 enum stop_type {
@@ -322,6 +372,32 @@ struct server_slot {
         previous_msg = ik_chat_msg();
         current_msg = ik_chat_msg();
         tool_call_ids.clear();
+    }
+
+    // Update chat message and compute diffs for streaming tool calls
+    // Based on original llama.cpp update_chat_msg pattern
+    const ik_chat_msg & update_chat_msg(std::vector<ik_chat_msg_diff> & diffs) {
+        ik_chat_msg previous = current_msg;
+        
+        try {
+            // Parse generated text incrementally (is_partial = true during generation)
+            bool is_partial = !stopped_eos && !stopped_word && !stopped_limit;
+            ik_chat_msg new_msg = parse_chat_message_incremental(generated_text, is_partial);
+            
+            if (!new_msg.empty()) {
+                // Ensure tool call IDs are set consistently across streaming chunks
+                new_msg.ensure_tool_call_ids_set(tool_call_ids, generate_tool_call_id);
+                current_msg = new_msg;
+                
+                // Compute diffs for streaming
+                diffs = ik_chat_msg_diff::compute_diffs(previous, current_msg);
+            }
+        } catch (const std::exception& e) {
+            // If parsing fails, don't update current_msg and return empty diffs
+            diffs.clear();
+        }
+        
+        return current_msg;
     }
 
     bool has_budget(gpt_params &global_params) {
@@ -1579,12 +1655,42 @@ struct server_context {
         res.id_multi = slot.id_multi;
         res.error    = false;
         res.stop     = false;
+
+        // Update chat message and compute diffs for streaming tool calls
+        // Following original llama.cpp pattern (server.cpp:2503)
+        std::vector<ik_chat_msg_diff> oaicompat_msg_diffs;
+        slot.update_chat_msg(oaicompat_msg_diffs);
+
+        // Following original llama.cpp pattern: send empty content in streaming mode
+        // Clean content comes through oaicompat_msg_diffs instead of raw tokens
         res.data     = json {
-            {"content",    tkn.text_to_send},
+            {"content",    ""},  // Empty - clean content provided via diffs
             {"stop",       false},
             {"id_slot",    slot.id},
             {"multimodal", false}
         };
+
+        // Store diffs for format_partial_response_oaicompat to use
+        // Convert ik_chat_msg_diff to JSON format for storage
+        json diffs_json = json::array();
+        for (const auto & diff : oaicompat_msg_diffs) {
+            json diff_obj;
+            if (!diff.content_delta.empty()) {
+                diff_obj["content_delta"] = diff.content_delta;
+            }
+            if (diff.tool_call_index != std::string::npos) {
+                diff_obj["tool_call_index"] = diff.tool_call_index;
+                diff_obj["tool_call_delta"] = {
+                    {"id", diff.tool_call_delta.id},
+                    {"name", diff.tool_call_delta.name},
+                    {"arguments", diff.tool_call_delta.arguments}
+                };
+            }
+            if (!diff_obj.empty()) {
+                diffs_json.push_back(diff_obj);
+            }
+        }
+        res.data["oaicompat_msg_diffs"] = diffs_json;
 
         if (slot.sparams.n_probs > 0) {
             const std::vector<llama_token> to_send_toks = llama_tokenize(ctx, tkn.text_to_send, false);
@@ -2667,22 +2773,43 @@ static json format_final_response_oaicompat(const json& request, json result, co
     int num_prompt_tokens = json_value(result, "tokens_evaluated", 0);
     std::string content = json_value(result, "content", std::string(""));
 
-    // Check for Kimi-K2 tool calls in response
-    json tool_calls = parse_kimi_k2_tool_calls(content);
+    // Parse tool calls using auto-detected format (following original llama.cpp pattern)
+    common_chat_syntax syntax;
+    syntax.format = COMMON_CHAT_FORMAT_KIMI_K2; // Default to Kimi-K2 for backward compatibility
+    syntax.enable_tool_calls = true;
+    
+    // Phase 4E: Enable progressive parsing based on configuration
+    if (g_progressive_config.should_use_progressive(syntax.format) || 
+        g_progressive_config.should_use_progressive_random()) {
+        syntax.enable_progressive_parsing = true;
+        
+        if (server_verbose) {
+            LOG_VERBOSE("Using progressive parsing for format", 
+                       {{"format", common_chat_format_name(syntax.format)}});
+        }
+    }
+    
+    // Use new multi-format parser
+    common_chat_msg parsed_msg = common_chat_parse(content, false, syntax);
+    
+    // Convert to JSON format for compatibility
+    json tool_calls = json::array();
+    for (const auto & tc : parsed_msg.tool_calls) {
+        tool_calls.push_back({
+            {"type", "function"},
+            {"function", {
+                {"name", tc.name},
+                {"arguments", tc.arguments}
+            }},
+            {"id", tc.id}
+        });
+    }
+    
     bool has_tool_calls = !tool_calls.empty();
     
-    // Remove tool call tokens from content for display
+    // Use cleaned content from parser (following original llama.cpp pattern)
     if (has_tool_calls) {
-        size_t section_start = content.find("<|tool_calls_section_begin|>");
-        if (section_start != std::string::npos) {
-            size_t section_end = content.find("<|tool_calls_section_end|>");
-            if (section_end != std::string::npos) {
-                content = content.substr(0, section_start) + 
-                         content.substr(section_end + 26);
-            }
-        }
-        // Clean all function call formats (XML and simple formats)
-        content = clean_all_function_call_formats(content);
+        content = parsed_msg.content; // Parser already cleaned the content
     }
 
     std::string finish_reason = "length";
@@ -2766,11 +2893,35 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
     // Follow original llama.cpp pattern: Always process diffs and add final chunk
     std::vector<json> streaming_chunks;
     
-    // Process diffs (could be empty, like original llama.cpp)
-    // if (slot) { // slot is always available now
-        std::vector<ik_chat_msg_diff> diffs;
-        streaming_chunks = generate_streaming_chunks(diffs, completion_id, modelname);
-    // }
+    // Extract diffs from task result (populated by send_partial_response)
+    // Following original llama.cpp pattern where diffs are stored in task result
+    std::vector<ik_chat_msg_diff> diffs;
+    
+    if (result.contains("oaicompat_msg_diffs") && result["oaicompat_msg_diffs"].is_array()) {
+        for (const auto & diff_json : result["oaicompat_msg_diffs"]) {
+            ik_chat_msg_diff diff;
+            
+            // Extract content delta
+            diff.content_delta = diff_json.value("content_delta", "");
+            
+            // Extract tool call data
+            if (diff_json.contains("tool_call_index")) {
+                diff.tool_call_index = diff_json["tool_call_index"];
+                if (diff_json.contains("tool_call_delta")) {
+                    const auto & tc_delta = diff_json["tool_call_delta"];
+                    diff.tool_call_delta.id = tc_delta.value("id", "");
+                    diff.tool_call_delta.name = tc_delta.value("name", "");
+                    diff.tool_call_delta.arguments = tc_delta.value("arguments", "");
+                }
+            } else {
+                diff.tool_call_index = std::string::npos;
+            }
+            
+            diffs.push_back(diff);
+        }
+    }
+    
+    streaming_chunks = generate_streaming_chunks(diffs, completion_id, modelname);
     
     // Always add final chunk (like original llama.cpp)
     if (!finish_reason.empty()) {
@@ -2951,6 +3102,17 @@ int main(int argc, char ** argv) {
     // TODO: not great to use extern vars
     server_log_json = params.log_json;
     server_verbose = params.verbosity > 0;
+    
+    // Phase 4E: Initialize progressive parsing configuration from environment
+    g_progressive_config.load_from_environment();
+    
+    if (server_verbose) {
+        LOG_VERBOSE("Progressive parsing configuration", {
+            {"enabled", g_progressive_config.enable_progressive},
+            {"rollout_percentage", g_progressive_config.rollout_percentage},
+            {"force_legacy", g_progressive_config.force_legacy}
+        });
+    }
 
     // struct that contains llama context and inference
     server_context ctx_server;
