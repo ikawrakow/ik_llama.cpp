@@ -2706,6 +2706,60 @@ void iqk_convert_iq3_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, in
     }
 }
 
+void iqk_convert_iq4_kss_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
+    GGML_ASSERT(n%QK_K == 0);
+    GGML_ASSERT(nrc_x%8 == 0);
+
+    int nb = n/QK_K;
+
+    const block_iq4_kss * x8[8];
+
+    block_q8_k_r8 * y = (block_q8_k_r8 *)vy;
+
+    __m256i values[2];
+    {
+        auto v1 = _mm_loadu_si128((const __m128i *)iq4k_values+0);
+        auto v2 = _mm_loadu_si128((const __m128i *)iq4k_values+1);
+        values[0] = MM256_SET_M128I(v1, v1);
+        values[1] = MM256_SET_M128I(v2, v2);
+    }
+
+    float drow[8];
+    float dnew[8];
+    int16_t ls[16];
+
+    __m256i xv[8];
+    uint32_t block[8];
+
+    for (int ix = 0; ix < nrc_x; ix += 8) {
+        for (int k = 0; k < 8; ++k) {
+            const float * dptr = (const float *)((const char *)vx + (ix + k)*bx);
+            drow[k] = dptr[0];
+            x8[k] = (const block_iq4_kss *)(dptr + 1);
+        }
+        auto vd = _mm256_loadu_ps(drow);
+        for (int i = 0; i < nb; ++i) {
+            for (int k = 0; k < 8; ++k) {
+                for (int ib32 = 0; ib32 < 8; ++ib32) {
+                    auto val = _mm_loadu_si128((const __m128i *)x8[k][i].qs+ib32);
+                    auto val_q = _mm_and_si128(val, _mm_set1_epi32(0xfffefffe));
+                    val_q = _mm_xor_si128(val_q, _mm_srli_epi16(val_q, 1));
+                    xv[ib32] = _mm256_and_si256(MM256_SET_M128I(_mm_srli_epi16(val_q, 4), val_q), _mm256_set1_epi8(0xf));
+                    auto q4 = x8[k][i].qs + 4*ib32;
+                    uint32_t s32 = (q4[0] & 0x00010001) | ((q4[1] & 0x00010001) << 2) | ((q4[2] & 0x00010001) << 4) | ((q4[3] & 0x00010001) << 6);
+                    uint8_t s8 = (s32 | (s32 >> 15)) & 0xff;
+                    //auto val_s = _mm_madd_epi16(_mm_and_si128(val, _mm_set1_epi32(0x00010001)), _mm_set1_epi64x(0x0008000400020001));
+                    ls[2*ib32+0] = ls[2*ib32+1] = ((s8 & 254) - 127);
+                    xv[ib32] = _mm256_shuffle_epi8(values[s8 & 1], xv[ib32]);
+                }
+                dnew[k] = convert_to_q8_k_r8(k, 1.f/127, xv, ls, block, y[i].qs);
+            }
+            _mm_storeu_si128((__m128i *)y[i].d, _mm256_cvtps_ph(_mm256_mul_ps(vd, _mm256_loadu_ps(dnew)), _MM_ROUND_NEAREST));
+        }
+        y += nb;
+    }
+}
+
 void iqk_convert_iq4_ks_q8_k_r8(int n, const void * vx, size_t bx, void * vy, int nrc_x) {
     GGML_ASSERT(n%QK_K == 0);
     GGML_ASSERT(nrc_x%8 == 0);
@@ -3132,6 +3186,7 @@ bool iqk_convert_iqk_quants_q80_r8(int type, int n, const void * vx, size_t bx, 
         case GGML_TYPE_IQ2_KL : iqk_convert_iq2_kl_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_KS : iqk_convert_iq3_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ3_K  : iqk_convert_iq3_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_IQ4_KSS: iqk_convert_iq4_kss_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_KS : iqk_convert_iq4_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_K  : iqk_convert_iq4_k_q8_k_r8 (n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ5_KS : iqk_convert_iq5_ks_q8_k_r8(n, vx, bx, vy, nrc_x); break;
