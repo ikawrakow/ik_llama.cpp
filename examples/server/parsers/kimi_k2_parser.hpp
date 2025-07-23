@@ -441,6 +441,22 @@ static std::string extract_content_during_parsing(const std::string& text, bool 
         }
     }
     
+    // Process token format sections first: <|tool_calls_section_begin|>...<|tool_calls_section_end|>
+    size_t section_start = text.find(TOOL_CALLS_SECTION_BEGIN, last_content_end);
+    if (section_start != std::string::npos) {
+        // Add content before section
+        content += text.substr(last_content_end, section_start - last_content_end);
+        
+        size_t section_end = text.find(TOOL_CALLS_SECTION_END, section_start);
+        if (section_end != std::string::npos) {
+            // Skip entire section
+            last_content_end = section_end + TOOL_CALLS_SECTION_END_LEN;
+        } else if (is_partial) {
+            // Incomplete section during streaming - stop here
+            return string_strip(content);
+        }
+    }
+    
     // Process simple function calls: functions.name:id{json}
     size_t func_pos = last_content_end;
     while ((func_pos = text.find(FUNCTIONS_PREFIX, func_pos)) != std::string::npos) {
@@ -480,22 +496,6 @@ static std::string extract_content_during_parsing(const std::string& text, bool 
             }
             // Not streaming, skip partial pattern
             func_pos = brace_pos + 1;
-        }
-    }
-    
-    // Process token format sections: <|tool_calls_section_begin|>...<|tool_calls_section_end|>
-    size_t section_start = text.find(TOOL_CALLS_SECTION_BEGIN, last_content_end);
-    if (section_start != std::string::npos) {
-        // Add content before section
-        content += text.substr(last_content_end, section_start - last_content_end);
-        
-        size_t section_end = text.find(TOOL_CALLS_SECTION_END);
-        if (section_end != std::string::npos) {
-            // Skip entire section
-            last_content_end = section_end + TOOL_CALLS_SECTION_END_LEN;
-        } else if (is_partial) {
-            // Incomplete section during streaming - stop here
-            return string_strip(content);
         }
     }
     

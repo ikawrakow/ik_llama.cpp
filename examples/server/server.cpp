@@ -42,52 +42,6 @@ using json = nlohmann::ordered_json;
 bool server_verbose = false;
 bool server_log_json = true;
 
-// Progressive parsing configuration (Phase 4E)
-struct ProgressiveParsingConfig {
-    bool enable_progressive = false;
-    std::vector<std::string> enabled_formats = {"KIMI_K2"};
-    bool force_legacy = false; // Override for testing
-    double rollout_percentage = 0.0; // Gradual rollout 0-100%
-    
-    bool should_use_progressive(common_chat_format format) const {
-        if (force_legacy) return false;
-        if (!enable_progressive) return false;
-        
-        std::string format_name = common_chat_format_name(format);
-        return std::find(enabled_formats.begin(), enabled_formats.end(), format_name) 
-               != enabled_formats.end();
-    }
-    
-    // Initialize from environment
-    void load_from_environment() {
-        const char* env_progressive = std::getenv("LLAMA_PROGRESSIVE_PARSING");
-        if (env_progressive && std::string(env_progressive) == "1") {
-            enable_progressive = true;
-        }
-        
-        const char* env_percentage = std::getenv("LLAMA_PROGRESSIVE_PERCENTAGE");
-        if (env_percentage) {
-            rollout_percentage = std::clamp(std::stod(env_percentage), 0.0, 100.0);
-        }
-        
-        const char* env_force_legacy = std::getenv("LLAMA_FORCE_LEGACY_PARSING");
-        if (env_force_legacy && std::string(env_force_legacy) == "1") {
-            force_legacy = true;
-        }
-    }
-    
-    // Gradual rollout decision
-    bool should_use_progressive_random() const {
-        if (!enable_progressive || force_legacy) return false;
-        
-        static std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
-        std::uniform_real_distribution<double> dist(0.0, 100.0);
-        return dist(rng) < rollout_percentage;
-    }
-};
-
-// Global progressive parsing configuration
-static ProgressiveParsingConfig g_progressive_config;
 
 
 enum stop_type {
@@ -2778,16 +2732,6 @@ static json format_final_response_oaicompat(const json& request, json result, co
     syntax.format = COMMON_CHAT_FORMAT_KIMI_K2; // Default to Kimi-K2 for backward compatibility
     syntax.enable_tool_calls = true;
     
-    // Phase 4E: Enable progressive parsing based on configuration
-    if (g_progressive_config.should_use_progressive(syntax.format) || 
-        g_progressive_config.should_use_progressive_random()) {
-        syntax.enable_progressive_parsing = true;
-        
-        if (server_verbose) {
-            LOG_VERBOSE("Using progressive parsing for format", 
-                       {{"format", common_chat_format_name(syntax.format)}});
-        }
-    }
     
     // Use new multi-format parser
     common_chat_msg parsed_msg = common_chat_parse(content, false, syntax);
@@ -3103,16 +3047,6 @@ int main(int argc, char ** argv) {
     server_log_json = params.log_json;
     server_verbose = params.verbosity > 0;
     
-    // Phase 4E: Initialize progressive parsing configuration from environment
-    g_progressive_config.load_from_environment();
-    
-    if (server_verbose) {
-        LOG_VERBOSE("Progressive parsing configuration", {
-            {"enabled", g_progressive_config.enable_progressive},
-            {"rollout_percentage", g_progressive_config.rollout_percentage},
-            {"force_legacy", g_progressive_config.force_legacy}
-        });
-    }
 
     // struct that contains llama context and inference
     server_context ctx_server;

@@ -67,13 +67,9 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
 }
 
 // Format parsing functions (ported from original llama.cpp)
-static void common_chat_parse_content_only_impl(common_chat_msg_parser & builder) {
+// Content-only parsing (internal implementation - matches llama.cpp exactly)
+static void common_chat_parse_content_only(common_chat_msg_parser & builder) {
     builder.add_content(builder.consume_rest());
-}
-
-// Public wrapper for content-only parsing
-void common_chat_parse_content_only(common_chat_msg_parser & builder) {
-    common_chat_parse_content_only_impl(builder);
 }
 
 static void common_chat_parse_generic(common_chat_msg_parser & builder) {
@@ -159,7 +155,7 @@ static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
 static void common_chat_parse(common_chat_msg_parser & builder) {
     switch (builder.syntax().format) {
         case COMMON_CHAT_FORMAT_CONTENT_ONLY:
-            common_chat_parse_content_only_impl(builder);
+            common_chat_parse_content_only(builder);
             break;
         case COMMON_CHAT_FORMAT_GENERIC:
             common_chat_parse_generic(builder);
@@ -186,7 +182,7 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
             // Fallback to content-only on parsing errors
             builder.clear_tools();
             builder.move_to(0);
-            common_chat_parse_content_only_impl(builder);
+            common_chat_parse_content_only(builder);
         }
         // Re-throw for partial cases to signal incomplete parsing
         if (is_partial) {

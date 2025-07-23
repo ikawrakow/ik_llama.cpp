@@ -139,7 +139,6 @@ struct common_chat_syntax {
     common_chat_format format = COMMON_CHAT_FORMAT_KIMI_K2;
     bool enable_thinking = false;
     bool enable_tool_calls = true;
-    bool enable_progressive_parsing = false; // Phase 4E: Progressive parsing feature flag
 };
 
 // Exception for partial parsing
@@ -163,5 +162,3 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
 // Forward declare parser class  
 class common_chat_msg_parser;
 
-// Content-only parsing wrapper for compatibility
-void common_chat_parse_content_only(common_chat_msg_parser & builder);

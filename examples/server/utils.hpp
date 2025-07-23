@@ -7,6 +7,7 @@
 #define JSON_ASSERT GGML_ASSERT
 #include "json.hpp"
 #include "kimi_k2_tools.hpp"
+#include "qwen3_tools.hpp"
 #include <string>
 #include <vector>
 #include <sstream>
@@ -160,6 +161,20 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
             } else if (i == 0) {
                 // Create system message with tools if no system message exists
                 std::string tools_prompt = kimi_k2_create_system_with_tools(tools);
+                chat.push_back({"system", tools_prompt});
+                tools_injected = true;
+            }
+        }
+        
+        // Inject tools for Qwen3 models (XML Hermes format)
+        if (qwen3_should_inject_tools(tools, model_name) && !tools_injected) {
+            if (role == "system") {
+                // Add tools to existing system message
+                content = qwen3_inject_tools_to_system(content, tools);
+                tools_injected = true;
+            } else if (i == 0) {
+                // Create system message with tools if no system message exists
+                std::string tools_prompt = qwen3_create_system_with_tools(tools);
                 chat.push_back({"system", tools_prompt});
                 tools_injected = true;
             }
@@ -402,6 +417,41 @@ static json oaicompat_completion_params_parse(
 
     // Extract tools from the request body
     json tools = json_value(body, "tools", json::array());
+    
+    // Debug: Log system prompt when tools are detected
+    if (!tools.empty() && server_verbose) {
+        LOG_VERBOSE("Tool calls detected in request", {
+            {"tool_count", tools.size()},
+            {"model", json_value(body, "model", std::string(DEFAULT_OAICOMPAT_MODEL))}
+        });
+        
+        // Extract and log system prompt from messages
+        if (body.contains("messages") && body["messages"].is_array()) {
+            for (const auto& msg : body["messages"]) {
+                if (msg.contains("role") && msg["role"] == "system" && msg.contains("content")) {
+                    std::string content_str;
+                    if (msg["content"].is_string()) {
+                        content_str = msg["content"];
+                    } else if (msg["content"].is_array()) {
+                        // Handle content blocks format
+                        for (const auto& block : msg["content"]) {
+                            if (block.contains("type") && block["type"] == "text" && block.contains("text")) {
+                                if (!content_str.empty()) content_str += " ";
+                                content_str += block["text"];
+                            }
+                        }
+                    }
+                    
+                    if (!content_str.empty()) {
+                        LOG_VERBOSE("System prompt with tools", {
+                            {"system_prompt", content_str.substr(0, 500) + (content_str.length() > 500 ? "..." : "")}
+                        });
+                    }
+                    break; // Only log first system message
+                }
+            }
+        }
+    }
 
     // Extract model name from the request body
     std::string model_name = json_value(body, "model", std::string(DEFAULT_OAICOMPAT_MODEL));

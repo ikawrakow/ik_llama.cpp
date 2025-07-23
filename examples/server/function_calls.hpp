@@ -3,6 +3,8 @@
 #include "json.hpp"
 #include "streaming_chat.hpp"
 #include "parsers/kimi_k2_parser.hpp"
+#include "parsers/qwen3_parser.hpp"
+#include "qwen3_tools.hpp"
 #include "../../common/chat.h"
 #include "../../common/chat-parser.h"
 #include <string>
@@ -15,30 +17,58 @@ static json parse_kimi_k2_tool_calls(const std::string& text) {
     return kimi_k2::parse_tool_calls(text);
 }
 
+// Function calling interface for Qwen3 format
+static json parse_qwen3_tool_calls(const std::string& text) {
+    return qwen3::parse_tool_calls(text);
+}
+
 static std::string clean_function_calls_from_content(const std::string& content) {
     return kimi_k2::clean_content(content);
 }
 
 // New llama.cpp-style content extraction with streaming support
-static std::string extract_content_from_mixed_input(const std::string& content, bool is_partial) {
-    return kimi_k2::extract_content_during_parsing(content, is_partial);
+static std::string extract_content_from_mixed_input(const std::string& content, bool is_partial, const std::string& model_name = "") {
+    if (is_qwen3_model(model_name)) {
+        return qwen3::extract_content_during_parsing(content, is_partial);
+    } else {
+        return kimi_k2::extract_content_during_parsing(content, is_partial);
+    }
 }
 
-// Incremental parsing for streaming tool calls
-static ik_chat_msg parse_chat_message_incremental(const std::string& content, bool is_partial = false) {
+// Incremental parsing for streaming tool calls with model detection
+static ik_chat_msg parse_chat_message_incremental(const std::string& content, bool is_partial = false, const std::string& model_name = "") {
     ik_chat_msg msg;
     msg.role = "assistant";
     
     try {
-        json tool_calls_json = parse_kimi_k2_tool_calls(content);
+        json tool_calls_json;
+        bool has_function_syntax = false;
         
-        // Check for partial content during streaming
-        if (is_partial && kimi_k2::is_partial_content_advanced(content)) {
-            throw std::runtime_error("partial structured content detected");
+        // Route parsing based on model type
+        if (is_qwen3_model(model_name)) {
+            // Use Qwen3 XML parser
+            tool_calls_json = parse_qwen3_tool_calls(content);
+            
+            // Check for partial content during streaming
+            if (is_partial && qwen3::is_partial_content_advanced(content)) {
+                throw std::runtime_error("partial structured content detected");
+            }
+            
+            // Check for malformed XML tool call syntax
+            has_function_syntax = content.find("<tool_call>") != std::string::npos;
+        } else {
+            // Default to Kimi-K2 parser
+            tool_calls_json = parse_kimi_k2_tool_calls(content);
+            
+            // Check for partial content during streaming
+            if (is_partial && kimi_k2::is_partial_content_advanced(content)) {
+                throw std::runtime_error("partial structured content detected");
+            }
+            
+            // Check for malformed function call syntax
+            has_function_syntax = content.find("functions.") != std::string::npos;
         }
         
-        // Check for malformed function call syntax
-        bool has_function_syntax = content.find("functions.") != std::string::npos;
         bool parsing_succeeded = !tool_calls_json.empty();
         
         if (has_function_syntax && !parsing_succeeded) {
@@ -83,10 +113,19 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
                 }
             }
             
-            // Use llama.cpp-style content extraction that handles streaming properly
-            msg.content = extract_content_from_mixed_input(content, is_partial);
-    } else {
-            msg.content = extract_content_from_mixed_input(content, is_partial);
+            // Use model-specific content extraction
+            if (is_qwen3_model(model_name)) {
+                msg.content = qwen3::extract_content_during_parsing(content, is_partial);
+            } else {
+                msg.content = kimi_k2::extract_content_during_parsing(content, is_partial);
+            }
+        } else {
+            // No tool calls found, extract content
+            if (is_qwen3_model(model_name)) {
+                msg.content = qwen3::extract_content_during_parsing(content, is_partial);
+            } else {
+                msg.content = kimi_k2::extract_content_during_parsing(content, is_partial);
+            }
         }
         
     } catch (const std::exception& e) {

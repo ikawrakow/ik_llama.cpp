@@ -18,7 +18,6 @@ class common_chat_msg_parser {
 
     size_t pos_ = 0;
     common_chat_msg result_;
-    bool use_progressive_parsing_ = false;
 
   public:
     struct find_regex_result {
@@ -81,9 +80,6 @@ class common_chat_msg_parser {
     bool consume_spaces();
     void set_healing_marker(const std::string & marker);
     
-    // Progressive parsing mode control
-    void enable_progressive_parsing(bool enable = true) { use_progressive_parsing_ = enable; }
-    bool is_progressive_mode() const { return use_progressive_parsing_; }
     
     // Main parsing entry point
     void parse();
@@ -117,11 +113,6 @@ private:
     void parse_deepseek_r1_format();
     void parse_generic_format();
     
-    // Progressive parsing implementations (Phase 4)
-    void parse_kimi_k2_format_progressive();
-    void parse_kimi_k2_token_format_progressive();
-    void parse_kimi_k2_simple_format_progressive();
-    void parse_kimi_k2_xml_format_progressive();
     
     // JSON parsing utilities (enhanced streaming support)
     struct json_parse_result {
@@ -130,10 +121,6 @@ private:
         bool is_partial;
         std::string healing_marker;
     };
-    json_parse_result consume_json_args_progressive();
-    
-    bool try_parse_simple_function_call_progressive();
-    void parse_xml_tool_call_progressive();
     
     // Partial detection utilities
     bool detect_partial_function_call(const std::string& content);
@@ -143,4 +130,7 @@ private:
     std::optional<find_regex_result> try_find_literal_legacy(const std::string & literal);
 };
 
-// Content-only parsing for fallback scenarios (implemented in chat.cpp as static)
+// Main parsing function (public API)
+common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+
+// Content-only parsing for fallback scenarios (static internal function)
