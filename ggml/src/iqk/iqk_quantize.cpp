@@ -4229,25 +4229,17 @@ uint16_t prune_iq4ks(uint16_t v, const int8_t * values, const float * x, const f
         q4[j] = q;
         auto pc = popcount(q);
         float diff0 = dl*iq4k_values[q] - x[j];
-        if (q > 0) {
-            uint8_t qm = q - 1u;
-            int pcm = popcount(qm);
-            if (pcm == pc-1 || pcm == pc+1) {
-                float diff1 = dl*values[qm] - x[j];
+        int qmin = std::max(int(q)-2,  0);
+        int qmax = std::min(int(q)+2, 15);
+        for (int iq = qmin; iq <= qmax; ++iq) {
+            uint8_t qq = iq;
+            if (qq == q) continue;
+            int pci = popcount(qq);
+            if (std::abs(pci - pc)%2) {
+                float diff1 = dl*values[qq] - x[j];
                 float score = w[j]*(diff1*diff1 - diff0*diff0);
                 if (score < best_score) {
-                    best_score = score; jbest = j; bestq = qm;
-                }
-            }
-        }
-        if (q < 15) {
-            uint8_t qp = q + 1u;
-            int pcp = popcount(qp);
-            if (pcp == pc-1 || pcp == pc+1) {
-                float diff1 = dl*values[qp] - x[j];
-                float score = w[j]*(diff1*diff1 - diff0*diff0);
-                if (score < best_score) {
-                    best_score = score; jbest = j; bestq = qp;
+                    best_score = score; jbest = j; bestq = qq;
                 }
             }
         }
@@ -4468,7 +4460,7 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
             }
         }
     }
-    if (sumq2 > 0) *dptr = sumqx/sumq2;
+    if (sumq2 > 0) *dptr = sumqx/sumq2 * 1.01f;
 }
 
 void prune_iq4ks_to_iq4kss(int n_per_row, const uint16_t * table, const char * cx, const float * x, char *cy,
