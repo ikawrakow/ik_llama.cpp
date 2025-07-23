@@ -336,7 +336,7 @@ struct server_slot {
         try {
             // Parse generated text incrementally (is_partial = true during generation)
             bool is_partial = !stopped_eos && !stopped_word && !stopped_limit;
-            ik_chat_msg new_msg = parse_chat_message_incremental(generated_text, is_partial);
+            ik_chat_msg new_msg = parse_chat_message_incremental(generated_text, is_partial, oaicompat_model);
             
             if (!new_msg.empty()) {
                 // Ensure tool call IDs are set consistently across streaming chunks
