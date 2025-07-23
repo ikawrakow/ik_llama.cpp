@@ -104,6 +104,20 @@ There is no single point of reference describing all new `ik_llama.cpp` features
 * [This discussion](https://github.com/ikawrakow/ik_llama.cpp/discussions/266) is about running DeepSeek-V3/R1 on a 16 x 3090 setup
 * [This discussion](https://github.com/ikawrakow/ik_llama.cpp/discussions/8) describes the new quantization types available in `ik_llama.cpp`
 
+## Testing
+
+### Function Calls Tests
+
+To run the function calls test suite:
+
+```bash
+cd build
+cmake --build . --target test-function-calls
+./bin/test-function-calls
+```
+
+The test suite covers parser functionality, streaming, error handling, content cleaning, and server integration. All tests should pass to ensure production readiness.
+
 ## Contributing
 
 Contributions in form of pull requests, issue submissions (bug reports, feature requests), or general discussions, are welcome.
