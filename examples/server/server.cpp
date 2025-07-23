@@ -2727,14 +2727,11 @@ static json format_final_response_oaicompat(const json& request, json result, co
     int num_prompt_tokens = json_value(result, "tokens_evaluated", 0);
     std::string content = json_value(result, "content", std::string(""));
 
-    // Parse tool calls using auto-detected format (following original llama.cpp pattern)
-    common_chat_syntax syntax;
-    syntax.format = COMMON_CHAT_FORMAT_KIMI_K2; // Default to Kimi-K2 for backward compatibility
-    syntax.enable_tool_calls = true;
+    // Parse tool calls using model-specific format detection
+    std::string model_name = json_value(request, "model", std::string(""));
     
-    
-    // Use new multi-format parser
-    common_chat_msg parsed_msg = common_chat_parse(content, false, syntax);
+    // Use the same parsing logic as streaming path for consistency
+    ik_chat_msg parsed_msg = parse_chat_message_incremental(content, false, model_name);
     
     // Convert to JSON format for compatibility
     json tool_calls = json::array();
