@@ -148,6 +148,54 @@ const std::string content_cleaning_mixed_formats = R"(First: <|tool_calls_sectio
 const std::string contamination_ls_issue = R"(I'll help you examine the workspace. Let me list the current directory contents.functions.LS:1{"path": "/Users/seven/Documents/projects/ai/sequential_thinking"})";
 const std::string expected_clean_ls = R"(I'll help you examine the workspace. Let me list the current directory contents.)";
 
+// DeepSeek R1 test data
+const std::string deepseek_r1_simple = R"(<think>Need weather.</think>I'll check weather.
+
+<｜tool▁calls▁begin｜>
+<｜tool▁call▁begin｜>
+function<｜tool▁sep｜>get_weather
+```json
+{"location": "Tokyo"}
+```
+<｜tool▁call▁end｜>
+<｜tool▁calls▁end｜>
+
+Getting weather info.)";
+
+const std::string deepseek_r1_multiple = R"(<think>Weather and math.</think>Doing both tasks.
+
+<｜tool▁calls▁begin｜>
+<｜tool▁call▁begin｜>
+function<｜tool▁sep｜>get_weather
+```json
+{"location": "Tokyo"}
+```
+<｜tool▁call▁end｜>
+<｜tool▁call▁begin｜>
+function<｜tool▁sep｜>calculate
+```json
+{"expression": "15 * 23"}
+```
+<｜tool▁call▁end｜>
+<｜tool▁calls▁end｜>
+
+Results complete.)";
+
+const std::string deepseek_r1_no_reasoning = R"(Checking weather.
+
+<｜tool▁calls▁begin｜>
+<｜tool▁call▁begin｜>
+function<｜tool▁sep｜>get_weather
+```json
+{"location": "Tokyo"}
+```
+<｜tool▁call▁end｜>
+<｜tool▁calls▁end｜>
+
+Done.)";
+
+const std::string deepseek_r1_reasoning_only = R"(<think>Just thinking, no tools needed.</think>Here's my direct response.)";
+
 // Advanced partial detection test cases based on original llama.cpp patterns
 // TDD: Advanced partial detection - streaming edge cases
 const std::string partial_incomplete_function_name = R"(Let me help you with that. func)";
@@ -2799,6 +2847,66 @@ int main() {
         assert(simple_msg.reasoning_content.empty());
         assert(simple_msg.content == "Just a simple response.");
         std::cout << "✅ PASS: DeepSeek R1 regular content works" << std::endl;
+        
+        // Test DeepSeek R1 tool calling
+        std::cout << std::endl;
+        std::cout << "🔧 Testing DeepSeek R1 Tool Calling:" << std::endl;
+        
+        // Test simple tool call
+        deepseek_syntax.enable_tool_calls = true;
+        auto simple_tool_msg = common_chat_parse(deepseek_r1_simple, false, deepseek_syntax);
+        assert(simple_tool_msg.tool_calls.size() == 1);
+        assert(simple_tool_msg.tool_calls[0].name == "get_weather");
+        assert(simple_tool_msg.tool_calls[0].arguments == "{\"location\": \"Tokyo\"}");
+        assert(simple_tool_msg.reasoning_content == "Need weather.");
+        assert(simple_tool_msg.content.find("I'll check weather") != std::string::npos);
+        assert(simple_tool_msg.content.find("Getting weather info") != std::string::npos);
+        std::cout << "✅ PASS: DeepSeek R1 simple tool call parsed" << std::endl;
+        
+        // Test multiple tool calls
+        auto multi_tool_msg = common_chat_parse(deepseek_r1_multiple, false, deepseek_syntax);
+        assert(multi_tool_msg.tool_calls.size() == 2);
+        assert(multi_tool_msg.tool_calls[0].name == "get_weather");
+        assert(multi_tool_msg.tool_calls[1].name == "calculate");
+        assert(multi_tool_msg.tool_calls[1].arguments == "{\"expression\": \"15 * 23\"}");
+        assert(multi_tool_msg.reasoning_content == "Weather and math.");
+        std::cout << "✅ PASS: DeepSeek R1 multiple tool calls parsed" << std::endl;
+        
+        // Test tool call without reasoning
+        auto no_reason_tool_msg = common_chat_parse(deepseek_r1_no_reasoning, false, deepseek_syntax);
+        assert(no_reason_tool_msg.tool_calls.size() == 1);
+        assert(no_reason_tool_msg.tool_calls[0].name == "get_weather");
+        assert(no_reason_tool_msg.reasoning_content.empty());
+        std::cout << "✅ PASS: DeepSeek R1 tool call without reasoning parsed" << std::endl;
+        
+        // Test reasoning only (no tool calls)
+        auto reason_only_msg = common_chat_parse(deepseek_r1_reasoning_only, false, deepseek_syntax);
+        assert(reason_only_msg.tool_calls.empty());
+        assert(reason_only_msg.reasoning_content == "Just thinking, no tools needed.");
+        assert(reason_only_msg.content == "Here's my direct response.");
+        std::cout << "✅ PASS: DeepSeek R1 reasoning only parsed" << std::endl;
+        
+        // Test function_calls.hpp integration with DeepSeek R1
+        std::cout << std::endl;
+        std::cout << "🔗 Testing DeepSeek R1 Integration:" << std::endl;
+        
+        // Test model detection
+        assert(is_deepseek_r1_model("deepseek-r1-distill-llama-8b"));
+        assert(is_deepseek_r1_model("DeepSeek-R1"));
+        assert(!is_deepseek_r1_model("kimi-k2"));
+        std::cout << "✅ PASS: DeepSeek R1 model detection works" << std::endl;
+        
+        // Test incremental parsing with model name
+        auto parsed_msg = parse_chat_message_incremental(deepseek_r1_simple, false, "deepseek-r1");
+        assert(parsed_msg.tool_calls.size() == 1);
+        assert(parsed_msg.tool_calls[0].name == "get_weather");
+        std::cout << "✅ PASS: DeepSeek R1 incremental parsing works" << std::endl;
+        
+        // Test content extraction
+        std::string extracted = extract_content_from_mixed_input(deepseek_r1_simple, false, "deepseek-r1");
+        assert(extracted.find("<think>") == std::string::npos);
+        assert(extracted.find("<｜tool▁calls▁begin｜>") == std::string::npos);
+        std::cout << "✅ PASS: DeepSeek R1 content extraction works" << std::endl;
         
     } catch (const std::exception& e) {
         std::cout << std::endl;

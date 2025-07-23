@@ -5,6 +5,7 @@
 #include "parsers/kimi_k2_parser.hpp"
 #include "parsers/qwen3_parser.hpp"
 #include "qwen3_tools.hpp"
+#include "deepseek_r1_tools.hpp"
 #include "../../common/chat.h"
 #include "../../common/chat-parser.h"
 #include <string>
@@ -30,6 +31,33 @@ static std::string clean_function_calls_from_content(const std::string& content)
 static std::string extract_content_from_mixed_input(const std::string& content, bool is_partial, const std::string& model_name = "") {
     if (is_qwen3_model(model_name)) {
         return qwen3::extract_content_during_parsing(content, is_partial);
+    } else if (is_deepseek_r1_model(model_name)) {
+        // DeepSeek R1 content extraction - remove <think> tags and tool calls
+        std::string result = content;
+        
+        // Remove <think>...</think> tags
+        size_t think_start = 0;
+        while ((think_start = result.find("<think>", think_start)) != std::string::npos) {
+            size_t think_end = result.find("</think>", think_start);
+            if (think_end != std::string::npos) {
+                result.erase(think_start, think_end + 8 - think_start);
+            } else {
+                break;
+            }
+        }
+        
+        // Remove DeepSeek R1 tool call syntax
+        size_t tool_start = 0;
+        while ((tool_start = result.find("<｜tool▁calls▁begin｜>", tool_start)) != std::string::npos) {
+            size_t tool_end = result.find("<｜tool▁calls▁end｜>", tool_start);
+            if (tool_end != std::string::npos) {
+                result.erase(tool_start, tool_end + strlen("<｜tool▁calls▁end｜>") - tool_start);
+            } else {
+                break;
+            }
+        }
+        
+        return result;
     } else {
         return kimi_k2::extract_content_during_parsing(content, is_partial);
     }
@@ -56,6 +84,38 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
             
             // Check for malformed XML tool call syntax
             has_function_syntax = content.find("<tool_call>") != std::string::npos;
+        } else if (is_deepseek_r1_model(model_name)) {
+            // Use common chat parser for DeepSeek R1
+            try {
+                common_chat_syntax syntax;
+                syntax.format = COMMON_CHAT_FORMAT_DEEPSEEK_R1;
+                syntax.enable_tool_calls = true;
+                
+                common_chat_msg_parser parser(content, is_partial, syntax);
+                parser.parse();
+                auto result = parser.result();
+                
+                // Convert tool calls to JSON format expected by the system
+                tool_calls_json = json::array();
+                for (const auto& tool_call : result.tool_calls) {
+                    json tc;
+                    tc["id"] = tool_call.id.empty() ? ("call_" + std::to_string(rand())) : tool_call.id;
+                    tc["type"] = "function";
+                    tc["function"]["name"] = tool_call.name;
+                    tc["function"]["arguments"] = tool_call.arguments;
+                    tool_calls_json.push_back(tc);
+                }
+                
+                // Check for malformed DeepSeek R1 tool call syntax
+                has_function_syntax = content.find("<｜tool▁calls▁begin｜>") != std::string::npos;
+            } catch (const common_chat_msg_partial_exception&) {
+                if (is_partial) {
+                    throw std::runtime_error("partial structured content detected");
+                }
+                // If not partial, treat as regular content
+                tool_calls_json = json::array();
+                has_function_syntax = false;
+            }
         } else {
             // Default to Kimi-K2 parser
             tool_calls_json = parse_kimi_k2_tool_calls(content);

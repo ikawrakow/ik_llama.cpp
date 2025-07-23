@@ -4,9 +4,15 @@ This document describes the function calling format supported by the ik_llama.cp
 
 ## Overview
 
-The server supports the native Kimi-K2 function calling format. All function calls are automatically detected and converted to OpenAI-compatible responses.
+The server supports multiple native function calling formats including Kimi-K2, Qwen3 (XML), and DeepSeek R1. All function calls are automatically detected and converted to OpenAI-compatible responses.
 
-**⚠️ Model Requirement**: Function calling support is **only enabled for models containing "kimi-k2" or "kimi_k2" in the model name**. Other models will not have tool injection or function call parsing enabled.
+**⚠️ Model Requirements**: Function calling support is enabled for the following model types:
+
+- **Kimi-K2 models**: Models containing "kimi-k2" or "kimi_k2" in the model name
+- **Qwen3 models**: Models containing "qwen3", "qwen-3", or "qwen_3" in the model name  
+- **DeepSeek R1 models**: Models containing "deepseek-r1", "deepseek_r1", or similar patterns
+
+Other models will not have tool injection or function call parsing enabled.
 
 ## Supported Formats
 
@@ -68,6 +74,40 @@ functions.get_weather:0<|tool_call_argument_begin|>
 - XML-style format as fallback when model generates this format instead of token format
 - Parameters are extracted as key-value pairs
 - Automatically converted to JSON arguments
+
+### DeepSeek R1 Native Format
+
+**Detection Pattern:** `<｜tool▁calls▁begin｜>...<｜tool▁calls▁end｜>`
+
+**Structure:**
+```
+<｜tool▁calls▁begin｜>
+<｜tool▁call▁begin｜>
+function<｜tool▁sep｜>{function_name}
+```json
+{JSON arguments}
+```
+<｜tool▁call▁end｜>
+<｜tool▁calls▁end｜>
+```
+
+**Example:**
+```
+<｜tool▁calls▁begin｜>
+<｜tool▁call▁begin｜>
+function<｜tool▁sep｜>get_weather
+```json
+{"location": "Tokyo"}
+```
+<｜tool▁call▁end｜>
+<｜tool▁calls▁end｜>
+```
+
+**Notes:**
+- Native DeepSeek R1 format ported from original llama.cpp
+- Supports reasoning with `<think>...</think>` tags (automatically extracted)
+- Multiple function calls supported with separate call blocks
+- JSON arguments are contained within markdown code blocks
 
 ## OpenAI-Compatible Output
 
@@ -150,7 +190,9 @@ To enable function calling, include the `tools` parameter in your request:
 ## Model Compatibility
 
 - **Kimi-K2 models**: Native support with token format
-- **Other models**: May work with proper prompting to use the token format
+- **Qwen3 models**: Native support with XML format (Hermes-style)
+- **DeepSeek R1 models**: Native support with reasoning and function call format (ported from original llama.cpp)
+- **Other models**: No function calling support
 
 ## Testing
 

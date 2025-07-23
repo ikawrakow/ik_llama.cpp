@@ -8,6 +8,7 @@
 #include "json.hpp"
 #include "kimi_k2_tools.hpp"
 #include "qwen3_tools.hpp"
+#include "deepseek_r1_tools.hpp"
 #include <string>
 #include <vector>
 #include <sstream>
@@ -175,6 +176,20 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
             } else if (i == 0) {
                 // Create system message with tools if no system message exists
                 std::string tools_prompt = qwen3_create_system_with_tools(tools);
+                chat.push_back({"system", tools_prompt});
+                tools_injected = true;
+            }
+        }
+        
+        // Inject tools for DeepSeek R1 models
+        if (deepseek_r1_should_inject_tools(tools, model_name) && !tools_injected) {
+            if (role == "system") {
+                // Add tools to existing system message
+                content = deepseek_r1_inject_tools_to_system(content, tools);
+                tools_injected = true;
+            } else if (i == 0) {
+                // Create system message with tools if no system message exists
+                std::string tools_prompt = deepseek_r1_create_system_with_tools(tools);
                 chat.push_back({"system", tools_prompt});
                 tools_injected = true;
             }
