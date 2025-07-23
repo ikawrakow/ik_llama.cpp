@@ -2659,6 +2659,89 @@ void test_qwen3_integration_with_existing() {
     std::cout << "   ✅ PASS: Content extraction routing works correctly" << std::endl;
 }
 
+void test_qwen3_format_chat_integration() {
+    std::cout << "🔌 Testing format_chat Tool Injection Integration:" << std::endl;
+    
+    // Create test tools
+    json test_tools = json::array();
+    test_tools.push_back({
+        {"type", "function"},
+        {"function", {
+            {"name", "LS"},
+            {"description", "List files and directories"},
+            {"parameters", {
+                {"type", "object"},
+                {"properties", {
+                    {"path", {{"type", "string"}, {"description", "Directory path"}}}
+                }},
+                {"required", json::array({"path"})}
+            }}
+        }}
+    });
+    
+    // Test messages without system message
+    std::vector<json> messages;
+    messages.push_back({{"role", "user"}, {"content", "List files"}});
+    
+    // Mock format_chat call (we can't easily test the real one due to llama_model dependency)
+    // Instead test the tool injection components that format_chat uses
+    
+    // Test 1: qwen3_should_inject_tools logic
+    bool should_inject_qwen3 = qwen3_should_inject_tools(test_tools, "qwen3-7b");
+    bool should_not_inject_gpt = qwen3_should_inject_tools(test_tools, "gpt-4");
+    bool should_not_inject_empty = qwen3_should_inject_tools(json::array(), "qwen3-7b");
+    
+    test_assert(should_inject_qwen3, "format_chat integration: Should inject for Qwen3");
+    test_assert(!should_not_inject_gpt, "format_chat integration: Should not inject for non-Qwen3");
+    test_assert(!should_not_inject_empty, "format_chat integration: Should not inject empty tools");
+    
+    std::cout << "   ✅ PASS: Tool injection conditions work correctly" << std::endl;
+    
+    // Test 2: System message creation when no system message exists
+    std::string standalone_system = qwen3_create_system_with_tools(test_tools);
+    test_assert(standalone_system.find("# Tools") != std::string::npos, "format_chat integration: Standalone system has tools header");
+    test_assert(standalone_system.find("<tools>") != std::string::npos, "format_chat integration: Standalone system has tools XML");
+    test_assert(standalone_system.find("LS") != std::string::npos, "format_chat integration: Standalone system has LS tool");
+    test_assert(standalone_system.find("<tool_call>") != std::string::npos, "format_chat integration: Standalone system has format instructions");
+    
+    std::cout << "   ✅ PASS: Standalone system message creation works" << std::endl;
+    
+    // Test 3: Injection into existing system message
+    std::string original_system = "You are a helpful assistant.";
+    std::string enhanced_system = qwen3_inject_tools_to_system(original_system, test_tools);
+    test_assert(enhanced_system.find("You are a helpful assistant") != std::string::npos, "format_chat integration: Original system preserved");
+    test_assert(enhanced_system.find("<tools>") != std::string::npos, "format_chat integration: Tools added to existing system");
+    test_assert(enhanced_system.find("LS") != std::string::npos, "format_chat integration: Tool details in enhanced system");
+    
+    std::cout << "   ✅ PASS: System message enhancement works" << std::endl;
+    
+    // Test 4: Verify tool format matches expected output (allow compact JSON)
+    test_assert(enhanced_system.find("\"name\":\"LS\"") != std::string::npos || enhanced_system.find("\"name\": \"LS\"") != std::string::npos, "format_chat integration: Tool name in JSON format");
+    test_assert(enhanced_system.find("\"description\":\"List files") != std::string::npos || enhanced_system.find("\"description\": \"List files") != std::string::npos, "format_chat integration: Tool description present");
+    test_assert(enhanced_system.find("\"parameters\"") != std::string::npos, "format_chat integration: Tool parameters present");
+    
+    std::cout << "   ✅ PASS: Tool formatting is correct" << std::endl;
+    
+    // Test 5: Verify this would prevent conversational preamble
+    // The key issue: model generates "⏺ I'll list files" instead of calling tools
+    // Our injection should include directive instructions
+    bool has_directive = enhanced_system.find("You may call one or more functions") != std::string::npos;
+    bool has_format_instruction = enhanced_system.find("<tool_call>") != std::string::npos;
+    
+    test_assert(has_directive, "format_chat integration: Has directive instruction");
+    test_assert(has_format_instruction, "format_chat integration: Has format instruction");
+    
+    std::cout << "   ✅ PASS: Anti-preamble instructions present" << std::endl;
+    
+    // Test 6: Character count and size validation
+    // System message should be substantial but not excessive
+    size_t enhanced_size = enhanced_system.length();
+    test_assert(enhanced_size > 200, "format_chat integration: Enhanced system has substantial content");
+    test_assert(enhanced_size < 2000, "format_chat integration: Enhanced system not excessively long");
+    
+    std::cout << "   ✅ PASS: System message size is reasonable (" << enhanced_size << " chars)" << std::endl;
+}
+
 
 int main() {
     std::cout << "🧪 Running Comprehensive Kimi-K2 Function Calling Tests" << std::endl;
@@ -2754,6 +2837,7 @@ int main() {
         test_qwen3_advanced_features();
         test_qwen3_tool_injection();
         test_qwen3_integration_with_existing();
+        test_qwen3_format_chat_integration();
         
         std::cout << "\n🎉 Qwen3 XML Tool Calling Implementation Status:" << std::endl;
         std::cout << "   ✅ Model detection working correctly" << std::endl;
