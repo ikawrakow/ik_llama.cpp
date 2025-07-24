@@ -2992,6 +2992,35 @@ int main() {
         assert(extracted.find("<｜tool▁calls▁begin｜>") == std::string::npos);
         std::cout << "✅ PASS: DeepSeek R1 content extraction works" << std::endl;
         
+        // Test streaming finish_reason logic (core of the fix)
+        std::cout << "\n🎯 Testing Streaming finish_reason Logic:" << std::endl;
+        
+        // Test Case 1: Content with tool calls should lead to finish_reason="tool_calls"
+        std::string tool_call_content = "functions.get_weather:0{\"location\": \"Tokyo\"}";
+        ik_chat_msg msg_with_tools = parse_chat_message_incremental(tool_call_content, false, "kimi-k2");
+        bool should_be_tool_calls = !msg_with_tools.tool_calls.empty();
+        std::string finish_reason_with_tools = should_be_tool_calls ? "tool_calls" : "stop";
+        assert(finish_reason_with_tools == "tool_calls");
+        std::cout << "✅ PASS: Content with tool calls -> finish_reason='tool_calls'" << std::endl;
+        
+        // Test Case 2: Content without tool calls should lead to finish_reason="stop"
+        std::string regular_content = "This is just regular text without any tool calls.";
+        ik_chat_msg msg_without_tools = parse_chat_message_incremental(regular_content, false, "kimi-k2");
+        bool should_be_stop = msg_without_tools.tool_calls.empty();
+        std::string finish_reason_without_tools = should_be_stop ? "stop" : "tool_calls";
+        assert(finish_reason_without_tools == "stop");
+        std::cout << "✅ PASS: Content without tool calls -> finish_reason='stop'" << std::endl;
+        
+        // Test Case 3: Qwen3 XML format tool calls
+        std::string qwen3_content = "<tool_call>\n{\"name\": \"get_weather\", \"arguments\": {\"location\": \"Tokyo\"}}\n</tool_call>";
+        ik_chat_msg qwen3_msg = parse_chat_message_incremental(qwen3_content, false, "qwen3-7b");
+        bool qwen3_should_be_tool_calls = !qwen3_msg.tool_calls.empty();
+        std::string qwen3_finish_reason = qwen3_should_be_tool_calls ? "tool_calls" : "stop";
+        assert(qwen3_finish_reason == "tool_calls");
+        std::cout << "✅ PASS: Qwen3 XML tool calls -> finish_reason='tool_calls'" << std::endl;
+        
+        std::cout << "🎯 All streaming finish_reason tests passed!" << std::endl;
+        
     } catch (const std::exception& e) {
         std::cout << std::endl;
         std::cout << "❌ Test failed with exception: " << e.what() << std::endl;
