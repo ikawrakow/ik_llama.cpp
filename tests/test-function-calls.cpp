@@ -3020,7 +3020,6 @@ int main() {
         std::cout << "✅ PASS: Qwen3 XML tool calls -> finish_reason='tool_calls'" << std::endl;
         
         std::cout << "🎯 All streaming finish_reason tests passed!" << std::endl;
-        
     } catch (const std::exception& e) {
         std::cout << std::endl;
         std::cout << "❌ Test failed with exception: " << e.what() << std::endl;
