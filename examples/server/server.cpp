@@ -1683,6 +1683,7 @@ struct server_context {
         res.stop     = true;
         res.data     = json {
             {"content",             !slot.params.stream ? slot.generated_text : ""},
+            {"generated_text",      slot.generated_text},  // Always include full text for finish_reason logic
             {"id_slot",             slot.id},
             {"stop",                true},
             {"model",               params.model_alias},
@@ -2822,11 +2823,22 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
     std::string content = json_value(result, "content", std::string(""));
 
     std::string finish_reason;
-    if (stopped_word || stopped_eos) {
-        finish_reason = "stop";
-    }
     if (stopped_limit) {
         finish_reason = "length";
+    } else if (stopped_word || stopped_eos) {
+        // Following original llama.cpp pattern: finish_reason = oaicompat_msg.tool_calls.empty() ? "stop" : "tool_calls"
+        // Use generated_text (complete content) for finish_reason logic, not content (empty in streaming)
+        std::string generated_text = json_value(result, "generated_text", std::string(""));
+        ik_chat_msg final_msg = parse_chat_message_incremental(generated_text, false, modelname);
+        
+        // Debug logging
+        LOG_INFO("DEBUG: Streaming finish_reason check", {
+            {"generated_text", generated_text},
+            {"model_name", modelname}, 
+            {"tool_calls_count", final_msg.tool_calls.size()}
+        });
+        
+        finish_reason = final_msg.tool_calls.empty() ? "stop" : "tool_calls";
     }
 
     std::time_t t = std::time(0);
