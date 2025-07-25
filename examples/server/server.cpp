@@ -2,6 +2,7 @@
 #include "utils.hpp"
 
 #include "common.h"
+#include "speculative.h"
 #include "json-schema-to-grammar.h"
 #include "llama.h"
 #include "grammar-parser.h"
@@ -148,14 +149,14 @@ static std::string remove_simple_function_calls(const std::string& content) {
     size_t pos = 0;
     while ((pos = cleaned.find(func_pattern, pos)) != std::string::npos) {
         size_t func_start = pos;
-        
+
         // Find the opening brace for arguments
         size_t brace_pos = cleaned.find('{', pos);
         if (brace_pos == std::string::npos) {
             pos += func_pattern.length();
             continue;
         }
-        
+
         // Find the matching closing brace
         int brace_count = 1;
         size_t end_pos = brace_pos + 1;
@@ -164,7 +165,7 @@ static std::string remove_simple_function_calls(const std::string& content) {
             else if (cleaned[end_pos] == '}') brace_count--;
             end_pos++;
         }
-        
+
         if (brace_count == 0) {
             // Remove the entire function call
             cleaned.erase(func_start, end_pos - func_start);
@@ -186,7 +187,7 @@ static std::string remove_xml_function_calls(const std::string& content) {
             pos = tool_call_start + 11;
             continue;
         }
-        
+
         // Remove the entire XML tool call block
         cleaned.erase(tool_call_start, tool_call_end - tool_call_start + 12);
         pos = tool_call_start;
@@ -196,17 +197,17 @@ static std::string remove_xml_function_calls(const std::string& content) {
 
 static std::string clean_all_function_call_formats(const std::string& content) {
     std::string cleaned = content;
-    
+
     // Remove XML format first
     cleaned = remove_xml_function_calls(cleaned);
-    
+
     // Then remove simple format
     cleaned = remove_simple_function_calls(cleaned);
-    
+
     // Trim whitespace from cleaned content
     cleaned.erase(0, cleaned.find_first_not_of(" \t\n\r"));
     cleaned.erase(cleaned.find_last_not_of(" \t\n\r") + 1);
-    
+
     return cleaned;
 }
 
@@ -230,7 +231,7 @@ struct slot_params {
     bool timings_per_token = false;
     json input_prefix;
     json input_suffix;
-    
+
     // speculative decoding parameters
     struct {
         int n_max = 0;  // max drafted tokens
@@ -299,12 +300,12 @@ struct server_slot {
     int32_t ga_i = 0;   // group-attention state
     int32_t ga_n = 1;   // group-attention factor
     int32_t ga_w = 512; // group-attention width
-    
+
     // speculative decoding
     struct common_speculative * spec = nullptr;
     llama_context * ctx_dft = nullptr;
     llama_batch batch_spec = {};
-    
+
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
@@ -337,12 +338,12 @@ struct server_slot {
         n_past_se          = 0;
 
         generated_token_probs.clear();
-        
+
         // Reset streaming tool call state
         previous_msg = ik_chat_msg();
         current_msg = ik_chat_msg();
         tool_call_ids.clear();
-        
+
         // Reset speculative decoding stats
         n_draft_total = 0;
         n_draft_accepted = 0;
@@ -352,17 +353,17 @@ struct server_slot {
     // Based on original llama.cpp update_chat_msg pattern
     const ik_chat_msg & update_chat_msg(std::vector<ik_chat_msg_diff> & diffs) {
         ik_chat_msg previous = current_msg;
-        
+
         try {
             // Parse generated text incrementally (is_partial = true during generation)
             bool is_partial = !stopped_eos && !stopped_word && !stopped_limit;
             ik_chat_msg new_msg = parse_chat_message_incremental(generated_text, is_partial, oaicompat_model);
-            
+
             if (!new_msg.empty()) {
                 // Ensure tool call IDs are set consistently across streaming chunks
                 new_msg.ensure_tool_call_ids_set(tool_call_ids, generate_tool_call_id);
                 current_msg = new_msg;
-                
+
                 // Compute diffs for streaming
                 diffs = ik_chat_msg_diff::compute_diffs(previous, current_msg);
             }
@@ -370,7 +371,7 @@ struct server_slot {
             // If parsing fails, don't update current_msg and return empty diffs
             diffs.clear();
         }
-        
+
         return current_msg;
     }
 
@@ -433,7 +434,7 @@ struct server_slot {
         timings.prompt_per_token_ms = t_prompt_processing / n_prompt_tokens_processed;
         timings.prompt_per_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
 
-          
+
         timings.predicted_n = n_decoded;
         timings.predicted_ms = (ggml_time_us() - t_start_generation) / 1e3;
         timings.predicted_per_token_ms = t_token_generation / n_decoded;
@@ -816,7 +817,7 @@ struct server_context {
 
     bool clean_kv_cache = true;
     bool add_bos_token  = true;
-    
+
     // For speculative decoding
     llama_init_result model_dft_owned;
     llama_context_params cparams_dft;
@@ -894,7 +895,7 @@ struct server_context {
         // Load draft model for speculative decoding if specified
         if (!params.model_draft.empty()) {
             LOG_INFO("loading draft model", {{"model", params.model_draft}});
-            
+
             gpt_params params_dft = params;
             params_dft.model = params.model_draft;
             params_dft.n_ctx = params.n_gpu_layers_draft == 0 ? params.n_ctx / params.n_parallel : params.n_gpu_layers_draft;
@@ -902,20 +903,20 @@ struct server_context {
             params_dft.n_parallel = 1;
             params_dft.cache_type_k = params.cache_type_k;
             params_dft.cache_type_v = params.cache_type_v;
-            
+
             llama_init_result llama_init_dft = llama_init_from_gpt_params(params_dft);
-            
+
             llama_model * model_dft = llama_init_dft.model;
             if (model_dft == nullptr) {
-                LOG_ERROR("failed to load draft model", {{"model", params.speculative_model}});
+                LOG_ERROR("failed to load draft model", {{"model", params.model_draft}});
                 return false;
             }
-            
+
             if (!common_speculative_are_compatible(ctx, llama_init_dft.context)) {
                 LOG_ERROR("the draft model is not compatible with the target model", {});
                 return false;
             }
-            
+
             // Store the draft context initialization parameters for later use
             cparams_dft = llama_context_default_params();
             cparams_dft.n_ctx = params_dft.n_ctx;
@@ -936,7 +937,7 @@ struct server_context {
             cparams_dft.logits_all = false;
             cparams_dft.embedding = false;
             cparams_dft.offload_kqv = params_dft.offload_kqv;
-            
+
             // Keep the draft model alive
             model_dft_owned = llama_init_dft;
         }
@@ -990,17 +991,17 @@ struct server_context {
             slot.ga_w = ga_w;
 
             slot.sparams = params.sparams;
-            
+
             // Initialize speculative decoding if a draft model is loaded
             if (model_dft_owned.context) {
                 slot.batch_spec = llama_batch_init(params.n_draft + 1, 0, 1);
-                
+
                 slot.ctx_dft = llama_init_from_model(model_dft_owned.model, cparams_dft);
                 if (slot.ctx_dft == nullptr) {
                     LOG_ERROR("failed to create draft context", {});
                     return;
                 }
-                
+
                 slot.spec = common_speculative_init(slot.ctx_dft);
                 if (slot.spec == nullptr) {
                     LOG_ERROR("failed to create speculator", {});
@@ -1198,12 +1199,12 @@ struct server_context {
         slot.sparams.seed              = json_value(data, "seed",              default_sparams.seed);
         slot.sparams.n_probs           = json_value(data, "n_probs",           default_sparams.n_probs);
         slot.sparams.min_keep          = json_value(data, "min_keep",          default_sparams.min_keep);
-        
+
         // speculative decoding parameters
         slot.params.speculative.n_max = json_value(data, "speculative.n_max", 0);
         slot.params.speculative.n_min = json_value(data, "speculative.n_min", 0);
         slot.params.speculative.p_min = json_value(data, "speculative.p_min", 0.75f);
-        
+
         // Clamp speculative parameters
         slot.params.speculative.n_min = std::min(slot.params.speculative.n_max, slot.params.speculative.n_min);
         slot.params.speculative.n_min = std::max(slot.params.speculative.n_min, 0);
@@ -2812,7 +2813,7 @@ struct server_context {
 
                 slot.i_batch = -1;
             }
-                
+
             // Do speculative decoding
             for (auto & slot : slots) {
                 if (!slot.is_processing() || !slot.spec) {
@@ -2950,10 +2951,10 @@ static json format_final_response_oaicompat(const json& request, json result, co
 
     // Parse tool calls using model-specific format detection
     std::string model_name = json_value(request, "model", std::string(""));
-    
+
     // Use the same parsing logic as streaming path for consistency
     ik_chat_msg parsed_msg = parse_chat_message_incremental(content, false, model_name);
-    
+
     // Convert to JSON format for compatibility
     json tool_calls = json::array();
     for (const auto & tc : parsed_msg.tool_calls) {
@@ -2966,9 +2967,9 @@ static json format_final_response_oaicompat(const json& request, json result, co
             {"id", tc.id}
         });
     }
-    
+
     bool has_tool_calls = !tool_calls.empty();
-    
+
     // Use cleaned content from parser (following original llama.cpp pattern)
     if (has_tool_calls) {
         content = parsed_msg.content; // Parser already cleaned the content
@@ -3050,14 +3051,14 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
         // Use generated_text (complete content) for finish_reason logic, not content (empty in streaming)
         std::string generated_text = json_value(result, "generated_text", std::string(""));
         ik_chat_msg final_msg = parse_chat_message_incremental(generated_text, false, modelname);
-        
+
         // Debug logging
         LOG_INFO("DEBUG: Streaming finish_reason check", {
             {"generated_text", generated_text},
-            {"model_name", modelname}, 
+            {"model_name", modelname},
             {"tool_calls_count", final_msg.tool_calls.size()}
         });
-        
+
         finish_reason = final_msg.tool_calls.empty() ? "stop" : "tool_calls";
     }
 
@@ -3065,18 +3066,18 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
 
     // Follow original llama.cpp pattern: Always process diffs and add final chunk
     std::vector<json> streaming_chunks;
-    
+
     // Extract diffs from task result (populated by send_partial_response)
     // Following original llama.cpp pattern where diffs are stored in task result
     std::vector<ik_chat_msg_diff> diffs;
-    
+
     if (result.contains("oaicompat_msg_diffs") && result["oaicompat_msg_diffs"].is_array()) {
         for (const auto & diff_json : result["oaicompat_msg_diffs"]) {
             ik_chat_msg_diff diff;
-            
+
             // Extract content delta
             diff.content_delta = diff_json.value("content_delta", "");
-            
+
             // Extract tool call data
             if (diff_json.contains("tool_call_index")) {
                 diff.tool_call_index = diff_json["tool_call_index"];
@@ -3089,13 +3090,13 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
             } else {
                 diff.tool_call_index = std::string::npos;
             }
-            
+
             diffs.push_back(diff);
         }
     }
-    
+
     streaming_chunks = generate_streaming_chunks(diffs, completion_id, modelname);
-    
+
     // Always add final chunk (like original llama.cpp)
     if (!finish_reason.empty()) {
         json finish_chunk = {
@@ -3109,7 +3110,7 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
         };
         streaming_chunks.push_back(finish_chunk);
     }
-    
+
     // Return streaming chunks (could be just final chunk if no diffs)
     if (!streaming_chunks.empty()) {
         return streaming_chunks;
@@ -3275,7 +3276,7 @@ int main(int argc, char ** argv) {
     // TODO: not great to use extern vars
     server_log_json = params.log_json;
     server_verbose = params.verbosity > 0;
-    
+
 
     // struct that contains llama context and inference
     server_context ctx_server;
