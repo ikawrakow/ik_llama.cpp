@@ -183,5 +183,6 @@ void llama_sampling_accept(
 // access the internal list of current candidate tokens
 llama_token_data_array * llama_sampling_get_candidates(struct llama_sampling_context * ctx_sampling);
 
-std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<llama_token> & draft);
+std::vector<llama_token> llama_sampling_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<llama_token> & draft);
 
+std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft);
