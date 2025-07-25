@@ -238,7 +238,7 @@ std::vector<llama_token> llama_speculative_gen_draft(
     for (int i = 0; i < params.n_draft; ++i) {
         llama_batch_clear(batch);
 
-        llama_sampling_sample(smpl, ctx, 0, true);
+        llama_sampling_sample(smpl, ctx, nullptr, 0);
 
         const auto * cur_p = llama_sampling_get_candidates(smpl);
 
