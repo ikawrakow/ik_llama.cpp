@@ -1,28 +1,29 @@
 #pragma once
 
 #include "llama.h"
-#include "common.h"
 
-struct common_speculative;
+#include <vector>
 
-struct common_speculative_params {
+struct llama_speculative;
+
+struct llama_speculative_params {
     int n_draft = 16;  // max drafted tokens
     int n_reuse = 256;
 
     float p_min = 0.75f; // min probability required to accept a token in the draft
 };
 
-struct common_speculative * common_speculative_init(struct llama_context * ctx_dft);
+struct llama_speculative * llama_speculative_init(struct llama_context * ctx_dft);
 
-void common_speculative_free(struct common_speculative * spec);
+void llama_speculative_free(struct llama_speculative * spec);
 
-bool common_speculative_are_compatible(
+bool llama_speculative_are_compatible(
         const struct llama_context * ctx_tgt,
         const struct llama_context * ctx_dft);
 
 // sample up to n_draft tokens and add them to the batch using the draft model
-std::vector<llama_token> common_speculative_gen_draft(
-               struct common_speculative * spec,
-        struct common_speculative_params   params,
+std::vector<llama_token> llama_speculative_gen_draft(
+                struct llama_speculative * spec,
+         struct llama_speculative_params   params,
           const std::vector<llama_token> & prompt,
                              llama_token   id_last);

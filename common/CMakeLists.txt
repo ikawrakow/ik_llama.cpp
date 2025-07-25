@@ -74,6 +74,7 @@ add_library(${TARGET} STATIC
     train.cpp
     ngram-cache.h
     ngram-cache.cpp
+    speculative.cpp
     )
 
 if (BUILD_SHARED_LIBS)
