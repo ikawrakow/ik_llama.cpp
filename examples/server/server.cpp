@@ -235,7 +235,7 @@ struct slot_params {
 
     // speculative decoding parameters
     struct {
-        int n_max = 0;  // max drafted tokens
+        int n_max = 16;  // max drafted tokens
         int n_min = 0;  // min drafted tokens to accept
         float p_min = 0.75f; // min probability required to accept a token in the draft
     } speculative;
@@ -1197,9 +1197,9 @@ struct server_context {
         slot.sparams.min_keep          = json_value(data, "min_keep",          default_sparams.min_keep);
 
         // speculative decoding parameters
-        slot.params.speculative.n_max = json_value(data, "speculative.n_max", 0);
-        slot.params.speculative.n_min = json_value(data, "speculative.n_min", 0);
-        slot.params.speculative.p_min = json_value(data, "speculative.p_min", 0.75f);
+        slot.params.speculative.n_max = json_value(data, "speculative.n_max", default_params.speculative.n_max);
+        slot.params.speculative.n_min = json_value(data, "speculative.n_min", default_params.speculative.n_min);
+        slot.params.speculative.p_min = json_value(data, "speculative.p_min", default_params.speculative.p_min);
 
         // Clamp speculative parameters
         slot.params.speculative.n_min = std::min(slot.params.speculative.n_max, slot.params.speculative.n_min);
