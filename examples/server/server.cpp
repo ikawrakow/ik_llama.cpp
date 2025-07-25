@@ -892,16 +892,16 @@ struct server_context {
         GGML_ASSERT(llama_add_eos_token(model) != 1);
 
         // Load draft model for speculative decoding if specified
-        if (!params.speculative_model.empty()) {
-            LOG_INFO("loading draft model", {{"model", params.speculative_model}});
+        if (!params.model_draft.empty()) {
+            LOG_INFO("loading draft model", {{"model", params.model_draft}});
             
             gpt_params params_dft = params;
-            params_dft.model = params.speculative_model;
-            params_dft.n_ctx = params.speculative_n_ctx == 0 ? params.n_ctx / params.n_parallel : params.speculative_n_ctx;
-            params_dft.n_gpu_layers = params.speculative_n_gpu_layers;
+            params_dft.model = params.model_draft;
+            params_dft.n_ctx = params.n_gpu_layers_draft == 0 ? params.n_ctx / params.n_parallel : params.n_gpu_layers_draft;
+            params_dft.n_gpu_layers = params.n_gpu_layers_draft;
             params_dft.n_parallel = 1;
-            params_dft.cache_type_k = params.speculative_cache_type_k;
-            params_dft.cache_type_v = params.speculative_cache_type_v;
+            params_dft.cache_type_k = params.cache_type_k;
+            params_dft.cache_type_v = params.cache_type_v;
             
             llama_init_result llama_init_dft = llama_init_from_gpt_params(params_dft);
             
@@ -993,7 +993,7 @@ struct server_context {
             
             // Initialize speculative decoding if a draft model is loaded
             if (model_dft_owned.context) {
-                slot.batch_spec = llama_batch_init(params.speculative_n_max + 1, 0, 1);
+                slot.batch_spec = llama_batch_init(params.n_draft + 1, 0, 1);
                 
                 slot.ctx_dft = llama_init_from_model(model_dft_owned.model, cparams_dft);
                 if (slot.ctx_dft == nullptr) {
