@@ -2889,7 +2889,11 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
         };
         streaming_chunks.push_back(finish_chunk);
     }
-    
+    if (server_task_result_dict.count(task_result.id) > 0)
+    {
+        for (auto& chunk : streaming_chunks)
+            chunk.push_back({ "timings", server_task_result_dict[task_result.id].timings.to_json() });
+    }
     // Return streaming chunks (could be just final chunk if no diffs)
     if (!streaming_chunks.empty()) {
         return streaming_chunks;

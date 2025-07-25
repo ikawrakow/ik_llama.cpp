@@ -231,6 +231,26 @@ const SETTING_SECTIONS = (
   {
     title: (
       <>
+        <BookmarkIcon className={ICON_CLASSNAME} />
+        Presets
+      </>
+    ),
+    fields: [
+      {
+        type: SettingInputType.CUSTOM,
+        key: 'custom', // dummy key for presets
+        component: () => (
+          <PresetsManager
+            currentConfig={localConfig}
+            onLoadPreset={setLocalConfig}
+          />
+        ),
+      },
+    ],
+  },
+  {
+    title: (
+      <>
         <Cog6ToothIcon className={ICON_CLASSNAME} />
         General
       </>
@@ -489,26 +509,7 @@ const SETTING_SECTIONS = (
       },
     ],
   },
-  {
-    title: (
-      <>
-        <BookmarkIcon className={ICON_CLASSNAME} />
-        Presets
-      </>
-    ),
-    fields: [
-      {
-        type: SettingInputType.CUSTOM,
-        key: 'custom', // dummy key for presets
-        component: () => (
-          <PresetsManager
-            currentConfig={localConfig}
-            onLoadPreset={setLocalConfig}
-          />
-        ),
-      },
-    ],
-  },
+  
 ];
 
 export default function SettingDialog({
