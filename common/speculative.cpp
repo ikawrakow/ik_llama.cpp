@@ -15,7 +15,7 @@ struct common_speculative {
     struct common_sampler * smpl;
 
     llama_batch batch;
-    llama_tokens prompt;
+    std::vector<llama_token> prompt;
 };
 
 struct common_speculative * common_speculative_init(
@@ -84,13 +84,13 @@ bool common_speculative_are_compatible(
     const struct llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
     const bool vocab_type_tgt = llama_vocab_type(vocab_tgt);
-    LOG_DBG("%s: vocab_type tgt: %d\n", __func__, vocab_type_tgt);
+    LLAMA_LOG_DBG("%s: vocab_type tgt: %d\n", __func__, vocab_type_tgt);
 
     const bool vocab_type_dft = llama_vocab_type(vocab_dft);
-    LOG_DBG("%s: vocab_type dft: %d\n", __func__, vocab_type_dft);
+    LLAMA_LOG_DBG("%s: vocab_type dft: %d\n", __func__, vocab_type_dft);
 
     if (vocab_type_tgt != vocab_type_dft) {
-        LOG_ERR("%s: draft model vocab type must match target model to use speculation but "
+        LLAMA_LOG_ERR("%s: draft model vocab type must match target model to use speculation but "
                      "vocab_type_dft = %d while vocab_type_tgt = %d\n", __func__, vocab_type_dft, vocab_type_tgt);
         return false;
     }
@@ -99,9 +99,9 @@ bool common_speculative_are_compatible(
         llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
         llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
         llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)) {
-        LOG_ERR("%s: draft vocab special tokens must match target vocab to use speculation\n", __func__);
-        LOG_ERR("%s: tgt: bos = %d (%d), eos = %d (%d)\n", __func__, llama_vocab_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_tgt), llama_vocab_eos(vocab_tgt), llama_vocab_get_add_eos(vocab_tgt));
-        LOG_ERR("%s: dft: bos = %d (%d), eos = %d (%d)\n", __func__, llama_vocab_bos(vocab_dft), llama_vocab_get_add_bos(vocab_dft), llama_vocab_eos(vocab_dft), llama_vocab_get_add_eos(vocab_dft));
+        LLAMA_LOG_ERR("%s: draft vocab special tokens must match target vocab to use speculation\n", __func__);
+        LLAMA_LOG_ERR("%s: tgt: bos = %d (%d), eos = %d (%d)\n", __func__, llama_vocab_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_tgt), llama_vocab_eos(vocab_tgt), llama_vocab_get_add_eos(vocab_tgt));
+        LLAMA_LOG_ERR("%s: dft: bos = %d (%d), eos = %d (%d)\n", __func__, llama_vocab_bos(vocab_dft), llama_vocab_get_add_bos(vocab_dft), llama_vocab_eos(vocab_dft), llama_vocab_get_add_eos(vocab_dft));
         return false;
     }
 
@@ -112,7 +112,7 @@ bool common_speculative_are_compatible(
         const int vocab_diff = std::abs(n_vocab_tgt - n_vocab_dft);
 
         if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
-            LOG_ERR("%s: draft model vocab must closely match target model to use speculation but "
+            LLAMA_LOG_ERR("%s: draft model vocab must closely match target model to use speculation but "
                          "target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
                     __func__, n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
             return false;
@@ -122,7 +122,7 @@ bool common_speculative_are_compatible(
             const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
             const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
             if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-                LOG_ERR("%s: draft vocab vocab must match target vocab to use speculation but "
+                LLAMA_LOG_ERR("%s: draft vocab vocab must match target vocab to use speculation but "
                              "token %d content differs - target '%s', draft '%s'\n", __func__, i,
                         common_token_to_piece(ctx_tgt, i).c_str(),
                         common_token_to_piece(ctx_dft, i).c_str());
@@ -169,7 +169,7 @@ llama_tokens common_speculative_gen_draft(
         }
     }
 
-    LOG_DBG("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt.size());
+    LLAMA_LOG_DBG("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt.size());
 
     llama_tokens result;
     result.reserve(params.n_draft);
@@ -211,7 +211,7 @@ llama_tokens common_speculative_gen_draft(
     common_batch_clear(batch);
 
     for (size_t i = i_start + reuse_n; i < prompt_tgt.size(); ++i) {
-        //LOG_DBG("i = %d, i_start = %d, reuse_n = %d, i - i_start = %d, id = %6d\n", i, i_start, reuse_n, i - i_start, prompt_tgt[i]);
+        //LLAMA_LOG_DBG("i = %d, i_start = %d, reuse_n = %d, i - i_start = %d, id = %6d\n", i, i_start, reuse_n, i - i_start, prompt_tgt[i]);
         common_batch_add(batch, prompt_tgt[i], i - i_start, { 0 }, false);
 
         prompt.push_back(prompt_tgt[i]);
@@ -219,21 +219,21 @@ llama_tokens common_speculative_gen_draft(
 
     // we should rarely end-up here during normal decoding
     if (batch.n_tokens > 0) {
-        //LOG_DBG("%s: draft prompt batch: %s\n", __func__, string_from(ctx, batch).c_str());
+        //LLAMA_LOG_DBG("%s: draft prompt batch: %s\n", __func__, string_from(ctx, batch).c_str());
 
         llama_decode(ctx, batch);
     }
 
     const llama_pos n_past = prompt.size();
 
-    LOG_DBG("%s: n_past = %d\n", __func__, n_past);
+    LLAMA_LOG_DBG("%s: n_past = %d\n", __func__, n_past);
 
     common_batch_clear(batch);
     common_batch_add  (batch, id_last, n_past, { 0 }, true);
 
     prompt.push_back(id_last);
 
-    //LOG_DBG("%s: draft prompt: %s\n", __func__, string_from(ctx, prompt).c_str());
+    //LLAMA_LOG_DBG("%s: draft prompt: %s\n", __func__, string_from(ctx, prompt).c_str());
 
     llama_decode(ctx, batch);
 
@@ -248,7 +248,7 @@ llama_tokens common_speculative_gen_draft(
         const auto * cur_p = common_sampler_get_candidates(smpl);
 
         for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-            LOG_DBG(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+            LLAMA_LOG_DBG(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
                     k, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx, cur_p->data[k].id).c_str());
         }
 
