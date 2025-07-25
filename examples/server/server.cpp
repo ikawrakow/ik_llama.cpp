@@ -2870,10 +2870,10 @@ struct server_context {
 
                 // construct the speculation batch
                 llama_batch_clear(slot.batch_spec);
-                llama_batch_add(slot.batch_spec, id, slot.n_past, { slot.id }, true);
+                llama_batch_add(slot.batch_spec, id, slot.n_past, { slot.id + 1 }, true);
 
                 for (size_t i = 0; i < draft.size(); ++i) {
-                    llama_batch_add(slot.batch_spec, draft[i], slot.n_past + 1 + i, { slot.id }, true);
+                    llama_batch_add(slot.batch_spec, draft[i], slot.n_past + 1 + i, { slot.id + 1 }, true);
                 }
 
                 LOG_VERBOSE("decoding speculative batch", {
@@ -2895,7 +2895,7 @@ struct server_context {
                 slot.cache_tokens.push_back(id);
                 slot.cache_tokens.insert(slot.cache_tokens.end(), ids.begin(), ids.end() - 1);
 
-                llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
+                llama_kv_cache_seq_rm(ctx, slot.id + 1, slot.n_past, -1);
 
                 for (size_t i = 0; i < ids.size(); ++i) {
                     completion_token_output result;
