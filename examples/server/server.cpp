@@ -303,7 +303,7 @@ struct server_slot {
     int32_t ga_w = 512; // group-attention width
 
     // speculative decoding
-    struct common_speculative * spec = nullptr;
+    struct llama_speculative * spec = nullptr;
     llama_context * ctx_dft = nullptr;
     llama_batch batch_spec = {};
 
@@ -874,7 +874,7 @@ struct server_context {
                 llama_free(slot.ctx_dft);
             }
             if (slot.spec) {
-                common_speculative_free(slot.spec);
+                llama_speculative_free(slot.spec);
             }
             llama_batch_free(slot.batch_spec);
         }
@@ -924,7 +924,7 @@ struct server_context {
                 return false;
             }
 
-            if (!common_speculative_are_compatible(ctx, llama_init_dft.context)) {
+            if (!llama_speculative_are_compatible(ctx, llama_init_dft.context)) {
                 LOG_ERROR("the draft model is not compatible with the target model", {});
                 return false;
             }
@@ -998,7 +998,7 @@ struct server_context {
                     return;
                 }
 
-                slot.spec = common_speculative_init(slot.ctx_dft);
+                slot.spec = llama_speculative_init(slot.ctx_dft);
                 if (slot.spec == nullptr) {
                     LOG_ERROR("failed to create speculator", {});
                     return;
@@ -2847,13 +2847,13 @@ struct server_context {
 
                 llama_token id = slot.sampled;
 
-                struct common_speculative_params params_spec;
+                struct llama_speculative_params params_spec;
                 params_spec.n_draft = n_draft_max;
                 params_spec.n_reuse = cparams_dft.n_ctx - slot.params.speculative.n_max;
                 params_spec.p_min = slot.params.speculative.p_min;
 
                 const std::vector<llama_token> & cached_text_tokens = slot.cache_tokens;
-                std::vector<llama_token> draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, id);
+                std::vector<llama_token> draft = llama_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, id);
 
                 // ignore small drafts
                 if (slot.params.speculative.n_min > (int) draft.size()) {
