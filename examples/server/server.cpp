@@ -908,7 +908,7 @@ struct server_context {
         if (!params.model_draft.empty()) {
             LOG_INFO("loading draft model", {{"model", params.model_draft}});
 
-            gpt_params params_dft = params;
+            gpt_params params_dft;
             params_dft.model = params.model_draft;
             params_dft.n_ctx = params.n_gpu_layers_draft == 0 ? params.n_ctx / params.n_parallel : params.n_gpu_layers_draft;
             params_dft.n_gpu_layers = params.n_gpu_layers_draft;
