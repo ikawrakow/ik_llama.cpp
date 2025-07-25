@@ -910,7 +910,7 @@ struct server_context {
 
             gpt_params params_dft;
             params_dft.model = params.model_draft;
-            params_dft.n_ctx = params.n_gpu_layers_draft == 0 ? params.n_ctx / params.n_parallel : params.n_gpu_layers_draft;
+            params_dft.n_ctx = params.n_gpu_layers_draft == 0 ? params.n_ctx / params.n_parallel : params.n_ctx; // TODO: add params_base.speculative.n_ctx
             params_dft.n_gpu_layers = params.n_gpu_layers_draft;
             params_dft.n_parallel = 1;
             params_dft.cache_type_k = params.cache_type_k;
