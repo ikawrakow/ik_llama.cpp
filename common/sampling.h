@@ -176,3 +176,22 @@ void llama_sampling_accept(
         struct llama_context * ctx_main,
         llama_token id,
         bool apply_grammar);
+
+// generalized version of common_sampler_sample
+//
+// will cross-reference the sampled tokens with a batch of draft tokens and accept those that match
+// if the sampler disagrees at some point, we stop and return the accepted tokens up to now
+//
+//      common_sampler_sample_n(gsmpl, ctx, { idx }, {});
+//
+// is equivalent to
+//
+//      common_sampler_sample(gsmpl, ctx, idx);
+//      common_sampler_accept(gsmpl, token, true);
+//
+// requires: idxs.size() == draft.size() + 1
+//
+// returns at least 1 token, up to idxs.size()
+//
+std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft);
+
