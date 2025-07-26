@@ -154,3 +154,7 @@ INFO [            update_slots] all slots are idle | tid="137884088823808" times
 I have never looked into splitting the KV cache when using `-sm row`, so the behavior is whatever the behavior of `llama.cpp` was when I forked last year.
 
 Out of curiosity: does `-sm row` give you a better performance compared to `-sm layer` ?
+
+> 👤 **pt13762104** replied on **2025-05-08** at **08:36:42**
+> 
+> Yes. About 1.5x better

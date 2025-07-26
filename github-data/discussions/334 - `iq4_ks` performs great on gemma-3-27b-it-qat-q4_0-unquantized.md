@@ -668,6 +668,16 @@ This is QAT but unlike previous QAT models I have seen this was done with an add
 
 ![image](https://github.com/user-attachments/assets/2e3b2cd5-8ffe-4b6b-95db-694d99c1fbf5)
 
+> 👤 **bartowski1182** replied on **2025-04-19** at **00:55:33**
+> 
+> > unlike previous QAT
+> 
+> Which ones have you seen, and what did they do if not additional fine tuning? 🤔
+> 
+> But yes I theorized it was possible that they did some fine tuning for the quant awareness with wiki text itself, maybe unlikely but certainly not impossible
+> 
+> I think it could be valuable to use a random additional well formatted English corpus for more PPL numbers, that might start giving a more full image
+
 > 👤 **saood06** replied on **2025-04-19** at **01:32:31**
 > 
 > > Which ones have you seen, and what did they do if not additional fine tuning? 🤔
@@ -697,6 +707,16 @@ Have you seen these versions, [27B](https://huggingface.co/stduhpf/google-gemma-
 👤 **ikawrakow** commented on **2025-04-19** at **08:38:23**
 
 In my quick experiments with Gemma3-12B, the `Q4_0` quantized version has a significantly lower Wiki2 perplexity than the `bf16` model, or any other quantization. Which means that whatever they have done, they have massively overfit that specific dataset, specifically with `Q4_0` quantization.  Which means that one cannot use Wiki2 for evaluation (PPL, but also KLD or any other quantization quality measure). On my book (but you may differ from me in that regard), it also means that one cannot take this model seriously.
+
+> 👤 **saood06** replied on **2025-04-19** at **08:56:08**
+> 
+> > On my book (but you may differ from me in that regard), it also means that one cannot take this model seriously.
+> 
+> I haven't touched Gemma 3 myself yet (I want to see if it beats QwQ for my GPU only use cases), but I've heard a lot of positive feedback on the QAT version of Gemma 3. I agree that it does make them hard to directly compare since they differ so much, but whatever they did people seem generally happy with it.
+> 
+> > but also KLD or any other quantization quality measure
+> 
+> Do you think knowing the KLD between the two BF16 versions versions would be insightful (not that I could run it in a reasonable amount of time for the 27B, the 12B might be possible though)?
 
 > 👤 **bartowski1182** replied on **2025-04-20** at **18:19:36**
 > 
@@ -783,6 +803,34 @@ Good question. If the `Q4_0` model outperforms the `bf16` model (at least it doe
 > but I've heard a lot of positive feedback on the QAT version of Gemma 3.
 
 Is it so because it really is good, or is it more because the sentiment towards Google has shifted lately (at least when it comes to "AI"). My impression is that the Internet believes that the latest Gemini models are currently the best (and so, by extension, Gemma3 must be among the best open weight). But the few things that I asked Gemma3-12B where I have good knowledge of the subject matter, the answers were complete BS.
+
+> 👤 **saood06** replied on **2025-04-19** at **09:33:57**
+> 
+> > Good question. If the `Q4_0` model outperforms the `bf16` model (at least it does for a set of quality metrics), do we now compare the `Q4_0` model against `bf16`, or do we compare the other way around? 
+> 
+> There are two different BF16's the original post shows PPL of both (pasted below for convenience).
+> 
+> Original BF16:
+> `## google/gemma-3-27b-it-BF16-00001-of-00002.gguf`
+> `Final estimate: PPL = 8.4276 +/- 0.06705`
+> 
+> QAT BF16:
+> `## google/gemma-3-27b-it-qat-q4_0-unquantized-BF16-00001-of-00002.gguf`
+> `Final estimate: PPL = 8.2021 +/- 0.06387`
+> 
+> The extra finetuning that happened because of QAT is definitely showing from these numbers.
+> 
+> >How do I know which of these two models is better? QAT was involved, fine tuning was involved, so maybe `Q4_0` is the best model?
+> >[...]
+> > Is it so because it really is good, or is it more because the sentiment towards Google has shifted lately (at least when it comes to "AI"). My impression is that the Internet believes that the latest Gemini models are currently the best (and so, by extension, Gemma3 must be among the best open weight). 
+> 
+> My impression is that sentiment on Gemma3 is still mixed (if it was better I would have tried it by now), but that for people that used Gemma 3 the QAT versions are a very good drop in replacement offering higher quality, faster inference, and smaller models, but to me it doesn't seem like it has changed the perception of Gemma3 as a whole with plenty of people still not liking it. There may be usecases in which it has degraded performance compared to the non QAT version, but I have yet to come across any reports of that.
+> 
+> >But the few things that I asked Gemma3-12B where I have good knowledge of the subject matter, the answers were complete BS.
+> 
+> Did both QAT and non QAT do that? I'd assume they'd both fail your test.
+> 
+> Gemma3 may not be a good fit for you, but I am curious what models you have used and liked.
 
 > 👤 **ikawrakow** replied on **2025-04-20** at **07:02:01**
 > 
@@ -1010,6 +1058,16 @@ The PP performance difference between mainline and `ik_llama.cpp` did not look p
 
 Are you sure your `sweep-bench` adaptation for mainline is working correctly? Gemma3 KV cache size relative to model size is quite high, so just a ~40% drop in PP performance at 32k tokens seen for mainline seems relatively unlikely.
 
+> 👤 **saood06** replied on **2025-04-27** at **08:10:16**
+> 
+> > @ubergarm
+> > 
+> > Are you sure your `sweep-bench` adaptation for mainline is working correctly? Gemma3 KV cache size relative to model size is quite high, so just a ~40% drop in PP performance at 32k tokens seen for mainline seems relatively unlikely.
+> 
+> ~~He is missing a llama_synchronize call, could that account for it?~~
+> 
+> Edit: Nevermind
+
 > 👤 **ubergarm** replied on **2025-04-27** at **17:14:57**
 > 
 > *EDIT* My compile script was messed up and putting me into DEBUG mode...
@@ -1145,6 +1203,16 @@ It is related, but not really the same. With `llama-sweep-bench` you have `N_KV`
 
 If you see such messages, you are running in debug mode.
 
+> 👤 **saood06** replied on **2025-04-28** at **07:34:44**
+> 
+> > > I ran a plain llama-bench for PP only to compare and sanity check if my adaptation of llama-sweep-bench is accurate at least for PP. It looks like in general llama-sweep-bench shows lower scores than llama-bench assuming the x-axis is the describing the "same thing" for both e.g. PP context length is similar enough to N_KV?
+> > 
+> > It is related, but not really the same. 
+> >[...]
+> >If for simplicity we assume that performance decreases linearly with `N_KV`, then, to first order, the `llama-bench` PP performance for `N` tokens is about the same as `llama-sweep-bench` with `N_KV = N/2`.
+> 
+> You can also convert by just summing up the time taken and tokens processed up to PP, and then divide, but I like sweep bench because it does accurately reflect single slot server usage at a depth of N_KV.
+
 ---
 
 👤 **Nexesenex** commented on **2025-05-31** at **10:58:14**
@@ -1202,6 +1270,12 @@ For IQ4_KS (imat) with embed/output q6_0 and attn_v in iq4_nl (13.77 GiB (4.38 B
 For IQ4_KS (imat) with embed/output q6_0 and attn_q / attn_k / attn_o / ffn_gate / ffn_up in new_iq2_kt (9.361 GiB (2.977 BPW)): PPL = 9.0237 +/- 0.06934 (not bad at all!)
 For IQ4_KS (imat) with embed/output q6_0 and attn_q / attn_o / ffn_gate / ffn_up in new_iq2_kt (9.529 GiB (3.031 BPW)): : PPL = 9.0063 +/- 0.06917
 For IQ4_KS (imat) with embed/output q6_0 and attn_q / ffn_gate / ffn_up in new_iq2_kt (9.867 GiB (3.138 BPW)): PPL = 9.0923 +/- 0.07124
+
+> 👤 **ubergarm** replied on **2025-06-04** at **16:54:07**
+> 
+> Yeah these QATs are wild where the 4bpw "beats" the bf16!?! And for some reason the `iq4_ks` 32 block quants seem to do very well. psure the `iq4_ks` is a strict upgrade of the `iq4_xs` as I understand it is the same bpw with better PPL.
+> 
+> Thanks again for sharing your results! Definitely check out the new hottness `iqN_kt` which are basically [QTIP](https://arxiv.org/html/2406.11235v3) / exl3  style trellis quants. So far I'd say they are like a smaller version of `iqN_k` with similar perplexity, but I need to do more testing as the implementation isn't fully baked yet.
 
 > 👤 **Nexesenex** replied on **2025-06-05** at **02:42:48**
 > 

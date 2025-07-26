@@ -97,6 +97,16 @@ But then again, I'm one of those people suffering from the NIH syndrome, so used
 
 Btw, on [this branch](https://github.com/ikawrakow/ik_llama.cpp/tree/ik/try_svd) there is some exploration of using SVD before or after the quantization. I have misused the `quantize-stats` tool to look at how the root-mean-square-error (rmse) behaves as a function of the number of SVD components. One can do the SVD before or after quantization. Certainly not production quality, AVX2-only vectorization, very simple multi-threading, but still enough to see that SVD does not add any value to LLMs quantization when the quantization works reasonably well. I know it works because full SVD reduces rmse to zero.
 
+> 👤 **compilade** replied on **2024-08-27** at **16:59:19**
+> 
+> Thanks!
+> 
+> I see that when `SVD_BEFORE` is `false`, the initial output fed into `try_svd` is non-zero, and SVD is [done on the subtraction of input and output](https://github.com/ikawrakow/ik_llama.cpp/blob/63fc8014a25e5192b618e0d8f869f8c507c99793/examples/quantize-stats/quantize-stats.cpp#L317), which means this does look similar to LQER (while also quantizing the low-rank tensor?) if I understand it correctly. Still feels like a good proof of concept, even though it doesn't test using SVD both before quantization (to remove low-rank components from the input) *and* after (to then correct both the additional low-rank error and the quantization error) at the same time. It's helpful to know that plain LQER is worse than better quantization.
+> 
+> I didn't really do any experiment lately towards LQER (and L²QER) because I was busy with other things, but this SVD implementation could likely be eventually useful for control vectors according to <https://github.com/ggerganov/llama.cpp/discussions/8831#discussioncomment-10227359> (cc @ngxson)
+> 
+> For L²QER, I think `imatrix` files will probably need to use a less bespoke format, which means I think they could be GGUF files with `general.type` equal to `imatrix` (a bit like LoRA adapters have `general.type` equal to `adapter` since <https://github.com/ggerganov/llama.cpp/pull/8332>).
+
 ---
 
 👤 **ikawrakow** commented on **2024-09-11** at **14:31:14**
@@ -104,6 +114,20 @@ Btw, on [this branch](https://github.com/ikawrakow/ik_llama.cpp/tree/ik/try_svd)
 @compilade With your PR-9400 in `llama.cpp` I now have to write GGUF loading and link against `ggml` when I want to take a quick look at an imatrix? Instead of just copy/pasting the 20 LOC of imatrix structure definition and (de-)serialization into a `.cpp` file and being done in 5 minutes? Ouch. And no, HF tools will with 99.99% probability not help me with what I'm interested in. I mean, having a Python imatrix to GGUF converter is I guess great for those who want to look at imatrix files on HF, but changing the imatrix tool to output GGUFs is a bit too much afaik.
 
 Oh well, I'll need to keep my own copy of the `imatrix` and `quantize` tools.
+
+> 👤 **ngxson** replied on **2024-09-11** at **15:17:56**
+> 
+> Hi and sorry if this change disrupts your workflow.
+> 
+> The main reason behind this change was that we want to unify file formats in llama.cpp. From the perspective of software engineering, is needed because it could help abstract out some parts of the implementation, thus provide a better code base for more features to come in the future.
+> 
+> Contrary to what you said (to have HF to visualize the GGUF file), in fact, this change does introduce a headache to HF backend, since now we have to distinguish between GGUF model file and GGUF other-files (i.e. imatrix, cvector, lora). This is just to clarify to you that the main motivation of the change is about refactoring code in llama.cpp.
+> 
+> Beside that, I'm wondering if it could help you: there is `gguf-py` package that allow GGUF file to be loaded into python. You can then use `torch` to investigate the imatrix tensors.
+> 
+> Another option would be have a CLI arg in imatrix to select the output file format, although this may make the code a bit harder to maintain.
+> 
+> In anyway, I appreciate your work and would love to know if we can do anything to help you.
 
 > 👤 **ikawrakow** replied on **2024-09-11** at **16:01:09**
 > 
@@ -185,6 +209,69 @@ void read_imatrix(std::istream in, ...) {
 }
 ``` 
 Voila, all existing imatrices continue to work, you can add whatever extensions you like (anywhere you like, not just at the end), we don't need to include `ggml/gguf` headers and link against a 370 MB `libggml.so`, etc.
+
+> 👤 **compilade** replied on **2024-09-13** at **01:56:41**
+> 
+> > I must admit I don't understand the concerns. The issue is that one cannot (correctly) combine imatrices computed with different `u_batch` sizes? (One can always combine them, but the files will not contribute to the combined imatrix with the correct weight). Why would one want to do that? AFAIK, not needing to worry about batch and u-batch sizes is a feature, not a bug.
+> 
+> The sanest way to both not worry about batch sizes and correctly combine `imatrix` files is to store the number of tokens (or activations in this case) instead of the number of "chunks". This is what is done in the GGUF-based format. You're right that the chunk size in the metadata isn't really necessary. I *think* it would be possible to make it work that way in the simper format, but there would still be some weirdness with MoE tensors.
+> 
+> I know using GGUF would make the `imatrix` format more complicated, but interoperability with existing and future GGUF tooling would be useful. For example, I'm working on some kind `gguf-diff` tool which will compare tensors between GGUF files (dequantizing if necessary), and making `imatrix` data stored as GGUF would make that tool work on `imatrix` files too without having to specially handle them.
+> 
+> > what context length are you going to record for the combined imatrix file?
+> 
+> The one used at the time of merging them (the last one). It seems like there is no good choice for the context length in that case.
+> 
+> > Voila, all existing imatrices continue to work, you can add whatever extensions you like (anywhere you like, not just at the end)
+> 
+> But the extensions would still break your scripts, so I don't see how it makes it better? It seems like all you want from this is that `imatrix` remains a trivially parsable format, even if it's changed?
+> 
+> > we don't need to include `ggml/gguf` headers and link against a 370 MB `libggml.so`, etc.
+> 
+> You're still using `llama-imatrix` (which does link against `libggml.so`) to generate those files.
+> 
+> You know what, I think you're right to want to keep it simple. But GGUF-based `imatrix` also enables a bunch of stuff which is otherwise not possible. I will set <https://github.com/ggerganov/llama.cpp/pull/9400> as a draft, and then I'll try to make a compromise by making `llama-imatrix` *both* able to output the simple (somewhat backward-compatibly, but by storing the number of tokens as `ncall` instead of the number of chunks (the division by `ncall` will still result in a mean (of squares), so your existing scripts *should* continue to work)) *and* GGUF-based format (so that bidirectional conversion will be directly possible with `--in-file`. The GGUF-based `imatrix` format would only be used when the `--output` ends with `.gguf`, which it will by default), while I'll also try to make `llama-quantize` read both (basically falling back when loading as GGUF fails).
+> 
+> It's gonna take me *at least* another week to implement that (not much free time this month, and lots of good conferences in my area).
+> 
+> Not sure if supporting both formats will be viable long-term, though. But from this discussion I gather that both have reasons to exist.
+> 
+> Basically, I think these are the arguments **for** each format:
+> 
+> - Keeping the "simpler" `imatrix.dat` format
+>   - Simpler to parse
+>     - Only 20 LOC (closer to 50 LOC with proper error handling)
+>   - No need to link to `ggml` to load it
+>   - Allows self-contained programs to do experiments with it
+> - Using GGUF for `imatrix`
+>   - Reduces the need for special-purpose formats
+>   - More interoperability with existing and future GGUF tooling
+>     - `gguf_dump.py`
+>     - HF previews
+>     - (eventually) `gguf-diff`
+>   - Trivially extensible
+>     - More metadata
+>     - Easier type changes for metadata (e.g. `int32` vs `int64`)
+>   - Counts are multi-dimensional
+>     - For stacked MoE tensors, each expert gets its own activation count
+>     - Allows keeping the sums intact
+>       - Great for merging `imatrix` files
+> 
+> And the arguments against:
+> 
+> - Keeping the "simpler" `imatrix.dat` format
+>   - Not trivially identifiable (no magic number as file header)
+>   - Weird serialization of MoE activation sums (scaled to use the same chunk count for the whole tensor)
+>   - Hard to backward-compatibly extend
+>     - (although some kind of extension *is* possible, it will pretty much always cause breaking changes)
+>   - Need to write a special-purpose `imatrix_reader` in `gguf-py`
+> - Using GGUF for `imatrix`:
+>   - Depends on more code to load/save such files
+>     - which means more probability for bugs
+>       - (although since that code is shared with model loading, noticing/fixing bugs there benefit everything which uses it)
+>   - Can't make stand-alone programs for quantization experiments like before
+>     - Need to link to `libggml.so` to use GGUF-based `imatrix` files
+>     - Or need to include some `gguf.h` header-only library
 
 > 👤 **compilade** replied on **2025-07-12** at **14:18:22**
 > 

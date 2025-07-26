@@ -24,3 +24,8 @@ Edit 2 : https://github.com/Nexesenex/croco.cpp/releases/tag/v1.93040_b5600_RMv1
 👤 **VinnyG9** commented on **2025-05-28** at **20:14:51**
 
 any performance numberos?
+
+> 👤 **Nexesenex** replied on **2025-05-29** at **07:05:33**
+> 
+> None, it barely works for a part of its purpose, which is to quantize models with some IQ quants within the mainline framework.
+> PPL test work also, as well as Cuda inference for Gemma 3 in 0.04. And that's it for now. ^^

@@ -152,6 +152,23 @@ If you look at all merged PRs, you will see that it has been quite a journey to 
 
 A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonshotai/Kimi-K2-Instruct .... :sob: lol...
 
+> 👤 **magikRUKKOLA** replied on **2025-07-11** at **23:35:48**
+> 
+> @ubergarm 
+> > A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonshotai/Kimi-K2-Instruct .... 😭 lol...
+> 
+> ```
+> Paper Link (co**mm**ing soon)
+> ```
+> 
+> Yeah, I am so excited too! :D
+> So the minimum requirements are the 512GB RAM and 48GB VRAM to run some IQ2 quant lol. (?)  I guess its time to upgrade.
+> 
+> quote:
+> > Agentic Intelligence: Specifically designed for **tool use**, reasoning, and autonomous problem-solving.
+> 
+> I suggest that the setup how the tool usage can be applied with ik_llama.cpp should be documented somewhere.  Basically we need a MITM-tool to translate JSON<->TOOL_CALL_TOKENS.  And that's about it.
+
 > 👤 **ewhacc** replied on **2025-07-12** at **09:59:24**
 > 
 > @ubergarm 
@@ -239,6 +256,42 @@ Edit: I'm trying evshiron llama.cpp, which seems to have a direct conversion fro
 Edit:  Failed to get q8_0.    I don't know it needs 1T RAM, but seems not a RAM problem (tried on 512M)
 python ev_llama.cpp/convert_hf_to_gguf.py Kimi-K2-Instruct --outfile  Kimi-K2-Instruct-q8 --outtype q8_0
 ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
+
+> 👤 **ubergarm** replied on **2025-07-13** at **16:29:49**
+> 
+> @ewhacc 
+> 
+> > I just tried fp8_cast_bf16.py but got VRAM OOM.
+> 
+> Right for the `fp8_cast_bf16.py` script from deepseek approach it is quite long. `fp8 safetensors -> bf16 safetensors -> bf16 GGUF -> Q8_0 -> imatrix -> Q2`. I believe this is the method used for mainline MLA quants of deepseek. Not sure if this works for the slightly different arch Kimi-K2 1000B-A32B or not. 
+> 
+> Regarding OOMing with this method, [i have some notes in a discussion with fairydreaming about using triton-cpu instead for using RAM without GPU](https://github.com/ggml-org/llama.cpp/discussions/11989#discussioncomment-13555486) that I just dug up. Also found a patch that might prevent VRAM OOM on 4090 series cards [here on hugginface](https://huggingface.co/deepseek-ai/DeepSeek-V3/discussions/17).
+> 
+> > BTW, isn't it possible to make imatrix directly from BF16?
+> 
+> Yes, if you can run inferencing with the 2TB VRAM+RAM bf16 GGUF, then you could use it directly for imatrix. I haven't tested the quality difference in terms of perplexity, but I believe the Q8_0 is sufficient given it is quite similar to the native fp8.
+> 
+> >  I'm trying evshiron llama.cpp, which seems to have a direct conversion from fp8 to q8_0.
+> 
+> Yes this is my usual method. Not sure it would work with Kimi-K2 though without some modifications. I assume you got `triton-cpu` to build (this is one of the more difficult steps of the process). Notes on building triton-cpu [here where @saood06 helped fix a build bug for them](https://github.com/triton-lang/triton-cpu/issues/237#issuecomment-2878180022).
+> 
+> My script then is to convert the fp8 safetensors directly to bf16 GGUF is:
+> ```bash
+> # evshiron/llama.cpp@63b7e8aa
+> source venv/bin/activate
+> python \
+>       llama.cpp/convert_hf_to_gguf.py \
+>       --outtype bf16 \
+>       --split-max-size 50G \
+>       --outfile /models/ubergarm/DeepSeek-TNG-R1T2-Chimera-GGUF/ \
+>       /models/tngtech/DeepSeek-TNG-R1T2-Chimera/
+> ```
+> 
+> If you're still getting that error, you might have to poke around in `convert_hf_to_gguf.py` search where it says `triton` for the `deepseek-v3` part. Might need to look at the recent Kimi-K2 PR https://github.com/ggml-org/llama.cpp/pull/14654 and add that to the evshiron fork or something.
+> 
+> I don't have access to enough RAM at the moment. Maybe will in the next few weeks :crossed_fingers: 
+> 
+> Thanks for blazing the trail! And feel free to open a new discussion/issue specific to Kimi-K2 etc...
 
 > 👤 **magikRUKKOLA** replied on **2025-07-13** at **18:17:56**
 > 

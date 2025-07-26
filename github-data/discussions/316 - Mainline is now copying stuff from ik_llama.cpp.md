@@ -57,6 +57,10 @@ Please don't blame anyone else than me, I do not represent `ggml` nor `llama.cpp
 
 I'm sorry if this came across as a critique/attack on you. That was not the intent, and it has nothing to do with you. It is between ggerganov and me. Given the history, and there is 15 years of it even before `llama.cpp` came to be, I would have expected a different reaction from ggerganov to your PRs.
 
+> 👤 **JohannesGaessler** replied on **2025-04-06** at **14:06:02**
+> 
+> In the end I am the one who is responsible for reviewing and merging the PR in question. I had interpreted [this post](https://github.com/ikawrakow/ik_llama.cpp/discussions/256#discussioncomment-12496828) as permission to do so without preconditions. I'm sorry for acting against your wishes.
+
 ---
 
 👤 **CISC** commented on **2025-04-06** at **14:08:38**
@@ -74,6 +78,16 @@ You have made a great number of awesome contributions here, and I still wish for
 > upstream is free to take from here whatever they find useful
 
 Meaning there is nothing I can do to prevent that from happening as I'm publishing under a MIT license. I don't think I said that I do not expect upstream to abide by the terms of the license.
+
+> 👤 **CISC** replied on **2025-04-06** at **14:38:40**
+> 
+> > @CISC @JohannesGaessler As you both refer to what I wrote in #256, here it is:
+> > 
+> > > upstream is free to take from here whatever they find useful
+> > 
+> > Meaning there is nothing I can do to prevent that from happening as I'm publishing under a MIT license. I don't think I said that I do not expect upstream to abide by the terms of the license.
+> 
+> I'm fixing my mistake right now, sorry about that.
 
 ---
 
@@ -94,6 +108,16 @@ The [discussion 6934](https://github.com/ggml-org/llama.cpp/discussions/6394) wa
 👤 **JohannesGaessler** commented on **2025-04-07** at **07:59:15**
 
 For the record: Do you find it acceptable for people to read your code and to then submit a PR to llama.cpp/ggml with the same functionality?
+
+> 👤 **ikawrakow** replied on **2025-04-07** at **09:10:21**
+> 
+> > For the record: Do you find it acceptable for people to read your code and to then submit a PR to llama.cpp/ggml with the same functionality?
+> 
+> I addressed that above. But here it is again my perhaps wrong concept of how it should be:
+> * If you copy my code, you need to add a copyright notice as requested by the MIT license.
+> * If you reimplement what I have done here in your own way, you don't need to mention me or this repository. But if you were nice, you would still mention the original source/idea. Just like in many places in the ggml/llama.cpp code there are references to papers and/or other repositories. 
+> 
+> Now, also for the record, it isn't so that there aren't copyright notices in `ggml` "sprinkled around the code" as @ggerganov puts it. See for instance [this](https://github.com/ggml-org/ggml/blob/ab9ed73d40965d7e4b25a4adf2230b9a19bffbf9/src/ggml-cpu/ops.cpp#L4996) (and same notices in all other backends). I have this line in my fork as well in a completely [different place](https://github.com/ikawrakow/ik_llama.cpp/blob/a051f08b8f059fa10dd089d231b975291c122e9d/ggml/src/ggml.c#L16726), so it has been preserved over multiple code reorganizations (so, maintaining copyright notices in the source code as things are moved around is not quite as painful as claimed). You don't wonder why a Kawrakow copyright notice is so different from a Jeffrey Quesnelle and Bowen Peng copyright notice?
 
 > 👤 **JohannesGaessler** replied on **2025-04-07** at **10:41:05**
 > 
@@ -122,6 +146,14 @@ Yes, of course, as predicted.
 👤 **jano403** commented on **2025-04-07** at **11:16:19**
 
 A based thing to do would be to license your repository under AGPL3.0, solves all problems.
+
+> 👤 **ikawrakow** replied on **2025-04-07** at **11:23:15**
+> 
+> > A based thing to do would be to license your repository under AGPL3.0, solves all problems.
+> 
+> Yes, I agree, it would have been better. But I didn't feel like juggling two different licenses, so just went with the original MIT license.
+> 
+> On the other hand, the final outcome would not have been any different. Mainline will independently discover and implement the improvement I have made here without looking at my changes, not even once. I think this was made very clear by @JohannesGaessler's last comment.
 
 > 👤 **jano403** replied on **2025-04-07** at **11:29:07**
 > 
@@ -179,3 +211,9 @@ A based thing to do would be to license your repository under AGPL3.0, solves al
 @CISC 
 
 I'm sorry you ended up in the middle of this. I hope this has not damaged your relation with, and your ability to contribute to, the `ggml` and `llama.cpp` projects.
+
+> 👤 **CISC** replied on **2025-04-07** at **11:58:00**
+> 
+> > I'm sorry you ended up in the middle of this. I hope this has not damaged your relation with, and your ability to contribute to, the `ggml` and `llama.cpp` projects.
+> 
+> Let's just say this weekend was more interesting than I would have liked. :(

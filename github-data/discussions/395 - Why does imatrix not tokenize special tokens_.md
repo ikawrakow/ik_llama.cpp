@@ -33,6 +33,14 @@ In any case, it would be interesting to see if including special tokens, using n
 
 You are welcome.
 
+> 👤 **bartowski1182** replied on **2025-05-09** at **12:33:00**
+> 
+> Ah did I not send that reply here first? Sorry, I had one typed up
+> 
+> That makes perfect sense though! Do you think you'd want the same thing here? Was planning to open one up in each assuming it made sense, it seems like a nice idea for A/B testing anyways, but figured I'd double check with the original architect that there wasn't something glaringly obvious I was missing
+> 
+> Thanks again for the input!
+
 > 👤 **bartowski1182** replied on **2025-05-09** at **12:42:35**
 > 
 > Truly did not mean to just grab knowledge and run, that's a terrible look, hence I meant to ask if I could contribute the same here so that it wouldn't just be a one-sided deal (not that it's a complex change from me, but just the principle of it, it's not in good taste to open a discussion, get your insight, and run to mainline without saying anything, that isn't my style but it's exactly what I did in this case)

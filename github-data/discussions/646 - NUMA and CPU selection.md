@@ -35,6 +35,12 @@ I'm not sure if the high core-count CPU's can be configured as a single NUMA nod
 
 Here is a [comment](https://github.com/ikawrakow/ik_llama.cpp/issues/629#issuecomment-3092549546) from someone using a 9355 EPYC (12 memory channels) and getting a very decent CPU-only TG performance with it.
 
+> 👤 **saood06** replied on **2025-07-25** at **05:37:39**
+> 
+> >I'm not sure if the high core-count CPU's can be configured as a single NUMA node. Can one not simply try in a cloud instance?
+> 
+> I've seen BIOS's that mirror memory to create one NUMA node. (Not relevant on gear I have, and not sure if present on gear I have ).
+
 > 👤 **saood06** replied on **2025-07-25** at **05:42:05**
 > 
 > >NUMA is a topic that I want to do something about, but nothing has been done at this point.
@@ -67,6 +73,10 @@ But then I came across a paper explaining cross-CCD memory latency and bandwidth
 
 [Here's a chart](https://www.thomas-krenn.com/en/wiki/AMD_EPYC_9005_Turin) of all AMD EPYC 9005 Turin CPUs I found extremely useful.
 
+> 👤 **joshuakoh1** replied on **2025-07-25** at **09:47:38**
+> 
+> The 9175F or F series chips certainly look interesting IF the software is mature enough for CCD pinning. Not sure if this is the case or will be the case in the near future. As far as I've found out, seems like all cross CCD communication will go across the infinity fabric which would end up being a massive bottleneck if not properly managed.
+
 ---
 
 👤 **ikawrakow** commented on **2025-07-25** at **09:07:41**
@@ -81,6 +91,10 @@ The second point is definitely important. The 9004 series uses the Zen4 core, wh
 
 ---
 <sup>1</sup> There are some relatively minor performance gains when one can make use of the additional `AVX512` instructions, particularly instructions with a mask. But for the bulk of the computation, which is performing `int8_t` dot products between SIMD vectors, there is no benefit from `AVX512` with the Zen4 core.
+
+> 👤 **joshuakoh1** replied on **2025-07-25** at **09:43:59**
+> 
+> Regarding your second point, would a 16 core 9115 make more sense than a 32/48 core 9354/9454?
 
 > 👤 **sousekd** replied on **2025-07-25** at **09:45:02**
 > 

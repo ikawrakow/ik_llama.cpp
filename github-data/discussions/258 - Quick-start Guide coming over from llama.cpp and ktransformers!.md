@@ -1001,6 +1001,29 @@ My initial impression is with the right settings it can get faster prompt proces
 
 Looking forward to trying it with an MLA supported quant.
 
+> 👤 **saood06** replied on **2025-03-15** at **04:08:06**
+> 
+> > I trolled through some of the PRs you linked to me and pulled together this rough guide as my notes for getting started with `ik_llama.cpp`. Thanks for pointing me in the right direction.
+> 
+> Glad I can be of help. I've seen a lot of people show interest in using ik_llama.cpp but the amount of options and the spread out documentation was a deterrent. This guide (even in it's current state) is a much better resource to give people than my explanations and links to PR's, so thank you for putting it together.
+> 
+> > The biggest hurdle so far is needing a custom quant for MLA support. I'll work on that another time as I'm using og unsloth `UD-Q2_K_XL` which fits in this systems 256GB RAM.
+> 
+> You seemed to have found all the huggingface MLA quants I know of but I forgot to mention that you can use the technique listed [here](https://huggingface.co/daydream-org/DeepSeek-R1-GGUF-11446/discussions/1#67a327570051a98a96ded9e6) in order to skip a step if you are going to manually convert from the original fp8 model files. (I've thought about porting that here but the triton dependence adds more complication than I think it is worth for most people, when more fp8 native models are released, I think something along the lines of [this](https://github.com/ggml-org/llama.cpp/pull/10055) is the best path forward). 
+> 
+> I think reading through this discussion https://github.com/ikawrakow/ik_llama.cpp/discussions/242 (most relevant bits are [this](https://github.com/ikawrakow/ik_llama.cpp/discussions/242#discussioncomment-12427878), [this](https://github.com/ikawrakow/ik_llama.cpp/discussions/242#discussioncomment-12452986), and [this](https://github.com/ikawrakow/ik_llama.cpp/discussions/242#discussioncomment-12489932) but there are other bits of the discussion that are worth reading if you are making your own imatrix as you may run into similar issues, but as mentioned you can just use an imatrix from someone else, just make sure to set the new MLA tensors to high quant types as those won't be in any imatrix unless they created it with MLA.
+> 
+> Making a custom quant has a lot of flexibility in terms of quality, size, and performance (for example the quant of the attention tensors and shared experts has much lower impact on size, but has larger impacts on quality and size, whereas the quant of the non-shared experts has a much larger impact on size, and a smaller impact on performance). This is demonstrated [here](https://github.com/ikawrakow/ik_llama.cpp/pull/239#issuecomment-2708370916) where the custom blend that is smaller had lower PPL than the IQ4_KSS quant. There is a lot more discussion about quants in that thread (and it is where the issue of CUDA for certain tensors was first noticed).
+> 
+> 
+> > My initial impression is with the right settings it can get faster prompt processing than ktransformers and about the same token generation.
+> > 
+> > Looking forward to trying it with an MLA supported quant.
+> 
+> I think ktransformers will outperform ik_llama.cpp without MLA for TG at higher context lengths as it uses MLA. The higher PP is nice, I wonder if the lead is still held with MLA.
+> 
+> Also you may find https://github.com/ikawrakow/ik_llama.cpp/pull/225 useful for benchmarking.
+
 > 👤 **magikRUKKOLA** replied on **2025-07-13** at **22:39:43**
 > 
 > @saood06 please keep in mind that there is no such thing as comparing the performance of ik_llama.cpp with ktransformers.  Simply because the ktransformers is using old fork of flashinfer (see 0.2.3).  If simply put, you will get either crash in the sampler or the garbage output (or lost context).  Yeah, I initially thought ik_llama.cpp suck because the decode speed is slower (esp. on a long context because they dont't use matrix absorption etrc.) .. but ... there is simply no way to run ktransformers with large context.  ktransformers doesn't even have the --seed parameter implemented lol so each time the llm answers you you can't tell if its a right answer or its a garbage lol.  ktransformers was written by script-kiddies (I looked at the code -- its awful).  So please be serious.
@@ -1041,6 +1064,16 @@ Thank you for these results.
 >\# was getting nan's even without -mla 2 -fa -amb 2048 -fmoe. switched to default --ubatch-size 512 and nan's appear later in the sequence
 
 Just thought you'd want to know this, manually notifying you as edit's don't trigger notifications.
+
+> 👤 **ubergarm** replied on **2025-03-16** at **03:58:21**
+> 
+> Yeah I managed to cobble together a quantize script and create my first quant `IQ2_K_R4` weighing in at `179G` and slightly higher perplexity that `UD-Q2_K_XL` at `212G` comparing across the first 10 perplexity data points. I saw a note about `nan` [over here too on this huggingface unsloth R1-GGUF discussion](https://huggingface.co/unsloth/DeepSeek-R1-GGUF/discussions/37#67bb416987172149b9baa34e) (can't compare against those charts as they use a custom txt file and not `wiki.test.raw`). The new quant at 32k context took an 8k prompt at ~63 tok/sec pp and gave ~11.3 tok/sec tg.
+> 
+> Now that I see how it works better I'm rolling another one with more `q8_0`s for the less frequent layers and targeting under 256GB RAM system. At least I have enough perplexity data points to compare across these specific quants.
+> 
+> The other thing I need to dig into more is what combination of `-ctk` and `-ctv` work with what mla/amb/fmoe/fa settings. I noticed `-ctk q8_0 -ctv q8_0` works with `-mla 2 -fa -amb 2048 -fmoe` and allows 32k context to fit in 24GB VRAM comfortably. However, trying `q8_KV` and `iq4_nl` types segfaulted (didn't grab a backtrace, might be a known invalid combination).
+> 
+> Made a lot of progress today! Hope to move on to making a CPU only optimized quant for the Intel 6980P to try (e.g. exps around `q6_k_r4` or whatever repacked quant types might be good combo of high quality and reasonably fast assuming plenty of RAM.
 
 > 👤 **saood06** replied on **2025-03-16** at **04:43:23**
 > 
@@ -1619,6 +1652,18 @@ I don't think it's the size that is the issue, iq2_bn_r4 is a bitnet quant. I br
 
 If you are still experimenting with quant types, you might be able to improve on your Q2_K_R4 at around the same size by replacing the q2_k_r4, and q3_k_r4 which are k quants with similar sized i quants or iqk quants instead of using k quants, this PR https://github.com/ikawrakow/ik_llama.cpp/pull/85 has a really nice chart  focusing on that quant range (caveat IQ3_KL is not a quant type, it is a quant recipe), and shows how the three different quant types (i, k and iqk) stack up.
 
+> 👤 **ubergarm** replied on **2025-03-21** at **15:38:10**
+> 
+> > iq2_bn_r4 is a bitnet quant
+> 
+> I saw a few small bitnet quants and wanted to try it out. Okay so its not the size but the bitnet quants are not great *for non bit-net trained models*. Good to know!
+> 
+> > q2_k_r4, and q3_k_r4 which are k quants with similar sized i quants or iqk quants 
+> 
+> My first attempt was i quants, which are indeed quite small but seem be more CPU intensive on generation. I see, the `iqk` "non-linear" quants in the PR 85 are probably the best bang for the bit assuming I am patient enough to generate the quant. Yeah I'll do another iteration on my custom quant then with these!
+> 
+> Thanks for taking the time to explain with references, really appreciate it!
+
 > 👤 **ubergarm** replied on **2025-03-21** at **16:39:43**
 > 
 > Okie I'm cooking up one targeting a 256GB RAM + ~24GB VRAM system with `-ot exps=CPU`:
@@ -1727,6 +1772,10 @@ If you are still experimenting with quant types, you might be able to improve on
 > Okay so its not the size but the bitnet quants are not currently great.
 
 They are actually great. But they are Bitnet quants, so quants for a model that has been trained such that model weights take one of 3 possible values (-1, 0, 1). Hence, they absolutely cannot be used for normal models trained using actual floats. But that does not make them not great. The ternary quants in this repo (`IQ2_BN`, `IQ1_BN`) have, as far as I can tell, by far the fastest CPU implementation around.
+
+> 👤 **ubergarm** replied on **2025-03-21** at **15:51:44**
+> 
+> Okay gotchu. Yeah I picked them hoping they were fast, but given R1 was not trained as a bitnet they are not the right match for this specific case.
 
 ---
 
@@ -1846,6 +1895,10 @@ Oh, this is Kawrakow-style usability at its best!
 The "K" in k-quants need to be capitalized. So, `q5_K`, not `q5_k`. 
 
 This applies only to `q2_K, q3_K, q4_K, q5_K, q6_K`. In the other cases (`iq4_k`, etc.) it is small `k`.
+
+> 👤 **fredlas** replied on **2025-04-08** at **19:19:28**
+> 
+> Oh man, thanks. I actually tried different capitalizations, but hadn't gone as far as mixing them!
 
 ---
 
@@ -2213,6 +2266,10 @@ main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 |   512 |    128 |  32256 |    6.936 |    73.82 |   11.624 |    11.01 |
 
 </details>
+
+> 👤 **ikawrakow** replied on **2025-04-09** at **05:49:42**
+> 
+> @saood06  You said somewhere that KTransformers was the fastest toolkit for DeepSeek inference. This is not faster?
 
 > 👤 **ubergarm** replied on **2025-04-09** at **17:03:08**
 > 
@@ -2701,6 +2758,47 @@ main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 </details>
 
+> 👤 **ubergarm** replied on **2025-04-11** at **19:03:52**
+> 
+> @anikiforovopensource 
+> 
+> Hey very nice, I appreciate how thorough you are!
+> 
+> 1. Interesting that `-ctk f16` is faster while only adding about 1GiB of VRAM @ 32k context as compared to `-ctk q8_0`. I'll keep that in mind for how I'm running, given I might prefer the extra speed over extra context in some configs.
+> 2. Aye, great job finding and offloading a few more layers into VRAM. This is exactly the right approch. I just learned some tips about which layers might be best to offload from @ikawrakow  [here on Discussion #323](https://github.com/ikawrakow/ik_llama.cpp/discussions/323#discussioncomment-12802730). 
+> 3. You could collapse the override tensor command in your logs using regex e.g. either of these two I tested which are equivalent:
+> ```
+> # its okay if you have excessive stuff that doesn't match e.g. layer 61,62,63,...,69
+> 
+>     --override-tensor [6-9]\.*exps=CPU,[1-6][0-9]\.*exps=CPU
+> 
+> # or since it uses order of operations, specify the exact CUDA device layers first then "the rest on CPU"
+> 
+>     --override-tensor [3-5]\.*exps=CUDA0,exps=CPU
+> 
+> # or pass multiple times, the order matters so first cli options get first preference
+> 
+>     -ot [3-5]\.*exps=CUDA0 \
+>     -ot exps=CPU
+> 
+> ```
+> Its also fine to leave it how you have it to make it explicit.
+> 
+> If you wanted to try something like ik mentions in the other discussion given you are using `-fmoe`, you could try to see how much fits like so:
+> ```
+> -ot blk\.[3-9]\.ffn_up_exps=CUDA0 \
+> -ot blk\.[3-9]\.ffn_gate_exps=CUDA0 \
+> -ot exps=CPU
+> ```
+> 
+> > I prefer to run R1 instead of V3, so I currently don't have the quant to utilize more RAM. I can run benchmarks on your DS-R1 671B ubergarm IQ2_XS_R4 and DS-R1 671B ubergarm Q2_K_R4 quants if you share those.
+> 
+> Wow thanks, yeah I never went back and quantized R1 given I just learned how to do this when V3-0324 dropped lol...
+> 
+> If there is demand for it I might try to release a couple with slightly reduced shared experts / attention to fit longer context in 24GB VRAM. If things go well and I still have access to these remote rigs from https://level1techs.com, I def plan to hopefully release something assuming R2 is similar architecture.
+> 
+> Thanks again!
+
 > 👤 **saood06** replied on **2025-04-12** at **04:17:40**
 > 
 > >I prefer to run R1 instead of V3, so I currently don't have the quant to utilize more RAM.
@@ -2744,6 +2842,10 @@ main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 This is only true when attention is computed on the GPU (on the GPU `fp16` is king). But for CPU-only inference, or for hybrid inference where for whatever reason the attention ops involving the KV cache are run on the CPU, `q8_0` KV-cache will outperform `fp16` by a significant margin.
 
+> 👤 **anikifoss** replied on **2025-04-14** at **15:19:35**
+> 
+> It's interesting to see how applying one optimization immediately moves the bottleneck somewhere else, running these models is pushing the hardware limits in different ways.
+
 ---
 
 👤 **Dampfinchen** commented on **2025-04-14** at **18:52:59**
@@ -2755,6 +2857,10 @@ I've compiled your build of llama.cpp with CUDA and AVX2 to see if there's any i
 I think its  --override-tensor but I don't know the specific command. I tried  ffn_down_exps=CUDA0 which resulted in a speedup almost on par with main, but using that and ffn_up_exps=CUDA0, gate_exps=CUDA0 results in a performance loss again (although I think the latter of which is only for MoE models?)
 
 What is the command for doing that? Thank you!
+
+> 👤 **ikawrakow** replied on **2025-04-14** at **19:16:16**
+> 
+> Can you give more details? (quantization used, if any, commands used here and in mainline). It is hard to diagnose and give suggestions based on the provided information.
 
 > 👤 **Dampfinchen** replied on **2025-04-14** at **19:35:17**
 > 
@@ -3020,6 +3126,16 @@ First 700 tokens PP runs at 48 t/s, then TG at 7 t/s.
 With 8000 context PP drops to ~30t/s.
 
 I'm actually okay with this TG, but I gotta get my PP up :stuck_out_tongue_winking_eye:; my use case requires trawling through a lot of context. I'll check back in when I get GPU working and RAM at expected speed.
+
+> 👤 **saood06** replied on **2025-05-13** at **03:44:10**
+> 
+> >RTR seems to have a huge impact.
+> 
+> Yes this is because the quant you pulled is optimized for hybrid inference, see #272/#274 for ways to convert it to be CPU optimized (if you plan to keep using it CPU only), if you want to be able to avoid the load times of `-rtr`, but if you plan on using it with your GPU than the quant is already made for that and you just need to use the correct `--override-tensor` for it.
+> 
+> > my use case requires trawling through a lot of context.
+> 
+> Just a reminder that parallel inference exists and can help get more overall throughput if your use case can allow for it.
 
 > 👤 **cmoncure** replied on **2025-05-13** at **12:17:53**
 > 
@@ -3537,6 +3653,30 @@ where it came from?
 where does it live?
 what does it feed on?
 
+> 👤 **ubergarm** replied on **2025-05-13** at **19:26:14**
+> 
+> The guide is missing a lot of things as this fork has been moving pretty quickly. Your best bet in general is to search closed PRs for more details.
+> 
+> Regarding llama-sweep-bench:
+> 
+> > where it came from?
+> 
+> I believe @saood06 introduced it in https://github.com/ikawrakow/ik_llama.cpp/pull/225
+> 
+> > where does it live?
+> 
+> On this fork it will be built and live in `ik_llama.cpp/build/bin/llama-sweep-bench` depending on your build command. I don't think it exists for mainline, but i just rebased and force pushed my fork's [branch with the ported code here](https://github.com/ubergarm/llama.cpp/tree/ug/port-sweep-bench) and tested that it compiles.
+> 
+> > what does it feed on?
+> 
+> consciousness. of what else could this universe be comprised?
+> 
+> ---
+> 
+> I have some examples in my recent [speed benchmark methodology gist](https://gist.github.com/ubergarm/0f9663fd56fc181a00ec9f634635eb38#methodology) as well. You can use the python script that comes with it to make plots or vibe code your own plotting tool etc.
+> 
+> Basically you figure out the command you want to use for your specific system then replace the binary with `llama-sweep-bench` and it more or less will work. I really like to see the speed trade-offs for longer context which you just don't get with most other benchmark tools.
+
 ---
 
 👤 **bart2** commented on **2025-05-20** at **06:11:45**
@@ -3582,6 +3722,10 @@ Current maximum context size I managed to get so far was 41000. Full ik_llama.cp
 Is there any way to squeeze a larger context size out of this hardware, while maintaining reasonable tokens/s (>15tps)?
 
 Thanks for any help and for working on this!
+
+> 👤 **ikawrakow** replied on **2025-05-20** at **06:16:57**
+> 
+> Can you post the part of the log where it tells you what the CUDA buffer sizes are?
 
 > 👤 **bart2** replied on **2025-05-20** at **06:23:01**
 > 
@@ -3833,6 +3977,25 @@ G:\ik_llama>llama-bench.exe --model "G:\Qwen3-235B-A22B-128K-Q8_0-00001-of-00006
 
 Any suggestions are appreciated! :-)
 
+> 👤 **ubergarm** replied on **2025-05-25** at **15:50:57**
+> 
+> Hey glad you got it going on your system. Thanks a lot for the detailed explanation of the BIOS settings as I don't have access to intel xeon BIOS. I had never heard of "node interleaving" option and just assumed that dual socket intel had no equivalent of AMD `NPS0` to present a single numa node for *both* sockets.
+> 
+> Right, I watched a good deep dive on AMD Epyc server BIOS on level1techs youtube recently and the AMD engineers basically said "don't use NPS0 unless your workload is not optimized at all" and that is basically the case for all CPU inferencing engines so even though aggregate RAM bandwidth goes down it will likely be the fastest for now.
+> 
+> You could compare a single numa node setup with having 1x numa node per socket and running with `numactl --interleave=all llama-server --numa distribute` just to see the difference.
+> 
+> So quick possible optimizations thoughts for you given you are running CPU only:
+> 1. Use different number of `--threads 28` and `--threads-batch 56` or something like that as in general PP is more CPU bottle-necked whereas TG is more RAM i/o bottlenecked. Generally for PP I would use the number of *total* physical cores across both CPUs and (not counting SMT/hyperthreads) and then for TG go with the number for a single CPU. You can adjust from there for your specific setup.
+> 2. In general I would advise *against* any of those "128k" versions of the model as they are basically the same model but the GGUF has baked in the yarn options to run in 4x mode which the qwen official version does *not* enable on purpose and also puts a big warning on their model card that *this can degrade performance* if your prompts tend to be shorter than 32k when usin 4x yarn mode. Given you're getting only 30ish tok/sec PP I can't imaging you want to wait around for big 32k+ prompt lengths so just get a normal GGUF or override the yarn back to normal mode as the baked in ~40k context is plenty for most people unless they know what they are doing and really need that 32k+ context on almost every prompt. haha...
+> 3. Linux *might* be a little faster but given you are fully in RAM you're not fighting the mmap swapping business on windows which is supposedly slower than native linux page cache. If your CPUs have a mix of P cores and E cores you might be able to play around pinning threads to P cores and all that jazz but it is probably a lot of fuss especially in windows. Linux might do a better job of thread allocation on newer kernels, but just speculating wildly.
+> 4. You can probably get a boost using q8_0 for ctk/ctv kv-cache quantization as the default is f16. f16 is typically faster on cuda GPUs but takes more VRAM. q8 is generally faster on CPU than f16 and also gives the side benefit of taking less RAM. psure ik's fork will re-pack the q8_0 kv-cache under the hood for generally better performance (and old PR allows you to turn that off if you really wanted to a/b test that on your specific rig). That would be adding` -ctk q8_0 -ctv q8_0` to your command.
+> 5. Add `-fmoe` for fused moe as this version of qwen3moe supports that psure and may give some benefits even on CPU.
+> 6. For actual use you probably want to use `-c 32768` for a reasonable amount of context given this is a thinking model. Though at your speeds you may want to just include `/no_think` at the beginning of your prompts or whatever the secret word is to disable thinking for speed up at the cost of worse performance on logic/coding responses.
+> 7. Finally, you might consider going with a Q4 model or rolling your own iq4_ks model as having smaller weights will likely speed up TG with similar PP (or slightly slower depending on exact quant). I know you have enough RAM to hold the big models, but it might be worth it for you to get a little more speed given you have no GPU at all.
+> 
+> Have fun tweaking!
+
 > 👤 **cfelicio** replied on **2025-05-28** at **17:55:56**
 > 
 > Thanks for providing such a detailed reply, this has been super helpful! I ended up spending some more time on this, and wanted to share my results:
@@ -3863,6 +4026,16 @@ Any suggestions are appreciated! :-)
 👤 **cmoncure** commented on **2025-06-01** at **19:34:56**
 
 What's the easiest method to produce a file that simply applies the --runtime-repack transformation to an existing GGUF? I can run DeepSeek at Q_8 but the startup time is a killer.
+
+> 👤 **ubergarm** replied on **2025-06-01** at **19:47:13**
+> 
+> > What's the easiest method to produce a file that simply applies the --runtime-repack transformation to an existing GGUF?
+> 
+> I ran it once a few months ago but lost my logs and my rigs are tied up at the moment. Someone was asking me on reddit too: https://www.reddit.com/r/LocalLLaMA/comments/1kb97ys/comment/mvg837s/
+> 
+> If you want to repack *everything* for CPU inferencing, it is basically `./build/bin/llama-quantize --repack inputmodel outputmodel` but I haven't tested so let me know once u figure it out and I'll try to update the guide/model card with a reference and let that guy on reddit know.
+> 
+> There is an option for regex matching if you only want to repack some tensors, check out `./build/bin/llama-quantize --help` or the code for more deets.
 
 > 👤 **saood06** replied on **2025-06-02** at **00:49:12**
 > 
@@ -5373,6 +5546,10 @@ I have NPS0 set in BIOS, and "LLC as NUMA domain (ACPI SRAT L3 Cache as NUMA dom
 
 Anyway, just wanted to say "thanks" and share my excitement 💯.
 Any tips, insights or discussion would be welcome.
+
+> 👤 **cmoncure** replied on **2025-06-25** at **22:33:44**
+> 
+> Great post. Your perf results track with my similar system (EPYC 9175F), with your PP about 1.3x bigger than mine at low context, I guess due to having 32 cores to my 16. All your remarks about command line flags impact on performance track with my observations. I don't know how to make it run faster so I will just recommend that applying a permanent repack to the quant is fairly easy and straightforward so consider it when you're bored of waiting for -rtr.
 
 > 👤 **sousekd** replied on **2025-06-27** at **23:10:41**
 > 
@@ -9756,6 +9933,12 @@ Please post the compilation errors you get with `AVX512_BF16`. It is supposed to
 
 There are places where I have added GEMM/GEMV implementations optimized for `AVX512` extensions that I have available on my Ryzen-7950X CPU (Zen4 core). To be effective, one needs to enable `AVX512, AVX512_VNNI, AVX512VL, AVX512BW` and `AVX512DQ`. I don't think these are all available via `GGML_something` cmake definitions. When building on Linux they all get enabled with `GGML_NATIVE`, but on Windows you most likely need to work with `-DGGML_ARCH_FLAGS=add_necessary_compiler_flags`. TG performance is memory bound, so there will not be much impact there, but for PP you may get some additional performance increases if your CPU supports all of these.
 
+> 👤 **sousekd** replied on **2025-06-24** at **15:26:15**
+> 
+> > Please post the compilation errors you get with `AVX512_BF16`. It is supposed to work, ...
+> 
+> Oh, you are 100% correct and I am an idiot. **ik_llama.cpp** builds perfectly fine with `-DGGML_AVX512_BF16=ON` using MSVC - it was (and is) **llama.cpp** which does not build. I was experimenting with both and got confused :). Thank you!
+
 ---
 
 👤 **createthis** commented on **2025-07-10** at **16:13:24**
@@ -9830,6 +10013,58 @@ I'm just curious: Why is generation tok/s so much lower in `ik_llama.cpp` vs `ll
 
 Thanks!
 
+> 👤 **ubergarm** replied on **2025-07-10** at **17:33:21**
+> 
+> Hey thanks for taking some time to try this out. I too started using ktransformers but have since moved over to ik's for given he is the author on pretty much all the quants after the original `q8_0` types.
+> 
+> > I run with NPS4 set in the system BIOS, so I have 8 numa domains.
+> 
+> Both myself an fairydreaming have done a lot of research on the NUMA domain issue for both [intel xeon](https://github.com/ggml-org/llama.cpp/discussions/12088) and [amd epyc](https://github.com/ggml-org/llama.cpp/discussions/11733) dual socket rigs.
+> 
+> the tl;dr; is I recommend you try out `NPS0` for dual socket systems given the nature of this workload being not optimized. The more NUMA nodes you have likely the worse performance, but if you *must* use more NUMA domains because of other system workloads then consider running with either:
+> 
+> ```
+> # if u need RAM from all NUMA nodes to fit the model
+> numactl --interleave=all llama-server --numactl distribute ...
+> 
+> # if a single NUMA node (e.g. in NPS1) has enough RAM:
+> numactl -N 0 -m 0 llama-server --numactl numactl ...
+> ```
+> 
+> Generally PP will benefit from as much physical cores that you can throw at it, but TG will likely be fastest with some smaller number of threads so get the best of both worlds with `--threads-batch <num_phys_corses> --threads <slightly_less_sometimes>` etc...
+> 
+> I've been helping folks tune their exact command to get max speed, so I'll take a crack at yours as it stands assuming you are still running with 8 numa domains and haven't attempted the above BIOS optimizations yet:
+> 
+> ```bash
+> # build for RTX PRO Blackwel 96GB VRAM arch/capabilities 120 psure
+> cmake -B ./build -DGGML_CUDA=ON -DGGML_SCHED_MAX_COPIES=1 -DGGML_CUDA_IQK_FORCE_BF16=1 -DCMAKE_CUDA_ARCHITECTURES="120"
+> cmake --build ./build --config Release -j $(nproc)
+> 
+> # run on single CPU socket assuming NPS4 (4x domains per socket)
+> numactl --interleave=0,1,2,3 \
+> ./build/bin/llama-sweep-bench \
+>     --model /data/DeepSeek-V3-0324-GGUF-UD/UD-Q4_K_XL/DeepSeek-V3-0324-UD-Q4_K_XL-00001-of-00008.gguf \
+>     -fa -mla 3 -fmoe -amb 512 -mg 0 \
+>     --ctx-size 20480 \
+>     -ngl 99 \
+>     -ot "blk\.(3|4|5|6|7|8)\.ffn_.*=CUDA0" \
+>     -ot exps=CPU \
+>     --threads 32 \
+>     --threads-batch 32 \
+>     -ub 4096 -b 4096 \
+>     -rtr \
+>     --numa numactl \
+>     --warmup-batch
+> ```
+> 
+> Adjust `-ot "blk\.(3|4|5|6|7|8)\.ffn_.*=CUDA0" \` as high as it goes without OOMing... This is how we do multi-GPU here vs ktransformers chat yaml things. Also here on ik's fork there is no performance hit offloading additonal layers like ktransformers (at least used to have) due to its cuda graphs stuff.
+> 
+> `-DGGML_SCHED_MAX_COPIES=1` is also in mainline llama.cpp and the default is 4 pipeline parallel but using 1 is much more simple and allows more VRAM and easier for multi-GPU and then just increase batches for more speed. You will possibly see a debug log like `llama_new_context_with_model: pipeline parallelism enabled (n_copies=1)`.
+> 
+> Once you've dialed in the command you can then just switch out the executable back to `llama-server` and add back in alias/host/port and remove `--warmup-batch`.
+> 
+> Okay, let me know if u have any questions, you have a very nice rig!
+
 > 👤 **sousekd** replied on **2025-07-10** at **18:29:53**
 > 
 > Hi @createthis, I was able to achieve the following on (single) Epyc 9355 and RTX 5090:
@@ -9865,6 +10100,10 @@ will give a nice table with PP and TG performance for 0...32k tokens in the KV c
 I think in `llama.cpp` they have added the `--depth` argument to `llama-bench` that allows you to get similar results.
 
 Another comment related to the NUMA situation: I don't have access to a NUMA system myself, but people report that, sadly, on dual socket systems they get the best performance by disabling NUMA in the BIOS and running on a single CPU. @ubergarm has done quite a few experiments in that regard. I haven't followed what is happening in `llama.cpp` land on that front, so maybe they have improved in the meantime (but hadn't only 2-3 months ago).
+
+> 👤 **ikawrakow** replied on **2025-07-10** at **16:48:34**
+> 
+> But apart from everything else, worth pointing out that `ik_llama.cpp` needs only half the total time for PP+TG compared to `llama.cpp`.
 
 ---
 
@@ -9988,6 +10227,44 @@ PP speed does continue to rise past 32 threads though, which is suprising:
 |   512 |    128 |   3584 |    3.369 |   151.97 |   13.454 |     9.51 |
 |   512 |    128 |   4096 |    3.413 |   150.02 |   13.577 |     9.43 |
 ```
+
+> 👤 **ubergarm** replied on **2025-07-10** at **23:13:21**
+> 
+> @createthis 
+> 
+> > ./build/bin/llama-batched-bench
+> 
+> I've never used `llama-batched-bench` but @saood06 has mentioned it before. Is that why you're seeing more TG tok/sec there? It might be comparing something different than `llama-sweep-bench` ? I know using `llama-server --parallel 4` for example gives higher aggregate throughput at a cost to individual request speeds.
+> 
+> > PP speed does continue to rise past 32 threads though, which is suprising:
+> 
+> This is as expected as PP is CPU limited, so more cores will give some speed boosts there.
+> 
+> ---
+> 
+> Okay cool looks like you got it into NPS0! So now that you don't need to worry about numactl, give this a try:
+> 
+> ```bash
+> ./build/bin/llama-sweep-bench \
+>     --model /data/DeepSeek-V3-0324-GGUF-UD/UD-Q4_K_XL/DeepSeek-V3-0324-UD-Q4_K_XL-00001-of-00008.gguf \
+>     -fa -mla 3 -fmoe -amb 512 -mg 0 \
+>     --ctx-size 20480 \
+>     -ngl 99 \
+>     -ot "blk\.(3|4|5|6|7|8)\.ffn_.*=CUDA0" \
+>     -ot exps=CPU \
+>     --threads 48 \
+>     --threads-batch 64 \
+>     -ub 4096 -b 4096 \
+>     -rtr \
+>     --warmup-batch
+> ```
+> 
+> The trade off is how you want to spend your VRAM: 
+> 1. you will get more PP by increasing `-ub -b` 
+> 2. you will get more TG by offloading more layers with `-ot ...`
+> 3. try with and without `-rtr` as benefits can vary with batch size
+> 
+> If it OOMs on VRAM already, just back off how many offload layers e.g. `-ot "blk\.(3|4|5)\.ffn_.*=CUDA0" \`
 
 > 👤 **saood06** replied on **2025-07-10** at **23:23:43**
 > 
@@ -10464,6 +10741,10 @@ https://github.com/turboderp-org/exllamav3
 
 The same thing goes for ik_llama.cpp etc. -- the matrix absorption trick in flash **infer** is not available in flashattn hence the for the full context in ik_llama.cpp its required to have at least 48 GB VRAM which is not ideal. 
 ```
+
+> 👤 **ubergarm** replied on **2025-07-10** at **23:42:50**
+> 
+> Sorry not sure which of these is the real one, I replied over here: https://github.com/ikawrakow/ik_llama.cpp/discussions/477#discussioncomment-13726306
 
 > 👤 **ubergarm** replied on **2025-07-10** at **23:51:29**
 > 

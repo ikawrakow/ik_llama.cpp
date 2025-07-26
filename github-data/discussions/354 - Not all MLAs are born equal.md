@@ -252,6 +252,14 @@ The next graph shows PP performance as a function of `N_KV`. Here the performanc
 
 Since you are tagging me: I did look at the more general implementation for mapping MoE to regular matrix multiplications in the PR where I commented but I did not look at any MoE-specific CUDA code for matrix vector multiplication, nor was I aware that this repository had such an optimization. It's just the natural way of writing a fused kernel.
 
+> 👤 **ikawrakow** replied on **2025-04-29** at **14:39:31**
+> 
+> >  It's just the natural way of writing a fused kernel.
+> 
+> Sure, a kernel that did not get written for a very long time, despite the well known fact that `llama.cpp` CUDA performance for MoE models is really bad. Which indicates that the understanding how badly the fused kernel was needed was missing. It is not very often that one has a PR that [improves performance up to 4X](https://github.com/ggml-org/llama.cpp/pull/13014#issuecomment-2816637977).
+> 
+> But if it is so as you say, then sorry.
+
 > 👤 **JohannesGaessler** replied on **2025-04-29** at **15:33:40**
 > 
 > Apology accepted. My top priority was and still is good performance for dense GEMM/GEMV because that is the most fundamental operation. MoE optimizations have now simply reached the front of the priority queue.
@@ -267,6 +275,16 @@ I am building an EPYC box with 768 GB RAM and 96 GB VRAM (2x48). Will I be able 
 Do you plan to support the incompatible mainline GGUF files? Can I assume that GGUFs created before mid-April or so will be compatible? (Downloading these larger models represents a considerable cost.)
 
 Thank you for creating this work and making it available. You are a true wizard.
+
+> 👤 **ikawrakow** replied on **2025-05-06** at **16:16:34**
+> 
+> > Can I assume that GGUFs created before mid-April or so will be compatible? (Downloading these larger models represents a considerable cost.)
+> 
+> I think so. But to make sure, if you are downloading from HF, you can check the content of the GGUF. To be compatible, it needs to have tensors ` blk.X.attn_kv_b.weight` (where `X` is the layer index, so 0,1,...). If it does, it will work with this fork. If instead it has separate tensors `blk.X.attn_k_b.weight` and `blk.X.attn_v_b.weight`, it is most likely not compatible. 
+> 
+> > Do you plan to support the incompatible mainline GGUF files? 
+> 
+> No, not really. There are implications beyond compatibility. The change impacts quantization of the attention tensors, and I think there are now some reports from users about reduced model quality after the change was made and the quantized models compatible with that change started coming out.
 
 > 👤 **saood06** replied on **2025-05-06** at **20:24:09**
 > 

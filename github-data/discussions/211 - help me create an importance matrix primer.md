@@ -233,6 +233,16 @@ This documentation introduces general approaches to quantization and then llama.
 
 Etc. Sorry @robbiemu, but this is just too far from representing the actual imatrix fundamentals and the imatrix use for guiding quantization.
 
+> 👤 **robbiemu** replied on **2025-02-21** at **11:55:47**
+> 
+> thank you for that :) Its a draft, of course there are things going to be wrong, its a big project that I've worked _with_ much more than _in_, and I need and appreciate the help identifying where I need to correct. 
+> 
+> especially things like simple errata like Github's markdown not rendering latex and my confusing at one point blocks of 32 for superblocks of 256 vis-a-vis AVX2 are little burden. But there were a couple of points that I dont feel confident how to process.
+> 
+> At the beginning, I did transclude in sections from another document I have on LeanQuants specifically because in our conversation where I felt you were the one to equate the imatrix to the hessian approach. And they have a very natural way of expressing the relationship to quantization decisions so .. I took pains to show the approximate relationship. That and, if you search/read about llama.cpp importance matrices online now, you will often see this relationship indicated. In reading your PR comment I see that you don't even explicitly mention it, so maybe inclusion was misguided. Yet, you also don't directly ground quantization decisions to using an importance matrix. In other words, the "how did we get here" that this section currently provides .. I'll need to add that still. Do you prefer another formulation rather than what I used from LeanQuant? If I were to keep it: What is glossed over as essentially a given, that you can calculate only the diagonal, and the fact that you can treat a block-diagonal matrix here as a collection of smaller matrices (so you can break up the model's quantization row-wise, as is done in llama.cpp) -- those can be simplified or removed and replaced with the derivation you spell out in your PR.
+> 
+> What really interests me is # 7. after generating your imatrix the next step, in practice, is to use the quantization tool. So it must be in the details it is incorrect. I got this from perplexity (I've not been working very much in the llama.cpp source code, except in regards YaRN). If it is not too much to ask, could I ask you to help correct that into a high level description. I'm trying to avoid an exact correspondence here (phase 1 also does not live up to that), I just want a simple conceptual description of the execution graph.
+
 > 👤 **robbiemu** replied on **2025-02-21** at **12:28:24**
 > 
 > On one other point:
@@ -262,3 +272,15 @@ Where did you even get this equation from? It certainly is not used anywhere in 
 > High-importance weights receive larger bit allocations within mixed-precision quantization ...
 
 No. All model weights in a tensor use the exact same amount of bits per weight.
+
+> 👤 **robbiemu** replied on **2025-02-21** at **19:03:42**
+> 
+> Ok hold on, please understand I'm just trying to essentially describe this, using tools to help me avoid reading the code was probably a mistake but, in my defense, its a big project that I am trying to elaborate. :) I'll apply the changes, this will get better. Maybe I should seek help from others instead... if so my apologies. I dont want to address the entire reply you gave me there just now, but something you said really gave me doubt.
+> 
+> >> The quantization algorithm scales compression aggressiveness inversely with importance scores...
+> >
+> > Absolutely not. Everything is quantized with the same number of bits, so the "compression aggressiveness" is the same. Instead, when the difference between the original and the quantized model is minimized, the importance matrix enters as a weighting factor in the optimization objective (a.k.a. "loss" these days).
+> 
+> Wow that is a surprise.  So for example, in your earlier reference to the `quantize_row_q4_0_impl()` function, the loop is not assigning a different number of bits to each column of weights within the row? If it is applying the same value throughout, why is it using a for loop for each column of weights from the row?
+> 
+> edit: ooh, I forgot about this! I had known it at some level before, but it was never necessary in discussing it so I forgot and went back to my original understanding. It is basically a lot more computation to use a different number of bits, but there are other details that go into extracting the original value. the multiplier and the offset.

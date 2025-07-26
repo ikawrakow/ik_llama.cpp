@@ -57,6 +57,14 @@ Thanks and let me know if you try these out or have questions or comments. Feel 
 
 Thanks for these quants and the rest of your work you publish. Could you do one that fits in 128GB RAM and 72GB VRAM with 32K context? I tried the unsloth IQ1_S and got about 2.7 t/s generation on mainline and 2.15 t/s on ik. It was coherent and delivered surprisingly good responses to real world coding tasks. Oh but the R4 variants don't support Q1 yet, right?
 
+> 👤 **ubergarm** replied on **2025-06-01** at **17:54:28**
+> 
+> Yeah getting that small becomes tricky. I've been noodling on it and want to try out some experiments.. the iq2_kt quants might be interesting but will take a long time to quantize. they will get us down to 2.125 BPW but likely not performant given a lot of CPU inferencing.
+> 
+> I could look into the IQ1 stuff but haven't ever messed with those really... but yes there are no `_r4` repacked versions of the smaller sub ~4bpw guys yet.
+> 
+> If you have a good PCIe Gen5 NVMe e.g. the T705 or similar you might actually get faster going with my `IQ2_KS` which is 220GiB and using the default mmap() to let some of it "hang off" into page cache. Hoping to try that soon and expect 3-5 tok/sec on my gaming rig (96GB RAM +24GB VRAM) but it does heat up the SSD (though no write level wear as it is read only).
+
 > 👤 **ubergarm** replied on **2025-06-02** at **04:43:27**
 > 
 > @randoentity 
@@ -100,6 +108,12 @@ I downloaded IQ1_S from unsloth and got 90t/s PP but same and slightly lower 10.
 different in that regard. Granted, I can use full 32k context now and maintain speeds.
 
 Smaller AMB than 512 often lets you fit a couple more pieces due to the reduced buffer. Every little bit on GPU helps when CPU/Memory isn't that strong.
+
+> 👤 **ubergarm** replied on **2025-06-01** at **17:57:01**
+> 
+> > Will -rtr fix the R4 quants so they don't have to use the BF16 path?
+> 
+> `-rtr` will try to make non `_r4` quants into `_r4` quants so I believe the answer is no. Though some folks are reporting `-DGGML_CUDA_IQK_FORCE_BF16=1` is giving them a slight speed *boost* probably depending on what model GPU you have.
 
 ---
 
@@ -244,6 +258,10 @@ llama_model_loader: - type iq3_k_r4:   58 tensors
 
 </details>
 
+> 👤 **ikawrakow** replied on **2025-06-01** at **15:30:25**
+> 
+> Ha, this is interesting. On my RTX-4080 `bf16` is ~10-20% slower than `fp16`.
+
 > 👤 **ikawrakow** replied on **2025-06-01** at **15:40:55**
 > 
 > Btw, if you have space VRAM, try `-b 4096 -ub 4096`. This should give you a very significant boost in PP performance.
@@ -363,6 +381,10 @@ llama_model_loader: - type iq3_k_r4:   58 tensors
 👤 **anikifoss** commented on **2025-06-01** at **16:12:44**
 
 I uploaded the custom quant I use for coding [here](https://huggingface.co/anikifoss/DeepSeek-R1-0528-DQ4_K_R4) with some of the infromation how I arrived there and relevant benchmarks. I added some teasers on command line arguments to experiment with, as this branch is moving quickly and small performance improvements can add up over time.
+
+> 👤 **ubergarm** replied on **2025-06-04** at **21:08:29**
+> 
+> Thanks again for your quant, pretty sure it is the biggest boi of them all so a great choice for anyone with a big rig that wants the more BPW than my quants!
 
 ---
 
@@ -745,6 +767,14 @@ My personal observations and thoughts are:
 3. The 32 block size [_ks](https://github.com/ikawrakow/ik_llama.cpp/pull/83#issue-2575352790) quants are looking really strong here especially given recent CUDA speed-ups. I'm eyeing that `iq5_ks` for future recipes and glad I already used them my released `IQ2_K_R4`
 4. The error bars crack me up.
 
+> 👤 **ubergarm** replied on **2025-06-02** at **04:46:51**
+> 
+> ![perplexity](https://github.com/user-attachments/assets/55a55312-b41b-49c5-86cb-922d82b62190)
+> 
+> Just ran some perplexity numbers for all of the quants I've released to huggingface. Running a few KLD on a very short "novel" test corpus also mainly to compare against quants from other cookers using different imatrix test corpus and methodologies and confirm if the PPL compares between us all okay or what.
+> 
+> Interestingly the small `IQ1_S_R4` has a perplexity lower than `Qwen3-235B-A22B-Q8_0`=`Final estimate: PPL = 5.3141 +/- 0.03321` 232.769 GiB though that doesn't necessarily mean it is "better" but possibly more trained against wiki.test.raw?
+
 > 👤 **ikawrakow** replied on **2025-06-02** at **05:36:13**
 > 
 > So, `iq5_ks` looks like the winning option for attention tensors.
@@ -909,6 +939,10 @@ So here is a new surprise, since I'm eying that IQ1 quant you're publishing. On 
 
 On another note, I tried to test mainline llama and that sweep bench segfaults with deepseek and does not recognize the -FA parameter. I was able to load on llama-server and get a blazing fast 6t/s PP, 6t/s TG. So much for that.
 
+> 👤 **ubergarm** replied on **2025-06-04** at **21:11:14**
+> 
+> Check out this [PR492](https://github.com/ikawrakow/ik_llama.cpp/pull/492), given one cannot simply repack IQ1_S to IQ1_S_R4 is possibly related to the mind wobbles. haha..
+
 ---
 
 👤 **cmoncure** commented on **2025-06-03** at **00:58:43**
@@ -930,6 +964,10 @@ With Q4_K_M `-ngl 8 -sm layer -b 4096` it's 180-200 PP but less ideal 6-8 TG.  C
 (IQ4_K_R4 `-ngl 8 -sm layer -b 4096` performance is not "tokens per second" but "seconds per token")
 
 Either way I have a whole GPU worth of compute just sitting idle.  There has to be a way to utilize it. Can I not have the `-ngl 8 -sm layer` approach during PP on CUDA0, and then the `-rtr -sm none` approach during TG on CUDA1? Can I produce a quant that gets me the best of both worlds?
+
+> 👤 **Ph0rk0z** replied on **2025-06-03** at **02:39:39**
+> 
+> Trial and error :( Helps to print the sizes on mainline and then see what you can fit. Generally on deepseek, only EXP layers help. All the little small ones don't do much.
 
 > 👤 **cmoncure** replied on **2025-06-03** at **15:24:54**
 > 
@@ -1406,6 +1444,10 @@ But, you want to do something like this?
 
 Are these **impossible** for REASONS or just "not supported" i.e. go learn the domain and write the code myself?
 
+> 👤 **Thireus** replied on **2025-06-03** at **21:32:54**
+> 
+> I'm reading this answer - https://chatgpt.com/share/683f69cc-bff8-800f-8610-55aa4de145ed
+
 > 👤 **ubergarm** replied on **2025-06-03** at **23:25:38**
 > 
 > @cmoncure 
@@ -1455,6 +1497,12 @@ Day 4 of chasing performance with bespoke repacking and the delicate and mercuri
 I made a repacked quant that converts only the exps tensors running on CPU to _r4 (exps 11...60) and run everything else on CUDA0 and CUDA1 with --sm layer.  It should be the best of both worlds, but it's the worst of both worlds: PP 71 and TG 9.
 
 The domain may seem like black magic but at the end of the day all we're doing here is matrix multiplication. My instinct is screaming at me that there's huge amounts of performance left on the table.  The wild and frankly shocking comment that "high gpu utilization is actually a bad thing" notwithstanding, the goal is to get the most math done per unit time as possible. It's very telling that seemingly no one can give an explanation that holds water of what operations must be tied to one another on a compute device, or why the tensors can be split in one way between CPU and CUDA0 but as soon as you extend the split to involve CUDA1 the performance bombs.  We want to run big models on commodity hardware and that means finding the way of distributing the computation among multiple relatively-low-capacity compute units that maximizes the contribution of all the units.
+
+> 👤 **Thireus** replied on **2025-06-06** at **15:08:15**
+> 
+> Don't give up so soon! I'm in the same boat and I need motivation. 😂
+> 
+> Which model/quant and ik_llama build are you using?
 
 > 👤 **cmoncure** replied on **2025-06-06** at **15:48:32**
 > 
@@ -1527,6 +1575,11 @@ parameter:
 
 Add -b 4096 -ub 4096 and you will have 3x your pp speed
 
+> 👤 **zts9989** replied on **2025-06-26** at **01:36:14**
+> 
+> https://github.com/ggml-org/llama.cpp/issues/14325
+> Thanks.
+
 ---
 
 👤 **saood06** commented on **2025-06-11** at **15:05:50**
@@ -1550,6 +1603,14 @@ Thank you for the discussion. Sharing my experimental results for your reference
 ![p5](https://github.com/user-attachments/assets/ac731f45-b798-472b-879b-d5400c865787)
 
 https://github.com/ggml-org/llama.cpp/issues/14325
+
+> 👤 **saood06** replied on **2025-06-26** at **01:58:27**
+> 
+> You said in the linked post:
+> 
+> >I tested ik llamacpp and found some performance improvements, but the stability was insufficient (there also seem to be other issues with usability and stability)
+> 
+> Can you make issues for the usability and stability problems you mentioned.
 
 > 👤 **zts9989** replied on **2025-06-26** at **02:03:56**
 > 
@@ -1638,6 +1699,10 @@ Screenshot evidence will be attached as noted.
 ![Screenshot_2025-06-26_15-21-42](https://github.com/user-attachments/assets/38f9bf03-6121-4548-88d8-6e3e43dd12aa)
 ![Screenshot_2025-06-26_15-29-56](https://github.com/user-attachments/assets/fa1c28d4-8060-4f73-ae76-8f7d60da89ce)
 
+> 👤 **ikawrakow** replied on **2025-06-26** at **09:04:13**
+> 
+> I suggest you try `-mla 3 -fmoe`. If you run out of VRAM, add `-amb 512`. For the 36k tokens you are processing you should get a very significant performance boost in PP performance.
+
 > 👤 **Thireus** replied on **2025-06-26** at **09:14:12**
 > 
 > @zts9989 - Yep, similar observations here https://github.com/ikawrakow/ik_llama.cpp/discussions/477#discussioncomment-13367713 ;)
@@ -1673,6 +1738,13 @@ Thanks!
 I can see what I can do, but I don't feel particularly motivated to engage in hunting down integer overflows and CUDA maximum block size exceeded issues in code that I didn't write myself or at least modified at some point. There are still some performance optimizations left that would be more interesting to work on.
 
 But based on your performance numbers, I estimate you have a 30 GB/s PCI-E, so it takes about 13 seconds to upload all experts stored in RAM to the GPU(s). For u-batch size of 16k tokens you are getting 347 t/s, so the u-batch takes about 47 seconds, so computation is about 34 seconds (and it is easy to verify that this napkin math works for u-batches of 8k and 4k). If you would go to u-batch size of 32k tokens, computation for the batch will at least double, offload time will stay the same, so it will be taking about 81 seconds, so performance will be in the range of 390 t/s. In reality when batch sizes become very large, computing performance goes down due to limited caches, etc, so I'm guessing you will saturate around 350-360 t/s. If I look at the 8k u-batch size, I estimate you have in the range of 30 GB of unused VRAM. Hence, you could have uploaded 5 or 6 layers of experts to the GPU. That would slightly increase your PP performance, and will also boost your TG performance by about 10%.
+
+> 👤 **zts9989** replied on **2025-06-26** at **13:02:20**
+> 
+> I just gave it a try.
+> My GPU is connected via PCIe 4.0 x16, so the bandwidth is around 30 GB/s. 347 t/s really seems to be the current limit for my setup. I experimented with a batch size of 32,768 tokens, but performance actually decreased. I also tried pre-loading experts into the available GPU VRAM – the gain was minimal (just from 17.3 to 17.5 t/s).
+> 
+> Thanks for the suggestions though. I've now secured a runtime environment with higher-performance PP.
 
 > 👤 **ikawrakow** replied on **2025-06-26** at **17:37:09**
 > 
@@ -1800,6 +1872,10 @@ Built on Tue_May_27_02:21:03_PDT_2025
 Cuda compilation tools, release 12.9, V12.9.86
 Build cuda_12.9.r12.9/compiler.36037853_0
 ```
+
+> 👤 **ikawrakow** replied on **2025-07-11** at **04:57:13**
+> 
+> What is the model in these benchmarks?
 
 > 👤 **ubergarm** replied on **2025-07-11** at **06:22:06**
 > 
@@ -1929,6 +2005,71 @@ Build cuda_12.9.r12.9/compiler.36037853_0
 👤 **magikRUKKOLA** commented on **2025-07-10** at **21:31:25**
 
 MOVED: https://github.com/ikawrakow/ik_llama.cpp/discussions/258#discussioncomment-13726226
+
+> 👤 **ubergarm** replied on **2025-07-10** at **23:41:21**
+> 
+> @magikRUKKOLA 
+> 
+> Thanks for bringing the discussion over here, explaining your goal of running as much context as possible up to 160k (model max) on the least VRAM possible, and showing your hardware setup.
+> 
+> > hence the for the full context in ik_llama.cpp its required to have at least 48 GB VRAM which is not ideal.
+> 
+> I'm not sure how you came to this conclusion? I just ran [ubergarm/DeepSeek-TNG-R1T2-Chimera-GGUF/IQ2_KS](https://huggingface.co/ubergarm/DeepSeek-TNG-R1T2-Chimera-GGUF) at full 160k context using only 13830MiB VRAM with q8_0 quantized kv-cache... The TG speeds are suffering a bit because I'm not offloading any layers/weights to GPU, but if I were to really run this I'd optimize by offloading some more layers to fill remaining VRAM and increasing `-ub 4096 -b 4096` etc...
+> 
+> <details>
+> 
+> <summary>👈How to run 160k context in under 14GB VRAM + ~200GB RAM</summary>
+> 
+> 
+> ```bash
+> export model=/mnt/raid/hf/DeepSeek-TNG-R1T2-Chimera-GGUF/IQ2_KS/DeepSeek-TNG-R1T2-Chimera-IQ2_KS-00001-of-00005.gguf
+> CUDA_VISIBLE_DEVICES="0" \
+> ./build/bin/llama-server \
+>     --model "$model" \
+>     --alias ubergarm/DeepSeek-TNG-R1T2-Chimera-IQ2_KS \
+>     -fa \
+>     -mla 3 -fmoe -amb 512 \
+>     --ctx-size 163840 \
+>     -ctk q8_0 \
+>     -ngl 0 \
+>     --parallel 1 \
+>     --threads 24 \
+>     --host 127.0.0.1 \
+>     --port 8080
+> .
+> .
+> .
+> 
+>   Device 0: NVIDIA RTX A6000, compute capability 8.6, VMM: yes
+> llm_load_tensors: ggml ctx size =    0.47 MiB
+> llm_load_tensors: offloading 0 repeating layers to GPU
+> llm_load_tensors: offloaded 0/62 layers to GPU
+> llm_load_tensors:        CPU buffer size = 42314.45 MiB
+> llm_load_tensors:        CPU buffer size = 42634.02 MiB
+> llm_load_tensors:        CPU buffer size = 42634.02 MiB
+> llm_load_tensors:        CPU buffer size = 42634.02 MiB
+> llm_load_tensors:        CPU buffer size = 38222.26 MiB
+> ....................................................................................................
+> llama_new_context_with_model: n_ctx      = 163840
+> llama_new_context_with_model: n_batch    = 2048
+> llama_new_context_with_model: n_ubatch   = 512
+> llama_new_context_with_model: flash_attn = 1
+> llama_new_context_with_model: mla_attn   = 3
+> llama_new_context_with_model: attn_max_b = 512
+> llama_new_context_with_model: fused_moe  = 1
+> llama_new_context_with_model: ser        = -1, 0
+> llama_new_context_with_model: freq_base  = 10000.0
+> llama_new_context_with_model: freq_scale = 0.025
+> llama_kv_cache_init:  CUDA_Host KV buffer size =  5833.12 MiB
+> llama_new_context_with_model: KV self size  = 5833.12 MiB, c^KV (q8_0): 5833.12 MiB, kv^T: not used
+> llama_new_context_with_model:  CUDA_Host  output buffer size =     0.99 MiB
+> llama_new_context_with_model:      CUDA0 compute buffer size = 13569.14 MiB
+> llama_new_context_with_model:  CUDA_Host compute buffer size =   334.01 MiB
+> ```
+> 
+> </details>
+> 
+> So you have 3x 3090s and how much RAM? You can easily achieve full 160k context while offloading additional layers for max PP and TG speeds.
 
 > 👤 **magikRUKKOLA** replied on **2025-07-10** at **23:48:40**
 > 
@@ -2262,6 +2403,10 @@ EOF
 ```
 <details>
 
+> 👤 **ikawrakow** replied on **2025-07-14** at **15:11:10**
+> 
+> My recommendation would be to use a log scale for perplexity, else you see nothing when you add low-but quants and expand the plot range accordingly.
+
 > 👤 **magikRUKKOLA** replied on **2025-07-15** at **06:40:15**
 > 
 > @ikawrakow okay cool, its done.  The json and bash files to generate the graph are provided.
@@ -2496,6 +2641,10 @@ R1 stats (THIREUS quants added).
 
 
 ```
+
+> 👤 **Panchovix** replied on **2025-07-16** at **17:17:17**
+> 
+> Those Thireus ones look pretty impressive, are they posted somewhere? Do they work on lcpp or only on iklcpp?
 
 > 👤 **magikRUKKOLA** replied on **2025-07-16** at **18:51:48**
 > 
@@ -4637,6 +4786,10 @@ Once you have the system's effective memory bandwidth, you can then reverse the 
 
 Things get a little more tricky when you have a GPU in the mix. The same formula usually applies to GPU and VRAM (uncless the card is very weak at compute, like some older cards). However, if you have both GPU and CPU working together, then the slowest one (CPU) will be your bottleneck. Then you need to figure out how many active parameters will go on the GPU and how many will go on the CPU.
 
+> 👤 **magikRUKKOLA** replied on **2025-07-16** at **22:08:55**
+> 
+> A stupid question -- are you basically saying that IQ1_S_R4 quant will be twise as fast as say, IQ3_KT ?  both in prefill and decode ? :)
+
 > 👤 **anikifoss** replied on **2025-07-16** at **22:16:13**
 > 
 > > are you basically saying that IQ1_S_R4 quant will be twise as fast as say, IQ3_KT ? both in prefill and decode ? :)
@@ -4667,6 +4820,12 @@ Things get a little more tricky when you have a GPU in the mix. The same formula
 
 **Prompt Processing** uses a clever workaround to cheat the RAM bandwidth limitation. You multiply several tokens at the same time, that way you are re-using the data in the CPU cache, side-stepping the RAM bandwidth limit.
 
+> 👤 **magikRUKKOLA** replied on **2025-07-16** at **22:30:27**
+> 
+> > **Prompt Processing**
+> 
+> Unrelated question:  have you seen MLA matrix absorbtion ( https://github.com/ikawrakow/ik_llama.cpp/discussions/599#discussion-8567748 ) implemented properly somewhere?
+
 ---
 
 👤 **anikifoss** commented on **2025-07-17** at **16:54:59**
@@ -4678,6 +4837,12 @@ Does anyone have experience with MI50s or running a mixed ROCM/CUDA setup?
 If I can get MI50s working working, I'll try hooking up 22 of them into one system, for a total of 704GB VRAM. That should be enough to run my chunky Kimi-K2 quant. Will need to limit power consumption to 120W stay within 1600x2 Watts.
 
 I found some articles online with mixed feedback about MI50s, would really appreciate if someone could share the first hand experience!
+
+> 👤 **magikRUKKOLA** replied on **2025-07-17** at **19:14:37**
+> 
+> > If I can get MI50s working working, I'll try hooking up 22 of them into one system, for a total of 704GB VRAM
+> 
+> But exactly how?  The CPUs have a limited number of PCIe lanes that they support.
 
 > 👤 **anikifoss** replied on **2025-07-17** at **19:17:39**
 > 

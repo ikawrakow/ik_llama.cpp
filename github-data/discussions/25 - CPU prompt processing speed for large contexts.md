@@ -170,6 +170,12 @@ Ha, you had already done that! I didn't check `llamafile` and discovered this on
 
 I don't care about MSVC, so sure. There is the MIT vs Apache-2.0 issue, but we can sort that out.
 
+> 👤 **jart** replied on **2024-08-22** at **18:02:15**
+> 
+> Apple doesn't have OpenMP. So that's where my thread synchronization changes have the most impact. Right now in llama.cpp if I build it on my Apple M2 and run with `-ngl 0` for CPU mode it gets 134 tok/sec tops. But llamafile with `-ngl 0` on MacOS M2 generates text at anywhere from 150 tok/sec to 210 tok/sec depending on how much Netflix is interfering and how much I win the XNU scheduler lottery (I imagine things are consistently 200+ if Asahi Linux is used instead of XNU). On the other hand, if I use Metal GPU then it consistently generates text at 200 tok/sec.
+> 
+> Yes, that's correct. I'm claiming that the changes you and I both made on llamafile have made M2 Ultra CPU go faster than its GPU sometimes when generating text with TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf. However if I use a larger model like Mistral 7b where the matmuls start to dominate a lot more than the sync barriers, then I can only generate 42 tok/sec and GPU does 72 tok/sec. So this is all a bit orthogonal to the goal here of huge context windows. I just wanted you to know that we did something most people would likely assume is not possible. I certainly wouldn't have, because when I started focusing on this in January I set out with the goal of making CPU at at least only 10x slower than GPU.
+
 > 👤 **jart** replied on **2024-08-22** at **18:13:48**
 > 
 > As for MIT vs. Apache 2.0 there's a lot of leeway from Mozilla to make my work available to other local AI projects under the MIT license if that's what you're using here. I'll roll up a pull request for you sometime in the next few days, that'll work smoothly on POSIX platforms.

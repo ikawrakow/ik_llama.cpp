@@ -54,6 +54,19 @@ instead.
 
 If you split `ffn_up` and `ffn_gate` and there is a fused `ffn_up/ffn_gate` op where `ffn_up` is on the GPU but `ffn_gate` is on the CPU, whatever the back-end decides to do (run the op on the GPU or the CPU), the tensors need to be copied from the GPU to the CPU or vice versa. This totally kills TG performance.
 
+> 👤 **usrlocalben** replied on **2025-07-15** at **18:37:07**
+> 
+> > `Q6_K` has been around forever and hence is a well supported quant on all platforms.
+> 
+> I did find it surprising. If instead it were IQxxx I proably might not have been inspired to ask/write.
+> 
+> 
+> > Instead, you absolutely do not want to split up `ffn_up` and `ffn_gate` when using `-fmoe`. Try
+> 
+> Makes so much sense it should have been obvious 😥
+> 
+> Thanks
+
 > 👤 **usrlocalben** replied on **2025-07-15** at **18:42:37**
 > 
 > Furthermore, now I see why I've observed that particular offload pattern mentioned in various places.
@@ -65,3 +78,7 @@ If you split `ffn_up` and `ffn_gate` and there is a fused `ffn_up/ffn_gate` op w
 👤 **ikawrakow** commented on **2025-07-15** at **18:07:47**
 
 One more thing: if you have enough VRAM to use batch and u-batch of 4096, you should try removing `-op 26,0,27,0,29,0` to see how this affects your PP performance. Depending on GPU vs CPU speed, this may give you a non-negligible boost in PP performance for long prompts (longer than 4k tokens).
+
+> 👤 **usrlocalben** replied on **2025-07-15** at **18:39:48**
+> 
+> In the same testing prior to posting I did a fresh a/b test w & w/o this and it _still_ improve things, maybe 1.5x (I just tossed the measurements). I did notice the recent change to the heuristics wrt. offloading but enforcing the -op policy is still an improvement for my hw combo.

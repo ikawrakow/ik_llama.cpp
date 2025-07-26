@@ -45,6 +45,10 @@ This would be a massive win for me.  Currently PP is the millstone around the ne
 
 KV Cache reuse and tool calling would open up whole new worlds.
 
+> 👤 **mtcl** replied on **2025-06-05** at **02:26:48**
+> 
+> I agree 100% with you. Given that I built my own tool calling solution for ik_llama.cpp, at this point of time kv cache reuse would mean an instant switch for me to this!
+
 ---
 
 👤 **SamuelOliveirads** commented on **2025-06-03** at **21:52:10**
@@ -52,6 +56,18 @@ KV Cache reuse and tool calling would open up whole new worlds.
 Glad to see that others are also interested in this feature! I was about to open an issue myself, but I noticed that @saood06 is already looking into something similar [here](https://github.com/ikawrakow/ik_llama.cpp/issues/455#issuecomment-2917718499) — so now it’s just a matter of waiting.
 
 By the way, @saood06, if you need any help with testing, I’d be happy to assist.
+
+> 👤 **saood06** replied on **2025-06-06** at **09:16:14**
+> 
+> Since there does seem to be demand, and people waiting, I'll provide an update which explains what my plan is (and the benefits, but also the limitations), and the current status.
+> 
+> The goal is to create a new mechanism where if enabled a [trie](https://en.wikipedia.org/wiki/Trie) of all processed tokens is kept that can be saved and restored to a file. This should allow you to keep every explored branch of a session (or multiple if you share a large initial prompt between sessions) with the least amount of space and no quality loss.
+> 
+> This may only be viable on MLA models as they are extremely light for KV cache, and this method does not degrade quality like chunking or shifting, but for that reason this does not handle the common case of shifting the cache when you want to remove the thought tokens without having to reprocess as there is no way to do that without losing (at least some) quality. 
+> 
+> I was stalled because of #436 but now that saving and loading works I am now unblocked, but this still seems like a large undertaking and may take some time.
+> 
+> I may end up porting the chunk/shift method (or @cmoncure is welcome to do it) anyway (even before I finish), since as I said they have different tradeoffs, but integrating the two fully as nice as it sounds (which would let you be able to chunk and shift from the trie) seems way too difficult.
 
 > 👤 **cmoncure** replied on **2025-06-06** at **15:16:33**
 > 

@@ -65,6 +65,16 @@ The better TG performance is unexpected. I haven't checked these models closely,
 
 Please file an issue with your command. If you could run in the debugger and do a backtrace when it crashes, that would be great!
 
+> 👤 **rkozuch** replied on **2025-07-24** at **12:02:00**
+> 
+> Changing fast indeed. Was not expecting the whole repo to disappear overnight 😅. Welcome back!
+> 
+> I misremembered the error and it was not Deepseek R1 but instead V3 causing the segfaults, and only in `llama-bench`, for some reason.
+> 
+> > If you could run in the debugger and do a backtrace when it crashes, that would be great!
+> 
+> No worries, but I'm not familiar with the debugger; if you can point me in the right direction on how I can do a backtrace, I can do that over the weekend. Cheers
+
 ---
 
 👤 **ubergarm** commented on **2025-07-20** at **14:57:40**

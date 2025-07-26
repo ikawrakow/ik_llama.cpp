@@ -125,6 +125,10 @@ Cheers!
 
 It's a good idea to view all the layers and their file sizes on the model. That way you know what you can fit onto your GPUs. Not all blocks have the same sized layers. I have used llama.cpp mainline to print the sizes and adjusted accordingly. The more you cram, the more t/s you generally get. Smaller AMB can get you smaller buffers and perhaps fit another layer. Benchmarking is your friend. Once you cache the model in sysram, its easy to re-load and try things. There is some variance in llama-sweep-bench, but you can still spot larger trends. After a lot of testing, it might be wise to dump your cache and re-test your best ones.
 
+> 👤 **Panchovix** replied on **2025-06-17** at **13:56:49**
+> 
+> What is the effect by reducing or increasing the amb, besides buffer size?
+
 > 👤 **Ph0rk0z** replied on **2025-06-18** at **01:11:46**
 > 
 > From the original PR it runs the ops multiple times, if I understand correctly. Breaking them up into batches. On some systems that can be slower? In practice I found little difference.
@@ -184,6 +188,14 @@ https://www.youtube.com/watch?v=cFddXR1nPLg
 59:36 - iklama.cpp Performance Results (15 tokens/sec)
 1:08:31 - Test 4: Llama 4 Maverick MoE Model
 1:20:22 - Maverick Performance Results (57 tokens/sec!)
+
+> 👤 **Panchovix** replied on **2025-06-23** at **03:19:03**
+> 
+> Not them but for 2bpw or more you may get benefits by offloading.
+> 
+> If you want to load 2-4bpw fully on GP without offloading, then you need 2 6000 Pros more haha.
+> 
+> It is not normal to get 12 t/s PP. How are you running the model? On that specific quant I get about 200-300 t/s PP on a 5090 (and other GPUs, offloading about 100GB to RAM).
 
 > 👤 **mtcl** replied on **2025-06-23** at **03:28:12**
 > 

@@ -369,6 +369,10 @@ norm layers split 1/1, output layers on last gpu
 
 Edit: a discussion makes a lot more sense. Thanks @ikawrakow
 
+> 👤 **ikawrakow** replied on **2025-05-25** at **07:36:49**
+> 
+> Yes, I thought this could be useful info for some people.
+
 ---
 
 👤 **VinnyG9** commented on **2025-05-25** at **12:51:11**
@@ -381,6 +385,10 @@ booted back on linux mint vanilla
  41t/s xD
 
 I'm now a distrohopper
+
+> 👤 **Ph0rk0z** replied on **2025-05-25** at **18:14:19**
+> 
+> I've been using xanmod-v3 with mint. Since my CPUs identify as skylake-x, I might try the V4 version and see if there is some difference.
 
 > 👤 **VinnyG9** replied on **2025-05-26** at **15:27:17**
 > 

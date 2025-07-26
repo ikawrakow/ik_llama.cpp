@@ -72,6 +72,24 @@ Before LLaMA-3, `Q6_K` quantization always had a quantization error in the 0.1-0
 
 @ikawrakow just found out your fork, wanted to clear my idea - K quants are block based and IQ quants are also block based in llama.cpp with a codebook. The IQn_K quants here is the same as IQ quants but with a non-linear mapping between the quantized weight and actual weight. Maybe its somewhere in the code but can you elaborate what the non-linear function is? And even if the lookup table is small (4x4grid instead of 256x256), the time to access it from L1 cache will still be the same because of memory bandwidth right?
 
+> 👤 **ikawrakow** replied on **2025-06-13** at **18:56:53**
+> 
+> Sub 4-bit i-quants use codebooks. `IQ4_XS` and `IQ4_NL`, which were added along with the codebook i-quants `IQ2_XXS, IQ2_S, IQ2_S, IQ3_XXS, IQ3_S` do not use a codebook, but a non-linear mapping for individual quants. They are both 4-bit, so the lookup table has just 16 entries, and the lookup adds negligible overhead.
+> 
+> The `IQX_K` quants also don't use a codebook. If fact, one of the main motivations to create them was to prove to myself that there is nothing special about codebooks. The main difference between `IQX_K` quants and `IQ4_XS/IQ4_NL` is in the use of an extra bit that selects between two lookup tables. `IQ4_KS`, which uses the exact same amount of bits per model weight as `IQ4_XS` (4.25) arrives at a lower quantization error than `IQ4_XS` that way. There are now the following `IQX_K` quants
+> * `IQ2_KS` - blocks of 32 weights with a per tensor row scale. Lookup table is 2x4 entries, 2.1875 bpw
+> * `IQ2_K` - blocks of 16 weights in super-blocks of 256. Lookup table is 2x4 entries, 2.375 bpw
+> * `IQ3_K` - blocks of 16 weights in super-blocks of 256. Lookup table is 2x8 entries, 3.4375 bpw
+> * `IQ4_KS` - blocks of 32 weights with a per tensor row scale. Lookup table is 2x16 entries, 4.25 bpw
+> * `IQ4_K` - blocks of 16 weights in super-blocks of 256. Lookup table is 2x16 entries, 4.5 bpw
+> * `IQ5_KS` - blocks of 32 weights with a per tensor row scale. Lookup table is 2x32 entries, 5.25 bpw
+> * `IQ5_K` - blocks of 16 weights in super-blocks of 256. Lookup table is 2x32 entries, 5.5 bpw
+> * `IQ6_K` - blocks of 16 weights in super-blocks of 256. Lookup table is 2x64 entries, 6.5 bpw
+> 
+> The sub-4 bpw `IQX_K` quants are much faster on the CPU than the corresponding i-quants and about on par with k-quants. On CUDA performance is more influenced by the block size than it is by the additional lookup required. If we take `IQ4_KS` as an example, it is faster than `Q4_0` (the quant that receives the largest amount of attention and love in mainline `llama.cpp`) for token generation, and only 3-4% slower for prompt processing. On the other hand, the quants that use blocks of 16 tend to be 20-25% slower for prompt processing than quants with blocks of 32 (due to me re-using the GEMM kernel that came from Jonahhes, and the block of 16 kernel not being as good as the block of 32 kernel). Token generation is memory bound, so speed is entirely determined by bpw, and none of the packing details or lookup tables matters that much.
+> 
+> Hope this answers your questions.
+
 > 👤 **afsara-ben** replied on **2025-06-13** at **20:51:18**
 > 
 > thanks for your reply. What is the non-linear function that results in the lookup grid being smaller? Since it fits into 1/2 SIMD registers, so number of load requests is lower than what would be required for codebook? Additionally, will there be a Metal implementation of the `IQX_K` quants?
@@ -99,6 +117,10 @@ Nice to meet you too.
 I don't think I want to get involved with your dispute with the `llama.cpp` maintainers or discuss my reasons for leaving the `llama.cpp` project. 
 
 Concerning a port of the `iqk` GEMM/GEMV implementation to  Qualcomm Hexagon cDSP: you are obviously free to make a port, and I can try to help as time permits. But be warned: adding this port to your ongoing PR will reduce its chance of getting accepted to zero.
+
+> 👤 **ikawrakow** replied on **2025-06-22** at **13:52:00**
+> 
+> You are likely not building the project correctly. `ik_lllama.cpp` is fast, but not 6 times faster than `llama.cpp` for `Q4_0`. What happens if you rebase on the latest main branch and run?
 
 > 👤 **ikawrakow** replied on **2025-06-22** at **14:42:43**
 > 

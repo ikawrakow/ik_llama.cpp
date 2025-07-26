@@ -70,6 +70,38 @@ Note that the tensor overrides are processed in the order they were defined on t
 
 If the GPUs are different, then it may be better to just manually define with `-ot` which tensors go where.
 
+> 👤 **matt23654** replied on **2025-05-06** at **13:54:09**
+> 
+> Hi @ikawrakow !
+> 
+> No matter what I do ``-sm layer`` just doesnt seem to work with 2 devices. A variation of your first command segfaults:
+> 
+> ``build/bin/llama-server -m ~/.cache/huggingface/hub/models--ubergarm--Qwen3-235B-A22B-GGUF/snapshots/073738969f80d41f288cbfd6a29523769336bee8/Qwen3-235B-A22B-mix-IQ3_K-00001-of-00003.gguf -ngl 99 --temp 0.6 --top-k 20 --top-p 0.95 --min-p 0 --presence-penalty 1.5 -c 8192 --host 127.0.0.1 --port 4000 -fa -fmoe -sm layer -v -ts 50,50 -ot "exps=CPU"``
+> 
+> ...
+> 
+> ```
+> llama_new_context_with_model: mla_attn   = 0
+> llama_new_context_with_model: attn_max_b = 0
+> llama_new_context_with_model: fused_moe  = 1
+> llama_new_context_with_model: ser        = -1, 0
+> llama_new_context_with_model: freq_base  = 1000000.0
+> llama_new_context_with_model: freq_scale = 1
+> llama_kv_cache_init:      CUDA0 KV buffer size =   768.00 MiB
+> llama_kv_cache_init:      CUDA1 KV buffer size =   736.00 MiB
+> llama_new_context_with_model: KV self size  = 1504.00 MiB, K (f16):  752.00 MiB, V (f16):  752.00 MiB
+> llama_new_context_with_model:  CUDA_Host  output buffer size =     1.16 MiB
+> llama_new_context_with_model: pipeline parallelism enabled (n_copies=4)
+> ggml_backend_cuda_buffer_type_alloc_buffer: allocating 173219.94 MiB on device 0: cudaMalloc failed: out of memory
+> ggml_gallocr_reserve_n: failed to allocate CUDA0 buffer of size 181634272256
+> llama_new_context_with_model: failed to allocate compute buffers
+> llama_init_from_gpt_params: error: failed to create context with model '~/.cache/huggingface/hub/models--ubergarm--Qwen3-235B-A22B-GGUF/snapshots/073738969f80d41f288cbfd6a29523769336bee8/Qwen3-235B-A22B-mix-IQ3_K-00001-of-00003.gguf'
+>  ERR [              load_model] unable to load model | tid="127462866935808" timestamp=1746539401 model="~/.cache/huggingface/hub/models--ubergarm--Qwen3-235B-A22B-GGUF/snapshots/073738969f80d41f288cbfd6a29523769336bee8/Qwen3-235B-A22B-mix-IQ3_K-00001-of-00003.gguf"
+> Segmentation fault (core dumped)
+> ```
+> 
+> I don't know why it wants to allocate such a huge amount of memory. It doesn't do that with one device or with ``-sm row`` (as mentioned row doesn't work if I try to put any MoE expert tensors on the GPUs).
+
 > 👤 **ubergarm** replied on **2025-05-06** at **13:57:01**
 > 
 > @matt23654 

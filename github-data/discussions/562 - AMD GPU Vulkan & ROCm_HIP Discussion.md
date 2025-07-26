@@ -85,11 +85,23 @@ Thanks and curious if anyone else has tried this or is interested in improving s
 
 llama.cpp's vulkan backend is faster and uses less memory on my 7900xtx as well (I'm using latest rocm on Arch so it's not that).
 
+> 👤 **ubergarm** replied on **2025-06-29** at **14:41:47**
+> 
+> Yup, this is to be expected given ik's fork prioritizes a couple CPU types and CUDA implementations and does not focus on maintaining Vulkan nor ROCm/HIP backends.
+
 ---
 
 👤 **firecoperana** commented on **2025-06-29** at **14:50:07**
 
 I'm working on bringing ik_llama.cpp up to date with llama.cpp's vulkan backend. It is actually easier than I expected.
+
+> 👤 **ubergarm** replied on **2025-06-29** at **14:58:06**
+> 
+> @firecoperana very cool to hear :fire: !
+> 
+> As suggested by @0cc4m and some discussion by the author of those Vulkanised Conference PDF slides linked above, @jeffbolznv ,over on the [mainline vulkan benchmark discussion](https://github.com/ggml-org/llama.cpp/discussions/10879#discussioncomment-13606581) I might try to `pacman -Sy extra/nvidia-utils` and build the vulkan backend for my NVIDIA RTX 3090TI FE GPU and compare performance there as well.
+> 
+> Please update us here if you have a fork/branch/PR you'd like to test and if I still have access to the AMD RX 7900 XTX I can give it a go as I'd like to use ik's SOTA quants on that machine for a fun project...
 
 > 👤 **ikawrakow** replied on **2025-06-29** at **16:25:52**
 > 
@@ -167,6 +179,10 @@ Anyhow, at the end I got the mainline Vulkan build working, but performance is v
 So, PP is 3X lower, TG is 20-25% lower.
 
 Given this, does it make sense to spend time on Vulkan? When I forked `llama.cpp` last year the Vulkan stuff was mostly a gimmick, with performance not much better than just running on a moderately fast CPU. They have done a lot of Vulkan development and performance improvements in mainline since then, but it still seems way too far behind.
+
+> 👤 **jeffbolznv** replied on **2025-07-01** at **14:08:19**
+> 
+> Installing the Vulkan SDK is the "right" way to get the dependencies. The pp scores shouldn't be that low, it suggests cooperative matrix isn't getting used. What driver version are you using? Can you share the beginning of the log where ggml-vulkan prints device info?
 
 > 👤 **ubergarm** replied on **2025-07-01** at **19:20:24**
 > 
@@ -324,6 +340,12 @@ cmake .. -DGGML_VULKAN=ON -DGGML_CUDA=OFF
 make -j
 ```
 
+> 👤 **jeffbolznv** replied on **2025-07-01** at **14:43:13**
+> 
+> Is it a release build? I can't tell.
+> 
+> You'd probably get a boost from a newer driver (to enable coopmat2), but the pp numbers seem slow for coopmat1.
+
 > 👤 **ikawrakow** replied on **2025-07-01** at **14:54:36**
 > 
 > Yes, this is a release build. @ubergarm is getting in the range of 3000 t/s for LlaMA-7B on his RX 7900 XTX, so same ball park.
@@ -333,6 +355,10 @@ make -j
 👤 **jeffbolznv** commented on **2025-07-01** at **14:53:29**
 
 What's the llama-bench equivalent of the `N_KV` column in that table? Is it `-d`? I see a big difference between coopmat1 and coopmat2 with large depth.
+
+> 👤 **ikawrakow** replied on **2025-07-01** at **15:00:56**
+> 
+> I haven't looked into mainline `llama.cpp`, but the `sweep-bench` here adds `N_KV` tokens to the KV cache, and then runs a batch of a given size (1024 tokens in the above example), and generates a given number of new tokens (256 in the example). Time is measured for both, and resulting tokens/second is printed. The KV cache is increased gradually in a sweep, which corresponds to a typical experience of a user interacting with an LLM.  I don't know what the `-d` option in mainline does (I think it is a relatively recent addition), that's why I have a port of `sweep-bench` to mainline `llama.cpp` to be able to run direct (and more meaningful) comparisons than `-p 512` or `-n 128`).
 
 > 👤 **jeffbolznv** replied on **2025-07-01** at **15:14:47**
 > 
@@ -489,6 +515,10 @@ What's the llama-bench equivalent of the `N_KV` column in that table? Is it `-d`
 > A path allowing AMD GPUs to be used e.g. RX 7900 XTX 24GB VRAM
 
 But a port of the mainline Vulkan back-end to `ik_llama.cpp` without the additions that make `ik_llama.cpp` faster for CUDA and CPU inference has zero benefits. People can simply use `llama.cpp` with their AMD GPUs.
+
+> 👤 **firecoperana** replied on **2025-07-02** at **14:32:39**
+> 
+> Another benefit is to people who have both nvidia and amd or even intel GPUs. They can use RPC to load different backends or just use vulkan to use non CUDA GPU to offload more weights to vram.
 
 > 👤 **ikawrakow** replied on **2025-07-02** at **14:43:52**
 > 

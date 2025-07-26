@@ -44,6 +44,12 @@ Are you planning to correct it? The 1800 lines added in your PR are not a "port"
 Yes, I have always believed that both the early content and the “ported” parts of Llamafile originated from your work. And what I did more was porting and testing, so I never intended to modify (except for necessary interface adjustments) your work. I think this is your contribution！
 I hope we can have more communication in the future
 
+> 👤 **ikawrakow** replied on **2025-04-08** at **11:19:06**
+> 
+> Sorry, @moonshadow-25, but there are no "ported” parts of Llamafile in your PR. There are 1800 lines of code copied from here. They do not exist in Llamafile to be "ported" (i.e., copied) from there.
+> 
+> You have created a bit of a mess with your PR. KTransformers and Llamafile are both Apache-2.0 licensed. But the code here is published under a MIT License. Now, Apache-2.0 and MIT are both very permissive licenses, so it is easy to bundle code published under these license together, as explained for instance [here](https://infra.apache.org/licensing-howto.html). You could have even asked me if I would be willing to relicense the portions you copied to Apache-2.0 so it makes things easier for KTransformers (after all, I did change the MIT License of the code I contributed to Llamafile to Apache-2.0 to make it easier for them). But as permissive as these licenses are, it does not mean you can just ignore what they ask you to do.
+
 > 👤 **moonshadow-25** replied on **2025-04-08** at **11:41:27**
 > 
 > Indeed, I am very sorry that I only realized the difference now. They look too similar, and both authors are you. So I subjectively assumed it was the same license.

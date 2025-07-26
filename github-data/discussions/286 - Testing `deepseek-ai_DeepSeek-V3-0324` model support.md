@@ -64,6 +64,26 @@ The second point, those weights were present in the other releases such as V3, V
 
 I'm curious, and will have to make room for it on my server. I know this is slightly off topic but I'd be curious to hear your experience with this (and any of the other Deepseek models you've tried).
 
+> 👤 **ubergarm** replied on **2025-03-25** at **00:00:24**
+> 
+> > This is just another finetune.
+> 
+> Great, might have a chance at getting it to work!
+> 
+> > For the first point, the linked imatrix will work but I do not recommended it 
+> 
+> I see, thanks for the tip. I see now some discussions from over a year ago about making imatrix files and will give it a go.
+> 
+> >  The mradermacher team is already working on quanting and imatrixing that model
+> 
+> Ahh yes, I see [mradermacher/DeepSeek-V3-0324-GGUF](https://huggingface.co/mradermacher/DeepSeek-V3-0324-GGUF) is rolling in as we speak! I'm almost done with the `fp8` and will make the `bf16` GGUF from that. Not sure how long generating an imatrix will take, but might have something working by end of tomorrow if it goes smoothly!
+> 
+> > your experience with this (and any of the other Deepseek models you've tried)
+> 
+> Yeah will keep you posted with new V3. I'm only now experimenting with using longer context ~30-40k by copy pasting in code, man pages, documentation, etc.  Using R1 at `Q4` today I was trying to understand how to potentially have `llm_load_tensors()` allocate N copies of ctx_buffs (one on each N NUMA nodes). It helped me understand a bit more the relationship between `src/llama.cpp` and `ggml/src/ggml-backend.c`, but didn't give magic working code haha... It did help me update `CMakeLists.txt` to get it building linking with libnuma library. I've also had some luck with it refactoring python code especially creating uniform style comments and adding static typing. Even QwQ-32B could write a decent 1-shot flappy bird when given a detailed prompt to follow haha... 
+> 
+> One supposed success story is about [airbnb refactoring javascript test code](https://medium.com/airbnb-engineering/accelerating-large-scale-test-migration-with-llms-9565c208023b) to use a different library. Hard to say how much "tech debt" was incurred if any, but I too am curious to hear of any successful uses of ai for actually useful coding.
+
 > 👤 **saood06** replied on **2025-03-25** at **02:39:47**
 > 
 > > > This is just another finetune.
@@ -346,6 +366,10 @@ As @saood06 pointed out, `Q8_0` is good enough to collect imatrix data.
 > Also this https://github.com/ikawrakow/ik_llama.cpp/pull/250 if you haven't seen it is obviously relevant to you,
 
 This has been superseded by #259. The additional 2 tensors needed for MLA (`attn_k_b` and `attn_v_b`) are computed on the fly from `attn_kv_b` when loading the model (if missing). So, the best strategy is to use standard attention for imatrix calculations, which will give imatrix data to `attn_kv_b`, so this tensor will get a better quantization. `attn_k_b` is a transposed version of half of `attn_kv_b`. It gets computed by converting `attn_kv_b` to `fp32`, transposing that, and then quantizing to `Q8_0`, so (nearly) lossless. `attn_v_b` is just a view of the other half of `attn_kv_b`, so it uses the `attn_kv_b` data directly.
+
+> 👤 **saood06** replied on **2025-03-25** at **07:01:42**
+> 
+> Sorry I forgot about the implications of that PR, updated my comment to reflect it.
 
 > 👤 **ubergarm** replied on **2025-03-25** at **14:58:40**
 > 
@@ -4003,6 +4027,14 @@ This has been superseded by #259. The additional 2 tensors needed for MLA (`attn
 
 Just saw this "In our web and application environments, the temperature parameter $T_{model}$ is set to 0.3. " and they even go as far to encourage users to use that by "Thus, if you call V3 via API, temperature 1.0 equals to the model temperature 0.3.", so I think you might want to experiment with that temperature.
 
+> 👤 **ubergarm** replied on **2025-03-25** at **16:03:34**
+> 
+> Ahh, interesting, yeah R1 suggested default was 0.6 or somthing iirc.
+> 
+> Does specifying temperature matter for making the imatrix? Guessing it does not, so will continue trying to make imatrix with default command above.
+> 
+> But when I go to actually test a final quant, thanks for this important detail to set `temp=0.3`!
+
 > 👤 **saood06** replied on **2025-03-25** at **16:54:05**
 > 
 > > But when I go to actually test a final quant, thanks for this important detail to set `temp=0.3`!
@@ -4024,6 +4056,18 @@ Just saw this "In our web and application environments, the temperature paramete
 Is this something you have looked into? I think even a basic implementation should offer 50% improvement.
 
 There is also jukofyork who is making draft model's (see [here](https://huggingface.co/jukofyork/DeepSeek-R1-DRAFT-0.5B-GGUF)) that can be used with llama.cpp's already existing generic drafting implementation, I'm watching that to see how much performance uplift people end up reporting on that.
+
+> 👤 **ikawrakow** replied on **2025-03-26** at **05:05:55**
+> 
+> > > 14B of the Multi-Token Prediction (MTP) Module weights
+> > 
+> > @ikawrakow
+> > 
+> > Is this something you have looked into? I think even a basic implementation should offer 50% improvement.
+> > 
+> > There is also jukofyork who is making draft model's (see [here](https://huggingface.co/jukofyork/DeepSeek-R1-DRAFT-0.5B-GGUF)) that can be used with llama.cpp's already existing generic drafting implementation, I'm watching that to see how much performance uplift people end up reporting on that.
+> 
+> No, I haven't looked into how it works. I'm surprised MPT has not been implemented in mainline.
 
 > 👤 **jukofyork** replied on **2025-03-31** at **22:05:13**
 > 
@@ -4052,6 +4096,12 @@ There is also jukofyork who is making draft model's (see [here](https://huggingf
 > [210]6447980.5077,[211]6475482.7036,[212]6484583.7694,[213]6476309.6415,
 
 The imatrix computation that gave these final perplexity values is useless. It means mainline is not working with `Q8_0` either for DeepSeek-V3 (the difference between a NaN PPL and a PPL of 6 million is marginal, if any).
+
+> 👤 **saood06** replied on **2025-03-26** at **05:08:32**
+> 
+> > It means mainline is not working with `Q8_0` either for DeepSeek-V3 (the difference between a NaN PPL and a PPL of 6 million is marginal, if any).
+> 
+> That's the MLA PR on llama.cpp that is not working, llama.cpp main works as it has been used a lot to do imatrix for the large Deepseek V3/R1 models.
 
 > 👤 **ikawrakow** replied on **2025-03-26** at **06:01:14**
 > 

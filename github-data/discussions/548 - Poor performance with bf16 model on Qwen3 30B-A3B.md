@@ -151,6 +151,10 @@ main: n_kv_max = 16384, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 Don't use `-rtr` for the `bf16` model.
 
+> 👤 **Gaolingx** replied on **2025-06-22** at **15:31:07**
+> 
+> wow, thanks a lot for your suggestion, the speed is normal now, I got ~65 PP speed and ~11.8 TG speed, but the cpu+cuda(`-ot exps=CPU`) speed doesn't seem to be much faster than the pure cpu, although it is a moe model. maybe I should do a more detailed benchmark.
+
 > 👤 **ikawrakow** replied on **2025-06-22** at **15:35:13**
 > 
 > You need larger u-batch size for better PP performance. The experts are in RAM and need to be offloaded to the GPU, which takes a while. If you run `llama-sweep-bench` with `-ub 2048` you will see much better PP performance.

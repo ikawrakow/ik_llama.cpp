@@ -1357,6 +1357,35 @@ the prompt:
 
 What sampler settings do you use?
 
+> 👤 **magikRUKKOLA** replied on **2025-07-17** at **01:20:56**
+> 
+> > What sampler settings do you use?
+> 
+> Unfortunately its irrelevant.  Try throwing the prompt into the original inference provider (the deepseek app or whatever).  The result will be the same -- nonsense related to the stupid equation.
+> 
+> the settings are default ones:
+> 
+> ```
+> CUDA_VISIBLE_DEVICES="0,1,2" \
+> /opt/ik_llama.cpp/ik_llama.cpp/build/bin/llama-server \
+>     --model /opt/ubergarm/DeepSeek-R1-0528-GGUF/IQ2_K_R4/DeepSeek-R1-0528-IQ2_K_R4-00001-of-00005.gguf \
+>     --alias ubergarm/DeepSeek-R1-0528-IQ2_K_R4-160k \
+>     --seed 3407 \
+>     -mla 3 -fa \
+>     --ctx-size $((160 * 1024)) \
+>     --temp 0.5 --top-k 0 --top-p 1.0 --min-p 0.1 --repeat-penalty 1.0 \
+>     -ctk q8_0 \
+>     -fmoe \
+>     --n-gpu-layers 99 \
+>     -b $((4 * 1024)) -ub $((2 * 1024)) \
+>     -amb 512 \
+>     --override-tensor exps=CPU \
+>     --threads $(grep ^cpu\\scores /proc/cpuinfo | uniq | awk '{print $4}' | xargs -I{} echo "{}-0" | bc) \
+>     --host 0.0.0.0 \
+>     --port 8080 \
+>     --lookup-cache-dynamic /mnt/data/ik_llama.kv.dump
+> ```
+
 > 👤 **saood06** replied on **2025-07-17** at **01:29:34**
 > 
 > >Try throwing the prompt into the original inference provider (the deepseek app or whatever). The result will be the same -- nonsense related to the stupid equation.

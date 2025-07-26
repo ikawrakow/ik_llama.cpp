@@ -421,6 +421,10 @@ perplexity: 11.69 seconds per pass - ETA 27.32 minutes
 Final estimate: PPL = 3.4178 +/- 0.01891
 ```
 
+> 👤 **fredlas** replied on **2025-03-19** at **15:49:40**
+> 
+> Were you thinking of uploading this to huggingface, by any chance? I can reproduce and upload it myself if necessary, but I haven't downloaded the full R1 weights yet, and would be happy to continue avoiding that if possible!
+
 > 👤 **ubergarm** replied on **2025-03-19** at **22:37:04**
 > 
 > @fredlas do you have any specific hardware configuration in mind? e.g. how much system RAM, and GPUs / VRAM? I put together rough notes on making your own custom quant in [this quick-start guide discussion](https://github.com/ikawrakow/ik_llama.cpp/discussions/258). I believe @davidsyoung has tailored the quant specific to his 16x3090 = 384 GB VRAM setup.

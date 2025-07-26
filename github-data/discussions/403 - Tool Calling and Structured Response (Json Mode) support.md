@@ -31,6 +31,14 @@ we are a very small team, so cannot do everything that `llama.cpp` does. Hence, 
 
 Please enter a feature request in the Issues. I'll label it with "help wanted" and we will see what happens.
 
+> 👤 **mtcl** replied on **2025-05-10** at **08:33:02**
+> 
+> No worries my friend. I have a workaround here that I've written.
+> 
+> https://github.com/Teachings/FastAgentAPI
+> 
+> It acts as a wrapper and get me by. Thank you for your hard work!
+
 > 👤 **cmoncure** replied on **2025-05-30** at **19:58:13**
 > 
 > Before I try and get this running, can you educate me on the mechanics of tool calling within the LLM response? I understand that the LLM may request a call as part of its TG phase, and then the call runner injects the result into the LLM response. Is this correct? 

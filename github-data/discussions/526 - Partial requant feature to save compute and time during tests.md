@@ -40,6 +40,11 @@ It would be useful, right? When I'm actively experimenting with quantization mix
 
 The alternative is to run a second quantization where only the tensors that you want to change are quantized (using `--custom-q`), and then, as @saood06 mentions, use gguf-py to stitch the two models together (although, I don't think there is an easy out-of-the-box way of doing, or is there?)
 
+> 👤 **Nexesenex** replied on **2025-06-13** at **12:59:46**
+> 
+> Well, I'm not well versed in gguf.py, so I'd trust Saood's word on that.
+> It seems to be quite the hassle still, and a proper and straight implementation of such feature would imho be critically important, because it would save time, which is irrecoverable, and compute/money/natural resources, which are not infinite for either one, either all.
+
 > 👤 **saood06** replied on **2025-06-13** at **13:01:45**
 > 
 > >(although, I don't think there is an easy out-of-the-box way of doing, or is there?)
@@ -95,6 +100,14 @@ The alternative is to run a second quantization where only the tensors that you 
 @Nexesenex 
 
 Have you seen this: https://github.com/Thireus/GGUF-Tool-Suite? I haven't fully gone through the code yet, but I think it seems to accomplish at least some of the goals you described here (taking the path of using the gguf-split system).
+
+> 👤 **Nexesenex** replied on **2025-07-12** at **22:04:37**
+> 
+> > @Nexesenex
+> > 
+> > Have you seen this: https://github.com/Thireus/GGUF-Tool-Suite? I haven't fully gone through the code yet, but I think it seems to accomplish at least some of the goals you described here (taking the path of using the gguf-split system).
+> 
+> You will laugh. I discovered his fork of IKL today, and didn't discover yet his tools suite. Thanks for the heads-up, I will dive into it asap! :)
 
 > 👤 **saood06** replied on **2025-07-12** at **23:30:04**
 > 

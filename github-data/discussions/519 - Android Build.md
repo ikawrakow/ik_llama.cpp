@@ -21,6 +21,10 @@ I want to build for android so that I can create an android app. Thank you
 
 See #401
 
+> 👤 **aezendc** replied on **2025-06-21** at **05:39:58**
+> 
+> I mean using windows. I cant successfully build using NDK
+
 ---
 
 👤 **jeffzhou2000** commented on **2025-06-21** at **08:48:21**
@@ -30,6 +34,10 @@ FYI:
 refer to project kantv(build a standard Android APK with llama.cpp + whisper.cpp):https://github.com/kantv-ai/kantv
 
 or my forked llama.cpp: https://github.com/zhouwg/ggml-hexagon
+
+> 👤 **aezendc** replied on **2025-06-21** at **09:28:14**
+> 
+> is bitnet-b1.58-2B-4T-GGUF model will work here?
 
 > 👤 **jeffzhou2000** replied on **2025-06-21** at **09:32:04**
 > 

@@ -13,13 +13,14 @@ from typing import Dict, List, Any, Optional, TypedDict, Set
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GRAPHQL_URL = "https://api.github.com/graphql"
 
-MAX_RETRIES = 5
-INITIAL_BACKOFF = 2
-BATCH_SIZE = 1000
-RATE_LIMIT_THRESHOLD = 100
 PER_PAGE = 100
 PER_PAGE_NESTED = 100
+INITIAL_REPLIES = 40
+BATCH_SIZE = 1000
+MAX_RETRIES = 5
+INITIAL_BACKOFF = 2
 INTER_REQUEST_DELAY = 0.05
+RATE_LIMIT_THRESHOLD = 100
 
 PAGE_INFO_FRAGMENT = "fragment PageInfoFragment on PageInfo { endCursor, hasNextPage }"
 AUTHOR_FRAGMENT = "fragment AuthorFragment on Actor { login }"
@@ -68,7 +69,16 @@ ITEM_TYPE_CONFIG = {
     "discussions": {
         "graphql_name": "discussions", "path": ("repository", "discussions"),
         "fields": f"""...DiscussionItemFields
-            comments(first: {PER_PAGE_NESTED}) {{ pageInfo {{...PageInfoFragment}}, nodes {{ ...CommentFields, replies(first: 1) {{ pageInfo {{...PageInfoFragment}} }} }} }}
+            comments(first: {PER_PAGE_NESTED}) {{
+                pageInfo {{...PageInfoFragment}},
+                nodes {{
+                    ...CommentFields,
+                    replies(first: {INITIAL_REPLIES}) {{
+                        pageInfo {{...PageInfoFragment}},
+                        nodes {{ ...CommentFields }}
+                    }}
+                }}
+            }}
         """,
         "required_fragments": {"PageInfoFragment", "CommentFields", "DiscussionItemFields", "AuthorFragment"},
     },

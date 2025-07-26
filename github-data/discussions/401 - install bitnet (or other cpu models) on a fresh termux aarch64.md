@@ -39,6 +39,12 @@ reverted to old prompt template
 
 what is a termux?
 
+> 👤 **saood06** replied on **2025-05-14** at **12:25:00**
+> 
+> > what is a termux?
+> 
+> Android terminal emulator: https://termux.dev/en/
+
 ---
 
 👤 **Benjamin-Wegener** commented on **2025-05-15** at **14:23:33**
@@ -48,6 +54,18 @@ using the built in llama-server standard and pasting that in prompt template fie
 
 {{history}}
 {{char}}:
+
+> 👤 **saood06** replied on **2025-05-16** at **06:01:00**
+> 
+> Just to be clear the proper template is:
+> 
+> <|begin_of_text|>System: {system_message}<|eot_id|>
+> User: {user_message_1}<|eot_id|>
+> Assistant: {assistant_message_1}<|eot_id|>
+> User: {user_message_2}<|eot_id|>
+> Assistant: {assistant_message_2}<|eot_id|>
+> 
+> It's been a while since I've used the server's template field but my testing using an alternative front-end following this was successful.
 
 > 👤 **saood06** replied on **2025-05-18** at **12:42:54**
 > 
@@ -99,6 +117,10 @@ using the built in llama-server standard and pasting that in prompt template fie
 Didn't work for me in my case. Stayed hung up at compilation forever
 ![1000035416](https://github.com/user-attachments/assets/0b55130a-1964-44fb-8f44-da2bd2557b84)
 
+> 👤 **ikawrakow** replied on **2025-05-16** at **05:30:51**
+> 
+> You have to be patient. The file is 18k LOC of heavily templated C++ code. It takes a while to compile even on a fast desktop CPU. I know it needs to get refactored into multiple files (#183), but I haven't come around to do it.
+
 > 👤 **ikawrakow** replied on **2025-05-16** at **06:21:47**
 > 
 > Just measured: it takes 2 minutes on my M2-Max CPU to compile this file. Based on this, my guess is that it is in the 5-10 minutes range on a phone.
@@ -148,6 +170,41 @@ You can now disable building the templated flash attention (FA) kernels. Disabli
 
 See PR #429
 
+> 👤 **RobertAgee** replied on **2025-05-17** at **10:00:36**
+> 
+> Thanks @ikawrakow for the fast PR! I was able to successfully get it running and make a call to get a response! :) 
+> 
+> For anyone in my situation, it did have a few what looked like errors in the console during the build process, but it was successful, as I said, so no worries. Here's the list of commands with the speed up (disabling flash attention kernels):
+> 
+> ```apt update && apt install wget cmake git -y
+> 
+> git clone https://github.com/ikawrakow/ik_llama.cpp
+> 
+> cd ik_llama.cpp
+> 
+> cmake -B ./build -DGGML_CUDA=OFF -DGGML_BLAS=OFF -DGGML_ARCH_FLAGS="-march=armv8.2-a+dotprod+fp16" -DGGML_IQK_FLASH_ATTENTION=OFF
+> 
+> cmake --build ./build --config Release -j $(nproc)
+> 
+> wget https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/resolve/main/ggml-model-i2_s.gguf?download=true -O ./models/ggml-model-i2_s.gguf
+> 
+> ./build/bin/llama-quantize --allow-requantize ./models/ggml-model-i2_s.gguf ./models/bitnet.gguf iq2_bn_r4
+> 
+> ./build/bin/llama-server -mla 3 --model ./models/bitnet.gguf
+> ```
+> 
+> Sample call I made from my API tester app to the server to test it.
+> 
+> ```
+> curl http://127.0.0.1:8080/completion -X POST \
+>   -H "Content-Type: application/json" \
+>   -d '{
+>     "prompt": "<|im_start|>system\nYou are a helpful assistant<|im_end|>\n<|im_start|>user\nHello, who are you?<|im_end|>\n<|im_start|>assistant\n",
+>     "temperature": 0.7,
+>     "n_predict": 128,
+>     "stop": ["<|im_end|>"]
+>   }'
+
 ---
 
 👤 **ikawrakow** commented on **2025-05-20** at **09:48:56**
@@ -156,6 +213,16 @@ There is now PR #435 that significantly reduces build time. I cannot test on And
 * New vs old build time (with CPU model)
 * Does it still work correctly?
 * Is the inference performance affected?
+
+> 👤 **aezendc** replied on **2025-06-02** at **15:30:06**
+> 
+> > There is now PR #435 that significantly reduces build time. I cannot test on Android myself, so would appreciate if someone did and reported
+> > 
+> > * New vs old build time (with CPU model)
+> > * Does it still work correctly?
+> > * Is the inference performance affected?
+> 
+> HI ikawrakow do we have a step by step running microsoft/bitnet-b1.58-2B-4T-gguf in windows?
 
 > 👤 **ikawrakow** replied on **2025-06-02** at **15:36:51**
 > 

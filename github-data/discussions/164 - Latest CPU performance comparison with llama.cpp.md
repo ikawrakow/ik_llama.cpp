@@ -294,6 +294,22 @@ Sorry, the goal was to make the `_R4` quants use the same quantization mixes, bu
 
 `IQ5_K` is normally quite a bit better than `Q5_K`, so most of the time I would expect this to perform better.
 
+> 👤 **saood06** replied on **2025-01-11** at **09:59:16**
+> 
+> >Sorry, the goal was to make the _R4 quants use the same quantization mixes, but apparently I have not quite succeeded. The function where the quantization type is selected is quite messy. But instead of re-quantizing to *_R4, you can use the -rtr command line option, which will make your model use the exact same mix of quantization types (but those where an _R4 variant is available will be repacked to that).
+> 
+> No worries, I only made the quant to test (for actual use, I'd make an IQK quant) and I didn't realize batched-bench supported rtr. It also didn't matter for this machine and test, but I also wasn't sure how runtime repacking and NUMA would behave, if the runtime repacking would interfere with the benefits from POSIX_MADV_RANDOM.
+> 
+> >IQ5_K is normally quite a bit better than Q5_K, so most of the time I would expect this to perform better.
+> 
+> Yes, but if the tensor was originally Q5_K converting it can't recover accuracy, it can only maintain it or lose more.
+> 
+> On another note, I also got Deepseek V3 working with ik_llama.cpp. I don't have direct comparisons to llama.cpp ( and I don't know if I will, making a quant takes 4 hours) but running IQ4_K ( on different hardware then the Midnight Miqu test above, this one is a dual socket Xeon E5-2690 v3). Indirectly comparing to what people were posting on reddit with either machine's that were far better than mine, or quants that were smaller the performance I have seems a lot better. The only thing is this model based on both my experience and some issues made on llama.cpp takes a LOT of tokens to get fully faulted into RAM, which might be why people were posting such low performance numbers.
+> 
+> Once almost all the model is in system cache, it did Prompt processing at 11.5 t/s, and token generation at 2.75 t/s. I still couldn't get it to fully fault, but it did basically stop paging, and performance stopped improving, once it hit those numbers.
+> 
+> I couldn't get it to run with an _R4 quant it hit the GGML_ASSERT(nrc_x%4 == 0), but even without that I'm still happy with the performance of it.
+
 > 👤 **ikawrakow** replied on **2025-01-11** at **10:38:23**
 > 
 > > I couldn't get it to run with an _R4 quant it hit the GGML_ASSERT(nrc_x%4 == 0), but even without that I'm still happy with the performance of it.
@@ -705,6 +721,10 @@ Clearly I'm doing something there that works better for odd number of queries. I
 
 Do you plan to update the README.md with these numbers? The R4 quants are very impressive.
 
+> 👤 **ikawrakow** replied on **2025-01-19** at **15:30:36**
+> 
+> I should, I know. It is just that I prefer to solve problems rather that write about how I solved the problem and what came out.
+
 > 👤 **saood06** replied on **2025-04-27** at **09:33:26**
 > 
 > You made a good list of things [here](https://github.com/ikawrakow/ik_llama.cpp/discussions/256#discussioncomment-12496828), the "Why?" section can be updated with newer models like the official bitnet release, Deepseek, Llama-4. Updating the benchmarks though I know is a lot.
@@ -720,6 +740,18 @@ Do you plan to update the README.md with these numbers? The R4 quants are very i
 Out of curiousity, do you intend to maintain this fork as an alternative to llama.cpp perpetually? or is it more of a testing grounds before upstreaming?
 
 wondering if it's worth recommending people run this specifically for better performance or if it's more of a "bleeding edge" kind of project that people should just wait to get later when it's more ready
+
+> 👤 **ikawrakow** replied on **2025-01-23** at **08:18:58**
+> 
+> > Out of curiousity, do you intend to maintain this fork as an alternative to llama.cpp perpetually? or is it more of a testing grounds before upstreaming?
+> 
+> Nothing is perpetual in this world :smiley: 
+> 
+> But no, I have no intention to be upstreaming to `llama.cpp`. 
+> 
+> It is also a bit of a chicken and egg game: I'll only get a more significant number of users if people know (or at least expect) that I'm seriously committed to his project and the project gets advertised around social networks, but I can only know if I want to seriously commit to maintaining this project long term for a significant number of users if I already have many users and have dealt with the associated bug reports and feature requests :smiley:
+> 
+> As it stands, this project is only useful for technical users who are not scared to build the project themself (no docker images and pre-build binaries), and are using one of the platforms I develop/test on (Linux and macOS, `AVX2` or `ARM_NEON` CPUs, newer Nvidia GPUs). It may or may not work on Windows/Android/etc, old Nvidia or AMD GPUs, etc. I absolutely don't have the bandwidth (or desire) to be supporting every operating system and computing platform under the sun, including 10+ year old CPUs and GPUs, and obscure platforms used by exactly 3 people in the worlds, as `llama.cpp` does.
 
 > 👤 **bartowski1182** replied on **2025-01-23** at **15:12:49**
 > 

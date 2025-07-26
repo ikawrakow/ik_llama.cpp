@@ -33,6 +33,10 @@ I would like to thank everybody for the support in the last two days!
 
 Feel free to add comments about this strange event here.
 
+> 👤 **jeffzhou2000** replied on **2025-07-22** at **14:37:41**
+> 
+> it seems all previous discussions gone.
+
 > 👤 **saood06** replied on **2025-07-22** at **14:44:41**
 > 
 > > it seems all previous discussions gone.
@@ -114,3 +118,9 @@ git shortlog -se | sort -n -r
 ```
 
 Codeberg is the only one that gets the number of commits correctly (GitLab does that too, but is unable to merge the 3 Kawrakow emails). GitHub must be using an LLM that hallucinates an answer :-)
+
+> 👤 **mcm007** replied on **2025-07-22** at **20:49:42**
+> 
+> > ... must be using an LLM that hallucinates an answer :-)
+> 
+> Or a too lower quant that was not cooked by @ubergarm 😄

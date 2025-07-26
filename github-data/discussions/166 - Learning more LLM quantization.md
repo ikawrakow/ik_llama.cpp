@@ -44,3 +44,7 @@ Do I need to understand fundamentals concept on operating systems, comp.arch, me
 I want to be a programmar like you. 
 
 Sorry .. lots of questions all over the place :(
+
+> 👤 **arnfaldur** replied on **2025-03-13** at **02:10:31**
+> 
+> Trying to understand this codebase isn't attacking the wall where it's lowest. You're probably best off finding some beginner/intermediate C++ courses online. I imagine that there are plenty available for free. You don't strictly need to understand all these fundamentals to understand what this project is doing, but you sound like you're in the *don't know what you don't know* phase and a general Computer Science course would likely get you the farthest at this point.

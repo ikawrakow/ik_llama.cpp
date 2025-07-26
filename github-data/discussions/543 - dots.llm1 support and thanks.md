@@ -36,6 +36,10 @@ seen here:
 >
 >https://github.com/huggingface/transformers/blob/ffe12627b4e84489d2ab91dd0ec00614855edc79/src/transformers/models/dots1/modular_dots1.py
 
+> 👤 **firecoperana** replied on **2025-07-02** at **22:56:45**
+> 
+> @saood06 Are you working on it? If not, I can give a try.
+
 > 👤 **saood06** replied on **2025-07-03** at **02:23:35**
 > 
 > #573 exists now. Testing is welcome.

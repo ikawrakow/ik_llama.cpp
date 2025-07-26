@@ -153,6 +153,10 @@ OK, here is apples-to-apples performance comparison on my M2-Max laptop between 
 
 The difference in performance decreases with model size, but that's just a matter of memory bandwidth saturation for `IQ2_BN`. The 30B model is 7.45 GiB, so at 13.6 t/s this is 101 GiB/s to fetch the model weights from RAM, which is basically as good as it gets on the M2-Max CPU.
 
+> 👤 **saood06** replied on **2025-04-22** at **08:05:03**
+> 
+> Interesting to see the TG number here for 2.7B (115.52 t/s)  is double the performance you got for bitnet2b_2501 (62.33 t/s) which is 2.741 B parameters. Do you know what makes the different architecture twice as slow?
+
 > 👤 **ikawrakow** replied on **2025-04-22** at **08:19:46**
 > 
 > This is running on my M2-Max laptop. The M2 has 400 GB/s memory bandwidth. Unfortunately only about 100 GB/s are given to the CPU, the other 300 GB/s are reserved for the GPU (but there are model/quant combinations where I can get up to 110-115 GB/s running CPU-only). As a result the M2-Max has a much better TG performance than a consumer level `x86_64` CPU - nearly twice the TG performance of the Ryzen-7950X. Another interesting thing about the M2-Max is that the silicon spent on the GPU is basically a waste. If it had been spent to double the number of CPU cores, and all of the 400 GB/s had been given to the CPU, that hypothetical CPU would be wiping the floor with the Apple GPU (well, at least for TG, PP would be still 2X lower than the GPU).
@@ -210,6 +214,10 @@ The difference in performance decreases with model size, but that's just a matte
 👤 **saood06** commented on **2025-04-15** at **14:27:18**
 
 They updated the repo with the first Official model (all previous models were just supported models, and had far less training) https://huggingface.co/microsoft/bitnet-b1.58-2B-4T it looks competitive at it's size as it was trained with 4T tokens.
+
+> 👤 **ikawrakow** replied on **2025-04-15** at **15:22:22**
+> 
+> Good to know. But has something changed since the preliminary models were published (i.e., do I need to make changes to the Bitnet implementation)?
 
 > 👤 **saood06** replied on **2025-04-15** at **15:27:41**
 > 

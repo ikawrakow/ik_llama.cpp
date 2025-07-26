@@ -31,6 +31,12 @@ In `ik_llama.cpp`, being a fork of `llama.cpp`, the NUMA situation is the same a
 
 Improving performance on NUMA systems is something I would be interested in looking into, but I don't have a dual socket system available (with enough memory bandwidth to make it interesting), and I'm just a lonely guy hacking here for fun without the resources to go and rent/buy such a system.
 
+> 👤 **bhugueney** replied on **2025-02-11** at **10:56:00**
+> 
+> Thx !
+> I sure hope my message didn't come of as complaining : I've very grateful for what you already did !
+> If you are interested I will try to provide you full access to my dual Epyc server with 16 × 64 GB of DDR4 @3200.
+
 > 👤 **ikawrakow** replied on **2025-02-11** at **14:47:10**
 > 
 > This would be of course great, but I'm hesitant to promise to tackle the NUMA issue right away. 
@@ -58,6 +64,12 @@ There is actually a good discussion on mainline: https://github.com/ggml-org/lla
 They did test ik_llama.cpp (but in only with a single NUMA Node on a single CPU at Q8_0) where it still outperformed mainline for CPU only.
 
 Also you can look at zts9989's comment [here](https://github.com/ggml-org/llama.cpp/pull/11397#issuecomment-2716225570)  where he talks about NUMA and what llama.cpp could improve on after he found that "approximately 50% of CPU usage is spent on thread synchronization" when running Deepseek R1 with multiple numa nodes.
+
+> 👤 **ikawrakow** replied on **2025-03-13** at **07:27:34**
+> 
+> > They did test ik_llama.cpp (but in only with a single NUMA Node on a single CPU at Q8_0) where it still outperformed mainline for CPU only.
+> 
+> Where can I find the test results?
 
 > 👤 **saood06** replied on **2025-03-13** at **07:44:42**
 > 
@@ -135,6 +147,16 @@ Very interesting results, thank you for posting and including my little LLM infe
 I'm curious which `AVX512` extensions are supported by this CPU to understand if vanilla `AVX2` is being used, or the code optimized for the Zen4 core (requires `AVX512F, AVX512VNNI, AVX512VL, AVX512BW, AVX512DQ`).
 
 Playing with some of the more advanced options that mainline `llama.cpp` does not have would be of course very interesting too.
+
+> 👤 **saood06** replied on **2025-03-13** at **21:20:04**
+> 
+> >I'm curious which AVX512 extensions are supported by this CPU to understand if vanilla AVX2 is being used, or the code optimized for the Zen4 core (requires AVX512F, AVX512VNNI, AVX512VL, AVX512BW, AVX512DQ).
+> 
+> All of those extensions are supported (and also AVX512_fp16 which AMD does not support even on Zen 5), none of the normal sources I use for this have been updated to show Granite Rapids but I did find [this](https://www.phoronix.com/image-viewer.php?id=intel-xeon-6980p-performance&image=intel_xeon_6980p_2_lrg). Granite rapids was supposed to have support for Intel AVX10 (Version 1, or Intel AVX10.1) but that apparently did not happen.
+> 
+> >I have seen a higher than usual amount of stars added to my repository in the last few days, I guess this must be due to your post.
+> 
+> I've also seen an uptick in organic mentions of ik_llama.cpp recently and have done my best to help people understand all the new features and benefits.
 
 > 👤 **ubergarm** replied on **2025-03-13** at **22:15:00**
 > 
@@ -269,6 +291,20 @@ The downside of duplicating the model is pretty heavy, but this approach obvious
 
 Looking at the codebase, I think it currently only works for dual socket nodes, and I would have been more interested in testing it but none of my machines (even the very unstable one quad socket 1 TB memory node that I haven't turned on in a long time) would have enough RAM to replicate my preferred quant of R1, I'd have to use one under 192 GB (I do still have my IQ1_S_R4 V2 that is 129 GB).
 
+> 👤 **ubergarm** replied on **2025-03-25** at **15:58:04**
+> 
+> Super, I just fetched this fork and will take a peek.
+> 
+> > The downside of duplicating the model is pretty heavy
+> 
+> Yeah, it is *so much* RAM! 
+> 
+> Probably easiest to go BIOS `NPS1` on dual socket AMD Epyc or on newer Intel Xeon BIOS `SNC=Disable` to get exactly 2 big NUMA nodes (one per CPU socket). Ideally you would have the most number of individual NUMA nodes to maximize performance, but the RAM is then too small per node to fit the bigger models.
+> 
+> Also [mingfeima](https://github.com/mingfeima) left an [interesting comment](https://github.com/ggml-org/llama.cpp/issues/12003#issuecomment-2731572966) recently discussing some of the intel specific optimizations and work he's doing on sglang.
+> 
+> Finally, I recently saw Wendell of [level1techs youtube channel do a video](https://www.youtube.com/watch?v=kOh04PhXqmY) about quad socket Intel Xeon. Seems like it could be configured into 8 individual NUMA nodes with 1TB each possibly?  Talk about wasting RAM, but would be fun to try haha...
+
 > 👤 **saood06** replied on **2025-03-27** at **07:24:15**
 > 
 > >Super, I just fetched this fork and will take a peek.
@@ -283,11 +319,39 @@ Looking at the codebase, I think it currently only works for dual socket nodes, 
 
 Why?
 
+> 👤 **ubergarm** replied on **2025-03-25** at **16:14:54**
+> 
+> Looking at Intel Memory Latency Checker `mlc` benchmarks suggest that the memory local to the compute on a specific NUMA node gives best bandwidth and latency.
+> 
+> My thinking is that duplicating weights into each NUMA node and having local threads working with that RAM would maximize performance.
+> 
+> However, I'm not fully aware of the other implications of combining computations for the final results in this "data parallel" situation. I've only read about "all reduce" in GPU specific implementations suggesting `nvlink` or `p2p` or RDMA infiniband networking is required for those "tensor parallel" implementations.
+> 
+> For now I'd be happy to configure each CPU socket as a single numa node in BIOS as that would probably be good enough and more likely to have enough RAM to fit bigger models. So data parallel = number CPU sockets = (probably 2 for most folks)
+
 ---
 
 👤 **ikawrakow** commented on **2025-03-25** at **16:24:17**
 
 Sure, that would be if you wanted to squeeze out the last bit of performance. But we are not at that stage. Instead, we are a factor of 2 or more away from what should be possible. Having 2 big NUMA nodes would make the distribution of weights much easier: simply change the weight loading to use two threads, each pinned to a specific NUMA node, and each loading half of the tensor data. During inference pin half the threads to run on the 1st NUMA node, and the other half to the second NUMA node. My thinking is that this should give a significant boost in performance without replicating the model on both NUMA nodes. It is of course possible to do stuff such as this with several NUMA nodes, but it makes things way more complicated. So, I'm thinking that the 1st step should be to get better performance with 2 NUMA nodes. But if you are telling me that this is very far from ideal, and that the only way to get better performance is to enable and utilize all NUMA nodes, then it is a waste of time to implement the simple approach described above.
+
+> 👤 **ubergarm** replied on **2025-03-25** at **16:36:46**
+> 
+> > that would be if you wanted to squeeze out the last bit of performance. But we are not at that stage.
+> 
+> Yes, I agree on both points.
+> 
+> >  I'm thinking that the 1st step should be to get better performance with 2 NUMA nodes
+> 
+> Again, I agree. My understanding is ktransformers `USE_NUMA=1` compilation flag is for 2 NUMA nodes. Also the [discussion/fork saood06 linked](https://github.com/ggml-org/llama.cpp/discussions/12289) seems to be specific to 2 NUMA nodes.
+> 
+> Going for exactly 2 NUMA nodes is also good because:
+> 1. Most AMD Epyc BIOS dual socket boards likely support `NPS1` for exactly 2 NUMA Nodes
+> 2. Newer Intel Xeon BIOS dual socket boards supports `SNC=Disable`for exactly 2 NUMA Nodes
+> 
+> No need to worry about rare brand new quad socket intel xeon boards or more smaller NUMA nodes currently imo.
+> 
+> I'll try to find my `mlc` benchmarks and post here, as the bandwidth is still pretty good converting a single CPU into 1 NUMA node.
 
 > 👤 **ubergarm** replied on **2025-03-25** at **16:52:11**
 > 
@@ -514,6 +578,14 @@ Oh I see a benchmark in the wild attempting to benchmark that [vproxy-tools/llam
 
 Not sure the details of how they are running it though...
 
+> 👤 **saood06** replied on **2025-03-30** at **20:58:05**
+> 
+> > Oh I see a benchmark in the wild attempting to benchmark that [vproxy-tools/llama.cpp](https://github.com/vproxy-tools/llama.cpp) NUMA data parallel code against ik fork: [ggml-org/llama.cpp#12289 (comment)](https://github.com/ggml-org/llama.cpp/discussions/12289#discussioncomment-12668490)
+> > 
+> > Not sure the details of how they are running it though...
+> 
+> Thanks for the link, I agree it would be nice if they included more details.
+
 > 👤 **ubergarm** replied on **2025-03-30** at **21:14:31**
 > 
 > Yeah, I gave it a try and while it did run it wasn't allocating threads on both NUMA nodes so I gave up for now after posting my logs.
@@ -581,6 +653,16 @@ just sharing i tried all snoop modes on my x99 dual board and got 200-300% boost
 | qwen3moe ?B Q4_K - Medium         | 16.49 GiB | 30.53 B | CUDA    |   0 |      31 |  1 |   1 |    1 |  tg64 |   31.61 ± 1.01 |
 | qwen3moe ?B Q4_K - Medium         | 16.49 GiB | 30.53 B | CUDA    |   0 |      31 |  1 |   1 |    1 | tg128 |   34.76 ± 1.54 |
 | qwen3moe ?B Q4_K - Medium         | 16.49 GiB | 30.53 B | CUDA    |   0 |      31 |  1 |   1 |    1 | tg256 |   35.70 ± 0.34 |
+
+> 👤 **ubergarm** replied on **2025-05-21** at **14:26:30**
+> 
+> Wow, big gains! I'd never heard of "snoop" mode, but don't have a lot of intel server experience:
+> 
+> > DIR+OSB mode allows for low local memory latency, high local memory bandwidth and I/O directory cache to reduce directory update overheads for I/O accesses.
+> 
+> Are you running hybrid CPU+GPU CUDA offloading some layers? I forget your exact system specs and VRAM, but if you can offload the whole thing it can go quite faster psure.  Also, if I'm running CPU/RAM *only* I generally recompile and disable CUDA backend fwiw.
+> 
+> Glad you're having fun tweaking and tuning!
 
 > 👤 **VinnyG9** replied on **2025-05-21** at **18:07:27**
 > 

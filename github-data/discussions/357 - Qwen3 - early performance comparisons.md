@@ -316,6 +316,73 @@ The next graph shows PP performance as a function of `N_KV`. Also here the perfo
 
 Anyone who has the horse power to run Qwen3-235B-A22B, please feel free to add your results to this discussion.
 
+> 👤 **ubergarm** replied on **2025-04-29** at **16:30:10**
+> 
+> I'm away from home but frantically trying to remote into a server I just got access too again and cook up a good Qwen3-235B-A22B mix for my home 3090TI 24GB VRAM + 96GB RAM system which is about the limit of common AM5 gaming rigs (with the faster and more supported 2x DIMM configuration).
+> 
+> Any particular reason you chose `IQ4_XS` for the experts over `IQ4_K` (possibly GPU inference speed?).
+> 
+> I haven't finished yet but my very rough WIP custom quantize script so far is:
+> <details>
+> 
+> <summary>Very rough ik_llama.cpp custom quantize script</summary>
+> 
+> ```bash
+> #!/usr/bin/env bash
+> 
+> custom="
+> #token_embd.weight - [ 4096, 151936,     1,     1], type =   bf16, Using custom type q8_0 for tensor token_embd.weight
+> #blk.1.ffn_gate_inp.weight - [ 4096,   128,     1,     1], type =    f32, size =    2.000 MB
+> #blk.1.attn_k_norm.weight - [  128,     1,     1,     1], type =    f32, size =    0.000 MB
+> #blk.1.attn_q_norm.weight - [  128,     1,     1,     1], type =    f32, size =    0.000 MB
+> #blk.1.attn_norm.weight - [ 4096,     1,     1,     1], type =    f32, size =    0.016 MB
+> #blk.1.ffn_norm.weight - [ 4096,     1,     1,     1], type =    f32, size =    0.016 MB
+> 
+> #blk.1.attn_k.weight - [ 4096,   512,     1,     1], type =   bf16, Using custom type q8_0 for tensor blk.1.attn_k.weight
+> #blk.1.attn_q.weight - [ 4096,  8192,     1,     1], type =   bf16, Using custom type q8_0 for tensor blk.1.attn_q.weight
+> #blk.1.attn_v.weight - [ 4096,   512,     1,     1], type =   bf16, Using custom type q8_0 for tensor blk.1.attn_v.weight
+> #blk.1.attn_output.weight - [ 8192,  4096,     1,     1], type =   bf16, Using custom type q8_0 for tensor blk.1.attn_output.weight
+> 
+> #blk.1.ffn_down_exps.weight - [ 1536,  4096,   128,     1], type =   bf16, Using custom type q8_0 for tensor blk.1.ffn_down_exps.weight
+> #blk.1.ffn_gate_exps.weight - [ 4096,  1536,   128,     1], type =   bf16, Using custom type q8_0 for tensor blk.1.ffn_gate_exps.weight
+> #blk.1.ffn_up_exps.weight - [ 4096,  1536,   128,     1], type =   bf16, Using custom type q8_0 for tensor blk.1.ffn_up_exps.weight
+> 
+> #output_norm.weight - [ 4096,     1,     1,     1], type =    f32, size =    0.016 MB
+> 
+> # Token embedding
+> token_embd\.weight=q8_0
+> 
+> # Attention
+> blk\..*\.attn_k.*=iq6_k
+> blk\..*\.attn_q.*=iq4_k
+> blk\..*\.attn_v.*=iq6_k
+> blk\..*\.attn_output.*=iq4_k
+> 
+> # Experts
+> blk\..*\.ffn_down_exps\.weight=iq4_k
+> blk\..*\.ffn_(gate|up)_exps\.weight=iq3_k
+> "
+> 
+> custom=$(
+>   echo "$custom" | grep -v '^#' | \
+>   sed -Ez 's:\n+:,:g;s:,$::;s:^,::'
+> )
+> 
+>     #--token-embedding-type q8_0 \
+>     #--output-tensor-type q8_0 \
+> ./build/bin/llama-quantize \
+>     --custom-q "$custom" \
+>     --imatrix /mnt/raid/models/ubergarm/Qwen3-235B-A22B-GGUF/imatrix-Qwen3-235B-A22B.dat \
+>     /mnt/raid/models/Qwen/Qwen3-235B-A22B/Qwen3-235B-A22B-BF16-00001-of-00011.gguf \
+>     /mnt/raid/models/ubergarm/Qwen3-235B-A22B-GGUF/Qwen3-235B-A22B-mix-IQ3_K.gguf \
+>     IQ3_K \
+>     24
+> ```
+> 
+> </details>
+> 
+> Did you bother to make an imatrix for your quant, and if so, were you able to activate enough experts with your imatrix corpus text? Thanks again, exciting times with Qwen3 MoE out and wondering if R2 is around the corner haha...
+
 > 👤 **ikawrakow** replied on **2025-04-29** at **16:34:39**
 > 
 > > Any particular reason you chose IQ4_XS for the experts over IQ4_K (possibly GPU inference speed?).
@@ -1146,6 +1213,12 @@ KReclaimable              633.56          633.56
 
 Interestingly I could hear my fans spin up and down periodically every 15 seconds or so as the CPU ramped up and the GPU dropped down a bit. I noticed this more on the Q8_0 test visually with `btop` as the CPU would drop to almost 0 and the GPU would ramp up and oscillate slowly back and forth.
 
+> 👤 **ikawrakow** replied on **2025-04-30** at **06:07:34**
+> 
+> > Note that for some reason ik_llama.cpp could offload one additional ffn layer than mainline llama.cpp in this test
+> 
+> This is because the `ik_llama.cpp` CUDA compute buffer is smaller. This is most likely due to the fused `ffn_up+ffn_gate` op that you get with `-fmoe`. In any case, having 80 instead of 81 MoE experts competed on the CPU will not make a significant difference in performance.
+
 > 👤 **ubergarm** replied on **2025-04-30** at **17:46:53**
 > 
 > I don't have access to enough RAM+VRAM currently to run the full `bf16`, so I'm using the `Q8_0` as the baseline for my imatrix data and PPL/KLD.
@@ -1249,6 +1322,27 @@ Interestingly I could hear my fans spin up and down periodically every 15 second
 
 [sweep-bench.cpp.gz](https://github.com/user-attachments/files/19971777/sweep-bench.cpp.gz)
 
+> 👤 **ubergarm** replied on **2025-04-30** at **17:21:50**
+> 
+> I compared your `sweep-bench.cpp` adaptation to mainline llama.cpp with [my adaptation](https://github.com/ubergarm/llama.cpp/blob/ug/port-sweep-bench/examples/sweep-bench/sweep-bench.cpp) of @saood06 's code. A couple quick results suggest they are pretty similar for two benchmarks I had run:
+> 
+> ## bartowski/THUDM_GLM-Z1-32B-0414-IQ4_XS.gguf GQA FA
+> 
+> ![thud-sweep-mine-vs-iks-adaptation](https://github.com/user-attachments/assets/2326af57-c779-4ea2-afd4-5f401357cca6)
+> 
+> Running the same and comparing against [this previous data](https://github.com/ikawrakow/ik_llama.cpp/pull/344#issuecomment-2832581799).
+> 
+> ## Qwen3-235B-A22B-Q8_0 GQA FA
+> 
+> ![qwen3-moe-ik-vs-ug-sweep-adaptation](https://github.com/user-attachments/assets/4dd766e7-85d9-4615-8a38-2d994528e21a)
+> ^ title is wrong, this big model was on the thread ripper pro with RTX A6000 oops
+> 
+> Running the same and comparing against the above chart.
+> 
+> ## Conclusion
+> 
+> The general trends seem to hold, but your implementation seems a bit more consistent without the occasional dips unless that was just some noise or me doing something else on the machine. I'll use your adaptation going forward just to keep it as similar as possible with your comparisons. Thanks!
+
 ---
 
 👤 **ikawrakow** commented on **2025-04-30** at **14:04:50**
@@ -1258,6 +1352,21 @@ OK, after thinking more about this, I can see why mainline has a better large co
 `ik_llama.cpp` does take advantage of GQA in the CPU FA implementation. Given the above results, it is clear that it is time to do the same for CUDA. I have two options:
 * Pickup the mainline PR (but heavy adaptation will be required as things have diverged a lot, and mainline FA does not support different K and V head sizes as required for DeepSeek models)
 * Finally sit down and write my own CUDA FA implementation
+
+> 👤 **ubergarm** replied on **2025-04-30** at **15:02:22**
+> 
+> Interesting, yes, I first noticed this with GLM-4 (which uses GQA) in the [CUDA + Flash Attention case](https://github.com/ikawrakow/ik_llama.cpp/pull/344#issuecomment-2832581799) benchmark.
+> 
+> I still have the dream of converting an existing GQA architecture model to MLA but the additional fine-tuning required even with a fraction of the original training data seems daunting:
+> 
+> > The expressiveness of MLA is greater than that of GQA when both have the same size of KV cache.
+> > -[TransMLA: Multi-head Latent Attention Is All You Need](https://arxiv.org/html/2502.07864v1)
+> 
+> But until MLA catches on more across other models, it might make sense to revisit the CUDA FA implementation for GQA, if that is something that interests you. Of course as soon as R2 comes around, this fickle world will jump on the next hype train lmao...
+> 
+> In the mean-time I'll re-run a couple `llama-sweep-bench` comparisons with your mainline `sweep-bench.cpp` adaptation to confirm or reject my prior benchmarks!
+> 
+> Thanks!
 
 > 👤 **ikawrakow** replied on **2025-04-30** at **16:14:03**
 > 
@@ -2534,6 +2643,880 @@ CPU performance TG comparison:
 GPU performance TG comparison:
 ![performance_comparison_tg_gpu](https://github.com/user-attachments/assets/293e3761-88f2-4cb9-8754-169aa9d6b153)
 
+> 👤 **AesSedai** replied on **2025-05-03** at **05:29:15**
+> 
+> One more test, I disabled pipeline parallelism (setting it to 1) and re-built ik_llama.cpp:
+> ```
+> cmake -DBLAS_INCLUDE_DIRS=/usr/include/openblas -B build -DGGML_CUDA=ON -DGGML_RPC=ON -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DGGML_SCHED_MAX_COPIES=1
+> ```
+> 
+> This let me use my second 3090 and offload a little more.
+> 
+> <details>
+> 
+> <summary>ik_llama.cpp 2x GPU logs</summary>
+> 
+> ```
+> ./build/bin/llama-sweep-bench -m /mnt/srv/slush/gguf/Qwen3-235B-A22B-GGUF-ik-llama/Qwen3-235B-A22B-mix-IQ6_K-00001-of-00005.gguf -c 16384 -t 48 -fa -rtr -fmoe -ctk q8_0 -ctv q8_0 -ngl 99 -ot "blk\.(0|1|2|3|4|5|6)\.ffn.*=CUDA0" -ot "blk\.(7|8|9|10|11|12|13)\.ffn.*=CUDA1" -ot "blk\.1[4-9]\.ffn.*=CPU" -ot "blk\.[2-9][0-9]\.ffn.*=CPU"
+> ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+> ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+> ggml_cuda_init: found 2 CUDA devices:
+>   Device 0: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+>   Device 1: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+> llama_model_loader: additional 4 GGUFs metadata loaded.
+> llama_model_loader: loaded meta data with 39 key-value pairs and 1131 tensors from /mnt/srv/slush/gguf/Qwen3-235B-A22B-GGUF-ik-llama/Qwen3-235B-A22B-mix-IQ6_K-00001-of-00005.gguf (version GGUF V3 (latest))
+> llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+> llama_model_loader: - kv   0:                       general.architecture str              = qwen3moe
+> llama_model_loader: - kv   1:                               general.type str              = model
+> llama_model_loader: - kv   2:                               general.name str              = Models
+> llama_model_loader: - kv   3:                         general.size_label str              = 128x10B
+> llama_model_loader: - kv   4:                            general.license str              = apache-2.0
+> llama_model_loader: - kv   5:                       general.license.link str              = https://huggingface.co/Qwen/Qwen3-235...
+> llama_model_loader: - kv   6:                               general.tags arr[str,1]       = ["text-generation"]
+> llama_model_loader: - kv   7:                       qwen3moe.block_count u32              = 94
+> llama_model_loader: - kv   8:                    qwen3moe.context_length u32              = 40960
+> llama_model_loader: - kv   9:                  qwen3moe.embedding_length u32              = 4096
+> llama_model_loader: - kv  10:               qwen3moe.feed_forward_length u32              = 12288
+> llama_model_loader: - kv  11:              qwen3moe.attention.head_count u32              = 64
+> llama_model_loader: - kv  12:           qwen3moe.attention.head_count_kv u32              = 4
+> llama_model_loader: - kv  13:                    qwen3moe.rope.freq_base f32              = 1000000.000000
+> llama_model_loader: - kv  14:  qwen3moe.attention.layer_norm_rms_epsilon f32              = 0.000001
+> llama_model_loader: - kv  15:                 qwen3moe.expert_used_count u32              = 8
+> llama_model_loader: - kv  16:              qwen3moe.attention.key_length u32              = 128
+> llama_model_loader: - kv  17:            qwen3moe.attention.value_length u32              = 128
+> llama_model_loader: - kv  18:                          general.file_type u32              = 142
+> llama_model_loader: - kv  19:                      qwen3moe.expert_count u32              = 128
+> llama_model_loader: - kv  20:        qwen3moe.expert_feed_forward_length u32              = 1536
+> llama_model_loader: - kv  21:                       tokenizer.ggml.model str              = gpt2
+> llama_model_loader: - kv  22:                         tokenizer.ggml.pre str              = qwen2
+> llama_model_loader: - kv  23:                      tokenizer.ggml.tokens arr[str,151936]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+> llama_model_loader: - kv  24:                  tokenizer.ggml.token_type arr[i32,151936]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+> llama_model_loader: - kv  25:                      tokenizer.ggml.merges arr[str,151387]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+> llama_model_loader: - kv  26:                tokenizer.ggml.eos_token_id u32              = 151645
+> llama_model_loader: - kv  27:            tokenizer.ggml.padding_token_id u32              = 151643
+> llama_model_loader: - kv  28:                tokenizer.ggml.bos_token_id u32              = 151643
+> llama_model_loader: - kv  29:               tokenizer.ggml.add_bos_token bool             = false
+> llama_model_loader: - kv  30:                    tokenizer.chat_template str              = {%- if tools %}\n    {{- '<|im_start|>...
+> llama_model_loader: - kv  31:               general.quantization_version u32              = 2
+> llama_model_loader: - kv  32:                      quantize.imatrix.file str              = /workspace/ubergarm/imatrix-Qwen3-235...
+> llama_model_loader: - kv  33:                   quantize.imatrix.dataset str              = calibration_data_v5_rc.txt
+> llama_model_loader: - kv  34:             quantize.imatrix.entries_count i32              = 753
+> llama_model_loader: - kv  35:              quantize.imatrix.chunks_count i32              = 225
+> llama_model_loader: - kv  36:                                   split.no u16              = 0
+> llama_model_loader: - kv  37:                                split.count u16              = 5
+> llama_model_loader: - kv  38:                        split.tensors.count i32              = 1131
+> llama_model_loader: - type  f32:  471 tensors
+> llama_model_loader: - type q8_0:   96 tensors
+> llama_model_loader: - type iq6_k:  564 tensors
+> llm_load_vocab: special tokens cache size = 26
+> llm_load_vocab: token to piece cache size = 0.9311 MB
+> llm_load_print_meta: format           = GGUF V3 (latest)
+> llm_load_print_meta: arch             = qwen3moe
+> llm_load_print_meta: vocab type       = BPE
+> llm_load_print_meta: n_vocab          = 151936
+> llm_load_print_meta: n_merges         = 151387
+> llm_load_print_meta: vocab_only       = 0
+> llm_load_print_meta: n_ctx_train      = 40960
+> llm_load_print_meta: n_embd           = 4096
+> llm_load_print_meta: n_layer          = 94
+> llm_load_print_meta: n_head           = 64
+> llm_load_print_meta: n_head_kv        = 4
+> llm_load_print_meta: n_rot            = 128
+> llm_load_print_meta: n_swa            = 0
+> llm_load_print_meta: n_swa_pattern    = 1
+> llm_load_print_meta: n_embd_head_k    = 128
+> llm_load_print_meta: n_embd_head_v    = 128
+> llm_load_print_meta: n_gqa            = 16
+> llm_load_print_meta: n_embd_k_gqa     = 512
+> llm_load_print_meta: n_embd_v_gqa     = 512
+> llm_load_print_meta: f_norm_eps       = 0.0e+00
+> llm_load_print_meta: f_norm_rms_eps   = 1.0e-06
+> llm_load_print_meta: f_clamp_kqv      = 0.0e+00
+> llm_load_print_meta: f_max_alibi_bias = 0.0e+00
+> llm_load_print_meta: f_logit_scale    = 0.0e+00
+> llm_load_print_meta: n_ff             = 12288
+> llm_load_print_meta: n_expert         = 128
+> llm_load_print_meta: n_expert_used    = 8
+> llm_load_print_meta: causal attn      = 1
+> llm_load_print_meta: pooling type     = 0
+> llm_load_print_meta: rope type        = 2
+> llm_load_print_meta: rope scaling     = linear
+> llm_load_print_meta: freq_base_train  = 1000000.0
+> llm_load_print_meta: freq_scale_train = 1
+> llm_load_print_meta: n_ctx_orig_yarn  = 40960
+> llm_load_print_meta: rope_finetuned   = unknown
+> llm_load_print_meta: ssm_d_conv       = 0
+> llm_load_print_meta: ssm_d_inner      = 0
+> llm_load_print_meta: ssm_d_state      = 0
+> llm_load_print_meta: ssm_dt_rank      = 0
+> llm_load_print_meta: model type       = ?B
+> llm_load_print_meta: model ftype      = IQ6_K - 6.6 bpw
+> llm_load_print_meta: model params     = 235.094 B
+> llm_load_print_meta: model size       = 198.259 GiB (7.244 BPW) 
+> llm_load_print_meta: repeating layers = 197.028 GiB (7.237 BPW, 233.849 B parameters)
+> llm_load_print_meta: general.name     = Models
+> llm_load_print_meta: BOS token        = 151643 '<|endoftext|>'
+> llm_load_print_meta: EOS token        = 151645 '<|im_end|>'
+> llm_load_print_meta: PAD token        = 151643 '<|endoftext|>'
+> llm_load_print_meta: LF token         = 148848 'ÄĬ'
+> llm_load_print_meta: EOT token        = 151645 '<|im_end|>'
+> llm_load_print_meta: max token length = 256
+> llm_load_print_meta: n_ff_exp         = 1536
+> llm_load_tensors: ggml ctx size =    1.49 MiB
+> Tensor blk.0.ffn_norm.weight buffer type overriden to CUDA0
+> Tensor blk.0.ffn_gate_inp.weight buffer type overriden to CUDA0
+> Tensor blk.0.ffn_gate_exps.weight buffer type overriden to CUDA0
+> Tensor blk.0.ffn_down_exps.weight buffer type overriden to CUDA0
+> Tensor blk.0.ffn_up_exps.weight buffer type overriden to CUDA0
+> Tensor blk.1.ffn_norm.weight buffer type overriden to CUDA0
+> Tensor blk.1.ffn_gate_inp.weight buffer type overriden to CUDA0
+> Tensor blk.1.ffn_gate_exps.weight buffer type overriden to CUDA0
+> Tensor blk.1.ffn_down_exps.weight buffer type overriden to CUDA0
+> Tensor blk.1.ffn_up_exps.weight buffer type overriden to CUDA0
+> Tensor blk.2.ffn_norm.weight buffer type overriden to CUDA0
+> Tensor blk.2.ffn_gate_inp.weight buffer type overriden to CUDA0
+> Tensor blk.2.ffn_gate_exps.weight buffer type overriden to CUDA0
+> Tensor blk.2.ffn_down_exps.weight buffer type overriden to CUDA0
+> Tensor blk.2.ffn_up_exps.weight buffer type overriden to CUDA0
+> Tensor blk.3.ffn_norm.weight buffer type overriden to CUDA0
+> Tensor blk.3.ffn_gate_inp.weight buffer type overriden to CUDA0
+> Tensor blk.3.ffn_gate_exps.weight buffer type overriden to CUDA0
+> Tensor blk.3.ffn_down_exps.weight buffer type overriden to CUDA0
+> Tensor blk.3.ffn_up_exps.weight buffer type overriden to CUDA0
+> Tensor blk.4.ffn_norm.weight buffer type overriden to CUDA0
+> Tensor blk.4.ffn_gate_inp.weight buffer type overriden to CUDA0
+> Tensor blk.4.ffn_gate_exps.weight buffer type overriden to CUDA0
+> Tensor blk.4.ffn_down_exps.weight buffer type overriden to CUDA0
+> Tensor blk.4.ffn_up_exps.weight buffer type overriden to CUDA0
+> Tensor blk.5.ffn_norm.weight buffer type overriden to CUDA0
+> Tensor blk.5.ffn_gate_inp.weight buffer type overriden to CUDA0
+> Tensor blk.5.ffn_gate_exps.weight buffer type overriden to CUDA0
+> Tensor blk.5.ffn_down_exps.weight buffer type overriden to CUDA0
+> Tensor blk.5.ffn_up_exps.weight buffer type overriden to CUDA0
+> Tensor blk.6.ffn_norm.weight buffer type overriden to CUDA0
+> Tensor blk.6.ffn_gate_inp.weight buffer type overriden to CUDA0
+> Tensor blk.6.ffn_gate_exps.weight buffer type overriden to CUDA0
+> Tensor blk.6.ffn_down_exps.weight buffer type overriden to CUDA0
+> Tensor blk.6.ffn_up_exps.weight buffer type overriden to CUDA0
+> Tensor blk.7.ffn_norm.weight buffer type overriden to CUDA1
+> Tensor blk.7.ffn_gate_inp.weight buffer type overriden to CUDA1
+> Tensor blk.7.ffn_gate_exps.weight buffer type overriden to CUDA1
+> Tensor blk.7.ffn_down_exps.weight buffer type overriden to CUDA1
+> Tensor blk.7.ffn_up_exps.weight buffer type overriden to CUDA1
+> Tensor blk.8.ffn_norm.weight buffer type overriden to CUDA1
+> Tensor blk.8.ffn_gate_inp.weight buffer type overriden to CUDA1
+> Tensor blk.8.ffn_gate_exps.weight buffer type overriden to CUDA1
+> Tensor blk.8.ffn_down_exps.weight buffer type overriden to CUDA1
+> Tensor blk.8.ffn_up_exps.weight buffer type overriden to CUDA1
+> Tensor blk.9.ffn_norm.weight buffer type overriden to CUDA1
+> Tensor blk.9.ffn_gate_inp.weight buffer type overriden to CUDA1
+> Tensor blk.9.ffn_gate_exps.weight buffer type overriden to CUDA1
+> Tensor blk.9.ffn_down_exps.weight buffer type overriden to CUDA1
+> Tensor blk.9.ffn_up_exps.weight buffer type overriden to CUDA1
+> Tensor blk.10.ffn_norm.weight buffer type overriden to CUDA1
+> Tensor blk.10.ffn_gate_inp.weight buffer type overriden to CUDA1
+> Tensor blk.10.ffn_gate_exps.weight buffer type overriden to CUDA1
+> Tensor blk.10.ffn_down_exps.weight buffer type overriden to CUDA1
+> Tensor blk.10.ffn_up_exps.weight buffer type overriden to CUDA1
+> Tensor blk.11.ffn_norm.weight buffer type overriden to CUDA1
+> Tensor blk.11.ffn_gate_inp.weight buffer type overriden to CUDA1
+> Tensor blk.11.ffn_gate_exps.weight buffer type overriden to CUDA1
+> Tensor blk.11.ffn_down_exps.weight buffer type overriden to CUDA1
+> Tensor blk.11.ffn_up_exps.weight buffer type overriden to CUDA1
+> Tensor blk.12.ffn_norm.weight buffer type overriden to CUDA1
+> Tensor blk.12.ffn_gate_inp.weight buffer type overriden to CUDA1
+> Tensor blk.12.ffn_gate_exps.weight buffer type overriden to CUDA1
+> Tensor blk.12.ffn_down_exps.weight buffer type overriden to CUDA1
+> Tensor blk.12.ffn_up_exps.weight buffer type overriden to CUDA1
+> Tensor blk.13.ffn_norm.weight buffer type overriden to CUDA1
+> Tensor blk.13.ffn_gate_inp.weight buffer type overriden to CUDA1
+> Tensor blk.13.ffn_gate_exps.weight buffer type overriden to CUDA1
+> Tensor blk.13.ffn_down_exps.weight buffer type overriden to CUDA1
+> Tensor blk.13.ffn_up_exps.weight buffer type overriden to CUDA1
+> Tensor blk.14.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.14.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.14.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.14.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.14.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.15.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.15.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.15.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.15.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.15.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.16.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.16.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.16.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.16.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.16.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.17.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.17.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.17.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.17.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.17.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.18.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.18.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.18.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.18.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.18.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.19.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.19.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.19.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.19.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.19.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.20.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.20.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.20.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.20.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.20.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.21.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.21.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.21.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.21.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.21.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.22.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.22.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.22.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.22.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.22.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.23.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.23.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.23.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.23.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.23.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.24.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.24.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.24.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.24.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.24.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.25.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.25.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.25.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.25.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.25.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.26.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.26.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.26.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.26.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.26.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.27.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.27.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.27.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.27.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.27.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.28.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.28.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.28.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.28.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.28.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.29.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.29.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.29.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.29.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.29.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.30.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.30.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.30.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.30.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.30.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.31.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.31.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.31.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.31.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.31.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.32.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.32.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.32.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.32.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.32.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.33.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.33.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.33.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.33.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.33.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.34.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.34.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.34.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.34.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.34.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.35.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.35.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.35.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.35.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.35.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.36.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.36.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.36.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.36.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.36.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.37.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.37.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.37.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.37.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.37.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.38.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.38.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.38.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.38.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.38.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.39.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.39.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.39.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.39.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.39.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.40.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.40.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.40.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.40.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.40.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.41.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.41.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.41.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.41.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.41.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.42.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.42.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.42.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.42.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.42.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.43.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.43.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.43.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.43.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.43.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.44.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.44.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.44.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.44.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.44.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.45.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.45.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.45.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.45.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.45.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.46.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.46.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.46.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.46.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.46.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.47.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.47.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.47.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.47.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.47.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.48.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.48.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.48.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.48.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.48.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.49.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.49.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.49.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.49.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.49.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.50.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.50.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.50.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.50.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.50.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.51.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.51.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.51.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.51.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.51.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.52.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.52.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.52.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.52.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.52.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.53.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.53.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.53.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.53.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.53.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.54.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.54.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.54.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.54.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.54.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.55.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.55.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.55.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.55.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.55.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.56.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.56.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.56.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.56.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.56.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.57.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.57.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.57.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.57.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.57.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.58.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.58.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.58.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.58.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.58.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.59.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.59.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.59.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.59.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.59.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.60.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.60.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.60.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.60.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.60.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.61.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.61.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.61.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.61.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.61.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.62.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.62.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.62.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.62.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.62.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.63.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.63.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.63.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.63.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.63.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.64.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.64.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.64.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.64.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.64.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.65.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.65.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.65.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.65.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.65.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.66.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.66.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.66.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.66.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.66.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.67.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.67.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.67.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.67.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.67.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.68.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.68.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.68.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.68.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.68.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.69.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.69.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.69.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.69.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.69.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.70.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.70.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.70.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.70.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.70.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.71.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.71.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.71.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.71.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.71.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.72.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.72.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.72.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.72.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.72.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.73.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.73.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.73.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.73.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.73.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.74.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.74.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.74.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.74.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.74.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.75.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.75.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.75.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.75.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.75.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.76.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.76.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.76.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.76.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.76.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.77.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.77.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.77.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.77.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.77.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.78.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.78.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.78.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.78.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.78.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.79.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.79.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.79.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.79.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.79.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.80.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.80.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.80.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.80.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.80.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.81.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.81.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.81.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.81.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.81.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.82.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.82.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.82.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.82.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.82.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.83.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.83.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.83.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.83.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.83.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.84.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.84.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.84.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.84.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.84.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.85.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.85.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.85.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.85.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.85.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.86.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.86.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.86.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.86.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.86.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.87.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.87.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.87.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.87.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.87.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.88.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.88.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.88.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.88.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.88.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.89.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.89.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.89.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.89.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.89.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.90.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.90.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.90.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.90.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.90.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.91.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.91.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.91.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.91.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.91.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.92.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.92.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.92.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.92.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.92.ffn_up_exps.weight buffer type overriden to CPU
+> Tensor blk.93.ffn_norm.weight buffer type overriden to CPU
+> Tensor blk.93.ffn_gate_inp.weight buffer type overriden to CPU
+> Tensor blk.93.ffn_gate_exps.weight buffer type overriden to CPU
+> Tensor blk.93.ffn_down_exps.weight buffer type overriden to CPU
+> Tensor blk.93.ffn_up_exps.weight buffer type overriden to CPU
+> llm_load_tensors: offloading 94 repeating layers to GPU
+> llm_load_tensors: offloading non-repeating layers to GPU
+> llm_load_tensors: offloaded 95/95 layers to GPU
+> llm_load_tensors:        CPU buffer size = 167201.25 MiB
+> llm_load_tensors:  CUDA_Host buffer size =   630.59 MiB
+> llm_load_tensors:      CUDA0 buffer size = 17333.91 MiB
+> llm_load_tensors:      CUDA1 buffer size = 17851.86 MiB
+> ....................................................................................................
+> ============ Repacked 80 tensors
+> llama_new_context_with_model: n_ctx      = 16384
+> llama_new_context_with_model: n_batch    = 2048
+> llama_new_context_with_model: n_ubatch   = 512
+> llama_new_context_with_model: flash_attn = 1
+> llama_new_context_with_model: mla_attn   = 0
+> llama_new_context_with_model: attn_max_b = 0
+> llama_new_context_with_model: fused_moe  = 1
+> llama_new_context_with_model: ser        = -1, 0
+> llama_new_context_with_model: freq_base  = 1000000.0
+> llama_new_context_with_model: freq_scale = 1
+> llama_kv_cache_init:      CUDA0 KV buffer size =   816.02 MiB
+> llama_kv_cache_init:      CUDA1 KV buffer size =   782.02 MiB
+> llama_new_context_with_model: KV self size  = 1598.00 MiB, K (q8_0):  799.00 MiB, V (q8_0):  799.00 MiB
+> llama_new_context_with_model:  CUDA_Host  output buffer size =     0.58 MiB
+> llama_new_context_with_model: pipeline parallelism enabled (n_copies=1)
+> llama_new_context_with_model:      CUDA0 compute buffer size =   144.00 MiB
+> llama_new_context_with_model:      CUDA1 compute buffer size =   312.75 MiB
+> llama_new_context_with_model:        CPU compute buffer size =     8.25 MiB
+> llama_new_context_with_model:  CUDA_Host compute buffer size =   120.01 MiB
+> llama_new_context_with_model: graph nodes  = 3672
+> llama_new_context_with_model: graph splits = 336
+> 
+> main: n_kv_max = 16384, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_layers = 99, n_threads = 48, n_threads_batch = 48
+> 
+> |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+> |-------|--------|--------|----------|----------|----------|----------|
+> |   512 |    128 |      0 |    3.957 |   129.39 |    7.209 |    17.75 |
+> |   512 |    128 |    512 |    3.910 |   130.94 |    7.676 |    16.67 |
+> |   512 |    128 |   1024 |    3.963 |   129.18 |    7.769 |    16.48 |
+> |   512 |    128 |   1536 |    3.961 |   129.27 |    7.837 |    16.33 |
+> |   512 |    128 |   2048 |    4.033 |   126.94 |    8.236 |    15.54 |
+> |   512 |    128 |   2560 |    4.054 |   126.28 |    8.429 |    15.19 |
+> |   512 |    128 |   3072 |    4.072 |   125.73 |   10.839 |    11.81 |
+> |   512 |    128 |   3584 |    4.098 |   124.94 |   11.515 |    11.12 |
+> |   512 |    128 |   4096 |    4.177 |   122.56 |   11.817 |    10.83 |
+> |   512 |    128 |   4608 |    4.182 |   122.44 |   12.003 |    10.66 |
+> |   512 |    128 |   5120 |    4.215 |   121.48 |   12.178 |    10.51 |
+> |   512 |    128 |   5632 |    4.213 |   121.54 |   12.464 |    10.27 |
+> |   512 |    128 |   6144 |    4.275 |   119.76 |   12.475 |    10.26 |
+> |   512 |    128 |   6656 |    4.200 |   121.89 |   12.690 |    10.09 |
+> |   512 |    128 |   7168 |    4.220 |   121.32 |   12.896 |     9.93 |
+> |   512 |    128 |   7680 |    4.251 |   120.45 |   13.109 |     9.76 |
+> |   512 |    128 |   8192 |    4.279 |   119.66 |   13.253 |     9.66 |
+> |   512 |    128 |   8704 |    4.293 |   119.26 |   13.550 |     9.45 |
+> |   512 |    128 |   9216 |    4.291 |   119.31 |   13.668 |     9.37 |
+> |   512 |    128 |   9728 |    4.301 |   119.04 |   13.804 |     9.27 |
+> |   512 |    128 |  10240 |    4.306 |   118.90 |   14.200 |     9.01 |
+> |   512 |    128 |  10752 |    4.338 |   118.02 |   14.255 |     8.98 |
+> |   512 |    128 |  11264 |    4.330 |   118.25 |   14.403 |     8.89 |
+> |   512 |    128 |  11776 |    4.375 |   117.03 |   14.506 |     8.82 |
+> |   512 |    128 |  12288 |    4.413 |   116.03 |   14.864 |     8.61 |
+> |   512 |    128 |  12800 |    4.414 |   116.00 |   14.960 |     8.56 |
+> |   512 |    128 |  13312 |    4.419 |   115.86 |   15.197 |     8.42 |
+> |   512 |    128 |  13824 |    4.440 |   115.32 |   15.448 |     8.29 |
+> |   512 |    128 |  14336 |    4.463 |   114.72 |   15.592 |     8.21 |
+> |   512 |    128 |  14848 |    4.473 |   114.46 |   15.740 |     8.13 |
+> |   512 |    128 |  15360 |    4.507 |   113.61 |   15.883 |     8.06 |
+> |   512 |    128 |  15872 |    4.514 |   113.43 |   16.207 |     7.90 |
+> ```
+> 
+> </details>
+> 
+> 
+> <details>
+> 
+> <summary>llama.cpp 2x GPU logs</summary>
+> 
+> ```
+> ./build/bin/llama-sweep-bench -m /mnt/srv/slush/gguf/Qwen3-235B-A22B-128K-GGUF/Q6_K/Qwen3-235B-A22B-128K-Q6_K-00001-of-00004.gguf -c 16384 -t 48 -fa -ctk q8_0 -ctv q8_0 -ngl 99 -ot "blk\.(0|1|2|3|4|5|6)\.ffn.*=CUDA0" -ot "blk\.(7|8|9|10|11|12|13)\.ffn.*=CUDA1" -ot "blk\.1[4-9]\.ffn.*=CPU" -ot "blk\.[2-9][0-9]\.ffn.*=CPU"
+> ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+> ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+> ggml_cuda_init: found 2 CUDA devices:
+>   Device 0: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+>   Device 1: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+> build: 5269 (1d36b367) with cc (GCC) 14.2.1 20250110 (Red Hat 14.2.1-7) for x86_64-redhat-linux
+> llama_model_load_from_file_impl: using device CUDA0 (NVIDIA GeForce RTX 3090) - 23871 MiB free
+> llama_model_load_from_file_impl: using device CUDA1 (NVIDIA GeForce RTX 3090) - 23871 MiB free
+> llama_model_loader: additional 3 GGUFs metadata loaded.
+> llama_model_loader: loaded meta data with 47 key-value pairs and 1131 tensors from /mnt/srv/slush/gguf/Qwen3-235B-A22B-128K-GGUF/Q6_K/Qwen3-235B-A22B-128K-Q6_K-00001-of-00004.gguf (version GGUF V3 (latest))
+> llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+> llama_model_loader: - kv   0:                       general.architecture str              = qwen3moe
+> llama_model_loader: - kv   1:                               general.type str              = model
+> llama_model_loader: - kv   2:                               general.name str              = Qwen3-235B-A22B-128K
+> llama_model_loader: - kv   3:                           general.finetune str              = 128k
+> llama_model_loader: - kv   4:                           general.basename str              = Qwen3-235B-A22B-128K
+> llama_model_loader: - kv   5:                       general.quantized_by str              = Unsloth
+> llama_model_loader: - kv   6:                         general.size_label str              = 235B-A22B
+> llama_model_loader: - kv   7:                            general.license str              = apache-2.0
+> llama_model_loader: - kv   8:                       general.license.link str              = https://huggingface.co/Qwen/Qwen3-235...
+> llama_model_loader: - kv   9:                           general.repo_url str              = https://huggingface.co/unsloth
+> llama_model_loader: - kv  10:                   general.base_model.count u32              = 1
+> llama_model_loader: - kv  11:                  general.base_model.0.name str              = Qwen3 235B A22B
+> llama_model_loader: - kv  12:          general.base_model.0.organization str              = Qwen
+> llama_model_loader: - kv  13:              general.base_model.0.repo_url str              = https://huggingface.co/Qwen/Qwen3-235...
+> llama_model_loader: - kv  14:                               general.tags arr[str,2]       = ["unsloth", "text-generation"]
+> llama_model_loader: - kv  15:                       qwen3moe.block_count u32              = 94
+> llama_model_loader: - kv  16:                    qwen3moe.context_length u32              = 131072
+> llama_model_loader: - kv  17:                  qwen3moe.embedding_length u32              = 4096
+> llama_model_loader: - kv  18:               qwen3moe.feed_forward_length u32              = 12288
+> llama_model_loader: - kv  19:              qwen3moe.attention.head_count u32              = 64
+> llama_model_loader: - kv  20:           qwen3moe.attention.head_count_kv u32              = 4
+> llama_model_loader: - kv  21:                    qwen3moe.rope.freq_base f32              = 1000000.000000
+> llama_model_loader: - kv  22:  qwen3moe.attention.layer_norm_rms_epsilon f32              = 0.000001
+> llama_model_loader: - kv  23:                 qwen3moe.expert_used_count u32              = 8
+> llama_model_loader: - kv  24:              qwen3moe.attention.key_length u32              = 128
+> llama_model_loader: - kv  25:            qwen3moe.attention.value_length u32              = 128
+> llama_model_loader: - kv  26:                      qwen3moe.expert_count u32              = 128
+> llama_model_loader: - kv  27:        qwen3moe.expert_feed_forward_length u32              = 1536
+> llama_model_loader: - kv  28:                       tokenizer.ggml.model str              = gpt2
+> llama_model_loader: - kv  29:                         tokenizer.ggml.pre str              = qwen2
+> llama_model_loader: - kv  30:                      tokenizer.ggml.tokens arr[str,151936]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+> llama_model_loader: - kv  31:                  tokenizer.ggml.token_type arr[i32,151936]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+> llama_model_loader: - kv  32:                      tokenizer.ggml.merges arr[str,151387]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+> llama_model_loader: - kv  33:                tokenizer.ggml.eos_token_id u32              = 151645
+> llama_model_loader: - kv  34:            tokenizer.ggml.padding_token_id u32              = 151643
+> llama_model_loader: - kv  35:                tokenizer.ggml.bos_token_id u32              = 151643
+> llama_model_loader: - kv  36:               tokenizer.ggml.add_bos_token bool             = false
+> llama_model_loader: - kv  37:                    tokenizer.chat_template str              = {%- if tools %}\n    {{- '<|im_start|>...
+> llama_model_loader: - kv  38:               general.quantization_version u32              = 2
+> llama_model_loader: - kv  39:                          general.file_type u32              = 18
+> llama_model_loader: - kv  40:                      quantize.imatrix.file str              = Qwen3-235B-A22B-128K-GGUF/imatrix_uns...
+> llama_model_loader: - kv  41:                   quantize.imatrix.dataset str              = unsloth_calibration_Qwen3-235B-A22B-1...
+> llama_model_loader: - kv  42:             quantize.imatrix.entries_count i32              = 752
+> llama_model_loader: - kv  43:              quantize.imatrix.chunks_count i32              = 46
+> llama_model_loader: - kv  44:                                   split.no u16              = 0
+> llama_model_loader: - kv  45:                        split.tensors.count i32              = 1131
+> llama_model_loader: - kv  46:                                split.count u16              = 4
+> llama_model_loader: - type  f32:  471 tensors
+> llama_model_loader: - type q6_K:  660 tensors
+> print_info: file format = GGUF V3 (latest)
+> print_info: file type   = Q6_K
+> print_info: file size   = 179.75 GiB (6.57 BPW) 
+> load: special tokens cache size = 26
+> load: token to piece cache size = 0.9311 MB
+> print_info: arch             = qwen3moe
+> print_info: vocab_only       = 0
+> print_info: n_ctx_train      = 131072
+> print_info: n_embd           = 4096
+> print_info: n_layer          = 94
+> print_info: n_head           = 64
+> print_info: n_head_kv        = 4
+> print_info: n_rot            = 128
+> print_info: n_swa            = 0
+> print_info: n_swa_pattern    = 1
+> print_info: n_embd_head_k    = 128
+> print_info: n_embd_head_v    = 128
+> print_info: n_gqa            = 16
+> print_info: n_embd_k_gqa     = 512
+> print_info: n_embd_v_gqa     = 512
+> print_info: f_norm_eps       = 0.0e+00
+> print_info: f_norm_rms_eps   = 1.0e-06
+> print_info: f_clamp_kqv      = 0.0e+00
+> print_info: f_max_alibi_bias = 0.0e+00
+> print_info: f_logit_scale    = 0.0e+00
+> print_info: f_attn_scale     = 0.0e+00
+> print_info: n_ff             = 12288
+> print_info: n_expert         = 128
+> print_info: n_expert_used    = 8
+> print_info: causal attn      = 1
+> print_info: pooling type     = 0
+> print_info: rope type        = 2
+> print_info: rope scaling     = linear
+> print_info: freq_base_train  = 1000000.0
+> print_info: freq_scale_train = 1
+> print_info: n_ctx_orig_yarn  = 131072
+> print_info: rope_finetuned   = unknown
+> print_info: ssm_d_conv       = 0
+> print_info: ssm_d_inner      = 0
+> print_info: ssm_d_state      = 0
+> print_info: ssm_dt_rank      = 0
+> print_info: ssm_dt_b_c_rms   = 0
+> print_info: model type       = 235B.A22B
+> print_info: model params     = 235.09 B
+> print_info: general.name     = Qwen3-235B-A22B-128K
+> print_info: n_ff_exp         = 1536
+> print_info: vocab type       = BPE
+> print_info: n_vocab          = 151936
+> print_info: n_merges         = 151387
+> print_info: BOS token        = 151643 '<|endoftext|>'
+> print_info: EOS token        = 151645 '<|im_end|>'
+> print_info: EOT token        = 151645 '<|im_end|>'
+> print_info: PAD token        = 151643 '<|endoftext|>'
+> print_info: LF token         = 198 'Ċ'
+> print_info: FIM PRE token    = 151659 '<|fim_prefix|>'
+> print_info: FIM SUF token    = 151661 '<|fim_suffix|>'
+> print_info: FIM MID token    = 151660 '<|fim_middle|>'
+> print_info: FIM PAD token    = 151662 '<|fim_pad|>'
+> print_info: FIM REP token    = 151663 '<|repo_name|>'
+> print_info: FIM SEP token    = 151664 '<|file_sep|>'
+> print_info: EOG token        = 151643 '<|endoftext|>'
+> print_info: EOG token        = 151645 '<|im_end|>'
+> print_info: EOG token        = 151662 '<|fim_pad|>'
+> print_info: EOG token        = 151663 '<|repo_name|>'
+> print_info: EOG token        = 151664 '<|file_sep|>'
+> print_info: max token length = 256
+> load_tensors: loading model tensors, this can take a while... (mmap = true)
+> load_tensors: offloading 94 repeating layers to GPU
+> load_tensors: offloading output layer to GPU
+> load_tensors: offloaded 95/95 layers to GPU
+> load_tensors:        CUDA0 model buffer size = 15922.41 MiB
+> load_tensors:        CUDA1 model buffer size = 16297.68 MiB
+> load_tensors:   CPU_Mapped model buffer size = 46604.38 MiB
+> load_tensors:   CPU_Mapped model buffer size = 47377.52 MiB
+> load_tensors:   CPU_Mapped model buffer size = 47377.52 MiB
+> load_tensors:   CPU_Mapped model buffer size = 42166.10 MiB
+> ....................................................................................................
+> llama_context: constructing llama_context
+> llama_context: n_seq_max     = 1
+> llama_context: n_ctx         = 16384
+> llama_context: n_ctx_per_seq = 16384
+> llama_context: n_batch       = 2048
+> llama_context: n_ubatch      = 512
+> llama_context: causal_attn   = 1
+> llama_context: flash_attn    = 1
+> llama_context: freq_base     = 1000000.0
+> llama_context: freq_scale    = 1
+> llama_context: n_ctx_per_seq (16384) < n_ctx_train (131072) -- the full capacity of the model will not be utilized
+> llama_context:  CUDA_Host  output buffer size =     0.58 MiB
+> llama_kv_cache_unified: kv_size = 16384, type_k = 'q8_0', type_v = 'q8_0', n_layer = 94, can_shift = 1, padding = 256
+> llama_kv_cache_unified:      CUDA0 KV buffer size =   816.00 MiB
+> llama_kv_cache_unified:      CUDA1 KV buffer size =   782.00 MiB
+> llama_kv_cache_unified: KV self size  = 1598.00 MiB, K (q8_0):  799.00 MiB, V (q8_0):  799.00 MiB
+> llama_context:      CUDA0 compute buffer size =   774.00 MiB
+> llama_context:      CUDA1 compute buffer size =   304.75 MiB
+> llama_context:        CPU compute buffer size =     8.25 MiB
+> llama_context:  CUDA_Host compute buffer size =    40.01 MiB
+> llama_context: graph nodes  = 5741
+> llama_context: graph splits = 543 (with bs=512), 176 (with bs=1)
+> 
+> main: n_kv_max = 16384, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_layers = 99, n_threads = 48, n_threads_batch = 48
+> 
+> |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+> |-------|--------|--------|----------|----------|----------|----------|
+> |   512 |    128 |      0 |    7.567 |    67.67 |    7.486 |    17.10 |
+> |   512 |    128 |    512 |    7.474 |    68.51 |    8.910 |    14.37 |
+> |   512 |    128 |   1024 |    7.488 |    68.38 |   10.591 |    12.09 |
+> |   512 |    128 |   1536 |    7.515 |    68.13 |   10.581 |    12.10 |
+> |   512 |    128 |   2048 |    7.535 |    67.95 |   10.588 |    12.09 |
+> |   512 |    128 |   2560 |    7.537 |    67.93 |   11.006 |    11.63 |
+> |   512 |    128 |   3072 |    7.552 |    67.80 |   11.114 |    11.52 |
+> |   512 |    128 |   3584 |    7.563 |    67.70 |   11.234 |    11.39 |
+> |   512 |    128 |   4096 |    7.578 |    67.56 |   11.320 |    11.31 |
+> |   512 |    128 |   4608 |    7.600 |    67.37 |   11.389 |    11.24 |
+> |   512 |    128 |   5120 |    7.594 |    67.42 |   11.932 |    10.73 |
+> |   512 |    128 |   5632 |    7.595 |    67.41 |   11.827 |    10.82 |
+> |   512 |    128 |   6144 |    7.612 |    67.26 |   11.759 |    10.89 |
+> |   512 |    128 |   6656 |    7.626 |    67.14 |   11.961 |    10.70 |
+> |   512 |    128 |   7168 |    7.656 |    66.88 |   12.073 |    10.60 |
+> |   512 |    128 |   7680 |    7.660 |    66.84 |   12.190 |    10.50 |
+> |   512 |    128 |   8192 |    7.672 |    66.74 |   12.343 |    10.37 |
+> |   512 |    128 |   8704 |    7.682 |    66.65 |   12.790 |    10.01 |
+> |   512 |    128 |   9216 |    7.693 |    66.56 |   12.578 |    10.18 |
+> |   512 |    128 |   9728 |    7.712 |    66.39 |   12.825 |     9.98 |
+> |   512 |    128 |  10240 |    7.725 |    66.28 |   13.087 |     9.78 |
+> |   512 |    128 |  10752 |    7.736 |    66.18 |   13.017 |     9.83 |
+> |   512 |    128 |  11264 |    7.750 |    66.07 |   13.143 |     9.74 |
+> |   512 |    128 |  11776 |    7.750 |    66.07 |   13.249 |     9.66 |
+> |   512 |    128 |  12288 |    7.769 |    65.90 |   13.393 |     9.56 |
+> |   512 |    128 |  12800 |    7.773 |    65.87 |   13.537 |     9.46 |
+> |   512 |    128 |  13312 |    7.787 |    65.75 |   13.620 |     9.40 |
+> |   512 |    128 |  13824 |    7.805 |    65.60 |   13.697 |     9.34 |
+> |   512 |    128 |  14336 |    7.823 |    65.44 |   13.976 |     9.16 |
+> |   512 |    128 |  14848 |    7.825 |    65.43 |   14.067 |     9.10 |
+> |   512 |    128 |  15360 |    7.824 |    65.44 |   14.361 |     8.91 |
+> |   512 |    128 |  15872 |    7.838 |    65.32 |   14.393 |     8.89 |
+> ```
+> 
+> </details>
+> 
+> and these are the updated GPU graphs:
+> 
+> ![performance_comparison_pp_gpu](https://github.com/user-attachments/assets/31612aea-90d7-446c-acc1-30f064185fc4)
+> 
+> ![performance_comparison_tg_gpu](https://github.com/user-attachments/assets/ecec5ab4-f1c9-42f5-b998-3b84a1986747)
+
 ---
 
 👤 **ikawrakow** commented on **2025-05-03** at **05:47:58**
@@ -2545,6 +3528,10 @@ I think it would be better to disable BLAS for both. CPU Prompt processing with 
 Prompt processing speed on CUDA will also benefit from larger u-batches (e.g., `-ub 2048`, in case VRAM permits).
 
 The CUDA TG results are somewhat surprising (sharp performance drop with context length for `ik_llama.cpp`, performance basically the same as CPU-only for long context, performance decreasing with more layers offloaded to a second GPU).
+
+> 👤 **AesSedai** replied on **2025-05-03** at **06:07:58**
+> 
+> I just re-ran the above with 2x GPU for llama.cpp as well and edited the comment / graph. I was already re-running ik_llama w/o BLAS, I'll have the results of that shortly.
 
 > 👤 **AesSedai** replied on **2025-05-03** at **06:19:29**
 > 
@@ -3396,6 +4383,10 @@ ik_llama.cpp BLAS vs NO BLAS PP comparison:
 ik_llama.cpp BLAS vs NO BLAS TG comparison:
 ![performance_comparison_tg_gpu](https://github.com/user-attachments/assets/06035299-c021-4279-907e-cb1d6a2f9f74)
 
+> 👤 **ikawrakow** replied on **2025-05-03** at **06:24:36**
+> 
+> Oh, for CPU-only inference you want to build **without CUDA**. The almighty `ggml` back-end scheduler that is very difficult to work around takes all sorts of funny decisions where to run stuff when one has more than one back-end enabled.
+
 > 👤 **AesSedai** replied on **2025-05-03** at **06:25:03**
 > 
 > D'oh, okay. I can redo it :)
@@ -3590,6 +4581,14 @@ Thanks!
 So, CPU PP is much better now and more inline with what I would have expected. Looking at the TG graph, it is clear that I still need to work on improving how the work is divided between the threads. The Qwen3 MoE models have a high GQA factor, so one should be able to achieve ~70-80% of zero-context performance at 16k tokens.
 
 But I see that the Epyc 9355 has 32 cores, so we are using hyper-threading?
+
+> 👤 **AesSedai** replied on **2025-05-03** at **07:23:30**
+> 
+> That's good news!
+> 
+> Yes, this is with hyperthreading. Out of the 64 threads on the system, 56 are passed through to the virtual machine and I have it configured to use 48 of those during the sweep.
+> 
+> Is there a particular `-t` count (or thread passthrough count) you would like me to try?
 
 > 👤 **ikawrakow** replied on **2025-05-03** at **07:27:14**
 > 

@@ -173,6 +173,12 @@ Go back to the basics. Start with LLaMA-v1-7B. I know, nobody uses that today. B
 
 Oh, I used `ik_llama.cpp` to compare. It is possible that has become much faster than mainline (I haven't used mainline for quite some time). I started testing with DeepSeek-Lite, and almost gave up (your `IQ4_NL` quantization took 302.5 seconds with imatrix). `ik_llama.cpp` does it in 54.5 seconds.
 
+> 👤 **bartowski1182** replied on **2025-03-26** at **17:42:29**
+> 
+> Re: quantization speed
+> 
+> Do you have any loose thoughts on where your crazy speedup may be coming from? Not asking you to do a thorough investigation, but curious if you have an initial place to point me
+
 > 👤 **ikawrakow** replied on **2025-03-26** at **18:16:32**
 > 
 > IIRC:
@@ -289,6 +295,10 @@ Big thanks to y'all doing so much inspirational work and making this stuff more 
 </details>
 
 :point_up:
+
+> 👤 **ikawrakow** replied on **2025-03-29** at **18:18:55**
+> 
+> I would be really curious to see the PPL values of the other quant cookers.
 
 > 👤 **bartowski1182** replied on **2025-03-29** at **18:42:51**
 > 

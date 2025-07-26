@@ -72,6 +72,14 @@ There are 470 open pull requests on llama.cpp most which probably take months or
 
 I understand upstreaming is a lot of effort, no guarantee that upstream will even like your coding standard or fix, in that case anyone is free to snoop around the code and upstream it to llama.cpp which will take months to review probably
 
+> 👤 **jeffzhou2000** replied on **2025-07-23** at **13:38:08**
+> 
+> > There are 470 open pull requests on llama.cpp most which probably take months or will never be merged
+> > 
+> > I understand upstreaming is a lot of effort, no guarantee that upstream will even like your coding standard or fix, in that case anyone is free to snoop around the code and upstream it to llama.cpp which will take months to review probably
+> 
+> I think there might-be some problems in the upstream llama.cpp project. e.g.: lack of some necessary codes of conducts. Because the upstream llama.cpp project is a 82k+ Github starers project with developers and experts from all over the world and different backgrounds.
+
 > 👤 **ikawrakow** replied on **2025-07-23** at **13:43:46**
 > 
 > @jeffzhou2000 This is not the right place to discuss your issues with the `llama.cpp` maintainers. Please stop.

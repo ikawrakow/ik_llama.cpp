@@ -45,6 +45,11 @@ I did a fresh recompile and repacking works now! Unfortunately IQ4_KT still does
 
 The `*_KT` quants are very slow on my M2-Max CPU, so it may not be worth putting the effort to make them work on a v8.0 phone.
 
+> 👤 **NotAHero04** replied on **2025-06-26** at **09:18:15**
+> 
+> So the KT quants do work after all, I just have to get the model from my PC. And yes, it is unbearably slow. (Q4_0 is 3x faster in TG)
+> ![Screenshot_20250626_155507](https://github.com/user-attachments/assets/e0a54dc0-4285-470a-b333-5aba063566b0)
+
 ---
 
 👤 **ikawrakow** commented on **2025-06-26** at **16:57:03**

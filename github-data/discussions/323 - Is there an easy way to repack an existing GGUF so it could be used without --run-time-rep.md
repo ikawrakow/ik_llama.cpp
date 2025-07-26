@@ -55,6 +55,13 @@ More generally, you can use `--repack-pattern` in the `llama-quantize` command b
 ```
 is equivalent.
 
+> 👤 **ikawrakow** replied on **2025-04-10** at **15:36:25**
+> 
+> I have never repacked (or quantized) a multi-part GGUF, so I don't know if `llama-quantize` does the right thing to load all parts. In case it does not, you may need to concatenate the parts into a single file
+> ```
+> cat file1 file2 ... fileN >>combined_file
+> ```
+
 > 👤 **saood06** replied on **2025-04-10** at **23:00:39**
 > 
 > >In case it does not, you may need to concatenate the parts into a single file
@@ -191,6 +198,20 @@ Please let me know if there are some kind of performance profiling or additional
 
 As of putting more ffn_up_exps and ffn_gate_exps on GPU, I will try that with as much layers as I can, thank you very much for the suggestion.
 
+> 👤 **ubergarm** replied on **2025-04-11** at **14:20:23**
+> 
+> @Lissanro 
+> 
+> > --no-mmap option, performance was back to normal. So, it seems something about mmap that drastically reduces performance. Nothing wrong with the quant file then.
+> 
+> If you are benchmarking while using mmap, you have to throw away the first full run results typically as the benchmarks start running before the model is loaded into page cache. You can check by watching your disk i/o and `cached` inside of `btop`. You will notice with mmap disabled, it takes longer to start up and finish allocating the entire model into RAM. When using mmap, it starts much quicker but runs slower in the beginning. This is normal expected behavior for all inference engines I've used.
+> 
+> Also, depending on how your system is configured, when not using mmap() you may be taking advantage of transparent huge pages automatically under the hood. You can check that with `numastat -m -p $(pidof llama-server)` or llama-bench etc... It seems to be system dependent on how this effects performance.
+> 
+> Keep us posted once you come up with a multi-gpu command line to override `ffn_up_exps` and `ffn_gate_exps` tensors onto each GPU as ik mentions above. I wanted to document that somewhere to help others as many of the questions I see are how to use more VRAM correctly when using `-ot`.
+> 
+> Thanks!
+
 > 👤 **ubergarm** replied on **2025-04-11** at **19:08:55**
 > 
 > @Lissanro 
@@ -257,6 +278,10 @@ So to repack I do inverse of my cuda regex? Can quant type also be converted? Or
 
 @Ph0rk0z 
 You need to craft a regex for R4 repacking happen in way that covers all tensors you plan to keep on CPU, but does not affect tensors that you plan running on GPU (GPU tensors need to be kept non-R4). You can refer to regexes in my previous message to see how repack regex differs.
+
+> 👤 **Ph0rk0z** replied on **2025-05-21** at **11:25:07**
+> 
+> Yea I assume it's just see which layers are on GPU and then exclude them. So if you pick 1,2,3,4 make a not 1,2,3,4 regex. Funny enough we have AI for this. But I have IQ4_XS, so what does that become? IQ4_XS_R4? Or can it repack to something else?
 
 > 👤 **ikawrakow** replied on **2025-05-21** at **11:29:29**
 > 

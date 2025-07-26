@@ -73,6 +73,12 @@ in each ubatch-sized window. Only a single token sequence is used.
 >The purpose of the benchmark is to visualize how the performance changes with
 the context size without averaging the metrics values over the whole context.
 
+> 👤 **bitbottrap** replied on **2025-02-23** at **01:18:38**
+> 
+> 500 token prompt, 300 token output.
+> 
+> If it's scripted and the results get written to a log that I can easily post I can do this periodically while this project is relevant. I did this by hand and it was the wrong way of doing it. And I'm not sure what parameters would be most beneficial to change especially when new features are being developed / tested.
+
 ---
 
 👤 **saood06** commented on **2025-02-23** at **01:36:47**
@@ -82,6 +88,10 @@ The fairydreaming benchmark includes a script that contains a python script that
 We could tell you what configs to run and then you just pass all the jsonl output from each config into the script and it outputs a graph.
 
 Edit: Fixed image link to show PP instead of TG graph
+
+> 👤 **bitbottrap** replied on **2025-02-23** at **02:49:14**
+> 
+> I'm primarily motivated by DeepSeek R1/V3 improvements right now. Being that the model is so large and the most value would probably be pushing limits of context tests take a while. I use this system during the day so I definitely can't afford to create such detailed graphs regularly. But if there were a smaller number of runs, say up to 30ish that's reasonable to run overnight by request.
 
 > 👤 **saood06** replied on **2025-02-23** at **04:59:50**
 > 
@@ -158,11 +168,68 @@ Run-time-repacking (rtr) does not change the mix of quantization types. `Q4_K_M`
 
 OK, so this is Zen3, so using vanilla AVX2 implementation. If the information I find on the Internet is correct, it should have ~200 GB/s memory bandwidth. We have 37B active parameters at about 4.8 bpw for `Q4_K_M`, so about 22 GB of model weights are active, so we should be getting in the range of 8-9 t/s for TG. I wonder where is the bottleneck. I'm able to 100% saturate the memory bandwidth on a Ryzen-7950X (Zen4 core), Ryzen-5975WX (Zen3 core) and M2-Max with the models I can run.
 
+> 👤 **bitbottrap** replied on **2025-02-24** at **01:12:31**
+> 
+> Good eye and thank you for challenging my assumptions. I had benchmarked mla and found that 63 threads was just fine. No large drop like flash attention. Here are the per-thread-count results for flash attention. Yes, there's a huge drop for 63:
+> 
+> | Thread Count | Prompt Eval Time (tokens/s) | Eval Time (tokens/s) |
+> |-------------|-----------------------------|----------------------|
+> | 2 | 2.39 | 0.98 |
+> | 4 | 4.71 | 1.57 |
+> | 8 | 9.30 | 2.65 |
+> | 16 | 18.14 | 3.57 |
+> | 24 | 26.52 | 3.18 |
+> | 32 | 33.74 | 3.41 |
+> | 48 | 42.53 | 3.42 |
+> | 49 | 39.05 | 1.88 |
+> | 50 | 43.38 | 2.36 |
+> | 51 | 39.63 | 1.89 |
+> | 52 | 44.61 | 2.68 |
+> | 53 | 42.42 | 1.89 |
+> | 54 | 44.63 | 2.28 |
+> | 55 | 42.70 | 2.18 |
+> | 56 | 45.70 | 3.20 |
+> | 57 | 43.20 | 1.96 |
+> | 58 | 45.45 | 2.40 |
+> | 59 | 44.28 | 1.88 |
+> | 60 | 44.52 | 2.63 |
+> | 61 | 44.46 | 1.89 |
+> | 62 | 43.56 | 2.32 |
+> | 63 | 45.11 | 1.91 |
+> | 64 | 48.52 | 3.59 |
+> | 65 | 36.08 | 2.05 |
+> | 96 | 37.80 | 3.75 |
+> | 128 | 43.49 | 3.67 |
+> 
+> There's also a bit of a difference in that these numbers and the original chart were derived from running llama-cli versus llama-bench. Full command line:
+> 
+> llama-cli -fa -b 1024 -ub 1024 -m DeepSeek-R1-256x21B-Q4_K-00001-of-00030.gguf -c 8192 -t 64 --mlock -n 300 -f prompt-prefill-benchmark.txt
+> 
+> Yes, none of this comes close to the theoretical maximum 200GB/sec memory bandwidth.
+
 ---
 
 👤 **ikawrakow** commented on **2025-02-24** at **14:35:34**
 
 Really curious to see what happens with PR #232.
+
+> 👤 **bitbottrap** replied on **2025-02-26** at **01:30:24**
+> 
+> Well I see the PR is in main. If you've got a command line that works with 1 or 2 24GB GPUs I'll start it up. I'd like to fit maximum possible context in there.
+> 
+> I see that mla with rtr is working together. Did a hand run and it sped things up. I also generated Q4_K_R4 and Q8_0_R8 quants and they also appear to speed things up. All working together too.
+> 
+> One thing bothers me and that's the official llama.cpp doesn't like the standard quants that are generated. I used the evshiron convert_hf_to_gguf.py and llama.cpp complains about "wrong number of tensors; expected 1147, got 1025"
+> 
+> A lot of interesting features have gone in here and started working recently. Sounds like it's time for a fairly thorough benchmarking.
+> 
+> Here's some size info regarding KV and compute with 163840 context using mla:
+> llama_kv_cache_init:        CPU KV buffer size = 20740.00 MiB
+> llama_new_context_with_model: KV self size  = 20740.00 MiB, c^KV (f16): 10980.00 MiB, kv^T (f16): 9760.00 MiB
+> ggml_cuda_host_malloc: failed to allocate 0.49 MiB of pinned memory: no CUDA-capable device is detected
+> llama_new_context_with_model:        CPU  output buffer size =     0.49 MiB
+> ggml_cuda_host_malloc: failed to allocate 41644.01 MiB of pinned memory: no CUDA-capable device is detected
+> llama_new_context_with_model:  CUDA_Host compute buffer size = 41644.01 MiB
 
 ---
 
@@ -179,6 +246,10 @@ This bothers me too, but that's how it got implemented in this unmerged [llama.c
 On KV cache size: To match KTransformers, `ik_llama.cpp` must be able to handle a context of 8K tokens. Based on the figures you provide for a context of 163k tokens, 8K tokens will require ~1 GiB if left as `f16`, or 765 MiB if the K cache is quantized with `Q8_0`. Let's assume the non-experts are quantized with 6.5 bpw on average (for DeepSeekV3/R1 it is useful to use more bits for the attention tensors and shared experts). 17B * 6.5 bpw = 13.5 GiB. So, there would be ~10 GiB left for KV cache and compute buffers I don't know how much compute buffers are required for DeepSeekV3/R1, but it seems you will be able to go to 32K or perhaps 65K tokens with MLA. Going beyond that will require splitting the model between the two GPUs.
 
 Of note: MLA is ~20% slower than standard attention for less than a few hundred tokens in the cache. It becomes competitive performance wise only beyond 16k tokens. With MLA there are two matrix multiplications that are extremely slow on CUDA. I'm trying to improve that but no luck so far.
+
+> 👤 **ikawrakow** replied on **2025-02-26** at **17:29:07**
+> 
+> PR #234 does speed MLA, but only with a single GPU involved.
 
 > 👤 **ikawrakow** replied on **2025-02-26** at **17:33:19**
 > 

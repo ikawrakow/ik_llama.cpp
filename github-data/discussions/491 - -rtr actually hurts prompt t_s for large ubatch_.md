@@ -325,6 +325,14 @@ It is an easy exercise, does not require an imatrix as you are not after the bes
 
 Without having understood what the repacking does or does not do for you, it becomes very hard to sort out the big models with partial offloads, offload policy, numa, what runs on the GPU or CPU when and why, etc.
 
+> 👤 **Ph0rk0z** replied on **2025-06-04** at **17:17:17**
+> 
+> Worth a try. I will have to. I'm repacking exactly what I don't put on GPU and watching the layers in quantize, i.e which become _R8. One other metric would be to do 4096/2048 and see if it really is correlated to half batch size or bound to the 1024 size.
+> 
+> Is there a way to print exactly what tensors are repacked by RTR? I could be missing some tiny layers it did on it's own by using the regex offline.
+> 
+> Textgen is back to 18.x t/s after I dropped caches but prompt processing benchmarks hold universally through my tests.
+
 > 👤 **Ph0rk0z** replied on **2025-06-05** at **11:48:40**
 > 
 > So I got it to print the tensors. The one that gets repacked by RTR and not offline repacking is token_embd. I had issues moving that tensor to either CPU or GPU manually.
@@ -437,6 +445,39 @@ No GPU full cores RTR
 
 
 It looks like on this system, RTR only helps when there is no GPU involved or the ubatch is 1024 (previous tests). In every other case, RTR lowers the prompt processing by a lot but improves TG.
+
+> 👤 **ciprianveg** replied on **2025-06-10** at **16:08:25**
+> 
+> I noticed it too, and iQ3_XXS_UD pp speed is affected by rtr much more than other quants, it drops from 250t/s to 26t/s, cca 10x slower. q2_xl_ud drops only from 245 to 140t/s. I am using no-mmap and swap disabled..
+> 
+> It is a pitty because while dropping pp speed 90%, it increases the generation speed by 40%.
+> 
+> i have a TR 3955 and 2x3090.
+> built with: cmake -B build -DGGML_CUDA=ON -DGGML_RPC=OFF -DGGML_BLAS=OFF  -DGGML_SCHED_MAX_COPIES=1   -DGGML_CUDA_IQK_FORCE_BF16=1
+> 
+> started with:
+> -ctx-size 71680 \
+>     -ctk q8_0 \
+>     -mla 3 \
+>     -fa \
+>     -amb 512 \
+>     -fmoe \
+>     --temp 0.6 \
+>     --top_p 0.95 \
+>     --min_p 0.01 \
+>     --n-gpu-layers 63 \
+>     -ot "blk\.[0-3]\.ffn_up_exps=CUDA0,blk\.[0-3]\.ffn_gate_exps=CUDA0,blk\.[0-3]\.ffn_down_exps=CUDA0"  \
+>     -ot "blk\.1[0-1]\.ffn_up_exps=CUDA1,blk\.1[0-1]\.ffn_gate_exps=CUDA1,blk\.1[0]\.ffn_down_exps=CUDA1"    \
+>     --override-tensor exps=CPU \
+>     --parallel 1 \
+>     --threads 16 \
+>     --threads-batch 15 \
+>     --host 0.0.0.0 --port 5002   \
+>     --ubatch-size 7168 --batch-size 7168  --no-mmap
+>     
+>     BUT, if i build it with: cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DGGML_CUDA=ON -DGGML_SCHED_MAX_COPIES=1
+>     
+>     no pp decrease anymore, but no tg speed increase, too..
 
 > 👤 **Ph0rk0z** replied on **2025-06-11** at **11:40:47**
 > 

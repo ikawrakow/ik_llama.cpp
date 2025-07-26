@@ -54,6 +54,12 @@ TG speed is now about the same, which is still quite remarkable.
 
 FA has improved CPU prompt processing speed by almost 50%, TG by 22%.
 
+> 👤 **saood06** replied on **2025-04-02** at **10:36:44**
+> 
+> Is there a chance SpargeAttn could be implemented here. Code [here](https://github.com/thu-ml/SpargeAttn), Paper [here](https://arxiv.org/abs/2502.18137). 
+> 
+> If it could would it benefit speed on CPU?
+
 > 👤 **ikawrakow** replied on **2025-04-02** at **13:44:09**
 > 
 > Other than the paper, is there any evidence that this works as advertised? If I did nothing else but implementing breakthroughs announced on arXiv, the day still wouldn't have enough hours.
