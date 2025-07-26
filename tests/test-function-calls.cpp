@@ -3024,7 +3024,6 @@ int main() {
         assert(extracted.find("<｜tool▁calls▁begin｜>") == std::string::npos);
         std::cout << "✅ PASS: DeepSeek R1 content extraction works" << std::endl;
         
-<<<<<<< HEAD
         // Test content contamination fix - exact user reported case
         std::cout << "\n🧹 Testing Content Contamination Fix:" << std::endl;
         std::string contaminated_content = "I'll help you add the new cleaning step for orientation management. Let me break this down into tasks:\n\n<｜tool▁calls▁begin｜>\n<｜tool▁call▁begin｜>\nfunction<｜tool▁sep｜>TodoWrite\n```json\n{\"items\": [{\"description\": \"Create ResetOrientation cleaning step class\", \"status\": \"pending\"}, {\"description\": \"Add setOrientationLock method to DeviceRobot\", \"status\": \"pending\"}, {\"description\": \"Integrate ResetOrientation into AndroidDeviceCleaner.clean method\", \"status\": \"pending\"}, {\"description\": \"Update iOS device cleaner to set iPad orientation to portrait instead of landscape\", \"status\": \"pending\"}]}\n```\n<｜tool▁call▁end｜>\n<｜tool▁calls▁end｜>";
