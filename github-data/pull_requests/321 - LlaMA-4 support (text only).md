@@ -31,11 +31,11 @@ As mentioned in [PR 12791](https://github.com/ggml-org/llama.cpp/pull/12791), th
 There are 2 R's in the word "strawberry".
 ```
 
-Closes #314
+Closes [#314](https://github.com/ikawrakow/ik_llama.cpp/issues/314)
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-04-09** at **15:02:02**
 

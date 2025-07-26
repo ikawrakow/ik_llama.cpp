@@ -29,13 +29,7 @@ This backup will also allow people to use the data directly for RAG use, in case
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-22** at **16:18:31**
-
-Wow, thank you for this!
-
----
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-07-22** at **16:30:05**
 

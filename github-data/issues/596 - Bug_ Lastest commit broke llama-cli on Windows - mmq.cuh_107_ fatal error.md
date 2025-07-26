@@ -82,7 +82,7 @@ D:\a\ik_llama.cpp\ik_llama.cpp\ggml\src\ggml-cuda\mmq.cuh:107: fatal error
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-07-10** at **07:52:57**
 

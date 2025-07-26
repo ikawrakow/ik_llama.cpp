@@ -10,7 +10,7 @@
 
 #### Description
 
-Is this related to #451 ?
+Is this related to [#451](https://github.com/ikawrakow/ik_llama.cpp/issues/451) ?
 I am running DeepSeek-R1-V3-0324-IQ4_K_R4 (ubergarm's Q4) quant and while the token generation is decent (i have seen 12 tps at 0, around 66% when it goes to)
 
 I use intel Xeon QYFS, 512GB DDR5 4800 RAM, and a RTX PRO 6000.

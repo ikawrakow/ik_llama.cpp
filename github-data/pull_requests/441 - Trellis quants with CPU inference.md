@@ -27,7 +27,7 @@ I am not sure of the PR practices - if you'd like me to merge into https://githu
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-05-21** at **07:13:48**
 
@@ -107,9 +107,3 @@ Overall it looks good to me, so we can think about merging. But there is also PR
 Terrific, this gets my test machine to 5.59t/s. I saw the LCG ops in next8 taking up lots of time but wasn't sure what to do about it, this is a cool trick - I assume having the constants as locals keeps them in registers or otherwise ensures they remain hot in cache?
 
 Re: https://github.com/ikawrakow/ik_llama.cpp/pull/435 - it looks not too difficult to me to reconcile my new kernels with the refactor. If you're done with your refactor already, you could merge your PR and then I can fix the resulting conflicts on this PR - maybe that's the cleanest way to do this? Since this branch is already conflicting with a file on main anyway. Otherwise happy to merge this first, then work on your branch.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-23** at **06:17:15**
-
-_No content provided._

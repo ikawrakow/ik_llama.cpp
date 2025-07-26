@@ -63,11 +63,11 @@ c:10624: GGML_ASSERT(dst->type == GGML_TYPE_F32) failed
 /home/w/projects/ik_llama.cpp/ggml/src/ggml.c:10624: GGML_ASSERT(dst->type == GGML_TYPE_F32) failed
 ```
 
-I'll peep at the PR #265 diff, guessing an ASSERT in the code-path related to `-ctk q8_0 -mla 2` on CPU is messing with computing `wk_b` tensors on the fly even for hybrid CPU+GPU inferencing.
+I'll peep at the PR [#265](https://github.com/ikawrakow/ik_llama.cpp/issues/265) diff, guessing an ASSERT in the code-path related to `-ctk q8_0 -mla 2` on CPU is messing with computing `wk_b` tensors on the fly even for hybrid CPU+GPU inferencing.
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-03-20** at **04:35:11**
 

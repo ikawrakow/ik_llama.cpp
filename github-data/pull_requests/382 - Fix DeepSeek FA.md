@@ -13,4 +13,4 @@
 
 #### Description
 
-PR #370 broke it. Too many things to test.
+PR [#370](https://github.com/ikawrakow/ik_llama.cpp/issues/370) broke it. Too many things to test.

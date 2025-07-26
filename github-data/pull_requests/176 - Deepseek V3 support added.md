@@ -29,13 +29,7 @@ Token generation: 2.75 t/s for IQ4_K, 3.10 t/s for IQ4_K_R4
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-01-23** at **16:09:41**
-
-_No content provided._
-
----
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-01-23** at **17:00:50**
 

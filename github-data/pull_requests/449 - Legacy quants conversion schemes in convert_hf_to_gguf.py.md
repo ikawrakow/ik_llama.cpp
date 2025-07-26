@@ -34,7 +34,7 @@ Also, 2 forgotten mentions of FTYPE IQ3_KL are added in llama.cpp file, and one 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-05-23** at **13:50:48**
 
@@ -89,9 +89,3 @@ Just checked the 4 conversions types on Llama 3 1B, and they are all coherent, g
 Qwen 1.5B works also.
 
 The feature seem to work with the IK Llama gguf conversion script as it is for the models it can convert normally, without the need to update it with the subsequent mainline PRs.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-24** at **06:09:15**
-
-_No content provided._

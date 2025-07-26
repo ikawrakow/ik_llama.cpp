@@ -17,24 +17,8 @@ and also remove the local AUTHORS copy as suggested by @saood06
 
 ---
 
-#### 💬 Conversation
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-04-07** at **14:01:18**
-
-You mentioned this to me in the other PR.
-
->@saood06 As you are not listed as an author in the LICENSE file, you may want to add your own copyright notice to the files that you have contributed/modified.
-
-Would adding a line to the license referencing ik_llama.cpp authors and having the local AUTHORS file here refer to those contributors make sense?
-
----
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-04-07** at **15:00:34**
 
 Like this?
-
----
-
-👤 **saood06** submitted a review: ✅ `APPROVED` on **2025-04-07** at **15:10:35**
-
-LGTM

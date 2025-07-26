@@ -12,7 +12,7 @@
 
 ### What happened?
 
-As mentioned in #82 this does not compile with MSVC. I was able to get through the issues and make it compile on my machine, no PR right now, but if this issue stays open long enough I will create one with an actual fix. 
+As mentioned in [#82](https://github.com/ikawrakow/ik_llama.cpp/issues/82) this does not compile with MSVC. I was able to get through the issues and make it compile on my machine, no PR right now, but if this issue stays open long enough I will create one with an actual fix. 
 
 Here's the git diff of the changes I made:
 ```diff
@@ -107,7 +107,7 @@ _No response_
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2024-10-15** at **05:52:32**
 

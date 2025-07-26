@@ -24,7 +24,7 @@ add quickstart section using ubergarm's discussion post. Scrolling to the discus
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-06-25** at **04:44:23**
 
@@ -43,32 +43,6 @@ I'll happily defer to your judgement -- I see you updating documents all the tim
 👤 **ikawrakow** commented on **2025-06-25** at **14:38:23**
 
 Why do I see the latest news as being changed in the diff?
-
----
-
-👤 **saood06** commented during a code review on `README.md` on **2025-06-25** at **17:48:05**
-
-`-DGGML_BLAS=OFF`
-
-Is not needed, it is off by default.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-25** at **17:48:05**
-
-_No content provided._
-
----
-
-👤 **saood06** commented during a code review on `README.md` on **2025-06-25** at **17:48:42**
-
-Same as above
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-25** at **17:48:42**
-
-_No content provided._
 
 ---
 

@@ -170,7 +170,7 @@ llama_print_timings:       total time =   52725.87 ms / 108033 tokens
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2024-10-23** at **06:27:44**
 

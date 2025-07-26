@@ -34,7 +34,7 @@ Linux
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-30** at **06:11:12**
 

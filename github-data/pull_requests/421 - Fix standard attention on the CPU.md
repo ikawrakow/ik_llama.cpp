@@ -13,4 +13,4 @@
 
 #### Description
 
-I have focusing on FA, MLA, FlashMLA lately, and at some point I have broken the standard self attention CPU implementation. This PR fixes it and closes #420.
+I have focusing on FA, MLA, FlashMLA lately, and at some point I have broken the standard self attention CPU implementation. This PR fixes it and closes [#420](https://github.com/ikawrakow/ik_llama.cpp/issues/420).

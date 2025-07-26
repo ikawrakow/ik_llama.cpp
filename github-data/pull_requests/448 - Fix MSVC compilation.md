@@ -15,4 +15,4 @@
 
 MSVC does not like `^` with SIMD vectors.
 
-Closes #447
+Closes [#447](https://github.com/ikawrakow/ik_llama.cpp/issues/447)

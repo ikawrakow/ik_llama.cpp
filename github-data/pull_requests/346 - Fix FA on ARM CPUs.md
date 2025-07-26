@@ -13,4 +13,4 @@
 
 #### Description
 
-I broke it with PR #332.
+I broke it with PR [#332](https://github.com/ikawrakow/ik_llama.cpp/issues/332).

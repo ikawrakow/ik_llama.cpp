@@ -26,11 +26,11 @@ This PR reduces the powers of the protection police. If a tensor is found that h
 
 The rationale behind this approach is that if an expert was never activated after processing a significant amount of calibration data, this expert cannot be very important, so we can afford to quantize it with low bpw quants even without guidance on the importance of columns of this expert.
 
-Strictly speaking it would be better to leave the zeros in the imatrix data of experts that have never been activated. But this would require to go and add proper protection against all-zeros imatrices, along with the appropriate corrective action, for all quants, and not just for `IQ1_S_R4` as I did in #191. So, for now we go with same-importance columns for never activated experts.
+Strictly speaking it would be better to leave the zeros in the imatrix data of experts that have never been activated. But this would require to go and add proper protection against all-zeros imatrices, along with the appropriate corrective action, for all quants, and not just for `IQ1_S_R4` as I did in [#191](https://github.com/ikawrakow/ik_llama.cpp/issues/191). So, for now we go with same-importance columns for never activated experts.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-02-11** at **17:09:17**
 

@@ -23,7 +23,7 @@ A similar fix is required for the CUDA implementation. This is left for a follow
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-05-13** at **14:54:54**
 

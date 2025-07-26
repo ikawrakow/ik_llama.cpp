@@ -192,7 +192,7 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-08** at **11:11:23**
 

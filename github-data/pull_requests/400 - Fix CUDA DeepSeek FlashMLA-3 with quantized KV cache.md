@@ -803,7 +803,7 @@ I.e., only very slightly slower than `fp16` KV cache. The KV cache is quite smal
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **JohannesGaessler** commented on **2025-05-09** at **07:23:38**
 

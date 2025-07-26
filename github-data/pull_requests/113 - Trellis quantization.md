@@ -63,7 +63,7 @@ In comparison, I get 194 t/s for `IQ2_KT` (with flash attention enabled, which I
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-04-07** at **03:27:46**
 

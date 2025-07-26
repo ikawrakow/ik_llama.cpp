@@ -27,7 +27,7 @@ I have tested with DeepSeek-Lite quantized with `IQ4_KSS` and `IQ4_K`. In both c
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **davidsyoung** commented on **2025-03-17** at **23:38:28**
 

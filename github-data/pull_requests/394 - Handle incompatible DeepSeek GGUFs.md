@@ -13,7 +13,7 @@
 
 #### Description
 
-Mainline `llama.cpp` [PR 12801](https://github.com/ggml-org/llama.cpp/pull/12801), which added MLA support for DeepSeek models 2.5 months after MLA was available here, broke backwards compatibility. As a result, the new DeepSeek GGUFs that started appearing on HF are not compatible with `ik_llama.cpp`, resulting in issues #373 and #383.
+Mainline `llama.cpp` [PR 12801](https://github.com/ggml-org/llama.cpp/pull/12801), which added MLA support for DeepSeek models 2.5 months after MLA was available here, broke backwards compatibility. As a result, the new DeepSeek GGUFs that started appearing on HF are not compatible with `ik_llama.cpp`, resulting in issues [#373](https://github.com/ikawrakow/ik_llama.cpp/issues/373) and [#383](https://github.com/ikawrakow/ik_llama.cpp/issues/383).
 
 My initial reaction was to not support the new DeepSeek GGUFs, as there was no real reason to introduce the backwards incompatibility (and have people re-download the giant DeepSeek-R1/V3 models). The two new tensors (per layer) required for MLA can be easily created on-the-fly when loading the model as it is done here.
 
@@ -27,7 +27,7 @@ I have tested with DeepSeek-Lite, which uses the exact same attention architectu
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **whatever1983** commented on **2025-05-09** at **05:36:06**
 

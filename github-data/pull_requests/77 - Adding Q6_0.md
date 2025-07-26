@@ -19,7 +19,7 @@ Nevertheless, with a block size of 32 it is the same as the other legacy quants,
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2024-10-21** at **09:42:19**
 

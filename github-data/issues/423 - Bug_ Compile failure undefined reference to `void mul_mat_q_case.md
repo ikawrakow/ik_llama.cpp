@@ -44,7 +44,7 @@ cmake --build build --config Release -j --clean-first
 
 3d92d7f8
 
-Debian latest: Linux red 6.1.0-34-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.135-1 (2025-04-25) x86_64 GNU/Linux
+Debian latest: Linux red 6.1.0-34-amd64 [#1](https://github.com/ikawrakow/ik_llama.cpp/issues/1) SMP PREEMPT_DYNAMIC Debian 6.1.135-1 (2025-04-25) x86_64 GNU/Linux
 
 
 ### What operating system are you seeing the problem on?
@@ -59,7 +59,7 @@ _No response_
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-15** at **13:50:36**
 

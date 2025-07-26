@@ -12,7 +12,7 @@
 
 ### What happened?
 
-Performance dropping with commit 14292913 #461
+Performance dropping with commit 14292913 [#461](https://github.com/ikawrakow/ik_llama.cpp/issues/461)
 
 To identify which commit the performance dropped with I was running:
 
@@ -75,7 +75,7 @@ Linux
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-06-03** at **14:24:50**
 

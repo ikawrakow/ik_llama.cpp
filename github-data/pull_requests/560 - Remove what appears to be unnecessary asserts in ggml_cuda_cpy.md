@@ -15,7 +15,7 @@
 
 Not sure why the assert were there as it seems the code should handle tensor sizes greater than `INT_MAX`.
 
-The funny part is that the assert is triggered when copying the KQ mask! I was able to trigger it using batch/u-batch of 16k tokens with a context of 32k tokens. Which means I should resurrect PR #28 as it is kind of ridiculous to be copying over 2 GB of data from the CPU to the GPU that could be 16X smaller if one used 1 bit per mask entry instead of a `fp16` value (or even `fp32` if not using FA).
+The funny part is that the assert is triggered when copying the KQ mask! I was able to trigger it using batch/u-batch of 16k tokens with a context of 32k tokens. Which means I should resurrect PR [#28](https://github.com/ikawrakow/ik_llama.cpp/issues/28) as it is kind of ridiculous to be copying over 2 GB of data from the CPU to the GPU that could be 16X smaller if one used 1 bit per mask entry instead of a `fp16` value (or even `fp32` if not using FA).
 
 After removing the assert everything seems to work fine.
 
@@ -23,7 +23,7 @@ But please test!
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2025-06-27** at **15:29:27**
 

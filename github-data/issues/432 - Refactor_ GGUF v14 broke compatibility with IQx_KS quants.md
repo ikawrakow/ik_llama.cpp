@@ -42,7 +42,7 @@ Well, I tried to check that by myself when GGUF v14 was out, where was the intro
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-18** at **15:07:29**
 

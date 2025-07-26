@@ -13,7 +13,7 @@
 
 ### Background Description
 
-Some models can produce activations that are beyond the range of `fp16`. In that scenario, usage of `Q8_1` to quantize the activations can be futile, see discussion in #194.
+Some models can produce activations that are beyond the range of `fp16`. In that scenario, usage of `Q8_1` to quantize the activations can be futile, see discussion in [#194](https://github.com/ikawrakow/ik_llama.cpp/issues/194).
 
 Hence, it would be prudent to change all quantization types using `Q8_1` for matrix multiplications to use something else.
 Alternatively, one may replace the `fp16` block scale and block sum in `Q8_1` with `bf16`. 

@@ -33,7 +33,7 @@ What is the trick? If $v$ is an unsigned 32 bit integer and $A, B$ are unsigned 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-06-08** at **11:37:36**
 

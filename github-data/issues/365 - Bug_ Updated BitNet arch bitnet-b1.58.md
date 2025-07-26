@@ -14,7 +14,7 @@
 
 I'm very rusty at ggml, quants, etc. so please forgive my ignorance.
 I've been attempting to get BitNet running, and by that I mean the _new_ BitNet as of April 23rd. MS uploaded a new version to HF, replacing the old one, and it seems to have breaking changes.
-From what I gather, #337 add support for the original 2025 BitNet with arch `bitnet-25`, but now the new one is `bitnet-b1.58`. I've been trying to add the changes from https://github.com/microsoft/BitNet/pull/212 with limited success. I'm also guessing that I need https://github.com/ggml-org/llama.cpp/compare/gg/bitnet since I am crashing because `vec_dot` is null at https://github.com/ikawrakow/ik_llama.cpp/blob/main/ggml/src/ggml.c#L14311 when `type` is `GGML_TYPE_I2_S` 36. Will try to get that implementation going next. I'm also on Windows arm64 which makes things more fun 😅
+From what I gather, [#337](https://github.com/ikawrakow/ik_llama.cpp/issues/337) add support for the original 2025 BitNet with arch `bitnet-25`, but now the new one is `bitnet-b1.58`. I've been trying to add the changes from https://github.com/microsoft/BitNet/pull/212 with limited success. I'm also guessing that I need https://github.com/ggml-org/llama.cpp/compare/gg/bitnet since I am crashing because `vec_dot` is null at https://github.com/ikawrakow/ik_llama.cpp/blob/main/ggml/src/ggml.c#L14311 when `type` is `GGML_TYPE_I2_S` 36. Will try to get that implementation going next. I'm also on Windows arm64 which makes things more fun 😅
 Am I on the right track here?
 
 ### Name and Version
@@ -33,7 +33,7 @@ Windows
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **usatenko** commented on **2025-05-02** at **01:26:16**
 

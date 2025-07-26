@@ -13,11 +13,11 @@
 
 #### Description
 
-Follow up of #415. This should fix SER issues on CUDA.
+Follow up of [#415](https://github.com/ikawrakow/ik_llama.cpp/issues/415). This should fix SER issues on CUDA.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-05-13** at **15:30:55**
 

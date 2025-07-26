@@ -54,7 +54,7 @@ This results in an additional 2-3% speedup of PP-512(Phi-3.5-mini) when running 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2024-09-28** at **10:07:59**
 

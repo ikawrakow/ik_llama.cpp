@@ -32,7 +32,7 @@ Linux
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-03-12** at **17:19:03**
 

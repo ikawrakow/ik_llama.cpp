@@ -52,7 +52,7 @@ Linux
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-12** at **11:41:48**
 

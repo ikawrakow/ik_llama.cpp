@@ -23,7 +23,7 @@ So I just put it here!
 
 -----
 
-gguf-split : improve --split and --merge logic (#9619)
+gguf-split : improve --split and --merge logic ([#9619](https://github.com/ikawrakow/ik_llama.cpp/issues/9619))
 
 * make sure params --split and --merge are not specified at same time
 
@@ -36,7 +36,7 @@ Co-authored-by: slaren <slarengh@gmail.com>
 
 ---------
 
-gguf-split : add basic checks (#9499)
+gguf-split : add basic checks ([#9499](https://github.com/ikawrakow/ik_llama.cpp/issues/9499))
 
 * gguf-split : do not overwrite existing files when merging
 
@@ -50,11 +50,3 @@ Authored-by: slaren <slarengh@gmail.com>
   - [ ] Low
   - [x] Medium
   - [ ] High
-
----
-
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-23** at **05:07:35**
-
-_No content provided._

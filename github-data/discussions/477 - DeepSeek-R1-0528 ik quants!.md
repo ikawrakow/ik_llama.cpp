@@ -4,7 +4,7 @@
 | :--- | :--- |
 | **State** | ✅ **Open** |
 | **Created** | 2025-05-30 |
-| **Updated** | 2025-07-25 |
+| **Updated** | 2025-07-26 |
 
 ---
 
@@ -4756,6 +4756,10 @@ R1 stats (THIREUS quants added).
 > >Yeah, why not. Let me collect some data on Chimera quants first.
 > 
 > Thanks. Your graphs really are nice, and it will be nice when they are more convenient to find.
+
+> 👤 **Thireus** replied on **2025-07-26** at **17:52:56**
+> 
+> Quick Note: Looks like Google Colab doesn't compute good mixes - so I don't know if the recipes I provided are good @magikRUKKOLA (I've generated them from Google Colab). I'm investigating the issue here: https://github.com/Thireus/GGUF-Tool-Suite/issues/15
 
 ---
 

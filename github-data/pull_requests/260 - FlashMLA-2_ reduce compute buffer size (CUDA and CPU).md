@@ -14,7 +14,7 @@
 #### Description
 
 This PR
-* Implements the same compute buffer size reduction approach as PR #253 on CUDA
+* Implements the same compute buffer size reduction approach as PR [#253](https://github.com/ikawrakow/ik_llama.cpp/issues/253) on CUDA
 * Adds the ability to control the compute buffer size for FlashMLA-2  (`-mla 2 -fa`) via the `-amb` command line option. 
 * Fixes a bunch of integer overflows that show up when one starts using very long contexts (in the `perplexity` tool, and in the CUDA implementation of `GGML_OP_CONCAT`)
 
@@ -26,7 +26,7 @@ For DeepSeek-Lite I need to use a quite low `-amb` threshold of 256 MiB to even 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **davidsyoung** commented on **2025-03-17** at **14:44:17**
 

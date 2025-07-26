@@ -23,7 +23,7 @@ Oh, when `wkv_b` is not quantized, `wk_b` uses the same type as `wkv_b` (`fp16` 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-03-15** at **16:27:08**
 

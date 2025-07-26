@@ -15,4 +15,4 @@
 
 Sorry about that.
 
-Closes #423
+Closes [#423](https://github.com/ikawrakow/ik_llama.cpp/issues/423)

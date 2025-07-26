@@ -13,4 +13,4 @@
 
 #### Description
 
-Ref #29
+Ref [#29](https://github.com/ikawrakow/ik_llama.cpp/issues/29)

@@ -13,7 +13,7 @@
 
 #### Description
 
-This PR uses the new trellis introduced in #505 and applies it to `IQ2_KT`.
+This PR uses the new trellis introduced in [#505](https://github.com/ikawrakow/ik_llama.cpp/issues/505) and applies it to `IQ2_KT`.
 
 This leads to a slightly higher PPL for the models where the `IQ2_KT` on the main branch works, but is more stable and there are no longer NaNs for the models where the existing `IQ2_KT` was failing (Qwen3-30B-A3B and DeepSeek-Lite).
 
@@ -28,7 +28,7 @@ Performance is also great, except on the Apple GPU, where it is slower than the 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-06-10** at **18:41:50**
 

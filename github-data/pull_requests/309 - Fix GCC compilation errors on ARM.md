@@ -13,4 +13,4 @@
 
 #### Description
 
-Closes #308
+Closes [#308](https://github.com/ikawrakow/ik_llama.cpp/issues/308)

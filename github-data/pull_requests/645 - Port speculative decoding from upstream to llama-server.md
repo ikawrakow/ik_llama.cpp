@@ -19,7 +19,7 @@
   - [x] Medium
   - [ ] High
 
-Related to #322 
+Related to [#322](https://github.com/ikawrakow/ik_llama.cpp/issues/322) 
 
 This is a port of the speculative decoding function for llama-server from the upstream code base.
 
@@ -33,7 +33,7 @@ I used Qwen3-235B in this PR.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-07-25** at **05:15:48**
 

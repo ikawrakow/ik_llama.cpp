@@ -13,11 +13,11 @@
 
 #### Description
 
-@Nexesenex Does this fix #160?
+@Nexesenex Does this fix [#160](https://github.com/ikawrakow/ik_llama.cpp/issues/160)?
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2024-12-22** at **16:44:51**
 

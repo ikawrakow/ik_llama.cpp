@@ -18,7 +18,7 @@ Relevant main llama.cpp issue: https://github.com/ggml-org/llama.cpp/issues/1441
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ubergarm** commented on **2025-06-27** at **21:09:18**
 

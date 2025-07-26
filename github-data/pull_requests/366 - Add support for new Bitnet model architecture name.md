@@ -13,12 +13,4 @@
 
 #### Description
 
-Fixes #365
-
----
-
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-02** at **05:07:17**
-
-_No content provided._
+Fixes [#365](https://github.com/ikawrakow/ik_llama.cpp/issues/365)

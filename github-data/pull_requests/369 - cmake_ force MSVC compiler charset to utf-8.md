@@ -25,13 +25,7 @@ This commit is to prevent `tests\test-grammar-integration.cpp(483,13): error C20
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-03** at **12:26:22**
-
-LGTM, but I cannot test. It would be useful if at least one other person tested before we merge.
-
----
+#### 🔀 Conversation
 
 👤 **Gaolingx** commented on **2025-05-03** at **12:54:45**
 

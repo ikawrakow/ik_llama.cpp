@@ -18,7 +18,7 @@ This compiles, but has not been tested yet.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-02-08** at **13:23:08**
 
@@ -41,30 +41,6 @@ This fork has much faster PP speeds, has Deepseek MLA support with a flag (-mla)
 👤 **saood06** commented on **2025-02-27** at **23:11:54**
 
 This has been tested, and does not currently work. I'm not sure why as the errors I'm getting seem to have never been encountered by people on llama.cpp.
-
----
-
-👤 **saood06** commented during a code review on `ggml/src/ggml-rpc.cpp` on **2025-02-27** at **23:14:23**
-
-The RPC client crashes here, which happens as the RPC server hits an issue.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-27** at **23:14:23**
-
-_No content provided._
-
----
-
-👤 **saood06** commented during a code review on `ggml/src/ggml-rpc.cpp` on **2025-02-27** at **23:17:32**
-
-I'm fairly certain this is where the RPC server is crashing, although it doesn't print the message as I never ran with GGML_DEBUG on.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-27** at **23:17:32**
-
-_No content provided._
 
 ---
 

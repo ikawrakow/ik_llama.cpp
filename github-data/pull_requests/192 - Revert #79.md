@@ -17,6 +17,6 @@ While testing potential improvements of `IQ1_S_R4` quantization, I ran into NaNs
 
 This means there is a race.
    
-The race was most likely introduced in #79 (avoid repeating already done quantizations of activations). I honestly do not understand why there could be a race, or even less do I understand why it would only happen for DeepSeek-Lite quantized with `IQ1_S_R4`. I have done countless runs since #79 and never observed anything suspicious.
+The race was most likely introduced in [#79](https://github.com/ikawrakow/ik_llama.cpp/issues/79) (avoid repeating already done quantizations of activations). I honestly do not understand why there could be a race, or even less do I understand why it would only happen for DeepSeek-Lite quantized with `IQ1_S_R4`. I have done countless runs since [#79](https://github.com/ikawrakow/ik_llama.cpp/issues/79) and never observed anything suspicious.
 
-Either way, this PR reverts #79. After doing so, there aren't any NaNs no matter how busy I make the system while running DeepSeek-Lite inference.  Hopefully this will also fix the NaNs @saood06 gets with `IQ1_S_R4` quantized DeepSeek-R1 (see discussion in #185).
+Either way, this PR reverts [#79](https://github.com/ikawrakow/ik_llama.cpp/issues/79). After doing so, there aren't any NaNs no matter how busy I make the system while running DeepSeek-Lite inference.  Hopefully this will also fix the NaNs @saood06 gets with `IQ1_S_R4` quantized DeepSeek-R1 (see discussion in [#185](https://github.com/ikawrakow/ik_llama.cpp/issues/185)).

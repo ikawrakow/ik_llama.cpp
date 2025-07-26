@@ -23,7 +23,7 @@ The benefit is illustrated with the following graph, which shows prompt processi
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-06-25** at **15:39:08**
 

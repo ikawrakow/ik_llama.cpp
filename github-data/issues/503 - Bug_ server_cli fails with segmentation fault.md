@@ -156,7 +156,7 @@ llama_new_context_with_model: graph splits = 779
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **OneOfOne** commented on **2025-06-07** at **20:05:07**
 

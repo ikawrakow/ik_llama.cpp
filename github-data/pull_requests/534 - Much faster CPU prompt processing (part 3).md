@@ -13,7 +13,7 @@
 
 #### Description
 
-This PR is a follow up of #531 and #533, and adds much faster GEMM for the remaining non-interleaved quants: `Q2_K, IQ4_XS, IQ4_NL, Q4_0, Q4_1, Q5_0, Q5_1, Q6_0, Q8_0`.
+This PR is a follow up of [#531](https://github.com/ikawrakow/ik_llama.cpp/issues/531) and [#533](https://github.com/ikawrakow/ik_llama.cpp/issues/533), and adds much faster GEMM for the remaining non-interleaved quants: `Q2_K, IQ4_XS, IQ4_NL, Q4_0, Q4_1, Q5_0, Q5_1, Q6_0, Q8_0`.
 
 Here is a PP-512 performance comparison between the main branch and this PR for LLaMA-3.1-8B-Instruct on a Ryzen-7950X CPU:
 
@@ -36,21 +36,7 @@ We observe gains in the range of 2X for all types. In case anyone is wondering w
 
 ---
 
-#### 💬 Conversation
-
-👤 **Nexesenex** submitted a review: 💬 `COMMENTED` on **2025-06-18** at **13:46:15**
-
-`
-                float d = _mm_cvtss_f32(max4/127.f);
-             
-`
-This line (2077) in idk_gemm_kquants.cpp provokes this error in MSVS 22 (Win 11) :
-
-binary '/': '__m128' does not define this operator or a conversion to a type acceptable to the predefined operator.
-
-I compile with AVX2 and FMA enabled.
-
----
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-06-18** at **13:49:36**
 

@@ -48,7 +48,7 @@ Further ideas for a subsequent PR :
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2024-11-22** at **15:30:05**
 

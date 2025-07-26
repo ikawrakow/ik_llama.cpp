@@ -36,7 +36,7 @@ A similar optimization can be done for CPUs with native `fp16` support, but as I
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-06-02** at **21:16:37**
 

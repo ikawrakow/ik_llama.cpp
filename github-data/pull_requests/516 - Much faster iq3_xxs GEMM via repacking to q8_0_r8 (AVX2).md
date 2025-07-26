@@ -13,7 +13,7 @@
 
 #### Description
 
-This PR is a follow up of #515, and applies the same technique to `IQ3_XXS`. We see nearly 3X increase in prompt processing speed compared to `IQ3_XXS`, and over 2X compared to `IQ3_XXS_R4`.
+This PR is a follow up of [#515](https://github.com/ikawrakow/ik_llama.cpp/issues/515), and applies the same technique to `IQ3_XXS`. We see nearly 3X increase in prompt processing speed compared to `IQ3_XXS`, and over 2X compared to `IQ3_XXS_R4`.
 
 Sweep-bench for pure `IQ3_XXS` quantization of LlaMA-3.1-8B on a Ryzen-7950X CPU:
 

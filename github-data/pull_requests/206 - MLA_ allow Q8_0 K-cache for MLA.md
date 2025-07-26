@@ -13,7 +13,7 @@
 
 #### Description
 
-After PR #205 we have two KV caches left when using MLA:
+After PR [#205](https://github.com/ikawrakow/ik_llama.cpp/issues/205) we have two KV caches left when using MLA:
 * `kv_l` - contiguous, not transposed
 * `kvt_l` - a transposed version of `kv_l`
 

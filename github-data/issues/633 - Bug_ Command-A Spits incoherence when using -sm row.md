@@ -189,7 +189,7 @@ llama_new_context_with_model: graph splits = 2
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-07-20** at **13:54:00**
 

@@ -21,13 +21,7 @@
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-18** at **14:36:30**
-
-Hey, you are back!
-
----
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2025-05-18** at **14:48:44**
 

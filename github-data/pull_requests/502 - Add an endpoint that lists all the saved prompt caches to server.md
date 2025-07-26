@@ -19,13 +19,7 @@ This should be enough to be used by any front end. The only thing that may poten
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-07** at **05:18:57**
-
-_No content provided._
-
----
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-06-11** at **06:50:30**
 

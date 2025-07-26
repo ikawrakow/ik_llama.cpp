@@ -14,7 +14,7 @@ Hi! — I'm coming from koboldcpp, and I've been testing this fork due to its op
 
 One feature I found very useful in koboldcpp was the context shift functionality, which helps when working with very long context windows.
 
-I noticed that `llama.cpp` implemented something similar in [PR #9866](https://github.com/ggml-org/llama.cpp/pull/9866), which allows for reusing the prompt cache more efficiently instead of regenerating the entire prompt every time the context overflows.
+I noticed that `llama.cpp` implemented something similar in [PR [#9866](https://github.com/ikawrakow/ik_llama.cpp/issues/9866)](https://github.com/ggml-org/llama.cpp/pull/9866), which allows for reusing the prompt cache more efficiently instead of regenerating the entire prompt every time the context overflows.
 
 I searched through this repo but couldn’t find an equivalent implementation.
 

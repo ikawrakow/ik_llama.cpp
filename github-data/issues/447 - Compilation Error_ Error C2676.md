@@ -62,7 +62,7 @@ C:\Textgen\ik_llama.cpp>
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-23** at **12:10:01**
 

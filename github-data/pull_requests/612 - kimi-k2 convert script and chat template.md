@@ -29,7 +29,7 @@ blk.0.attn_kv_b.weight - [  512, 16384,     1,     1], type =   bf16, converting
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-07-15** at **04:17:47**
 
@@ -56,12 +56,6 @@ numactl --interleave=all \
 ```
 
 Thanks!
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-15** at **06:01:35**
-
-_No content provided._
 
 ---
 

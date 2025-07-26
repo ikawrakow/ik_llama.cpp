@@ -34,17 +34,7 @@ I had to port llama.cpp function tool calls support. The most difficult part was
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-18** at **09:56:32**
-
-Thank you for this! People have been asking for function calling support, but that is not something I'm very familiar with.
-
-LGTM, but I would appreciate at least one other person testing.
-
-I see your location is Leipzig. Have fond memories of this place, having spent 11 years there studying physics, doing a PhD, and staying for my first postdoc position.
-
----
+#### 🔀 Conversation
 
 👤 **iSevenDays** commented on **2025-07-18** at **10:43:28**
 

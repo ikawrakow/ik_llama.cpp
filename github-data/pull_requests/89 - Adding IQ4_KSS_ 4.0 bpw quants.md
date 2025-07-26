@@ -39,7 +39,7 @@ In all following graph the token embedding and output tensors are quantized, and
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2024-10-16** at **20:38:07**
 

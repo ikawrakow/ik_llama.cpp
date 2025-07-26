@@ -13,4 +13,4 @@
 
 #### Description
 
-Did not make it into #630, so adding t here.
+Did not make it into [#630](https://github.com/ikawrakow/ik_llama.cpp/issues/630), so adding t here.

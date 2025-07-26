@@ -47,7 +47,7 @@ In your performance testing on the 6980P system `iqX_kt` quants were very far fr
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-06-19** at **20:04:52**
 

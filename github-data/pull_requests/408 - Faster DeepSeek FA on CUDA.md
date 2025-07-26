@@ -15,7 +15,7 @@
 
 This is a port of [this PR](https://github.com/ggml-org/llama.cpp/pull/13435) in mainline `llama.cpp`.
 
-The main difference to PR #386 is that now the FA kernel takes advantage of the fact that the V tensor contains the same data as the K tensor (it is a view on the K cache with an offset given by the RoPE embedding size). Hence, one can reduce the number of loads by reusing K tiles when processing `V*softmax(K*Q)`.
+The main difference to PR [#386](https://github.com/ikawrakow/ik_llama.cpp/issues/386) is that now the FA kernel takes advantage of the fact that the V tensor contains the same data as the K tensor (it is a view on the K cache with an offset given by the RoPE embedding size). Hence, one can reduce the number of loads by reusing K tiles when processing `V*softmax(K*Q)`.
 
 To take advantage of this new kernel I had to change the way the K cache is organized. In mainline `llama.cpp` the K cache stores `(RoPE, NoPE)` parts in that order, and the FA kernel assumes this arrangement. But in `ik_llama.cpp` prior to this PR the K cache was stored as `(NoPE, RoPE)`. As there are several places where the views into the K cache can go wrong when building the graph, the PR should be tested more thoroughly before merging. I have tested all possible combinations of `mla` and `fa` using DeepSeek-Lite and it appears to work correctly, but still.
 
@@ -34,7 +34,7 @@ Finally, being curious about the peculiar TG behavior as a function of `N_KV`, I
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **JohannesGaessler** commented on **2025-05-11** at **14:05:44**
 

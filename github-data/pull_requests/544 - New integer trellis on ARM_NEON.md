@@ -35,4 +35,4 @@ Still very low TG performance:
 
 Don't ask Apple Silicon to do too much work with a piece of data fetched from memory.
 
-Nevertheless, compared to PR #471 we observe ~13% speedup for `IQ2_KT`, ~30% speedup for `IQ3_KT`, and nearly 70% speedup for `Q4_KT`.
+Nevertheless, compared to PR [#471](https://github.com/ikawrakow/ik_llama.cpp/issues/471) we observe ~13% speedup for `IQ2_KT`, ~30% speedup for `IQ3_KT`, and nearly 70% speedup for `Q4_KT`.

@@ -105,7 +105,7 @@ Most Linuxex, I presume.
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **Manamama** commented on **2025-05-06** at **19:03:45**
 

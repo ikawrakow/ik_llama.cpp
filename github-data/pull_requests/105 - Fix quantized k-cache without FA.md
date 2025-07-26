@@ -16,4 +16,4 @@
 Ref  https://github.com/ggerganov/llama.cpp/pull/10032
 Ref https://github.com/ggerganov/llama.cpp/pull/10021
 
-Closes #103
+Closes [#103](https://github.com/ikawrakow/ik_llama.cpp/issues/103)

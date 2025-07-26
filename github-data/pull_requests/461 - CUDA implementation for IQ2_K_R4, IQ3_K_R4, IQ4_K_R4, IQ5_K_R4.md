@@ -23,7 +23,7 @@ For now GEMM is implemented via dequantize + cuBLAS. I may add quantized GEMM (a
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-05-30** at **15:22:27**
 

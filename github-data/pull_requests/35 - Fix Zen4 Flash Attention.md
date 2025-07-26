@@ -13,6 +13,6 @@
 
 #### Description
 
-Closes #34 
+Closes [#34](https://github.com/ikawrakow/ik_llama.cpp/issues/34) 
 
 Funny enough, the bug was not in the FA implementation but in the way I was calling `iqk_flash_attn_noalibi` from `ggml`.

@@ -14,7 +14,7 @@
 
 #### Description
 
-This PR is the combination of #505 and #511, but rebased on current main, and using @louiehelm's alternative multiplier (see comments in #511). 
+This PR is the combination of [#505](https://github.com/ikawrakow/ik_llama.cpp/issues/505) and [#511](https://github.com/ikawrakow/ik_llama.cpp/issues/511), but rebased on current main, and using @louiehelm's alternative multiplier (see comments in [#511](https://github.com/ikawrakow/ik_llama.cpp/issues/511)). 
 
 I was curios to see if not having an extra addition per step when generating the trellis sequence will have a pefromance impact, so made a proper change rather than just blindly replacing the two constants using `sed`. On CUDA performance impact is negligible, on `AVX2` we see 1-2% improvement.
 
@@ -22,7 +22,7 @@ With the latest commits I have also adapted `IQ3_KT` to the integer trellis.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-06-14** at **17:55:02**
 

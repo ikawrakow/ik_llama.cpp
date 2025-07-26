@@ -38,7 +38,7 @@ Would love to hear from someone having a GPU with enough VRAM to fit all DeepSee
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-02-25** at **06:34:34**
 

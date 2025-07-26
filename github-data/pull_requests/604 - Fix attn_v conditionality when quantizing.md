@@ -25,13 +25,7 @@ I can also expand this legacy custom quant to the IQ1 and IQ2 types quant strate
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-13** at **09:24:27**
-
-This is OK, but I think you should really start using `--custom-q`. That way you can make the mixes any way you like without relying on the logic in this function.
-
----
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2025-07-13** at **15:00:01**
 

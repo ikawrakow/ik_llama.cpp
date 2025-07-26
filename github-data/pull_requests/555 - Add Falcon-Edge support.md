@@ -13,7 +13,7 @@
 
 #### Description
 
-Closes #551 
+Closes [#551](https://github.com/ikawrakow/ik_llama.cpp/issues/551) 
 
 How to use:
 

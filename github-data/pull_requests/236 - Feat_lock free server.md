@@ -20,7 +20,7 @@
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-02-27** at **11:43:27**
 
@@ -39,18 +39,6 @@ Please accept my apologies for the accidental PR submission during my preliminar
 During my evaluation of DeepSeek-R1-671B performance, I observed occasionnally perceptible latency in Time-to-First-Token (TTFT) measurements within the llama.cpp implementation. This preliminary observation coincided with identifying a potentially prolonged lock duration in the execution flow while reviewing the codebase and profiling results which are early-stage findings requiring further validation.
 
 Thank you for your continued dedication to maintaining this exceptional codebase. I'm consistently impressed by the engineering rigor demonstrated in this project.
-
----
-
-👤 **saood06** commented during a code review on `examples/server/atomic_hash_map.hpp` on **2025-02-27** at **19:55:22**
-
-This is Apache, while this project is MIT.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-27** at **19:55:23**
-
-_No content provided._
 
 ---
 

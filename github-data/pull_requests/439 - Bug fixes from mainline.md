@@ -16,4 +16,4 @@
 Do these fix the mysterious illegal memory access crashes?
 I doubt it, but who knows.
 
-Ref #389, #425
+Ref [#389](https://github.com/ikawrakow/ik_llama.cpp/issues/389), [#425](https://github.com/ikawrakow/ik_llama.cpp/issues/425)

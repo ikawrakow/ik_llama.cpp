@@ -27,7 +27,7 @@ As with `IQ4_NL`, just for head size of 128 for now. Without `GGML_CUDA_FA_ALL_Q
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2024-10-21** at **18:14:38**
 

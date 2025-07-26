@@ -26,7 +26,7 @@ There's also a spot in the header where sampler order array was never updated? D
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-06-08** at **05:11:07**
 
@@ -100,45 +100,9 @@ Thank you for putting in the work to make this PR I do appreciate it, sorry that
 
 ---
 
-👤 **saood06** commented during a code review on `src/llama-sampling.cpp` on **2025-06-08** at **12:30:47**
-
-Is this correct? And even if it is why subtract one then add one?
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-08** at **12:30:47**
-
-_No content provided._
-
----
-
-👤 **saood06** commented during a code review on `src/llama-sampling.cpp` on **2025-06-08** at **12:31:14**
-
-You accidentally duplicated this when pasting in the comment.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-08** at **12:31:14**
-
-_No content provided._
-
----
-
 👤 **saood06** commented on **2025-06-08** at **12:32:40**
 
 I haven't built or ran the code yet, don't have time to test it tonight.
-
----
-
-👤 **Ph0rk0z** commented during a code review on `src/llama-sampling.cpp` on **2025-06-08** at **12:43:31**
-
-It's LLM jank. Model trying to follow the logic of the operation and show it, despite it being mathematically nonsensical.
-
----
-
-👤 **Ph0rk0z** submitted a review: 💬 `COMMENTED` on **2025-06-08** at **12:43:31**
-
-_No content provided._
 
 ---
 
@@ -161,42 +125,6 @@ Need to figure out if new samplers all belong here in sampling.h too
 ```
 
 Edit: this is default sampler order.. so makes no difference if you want no new samplers within it.
-
----
-
-👤 **saood06** commented during a code review on `src/llama-sampling.cpp` on **2025-06-08** at **12:58:55**
-
-Yes, but that still doesn't answer my question of is it correct? It doesn't look equivalent to the reference implementation to me.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-08** at **12:58:55**
-
-_No content provided._
-
----
-
-👤 **saood06** commented during a code review on `src/llama-sampling.cpp` on **2025-06-08** at **13:04:40**
-
-This also looks different from the reference implementation but also you never actual use ring_buffer let alone this method even though you do provide an implementation for it.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-08** at **13:04:40**
-
-_No content provided._
-
----
-
-👤 **saood06** commented during a code review on `src/llama-sampling.h` on **2025-06-08** at **13:06:56**
-
-The reference uses a ring_buffer for `dry_last_tokens` (`last_tokens` in the reference implementation) and not a vector. You added an implementation for a ring_buffer but never used it. If you want to use a vector (which could work but I feel like would end up being more complicated) for this than remove the ring_buffer implementation, but I do think you should try and get closer to the original implementation as they did use a ring_buffer for a reason.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-08** at **13:06:56**
-
-_No content provided._
 
 ---
 

@@ -25,7 +25,7 @@ Ported kimi-k2 support from llama.cpp.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **anikifoss** commented on **2025-07-14** at **16:40:34**
 
@@ -48,12 +48,6 @@ I'll try to use this PR on the same bf16 safetensors, and hope that the MLA stuf
 👤 **anikifoss** commented on **2025-07-14** at **16:41:44**
 
 I haven't ported the python changes yet, just getting ik_llama to load the model.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-14** at **16:43:15**
-
-LGTM.
 
 ---
 

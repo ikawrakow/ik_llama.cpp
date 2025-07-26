@@ -15,7 +15,7 @@
 
 Not much is known about `IQ4_KSS`, and nobody seems to be using it. So, I decided to give it some attention.
 
-Quick reminder (for more, see #89)
+Quick reminder (for more, see [#89](https://github.com/ikawrakow/ik_llama.cpp/issues/89))
 * `IQ4_KSS` uses exactly 4.0 bpw just like `IQ4_KT`
 * Performance on CUDA is very similar to `IQ4_KT` (after this PR)
 * PP CPU performance is similar to `IQ4_KT` (after this PR)
@@ -29,7 +29,7 @@ This PR
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-07-23** at **16:05:19**
 

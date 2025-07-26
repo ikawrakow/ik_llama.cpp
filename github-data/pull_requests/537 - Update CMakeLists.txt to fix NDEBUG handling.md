@@ -36,13 +36,7 @@ after my change to CMakeLists.txt
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-19** at **07:18:05**
-
-So, in the latest tool chains someone decided that the `NDEBUG` is not set when making a release build? Contrary to the established practice of the last 30 years?
-
----
+#### 🔀 Conversation
 
 👤 **iSevenDays** commented on **2025-06-19** at **07:32:42**
 

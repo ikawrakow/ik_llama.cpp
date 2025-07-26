@@ -13,7 +13,7 @@
 
 #### Description
 
-I have been focusing on reducing the KV cache size, but as per the lengthy exchange in #235 the actual issue for using a very long context is the size of the compute buffers. E.g., if one attempted to run DeepSeekV3/R1 with the claimed 163k tokens maximum context length, one would need over 40 GB of CUDA compute buffer **per GPU**. But even if running on the CPU, 40 GB is nothing to sneeze at.
+I have been focusing on reducing the KV cache size, but as per the lengthy exchange in [#235](https://github.com/ikawrakow/ik_llama.cpp/issues/235) the actual issue for using a very long context is the size of the compute buffers. E.g., if one attempted to run DeepSeekV3/R1 with the claimed 163k tokens maximum context length, one would need over 40 GB of CUDA compute buffer **per GPU**. But even if running on the CPU, 40 GB is nothing to sneeze at.
 
 This PR solves the problem. For GPU and CPU inference.
 
@@ -39,7 +39,7 @@ As another side note: I wasted at least another two hours fighting with the `ggm
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-02-28** at **16:46:30**
 

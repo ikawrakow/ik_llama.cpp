@@ -13,7 +13,7 @@
 
 #### Description
 
-Closes #523 
+Closes [#523](https://github.com/ikawrakow/ik_llama.cpp/issues/523) 
 
 @ciprianveg  @Ph0rk0z
 
@@ -21,7 +21,7 @@ Does this work better for you?
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ciprianveg** commented on **2025-06-12** at **20:29:16**
 

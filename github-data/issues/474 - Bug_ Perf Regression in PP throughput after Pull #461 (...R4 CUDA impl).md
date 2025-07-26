@@ -16,7 +16,7 @@ While testing out an IQ4 quant of R1-0528 I noticed that PP throughput on my sys
 
 I compare with an all Q8_0 quant and see what I expect, PP >50/sec (on main/HEAD today.)
 
-I bisected, and found that this problem was introduced with Pull #461 (commit 1429291).
+I bisected, and found that this problem was introduced with Pull [#461](https://github.com/ikawrakow/ik_llama.cpp/issues/461) (commit 1429291).
 
 However, my IQ4 quant **doesn't have any _R4 tensors**. It's Q8 shared, and IQ4_K for the remaining tensors.
 
@@ -26,7 +26,7 @@ CUDA device is RTX 8000 (Turing)
 
 I glance over the commit and mostly see changes that seem clearly restricted to _R4 suffix components. There are some shared parts where _n_interleaved_ is propagated down the template stack (iqk_mmvq.cu) but at a casual glance nothing strikes me as odd, but I'm certainly not that familiar with it. The dot product interface changed to a mutating one taking an accumulator pointer (previously returning the computed result) and that could be curious.
 
-aside, but maybe related -- there were recent PRs related to mla/fa that had some vague language wrt. Turing support. (Pulls #386  and #408 ) I say vague because 386 indicates turing is not supported, then 408 indicates that it is extended to Turing, but I'm not sure they're referring to the same thing, and the changes in 408 don't seem very significant. It's not clear what the proper mla/fa settings should be on Turing at this time. I currently use `-mla 2 -fa`
+aside, but maybe related -- there were recent PRs related to mla/fa that had some vague language wrt. Turing support. (Pulls [#386](https://github.com/ikawrakow/ik_llama.cpp/issues/386)  and [#408](https://github.com/ikawrakow/ik_llama.cpp/issues/408) ) I say vague because 386 indicates turing is not supported, then 408 indicates that it is extended to Turing, but I'm not sure they're referring to the same thing, and the changes in 408 don't seem very significant. It's not clear what the proper mla/fa settings should be on Turing at this time. I currently use `-mla 2 -fa`
 
 
 ### What operating system are you seeing the problem on?
@@ -35,7 +35,7 @@ Linux
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-30** at **07:48:21**
 

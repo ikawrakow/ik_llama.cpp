@@ -66,7 +66,7 @@ ___
 
 <sup>3</sup> This quantization type is not available in mainline `llama.cpp`.
 
-<sup>4</sup> Some of the tensor row size are not divisible by the k- and i-quants super-block size of 256. In mainline `llama.cpp` the quantization fails in that case when using `--pure`. I have changed `ik_llama.cpp` to use the fallback quantization type in that case in PR #294.
+<sup>4</sup> Some of the tensor row size are not divisible by the k- and i-quants super-block size of 256. In mainline `llama.cpp` the quantization fails in that case when using `--pure`. I have changed `ik_llama.cpp` to use the fallback quantization type in that case in PR [#294](https://github.com/ikawrakow/ik_llama.cpp/issues/294).
 
 <sup>5</sup> PR 12557 does not change `Q6_K` quantization. 
 
@@ -92,7 +92,7 @@ Extending the above algorithm to the non-linear quants `IQ4_XS` and `IQ4_NL` is 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **compilade** commented on **2025-03-28** at **15:35:37**
 

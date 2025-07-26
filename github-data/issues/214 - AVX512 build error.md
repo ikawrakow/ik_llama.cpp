@@ -61,7 +61,7 @@ I have tried multiple copies of GCC 14, they produce the same result. The AVX2 b
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-02-21** at **07:09:29**
 

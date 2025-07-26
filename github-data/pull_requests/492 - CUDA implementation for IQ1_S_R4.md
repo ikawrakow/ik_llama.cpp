@@ -15,7 +15,7 @@
 
 Apparently there are people who would like to use `IQ1_S` or `IQ1_S_R4` quantized models. This PR adds CUDA implementation for `IQ1_S_R4`.
 
-It seems there has been some confusion about which of these quants is supported where (see discussions in #477)
+It seems there has been some confusion about which of these quants is supported where (see discussions in [#477](https://github.com/ikawrakow/ik_llama.cpp/issues/477))
 
 To clarify:
 * `IQ1_S` and `IQ1_S_R4` have both fast GEMM and GEMV on the CPU, but `IQ1_S_R4` is faster for prompt processing due to row interleaving
@@ -66,7 +66,7 @@ Here is the performance with dequantize+cuBLAS that I had originally:
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-06-04** at **21:06:38**
 

@@ -13,7 +13,7 @@
 
 #### Description
 
-This PR is a follow up of #295. It applies the same approach to type-1 quants (`Q2_K, Q4_K, Q5_K, Q4_1, Q5_1`) and to `IQ3_K`. Quantization speed for `IQ3_K` is improved by a significant margin (up to 40%). Quantization speed for type-1 quants is also slightly improved ($\le 15$%). The changes do not result in PPL improvement for all tested models, but do improve PPL for the models that are more difficult to quantize (e.g., the LLaMA-3 series of models), and avoid a near catastrophic failure of `IQ3_K` on DeepSeek-Lite. 
+This PR is a follow up of [#295](https://github.com/ikawrakow/ik_llama.cpp/issues/295). It applies the same approach to type-1 quants (`Q2_K, Q4_K, Q5_K, Q4_1, Q5_1`) and to `IQ3_K`. Quantization speed for `IQ3_K` is improved by a significant margin (up to 40%). Quantization speed for type-1 quants is also slightly improved ($\le 15$%). The changes do not result in PPL improvement for all tested models, but do improve PPL for the models that are more difficult to quantize (e.g., the LLaMA-3 series of models), and avoid a near catastrophic failure of `IQ3_K` on DeepSeek-Lite. 
 
 The following table shows PPL comparisons between the main branch and this PR for LLaMA-v1-7B<sup>1</sup>(L1-7B in the table), LLaMA-v2-7B<sup>1</sup> (L2-7B), Mistral-7B<sup>1</sup> (M-7B), LLaMA-3.1-8B-Instruct (L3-8B), and DeepSeek-V2-Lite (DSL). Context is always 512 tokens. Also given are the quantization times (Q-time for short in the table) in seconds on a Ryzen-7950X CPU. Tested is "pure" quantization (i.e., using the `--pure` option of `llama-quantize`) with token embeddings and output tensor set to `Q8_0`. The quantization command line is
 ```
@@ -60,7 +60,7 @@ ___
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-04-02** at **10:55:25**
 

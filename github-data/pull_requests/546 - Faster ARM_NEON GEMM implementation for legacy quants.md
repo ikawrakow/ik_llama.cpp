@@ -15,7 +15,7 @@
 
 It is time to give some attention to the `ARM_NEON` back-end, which has fallen behind quite a bit.
 
-This PR corresponds to PRs #531, #533, #534 and applies the on-the-fly repacking technique to `Q4_0, Q4_1, Q5_0, Q5_1, Q6_0, Q8_0, IQ4_NL` for the `ARM_NEON` implementation.
+This PR corresponds to PRs [#531](https://github.com/ikawrakow/ik_llama.cpp/issues/531), [#533](https://github.com/ikawrakow/ik_llama.cpp/issues/533), [#534](https://github.com/ikawrakow/ik_llama.cpp/issues/534) and applies the on-the-fly repacking technique to `Q4_0, Q4_1, Q5_0, Q5_1, Q6_0, Q8_0, IQ4_NL` for the `ARM_NEON` implementation.
 
 Here is a PP-512 performance comparison between the main branch and this PR for LlaMA-3.1-8B-Instruct on M2-Max
 

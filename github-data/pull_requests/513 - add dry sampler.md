@@ -23,85 +23,13 @@ I test this using the example in https://github.com/vllm-project/vllm/pull/11368
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-06-10** at **02:57:13**
 
 This already looks so much better than #504 just from looking at how much more similar it is to the reference implementation.
 
 It was taking time testing that because it looked like it had a lot of edge cases that would lead to issues or at least some incorrect behavior.
-
----
-
-👤 **ikawrakow** commented during a code review on `examples/rpc/CMakeLists.txt` on **2025-06-10** at **05:42:27**
-
-Why do we need this?
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-10** at **05:42:27**
-
-_No content provided._
-
----
-
-👤 **ikawrakow** commented during a code review on `examples/server/CMakeLists.txt` on **2025-06-10** at **05:42:44**
-
-Why is this needed?
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-10** at **05:42:44**
-
-_No content provided._
-
----
-
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-06-10** at **05:47:23**
-
-The DRY sampler only depends on the vocabulary, not the entire model. Wouldn't it have been better to define the interface that way (taking a pointer to vocabulary instead of model)?
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-10** at **05:47:23**
-
-_No content provided._
-
----
-
-👤 **firecoperana** commented during a code review on `examples/rpc/CMakeLists.txt` on **2025-06-10** at **12:39:44**
-
-It's in the mainline file.
-
----
-
-👤 **firecoperana** submitted a review: 💬 `COMMENTED` on **2025-06-10** at **12:39:44**
-
-_No content provided._
-
----
-
-👤 **firecoperana** commented during a code review on `src/llama.cpp` on **2025-06-10** at **12:40:23**
-
-I can change it.
-
----
-
-👤 **firecoperana** submitted a review: 💬 `COMMENTED` on **2025-06-10** at **12:40:23**
-
-_No content provided._
-
----
-
-👤 **firecoperana** commented during a code review on `examples/server/CMakeLists.txt` on **2025-06-10** at **12:49:07**
-
-For the stack size code, add_tensor function in ggml-rpc.cpp is using recursion to serialize the graph. Windows has very small stack size by default, so it is easy to cause stack overflow if graph is too complex. This is not needed for dry sampler, but a bug fix for rpc.
-
----
-
-👤 **firecoperana** submitted a review: 💬 `COMMENTED` on **2025-06-10** at **12:49:08**
-
-_No content provided._
 
 ---
 
@@ -182,9 +110,3 @@ gmake[1]: *** Waiting for unfinished jobs....
 > ```
 
 Should be good this time.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-19** at **07:24:21**
-
-_No content provided._

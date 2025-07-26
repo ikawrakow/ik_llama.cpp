@@ -25,14 +25,8 @@
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-06-11** at **08:12:04**
 
 LGTM. Has anyone else tested?
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-12** at **05:19:20**
-
-_No content provided._

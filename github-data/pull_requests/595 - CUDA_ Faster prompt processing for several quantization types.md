@@ -29,7 +29,7 @@ Here some PP-512 results for LlaMA-3.1-8B on RTX-4080
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2025-07-09** at **14:42:26**
 

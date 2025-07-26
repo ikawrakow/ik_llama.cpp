@@ -19,19 +19,13 @@ https://github.com/ikawrakow/ik_llama.cpp/pull/612#issuecomment-3076684820
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **anikifoss** commented on **2025-07-16** at **13:10:21**
 
 Still running, 8 hours later at 50%. There is `attn_kv_b` in the output GGUF.
 
 Why do you need `attn_kv_b` anyway?
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-16** at **13:24:15**
-
-_No content provided._
 
 ---
 

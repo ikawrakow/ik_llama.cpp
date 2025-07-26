@@ -13,13 +13,13 @@
 
 #### Description
 
-See #467
+See [#467](https://github.com/ikawrakow/ik_llama.cpp/issues/467)
 
 The PR adds a command line parameter `--send-done`, which makes the server send a `data: [DONE]\n\n` message when a stop token is encountered.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **cyril23** commented on **2025-06-04** at **06:37:52**
 

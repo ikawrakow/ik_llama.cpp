@@ -13,7 +13,7 @@
 
 #### Description
 
-While working on #557 I noticed that dequantize+cuBLAS is faster than MMQ for the `iqX_k_r4` quants when the batch size is larger than some threshold.
+While working on [#557](https://github.com/ikawrakow/ik_llama.cpp/issues/557) I noticed that dequantize+cuBLAS is faster than MMQ for the `iqX_k_r4` quants when the batch size is larger than some threshold.
 
 The same applies to all quantization types with block size of 16: `Q2_K, Q3_K, Q6_K, IQ2_XS, IQ2_S, IQ2_K, IQ3_K, IQ4_K, IQ5_K, IQ6_K`. Hence, this PR changes the `ggml_cuda_should_use_mmq()` function to return `false` if the batch size (number of rows in the right matrix) is greater than some quantization type specific threshold.
 
@@ -23,7 +23,7 @@ This graph illustrates the PP performance improvement achieved this way for k-qu
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ewhacc** commented on **2025-06-26** at **20:12:34**
 

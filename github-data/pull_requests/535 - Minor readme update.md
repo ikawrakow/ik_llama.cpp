@@ -14,11 +14,3 @@
 #### Description
 
 This I think cleans things up, and also takes up less space.
-
----
-
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-19** at **05:39:09**
-
-_No content provided._

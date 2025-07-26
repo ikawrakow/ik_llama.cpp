@@ -23,7 +23,7 @@ cmake --build ./build --config Release -j 16
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-05** at **05:12:28**
 

@@ -31,12 +31,12 @@ Prompt processing speed is massively improved for long contexts, and is almost o
 The KV cache is the same size as `mla = 2` without FA (i.e., the smallest possible). One no longer needs to worry about controlling the maximum compute buffer size via `-amb`.
 
 **Caveats:**
-* Only `f16` KV cache can be used for now. As explained in PR #246 we need to convert the KV cache to `fp32` to be able to do the required operations, and the CUDA back-end does not yet support this conversion for quantized data types.
+* Only `f16` KV cache can be used for now. As explained in PR [#246](https://github.com/ikawrakow/ik_llama.cpp/issues/246) we need to convert the KV cache to `fp32` to be able to do the required operations, and the CUDA back-end does not yet support this conversion for quantized data types.
 * There is an avoidable increase in compute buffer size that is proportional to the maximum context length (to hold the KV cache converted to `f32` and other intermediate results. This is required on every GPU that performs attention computations.  For DeepSeek-Lite and context length of 32k tokens the CUDA compute buffer is 1404 MiB. It shuldn't be much bigger for DeepSeekV3/R1.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **davidsyoung** commented on **2025-03-08** at **23:33:14**
 

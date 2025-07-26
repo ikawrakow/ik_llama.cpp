@@ -58,7 +58,7 @@ For comparison, I get ~18.3 t/s on IQ2_K, so it is considerably slower, but mayb
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-05-26** at **14:18:01**
 

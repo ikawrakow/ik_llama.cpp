@@ -24,25 +24,13 @@ I've just ported over the Qwen3 PR. So it is missing the layers/model type, and 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-04-29** at **06:55:54**
 
 Thanks! I was just in the process of doing the same.
 
 Does `convert_hf_gguf.py` work with this model?
-
----
-
-👤 **ikawrakow** commented during a code review on `gguf-py/gguf/constants.py` on **2025-04-29** at **07:05:07**
-
-You are missing the `QWEN3` and `QWEN3MOE` enum entries further up in `class MODEL_ARCH(IntEnum)`
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-04-29** at **07:06:58**
-
-_No content provided._
 
 ---
 

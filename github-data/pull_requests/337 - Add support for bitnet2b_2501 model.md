@@ -21,7 +21,7 @@ I have not ran the model yet.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-04-21** at **16:08:46**
 
@@ -808,12 +808,6 @@ Here the results of the official Microsoft BitNet implementation (build a8ac7072
 | bitnet-25 2B I2_S - 2 bpw ternary |   1.71 GiB |     2.74 B | CPU        |      16 |         tg128 |         43.85 ± 0.02 |
 
 BitNet is a `llama.cpp` fork that does nothing else but adding BitNet support, with 2.6X lower PP and 1.42X lower TG performance than `ik_llama.cpp` - 15.8k stars.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-04-22** at **06:31:48**
-
-I think we can merge like this. It is fine to just use `I2_S` GGUFs. We can sort out the pre-tokenizer issue later.
 
 ---
 

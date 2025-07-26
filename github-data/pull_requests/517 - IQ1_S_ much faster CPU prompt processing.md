@@ -13,7 +13,7 @@
 
 #### Description
 
-This PR is a follow up of #515 and #516, and applies the same technique to `IQ1_S`. We see nearly 2X increase in prompt processing speed compared to `IQ1_S` and `IQ1_S_R4.
+This PR is a follow up of [#515](https://github.com/ikawrakow/ik_llama.cpp/issues/515) and [#516](https://github.com/ikawrakow/ik_llama.cpp/issues/516), and applies the same technique to `IQ1_S`. We see nearly 2X increase in prompt processing speed compared to `IQ1_S` and `IQ1_S_R4.
 
 Sweep-bench for `IQ1_S` quantization of LlaMA-3.1-8B on a Ryzen-7950X CPU:
 

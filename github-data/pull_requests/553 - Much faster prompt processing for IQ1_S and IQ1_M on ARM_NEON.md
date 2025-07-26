@@ -13,7 +13,7 @@
 
 #### Description
 
-This PR corresponds to PRs #531, #533, #534, #546, #549, #550, #552, and applies the on-the-fly repacking technique to
+This PR corresponds to PRs [#531](https://github.com/ikawrakow/ik_llama.cpp/issues/531), [#533](https://github.com/ikawrakow/ik_llama.cpp/issues/533), [#534](https://github.com/ikawrakow/ik_llama.cpp/issues/534), [#546](https://github.com/ikawrakow/ik_llama.cpp/issues/546), [#549](https://github.com/ikawrakow/ik_llama.cpp/issues/549), [#550](https://github.com/ikawrakow/ik_llama.cpp/issues/550), [#552](https://github.com/ikawrakow/ik_llama.cpp/issues/552), and applies the on-the-fly repacking technique to
 the 1-bit quants `IQ1_S` and `IQ1_M` on `ARM_NEON`. 
 
 Here is a PP-512 performance comparison between the main branch and this PR for LlaMA-3.1-8B-Instruct on M2-Max

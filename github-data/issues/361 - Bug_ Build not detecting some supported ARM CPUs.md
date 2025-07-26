@@ -12,11 +12,11 @@
 
 ### What happened?
 
-This was reported in #345 and I was also able to reproduce it on an Android device, there is a workaround with #347 but ideally you should not need to set the architecture flag manually. This does not seem to affect the Apple ARM devices.
+This was reported in [#345](https://github.com/ikawrakow/ik_llama.cpp/issues/345) and I was also able to reproduce it on an Android device, there is a workaround with [#347](https://github.com/ikawrakow/ik_llama.cpp/issues/347) but ideally you should not need to set the architecture flag manually. This does not seem to affect the Apple ARM devices.
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-02** at **05:23:08**
 

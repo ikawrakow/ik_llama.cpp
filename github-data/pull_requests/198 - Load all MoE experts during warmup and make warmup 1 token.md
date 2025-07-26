@@ -21,13 +21,7 @@ This allows warmup to actually warmup an MoE model as all experts are exercised.
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-02-10** at **07:12:56**
-
-LGTM, but it does nothing on the single socket computers I have currently available, so relying on the comments in the linked PR and issue that this really improves things on NUMA systems.
-
----
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-02-10** at **14:52:48**
 

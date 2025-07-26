@@ -28,7 +28,7 @@ Is that only supported by full Deepseek MoE, not the Qwen distills?
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-04-02** at **14:55:01**
 

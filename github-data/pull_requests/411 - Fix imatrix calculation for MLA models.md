@@ -13,7 +13,7 @@
 
 #### Description
 
-Mainline `llama.cpp` implemented MLA for DeepSeek models in [this PR](https://github.com/ggml-org/llama.cpp/pull/12801) 2.5 months after MLA was available here. The PR broke backwards compatibility with existing DeepSeek GGUFs. The incompatibility was handled in PR #394, and the reduced prompt processing performance with `llama.cpp`-style MLA GGUFs was recovered in #409.
+Mainline `llama.cpp` implemented MLA for DeepSeek models in [this PR](https://github.com/ggml-org/llama.cpp/pull/12801) 2.5 months after MLA was available here. The PR broke backwards compatibility with existing DeepSeek GGUFs. The incompatibility was handled in PR [#394](https://github.com/ikawrakow/ik_llama.cpp/issues/394), and the reduced prompt processing performance with `llama.cpp`-style MLA GGUFs was recovered in [#409](https://github.com/ikawrakow/ik_llama.cpp/issues/409).
 
 This PR fixes imatrix calculation for `llama.cpp`-style MLA GGUFs. The mainline MLA implementation splits the original `attn_kv_b` 2D tensor into `attn_k_b` and `attn_v_b`, which are 3D and have the shape `128 x n_lora x n_head` (`attn_k_b`) and `n_lora x 128 x n_head` (`attn_v_b`). When the `imatrix` tool was written there were only 2D tensors in the models, so it does not really work for the new 3D MLA tensors. There are two issues:
 * The first issue is that the activations are not contiguous, and this leads to a crash in the `imatrix` tool. The crash was fixed in mainline `llama.cpp` in [PR 13286](https://github.com/ggml-org/llama.cpp/pull/13286), and is fixed here with this PR
@@ -23,7 +23,7 @@ It is now almost a month since the `llama.cpp` [MLA PR](https://github.com/ggml-
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **bartowski1182** commented on **2025-05-12** at **21:49:14**
 

@@ -2,11 +2,11 @@
 
 This index provides a summary of all issues, pull requests, and discussions archived from the repository.
 
-- **Archive Date:** 2025-07-26 15:54:06 UTC
+- **Archive Date:** 2025-07-26 17:54:49 UTC
 - **Total Items:** 650
 
 <details open>
-<summary>📌 <strong>Issues</strong> (129 total: 103 ❌ Closed, 26 ✅ Open)</summary>
+<summary>📌 <strong>Issues</strong> (129 total: 103 Closed, 26 Open)</summary>
 
 | Status | # | Title | Author | Created | Updated |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -143,7 +143,7 @@ This index provides a summary of all issues, pull requests, and discussions arch
 </details>
 
 <details>
-<summary>🔀 <strong>Pull Requests</strong> (452 total: 403 🔀 Merged, 23 ❌ Closed, 14 ✅ Open, 12 📝 Draft)</summary>
+<summary>🔀 <strong>Pull Requests</strong> (452 total: 403 Merged, 23 Closed, 14 Open, 12 Draft)</summary>
 
 | Status | # | Title | Author | Created | Updated |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -338,7 +338,7 @@ This index provides a summary of all issues, pull requests, and discussions arch
 | 🔀 **Merged** | [338](./pull_requests/338 - BitNet adjustments.md) | BitNet adjustments | `ikawrakow` | 2025-04-22 | 2025-04-22 |
 | 🔀 **Merged** | [337](./pull_requests/337 - Add support for bitnet2b_2501 model.md) | Add support for bitnet2b_2501 model | `saood06` | 2025-04-21 | 2025-04-22 |
 | 🔀 **Merged** | [336](./pull_requests/336 - Fix termux_android build.md) | Fix termux/android build | `saood06` | 2025-04-20 | 2025-04-30 |
-| ❌ **Closed** | [333](./pull_requests/333 - Support GLM-4-0414 models based on piDack's mainline PR.md) | Support GLM-4-0414 models based on piDack's mainline PR | `ubergarm` | 2025-04-17 | 2025-07-25 |
+| ❌ **Closed** | [333](./pull_requests/333 - Support GLM-4-0414 models based on piDack's mainline PR.md) | Support GLM-4-0414 models based on piDack's mainline PR | `ubergarm` | 2025-04-17 | 2025-07-26 |
 | 🔀 **Merged** | [332](./pull_requests/332 - Better TG performance for GQA models (CPU).md) | Better TG performance for GQA models (CPU) | `ikawrakow` | 2025-04-16 | 2025-04-17 |
 | 🔀 **Merged** | [331](./pull_requests/331 - Better gemm_gemv on AVX2 fr q4_0_r8.md) | Better gemm/gemv on AVX2 fr q4_0_r8 | `ikawrakow` | 2025-04-15 | 2025-04-15 |
 | 🔀 **Merged** | [330](./pull_requests/330 - Allow q8_0 KV cache for head size 256.md) | Allow q8_0 KV cache for head size 256 | `ikawrakow` | 2025-04-15 | 2025-04-15 |
@@ -603,7 +603,7 @@ This index provides a summary of all issues, pull requests, and discussions arch
 </details>
 
 <details>
-<summary>🗣️ <strong>Discussions</strong> (69 total: 63 ✅ Open, 6 ❌ Closed)</summary>
+<summary>🗣️ <strong>Discussions</strong> (69 total: 62 Open, 6 Closed, 1 Answered)</summary>
 
 | Status | # | Title | Author | Created | Updated |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -631,7 +631,7 @@ This index provides a summary of all issues, pull requests, and discussions arch
 | ✅ **Open** | [526](./discussions/526 - Partial requant feature to save compute and time during tests.md) | Partial requant feature to save compute and time during tests. | `Nexesenex` | 2025-06-13 | 2025-07-22 |
 | ✅ **Open** | [519](./discussions/519 - Android Build.md) | Android Build | `aezendc` | 2025-06-11 | 2025-06-21 |
 | ✅ **Open** | [491](./discussions/491 - -rtr actually hurts prompt t_s for large ubatch_.md) | -rtr actually hurts prompt t/s for large ubatch? | `Ph0rk0z` | 2025-06-03 | 2025-06-11 |
-| ✅ **Open** | [477](./discussions/477 - DeepSeek-R1-0528 ik quants!.md) | DeepSeek-R1-0528 ik quants! | `ubergarm` | 2025-05-30 | 2025-07-25 |
+| ✅ **Open** | [477](./discussions/477 - DeepSeek-R1-0528 ik quants!.md) | DeepSeek-R1-0528 ik quants! | `ubergarm` | 2025-05-30 | 2025-07-26 |
 | ✅ **Open** | [466](./discussions/466 - A curiosity.md) | A curiosity. | `Nexesenex` | 2025-05-28 | 2025-06-08 |
 | ✅ **Open** | [459](./discussions/459 - qwen3 metrics on ancient hardware (2x xeon Vs 2x P100).md) | qwen3 metrics on ancient hardware (2x xeon Vs 2x P100) | `VinnyG9` | 2025-05-15 | 2025-05-28 |
 | ✅ **Open** | [451](./discussions/451 - Context reuse _ context shift for long prompts.md) | Context reuse / context shift for long prompts | `SamuelOliveirads` | 2025-05-23 | 2025-07-22 |
@@ -644,7 +644,7 @@ This index provides a summary of all issues, pull requests, and discussions arch
 | ❌ **Closed** | [395](./discussions/395 - Why does imatrix not tokenize special tokens_.md) | Why does imatrix not tokenize special tokens? | `bartowski1182` | 2025-05-07 | 2025-05-09 |
 | ❌ **Closed** | [393](./discussions/393 - Creating quantized models.md) | Creating quantized models | `nux` | 2025-05-07 | 2025-05-29 |
 | ✅ **Open** | [385](./discussions/385 - Qwen3 235B performance on Intel Xeon Scalable processor.md) | Qwen3 235B performance on Intel Xeon Scalable processor | `Gaolingx` | 2025-05-06 | 2025-05-27 |
-| ✅ **Open** | [384](./discussions/384 - ik_llama.cpp issues on an old workstation.md) | ik_llama.cpp issues on an old workstation | `matt23654` | 2025-05-06 | 2025-05-06 |
+| ✅ **Answered** | [384](./discussions/384 - ik_llama.cpp issues on an old workstation.md) | ik_llama.cpp issues on an old workstation | `matt23654` | 2025-05-06 | 2025-05-06 |
 | ✅ **Open** | [372](./discussions/372 - multy gpu.md) | multy gpu | `airnsk` | 2025-05-03 | 2025-05-06 |
 | ✅ **Open** | [359](./discussions/359 - Qwen3 quantization experiments.md) | Qwen3 quantization experiments | `ikawrakow` | 2025-04-30 | 2025-07-22 |
 | ✅ **Open** | [357](./discussions/357 - Qwen3 - early performance comparisons.md) | Qwen3 - early performance comparisons | `ikawrakow` | 2025-04-29 | 2025-05-19 |

@@ -39,7 +39,7 @@ Either add IQK GEMM for `IQ1_M`, or at least quard against the absence of a GEMM
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ubergarm** commented on **2025-07-18** at **14:43:32**
 

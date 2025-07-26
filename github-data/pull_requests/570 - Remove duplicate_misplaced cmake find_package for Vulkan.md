@@ -29,7 +29,7 @@ find_package(Vulkan COMPONENTS glslc REQUIRED)
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-07-02** at **14:13:30**
 

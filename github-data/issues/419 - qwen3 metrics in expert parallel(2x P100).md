@@ -107,7 +107,7 @@ WARNING: /proc/sys/kernel/numa_balancing is enabled, this has been observed to i
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-15** at **04:26:42**
 

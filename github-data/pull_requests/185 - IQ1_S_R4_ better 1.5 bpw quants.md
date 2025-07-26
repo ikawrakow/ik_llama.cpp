@@ -45,7 +45,7 @@ I don't have the disk space and RAM to play with DeepSeek-R1, so I would be real
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-02-06** at **08:31:42**
 
@@ -3350,18 +3350,6 @@ IQ4_K_R4 single token
 
 ---
 
-👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-02-06** at **15:16:38**
-
-Could this need to be higher for R1? The unsloth quant does this up to and including layer 8, my most recent attempt only did up to and including layer 6.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-06** at **15:16:38**
-
-_No content provided._
-
----
-
 👤 **ikawrakow** commented on **2025-02-06** at **15:28:21**
 
 Hmm, not sure. The token probabilities are not completely useless (same top-4 tokens). It is possible the imatrix is not adequate. 4+ bpw quants work even without an imatrix, so a bad imatrix is not immediately recognizable. I see in the log that 315 chunks were used. We have 8 out of 256 experts being active, so each expert got on average less than 10 chunks. That's not a lot of data to properly determine the relative importance of the tensor columns.
@@ -3371,18 +3359,6 @@ In case you have time and energy:
 * Have you tried running perplexity? Just a few chunks to compare to your best quantized model
 
 It is of course also possible that removing the super-block scale in `IQ1_S_R4` was not a good move. It didn't have any impact on DeepSeek-Lite, but having 3-bit block scales with just a single row scale is risky, and may result in too much precision loss in case there are big magnitude variations in the model weights.
-
----
-
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-02-06** at **15:30:35**
-
-Yes, the early layers tend to be more important, so increasing the number of layers and/or increasing the bpw of the quantization used will improve results. It is basically a matter of the balance between quantization quality and model size.
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-02-06** at **15:30:35**
-
-_No content provided._
 
 ---
 
@@ -3407,20 +3383,6 @@ Although the mmap allocator is working for me (and I might create a PR with it b
 >Can you try without MLA?
 
 When I have some more time I will.
-
----
-
-👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-02-06** at **16:18:14**
-
->in DeepSeek-Lite there is a single layer without MoE, but in DeepSeek-R1 there are 3 such layers
-
-The additional 2 layers of dense, means you hit 2 less MoE layers with this then you do on Lite, and this is still the only meaningful way I can see that the quant I just made is worse than the unsloth one, basically everything else is better, or the same.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-06** at **16:18:14**
-
-_No content provided._
 
 ---
 

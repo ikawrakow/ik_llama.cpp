@@ -12,7 +12,7 @@
 
 #### Description
 
-Attempt to fix #398, #425
+Attempt to fix [#398](https://github.com/ikawrakow/ik_llama.cpp/issues/398), [#425](https://github.com/ikawrakow/ik_llama.cpp/issues/425)
 
 My hopes are not very high, but it is better to try.
 * More extensive check that we can really also fuse the `ffn_down` operation. The change does nothing for me, but I also never have a crash, so let's try that.

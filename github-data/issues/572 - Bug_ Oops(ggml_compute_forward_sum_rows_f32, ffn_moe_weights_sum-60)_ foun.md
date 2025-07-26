@@ -757,7 +757,7 @@ Oops(ggml_compute_forward_sum_rows_f32, ffn_moe_weights_sum-60): found nan for i
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-07-03** at **13:09:02**
 

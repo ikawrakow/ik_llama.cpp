@@ -23,7 +23,7 @@ Some minor bug fix for webui
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-06-01** at **05:41:30**
 

@@ -52,7 +52,7 @@ I.e., using `Q8_KV` for K-cache quantization leads to a very minor loss of accur
 
 ### Update
 
-I have added the last 2 rows to the above table. In `Q8_KV*` the output and token embedding tensors are quantized with `Q8_0`, so most of the accuracy loss comes from these two tensors (and they have negligible impact on performance). I have also rerun the performance tests after merging PR #210. Here are the updated results:
+I have added the last 2 rows to the above table. In `Q8_KV*` the output and token embedding tensors are quantized with `Q8_0`, so most of the accuracy loss comes from these two tensors (and they have negligible impact on performance). I have also rerun the performance tests after merging PR [#210](https://github.com/ikawrakow/ik_llama.cpp/issues/210). Here are the updated results:
 
 | model          |     params | mla |          test |     t/s (main)   |    t/s (PR)      |  Speedup  |
 | -------------- | ---------: | --: | ------------: | ---------------: | ---------------: | --------: |

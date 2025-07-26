@@ -15,7 +15,7 @@
 
 This PR speeds up prompt processing (PP) when MLA is enabled. It is still slower than no-MLA, so I'm making this a draft for now to try some more. Still it would be great if somebody else tested to confirm that a) I did not introduce bugs and b) It is indeed faster on their systems.
 
-The PR also adds the changes suggested by @saood06 in the review of #188 
+The PR also adds the changes suggested by @saood06 in the review of [#188](https://github.com/ikawrakow/ik_llama.cpp/issues/188) 
 
 Speedup is achieved by concatenating the no- and rotational position encoding parts of `K` and `Q` (this also eliminates the `k_r` cache), which allows us to combine the former `kq_nope` and `kq_pe` matrix multiplications into a single matrix multiplication. This also eliminates the fairly expensive addition of  `kq_nope` and `kq_pe`. 
 
@@ -47,31 +47,7 @@ Not sure if the ~9% improvement at 16k tokens is real. It may be just due to les
 
 ---
 
-#### 💬 Conversation
-
-👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-02-12** at **20:10:20**
-
-We might want to print something if mla_attn is requested but not able to be run instead of just silently failing over to standard attention, I just saw a report of a user not realizing that this was happening and not sure why MLA was not giving any performance difference.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-12** at **20:10:21**
-
-_No content provided._
-
----
-
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-02-13** at **08:57:48**
-
-Thanks. Added a hopefully visible warning.
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-02-13** at **08:57:48**
-
-_No content provided._
-
----
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-02-13** at **09:04:18**
 

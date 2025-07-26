@@ -17,17 +17,11 @@ Update XTC and webUI docs.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-06-09** at **10:17:17**
 
 If I update the `Latest News` section of the main README.md can I omit dates and bundle things together (multiple PR's linked per line)?
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-09** at **10:19:10**
-
-_No content provided._
 
 ---
 

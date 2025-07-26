@@ -25,14 +25,8 @@ Introduces caching of GGML graph to avoid unnecessary full rebuild between each 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **agray3** commented on **2024-10-19** at **19:19:21**
 
 See https://github.com/ikawrakow/ik_llama.cpp/pull/94
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2024-10-20** at **06:35:58**
-
-_No content provided._

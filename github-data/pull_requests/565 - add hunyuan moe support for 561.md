@@ -33,7 +33,7 @@ model=/mnt/raid/models/ubergarm/Hunyuan-A13B-Instruct-GGUF/Hunyuan-A13B-Instruct
   --port 8080
 ```
 
-Would be great if anyone else could test e.g. @Downtown-Case as per #561 
+Would be great if anyone else could test e.g. @Downtown-Case as per [#561](https://github.com/ikawrakow/ik_llama.cpp/issues/561) 
 
 I haven't yet made imatrix nor tried to quantize further.
 
@@ -45,7 +45,7 @@ The behavior seems a bit odd and will answer in chinese if I don't use some kind
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-06-30** at **18:28:48**
 
@@ -180,69 +180,6 @@ model=/mnt/raid/models/ubergarm/Hunyuan-A13B-Instruct-GGUF/Hunyuan-A13B-Instruct
   --host 127.0.0.1 \
   --port 8080
 ```
-
----
-
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-07-01** at **06:00:36**
-
-If you check your previous PR about GLM4 you will see that you had to remove the `Vcur` reshaping. It is the same here. Remove this line and it is likely the difference between FA and no FA will go away.
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-07-01** at **06:00:36**
-
-_No content provided._
-
----
-
-👤 **ubergarm** commented during a code review on `src/llama.cpp` on **2025-07-01** at **23:54:30**
-
-Yup, thanks for the reminder! The two trickiest parts of porting an architecture is remembering to:
-
-1. Remove the `Vcur` reshaping.
-2. On mainline `build_attn()` the argument order goes `Qcur, Kcur, Vcur,`, but here with `llm_build_kv()` the order goes `Kcur, Vcur, Qcur,`.
-
-Just re-downloaded the new .safetensors, converted, and built a fresh quant to test:
-
-* `FA=1` Final estimate: PPL = 522.7473 +/- 5.68072
-* `FA=0` Final estimate: PPL = 527.6625 +/- 5.73144
-
-So looks "good" now haha... I didn't wait to find the bf16's PPL but this lines up in the ball-park with what [mainline is seeing around ~500](https://github.com/ggml-org/llama.cpp/pull/14425#issuecomment-3024357323).
-
-Of course I couldn't help myself and had to try out [the new IQ3_KS quant](https://github.com/ikawrakow/ik_llama.cpp/pull/566) as well lol...
-
-So far so good!
-```
-llm_load_print_meta: model type       = 80B.A13B
-llm_load_print_meta: model ftype      = IQ3_KS - 3.1875 bpw
-llm_load_print_meta: model params     = 80.393 B
-llm_load_print_meta: model size       = 34.088 GiB (3.642 BPW)
-llm_load_print_meta: general.name     = Hunyuan A13B Instruct
-
-# Attention
-blk\..*\.attn_k.*=iq6_k
-blk\..*\.attn_v.*=iq6_k
-
-blk\..*\.attn_q.*=iq5_k
-blk\..*\.attn_o.*=iq5_k
-
-# 1x Shared Expert
-blk\..*\.ffn_(down)_shexp.*=iq6_k
-blk\..*\.ffn_(gate|up)_shexp.*=iq5_k
-
-# 64x Routed Experts
-blk\..*\.ffn_(down)_exps.*=iq4_ks
-blk\..*\.ffn_(gate|up)_exps.*=iq3_ks # let's live dangerously
-
-# Token Embedding
-token_embd\.weight=iq6_k # splurged here a bit as this model's tokenization seems wierd
-```
-
----
-
-👤 **ubergarm** submitted a review: 💬 `COMMENTED` on **2025-07-01** at **23:54:30**
-
-_No content provided._
 
 ---
 
@@ -422,9 +359,3 @@ model=Hunyuan-A13B-Pretrain-IQ3_KS.gguf
 
 Final estimate: PPL = 5.4382 +/- 0.03349
 ```
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-09** at **08:29:32**
-
-OK, lets merge this.

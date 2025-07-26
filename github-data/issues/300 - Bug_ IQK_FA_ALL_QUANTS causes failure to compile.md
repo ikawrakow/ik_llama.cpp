@@ -30,7 +30,7 @@ Clear Linux OS
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-03-31** at **11:53:55**
 

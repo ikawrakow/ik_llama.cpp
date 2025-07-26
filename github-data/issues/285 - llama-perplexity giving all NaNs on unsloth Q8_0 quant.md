@@ -10,7 +10,7 @@
 
 #### Description
 
-Moving this into its own ticket from [#271](https://github.com/ikawrakow/ik_llama.cpp/issues/271#issuecomment-2740969252).
+Moving this into its own ticket from [[#271](https://github.com/ikawrakow/ik_llama.cpp/issues/271)](https://github.com/ikawrakow/ik_llama.cpp/issues/271#issuecomment-2740969252).
 
 Basically, I was able to run a clean `llama-perplexity` on [unsloth/DeepSeek-R1-Q8_0](https://huggingface.co/unsloth/DeepSeek-R1-GGUF/tree/main/DeepSeek-R1-Q8_0) with mainline llama.cpp, but when I tried with this fork it was throwing all NaNs.
 
@@ -796,7 +796,7 @@ Computed blk.60.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-03-25** at **07:28:41**
 

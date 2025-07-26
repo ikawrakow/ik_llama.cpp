@@ -12,9 +12,9 @@
 
 #### Description
 
-The purpose of this PR is to test if the NaNs observed for `Q8_0/Q8_0_R8` quantized DeepSeekV3/R1 will go away (#285)
+The purpose of this PR is to test if the NaNs observed for `Q8_0/Q8_0_R8` quantized DeepSeekV3/R1 will go away ([#285](https://github.com/ikawrakow/ik_llama.cpp/issues/285))
 
-My hypothesis is that we get an overflow in the block sum of `Q8_1/Q8_1_X4`, which is stored as `fp16`. `Q8_1/Q8_1_X4` is used for activation quantization on Zen4 for `Q8_0/Q8_0_R8` quants. See also #196 
+My hypothesis is that we get an overflow in the block sum of `Q8_1/Q8_1_X4`, which is stored as `fp16`. `Q8_1/Q8_1_X4` is used for activation quantization on Zen4 for `Q8_0/Q8_0_R8` quants. See also [#196](https://github.com/ikawrakow/ik_llama.cpp/issues/196) 
   
 The PR disables the Zen4 optimization and reverts to the vanilla `AVX2` implementation, which uses `Q8_0` (just like mainline `llama.cpp`).
 
@@ -22,7 +22,7 @@ Performance goes down quite a bit, but if we confirm that the change eliminates 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-03-26** at **15:17:57**
 

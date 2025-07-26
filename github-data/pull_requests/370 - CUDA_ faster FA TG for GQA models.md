@@ -34,7 +34,7 @@ My GPU is `ADA_LOVELACE`, so the MMA kernel does not get invoked for TG. But bas
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-05-03** at **20:24:02**
 

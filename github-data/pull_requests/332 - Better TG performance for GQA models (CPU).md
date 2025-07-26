@@ -26,7 +26,7 @@ The x-axis is `N_KV`, the number of tokens in the KV cache.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-04-16** at **16:04:38**
 

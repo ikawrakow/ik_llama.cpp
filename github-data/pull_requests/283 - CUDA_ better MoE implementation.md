@@ -13,7 +13,7 @@
 
 #### Description
 
-This PR makes "indirect" matrix multiplications as used for MoE models inference reproducible on CUDA, and closes #249 
+This PR makes "indirect" matrix multiplications as used for MoE models inference reproducible on CUDA, and closes [#249](https://github.com/ikawrakow/ik_llama.cpp/issues/249) 
 
 As a bonus, we get a ~10% PP speedup as measured with DeepSeek-Lite. I wouldn't be surprised if the benefit is even larger for DeepSeek-R1 as it has 4X more experts than DeepSeek-Lite.
 
@@ -21,7 +21,7 @@ The culprit for non-reproducible results and sluggish performance was the `k_cop
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-03-24** at **16:48:31**
 
@@ -324,18 +324,6 @@ I'm not sure, I haven't looked deeply into AWQ in a while, I was just curious ab
 
 ---
 
-👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **10:04:54**
-
-This synchronization is not safe to remove. `ids_host` and `rmapping` are deallocated when they go out of scope and the source pointers for `cudaMemcpyAsync` become dangling pointers. As the name implies, the memcpy is asynchronous and without an explicit synchronization there is no guarantee that the data is still valid once it's being copied to the device.
-
----
-
-👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **10:04:54**
-
-_No content provided._
-
----
-
 👤 **JohannesGaessler** commented on **2025-04-05** at **10:14:21**
 
 >Awesome work. Thank you. You are starting to get near to VLLM performance on PP.
@@ -344,102 +332,8 @@ If you are using GGUF models in both cases you should be aware that vLLM at some
 
 ---
 
-👤 **ikawrakow** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **10:55:53**
-
-Yes, they are deallocated when the function completes. Neither `ids_host` nor `ids` (or `ids_dev`) is used after that. The only reason this forgotten to remove synchronization is there is because I did have a  bug while developing this function. The bug resulted in out of bounds access, so before finding the actual bug one hypothesis I had was that I needed to synchronize because the copy had not finished when I started using the row ids.
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **10:55:53**
-
-_No content provided._
-
----
-
-👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **11:11:58**
-
-The original code had synchronization directly after the memcpy so I had assumed that that is where this line comes from. But that is I think not relevant to the discussion.
-
-When you call `cudaMemcpyAsync` you merely pass a pointer and queue a memcpy from that pointer to the device. As it is you don't have any guarantees that that memcpy will happen before the function returns and the memory is deallocated. Even if you are unable to provoke a bug in testing this is a defect which will result in sporadic segfaults or copying of garbage data.
-
----
-
-👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **11:11:58**
-
-_No content provided._
-
----
-
 👤 **ikawrakow** commented on **2025-04-05** at **11:17:43**
 
 > I have since improved this code but vLLM has to my knowledge not taken over these improvements.
 
 Based on the performance comparisons on my GPU (RTX-4080) against mainline that I ran after the improvements, they were too minor to offset the performance gains I have from other modifications. For MoE models with many experts such as DeepSeek-V3/R1/Lite, `ik_llama.cpp` is ~1.8X faster than mainline for PP after this PR. It is also ~80-90% of vLLM performance on a multi-GPU system such as the one davidsyoung has, where vLLM uses tensor parallelism and `ik_llama.cpp` does not (so all that will take to match or beat vLLM is to make row split work with MoE models). Given my very limited experience with GPU programming, and given my very rudimentary CUDA knowledge, I'm content with being at 90% of the performance of a repo with 900+ contributors (and the quantized matrix multiplications came from no-one less than you, @JohannesGaessler).
-
----
-
-👤 **ikawrakow** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **11:48:50**
-
-That would be true if nothing happened after this call. But the row ids are being used in subsequent calls in the same function, so the memcpy must have completed before the function exits. Let's take a look at your original `mul_mat_id` implementation. At the end we have [this call](https://github.com/ggml-org/llama.cpp/blob/7a84777f42a9b3ba47db5d20b7662f8ddf92f652/ggml/src/ggml-cuda/ggml-cuda.cu#L2093). This copies the data from the contiguous memory pool-allocated in the function to its final destination. Now, if this call has not completed by the time the function returns, than we would obviously have "sporadic segfaults and copying of garbage data". So, even without knowing anything about CUDA, one needs to assume that a call such as this completes synchronously, else the entire `llama.cpp` CUDA stack would be a collection of "sporadic segfaults and copying of garbage data". Well, there are calls such as that one in my function as well before it returns. These kernel calls, as well as the preceding processing, they all use the row ids that you are claiming may go out of scope. But in order for them to execute, the queued memcpy must have completed, so no, no "sporadic segfaults and copying of garbage data" at this point.
-
-But at the end of the day, if you are able to trigger the bug, using whatever it takes to trigger it, I'll be happy to uncomment the synchronization call.
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **11:48:50**
-
-_No content provided._
-
----
-
-👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **12:23:11**
-
-`k_copy_dst_from_contiguous` only uses device pointers. The point in time at which their data is valid is automatically synchronized with the execution of the kernel because CUDA streams guarantee an ordering in which device code is executed. `cudaMemcpyAsync` is fundamentally different because it uses a host pointer with memory that can become invalid under the control of host code.
-
->Let's take a look at your original mul_mat_id implementation. At the end we have [this call](https://github.com/ggml-org/llama.cpp/blob/7a84777f42a9b3ba47db5d20b7662f8ddf92f652/ggml/src/ggml-cuda/ggml-cuda.cu#L2093). This copies the data from the contiguous memory pool-allocated in the function to its final destination.
-
-The way the CUDA memory pools work is that the memory is allocated in a single, large block that can grow dynamically. Assuming that you don't need to increase the size of the block an "allocation" via `ggml_cuda_pool_alloc` does not actually allocate any new memory, it simply returns a pointer into the large block that is selected in such a way that there are no conflicts between the "allocated" memory regions while the "allocations" are in scope. The actual memory continues to be a valid allocation afterwards, though it will likely be overwritten by other kernels. This is very similar to how the ggml graph planner is giving each tensor a pointer to some data where at the time of the tensor being executed the data is guaranteed to be valid but the memory is re-used for other tensors as long as there are no conflicts.
-
----
-
-👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **12:23:11**
-
-_No content provided._
-
----
-
-👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **12:24:46**
-
->This is very similar to how the ggml graph planner is giving each tensor a pointer to some data
-
-Actually, `wdata` may be a better comparison.
-
----
-
-👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **12:24:46**
-
-_No content provided._
-
----
-
-👤 **ikawrakow** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **12:33:00**
-
-See #313. The issue is not that it will go out of scope, but that I'm using the data on the host before the copy may have completed.
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **12:33:00**
-
-_No content provided._
-
----
-
-👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **12:43:28**
-
-Sorry, I just noticed that I mixed up the copy directions for the two memcpys.
-
----
-
-👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **12:43:28**
-
-_No content provided._

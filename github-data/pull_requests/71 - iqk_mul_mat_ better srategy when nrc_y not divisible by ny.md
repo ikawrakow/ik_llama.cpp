@@ -26,7 +26,7 @@ This strategy is implemented in this PR. The following graph shows performance (
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Djip007** commented on **2024-11-26** at **19:09:21**
 

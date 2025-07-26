@@ -14,7 +14,7 @@ Commit ab7d193 makes it difficult to work with the repo on Windows, as it contai
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-07-23** at **09:07:14**
 

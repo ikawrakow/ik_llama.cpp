@@ -20,7 +20,7 @@ I did attempt to implement a computation of the entire tensor multiplication wit
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-02-26** at **17:27:37**
 

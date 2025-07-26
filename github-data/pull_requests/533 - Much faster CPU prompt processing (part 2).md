@@ -13,7 +13,7 @@
 
 #### Description
 
-This PR is a follow up of #531 and applies the technique to `IQK` quants.
+This PR is a follow up of [#531](https://github.com/ikawrakow/ik_llama.cpp/issues/531) and applies the technique to `IQK` quants.
 
 Here is a PP-512 performance comparison for LlaMA-3.1-8B-Instruct on a Ryzen-7950X CPU between the main branch and this PR:
 
@@ -34,7 +34,7 @@ For a bit of history, when [PR 6414](https://github.com/ggml-org/llama.cpp/pull/
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-06-17** at **16:45:36**
 

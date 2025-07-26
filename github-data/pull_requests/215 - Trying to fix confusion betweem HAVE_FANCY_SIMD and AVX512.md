@@ -12,11 +12,11 @@
 
 #### Description
 
-Attempt to fix #214
+Attempt to fix [#214](https://github.com/ikawrakow/ik_llama.cpp/issues/214)
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-02-21** at **10:31:43**
 

@@ -6,7 +6,7 @@
 | **Source Branch** | `ug/piDack/update-glm4z` |
 | **Target Branch** | `main` |
 | **Created** | 2025-04-17 |
-| **Updated** | 2025-07-25 |
+| **Updated** | 2025-07-26 |
 
 ---
 
@@ -19,7 +19,7 @@ I got stuck on this PR and figured I'd push it anyway, no pressure to look at it
 This PR needs some more love. It is *not* working on CUDA backend, but *might* be working on CPU backend for `THUDM/GLM-Z1-Rumination-32B-0414` `bf16` GGUF converted using piDack's mainline branch.
 
 ## Purpose
-The goal of this PR is to incorporate changes made by [piDack on maline llama.cpp PR#12957](https://github.com/ggml-org/llama.cpp/pull/12957) in order to support the recently updated [THUDM/glm-4-0414](https://huggingface.co/collections/THUDM/glm-4-0414-67f3cbcb34dd9d252707cb2e) models.
+The goal of this PR is to incorporate changes made by [piDack on maline llama.cpp PR[#12957](https://github.com/ikawrakow/ik_llama.cpp/issues/12957)](https://github.com/ggml-org/llama.cpp/pull/12957) in order to support the recently updated [THUDM/glm-4-0414](https://huggingface.co/collections/THUDM/glm-4-0414-67f3cbcb34dd9d252707cb2e) models.
 
 Specifically I was attempting to imatrix and quantize [THUDM/GLM-Z1-Rumination-32B-0414](https://huggingface.co/THUDM/GLM-Z1-Rumination-32B-0414/tree/main) hoping to use the new cosine similarity layer importance scoring to design a lower PPL quant.
 
@@ -943,7 +943,7 @@ I'll skip ahead and try to quantize it without imatrix for now and see if it act
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-04-17** at **22:30:45**
 
@@ -1271,3 +1271,11 @@ I see, the PR that actually got merged was mainline `PR#12867`. I'll close this 
 👤 **gopinath87607** commented on **2025-07-25** at **05:05:34**
 
 @ubergarm seems like glm is coming are we ready ? there is a some work going on in vllm repo i think
+
+---
+
+👤 **ubergarm** commented on **2025-07-26** at **17:45:50**
+
+@gopinath87607 
+
+I believe ZzZzZzZzZzZz did a transformers PR already, but haven't seen one on mainline lcpp yet psure. Getting hard to keep up haha...

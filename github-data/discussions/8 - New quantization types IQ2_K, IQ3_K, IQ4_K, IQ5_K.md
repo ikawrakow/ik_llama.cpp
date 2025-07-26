@@ -63,7 +63,7 @@ Will add later.
 
 Before LLaMA-3, `Q6_K` quantization always had a quantization error in the 0.1-0.15% range, i.e., it was basically as good as the full precision model. But for LLaMA-3.1-70B `Q6_K` quantization error is 0.65%! `Q8_0` does match the full precision model, but it uses 2 extra bpw. I have experimented with 6-bit non-linear quantization in the past, but `Q6_K` quantization error was so low that it was basically not possible to a see a benefit from the non-linearity. Given the much higher `Q6_K` quantization error for LLaMA-3 models, it may be worthwhile to resurrect 6-bit non-linear quantization.
 
-**Update** See PR #14
+**Update** See PR [#14](https://github.com/ikawrakow/ik_llama.cpp/issues/14)
 
 ---
 

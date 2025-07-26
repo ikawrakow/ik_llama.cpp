@@ -66,7 +66,7 @@ An image of the new resizable sessions section (`All` group is always on top, an
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-06-28** at **01:46:03**
 

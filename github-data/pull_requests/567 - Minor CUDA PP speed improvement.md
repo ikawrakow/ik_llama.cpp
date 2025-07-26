@@ -22,7 +22,7 @@ Here a `sweep-bench` graph for LlaMA-3.1-8B on RTX-4080 for `Q4_0` and `IQ4_KS`.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2025-07-02** at **03:05:58**
 

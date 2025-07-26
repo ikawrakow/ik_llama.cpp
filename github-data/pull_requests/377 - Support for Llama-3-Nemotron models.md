@@ -19,7 +19,7 @@ It compiles, have not tested yet. Testers welcome, but will try to test myself l
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-05-04** at **12:31:11**
 
@@ -75,30 +75,6 @@ Will sweep-bench it later.
 
 ---
 
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-04** at **13:23:29**
-
-I guess this is copy-pasted from `build_llama()`, which also builds the graph for the Granite models. But do we expect Nemotron to have something to do with Granite? If not, it is better to remove it.
-
----
-
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-04** at **13:23:50**
-
-Same comment as above
-
----
-
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-04** at **13:24:25**
-
-Does it apply to Nemotron?
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-05-04** at **14:02:57**
-
-_No content provided._
-
----
-
 👤 **ikawrakow** commented on **2025-05-04** at **14:05:15**
 
 I get this error when I try to run the [49B model](https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1) (after adjusting the `n_attention_vw` check):
@@ -111,18 +87,6 @@ llama_model_load: error loading model: error loading model vocabulary: cannot fi
 👤 **ikawrakow** commented on **2025-05-04** at **14:16:43**
 
 Works if I convert with mainline, so something is missing in the conversion script.
-
----
-
-👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-05-04** at **14:19:07**
-
-Sorry I didn't notice these. They are in the original PR as well (which I cherry-picked as it was from when they hadn't diverged too much), I'll take them out. Right now I'm working on the larger model as that can't be cherry-picked
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-05-04** at **14:19:07**
-
-_No content provided._
 
 ---
 
@@ -384,13 +348,6 @@ llama_model_loader: - type  f32:  131 tensors   (mainline)
 vs
 llama_model_loader: - type  f32:  130 tensors   (this PR)
 ```
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-05** at **13:14:51**
-
-From my perspective this is ready to merge.
-Just waiting for @Lissanro to confirm that it is working for them.
 
 ---
 

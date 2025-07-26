@@ -71,7 +71,7 @@ I'll compare to `Q2_K`, the quantization type that `IQ2_KL` is looking to replac
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2025-07-12** at **13:44:15**
 

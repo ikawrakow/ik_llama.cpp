@@ -12,7 +12,7 @@
 
 #### Description
 
-The goal of this is to be able to directly handle FP8 (more specifically E4M3) native models by creating an FP8 GGUF, which can then be quantized into a GGUF that can be used for inferencing (inference on FP8 is beyond the scope of this PR similar to #169).
+The goal of this is to be able to directly handle FP8 (more specifically E4M3) native models by creating an FP8 GGUF, which can then be quantized into a GGUF that can be used for inferencing (inference on FP8 is beyond the scope of this PR similar to [#169](https://github.com/ikawrakow/ik_llama.cpp/issues/169)).
 
 Currently only the FP8 GGUF creation is implemented (which involved including the weight_scale_inv and FP8_E4M3 quant methods). Tested with [this](https://huggingface.co/Qwen/Qwen3-0.6B-FP8/tree/main) tiny model for now which successfully created a GGUF and was able to dump it.
 
@@ -24,7 +24,7 @@ I will attempt to add the quantization support later (handling the scale) but wa
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-05-24** at **11:34:38**
 

@@ -24,14 +24,8 @@ This is part of this request: https://github.com/ikawrakow/ik_llama.cpp/pull/611
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Thireus** commented on **2025-07-17** at **01:33:30**
 
 Tested and ready to merge.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-17** at **05:26:53**
-
-_No content provided._

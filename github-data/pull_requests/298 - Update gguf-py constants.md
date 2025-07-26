@@ -13,7 +13,7 @@
 
 #### Description
 
-As reported in #297 the constants.py file needs to be updated. 
+As reported in [#297](https://github.com/ikawrakow/ik_llama.cpp/issues/297) the constants.py file needs to be updated. 
 
 Testing the command that errored it now gets further.
 
@@ -45,7 +45,7 @@ This is because GGML_QUANT_SIZES ([code](https://github.com/ikawrakow/ik_llama.c
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-03-31** at **08:03:08**
 
@@ -130,9 +130,3 @@ Processing tensor: blk.9.ffn_down.weight
 ```
 
 Interestingly enough  the `iq2_bn_r4` and `iq2_bn` converted version does not error and I can gguf-dump them.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-04-24** at **05:33:08**
-
-_No content provided._

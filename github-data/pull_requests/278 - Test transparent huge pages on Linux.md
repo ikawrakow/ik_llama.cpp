@@ -13,7 +13,7 @@
 
 #### Description
 
-In #267 @orca-zhang observes significant performance gains using 1 GiB huge pages, so I decided to see if I can reproduce. 
+In [#267](https://github.com/ikawrakow/ik_llama.cpp/issues/267) @orca-zhang observes significant performance gains using 1 GiB huge pages, so I decided to see if I can reproduce. 
 
 This PR adds the option to use transparent huge pages (THP) on Linux. To use it, just add `-thp` to the command line (but note that it is only invoked if also `mmap` is being used).
 
@@ -60,7 +60,7 @@ where `N` is how many 1 GiB huge pages you want reserved.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-03-22** at **17:20:30**
 

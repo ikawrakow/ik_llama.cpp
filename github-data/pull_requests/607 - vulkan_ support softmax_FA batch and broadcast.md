@@ -27,7 +27,7 @@ The new FA for deepseek MLA PR is missing this, which caused gibberish output in
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-07-13** at **19:09:26**
 

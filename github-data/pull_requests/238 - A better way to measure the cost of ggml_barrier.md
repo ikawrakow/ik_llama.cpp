@@ -19,7 +19,7 @@ Using this on TG runs with DeepSeek-Lite I'm finding that `ggml_barrier` costs a
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **davidsyoung** commented on **2025-03-01** at **09:51:17**
 

@@ -10,7 +10,7 @@
 
 #### Description
 
-The Qwen3 models were [officially released](https://qwenlm.github.io/blog/qwen3/), and support was added in `ik_llama.cpp` in PR #355, so I was curious to run some performance benchmarks. As much as I would like to try the flagship model, I don't have enough horse power for that, so I experimented with [Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B), the 30B total, 3B active parameter MoE model.
+The Qwen3 models were [officially released](https://qwenlm.github.io/blog/qwen3/), and support was added in `ik_llama.cpp` in PR [#355](https://github.com/ikawrakow/ik_llama.cpp/issues/355), so I was curious to run some performance benchmarks. As much as I would like to try the flagship model, I don't have enough horse power for that, so I experimented with [Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B), the 30B total, 3B active parameter MoE model.
 
 This time I'm using a custom quantization where all experts are quantized with `IQ4_XS`, all attention tensors with `Q5_K`, and the output tensor is `Q6_K`. PPL for this model is only 1.25% above the PPL of the `bf16` model, so it is a pretty decent quality quantization. Benchmarks are run on a Ryzen-7950X system with an RTX-4080 GPU.  Compared are the latest `ik_kllama.cpp` and `llama.cpp` versions as of this morning (April 29 2025).
 

@@ -14,11 +14,11 @@
 
 There is no point in using `ik_llama.cpp` without `GGML_IQK_MUL_MAT`.
 
-Closes #456
+Closes [#456](https://github.com/ikawrakow/ik_llama.cpp/issues/456)
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2025-05-25** at **12:34:51**
 

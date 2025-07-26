@@ -18,7 +18,7 @@ It's 10M context, so there must be some architectural difference from Llama 3.3
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **saood06** commented on **2025-04-06** at **00:05:11**
 

@@ -24,11 +24,11 @@ It does seem to work for me, but I would appreciate more comprehensive testing f
 
 Two, I think, interesting observations:
 * The Vulkan flash attention implementation absolutely does not work without setting the precision of the op to `fp32`. There is a difference between mainline and `ik_llama.cpp` in that regard. Mainline now just sets the precision to `fp32`, while in `ik_llama.cpp` this is only done for a select set of models. This may have been the actual reason for observing NaNs and gibberish. As I'm not ready to throw in the towel as mainline did at some point, I have changed the attention implementation to set the precision to `fp32` if it is one of the models known to require it, or if the Vulkan backend is enabled. This will have the negative effect of also affecting CUDA, if someone decided to build with CUDA and Vulkan enabled, so probably it would be better  to move this into the Vulkan backend itself (but this is left for a future PR as needed).
-* In the previous Vulkan port, I had observed very little difference between `mla = 1` and `mla = 3` (see #584). With this PR I do see, as expected, a significantly higher PP performance with `mla = 3` (e.g., for a context of 16k tokens on an RTX-4080 with coopmat2 enabled, 1470 t/s with `mla = 3` vs 1086 t/s with `mla = 1`.
+* In the previous Vulkan port, I had observed very little difference between `mla = 1` and `mla = 3` (see [#584](https://github.com/ikawrakow/ik_llama.cpp/issues/584)). With this PR I do see, as expected, a significantly higher PP performance with `mla = 3` (e.g., for a context of 16k tokens on an RTX-4080 with coopmat2 enabled, 1470 t/s with `mla = 3` vs 1086 t/s with `mla = 1`.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-07-14** at **13:34:55**
 

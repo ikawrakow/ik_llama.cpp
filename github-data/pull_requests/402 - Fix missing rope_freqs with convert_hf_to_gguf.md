@@ -19,12 +19,4 @@ The issue was that the convert script used generate_extra_tensors for those tens
 
 I tested with [Llama-3_1-Nemotron-51B-Instruct](https://huggingface.co/nvidia/Llama-3_1-Nemotron-51B-Instruct) and it now generates the rope_freqs.weight which was missing previously.
 
-Look at #377 for more information.
-
----
-
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-09** at **14:16:12**
-
-_No content provided._
+Look at [#377](https://github.com/ikawrakow/ik_llama.cpp/issues/377) for more information.

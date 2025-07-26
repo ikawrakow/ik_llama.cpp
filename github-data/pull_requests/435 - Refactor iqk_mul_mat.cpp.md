@@ -36,11 +36,11 @@ The GEMM files compile in 5-6 seconds each, so the FA instantiations dominate th
 
 It is a massive change. Testing of all types (50+ when row-interleaved quants are included) on `AVX2, Zen4` and `ARM_NEON` took quite some time. I hope to have covered all possible combinations, but still would appreciate additional testing from people using `ik_llama.cpp` for CPU-only inference.
 
-Closes #183
+Closes [#183](https://github.com/ikawrakow/ik_llama.cpp/issues/183)
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-05-20** at **07:20:58**
 

@@ -82,7 +82,7 @@ Thread 7 "llama-cli" received signal SIGILL, Illegal instruction.
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2024-09-19** at **08:45:58**
 

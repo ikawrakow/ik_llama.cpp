@@ -13,7 +13,7 @@
 
 #### Description
 
-As PRs #515, #516, #517.
+As PRs [#515](https://github.com/ikawrakow/ik_llama.cpp/issues/515), [#516](https://github.com/ikawrakow/ik_llama.cpp/issues/516), [#517](https://github.com/ikawrakow/ik_llama.cpp/issues/517).
 
 Here a sweep-bench with this PR for LlaMA-3.1-8B on a Ryzen-7950X CPU
 

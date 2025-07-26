@@ -305,7 +305,7 @@ Linux
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **jagusztinl** commented on **2025-06-19** at **08:40:53**
 

@@ -13,8 +13,8 @@
 
 #### Description
 
-This PR is a continuation of #515, #516, #517, #518 with the following differences
-* Quants are repacked to `Q8_K_R8` instead of `Q8_0_R8`. `Q8_K_R8` is the fastest quant known to human kind (see #141), and that helps achieve significant performance gains when batch size is greater than 32 tokens or so
+This PR is a continuation of [#515](https://github.com/ikawrakow/ik_llama.cpp/issues/515), [#516](https://github.com/ikawrakow/ik_llama.cpp/issues/516), [#517](https://github.com/ikawrakow/ik_llama.cpp/issues/517), [#518](https://github.com/ikawrakow/ik_llama.cpp/issues/518) with the following differences
+* Quants are repacked to `Q8_K_R8` instead of `Q8_0_R8`. `Q8_K_R8` is the fastest quant known to human kind (see [#141](https://github.com/ikawrakow/ik_llama.cpp/issues/141)), and that helps achieve significant performance gains when batch size is greater than 32 tokens or so
 * The technique of on-the-fly repacking before matrix multiplications is extended to a larger set of quants: `IQ1_M, IQ2_XS, IQ2_S, Q3_K` in addition to `IQ1_S, IQ2_XXS, IQ3_XXS, IQ3_S` already improved in the quoted PRs 
 * There is also `Q6_K` added, but in this case repacking is to `Q8_0_R8` as `Q6_K` cannot be losslessly repacked to `Q8_K`, and I was worried that there could be a non-negligible accuracy loss due to that. 
 
@@ -48,7 +48,7 @@ Based on this we can expect lower performance gains for a MoE model. For instanc
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-06-16** at **10:26:55**
 

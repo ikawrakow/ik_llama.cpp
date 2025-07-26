@@ -26,13 +26,7 @@ error: expected unqualified-id before numeric constant
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-18** at **16:53:19**
-
-_No content provided._
-
----
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-06-18** at **16:54:57**
 

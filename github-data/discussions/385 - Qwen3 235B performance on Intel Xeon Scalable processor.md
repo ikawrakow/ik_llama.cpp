@@ -24,7 +24,7 @@ The Qwen3 models were officially released on 29th, April, 2025. This is a mixtur
 - Number of Activated Experts: 8
 - Context Length: 32,768 natively and 131,072 tokens with YaRN.
 
-The qwen3moe had supported in in PR #355, I tried to run the biggest model [Qwen3-235B-A22B-128K-GGUF](https://hf-mirror.com/unsloth/Qwen3-235B-A22B-128K-GGUF) with ik_llama.cpp on my Workstation, I need better generation quality, an my system has sufficient memory(Total 512G RAM), so I chose the relatively higher quality quantization `Q8_0`.
+The qwen3moe had supported in in PR [#355](https://github.com/ikawrakow/ik_llama.cpp/issues/355), I tried to run the biggest model [Qwen3-235B-A22B-128K-GGUF](https://hf-mirror.com/unsloth/Qwen3-235B-A22B-128K-GGUF) with ik_llama.cpp on my Workstation, I need better generation quality, an my system has sufficient memory(Total 512G RAM), so I chose the relatively higher quality quantization `Q8_0`.
 
 ## System Info
 

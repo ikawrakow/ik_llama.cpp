@@ -15,4 +15,4 @@
 
 Fix `IQ1_M_R4` quantization failure.
 
-Closes #367
+Closes [#367](https://github.com/ikawrakow/ik_llama.cpp/issues/367)

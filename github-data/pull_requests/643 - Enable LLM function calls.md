@@ -22,11 +22,3 @@
 The PR fixes the logic when LLM responds with text and includes tool calls, but responds with "stop" instead of "tool_calls".
 
 The PR enables LLM to work with Claude Code proxies in streaming mode.
-
----
-
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-24** at **18:24:00**
-
-_No content provided._

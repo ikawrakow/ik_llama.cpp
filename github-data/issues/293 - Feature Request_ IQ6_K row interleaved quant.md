@@ -24,7 +24,7 @@ Quantizing models you have to choose between IQ6_K and Q6_K_R4 as IQ6_K does not
 
 ### Motivation
 
-I think a row interleaved version of IQ6_K would be helpful as IQ6_K has a nice quality improvement over #130.
+I think a row interleaved version of IQ6_K would be helpful as IQ6_K has a nice quality improvement over [#130](https://github.com/ikawrakow/ik_llama.cpp/issues/130).
 
 ### Possible Implementation
 
@@ -32,7 +32,7 @@ I'm not sure if 4 or 8 rows would be better.
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-03-27** at **07:26:10**
 

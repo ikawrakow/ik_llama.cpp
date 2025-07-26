@@ -40,7 +40,7 @@ will not be compiled because "static void ggml_compute_forward_mul_mat_id_up_gat
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-25** at **04:30:11**
 

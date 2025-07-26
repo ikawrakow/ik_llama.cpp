@@ -13,15 +13,15 @@
 
 #### Description
 
-DeepSeek-V3/R1 gives NaNs when inference is run on a computer with `AVX512_VNNI` and the model is quantized with `Q8_0/Q8_0_R8` (issue #285). The difference to vanilla `AVX2` is that in that case activations are quantized with `Q8_1/Q8_1_X4`. The block scale and sum in `Q8_1/Q8_1_X4` are `fp16`.
+DeepSeek-V3/R1 gives NaNs when inference is run on a computer with `AVX512_VNNI` and the model is quantized with `Q8_0/Q8_0_R8` (issue [#285](https://github.com/ikawrakow/ik_llama.cpp/issues/285)). The difference to vanilla `AVX2` is that in that case activations are quantized with `Q8_1/Q8_1_X4`. The block scale and sum in `Q8_1/Q8_1_X4` are `fp16`.
 
-We did have similar issues with `IQ1_S`, which was solved in #194 by going to a different quantization type for the activations. I did create issue #196 because of that.
+We did have similar issues with `IQ1_S`, which was solved in [#194](https://github.com/ikawrakow/ik_llama.cpp/issues/194) by going to a different quantization type for the activations. I did create issue [#196](https://github.com/ikawrakow/ik_llama.cpp/issues/196) because of that.
 
-We also observed NaNs on CUDA for `IQ4_K` and `IQ4_KS`. These quantization types do not have MMQ kernels, so matrix multiplications were done via dequantization to `fp16` and cuBLAS GEMM. The NaNs were resolved via dequantizing to `bf16` instead (PR #261)
+We also observed NaNs on CUDA for `IQ4_K` and `IQ4_KS`. These quantization types do not have MMQ kernels, so matrix multiplications were done via dequantization to `fp16` and cuBLAS GEMM. The NaNs were resolved via dequantizing to `bf16` instead (PR [#261](https://github.com/ikawrakow/ik_llama.cpp/issues/261))
 
 So, it seems one can not use `fp16` arithmetic in DeepSeek-V3/R1.
 
-This is further confirmed by #291, where we observe no NaNs when switching `Q8_0/Q8_0_R8` to vanilla `AVX2` implementation.  
+This is further confirmed by [#291](https://github.com/ikawrakow/ik_llama.cpp/issues/291), where we observe no NaNs when switching `Q8_0/Q8_0_R8` to vanilla `AVX2` implementation.  
 
 This PR introduces `Q8_2/Q8_2_X4` quantization types that use `bf16` block scale and sum. All quantization types that previously used `Q8_1/Q8_1_X4` to quantize activations for CPU GEMM/GEMV are switched to `Q8_2/Q8_2_X4`.
 
@@ -29,11 +29,11 @@ This should resolve all NaNs on the CPU.
 
 I wonder why we are not getting NaNs on CUDA for the quantization types that do use `Q8_1`. Or maybe we do, and it is just that nobody has reported.
 
-Closes #285 and #196
+Closes [#285](https://github.com/ikawrakow/ik_llama.cpp/issues/285) and [#196](https://github.com/ikawrakow/ik_llama.cpp/issues/196)
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-03-26** at **19:37:47**
 

@@ -13,7 +13,7 @@
 
 #### Description
 
-When using `sweep-bench` on CUDA, often the PP performance for `N_KV = 0` (i.e., first PP run) is lower than the measured PP performance for `N_KV > 0`. My guess is that this is due to having to find and load from the cache of pre-compiled kernels the required once, which may take time that is not negligible compared to the time it takes the compute the batch. For an example, see the graph in PR #374.
+When using `sweep-bench` on CUDA, often the PP performance for `N_KV = 0` (i.e., first PP run) is lower than the measured PP performance for `N_KV > 0`. My guess is that this is due to having to find and load from the cache of pre-compiled kernels the required once, which may take time that is not negligible compared to the time it takes the compute the batch. For an example, see the graph in PR [#374](https://github.com/ikawrakow/ik_llama.cpp/issues/374).
 
 To prevent this misleading result, this PR adds the ability to also use a warm-up run with `n_ubatch` tokens.  The option is off by default as computing a batch on the CPU for a large model can take a significant amount of time (but the measured performance is not affected by having done a batch warmup run). To turn it on, use
 ```
@@ -22,7 +22,7 @@ To prevent this misleading result, this PR adds the ability to also use a warm-u
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-05-04** at **08:51:18**
 

@@ -32,13 +32,13 @@ Similar to the other `*_KT` quants
 
 As trellis quants performance is very low on Metal (at least for my 30-core M2-Max GPU), I didn't not even bother to add a Metal implementation.
 
-To illustrate the quantization quality compared to other quantization types, the next graph shows `PPL(Q)/PPL(f16)-1` for LlaMA-3.1-8B-Instruct, which is notoriously hard to quantize. I have excluded the `IQ1_M` and `IQ1_S` data points as this would have extended the y-axis too much to be useful. We can see that `IQ1_KT` at 1.92 bpw provides nearly the same quality as `IQ2_XXS` at 2.13 bpw, so almost a 10% reduction in model size for comparable quantization quality. I have made the `IQ2_KL` data point magenta because it was also added very recently in PR #602. 
+To illustrate the quantization quality compared to other quantization types, the next graph shows `PPL(Q)/PPL(f16)-1` for LlaMA-3.1-8B-Instruct, which is notoriously hard to quantize. I have excluded the `IQ1_M` and `IQ1_S` data points as this would have extended the y-axis too much to be useful. We can see that `IQ1_KT` at 1.92 bpw provides nearly the same quality as `IQ2_XXS` at 2.13 bpw, so almost a 10% reduction in model size for comparable quantization quality. I have made the `IQ2_KL` data point magenta because it was also added very recently in PR [#602](https://github.com/ikawrakow/ik_llama.cpp/issues/602). 
 
 <img width="792" height="612" alt="il31c" src="https://github.com/user-attachments/assets/c4a3109d-4390-4d41-b44f-17bb2445e89e" />
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-07-16** at **15:50:24**
 

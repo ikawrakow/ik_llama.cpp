@@ -19,11 +19,11 @@ For me `-ctk q8_0 -ctv iq4_nl` is the most useful combination in terms of the co
 
 **Update**
 
-Based on @Nexesenex comment in #92, added `IQ4_NL + IQ4_NL` as a possible KV-cache combination for head size of 128. Hopefully this is a better alternative than `Q4_0 + Q4_0` for the VRAM poor.
+Based on @Nexesenex comment in [#92](https://github.com/ikawrakow/ik_llama.cpp/issues/92), added `IQ4_NL + IQ4_NL` as a possible KV-cache combination for head size of 128. Hopefully this is a better alternative than `Q4_0 + Q4_0` for the VRAM poor.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2024-10-20** at **18:48:37**
 

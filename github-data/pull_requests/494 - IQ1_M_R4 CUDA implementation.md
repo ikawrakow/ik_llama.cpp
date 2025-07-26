@@ -49,7 +49,7 @@ Here sweep bench for LlaMA-3-8B on RTX-4080
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-06-05** at **15:26:27**
 

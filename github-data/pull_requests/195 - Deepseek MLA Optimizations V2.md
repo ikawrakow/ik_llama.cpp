@@ -23,13 +23,3 @@ This PR contains the following things
 I will follow up with:
 - Having all the MoE experts load during warmup, that can be placed in this PR if you want, or a separate one. It is a very large QoL feature for large MoE. Without it the model is slowly loaded in on use, with it, the model is loaded immediately and at a faster rate.
 - The mmap based KV cache buffer, it is functional but I have yet to make it a CLI option.
-
----
-
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-02-09** at **07:36:43**
-
-Looks good. I added a minor change to check if `wk_b` and `wv_b` are available before turning on MLA (so we don't crash if someone is using an old model and asked for MLA).
-
-PP-4096 for `Q8_0_R8` quantized DeepSeek-Lite with `-mla` goes up to 292 t/s from 275 t/s with this change.

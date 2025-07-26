@@ -81,7 +81,7 @@ I have not bothered implementing the MMQ stuff, so CUDA PP performance is via de
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **compilade** commented on **2024-08-06** at **17:00:57**
 

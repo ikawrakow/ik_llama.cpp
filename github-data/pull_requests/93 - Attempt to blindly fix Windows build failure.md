@@ -13,7 +13,7 @@
 
 #### Description
 
-Ref #88 
+Ref [#88](https://github.com/ikawrakow/ik_llama.cpp/issues/88) 
 
 @Nexesenex @saood06
 
@@ -21,7 +21,7 @@ Does this work?
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2024-10-18** at **15:37:10**
 

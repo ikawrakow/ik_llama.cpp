@@ -75,7 +75,7 @@ Can give more info if needed. Tried to put this on reddit post but got "Server e
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-05** at **05:43:02**
 

@@ -10,7 +10,7 @@
 
 #### Description
 
-Tthe Vulkan back-end in `ik_llama.cpp` is now usable, and performance is better than `llama.cpp` (see, e.g., PR #584 that has a comparison for a MoE model). But compared to CUDA on the same GPU, performance is much lower, especially for MoE models (and most users appear to be using `ik_llama.cpp` exactly for one of the giant MoE models). I have mixed feelings how to proceed:
+Tthe Vulkan back-end in `ik_llama.cpp` is now usable, and performance is better than `llama.cpp` (see, e.g., PR [#584](https://github.com/ikawrakow/ik_llama.cpp/issues/584) that has a comparison for a MoE model). But compared to CUDA on the same GPU, performance is much lower, especially for MoE models (and most users appear to be using `ik_llama.cpp` exactly for one of the giant MoE models). I have mixed feelings how to proceed:
 * There is much more performance optimization potential in the Vulkan back-end compared to CUDA or CPU. So, from that point of view it seems worthwhile to put some effort into optimizing the Vulkan back-end
 * I know nothing about Vulkan programming in general or the `llama.cpp` Vulkan back-end in particular, hence, at least initially, it will be an uphill battle. Without a significant interest from the user base, I don't feel particularly motivated to do this to myself.
 

@@ -79,7 +79,7 @@ Ubuntu 24.04 running in Proxmox LXC
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-07-18** at **06:12:11**
 

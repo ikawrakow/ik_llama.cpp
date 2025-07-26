@@ -21,7 +21,7 @@ The second change is required for the `IQ2_BN_R4` 4-row interleaved variant. The
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-01-10** at **12:56:49**
 

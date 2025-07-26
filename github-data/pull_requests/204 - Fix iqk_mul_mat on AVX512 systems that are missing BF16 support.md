@@ -13,4 +13,4 @@
 
 #### Description
 
-Fixes #203
+Fixes [#203](https://github.com/ikawrakow/ik_llama.cpp/issues/203)

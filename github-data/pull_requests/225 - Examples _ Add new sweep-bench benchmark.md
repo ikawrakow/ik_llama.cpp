@@ -15,7 +15,7 @@
 
 Port of https://github.com/ggml-org/llama.cpp/commit/9488fbf1e4334b8f189b38a7d224b8e6c1a7b22b
 
-This is a good tool to benchmark with as requested by #223. 
+This is a good tool to benchmark with as requested by [#223](https://github.com/ikawrakow/ik_llama.cpp/issues/223). 
 
 As a very quick demo I generated this, just by running this ( ```./llama-sweep-bench -c 2048 -ub 512 -m  WizardLM-2-8x22B-IQ4_K_R4.gguf -ctk q8_KV -ctv q8_0 -fa --output-format jsonl ``` and then sweep-bench-plot.py with the output).
 
@@ -30,13 +30,7 @@ As a very quick demo I generated this, just by running this ( ```./llama-sweep-b
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-02-23** at **06:00:18**
-
-Thank you for this - can be very useful.
-
----
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-04-26** at **18:01:12**
 

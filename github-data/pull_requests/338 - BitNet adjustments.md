@@ -13,13 +13,13 @@
 
 #### Description
 
-Two small tweaks to #337:
+Two small tweaks to [#337](https://github.com/ikawrakow/ik_llama.cpp/issues/337):
 * Use `create_tensor` instead of `ml.create_tensor`. This is necessary for tensor overrides to work (in case one would ever want to use tensor overrides with a BitNet model)
 * Use `output.weight` instead of `token_embd.weight` for the final matrix multiplication. This improves CUDA performance quite a bit as `token_embd.weight` is on the host, so needs to be copied to the GPU each time it is needed (or the matrix multiplication is done on the CPU when running TG). I see that MicroSoft have decided to have `output.weight` stored in the model, even though it is identical to `token_embd.weight` (in the initial BitNet models one simply reused `token_embd.weight`). This makes the model quite a bit larger than it needs to be. Go figure.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-04-22** at **07:01:54**
 

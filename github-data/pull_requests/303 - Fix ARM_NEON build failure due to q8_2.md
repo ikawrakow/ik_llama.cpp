@@ -13,4 +13,4 @@
 
 #### Description
 
-I meant to also do `ARM_NEON` before merging #292 and then I forgot. This PR fixes the build failure.
+I meant to also do `ARM_NEON` before merging [#292](https://github.com/ikawrakow/ik_llama.cpp/issues/292) and then I forgot. This PR fixes the build failure.

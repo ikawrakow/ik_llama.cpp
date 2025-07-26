@@ -19,11 +19,11 @@ Sorry this is a mess, but this does get it to build now on my android device whe
 
 I did catch the additional issue of the changed iqk_flash_attn_noalibi definition in the case where your building this repo and IQK_IMPLEMENT is not defined because my device doesn't support dotprod.
 
-Fixes #159
+Fixes [#159](https://github.com/ikawrakow/ik_llama.cpp/issues/159)
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-04-20** at **08:59:26**
 
@@ -58,63 +58,6 @@ That should work.
 👤 **saood06** commented on **2025-04-21** at **03:39:42**
 
 Cleaned it up using an `IQK_API` macro.
-
----
-
-👤 **ikawrakow** commented during a code review on `ggml/src/iqk/iqk_config.h` on **2025-04-21** at **06:11:32**
-
-To have this also work for a static built, it should be
-```c++
-#ifdef GGML_SHARED
-#    if defined(_WIN32) && !defined(__MINGW32__)
-#        ifdef GGML_BUILD
-#            define IQK_API __declspec(dllexport)
-#        else
-#            define IQK_API __declspec(dllimport)
-#        endif
-#    else
-#        define IQK_API __attribute__ ((visibility ("default")))
-#    endif
-#else
-#    define IQK_API
-#endif
-```
-
----
-
-👤 **ikawrakow** commented during a code review on `ggml/src/iqk/iqk_flash_attn.cpp` on **2025-04-21** at **06:15:05**
-
-Do we really need to repeat `extern "C" IQK_API` here?
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-04-21** at **06:27:52**
-
-I wonder if something else apart from the dot product is needed to have the iqk functions work on your phone. I see that I have consistently used  `ggml_vdotq_s32`, whiere `ggml` provided an implementation when `__ARM_FEATURE_DOTPROD` is not available.  The one known missing ingredient without `__ARM_FEATURE_DOTPROD ` is `vdotq_laneq_s32`. But is there something else missing? If  `vdotq_laneq_s32` was the only missing thing, one could add an implementation, and then one would be able to use `iqk` stuff on generic `__aarch64__`. I don't have an Android phone myself, so was never compelled to try.
-
----
-
-👤 **saood06** commented during a code review on `ggml/src/iqk/iqk_config.h` on **2025-04-21** at **07:11:44**
-
-Changed.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-04-21** at **07:11:44**
-
-_No content provided._
-
----
-
-👤 **saood06** commented during a code review on `ggml/src/iqk/iqk_flash_attn.cpp` on **2025-04-21** at **07:12:00**
-
-Changed
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-04-21** at **07:12:00**
-
-_No content provided._
 
 ---
 

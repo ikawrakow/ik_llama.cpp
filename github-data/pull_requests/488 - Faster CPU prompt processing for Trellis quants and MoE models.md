@@ -13,6 +13,6 @@
 
 #### Description
 
-This PR is a follow up to #482, and applies the same dequantizing GEMM for MoE matrix multiplications.
+This PR is a follow up to [#482](https://github.com/ikawrakow/ik_llama.cpp/issues/482), and applies the same dequantizing GEMM for MoE matrix multiplications.
 
 For a DeepSeek-Lite model where only the `ffn_up` and `ffn_gate` tensors are quantized with `IQ2_KT` I observe a ~35% improvement in PP performance compared to te main branch.

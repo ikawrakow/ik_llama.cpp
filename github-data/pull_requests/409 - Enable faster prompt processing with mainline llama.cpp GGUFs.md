@@ -14,9 +14,9 @@
 #### Description
 
 Mainline llama.cpp [PR 12901](https://github.com/ggml-org/llama.cpp/pull/12801), which added MLA support for DeepSeek models 2.5 months after MLA was available here, broke backwards compatibility. As a result,
-the new DeepSeek GGUFs that started appearing on HF became compatible with `ik_llama.cpp`, so I added support for the incompatible GGUFs in #394. But using such crippled DeepSeek GGUF results in a much lower prompt processing performance. This is because the `attn_wkv_b` tensor is missing, so one cannot use `mla = 3`.
+the new DeepSeek GGUFs that started appearing on HF became compatible with `ik_llama.cpp`, so I added support for the incompatible GGUFs in [#394](https://github.com/ikawrakow/ik_llama.cpp/issues/394). But using such crippled DeepSeek GGUF results in a much lower prompt processing performance. This is because the `attn_wkv_b` tensor is missing, so one cannot use `mla = 3`.
 
-This PR removes this limitation. When `-mla 0 or 2 or 3` is specified on the command line, missing `attn_wkv_b` tensors are created on-the-fly while loading the model. This is basically the reverse of #259, where the `attn_wk_b` and `attn_wv_b`tensors necessary for MLA were computed from the `attn_wkv_b` tensors in the original DeepSeek GGUFs.
+This PR removes this limitation. When `-mla 0 or 2 or 3` is specified on the command line, missing `attn_wkv_b` tensors are created on-the-fly while loading the model. This is basically the reverse of [#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259), where the `attn_wk_b` and `attn_wv_b`tensors necessary for MLA were computed from the `attn_wkv_b` tensors in the original DeepSeek GGUFs.
 
 To show why this is useful, the following graph compares PP performance between the main branch and this PR. The `sweep-bench` command is
 ```
@@ -28,7 +28,7 @@ The model is a mainline `llama.cpp` DeepSeek-Lite GGUF with the `attn_wkv_b` ten
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Panchovix** commented on **2025-05-11** at **19:03:47**
 

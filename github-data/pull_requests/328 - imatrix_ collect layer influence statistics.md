@@ -19,7 +19,7 @@ Here is how one can collect statistics about the activations change caused by a 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-04-14** at **14:39:20**
 

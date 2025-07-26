@@ -14,7 +14,7 @@ i used to get t/sec in web ui by enabling option in advance tab but right now it
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **firecoperana** commented on **2025-07-25** at **15:13:36**
 

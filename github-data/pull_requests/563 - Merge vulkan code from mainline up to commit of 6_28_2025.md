@@ -13,15 +13,15 @@
 
 #### Description
 
-* Vulkan Optimizations and Fixes (#8959)
+* Vulkan Optimizations and Fixes ([#8959](https://github.com/ikawrakow/ik_llama.cpp/issues/8959))
 
 * Optimize Vulkan REPEAT performance
 
 .....................................................................................
 
-vulkan: lock accesses of pinned_memory vector (#14333)
+vulkan: lock accesses of pinned_memory vector ([#14333](https://github.com/ikawrakow/ik_llama.cpp/issues/14333))
 
-vulkan: handle noncontig in the final case of ggml_vk_get_cpy_pipeline (#14378)
+vulkan: handle noncontig in the final case of ggml_vk_get_cpy_pipeline ([#14378](https://github.com/ikawrakow/ik_llama.cpp/issues/14378))
 
 Fix cuda build error
 
@@ -36,7 +36,7 @@ Fix cuda build error
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **firecoperana** commented on **2025-06-29** at **19:21:51**
 
@@ -222,54 +222,6 @@ fwiw i just forced that explicitly to `void *` and it compiles but then segfault
 -        /* .clear           = */ ggml_backend_multi_buffer_clear,
 +        /* .clear           = */ (GGML_CALL void *) ggml_backend_multi_buffer_clear, // ubergarm hack
 ```
-
----
-
-👤 **ikawrakow** commented during a code review on `.github/workflows/build.yml` on **2025-06-30** at **06:48:44**
-
-I specifically removed all workflows, let's not put them back in.
-
----
-
-👤 **ikawrakow** commented during a code review on `.github/workflows/release.yml` on **2025-06-30** at **06:49:37**
-
-Same
-
----
-
-👤 **ikawrakow** commented during a code review on `ggml/include/ggml.h` on **2025-06-30** at **06:51:46**
-
-Let's not add stuff that is not related to the Vulkan back-end
-
----
-
-👤 **ikawrakow** commented during a code review on `ggml/include/ggml.h` on **2025-06-30** at **06:52:04**
-
-No new ops please
-
----
-
-👤 **ikawrakow** commented during a code review on `ggml/include/ggml.h` on **2025-06-30** at **06:52:43**
-
-No new ops please
-
----
-
-👤 **ikawrakow** commented during a code review on `ggml/src/ggml-alloc.c` on **2025-06-30** at **06:53:43**
-
-Let's not make changes that are not related to the Vulkan back-end
-
----
-
-👤 **ikawrakow** commented during a code review on `ggml/src/ggml-cpu/ggml-cpu.c` on **2025-06-30** at **06:58:42**
-
-I don't think I want a copy of all the refactoring that happened in mainline since I forked the project.
-
----
-
-👤 **ikawrakow** submitted a review: 🔄 `CHANGES_REQUESTED` on **2025-06-30** at **07:12:08**
-
-Please no new ops, new enum values, and no refactoring of the CPU backend. I think the Vulkan back-end can be updated to the latest without using the new back-end formalism in mainline.
 
 ---
 
@@ -519,18 +471,6 @@ So, for some reason int dot products and cooperative matrix are not enabled. I g
 
 ---
 
-👤 **ikawrakow** commented during a code review on `ggml/src/ggml-vulkan.cpp` on **2025-07-01** at **18:07:18**
-
-Why do we need this check? I don't have coopmat2 available, but if I comment out this check I get FA enabled, and it gives me a nice boost in performance.
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-07-01** at **18:07:18**
-
-_No content provided._
-
----
-
 👤 **ikawrakow** commented on **2025-07-01** at **18:18:05**
 
 OK, I'm learning. Need to build using
@@ -562,18 +502,6 @@ Then I need to comment out the check for coopmat2 on line 9476 in `ggml-vulkan.c
 PP is on par with mainline, TG is on par (or even slightly better) for short context, but performance somehow decreases faster with context length, so we end up with ~70% of mainline TG performance at 16k tokens. 
 
 I'm told in [this comment](https://github.com/ikawrakow/ik_llama.cpp/discussions/562#discussioncomment-13630937) that I need to update my Nvidia driver to 575, which will give me coopmat2 and almost a factor of 2 speedup.
-
----
-
-👤 **firecoperana** commented during a code review on `ggml/src/ggml-vulkan.cpp` on **2025-07-02** at **01:10:01**
-
-Removed.
-
----
-
-👤 **firecoperana** submitted a review: 💬 `COMMENTED` on **2025-07-02** at **01:10:01**
-
-_No content provided._
 
 ---
 
@@ -697,9 +625,3 @@ I don't quite understand why `ik_llama.cpp` would run faster than mainline. None
 > I tried a couple small R1-0528 quants but not quite there yet:
 
 Of course not. The Vulkan backend does not support DeepSeek flash attention, so no, no `-mla 3` is possible. `-fmoe` is not there either.  Neither are all the additions to concatenating, copying, and transposing tensors necessary to make FlashMLA-3 work.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-02** at **06:49:33**
-
-_No content provided._

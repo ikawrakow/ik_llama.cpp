@@ -11,7 +11,7 @@
 #### Description
 
 Title : Overlap CUDA graph building and processing to minimize GPU idle time and improve tokens per seconds performance.
-#11867
+[#11867](https://github.com/ikawrakow/ik_llama.cpp/issues/11867)
 Link : https://github.com/ggml-org/llama.cpp/pull/11867
 Author : @Aendk
 Use : a few % boost on Cuda PP and TG?

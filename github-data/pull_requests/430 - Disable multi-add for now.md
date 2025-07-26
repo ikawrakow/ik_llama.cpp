@@ -12,7 +12,7 @@
 
 #### Description
 
-There have been several crash reports (#398, #425) for large MoE models when using hybrid GPU/CPU inference. As I don't have the hardware to run such large models I'm not able to debug. But with help from @nux, who ran `llama-server` in the debugger on his computer and gave me a backtrace along with a few variables values (see [this](https://github.com/ikawrakow/ik_llama.cpp/issues/425#issuecomment-2888464768) and [this](https://github.com/ikawrakow/ik_llama.cpp/issues/425#issuecomment-2888500696), my hypothesis is that the problem is with the multi-add operation that I added to `ik_llama.cpp`.
+There have been several crash reports ([#398](https://github.com/ikawrakow/ik_llama.cpp/issues/398), [#425](https://github.com/ikawrakow/ik_llama.cpp/issues/425)) for large MoE models when using hybrid GPU/CPU inference. As I don't have the hardware to run such large models I'm not able to debug. But with help from @nux, who ran `llama-server` in the debugger on his computer and gave me a backtrace along with a few variables values (see [this](https://github.com/ikawrakow/ik_llama.cpp/issues/425#issuecomment-2888464768) and [this](https://github.com/ikawrakow/ik_llama.cpp/issues/425#issuecomment-2888500696), my hypothesis is that the problem is with the multi-add operation that I added to `ik_llama.cpp`.
 
 I'm of course not sure if the hypothesis is correct as it is based on very scarce evidence. Hence I would appreciate if the people reporting a problem test this PR and let me know if it fixes the problem, so pinging @Panchovix, @ciprianveg, @pt13762104, @schynce, @p4s2wd
 
@@ -22,7 +22,7 @@ What is multi-add? In MoE models the contributions of the routed experts need to
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **schynce** commented on **2025-05-18** at **10:10:42**
 

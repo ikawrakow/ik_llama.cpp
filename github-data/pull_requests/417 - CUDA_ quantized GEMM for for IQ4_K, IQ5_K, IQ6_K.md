@@ -13,11 +13,11 @@
 
 #### Description
 
-This PR follows in the footsteps of #374, and is the next step towards complete implementation of quantized matrix multiplications (a.k.a. MMQ) for the `IQX_K` quants.
+This PR follows in the footsteps of [#374](https://github.com/ikawrakow/ik_llama.cpp/issues/374), and is the next step towards complete implementation of quantized matrix multiplications (a.k.a. MMQ) for the `IQX_K` quants.
 
 We get in the range of 15% performance improvement compared to the existing implementation that dequantizes to `fp16` and then uses cuBLAS to perform the matrix multiplications.
 
-Another benefit is avoiding the numerical issues observed for DeepSeek models when using `fp16` arithmetic (see #261). It also potentially leads to CUDA compute buffer size reduction because the intermediate buffer for the dequantized tensor is not required. 
+Another benefit is avoiding the numerical issues observed for DeepSeek models when using `fp16` arithmetic (see [#261](https://github.com/ikawrakow/ik_llama.cpp/issues/261)). It also potentially leads to CUDA compute buffer size reduction because the intermediate buffer for the dequantized tensor is not required. 
 
 I have reused the existing matrix multiplication kernels, providing only the unpacking of the quantized data into the tiles used in the kernels. As such, performance is largely determined by the kernel (blocks of 16 or blocks of 32), and the unpacking cost (converting the packed data into `int8_t` values ready for matrix multiplications). This is best illustrated with the following graph. Model is LLaMA-3.1-8B, GPU is RTX-4080. All quantizations are done using `--output-tensor-type q6_K --pure`.
 
@@ -31,7 +31,7 @@ Such efforts are left for a future PR.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-05-14** at **14:42:37**
 

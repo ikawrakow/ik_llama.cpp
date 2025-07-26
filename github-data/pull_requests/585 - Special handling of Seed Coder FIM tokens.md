@@ -24,7 +24,7 @@ Seems a bit odd to need to figure out model families by vocab size? But I'm not 
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **fizzAI** commented on **2025-07-04** at **21:23:47**
 
@@ -35,57 +35,3 @@ Actually need to merge some tokenizer support from regular lcpp too, please hold
 👤 **fizzAI** commented on **2025-07-04** at **22:43:32**
 
 Appears to work, now
-
----
-
-👤 **ikawrakow** commented during a code review on `convert_hf_to_gguf.py` on **2025-07-05** at **09:29:56**
-
-It is the only model that has a vocabulary of 155,136 tokens?
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-07-05** at **09:29:56**
-
-_No content provided._
-
----
-
-👤 **ikawrakow** commented during a code review on `include/llama.h` on **2025-07-05** at **09:30:24**
-
-Pleas format the same way as the surrounding code.
-
----
-
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-07-05** at **09:30:33**
-
-Pleas format the same way as the surrounding code.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-05** at **09:30:54**
-
-_No content provided._
-
----
-
-👤 **fizzAI** commented during a code review on `convert_hf_to_gguf.py` on **2025-07-05** at **19:35:38**
-
-I'm not 100% sure honestly (nor do I have any idea how I would check that off the top of my head), but it's how CodeLlama handles it so it should be fine I thought
-
----
-
-👤 **fizzAI** submitted a review: 💬 `COMMENTED` on **2025-07-05** at **19:35:38**
-
-_No content provided._
-
----
-
-👤 **fizzAI** commented during a code review on `include/llama.h` on **2025-07-05** at **19:35:56**
-
-D: damn my editor
-
----
-
-👤 **fizzAI** submitted a review: 💬 `COMMENTED` on **2025-07-05** at **19:35:56**
-
-_No content provided._

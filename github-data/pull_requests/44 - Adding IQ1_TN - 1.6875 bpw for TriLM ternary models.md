@@ -49,7 +49,7 @@ As `IQ2_BN` PP performance is better than `IQ1_BN`, these tables indicate that m
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2024-09-09** at **11:56:12**
 

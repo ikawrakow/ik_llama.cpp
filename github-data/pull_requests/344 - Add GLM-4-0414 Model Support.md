@@ -13,7 +13,7 @@
 
 #### Description
 
-This is my second attempt which still has some issues. Original attempt was #333. This one is based on https://github.com/ggml-org/llama.cpp/pull/12867 . However, this PR does not bring over any of the python stuff.
+This is my second attempt which still has some issues. Original attempt was [#333](https://github.com/ikawrakow/ik_llama.cpp/issues/333). This one is based on https://github.com/ggml-org/llama.cpp/pull/12867 . However, this PR does not bring over any of the python stuff.
 
 In limited testing with of [bartowski/THUDM_GLM-Z1-32B-0414-GGUF](https://huggingface.co/bartowski/THUDM_GLM-Z1-32B-0414-GGUF/blob/main/THUDM_GLM-Z1-32B-0414-IQ4_XS.gguf) on CPU only and CUDA backends it seems to work as long as:
 
@@ -47,7 +47,7 @@ So I'll mark this as draft for now and see how things are looking soon.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-04-25** at **07:29:50**
 
@@ -239,42 +239,6 @@ Seems like bartowski used a version of mainline to convert that did include this
 
 ---
 
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-04-25** at **16:58:38**
-
-Add
-```c++
-                if (model.arch == LLM_ARCH_GLM4) {
-                    ggml_mul_mat_set_prec(kqv_i, GGML_PREC_F32);
-                }
-```
-after line 9515
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-04-25** at **16:58:38**
-
-_No content provided._
-
----
-
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-04-25** at **17:01:07**
-
-Add
-```c++
-if ( model.arch == LLM_ARCH_GLM4) {
-     ggml_mul_mat_set_prec(kqv, GGML_PREC_F32);
-}
-```
-after line 9475
-
----
-
-👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-04-25** at **17:01:07**
-
-_No content provided._
-
----
-
 👤 **ikawrakow** commented on **2025-04-25** at **17:07:32**
 
 I don't think any of the suggestions you are finding around the Internet are going to help. Just think about it:
@@ -424,12 +388,6 @@ Please make it ready and let's merge it.
 👤 **ubergarm** commented on **2025-04-26** at **15:23:46**
 
 Okay got it rebased, gonna force push it up after quick final test!!!
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-04-26** at **15:33:46**
-
-_No content provided._
 
 ---
 

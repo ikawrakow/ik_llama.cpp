@@ -15,7 +15,7 @@
 
 ### TL;DR
 
-This PR adds a flash attention (FA) implementation optimized for the Zen4 architecture as part of the quest to improve CPU inference for long contexts (#25, #26).
+This PR adds a flash attention (FA) implementation optimized for the Zen4 architecture as part of the quest to improve CPU inference for long contexts ([#25](https://github.com/ikawrakow/ik_llama.cpp/issues/25), [#26](https://github.com/ikawrakow/ik_llama.cpp/issues/26)).
 
 ### Limitations
 

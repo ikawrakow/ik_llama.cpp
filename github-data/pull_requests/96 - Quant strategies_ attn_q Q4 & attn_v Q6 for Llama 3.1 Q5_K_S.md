@@ -30,13 +30,7 @@ I suspect that it goes similarly for L3 as well, which was quite insensitive to 
 
 ---
 
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2024-10-19** at **15:24:19**
-
-Yes, reducing bpw for `attn_q` and increasing `bpw` for `attn_v` is a good strategy to improve quantized model performance in general in my experience.
-
----
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2024-10-19** at **16:04:22**
 

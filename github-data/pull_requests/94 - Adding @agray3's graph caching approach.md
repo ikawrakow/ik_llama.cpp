@@ -54,7 +54,7 @@ and this for the M2-Max
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2024-10-18** at **17:58:54**
 

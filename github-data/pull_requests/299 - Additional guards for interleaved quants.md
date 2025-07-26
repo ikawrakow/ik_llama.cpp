@@ -13,13 +13,13 @@
 
 #### Description
 
-Apparently not all use cases are covered when using interleaved quants, see #296.
+Apparently not all use cases are covered when using interleaved quants, see [#296](https://github.com/ikawrakow/ik_llama.cpp/issues/296).
 
 Hopefully this PR handles all scenarios where one may arrive at using an interleaved quantization type where this is not possible.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-03-31** at **12:05:48**
 

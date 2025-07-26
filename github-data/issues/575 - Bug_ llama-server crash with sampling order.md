@@ -12,7 +12,7 @@
 
 ### What happened?
 
-The OpenAi endpoint crashes when samplers order is specified with `--samplers "min_p;temperature"` or `--sampling-seq "mt"` after [Commit 3f111ad](https://github.com/ikawrakow/ik_llama.cpp/commit/3f111ad7bbb2d4f721332f9b2b344e48b3bbf9aa) ([add dry sampler #513 ](https://github.com/ikawrakow/ik_llama.cpp/pull/513)).
+The OpenAi endpoint crashes when samplers order is specified with `--samplers "min_p;temperature"` or `--sampling-seq "mt"` after [Commit 3f111ad](https://github.com/ikawrakow/ik_llama.cpp/commit/3f111ad7bbb2d4f721332f9b2b344e48b3bbf9aa) ([add dry sampler [#513](https://github.com/ikawrakow/ik_llama.cpp/issues/513) ](https://github.com/ikawrakow/ik_llama.cpp/pull/513)).
 
 Behavior observed with [aider](https://aider.chat/) but can be reproduced with curl:
 ```
@@ -114,7 +114,7 @@ VERB [            update_slots] prompt tokenized | tid="139998054885568" timesta
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-07-03** at **09:24:06**
 

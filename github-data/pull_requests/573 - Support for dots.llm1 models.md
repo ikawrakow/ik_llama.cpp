@@ -23,7 +23,7 @@ Huggingface link to models: [instruct](https://huggingface.co/rednote-hilab/dots
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **saood06** commented on **2025-07-03** at **03:44:01**
 
@@ -57,18 +57,6 @@ Thanks.
 >I notice an issue that if I leave system prompt empty, sometimes the response becomes unrelated to my question. With system prompt, it is fine. Do you also see this? I have the same issue when I run it from mainline.
 
 If it exists in mainline then maybe it is a problem with the model? I haven't seen it but I haven't tested the model further than my comment above.
-
----
-
-👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-07-03** at **06:18:24**
-
-I think you need to remove this line. We are not reshaping `V` as mainline because our attention implementation is different from theirs (and theirs was like ours until 2 or 3 months ago).
-
----
-
-👤 **ikawrakow** submitted a review: 🔄 `CHANGES_REQUESTED` on **2025-07-03** at **06:19:04**
-
-_No content provided._
 
 ---
 
@@ -147,18 +135,6 @@ Using `--override-kv tokenizer.ggml.bos_token_id=int:-1` like you linked above f
 
 ---
 
-👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-07-09** at **17:29:30**
-
-Commented it out (and the then redundant `cb`), and tested and it is working.
-
----
-
-👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-07-09** at **17:29:30**
-
-_No content provided._
-
----
-
 👤 **saood06** commented on **2025-07-09** at **17:45:47**
 
 > @saood06 What are your plans with this PR?
@@ -174,9 +150,3 @@ I still think the better solution would have been for the convert script to set 
 I also changed the warmup behavior to work with this model (a MoE without a BOS token), it is still the same hacky solution but now it does account for models without a BOS token, and it did warmup properly for me now (not sure why it wasn't with BOS set to [token id 11/`,`]).
 
 Edit: Also handled the merge conflicts.
-
----
-
-👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-07-10** at **06:31:53**
-
-_No content provided._

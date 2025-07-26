@@ -13,7 +13,7 @@
 
 #### Description
 
-This PR follows in the footsteps of #272 and adds the ability to specify one or more regular expressions to use for matching tensor names to be repacked. This is useful for hybrid GPU/CPU inference where one will want to repack only the tensors that stay on the CPU.
+This PR follows in the footsteps of [#272](https://github.com/ikawrakow/ik_llama.cpp/issues/272) and adds the ability to specify one or more regular expressions to use for matching tensor names to be repacked. This is useful for hybrid GPU/CPU inference where one will want to repack only the tensors that stay on the CPU.
 
 Usage
 ```

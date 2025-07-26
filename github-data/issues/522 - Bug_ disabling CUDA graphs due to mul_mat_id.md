@@ -460,7 +460,7 @@ ggml_backend_cuda_graph_compute: disabling CUDA graphs due to too many consecuti
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-06-12** at **05:03:54**
 

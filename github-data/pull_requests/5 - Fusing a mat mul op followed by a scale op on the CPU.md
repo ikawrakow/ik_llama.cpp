@@ -21,7 +21,7 @@ Given that Bitnet is just a niche thing for now, I'll just leave it on a draft P
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-02-08** at **14:27:07**
 

@@ -19,7 +19,7 @@ We get a nice speedup for PP, increasing with context length, but TG is not fast
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ikawrakow** commented on **2025-02-11** at **09:08:44**
 

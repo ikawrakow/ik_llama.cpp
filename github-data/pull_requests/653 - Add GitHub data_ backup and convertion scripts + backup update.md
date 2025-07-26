@@ -75,9 +75,9 @@ Files are in the '.' directory.
 ---
 
 ### Notes  
-- Content extraction for reviews isn’t fully implemented yet (see [example](https://github.com/ThomasBaruzier/ik_llama.cpp/blob/tb/github-data-scripts/github-data/pull_requests/620%20-%20Bump%20Windows%20max%20open%20files%20from%20512%20to%202048.md)). This could be added later if needed.
+- ~~Content extraction for reviews isn’t fully implemented yet (see [example](https://github.com/ThomasBaruzier/ik_llama.cpp/blob/tb/github-data-scripts/github-data/pull_requests/620%20-%20Bump%20Windows%20max%20open%20files%20from%20512%20to%202048.md)). This could be added later if needed.~~ Fixed, but note that the interactions within a review thread are flattened in the final output.
 - Wiki backups are not implemented.
-- Filename sanitization has been made a bit more lenient, max 100 char, and allowing a broader set of characters that should still be compatible with all OSes.
+- Filename sanitization has been made a bit more lenient, still max 80 char,  but allowing a broader set of characters that should still be compatible with all OSes.
 - Putting this PR as draft until I verify the above claim on a Windows machine.
 
 - [x] I’ve read the [contributing guidelines](https://github.com/ggerganov/llama.cpp/blob/master/CONTRIBUTING.md).  

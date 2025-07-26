@@ -19,7 +19,7 @@
 
 ### Feature Description
 
-PR #66 does it for Phi-3(.5)-mini, with a non-negligible performance gain on GPUs. Architectures that could potentially benefit from the same optimization are Falcon, DBRX, Starcoder, Bert, Bloom, MPT, Qwen, Phi-2, GPT-2, Codeshell, OpenLM, GPT-Neox, ChatGLM.
+PR [#66](https://github.com/ikawrakow/ik_llama.cpp/issues/66) does it for Phi-3(.5)-mini, with a non-negligible performance gain on GPUs. Architectures that could potentially benefit from the same optimization are Falcon, DBRX, Starcoder, Bert, Bloom, MPT, Qwen, Phi-2, GPT-2, Codeshell, OpenLM, GPT-Neox, ChatGLM.
 
 ### Motivation
 
@@ -27,4 +27,4 @@ Improve performance
 
 ### Possible Implementation
 
-See #66
+See [#66](https://github.com/ikawrakow/ik_llama.cpp/issues/66)

@@ -19,7 +19,7 @@ Add MMQ kernel for `Q6_0`.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2024-11-20** at **19:42:56**
 

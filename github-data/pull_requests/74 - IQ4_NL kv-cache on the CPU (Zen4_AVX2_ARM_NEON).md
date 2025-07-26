@@ -13,4 +13,4 @@
 
 #### Description
 
-This is a followup of PR #73 that enables usage of `IQ4_NL` for kv-cache on the CPU.
+This is a followup of PR [#73](https://github.com/ikawrakow/ik_llama.cpp/issues/73) that enables usage of `IQ4_NL` for kv-cache on the CPU.

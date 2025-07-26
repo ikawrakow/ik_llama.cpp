@@ -18,7 +18,7 @@ Also changed the automatic recipes to use `IQ2_KL` instead of `Q2_K`.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **Nexesenex** commented on **2025-07-17** at **16:18:26**
 

@@ -12,7 +12,7 @@
 
 ### What happened?
 
-After this PR: Refactor iqk_mul_mat.cpp (#435)
+After this PR: Refactor iqk_mul_mat.cpp ([#435](https://github.com/ikawrakow/ik_llama.cpp/issues/435))
 
 This commit results in a significant performance regression for me, established by git bisect.
 My TG drops by about 30% on DeepSeek. (12.5 t/s => 9.5 t/s)
@@ -22,7 +22,7 @@ commit https://github.com/ikawrakow/ik_llama.cpp/commit/b94cd3b632a78dfb46b18d52
 Author: Kawrakow [iwankawrakow@gmail.com](mailto:iwankawrakow@gmail.com)
 Date: Thu May 22 10:05:51 2025 +0300
 
-Refactor iqk_mul_mat.cpp (#435)
+Refactor iqk_mul_mat.cpp ([#435](https://github.com/ikawrakow/ik_llama.cpp/issues/435))
 
 
 
@@ -74,7 +74,7 @@ Linux
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
 👤 **ikawrakow** commented on **2025-05-23** at **12:49:28**
 

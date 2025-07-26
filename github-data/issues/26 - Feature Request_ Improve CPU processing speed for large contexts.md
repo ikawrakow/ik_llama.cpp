@@ -23,8 +23,8 @@ Recent open source / open weight models provide long context window, and hence i
 
 ### Motivation
 
-See #25 
+See [#25](https://github.com/ikawrakow/ik_llama.cpp/issues/25) 
 
 ### Possible Implementation
 
-See #25
+See [#25](https://github.com/ikawrakow/ik_llama.cpp/issues/25)

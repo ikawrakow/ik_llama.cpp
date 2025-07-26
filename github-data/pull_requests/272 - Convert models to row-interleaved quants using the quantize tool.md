@@ -13,7 +13,7 @@
 
 #### Description
 
-The main purpose of this PR is to remove the need for run-time-repacking (command line argument `-rtr`) by having a tool to convert models to row-interleaved quantization types. The main motivation for providing this tool is to allow using `mmap` when loading a model and still having row-interleaved quants, so that one can combine the claimed performance gains from using 1 GiB huge pages (see #267) with the performance gains due to row-interleaved quants.
+The main purpose of this PR is to remove the need for run-time-repacking (command line argument `-rtr`) by having a tool to convert models to row-interleaved quantization types. The main motivation for providing this tool is to allow using `mmap` when loading a model and still having row-interleaved quants, so that one can combine the claimed performance gains from using 1 GiB huge pages (see [#267](https://github.com/ikawrakow/ik_llama.cpp/issues/267)) with the performance gains due to row-interleaved quants.
 
 **Note:** this is only useful for **CPU-only** inference. The converted (repacked) model **will not work on a GPU** (or rather it will work but will be slow as all matrix multiplications with the repacked tensors will be done on the CPU).
 
@@ -27,11 +27,11 @@ Oh, `bf16` and `f16` models can be repacked too, one gets a `GGML_TYPE_BF16_R16`
 
 **Caveat:** Some of the quantization types had a relatively minor, platform-specific, optimization applied when run-time-repacking. But as there is no way to tell if the repacking was done online, or if we are dealing with an offline-repacked model, I had to remove this optimization. This affects `Q8_0_R8, Q8_K_R8, Q8_KV_R8` on Zen4 (127 was added to these quants during run-time-repacking to avoid doing this during inference), and `Q4_0_R8` on ARM (a mask of `0x88` was applied to the packed bits, which converts the otherwise unsigned `Q4_0` values to signed values multiplied with 16).  
 
-Closes #228
+Closes [#228](https://github.com/ikawrakow/ik_llama.cpp/issues/228)
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
 👤 **ubergarm** commented on **2025-03-20** at **14:32:33**
 
