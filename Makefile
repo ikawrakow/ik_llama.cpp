@@ -1087,6 +1087,7 @@ ggml/src/iqk/iqk_mul_mat.o: \
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif # GGML_NO_IQKMULMAT
 
+
 ifndef GGML_NO_LLAMAFILE
 ggml/src/llamafile/sgemm.o: \
 	ggml/src/llamafile/sgemm.cpp \
