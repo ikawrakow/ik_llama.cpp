@@ -1,4 +1,4 @@
-### 🐛 [#339](https://github.com/ikawrakow/ik_llama.cpp/issues/339) - Bug: bitnet2b_2501 template issues
+### [Issue #339](https://github.com/ikawrakow/ik_llama.cpp/issues/339) - Bug: bitnet2b_2501 template issues
 
 | **Author** | `saood06` |
 | :--- | :--- |
@@ -34,12 +34,6 @@ _No response_
 
 #### 💬 Conversation
 
-👤 **saood06** commented the **2025-04-22** at **07:51:57**:<br>
+👤 **saood06** commented on **2025-04-22** at **07:51:57**
 
 I think this can actually be closed, the llama_chat_apply_template_internal code looks correct, and I would just need to update the model's GGUF file. I don't use the CLI mode enough to know why it wasn't working there, but now I can get it to function properly in server when I use the correct template.
-
----
-
-👤 **saood06** commented the **2025-04-22** at **07:51:57**:<br>
-
-I think this can actually be closed, the llama_chat_apply_template_internal code looks correct, and I would just need to update the model's GGUF file. I don't use the CLI mode enough to know why it wasn't working there.

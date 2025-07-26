@@ -1,10 +1,11 @@
-### 🐛 [#105](https://github.com/ikawrakow/ik_llama.cpp/pull/105) - Fix quantized k-cache without FA
+### [Pull Request #105](https://github.com/ikawrakow/ik_llama.cpp/pull/105) - Fix quantized k-cache without FA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-24 |
 | **Updated** | 2024-10-24 |
+| **Merged** | 2024-10-24 |
 
 ---
 

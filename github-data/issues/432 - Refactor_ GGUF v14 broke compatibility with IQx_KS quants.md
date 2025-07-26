@@ -1,4 +1,4 @@
-### 📝 [#432](https://github.com/ikawrakow/ik_llama.cpp/issues/432) - Refactor: GGUF v14 broke compatibility with IQx_KS quants
+### [Issue #432](https://github.com/ikawrakow/ik_llama.cpp/issues/432) - Refactor: GGUF v14 broke compatibility with IQx_KS quants
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
@@ -44,7 +44,7 @@ Well, I tried to check that by myself when GGUF v14 was out, where was the intro
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-18** at **15:07:29**:<br>
+👤 **ikawrakow** commented on **2025-05-18** at **15:07:29**
 
 #45 in this repository or a PR somewhere else?
 
@@ -52,7 +52,7 @@ What is GGUF v14 anyway and why should we care about it here?
 
 ---
 
-👤 **Nexesenex** commented the **2025-05-18** at **15:21:31**:<br>
+👤 **Nexesenex** commented on **2025-05-18** at **15:21:31**
 
 Yes, PR 45 in the IK Llama repo.
 
@@ -75,30 +75,7 @@ I just wanted to point out what happened, because I spent a few hours trying to 
 
 ---
 
-👤 **Nexesenex** commented the **2025-05-18** at **15:21:31**:<br>
-
-Yes, PR 45 in the IK Llama repo.
-
-Since the 14th revision of the GGUF format went out on mainline, it seems that some screws got tightened.
-
-https://github.com/ggml-org/llama.cpp/pull/11030
-
-Maybe one of those 2 "restrictions" :
-```
-- Restricted the key general.alignment to uint32_t and powers of 2. On master this key can be set to other types (allowing users to write a file that then causes an error on read) and other values (which don't work correctly with GGML_PAD). There is now a macro GGUF_KEY_GENERAL_ALIGNMENT since this key has a special meaning.
-- If user code tries to call gguf_get_arr_data on a string array an error is raised. On master this returns a pointer of type gguf_str, a type defined in ggml.c. I would consider this a misuse of the API.
-```
-
-Before that PR, I could use all your quants (at the time, IQ_K, IQ_KS, and IQ_KT). After that, only the first gen of IQ_K quants (2,3,4,5,6) are functioning, the rest produce offset errors.
-
-You have absolutely no reason to help me on this, except to maintain some relative compatibility between the quants produced by IK_LLama and a fork of mainline implementing the IK quants.
-But I understand perfectly that you most likely will not want to waste your time trying to fix compatibility with some - potentially adverse - or at least factually incompatible mainline coding and refactoring which is unrelated to IK_LLama.
-
-I just wanted to point out what happened, because I spent a few hours trying to figure this out a few months ago before giving up, and deciding to follow the mainline move to avoid a growing merge-hell later on.
-
----
-
-👤 **ikawrakow** commented the **2025-05-18** at **15:44:53**:<br>
+👤 **ikawrakow** commented on **2025-05-18** at **15:44:53**
 
 @Nexesenex 
 
@@ -158,7 +135,7 @@ Let me know how it goes.
 
 ---
 
-👤 **JohannesGaessler** commented the **2025-05-18** at **16:28:45**:<br>
+👤 **JohannesGaessler** commented on **2025-05-18** at **16:28:45**
 
 On the mainline repository the implementation is
 
@@ -173,7 +150,7 @@ Doing this calculation manually can be seen as a defect but it only manifests as
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-18** at **16:38:18**:<br>
+👤 **ikawrakow** commented on **2025-05-18** at **16:38:18**
 
 > On the mainline repository the implementation is
 
@@ -183,13 +160,13 @@ Yes, this is the current implementation. But that implementation can change, and
 
 ---
 
-👤 **JohannesGaessler** commented the **2025-05-18** at **16:52:34**:<br>
+👤 **JohannesGaessler** commented on **2025-05-18** at **16:52:34**
 
 Yes, I agree that it's better to use `ggml_row_size`. If I write new code or touch existing code I will replace it as appropriate. It's a defect. But as there are no inputs that can provoke incorrect results on the mainline repository this defect is not manifesting as a bug and it is fairly low-priority. If this issue is of higher priority for someone else they will need to go through the code and fix the defect where applicable themself.
 
 ---
 
-👤 **Nexesenex** commented the **2025-05-18** at **17:43:13**:<br>
+👤 **Nexesenex** commented on **2025-05-18** at **17:43:13**
 
 @ikawrakow : it works. Tyvm!
 
@@ -203,12 +180,12 @@ Note : I speak on my own and sole behalf, but I needed to say this.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-19** at **14:11:02**:<br>
+👤 **ikawrakow** commented on **2025-05-19** at **14:11:02**
 
 @Nexesenex I think I can close this now.
 
 ---
 
-👤 **Nexesenex** commented the **2025-05-19** at **15:03:12**:<br>
+👤 **Nexesenex** commented on **2025-05-19** at **15:03:12**
 
 Yep. Thank again, @ikawrakow.

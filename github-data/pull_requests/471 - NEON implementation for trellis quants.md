@@ -1,10 +1,11 @@
-### 🔀 [#471](https://github.com/ikawrakow/ik_llama.cpp/pull/471) - NEON implementation for trellis quants
+### [Pull Request #471](https://github.com/ikawrakow/ik_llama.cpp/pull/471) - NEON implementation for trellis quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-29 |
 | **Updated** | 2025-05-29 |
+| **Merged** | 2025-05-29 |
 
 ---
 

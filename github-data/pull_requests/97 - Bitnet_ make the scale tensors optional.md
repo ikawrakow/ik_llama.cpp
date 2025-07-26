@@ -1,10 +1,11 @@
-### 🔀 [#97](https://github.com/ikawrakow/ik_llama.cpp/pull/97) - Bitnet: make the scale tensors optional
+### [Pull Request #97](https://github.com/ikawrakow/ik_llama.cpp/pull/97) - Bitnet: make the scale tensors optional
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-19 |
 | **Updated** | 2024-10-19 |
+| **Merged** | 2024-10-19 |
 
 ---
 

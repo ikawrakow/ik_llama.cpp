@@ -1,10 +1,11 @@
-### 🔀 [#36](https://github.com/ikawrakow/ik_llama.cpp/pull/36) - Zen4 Flash Attnetion 2
+### [Pull Request #36](https://github.com/ikawrakow/ik_llama.cpp/pull/36) - Zen4 Flash Attnetion 2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-03 |
 | **Updated** | 2024-09-04 |
+| **Merged** | 2024-09-04 |
 
 ---
 

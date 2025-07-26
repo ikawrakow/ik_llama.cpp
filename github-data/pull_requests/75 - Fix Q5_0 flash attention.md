@@ -1,10 +1,11 @@
-### 🐛 [#75](https://github.com/ikawrakow/ik_llama.cpp/pull/75) - Fix Q5_0 flash attention
+### [Pull Request #75](https://github.com/ikawrakow/ik_llama.cpp/pull/75) - Fix Q5_0 flash attention
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-01 |
 | **Updated** | 2024-10-01 |
+| **Merged** | 2024-10-01 |
 
 ---
 

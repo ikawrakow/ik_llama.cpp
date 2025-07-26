@@ -1,10 +1,11 @@
-### 🔀 [#483](https://github.com/ikawrakow/ik_llama.cpp/pull/483) -  convert_hf_to_gguf.py : conversion from hf weights to Q6_0
+### [Pull Request #483](https://github.com/ikawrakow/ik_llama.cpp/pull/483) -  convert_hf_to_gguf.py : conversion from hf weights to Q6_0
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-02 |
 | **Updated** | 2025-06-03 |
+| **Merged** | 2025-06-03 |
 
 ---
 
@@ -29,19 +30,25 @@ Inference is working as intended in my Croco.cpp.
 
 #### 💬 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-06-02** at **09:21:49**: 💬 `COMMENTED`
+👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-02** at **09:21:49**
+
+_No content provided._
 
 ---
 
-👤 **Nexesenex** submitted a review the **2025-06-02** at **11:33:17**: 💬 `COMMENTED`
-
----
-
-👤 **Nexesenex** commented during a code review the **2025-06-02** at **11:33:17** on `convert_hf_to_gguf.py`:<br>
+👤 **Nexesenex** commented during a code review on `convert_hf_to_gguf.py` on **2025-06-02** at **11:33:17**
 
 No, the q8_0 conversion ftype is not touched.
-This part of the code will just set the embeddings, output weight, attn_v, attn_k, or attn_qkv when it exists in q6_0 instead of q8_0 for the conversions in q5_0 and q5_1.
+This part of the code will just set the embeddings, output weight, attn_v, attn_k, or attn_qkv when it exists in ggml_type q6_0 instead of q8_0 for the conversions in ftypes q5_0 and q5_1.
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-06-03** at **06:30:23**: ✅ `APPROVED`
+👤 **Nexesenex** submitted a review: 💬 `COMMENTED` on **2025-06-02** at **11:33:17**
+
+_No content provided._
+
+---
+
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-03** at **06:30:23**
+
+_No content provided._

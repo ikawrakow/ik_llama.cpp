@@ -1,10 +1,11 @@
-### 🔀 [#186](https://github.com/ikawrakow/ik_llama.cpp/pull/186) - iq1_s_r4: slightly faster NEON gemm/gemv
+### [Pull Request #186](https://github.com/ikawrakow/ik_llama.cpp/pull/186) - iq1_s_r4: slightly faster NEON gemm/gemv
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-05 |
 | **Updated** | 2025-02-05 |
+| **Merged** | 2025-02-05 |
 
 ---
 

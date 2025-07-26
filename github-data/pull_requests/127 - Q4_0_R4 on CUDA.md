@@ -1,4 +1,4 @@
-### 🔀 [#127](https://github.com/ikawrakow/ik_llama.cpp/pull/127) - Q4_0_R4 on CUDA
+### [Pull Request #127](https://github.com/ikawrakow/ik_llama.cpp/pull/127) - Q4_0_R4 on CUDA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |

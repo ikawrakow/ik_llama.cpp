@@ -1,10 +1,11 @@
-### ✨ [#597](https://github.com/ikawrakow/ik_llama.cpp/issues/597) - Feature Request: Add THUDM/GLM-4-MoE-100B-A10B support
+### [Issue #597](https://github.com/ikawrakow/ik_llama.cpp/issues/597) - Feature Request: Add THUDM/GLM-4-MoE-100B-A10B support
 
 | **Author** | `ubergarm` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
 | **Created** | 2025-07-10 |
 | **Updated** | 2025-07-14 |
+| **Labels** | `enhancement` |
 
 ---
 
@@ -22,7 +23,7 @@ If it looks promising, I might try to add support for this nice sized MoE when i
 
 #### 💬 Conversation
 
-👤 **arch-btw** commented the **2025-07-14** at **23:51:59**:<br>
+👤 **arch-btw** commented on **2025-07-14** at **23:51:59**
 
 Yes, I look forward to this release myself!
 

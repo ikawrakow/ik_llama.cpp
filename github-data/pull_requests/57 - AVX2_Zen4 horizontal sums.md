@@ -1,4 +1,4 @@
-### 🔀 [#57](https://github.com/ikawrakow/ik_llama.cpp/pull/57) - AVX2/Zen4 horizontal sums 
+### [Pull Request #57](https://github.com/ikawrakow/ik_llama.cpp/pull/57) - AVX2/Zen4 horizontal sums 
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |

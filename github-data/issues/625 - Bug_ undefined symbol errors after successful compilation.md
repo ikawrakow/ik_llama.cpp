@@ -1,4 +1,4 @@
-### 🐛 [#625](https://github.com/ikawrakow/ik_llama.cpp/issues/625) - Bug: undefined symbol errors after successful compilation
+### [Issue #625](https://github.com/ikawrakow/ik_llama.cpp/issues/625) - Bug: undefined symbol errors after successful compilation
 
 | **Author** | `samteezy` |
 | :--- | :--- |
@@ -81,7 +81,7 @@ Ubuntu 24.04 running in Proxmox LXC
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-07-18** at **06:12:11**:<br>
+👤 **ikawrakow** commented on **2025-07-18** at **06:12:11**
 
 It looks like a confusion between `llama.cpp` and `ik_llama.cpp` libraries. I suspect `llama.cpp` is installed system-wide, so when the `ik_llama.cpp` server is started it picks up the `llama.cpp` DLLs. 
 
@@ -93,7 +93,7 @@ export LD_LIBRARY_PATH="/root/llama-builds/ik_llama.cpp/bin:$LD_LIBRARY_PATH"
 
 ---
 
-👤 **samteezy** commented the **2025-07-18** at **12:14:29**:<br>
+👤 **samteezy** commented on **2025-07-18** at **12:14:29**
 
 Yep, that was root cause. I've been restructuring my llama environment to use local, static builds of both `llama.cpp` and `ik_llama.cpp` this morning using `-DBUILD_SHARED_LIBS=OFF` and now they're both working great.
 Thanks for all your hard work!

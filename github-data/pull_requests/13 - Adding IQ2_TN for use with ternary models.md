@@ -1,10 +1,11 @@
-### 🔀 [#13](https://github.com/ikawrakow/ik_llama.cpp/pull/13) - Adding IQ2_TN for use with ternary models
+### [Pull Request #13](https://github.com/ikawrakow/ik_llama.cpp/pull/13) - Adding IQ2_TN for use with ternary models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-08-06 |
 | **Updated** | 2024-08-07 |
+| **Merged** | 2024-08-07 |
 
 ---
 
@@ -80,7 +81,7 @@ I have not bothered implementing the MMQ stuff, so CUDA PP performance is via de
 
 #### 💬 Conversation
 
-👤 **compilade** commented the **2024-08-06** at **17:00:57**:<br>
+👤 **compilade** commented on **2024-08-06** at **17:00:57**
 
 This is great!
 
@@ -97,3 +98,17 @@ But if I understand it correctly, both store the packed values in the same order
 Do you have plans for `IQ2_TN` to replace `TQ2_0`, or is this something done in parallel to see how fast it can get with better matrix multiplication than lots of dot products?
 
 Either way, I really appreciate your work on this. This was a pleasant surprise to see in my notifications.
+
+---
+
+👤 **ikawrakow** commented on **2024-08-06** at **18:17:39**
+
+> Does that mean the Metal and CUDA implementations for IQ2_TN would also work for TQ2_0?
+>
+>Do you have plans for IQ2_TN to replace TQ2_0, or is this something done in parallel to see how fast it can get with better matrix multiplication than lots of dot products?
+
+I'm not planning on contributing any of this to the official `llama.cpp` repository. Just hacking for fun.
+
+The Metal implementation should be just a copy/paste operation (and replace `IQ2_TN` with `TQ2_0`, etc.) to add to Metal in `llama.cpp`.
+
+For CUDA I did factor out the dot products of the new quants into a separate file to avoid having to have a coffee each time I touch something there and `mmq.cu / mmvq.cu` needs to be rebuilt. There are only that many coffees I can have in a day.  Hence, you will need to rearrange a bit. But other than that, yes, it should just work.

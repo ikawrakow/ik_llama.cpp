@@ -1,10 +1,11 @@
-### 🔀 [#324](https://github.com/ikawrakow/ik_llama.cpp/pull/324) - Correct L4 rms_norm
+### [Pull Request #324](https://github.com/ikawrakow/ik_llama.cpp/pull/324) - Correct L4 rms_norm
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-11 |
 | **Updated** | 2025-04-11 |
+| **Merged** | 2025-04-11 |
 
 ---
 

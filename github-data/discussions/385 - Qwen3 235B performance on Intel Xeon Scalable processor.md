@@ -1,4 +1,4 @@
-### 🗣️ [#385](https://github.com/ikawrakow/ik_llama.cpp/discussions/385) - Qwen3 235B performance on Intel Xeon Scalable processor
+### [Discussion #385](https://github.com/ikawrakow/ik_llama.cpp/discussions/385) - Qwen3 235B performance on Intel Xeon Scalable processor
 
 | **Author** | `Gaolingx` |
 | :--- | :--- |
@@ -160,7 +160,7 @@ I also use `Intel VTune Profiler 2025.0.1` capture some interesting data when ru
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2025-05-06** at **13:11:51**:<br>
+👤 **ikawrakow** commented on **2025-05-06** at **13:11:51**
 
 Thank you for these results. Quite amazing that it works reasonably well on an almost 8 years old CPU!
 
@@ -172,21 +172,13 @@ This shouldn't take very long, even for the 235B model.
 
 Another note: at least on the CPUs that I have available, one gets better performance using `q8_0` KV cache (add `-ctk q8_0 -ctv q8_0` to the command line). Not so much for short contexts, but quite noticeable for long contexts.
 
-> 👤 **saood06** replied the **2025-05-06** at **20:29:54**:<br>
-> > Another note: at least on the CPUs that I have available, one gets better performance using `q8_0` KV cache (add `-ctk q8_0 -ctv q8_0` to the command line). Not so much for short contexts, but quite noticeable for long contexts.
+> 👤 **Gaolingx** replied on **2025-05-07** at **07:16:13**
 > 
-> I have seen this https://www.reddit.com/r/LocalLLaMA/comments/1kewkno/qwen_30b_a3b_performance_degradation_with_kv/ where they report using `q8_0` KV cache causes the model to not able to solve a problem with a comment saying:
-> ```
-> KV cache q8_0: 0/5
-> KV cache f16: 2/2
-> ```
-> 
-> 👤 **Gaolingx** replied the **2025-05-07** at **07:16:13**:<br>
 > Ok, Thanks for the info. I found that the memory bandwidth was not filled when I use vtune profiler analysis the memory access, Maybe numa system works in Linux better, I will try to use `numactl` changes the memory policy ([https://github.com/ggml-org/llama.cpp/issues/1437](https://github.com/ggml-org/llama.cpp/issues/1437)), and repack the model with `q8_0_r8`. I will see if I can do better yet however.
 
 ---
 
-👤 **Gaolingx** replied the **2025-05-07** at **18:42:39**:<br>
+👤 **Gaolingx** commented on **2025-05-07** at **18:42:39**
 
 Note: when I run llama-server with `-fa` and `-rtr` parameter, the speed is a little faster than only use `-fa`, the prefill and decode are increased, That is a good beginning!
 
@@ -206,7 +198,7 @@ INFO [           print_timings]           total time =   35864.19 ms | tid="4682
 
 ---
 
-👤 **ikawrakow** replied the **2025-05-08** at **12:59:17**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **12:59:17**
 
 @saood06 
 
@@ -230,24 +222,9 @@ This grabbed my attention as I have never seen any significant difference betwee
 
 Hence, I think that the outcome is largely determined by the quality of the quantized model and by some luck. We know that in a random process (as we have here) slight differences in the computed token probabilities can make the model go on a very different path, even if the same seed was used.
 
-> 👤 **saood06** replied the **2025-05-08** at **22:40:13**:<br>
-> >So, being someone who does not take thinks for granted, I tried it myself.
-> 
-> Thank you. Do you mind saying what sampler settings you used?
-> 
-> > Hence, I think that the outcome is largely determined by the quality of the quantized model and by some luck. We know that in a random process (as we have here) slight differences in the computed token probabilities can make the model go on a very different path, even if the same seed was used.
-> 
-> The "luck" factor can be at least somewhat lessened based on how you sample (and why I like manually sampling and exploring many branches, and often injecting in tokens that would others never be sampled [since min_p would have removed it as it would be too low]). In my experience there are places where the "luck" of a single token selected by sane sampler settings does have an outsized impact on the internal world state, but often it doesn't with the model using different words or changing trivial things but otherwise staying on the same track. Either way for entire responses yes, there are often large variations between seeds and sampling parameters.
-> 
-> There are other ways that are being researched to try and improve outcomes such as using majority voting, incorporating scoring models or reward models and other highly compute intensive ways of trying to eek out more performance and consistency from models but for me manually sampling works well (and I also find it interesting and enjoyable trying to create a mental model of the AI's mental model).
-> 
-> >This grabbed my attention as I have never seen any significant difference between f16 and q8_0 KV cache (if anything, I would be more suspect towards f16 because it can overflow, and I think there have been reports about that).
-> 
-> For me, with Deepseek based models I tend to use f16 as I don't see the need to save the space and speed is very close between them, but with other models I do quantize the KV cache, so I was also really surprised by the thread I linked. One last thing I saw in there that I forgot to mention was him stating "I know but as a side test I tried also Roo Code that I could not get to use all the tools with KV cache Q8 and worked fine with F16." so I'm not sure why his experience shows such stark differences that I also have never really experienced.
-
 ---
 
-👤 **Gaolingx** replied the **2025-05-13** at **00:52:27**:<br>
+👤 **Gaolingx** commented on **2025-05-13** at **00:52:27**
 
 Note: qwen3moe uses 8 experts by default. I found that we can speed up token generation(2.7 token/s->3.2 token/s) by reducing some experts used (from Top-8 to Top-6), without a significant drop in quality.
 
@@ -260,12 +237,8 @@ INFO [           print_timings] generation eval time =   15317.10 ms /    50 run
 INFO [           print_timings]           total time =   25677.19 ms | tid="71476" timestamp=1747096864 id_slot=0 id_task=9696 t_prompt_processing=10360.092 t_token_generation=15317.103 t_total=25677.195
 ```
 
-> 👤 **saood06** replied the **2025-05-13** at **01:03:32**:<br>
-> > Note: qwen3moe uses 8 experts by default. I found that we can speed up token generation(2.7 token/s->3.2 token/s) by reducing some experts used (from Top-8 to Top-6), without a significant drop in quality.
+> 👤 **Gaolingx** replied on **2025-05-13** at **01:45:22**
 > 
-> There is this feature: https://github.com/ikawrakow/ik_llama.cpp/pull/239 I personally haven't had much success using it (for Deepseek V3/R1) , but it may work for you on Qwen.
-> 
-> 👤 **Gaolingx** replied the **2025-05-13** at **01:45:22**:<br>
 > > > Note: qwen3moe uses 8 experts by default. I found that we can speed up token generation(2.7 token/s->3.2 token/s) by reducing some experts used (from Top-8 to Top-6), without a significant drop in quality.
 > > 
 > > There is this feature: #239 I personally haven't had much success using it (for Deepseek V3/R1) , but it may work for you on Qwen.
@@ -277,11 +250,13 @@ INFO [           print_timings]           total time =   25677.19 ms | tid="7147
 > 
 > `--flash-attn --run-time-repack --smart-expert-reduction 7,1`
 > ![批注 2025-05-13 094242](https://github.com/user-attachments/assets/370fb493-a9c7-42c7-a380-90935df8f23e)
+
+> 👤 **ikawrakow** replied on **2025-05-13** at **12:35:23**
 > 
-> 👤 **ikawrakow** replied the **2025-05-13** at **12:35:23**:<br>
 > Can you both try PR #415 and let me know if it now works? Thanks!
+
+> 👤 **Gaolingx** replied on **2025-05-14** at **01:42:24**
 > 
-> 👤 **Gaolingx** replied the **2025-05-14** at **01:42:24**:<br>
 > > Can you both try PR #415 and let me know if it now works? Thanks!
 > 
 > yes, I pulled PR(#415 ), The smart expert reduction works very well on cpu backend, thank you fix it.
@@ -297,7 +272,7 @@ INFO [           print_timings]           total time =   25677.19 ms | tid="7147
 
 ---
 
-👤 **VinnyG9** replied the **2025-05-19** at **15:30:30**:<br>
+👤 **VinnyG9** commented on **2025-05-19** at **15:30:30**
 
 you forgot to set -nkvo?
 what snoop mode you're using for numa?
@@ -318,22 +293,13 @@ here's some numbers on the xeon v4 @Q2KL
 
 ---
 
-👤 **ikawrakow** replied the **2025-05-19** at **15:38:58**:<br>
+👤 **ikawrakow** commented on **2025-05-19** at **15:38:58**
 
 You cannot  compare `Q2_K` to `Q8_0` for TG, there is going to be a factor in the range of 3X difference. Her PP is for a short prompt, and we don't know if it was a single prompt of 165 tokens or 10 prompts with 16 tokens each.
 
-> 👤 **VinnyG9** replied the **2025-05-19** at **15:48:34**:<br>
-> > You cannot compare `Q2_K` to `Q8_0` for TG, there is going to be a factor in the range of 3X difference. Her PP is for a short prompt, and we don't know if it was a single prompt of 165 tokens or 10 prompts with 16 tokens each.
-> 
-> or 2.5x going by model size :)
-> i didn't mean to compare apples to apples just want to see more CPU benchmarks on the big MoEs, and point out OP is on a multi node system with HT On but limiting it to 25% of total threads(the MoEs will scale w/ all threads)
-> no --numa flag, no info on snoop mode which makes the biggest difference I've seen in my tests 
-> 
->  multi socket is way more complicated but can be worth it
-
 ---
 
-👤 **Gaolingx** replied the **2025-05-27** at **13:06:54**:<br>
+👤 **Gaolingx** commented on **2025-05-27** at **13:06:54**
 
 Well, I use `-ser 4,1` parameter to improve token generation(TG) performance, now we can get ~4.1 token/s TG(< 4k context size), and the 
 quality not declined too much. all right, I admit this is just my opinion. Others can offer their own opinions on this point...We don't know what will happen in complex tasks...

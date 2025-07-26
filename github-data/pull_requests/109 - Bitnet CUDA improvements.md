@@ -1,10 +1,11 @@
-### 🔀 [#109](https://github.com/ikawrakow/ik_llama.cpp/pull/109) - Bitnet CUDA improvements
+### [Pull Request #109](https://github.com/ikawrakow/ik_llama.cpp/pull/109) - Bitnet CUDA improvements
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-26 |
 | **Updated** | 2024-10-26 |
+| **Merged** | 2024-10-26 |
 
 ---
 

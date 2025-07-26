@@ -1,4 +1,4 @@
-### 🐛 [#538](https://github.com/ikawrakow/ik_llama.cpp/issues/538) - Bug: GGML_ASSERT failed at first prompt
+### [Issue #538](https://github.com/ikawrakow/ik_llama.cpp/issues/538) - Bug: GGML_ASSERT failed at first prompt
 
 | **Author** | `iehgit` |
 | :--- | :--- |
@@ -338,7 +338,7 @@ Aborted
 
 #### 💬 Conversation
 
-👤 **ubergarm** commented the **2025-06-19** at **01:26:22**:<br>
+👤 **ubergarm** commented on **2025-06-19** at **01:26:22**
 
 Hrmm... I'm getting something odd now too with my `DeepSeek-R1-0528-IQ4_KS_R4` as well as mostly pure models.
 
@@ -354,13 +354,13 @@ You might try `git checkout dc96820d` and re-build to see if that gets you for n
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-19** at **06:36:55**:<br>
+👤 **ikawrakow** commented on **2025-06-19** at **06:36:55**
 
 Is it fixed on the latest after #540?
 
 ---
 
-👤 **ubergarm** commented the **2025-06-19** at **15:35:21**:<br>
+👤 **ubergarm** commented on **2025-06-19** at **15:35:21**
 
 I recompiled to tip of main 3f111ad7 which includes PR540.
 
@@ -368,6 +368,6 @@ Confirmed it is working again for me and no longer throwing the `Oops(ggml_compu
 
 ---
 
-👤 **iehgit** commented the **2025-06-19** at **16:54:14**:<br>
+👤 **iehgit** commented on **2025-06-19** at **16:54:14**
 
 Fixed indeed. Thanks!

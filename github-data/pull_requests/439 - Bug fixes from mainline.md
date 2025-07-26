@@ -1,10 +1,11 @@
-### 🐛 [#439](https://github.com/ikawrakow/ik_llama.cpp/pull/439) - Bug fixes from mainline
+### [Pull Request #439](https://github.com/ikawrakow/ik_llama.cpp/pull/439) - Bug fixes from mainline
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-20 |
 | **Updated** | 2025-05-20 |
+| **Merged** | 2025-05-20 |
 
 ---
 

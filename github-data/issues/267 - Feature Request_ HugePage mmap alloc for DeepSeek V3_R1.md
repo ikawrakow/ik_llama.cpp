@@ -1,10 +1,11 @@
-### ✨ [#267](https://github.com/ikawrakow/ik_llama.cpp/issues/267) - Feature Request: HugePage mmap alloc for DeepSeek V3/R1
+### [Issue #267](https://github.com/ikawrakow/ik_llama.cpp/issues/267) - Feature Request: HugePage mmap alloc for DeepSeek V3/R1
 
 | **Author** | `orca-zhang` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-03-19 |
 | **Updated** | 2025-03-29 |
+| **Labels** | `enhancement` |
 
 ---
 
@@ -55,7 +56,7 @@ _No response_
 
 #### 💬 Conversation
 
-👤 **saood06** commented the **2025-03-19** at **03:00:59**:<br>
+👤 **saood06** commented on **2025-03-19** at **03:00:59**
 
 >Achieved about ~50% TG increasement when using Q2-K with `-mla=2 -fa -fmoe` in pure CPU.
 
@@ -67,15 +68,7 @@ Edit: The article itself is an interesting read (I used an online translator), a
 
 ---
 
-👤 **saood06** commented the **2025-03-19** at **03:00:59**:<br>
-
->Achieved about ~50% TG increasement when using Q2-K with `-mla=2 -fa -fmoe` in pure CPU.
-
-Can you tell me the system specs of the system this was with?
-
----
-
-👤 **orca-zhang** commented the **2025-03-19** at **03:40:30**:<br>
+👤 **orca-zhang** commented on **2025-03-19** at **03:40:30**
 
 > > Achieved about ~50% TG increasement when using Q2-K with `-mla=2 -fa -fmoe` in pure CPU.
 > 
@@ -97,7 +90,7 @@ The test may be biased. I will test it several times to verify the result. At pr
 
 ---
 
-👤 **saood06** commented the **2025-03-19** at **03:49:55**:<br>
+👤 **saood06** commented on **2025-03-19** at **03:49:55**
 
 > > Can you tell me the system specs of the system this was with?
 > 
@@ -118,7 +111,7 @@ Thanks, I'll try testing on my dual socket Xeon E5-2690 v3 machine on an IQ4_K_R
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-19** at **06:38:08**:<br>
+👤 **ikawrakow** commented on **2025-03-19** at **06:38:08**
 
 I was wondering about huge pages myself, so please submit a PR (along with precise instructions how to enable)
 
@@ -130,7 +123,7 @@ How does this play together with the `-rtr` option or with tensor overrides? On 
 
 ---
 
-👤 **orca-zhang** commented the **2025-03-19** at **14:10:33**:<br>
+👤 **orca-zhang** commented on **2025-03-19** at **14:10:33**
 
 Sorry for the late reply. I am busy with other work today. I will come back tomorrow to continue testing and do more verification and reporting. Thank you for answering my doubts. I did find that the performance was reduced after using 1GB huge pages and turning on `-ot` or `-rtr`.
 
@@ -142,19 +135,7 @@ I will submit a draft PR later. Thank you for your help.
 
 ---
 
-👤 **orca-zhang** commented the **2025-03-19** at **14:10:33**:<br>
-
-Sorry for the late reply. I am busy with other work today. I will come back tomorrow to continue testing and do more verification and reporting. Thank you for answering my doubts. I did find that the performance was reduced after using 1GB huge pages and turning on -ot or -rtr.
-
-The original modification was rough and only targeted the special scene of DeepSeek V3/R1 671B model. There was no consideration of adding options and adapting to more scenes. Fortunately, when applying for a smaller space, it will be downgraded to the original mmap allocation logic.
-
-https://github.com/orca-zhang/ik_llama.cpp/tree/feat/1g_hugepage_mmap
-
-I will submit a draft PR later. Thank you for your help.
-
----
-
-👤 **ubergarm** commented the **2025-03-20** at **04:06:38**:<br>
+👤 **ubergarm** commented on **2025-03-20** at **04:06:38**
 
 @orca-zhang interesting work, thanks for testing possible optimizations!
 
@@ -192,7 +173,7 @@ Thanks for sharing your findings!
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-20** at **16:20:14**:<br>
+👤 **ikawrakow** commented on **2025-03-20** at **16:20:14**
 
 > I've wondered this too. I felt like I saw some sped up at for at least the mmap enabled case simply using Transparent Huge Pages (THP) with normal 2MiB page size without need of any echo 4000 | sudo tee /proc/sys/vm/nr_hugepages manual huge pages enabled.
 
@@ -204,7 +185,7 @@ Fortunately there are only 2 or 3 places in the code where one needs to change i
 
 ---
 
-👤 **ubergarm** commented the **2025-03-20** at **17:05:09**:<br>
+👤 **ubergarm** commented on **2025-03-20** at **17:05:09**
 
 Hrmm. It is a bit confusing as transparent huge pages THP don't need to be pre-allocated like "normal" huge pages and kind of get handled in kernel without need for code changes if enabled  `[always]` or set to `[madvise]` and in code use `MADV_..`.
 
@@ -228,7 +209,7 @@ Just my 2 cents.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-20** at **17:14:58**:<br>
+👤 **ikawrakow** commented on **2025-03-20** at **17:14:58**
 
 >  It is a bit confusing as transparent huge pages THP don't need to be pre-allocated like "normal" huge pages and kind of get handled in kernel without need for code changes if enabled  [always] or set to [madvise] and in code use MADV_...
 
@@ -248,7 +229,7 @@ without the above command.
 
 ---
 
-👤 **ubergarm** commented the **2025-03-20** at **19:23:34**:<br>
+👤 **ubergarm** commented on **2025-03-20** at **19:23:34**
 
 Yes, that is true for regular huge pages. THP are a different mechanism but but similar result as manual huge pages. Honestly it still confuses me and I'm a bit beyond my current skill in discussing this haha...
 
@@ -352,48 +333,13 @@ The difference between Linux Kernel Transparent Huge Pages (THP) and regular hug
 
 ---
 
-👤 **ubergarm** commented the **2025-03-20** at **19:23:34**:<br>
-
-Yes, that is true for regular huge pages. THP are a different but similar beast. Honestly it still confuses me and I'm a bit beyond my current skill in discussing this haha...
-
-Feel free to ignore this all:
-
-## tl;dr;
-Since you manually configured huge pages and are manually using MAP_HUGETLB, and there is no clear performance boost, then probably it would be the same with THP.
-
-## Clear as Mud
-
-THP and "normal" HP are are similar but with different mechanism.
-
-> Huge pages can be difficult to manage manually, and often require significant changes to code in order to be used effectively. As such, Red Hat Enterprise Linux 6 also implemented the use of transparent huge pages (THP). THP is an abstraction layer that automates most aspects of creating, managing, and using huge pages. - https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/6/html/performance_tuning_guide/s-memory-transhuge#s-memory-transhuge
-
-I thought `MADV_HUGEPAGE` was for "transparent" THP and `MAP_HUGETLB` was for "normal" manually allocated huge pages?
-
-> MADV_HUGEPAGE (since Linux 2.6.38) Enables Transparent Huge Pages (THP) for pages in the range specified by addr and length. Currently, Transparent Huge Pages only work with private anonymous pages (see [mmap](https://linux.die.net/man/2/mmap)(2)).
-
-To make it more confusing, there are some kernel config options which are marked experimental still and disabled in vanilla ubuntu kernels:
-
-```
-# ARCH Linux Kernel
-sudo zcat /proc/config.gz | grep CONFIG_READ_ONLY_THP_FOR_FS
-CONFIG_READ_ONLY_THP_FOR_FS=y
-
-# Ubuntu LTS
-$ cat /boot/config-6.13.0-061300-generic | grep CONFIG_READ_ONLY_THP_FOR_FS
-# CONFIG_READ_ONLY_THP_FOR_FS is not set
-```
-
-Also the [kernel patch notes](https://lwn.net/Articles/795125/) for this feature suggest it is only for `brtfs` and `ext4`. And honestly I don't understand if it applies in this situation. haha...
-
----
-
-👤 **ikawrakow** commented the **2025-03-23** at **15:53:10**:<br>
+👤 **ikawrakow** commented on **2025-03-23** at **15:53:10**
 
 I think we can declare this one solved via #278
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **11:25:33**:<br>
+👤 **saood06** commented on **2025-03-25** at **11:25:33**
 
 @orca-zhang 
 
@@ -403,7 +349,7 @@ I watched numastat both during loading and during inference and the performance 
 
 ---
 
-👤 **orca-zhang** commented the **2025-03-29** at **09:27:20**:<br>
+👤 **orca-zhang** commented on **2025-03-29** at **09:27:20**
 
 @saood06 
 
@@ -419,7 +365,7 @@ we finally got tg=10.20 tokens/s based on the newly generated 11446-Q2-K model b
 
 ---
 
-👤 **saood06** commented the **2025-03-29** at **09:35:19**:<br>
+👤 **saood06** commented on **2025-03-29** at **09:35:19**
 
 > [@saood06](https://github.com/saood06)
 > 
@@ -433,38 +379,6 @@ Edit: I don't think the model is too big, it wouldn't fit on one numa node's loc
 > I've been getting some really exciting results in the latest [@ikawrakow](https://github.com/ikawrakow) updates
 
 That's good.
-
->, but I'm currently on sick leave so I haven't had time to figure out where the improvements are coming from.
-
-Hope you feel better soon.
-
-> 
-> In the hardware configuration of
-> 
->     * [Dual CPU] Intel Xeon 6454S
-> 
->     * DDR5 4800 MHz 96GB x4 + DDR5 5600MHz 64GB x4 (Total memory bandwith ~618GB/s)
-> 
-> 
-> we finally got tg=10.20 tokens/s based on the newly generated 11446-Q2-K model by the offline RTR tool
-
-Nice, I've also gotten massive improvements from recent releases see https://github.com/ikawrakow/ik_llama.cpp/issues/281
-
----
-
-👤 **saood06** commented the **2025-03-29** at **09:35:19**:<br>
-
-> [@saood06](https://github.com/saood06)
-> 
-> Will binding the process to run on one of the NUMA nodes help improve the problem?
-> 
-
-I'm not sure, I'll try that at some point, but I have some other things I want to test as well, so it might be a while till I get to it.
-
-
-> I've been getting some really exciting results in the latest [@ikawrakow](https://github.com/ikawrakow) updates
-
-That's good
 
 >, but I'm currently on sick leave so I haven't had time to figure out where the improvements are coming from.
 

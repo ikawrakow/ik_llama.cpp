@@ -1,10 +1,11 @@
-### 🔀 [#408](https://github.com/ikawrakow/ik_llama.cpp/pull/408) - Faster DeepSeek FA on CUDA
+### [Pull Request #408](https://github.com/ikawrakow/ik_llama.cpp/pull/408) - Faster DeepSeek FA on CUDA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-11 |
 | **Updated** | 2025-05-12 |
+| **Merged** | 2025-05-12 |
 
 ---
 
@@ -33,13 +34,13 @@ Finally, being curious about the peculiar TG behavior as a function of `N_KV`, I
 
 #### 💬 Conversation
 
-👤 **JohannesGaessler** commented the **2025-05-11** at **14:05:44**:<br>
+👤 **JohannesGaessler** commented on **2025-05-11** at **14:05:44**
 
 An RTX 4080 has 76 streaming multiprocessor, the CUDA code assigns KV slices to SMs in chunks of size 256. So every 76*256=19456 tokens the size of biggest workload across all of the SMs increases and there is a dip in performance. These so-called quantization effects are much more noticeable with compute than with I/O so they become more pronounced if the I/O of a kernel is optimized.
 
 ---
 
-👤 **Panchovix** commented the **2025-05-11** at **18:28:44**:<br>
+👤 **Panchovix** commented on **2025-05-11** at **18:28:44**
 
 Just tested on DeepSeek V3 0324 Q2_K_XL and it seems to have improved my t/s TG by about 1-2% (I guess with offloading there isn't much difference), but tested a smaller models (DeepSeek2 16B) on a single GPU (5090) and got about 8-12% speedup, so pretty nice!
 

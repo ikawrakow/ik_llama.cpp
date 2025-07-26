@@ -1,10 +1,11 @@
-### 🔀 [#184](https://github.com/ikawrakow/ik_llama.cpp/pull/184) - Deepseek-Lite
+### [Pull Request #184](https://github.com/ikawrakow/ik_llama.cpp/pull/184) - Deepseek-Lite
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-30 |
 | **Updated** | 2025-01-30 |
+| **Merged** | 2025-01-30 |
 
 ---
 

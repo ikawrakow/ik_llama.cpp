@@ -1,10 +1,11 @@
-### 🔀 [#310](https://github.com/ikawrakow/ik_llama.cpp/pull/310) - Metal: FA and FlashMLA
+### [Pull Request #310](https://github.com/ikawrakow/ik_llama.cpp/pull/310) - Metal: FA and FlashMLA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-03 |
 | **Updated** | 2025-04-03 |
+| **Merged** | 2025-04-03 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#84](https://github.com/ikawrakow/ik_llama.cpp/pull/84) - Better model info
+### [Pull Request #84](https://github.com/ikawrakow/ik_llama.cpp/pull/84) - Better model info
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-10 |
 | **Updated** | 2024-10-10 |
+| **Merged** | 2024-10-10 |
 
 ---
 

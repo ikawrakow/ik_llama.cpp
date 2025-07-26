@@ -1,10 +1,11 @@
-### 🔀 [#462](https://github.com/ikawrakow/ik_llama.cpp/pull/462) - CUDA GEMM and GEMV for IQ4_KS_R4 and IQ5_KS_R4
+### [Pull Request #462](https://github.com/ikawrakow/ik_llama.cpp/pull/462) - CUDA GEMM and GEMV for IQ4_KS_R4 and IQ5_KS_R4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-26 |
 | **Updated** | 2025-05-27 |
+| **Merged** | 2025-05-27 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#38](https://github.com/ikawrakow/ik_llama.cpp/pull/38) - Zen4 Flash Attention - bf16 support
+### [Pull Request #38](https://github.com/ikawrakow/ik_llama.cpp/pull/38) - Zen4 Flash Attention - bf16 support
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-04 |
 | **Updated** | 2024-09-05 |
+| **Merged** | 2024-09-05 |
 
 ---
 

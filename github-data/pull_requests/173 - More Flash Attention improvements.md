@@ -1,10 +1,11 @@
-### 🔀 [#173](https://github.com/ikawrakow/ik_llama.cpp/pull/173) - More Flash Attention improvements
+### [Pull Request #173](https://github.com/ikawrakow/ik_llama.cpp/pull/173) - More Flash Attention improvements
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-19 |
 | **Updated** | 2025-01-20 |
+| **Merged** | 2025-01-20 |
 
 ---
 
@@ -24,7 +25,7 @@ For reference, with a `Q8_K_R8`-quantized model we achieve 380 t/s for 512 token
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-01-20** at **06:57:27**:<br>
+👤 **ikawrakow** commented on **2025-01-20** at **06:57:27**
 
 Here is the performance relative to a GPU (RTX-4080) for the above graph
 

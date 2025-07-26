@@ -1,10 +1,11 @@
-### 🔀 [#139](https://github.com/ikawrakow/ik_llama.cpp/pull/139) - Faster R4 quants on Zen4
+### [Pull Request #139](https://github.com/ikawrakow/ik_llama.cpp/pull/139) - Faster R4 quants on Zen4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-13 |
 | **Updated** | 2024-12-13 |
+| **Merged** | 2024-12-13 |
 
 ---
 

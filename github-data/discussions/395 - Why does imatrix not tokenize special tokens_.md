@@ -1,4 +1,4 @@
-### 🗣️ [#395](https://github.com/ikawrakow/ik_llama.cpp/discussions/395) - Why does imatrix not tokenize special tokens?
+### [Discussion #395](https://github.com/ikawrakow/ik_llama.cpp/discussions/395) - Why does imatrix not tokenize special tokens?
 
 | **Author** | `bartowski1182` |
 | :--- | :--- |
@@ -17,7 +17,7 @@ Was it just an arbitrary decision or was there a reason at the time?
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2025-05-08** at **05:21:04**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **05:21:04**
 
 When the `imatrix` tool was written handling of chat, special tokens, etc., was extremely immature/non-existent in `llama.cpp` . If you look at the `llama_tokenize` function in `common` that is being used by the `imatrix` tool to tokenize the calibration data, you will see that the `parse_special` argument was added well after the `imatrix` tool was merged. It was added with a default value of `false`, so that defined the `imatrix` tool behavior with special tokens as this argument is missing in the `imatrix` call to `::lama_tokenize`. By the time `llama_tokenize` got the ability to parse special tokens I had left the `llama.cpp` project, so somebody else needed to notice, investigate, and possibly change.
 
@@ -27,30 +27,26 @@ In any case, it would be interesting to see if including special tokens, using n
 
 ---
 
-👤 **ikawrakow** replied the **2025-05-09** at **08:46:05**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **08:46:05**
 
 @bartowski1182 I see you submitted [this PR](https://github.com/ggml-org/llama.cpp/pull/13389) in mainline.
 
 You are welcome.
 
-> 👤 **bartowski1182** replied the **2025-05-09** at **12:33:00**:<br>
-> Ah did I not send that reply here first? Sorry, I had one typed up
+> 👤 **bartowski1182** replied on **2025-05-09** at **12:42:35**
 > 
-> That makes perfect sense though! Do you think you'd want the same thing here? Was planning to open one up in each assuming it made sense, it seems like a nice idea for A/B testing anyways, but figured I'd double check with the original architect that there wasn't something glaringly obvious I was missing
-> 
-> Thanks again for the input!
-> 
-> 👤 **bartowski1182** replied the **2025-05-09** at **12:42:35**:<br>
 > Truly did not mean to just grab knowledge and run, that's a terrible look, hence I meant to ask if I could contribute the same here so that it wouldn't just be a one-sided deal (not that it's a complex change from me, but just the principle of it, it's not in good taste to open a discussion, get your insight, and run to mainline without saying anything, that isn't my style but it's exactly what I did in this case)
+
+> 👤 **ikawrakow** replied on **2025-05-09** at **12:42:53**
 > 
-> 👤 **ikawrakow** replied the **2025-05-09** at **12:42:53**:<br>
 > > Do you think you'd want the same thing here?
 >  
 > Most people are using mainline `llama.cpp` to compute imatrix data, so it is not critical to have this here.
 > 
 > I'm waiting to see if the mainline developers will independently discover what's wrong with the imatrix calculation after their change to support MLA. After they have independently discovered it, or when enough time has passed, I'll make the change here, and at that point I can also put in the ability to use special tokens. Do you hear complains from users about reduced model quality after the MLA change?
+
+> 👤 **bartowski1182** replied on **2025-05-09** at **12:47:29**
 > 
-> 👤 **bartowski1182** replied the **2025-05-09** at **12:47:29**:<br>
 > > Do you hear complains from users about reduced model quality after the MLA change
 > 
 > No I didn't hear anything about that yet, but MLA has its own can of worms with speed so I had personally been avoiding remaking those models that have MLA since, hoping for a resolution...
@@ -60,20 +56,23 @@ You are welcome.
 > Without looking directly at your commit history I doubt anyone in mainline will figure it out, but who knows
 > 
 > I do know that I like your algorithm for some semi incomplete experts, seems reasonable to have some wiggle room there, especially if after 200k tokens of imatrix it's still not being activated quite enough
+
+> 👤 **ikawrakow** replied on **2025-05-09** at **12:48:22**
 > 
-> 👤 **ikawrakow** replied the **2025-05-09** at **12:48:22**:<br>
 > > Truly did not mean to just grab knowledge and run, that's a terrible look, hence I meant to ask if I could contribute the same here so that it wouldn't just be a one-sided deal (not that it's a complex change from me, but just the principle of it, it's not in good taste to open a discussion, get your insight, and run to mainline without saying anything, that isn't my style but it's exactly what I did in this case)
 > 
 > No worries. I know you are not free to mention my name in the mainline repository, else your PR will have the same fate as [that one](https://github.com/ggml-org/llama.cpp/pull/12727)
+
+> 👤 **bartowski1182** replied on **2025-05-09** at **12:55:14**
 > 
-> 👤 **bartowski1182** replied the **2025-05-09** at **12:55:14**:<br>
 > > else your PR will have the same fate as that one
 > 
 > I'd *like* to think that's not the reason, but rather the annoying complexity level of that function in general and excitement for a new feature (though the feature does miss out on an important part, counting discrete layers ahead of time and applying variable quantization automatically..)
 > 
 > But who knows, it's not my drama to unpack, so much as I wish we could all get along in a nice Kumbaya circle and contribute to the open world together, I know I'm naive ;)
+
+> 👤 **ikawrakow** replied on **2025-05-09** at **13:03:17**
 > 
-> 👤 **ikawrakow** replied the **2025-05-09** at **13:03:17**:<br>
 > It has never been the style of the `llama.cpp` project to wait for the perfect solution before merging a useful change.
 > 
 > Your PR is immensely helpful to anyone using mainline `llama.cpp` and making their own quantized MoE models.  

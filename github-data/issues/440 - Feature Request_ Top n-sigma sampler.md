@@ -1,10 +1,11 @@
-### ✨ [#440](https://github.com/ikawrakow/ik_llama.cpp/issues/440) - Feature Request: Top n-sigma sampler
+### [Issue #440](https://github.com/ikawrakow/ik_llama.cpp/issues/440) - Feature Request: Top n-sigma sampler
 
 | **Author** | `Ph0rk0z` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-05-20 |
 | **Updated** | 2025-06-03 |
+| **Labels** | `enhancement` |
 
 ---
 
@@ -37,12 +38,12 @@ _No response_
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-20** at **15:47:10**:<br>
+👤 **ikawrakow** commented on **2025-05-20** at **15:47:10**
 
 So, the quoted PR just integrates it into the standard `llama.cpp` sampling mechanism. The actual sampler is implemented in their PR 11233. I looked at 11233, and it is a pretty trivial thing, so very easy to implement. I had never actually looked at the sampling code, but a quick check shows that it is not a copy/paste. Also this has been completely reorganized in mainline (they just love pushing pieces of code from here to there). Here sampling is part of `common`, over there it is now part of `llama.cpp` itself. So, adding a new sampler involves me first getting familiar with how sampling is done in this fork.
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-06-03** at **13:58:36**:<br>
+👤 **Ph0rk0z** commented on **2025-06-03** at **13:58:36**
 
 https://github.com/ikawrakow/ik_llama.cpp/pull/489

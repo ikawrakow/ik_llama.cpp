@@ -1,10 +1,11 @@
-### 🔀 [#331](https://github.com/ikawrakow/ik_llama.cpp/pull/331) - Better gemm/gemv on AVX2 fr q4_0_r8
+### [Pull Request #331](https://github.com/ikawrakow/ik_llama.cpp/pull/331) - Better gemm/gemv on AVX2 fr q4_0_r8
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-15 |
 | **Updated** | 2025-04-15 |
+| **Merged** | 2025-04-15 |
 
 ---
 

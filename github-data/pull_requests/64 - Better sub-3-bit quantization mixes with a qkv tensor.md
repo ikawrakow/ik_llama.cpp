@@ -1,10 +1,11 @@
-### 🔀 [#64](https://github.com/ikawrakow/ik_llama.cpp/pull/64) - Better sub-3-bit quantization mixes with a qkv tensor
+### [Pull Request #64](https://github.com/ikawrakow/ik_llama.cpp/pull/64) - Better sub-3-bit quantization mixes with a qkv tensor
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-28 |
 | **Updated** | 2024-09-28 |
+| **Merged** | 2024-09-28 |
 
 ---
 

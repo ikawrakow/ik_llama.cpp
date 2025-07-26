@@ -1,10 +1,11 @@
-### 🔀 [#277](https://github.com/ikawrakow/ik_llama.cpp/pull/277) - Attempt to improve FlashMLA on the CPU
+### [Pull Request #277](https://github.com/ikawrakow/ik_llama.cpp/pull/277) - Attempt to improve FlashMLA on the CPU
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-22 |
 | **Updated** | 2025-03-23 |
+| **Merged** | 2025-03-23 |
 
 ---
 
@@ -18,13 +19,13 @@ There is a faster path for TG with FA and `mla=1,3`. But it only gets taken if s
 
 #### 💬 Conversation
 
-👤 **saood06** commented the **2025-03-22** at **10:59:25**:<br>
+👤 **saood06** commented on **2025-03-22** at **10:59:25**
 
-I'll test this with sweep-bench after the other 5 tests finish, as these tests take a long time and I'm stepping away from my desk right now.
+I'll test this with sweep-bench after the other 5 tests finish, as these tests take a long time and I won't be at my desk till tomorrow.
 
 ---
 
-👤 **saood06** commented the **2025-03-23** at **01:12:52**:<br>
+👤 **saood06** commented on **2025-03-23** at **01:12:52**
 
 @ikawrakow 
 
@@ -36,7 +37,7 @@ And also here's PP since it was generated anyway
 
 It seems a bit better (not counting the dips), but also far less dippy.
 
-Raw results for just the new one (the other two results can be found [here](https://github.com/ikawrakow/ik_llama.cpp/pull/273#issuecomment-2745899802):
+Raw results for just the new one (the other two results can be found [here](https://github.com/ikawrakow/ik_llama.cpp/pull/273#issuecomment-2745899802)):
 
 |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
 |-------|--------|--------|----------|----------|----------|----------|
@@ -75,7 +76,7 @@ Raw results for just the new one (the other two results can be found [here](http
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-23** at **06:28:14**:<br>
+👤 **ikawrakow** commented on **2025-03-23** at **06:28:14**
 
 Thank you for these results.
 

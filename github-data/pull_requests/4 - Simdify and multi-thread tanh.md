@@ -1,10 +1,11 @@
-### 🔀 [#4](https://github.com/ikawrakow/ik_llama.cpp/pull/4) - Simdify and multi-thread tanh
+### [Pull Request #4](https://github.com/ikawrakow/ik_llama.cpp/pull/4) - Simdify and multi-thread tanh
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-07-27 |
 | **Updated** | 2024-07-27 |
+| **Merged** | 2024-07-27 |
 
 ---
 

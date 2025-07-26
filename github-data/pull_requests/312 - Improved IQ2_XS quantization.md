@@ -1,10 +1,11 @@
-### 🔀 [#312](https://github.com/ikawrakow/ik_llama.cpp/pull/312) - Improved IQ2_XS quantization
+### [Pull Request #312](https://github.com/ikawrakow/ik_llama.cpp/pull/312) - Improved IQ2_XS quantization
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-05 |
 | **Updated** | 2025-04-07 |
+| **Merged** | 2025-04-07 |
 
 ---
 

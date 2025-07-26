@@ -1,10 +1,11 @@
-### 🔀 [#429](https://github.com/ikawrakow/ik_llama.cpp/pull/429) - Option to enable or disable the CPU FA kernels
+### [Pull Request #429](https://github.com/ikawrakow/ik_llama.cpp/pull/429) - Option to enable or disable the CPU FA kernels
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-17 |
 | **Updated** | 2025-05-17 |
+| **Merged** | 2025-05-17 |
 
 ---
 

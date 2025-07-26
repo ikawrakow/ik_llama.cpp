@@ -1,10 +1,11 @@
-### 🔀 [#154](https://github.com/ikawrakow/ik_llama.cpp/pull/154) - IQ2_XXS_R4
+### [Pull Request #154](https://github.com/ikawrakow/ik_llama.cpp/pull/154) - IQ2_XXS_R4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-20 |
 | **Updated** | 2024-12-20 |
+| **Merged** | 2024-12-20 |
 
 ---
 

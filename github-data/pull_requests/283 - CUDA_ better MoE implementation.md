@@ -1,10 +1,11 @@
-### 🔀 [#283](https://github.com/ikawrakow/ik_llama.cpp/pull/283) - CUDA: better MoE implementation
+### [Pull Request #283](https://github.com/ikawrakow/ik_llama.cpp/pull/283) - CUDA: better MoE implementation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-24 |
 | **Updated** | 2025-04-05 |
+| **Merged** | 2025-03-25 |
 
 ---
 
@@ -20,7 +21,7 @@ The culprit for non-reproducible results and sluggish performance was the `k_cop
 
 #### 💬 Conversation
 
-👤 **ubergarm** commented the **2025-03-24** at **16:48:31**:<br>
+👤 **ubergarm** commented on **2025-03-24** at **16:48:31**
 
 I pulled and built this branch and benchmarked speed vs main branch as well as llama-perplexity runs.
 
@@ -30,6 +31,7 @@ Also two back to back runs of `llama-perplexity` gave what looks like the same r
 
 Let me know if there is some other condition or way to test. Thanks!
 
+Details inside this fold 👇
 <details>
 
 <summary>Benchmark and Testing Logs</summary>
@@ -111,6 +113,8 @@ Final estimate: PPL = 3.6989 +/- 0.02106
 $ git rev-parse --short HEAD
 7f6980fa
 
+main: build = 3610 (7f6980fa)
+
 ## Run 1
 
 perplexity: tokenizing the input ..
@@ -146,13 +150,13 @@ llama_print_timings:       total time = 2838434.18 ms / 287233 tokens
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-24** at **17:21:53**:<br>
+👤 **ikawrakow** commented on **2025-03-24** at **17:21:53**
 
 Thanks for testing. You are running the MoE experts on the CPU, so you are not supposed to see a difference (and is good you confirm that you don't). At least part of the MoE experts need to run on the GPU to see a benefit (or at least a difference). I expect @davidsyoung with his 16 x 3090 configuration to see PP performance uplift.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-24** at **18:24:25**:<br>
+👤 **davidsyoung** commented on **2025-03-24** at **18:24:25**
 
 Awesome work!
 
@@ -162,7 +166,15 @@ Any particular `llama-bench` you'd like @ikawrakow?
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-24** at **18:36:17**:<br>
+👤 **ikawrakow** commented on **2025-03-24** at **18:29:30**
+
+> Any particular llama-bench you'd like @ikawrakow?
+
+I don't expect much of a difference for TG, so PP is the interesting benchmark to run. If you observe an effect, it shouldn't depend on any of the attention options (`mla`), so you can pick your favorite and run `llama-bench` for `-p 512,1024,2048,4096,8192 -ub 2048` with a model where you already have PP benchmarks for. Thanks!
+
+---
+
+👤 **davidsyoung** commented on **2025-03-24** at **18:36:17**
 
 Will run both PP and TG for completeness, running:
 
@@ -170,8 +182,8 @@ Will run both PP and TG for completeness, running:
 
 # Comparable data from #266:
 
-| model                          |       size |     params | backend    | ngl | n_ubatch | fa | mla |   amb | fmoe |          test |              t/s |
-| ------------------------------ | ---------: | ---------: | ---------- | --: | -------: | -: | --: | ----: | ---: | ------------: | ---------------: |
+| model                          |       size |     params | backend    | ngl | n_batch | n_ubatch | fa | mla |   amb | fmoe |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | ------: | -------: | -: | --: | ----: | ---: | ------------: | ---------------: |
 | deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |    2048 |     2048 |  1 |   2 |   128 |    1 |         pp512 |    238.52 ± 1.44 |
 | deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |    2048 |     2048 |  1 |   2 |   128 |    1 |        pp1024 |    304.77 ± 0.07 |
 | deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |    2048 |     2048 |  1 |   2 |   128 |    1 |        pp2048 |    348.11 ± 0.69 |
@@ -189,13 +201,21 @@ Will run both PP and TG for completeness, running:
 
 | model                          |       size |     params | backend    | ngl | n_ubatch | fa | mla |   amb | fmoe |          test |              t/s |
 | ------------------------------ | ---------: | ---------: | ---------- | --: | -------: | -: | --: | ----: | ---: | ------------: | ---------------: |
+| deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |     2048 |  1 |   2 |   128 |    1 |         pp512 |    235.44 ± 7.21 |
+| deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |     2048 |  1 |   2 |   128 |    1 |        pp1024 |    320.37 ± 3.14 |
+| deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |     2048 |  1 |   2 |   128 |    1 |        pp2048 |    375.89 ± 2.37 |
+| deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |     2048 |  1 |   2 |   128 |    1 |        pp4096 |    351.44 ± 0.69 |
+| deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |     2048 |  1 |   2 |   128 |    1 |        pp8192 |    305.28 ± 1.27 |
+| deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |     2048 |  1 |   2 |   128 |    1 |         tg128 |     16.84 ± 0.18 |
+| deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |     2048 |  1 |   2 |   128 |    1 |         tg256 |     17.52 ± 0.15 |
+| deepseek2 671B Q8_0            | 307.20 GiB |   672.05 B | CUDA       |  63 |     2048 |  1 |   2 |   128 |    1 |         tg512 |     17.72 ± 0.09 |
 
 
-_will edit as it completes_
+_I added `-r 10` so we would see less variance with the runs. The previous datapoints were fully warm with being part of a big overnight bench._
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-24** at **19:30:14**:<br>
+👤 **davidsyoung** commented on **2025-03-24** at **19:30:14**
 
 Awesome improvement! @ikawrakow 
 
@@ -203,13 +223,21 @@ Awesome improvement! @ikawrakow
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-25** at **06:47:06**:<br>
+👤 **ikawrakow** commented on **2025-03-25** at **06:47:06**
 
 This looks like a winner, merging.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-25** at **18:37:34**:<br>
+👤 **davidsyoung** commented on **2025-03-25** at **16:26:22**
+
+> This looks like a winner, merging.
+
+Awesome work. Thank you. You are starting to get near to VLLM performance on PP.
+
+---
+
+👤 **ikawrakow** commented on **2025-03-25** at **18:37:34**
 
 > Awesome work. Thank you. You are starting to get near to VLLM performance on PP.
 
@@ -217,7 +245,7 @@ How far am I from vLLM?
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **18:45:41**:<br>
+👤 **saood06** commented on **2025-03-25** at **18:45:41**
 
 > > This looks like a winner, merging.
 > 
@@ -227,7 +255,7 @@ And what about sglang which is supposedly even better for Deepseek? Also what ab
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-25** at **21:09:44**:<br>
+👤 **davidsyoung** commented on **2025-03-25** at **21:09:44**
 
 vLLM currently has an overflow issue (for myself personally), with Q3. So it’s not usable (this is with gguf).
 
@@ -241,7 +269,7 @@ But again, it’s broken at the moment.
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **21:17:08**:<br>
+👤 **saood06** commented on **2025-03-25** at **21:17:08**
 
 >Sglang has no gguf support.
 
@@ -249,7 +277,7 @@ As mentioned before, you might fit AWQ, and that quant has good support on sglan
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-25** at **23:52:05**:<br>
+👤 **davidsyoung** commented on **2025-03-25** at **23:52:05**
 
 > > Sglang has no gguf support.
 > 
@@ -259,7 +287,7 @@ Unfortunately not, I’m a bit short of VRAM. If AWQ had 3 bit or 3.5bit possibl
 
 ---
 
-👤 **saood06** commented the **2025-03-26** at **00:59:31**:<br>
+👤 **saood06** commented on **2025-03-26** at **00:59:31**
 
 > > > Sglang has no gguf support.
 > > 
@@ -272,7 +300,7 @@ That is really unfortunate, as 16x 24GB cards would have probably been the cheap
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-26** at **10:14:53**:<br>
+👤 **ikawrakow** commented on **2025-03-26** at **10:14:53**
 
 > As mentioned before, you might fit AWQ, and that quant has good support on sglang.
 
@@ -282,7 +310,7 @@ You seem to be recommending AWQ quants. On my book AWQ quants are pretty low qua
 
 ---
 
-👤 **saood06** commented the **2025-03-27** at **04:17:57**:<br>
+👤 **saood06** commented on **2025-03-27** at **04:17:57**
 
 > > As mentioned before, you might fit AWQ, and that quant has good support on sglang.
 > 
@@ -294,17 +322,13 @@ I'm not sure, I haven't looked deeply into AWQ in a while, I was just curious ab
 
 ---
 
-👤 **JohannesGaessler** submitted a review the **2025-04-05** at **10:04:54**: 💬 `COMMENTED`
+👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **10:04:54**
+
+_No content provided._
 
 ---
 
-👤 **JohannesGaessler** commented during a code review the **2025-04-05** at **10:04:54** on `ggml/src/ggml-cuda.cu`:<br>
-
-This synchronization is not safe to remove. `ids_host` and `rmapping` are deallocated when they go out of scope and the source pointers for `cudaMemcpyAsync` become dangling pointers. As the name implies, the memcpy is asynchronous and without an explicit synchronization there is no guarantee that the data is still valid once it's being copied to the device.
-
----
-
-👤 **JohannesGaessler** commented the **2025-04-05** at **10:14:21**:<br>
+👤 **JohannesGaessler** commented on **2025-04-05** at **10:14:21**
 
 >Awesome work. Thank you. You are starting to get near to VLLM performance on PP.
 
@@ -312,21 +336,19 @@ If you are using GGUF models in both cases you should be aware that vLLM at some
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-04-05** at **10:55:53**: 💬 `COMMENTED`
-
----
-
-👤 **ikawrakow** commented during a code review the **2025-04-05** at **10:55:53** on `ggml/src/ggml-cuda.cu`:<br>
+👤 **ikawrakow** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **10:55:53**
 
 Yes, they are deallocated when the function completes. Neither `ids_host` nor `ids` (or `ids_dev`) is used after that. The only reason this forgotten to remove synchronization is there is because I did have a  bug while developing this function. The bug resulted in out of bounds access, so before finding the actual bug one hypothesis I had was that I needed to synchronize because the copy had not finished when I started using the row ids.
 
 ---
 
-👤 **JohannesGaessler** submitted a review the **2025-04-05** at **11:11:58**: 💬 `COMMENTED`
+👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **10:55:53**
+
+_No content provided._
 
 ---
 
-👤 **JohannesGaessler** commented during a code review the **2025-04-05** at **11:11:58** on `ggml/src/ggml-cuda.cu`:<br>
+👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **11:11:58**
 
 The original code had synchronization directly after the memcpy so I had assumed that that is where this line comes from. But that is I think not relevant to the discussion.
 
@@ -334,7 +356,13 @@ When you call `cudaMemcpyAsync` you merely pass a pointer and queue a memcpy fro
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-05** at **11:17:43**:<br>
+👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **11:11:58**
+
+_No content provided._
+
+---
+
+👤 **ikawrakow** commented on **2025-04-05** at **11:17:43**
 
 > I have since improved this code but vLLM has to my knowledge not taken over these improvements.
 
@@ -342,11 +370,7 @@ Based on the performance comparisons on my GPU (RTX-4080) against mainline that 
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-04-05** at **11:48:50**: 💬 `COMMENTED`
-
----
-
-👤 **ikawrakow** commented during a code review the **2025-04-05** at **11:48:50** on `ggml/src/ggml-cuda.cu`:<br>
+👤 **ikawrakow** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **11:48:50**
 
 That would be true if nothing happened after this call. But the row ids are being used in subsequent calls in the same function, so the memcpy must have completed before the function exits. Let's take a look at your original `mul_mat_id` implementation. At the end we have [this call](https://github.com/ggml-org/llama.cpp/blob/7a84777f42a9b3ba47db5d20b7662f8ddf92f652/ggml/src/ggml-cuda/ggml-cuda.cu#L2093). This copies the data from the contiguous memory pool-allocated in the function to its final destination. Now, if this call has not completed by the time the function returns, than we would obviously have "sporadic segfaults and copying of garbage data". So, even without knowing anything about CUDA, one needs to assume that a call such as this completes synchronously, else the entire `llama.cpp` CUDA stack would be a collection of "sporadic segfaults and copying of garbage data". Well, there are calls such as that one in my function as well before it returns. These kernel calls, as well as the preceding processing, they all use the row ids that you are claiming may go out of scope. But in order for them to execute, the queued memcpy must have completed, so no, no "sporadic segfaults and copying of garbage data" at this point.
 
@@ -354,25 +378,29 @@ But at the end of the day, if you are able to trigger the bug, using whatever it
 
 ---
 
-👤 **JohannesGaessler** submitted a review the **2025-04-05** at **12:23:11**: 💬 `COMMENTED`
+👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **11:48:50**
+
+_No content provided._
 
 ---
 
-👤 **JohannesGaessler** commented during a code review the **2025-04-05** at **12:23:11** on `ggml/src/ggml-cuda.cu`:<br>
+👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **12:23:11**
 
 `k_copy_dst_from_contiguous` only uses device pointers. The point in time at which their data is valid is automatically synchronized with the execution of the kernel because CUDA streams guarantee an ordering in which device code is executed. `cudaMemcpyAsync` is fundamentally different because it uses a host pointer with memory that can become invalid under the control of host code.
 
 >Let's take a look at your original mul_mat_id implementation. At the end we have [this call](https://github.com/ggml-org/llama.cpp/blob/7a84777f42a9b3ba47db5d20b7662f8ddf92f652/ggml/src/ggml-cuda/ggml-cuda.cu#L2093). This copies the data from the contiguous memory pool-allocated in the function to its final destination.
 
-The way the CUDA memory pools work is that the memory is allocated in a single, large block that can grow dynamically. Assuming that you don't need to increase the size of the block an "allocation" `ggml_cuda_pool_alloc` does not actually allocate any new memory, it simply returns a pointer into the large block that is selected in such a way that there are no conflicts between the "allocated" memory regions while the "allocations" are in scope. The actual memory continues to be a valid allocation afterwards, though it will likely be overwritten by other kernels. This is very similar to how the ggml graph planner is giving each tensor a pointer to some data where at the time of the tensor being executed the data is guaranteed to be valid but the memory is re-used for other tensors as long as there are no conflicts.
+The way the CUDA memory pools work is that the memory is allocated in a single, large block that can grow dynamically. Assuming that you don't need to increase the size of the block an "allocation" via `ggml_cuda_pool_alloc` does not actually allocate any new memory, it simply returns a pointer into the large block that is selected in such a way that there are no conflicts between the "allocated" memory regions while the "allocations" are in scope. The actual memory continues to be a valid allocation afterwards, though it will likely be overwritten by other kernels. This is very similar to how the ggml graph planner is giving each tensor a pointer to some data where at the time of the tensor being executed the data is guaranteed to be valid but the memory is re-used for other tensors as long as there are no conflicts.
 
 ---
 
-👤 **JohannesGaessler** submitted a review the **2025-04-05** at **12:24:46**: 💬 `COMMENTED`
+👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **12:23:11**
+
+_No content provided._
 
 ---
 
-👤 **JohannesGaessler** commented during a code review the **2025-04-05** at **12:24:46** on `ggml/src/ggml-cuda.cu`:<br>
+👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **12:24:46**
 
 >This is very similar to how the ggml graph planner is giving each tensor a pointer to some data
 
@@ -380,20 +408,30 @@ Actually, `wdata` may be a better comparison.
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-04-05** at **12:33:00**: 💬 `COMMENTED`
+👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **12:24:46**
+
+_No content provided._
 
 ---
 
-👤 **ikawrakow** commented during a code review the **2025-04-05** at **12:33:00** on `ggml/src/ggml-cuda.cu`:<br>
+👤 **ikawrakow** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **12:33:00**
 
 See #313. The issue is not that it will go out of scope, but that I'm using the data on the host before the copy may have completed.
 
 ---
 
-👤 **JohannesGaessler** submitted a review the **2025-04-05** at **12:43:28**: 💬 `COMMENTED`
+👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **12:33:00**
+
+_No content provided._
 
 ---
 
-👤 **JohannesGaessler** commented during a code review the **2025-04-05** at **12:43:28** on `ggml/src/ggml-cuda.cu`:<br>
+👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **12:43:28**
 
 Sorry, I just noticed that I mixed up the copy directions for the two memcpys.
+
+---
+
+👤 **JohannesGaessler** submitted a review: 💬 `COMMENTED` on **2025-04-05** at **12:43:28**
+
+_No content provided._

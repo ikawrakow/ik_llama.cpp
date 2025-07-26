@@ -1,4 +1,4 @@
-### 📝 [#209](https://github.com/ikawrakow/ik_llama.cpp/issues/209) - Does the iqk_mul_mat.cpp support 1.58-bit quantization model?
+### [Issue #209](https://github.com/ikawrakow/ik_llama.cpp/issues/209) - Does the iqk_mul_mat.cpp support 1.58-bit quantization model?
 
 | **Author** | `godrosev` |
 | :--- | :--- |
@@ -16,7 +16,7 @@ And I have another question.I found the "iqk_mul_mat.inc"file of the "llamafile"
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-02-19** at **05:43:20**:<br>
+👤 **ikawrakow** commented on **2025-02-19** at **05:43:20**
 
 > Does the iqk_mul_mat.cpp support 1.58-bit quantization model?
 
@@ -28,7 +28,7 @@ It cannot? Looking at the current `iqk_mul_mat.inc` I see `IQ2_XXS, IQ2_XS, IQ2_
 
 ---
 
-👤 **godrosev** commented the **2025-02-19** at **06:30:38**:<br>
+👤 **godrosev** commented on **2025-02-19** at **06:30:38**
 
 Thank you very much for your answer.
 Sorry, my previous questions may have been very unclear.
@@ -39,18 +39,7 @@ I would like to ask you for advice
 
 ---
 
-👤 **godrosev** commented the **2025-02-19** at **06:30:38**:<br>
-
-Thank you very much for your answer.
-Sorry, my previous questions may have been very unclear.
-In question one, I mean 1.58b quantization model of Unsloth's Deepseek-r1.
-Question 2,I'm also referring to IQ1_S and IQ1_M these.
-Eventually, all I want to do is run Unsloth's Deepseek-r1 1.58b quantization model with llamafile. I haven't been able to do that yet, so I'd like to use the method of https://github.com/ikawrakow/ik_llama.cpp/iqk_mul_mat.cpp  and move it to llamafile, I don't know if that's possible.
-I would like to ask you for advice
-
----
-
-👤 **ikawrakow** commented the **2025-02-19** at **07:11:12**:<br>
+👤 **ikawrakow** commented on **2025-02-19** at **07:11:12**
 
 You can run Unsloth's `IQ1_S` with this repository,  but it will be slow as I haven't added `IQ1_S` gemm/gemv kernels to `iqk_mul_mat.cpp`, so matrix multiplications will be done via the kernels in `ggml`. If you quantize the model to `IQ1_S_R4`, it will be slightly better (as measured by perplexity) than Unsloth's, it will be a few GB smaller, and will run faster. Nearly 4X faster for prompt processing (a.k.a. prefill), and I estimate about 20% faster for token generation. To quantize the model, you need to find an imatrix file for DeepSeek-R1 on the Internet, and then simply
 ```
@@ -64,31 +53,31 @@ Updating `iqk_mul_mat.cpp` in llamafile: no, I don't have plans to do that at th
 
 ---
 
-👤 **godrosev** commented the **2025-02-19** at **07:42:26**:<br>
+👤 **godrosev** commented on **2025-02-19** at **07:42:26**
 
 Thank！！And I'll try the new method you advocate.
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-19** at **07:43:53**:<br>
+👤 **ikawrakow** commented on **2025-02-19** at **07:43:53**
 
 Btw, what is the system you intend to run this on?
 
 ---
 
-👤 **godrosev** commented the **2025-02-19** at **08:15:36**:<br>
+👤 **godrosev** commented on **2025-02-19** at **08:15:36**
 
 Linux(debian) and windows
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-19** at **08:17:56**:<br>
+👤 **ikawrakow** commented on **2025-02-19** at **08:17:56**
 
 I never use/test on Windows, so this may or may not work. But what I meant is the system specs (CPU, amount of RAM).
 
 ---
 
-👤 **godrosev** commented the **2025-02-19** at **08:53:28**:<br>
+👤 **godrosev** commented on **2025-02-19** at **08:53:28**
 
 Oh,I just misunderstood.
 I have two device
@@ -102,26 +91,13 @@ How should I do it best? Can you give me some advice? Thank you very much
 
 ---
 
-👤 **godrosev** commented the **2025-02-19** at **08:53:28**:<br>
-
-Oh,I just misunderstood.
-I have two device
-One is a server:
-Intel Xeon 6348 * 2 ，DDR4 3200 512GB，RTX3090*2
-the other is a PC:
-AMD AI MAX+395, LPDDR5 8000Mhz 128G;iGPU 40cu 8060s
-Now i want to intend the 1.58b Deepseek 671B model on the ai max 395.
-I use the ktransformers.But they dont support the IQ1_S model(Because they use the llamafile).So I'd like to modify this part of the code myself.
-
----
-
-👤 **ikawrakow** commented the **2025-02-19** at **13:25:15**:<br>
+👤 **ikawrakow** commented on **2025-02-19** at **13:25:15**
 
 What is the advantage of using KTransformers? Are you more familiar with Python?
 
 ---
 
-👤 **saood06** commented the **2025-02-19** at **14:10:18**:<br>
+👤 **saood06** commented on **2025-02-19** at **14:10:18**
 
 > What is the advantage of using KTransformers? Are you more familiar with Python?
 
@@ -129,15 +105,7 @@ KTransformers offers the best performance for running Deepseek mostly on CPU (bu
 
 ---
 
-👤 **saood06** commented the **2025-02-19** at **14:10:18**:<br>
-
-> What is the advantage of using KTransformers? Are you more familiar with Python?
-
-KTransformers offers the best performance (but they only support certain hardware configs and limited amount of KV). There is a comparison between ik_llama.cpp, llama.cpp and ktransformers running Deepseek here: https://www.reddit.com/r/LocalLLaMA/comments/1iq6ngx/ktransformers_21_and_llamacpp_comparison_with/ .They ran ik_llama in a lot of configs (default attention ,mla, mla+cuda, fa, fa+q8kv).
-
----
-
-👤 **ikawrakow** commented the **2025-02-19** at **14:22:59**:<br>
+👤 **ikawrakow** commented on **2025-02-19** at **14:22:59**
 
 @saood06 
 
@@ -145,7 +113,7 @@ The comparison in the linked Reddit thread does not use run-time-repacking in `i
 
 ---
 
-👤 **saood06** commented the **2025-02-19** at **14:32:22**:<br>
+👤 **saood06** commented on **2025-02-19** at **14:32:22**
 
 @ikawrakow 
 
@@ -159,7 +127,7 @@ Edit: I had mentioned using a IQ4_K_R4 to them but they ended up testing ik_llam
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-19** at **15:04:10**:<br>
+👤 **ikawrakow** commented on **2025-02-19** at **15:04:10**
 
 So, the `V` cache is transposed without FA, so when you store a single token, it will go and touch the entire giant 64k context memory allocation. This out to have some impact on what stuff goes into what memory bank, thus affecting TG performance.  I must admit I don't quite understand why the resident memory is still so high when using FA (in that case tokens are stored consecutively, so I expect to see only the memory actually used reported). Clearly, something is not quite right there.
 
@@ -175,7 +143,7 @@ I also don't get their low TG performance with FA. With a context of 500 tokens 
 
 ---
 
-👤 **godrosev** commented the **2025-02-20** at **03:34:55**:<br>
+👤 **godrosev** commented on **2025-02-20** at **03:34:55**
 
 > What is the advantage of using KTransformers? Are you more familiar with Python?
 
@@ -188,7 +156,7 @@ I think this should be pretty easy for you compared to other performance acceler
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-20** at **10:43:34**:<br>
+👤 **ikawrakow** commented on **2025-02-20** at **10:43:34**
 
 @godrosev 
 
@@ -196,13 +164,13 @@ I think this should be pretty easy for you compared to other performance acceler
 
 ---
 
-👤 **godrosev** commented the **2025-02-20** at **13:17:54**:<br>
+👤 **godrosev** commented on **2025-02-20** at **13:17:54**
 
 Thank you very much indeed!
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-21** at **07:56:02**:<br>
+👤 **ikawrakow** commented on **2025-02-21** at **07:56:02**
 
 > KTransformers offers the best performance for running Deepseek mostly on CPU (but they only support certain hardware configs and limited amount of KV)
 
@@ -210,7 +178,7 @@ So, they keep the attention tensors on the GPU and do the MoE part on the CPU. i
 
 ---
 
-👤 **saood06** commented the **2025-02-21** at **23:48:25**:<br>
+👤 **saood06** commented on **2025-02-21** at **23:48:25**
 
 >is that it?
 
@@ -227,20 +195,7 @@ Technically they do have some more features (and I'm not sure how much is in the
 
 ---
 
-👤 **saood06** commented the **2025-02-21** at **23:48:25**:<br>
-
->is that it?
-Basically yes.
->Or is there more to it? I didn't see anything in the code that would make it run faster without a GPU. Or am I missing something?
-Technically they do have some more features (and I'm not sure how much is in their source code as last I checked they did a binary only release initially of their latest version), but they aren't very relevant. They do better NUMA by duplicating the model on each node, avoiding any inter-socket model access but at the cost of double the memory footprint, and they also have AMX instruction support which is only relevant to a handful of CPUs.
-
-There are people (me included) who have tried to use llama.cpp (via an unmerged PR) to effectively do the same thing with llama.cpp and place only the attention tensors on the GPU and leave the experts on the CPU with varying degrees of success ( other people reported better performance but I ran into performance degradation and that might be because my GPU was only able to be accessed via RPC and was not local). There was even someone who reported a lot of success with Mixtral 8x22 (+66% better TG and -26% PP vs normal offloading) and that seems even more promising as llama.cpp has a better CUDA implementation for that than Deepseek where offloading crashes PP performance.
-
-I looked into porting that PR over to ik_llama.cpp but it looks like it would have to be basically rewritten and I haven't really put in any more time since then.
-
----
-
-👤 **godrosev** commented the **2025-02-22** at **01:48:08**:<br>
+👤 **godrosev** commented on **2025-02-22** at **01:48:08**
 
 > > KTransformers offers the best performance for running Deepseek mostly on CPU (but they only support certain hardware configs and limited amount of KV)
 > 
@@ -253,6 +208,6 @@ Therefore, I think the work that you do is the most important and crucial
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-21** at **12:38:49**:<br>
+👤 **ikawrakow** commented on **2025-03-21** at **12:38:49**
 
 I think we can close this one.

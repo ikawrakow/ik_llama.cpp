@@ -1,10 +1,11 @@
-### 🔀 [#630](https://github.com/ikawrakow/ik_llama.cpp/pull/630) - GEMM for IQ1_M
+### [Pull Request #630](https://github.com/ikawrakow/ik_llama.cpp/pull/630) - GEMM for IQ1_M
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-07-18 |
 | **Updated** | 2025-07-18 |
+| **Merged** | 2025-07-18 |
 
 ---
 

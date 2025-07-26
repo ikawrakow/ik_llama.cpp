@@ -1,10 +1,11 @@
-### 🐛 [#542](https://github.com/ikawrakow/ik_llama.cpp/pull/542) - Fix NEON build
+### [Pull Request #542](https://github.com/ikawrakow/ik_llama.cpp/pull/542) - Fix NEON build
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-19 |
 | **Updated** | 2025-06-19 |
+| **Merged** | 2025-06-19 |
 
 ---
 

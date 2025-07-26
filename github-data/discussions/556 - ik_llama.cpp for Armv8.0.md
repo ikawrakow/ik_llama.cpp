@@ -1,9 +1,9 @@
-### 🗣️ [#556](https://github.com/ikawrakow/ik_llama.cpp/discussions/556) - ik_llama.cpp for Armv8.0
+### [Discussion #556](https://github.com/ikawrakow/ik_llama.cpp/discussions/556) - ik_llama.cpp for Armv8.0
 
 | **Author** | `NotAHero04` |
 | :--- | :--- |
 | **Created** | 2025-06-25 |
-| **Updated** | 2025-06-26 |
+| **Updated** | 2025-07-22 |
 
 ---
 
@@ -26,7 +26,7 @@ If anyone is interested, I'll publish a fork. It just adds emulation for some NE
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2025-06-25** at **07:52:27**:<br>
+👤 **ikawrakow** commented on **2025-06-25** at **07:52:27**
 
 Nice 😄 
 
@@ -34,24 +34,20 @@ The repacked variants don't work because the emulation for `vdotq_laneq_s32` is 
 
 ---
 
-👤 **NotAHero04** replied the **2025-06-25** at **14:37:21**:<br>
+👤 **NotAHero04** commented on **2025-06-25** at **14:37:21**
 
 I did a fresh recompile and repacking works now! Unfortunately IQ4_KT still doesn't work :(
 ![Screenshot_2025_0625_213454](https://github.com/user-attachments/assets/ecdfd5e3-c7c0-41ce-affa-c35f59d68dfa)
 
 ---
 
-👤 **ikawrakow** replied the **2025-06-25** at **15:30:22**:<br>
+👤 **ikawrakow** commented on **2025-06-25** at **15:30:22**
 
 The `*_KT` quants are very slow on my M2-Max CPU, so it may not be worth putting the effort to make them work on a v8.0 phone.
 
-> 👤 **NotAHero04** replied the **2025-06-26** at **09:18:15**:<br>
-> So the KT quants do work after all, I just have to get the model from my PC. And yes, it is unbearably slow. (Q4_0 is 3x faster in TG)
-> ![Screenshot_20250626_155507](https://github.com/user-attachments/assets/e0a54dc0-4285-470a-b333-5aba063566b0)
-
 ---
 
-👤 **ikawrakow** replied the **2025-06-26** at **16:57:03**:<br>
+👤 **ikawrakow** commented on **2025-06-26** at **16:57:03**
 
 Yes, the `*_kt` quants performance is very competitive on a GPU, nearly competitive on the two `x86_64` CPU's that I have available, 2X slower than corresponding size quant on the M2-Max CPU, and ridiculously slow on the M2-Max GPU.
 

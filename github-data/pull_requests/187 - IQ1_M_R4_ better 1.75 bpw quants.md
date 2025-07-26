@@ -1,10 +1,11 @@
-### 🔀 [#187](https://github.com/ikawrakow/ik_llama.cpp/pull/187) - IQ1_M_R4: better 1.75 bpw quants
+### [Pull Request #187](https://github.com/ikawrakow/ik_llama.cpp/pull/187) - IQ1_M_R4: better 1.75 bpw quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-06 |
 | **Updated** | 2025-02-06 |
+| **Merged** | 2025-02-06 |
 
 ---
 

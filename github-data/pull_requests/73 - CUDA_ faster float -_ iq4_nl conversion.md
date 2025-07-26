@@ -1,10 +1,11 @@
-### 🔀 [#73](https://github.com/ikawrakow/ik_llama.cpp/pull/73) - CUDA: faster float -> iq4_nl conversion
+### [Pull Request #73](https://github.com/ikawrakow/ik_llama.cpp/pull/73) - CUDA: faster float -> iq4_nl conversion
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-01 |
 | **Updated** | 2024-10-01 |
+| **Merged** | 2024-10-01 |
 
 ---
 

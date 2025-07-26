@@ -1,9 +1,9 @@
-### 🗣️ [#619](https://github.com/ikawrakow/ik_llama.cpp/discussions/619) - gpu p2p utilization
+### [Discussion #619](https://github.com/ikawrakow/ik_llama.cpp/discussions/619) - gpu p2p utilization
 
 | **Author** | `magikRUKKOLA` |
 | :--- | :--- |
 | **Created** | 2025-07-16 |
-| **Updated** | 2025-07-17 |
+| **Updated** | 2025-07-24 |
 
 ---
 
@@ -53,3 +53,11 @@ Uh oh?
 4426             dpct::dev_mgr::instance().get_device(dst_ctx->device).queues_wait_and_throw()));
 4427 #endif
 ```
+
+---
+
+#### 🗣️ Discussion
+
+👤 **Ph0rk0z** commented on **2025-07-24** at **11:44:19**
+
+Increase your peer max batch size when compiling and for sure it uses it. You're looking at the intel code.

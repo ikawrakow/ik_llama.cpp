@@ -1,10 +1,11 @@
-### 🔀 [#493](https://github.com/ikawrakow/ik_llama.cpp/pull/493) - MMQ implementation for IQ4_KS_R4 and IQ5_KS_R4
+### [Pull Request #493](https://github.com/ikawrakow/ik_llama.cpp/pull/493) - MMQ implementation for IQ4_KS_R4 and IQ5_KS_R4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-05 |
 | **Updated** | 2025-06-05 |
+| **Merged** | 2025-06-05 |
 
 ---
 

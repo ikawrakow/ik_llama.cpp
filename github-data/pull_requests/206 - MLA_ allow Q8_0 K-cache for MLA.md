@@ -1,10 +1,11 @@
-### 🔀 [#206](https://github.com/ikawrakow/ik_llama.cpp/pull/206) - MLA: allow Q8_0 K-cache for MLA
+### [Pull Request #206](https://github.com/ikawrakow/ik_llama.cpp/pull/206) - MLA: allow Q8_0 K-cache for MLA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-13 |
 | **Updated** | 2025-02-13 |
+| **Merged** | 2025-02-13 |
 
 ---
 

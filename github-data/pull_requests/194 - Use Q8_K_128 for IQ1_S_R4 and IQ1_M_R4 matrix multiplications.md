@@ -1,10 +1,11 @@
-### 🔀 [#194](https://github.com/ikawrakow/ik_llama.cpp/pull/194) - Use Q8_K_128 for IQ1_S_R4 and IQ1_M_R4 matrix multiplications
+### [Pull Request #194](https://github.com/ikawrakow/ik_llama.cpp/pull/194) - Use Q8_K_128 for IQ1_S_R4 and IQ1_M_R4 matrix multiplications
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-08 |
 | **Updated** | 2025-02-09 |
+| **Merged** | 2025-02-09 |
 
 ---
 
@@ -27,7 +28,7 @@ Would appreciate if this gets tested with DeepSeek-R1.
 
 #### 💬 Conversation
 
-👤 **saood06** commented the **2025-02-08** at **21:39:38**:<br>
+👤 **saood06** commented on **2025-02-08** at **21:39:38**
 
 @ikawrakow 
 >Would appreciate if this gets tested with DeepSeek-R1.
@@ -40,6 +41,6 @@ No more `NaN`'s, nice! It's impressive how quickly you found the race condition 
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-09** at **06:02:29**:<br>
+👤 **ikawrakow** commented on **2025-02-09** at **06:02:29**
 
 Thank you for this! The decisive hint to solve it was the discussion about DeepSeek-R1 being dumb with `fp16` attention tensors that you alerted me to.

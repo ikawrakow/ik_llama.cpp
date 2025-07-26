@@ -1,4 +1,4 @@
-### 🐛 [#300](https://github.com/ikawrakow/ik_llama.cpp/issues/300) - Bug: IQK_FA_ALL_QUANTS causes failure to compile
+### [Issue #300](https://github.com/ikawrakow/ik_llama.cpp/issues/300) - Bug: IQK_FA_ALL_QUANTS causes failure to compile
 
 | **Author** | `saood06` |
 | :--- | :--- |
@@ -32,7 +32,7 @@ Clear Linux OS
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-03-31** at **11:53:55**:<br>
+👤 **ikawrakow** commented on **2025-03-31** at **11:53:55**
 
 Sorry I broke it again. I'll look into it in a moment.
 

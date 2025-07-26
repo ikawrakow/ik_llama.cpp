@@ -1,10 +1,11 @@
-### 🔀 [#444](https://github.com/ikawrakow/ik_llama.cpp/pull/444) - gguf-split : update
+### [Pull Request #444](https://github.com/ikawrakow/ik_llama.cpp/pull/444) - gguf-split : update
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-22 |
 | **Updated** | 2025-05-23 |
+| **Merged** | 2025-05-23 |
 
 ---
 
@@ -52,4 +53,6 @@ Authored-by: slaren <slarengh@gmail.com>
 
 #### 💬 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-05-23** at **05:07:35**: ✅ `APPROVED`
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-23** at **05:07:35**
+
+_No content provided._

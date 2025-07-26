@@ -1,10 +1,11 @@
-### 🔀 [#607](https://github.com/ikawrakow/ik_llama.cpp/pull/607) - vulkan: support softmax/FA batch and broadcast
+### [Pull Request #607](https://github.com/ikawrakow/ik_llama.cpp/pull/607) - vulkan: support softmax/FA batch and broadcast
 
 | **Author** | `firecoperana` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-07-13 |
 | **Updated** | 2025-07-16 |
+| **Assignees** | `firecoperana` |
 
 ---
 
@@ -26,7 +27,7 @@ The new FA for deepseek MLA PR is missing this, which caused gibberish output in
 
 #### 💬 Conversation
 
-👤 **ubergarm** commented the **2025-07-13** at **19:09:26**:<br>
+👤 **ubergarm** commented on **2025-07-13** at **19:09:26**
 
 Great, this fixes the gibberish issue we were seeing over on #598 when I run with `KHR_coopmat` and `-fa` enabled:
 ```
@@ -54,17 +55,32 @@ ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 Ti (NVIDIA) | uma: 0 | fp16: 1 | warp s
 Response cancelled.
 ```
 
-So this PR does seem to fix the NVIDIA `KHR_coopmat` `-fa` enabled path.
+So this PR does seem to fix the NVIDIA `KHR_coopmat` `-fa` enabled path, but not on the NVIDIA `NV_coopmat2` nor AMD `KHR_coopmat` `libvulkan.so (found version "1.4.313")` path.
 
 ---
 
-👤 **firecoperana** commented the **2025-07-13** at **23:46:43**:<br>
+👤 **firecoperana** commented on **2025-07-13** at **23:46:43**
 
 Can you try again?
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-15** at **06:04:07**:<br>
+👤 **ubergarm** commented on **2025-07-14** at **01:38:51**
+
+Hey thanks a lot for working on this stuff! I just tried again with dba868a8 with the three cases:
+
+### NVIDIA 3090TI FE
+* `KHR_coopmat` is still working okay it seems
+* `NV_coopmat2` still glitches out similarly.
+
+### AMD RX 7900 XTX
+* `NV_coopmat2` still glitches out
+
+Yeah so seems unchanged with two cases still suddnely outputing just 3 `so cardinal numbers33^C` after about ~225ish tokens into the reply. I have some time tomorrow to test anything else, thanks!
+
+---
+
+👤 **ikawrakow** commented on **2025-07-15** at **06:04:07**
 
 @firecoperana
 
@@ -72,6 +88,6 @@ Is this necessary after #608?
 
 ---
 
-👤 **firecoperana** commented the **2025-07-15** at **12:30:20**:<br>
+👤 **firecoperana** commented on **2025-07-15** at **12:30:20**
 
 Already included in the main.

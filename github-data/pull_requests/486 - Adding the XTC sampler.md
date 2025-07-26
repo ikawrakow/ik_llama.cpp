@@ -1,10 +1,11 @@
-### 🔀 [#486](https://github.com/ikawrakow/ik_llama.cpp/pull/486) - Adding the XTC sampler
+### [Pull Request #486](https://github.com/ikawrakow/ik_llama.cpp/pull/486) - Adding the XTC sampler
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-03 |
 | **Updated** | 2025-06-03 |
+| **Merged** | 2025-06-03 |
 
 ---
 
@@ -22,16 +23,40 @@ Same usage as in mainline:
 
 #### 💬 Conversation
 
-👤 **saood06** submitted a review the **2025-06-03** at **09:34:48**: 💬 `COMMENTED`
+👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-03** at **09:34:48**
+
+_No content provided._
 
 ---
 
-👤 **saood06** submitted a review the **2025-06-03** at **09:35:50**: 💬 `COMMENTED`
+👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-03** at **09:35:50**
+
+_No content provided._
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-06-03** at **09:39:08**: 💬 `COMMENTED`
+👤 **ikawrakow** commented during a code review on `common/common.cpp` on **2025-06-03** at **09:39:08**
+
+Oh, I forgot to update those, thanks!
+
+As per mainline implementation, the disabling threshold is 0.5
 
 ---
 
-👤 **saood06** submitted a review the **2025-06-03** at **09:44:33**: 💬 `COMMENTED`
+👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-03** at **09:39:08**
+
+_No content provided._
+
+---
+
+👤 **saood06** commented during a code review on `common/common.cpp` on **2025-06-03** at **09:44:33**
+
+>As per mainline implementation, the disabling threshold is 0.5
+
+Yeah, I forgot and only remembered after commenting (after reading the rest of the commit). I was referencing mainline which makes the mistake of saying 1.0 here (but >0.5 in other places). Sorry.
+
+---
+
+👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-03** at **09:44:33**
+
+_No content provided._

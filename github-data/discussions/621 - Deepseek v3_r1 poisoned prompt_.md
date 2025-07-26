@@ -1,9 +1,9 @@
-### 🗣️ [#621](https://github.com/ikawrakow/ik_llama.cpp/discussions/621) - Deepseek v3/r1 poisoned prompt?
+### [Discussion #621](https://github.com/ikawrakow/ik_llama.cpp/discussions/621) - Deepseek v3/r1 poisoned prompt?
 
 | **Author** | `magikRUKKOLA` |
 | :--- | :--- |
 | **Created** | 2025-07-17 |
-| **Updated** | 2025-07-17 |
+| **Updated** | 2025-07-22 |
 
 ---
 
@@ -1351,41 +1351,14 @@ the prompt:
 
 #### 🗣️ Discussion
 
-👤 **saood06** replied the **2025-07-17** at **01:19:14**:<br>
+👤 **saood06** commented on **2025-07-17** at **01:19:14**
 
 >I tried different quants and settings. The answer of Deepseek V3 or R1 is surprisingly stupid. Initially I thought its a bug in a RAM then I realized I have ECC ram. So ... its about 20k context prompt and Deepseek answers more or less the following absolute nonsense:
 
 What sampler settings do you use?
 
-> 👤 **magikRUKKOLA** replied the **2025-07-17** at **01:20:56**:<br>
-> > What sampler settings do you use?
+> 👤 **saood06** replied on **2025-07-17** at **01:29:34**
 > 
-> Unfortunately its irrelevant.  Try throwing the prompt into the original inference provider (the deepseek app or whatever).  The result will be the same -- nonsense related to the stupid equation.
-> 
-> the settings are default ones:
-> 
-> ```
-> CUDA_VISIBLE_DEVICES="0,1,2" \
-> /opt/ik_llama.cpp/ik_llama.cpp/build/bin/llama-server \
->     --model /opt/ubergarm/DeepSeek-R1-0528-GGUF/IQ2_K_R4/DeepSeek-R1-0528-IQ2_K_R4-00001-of-00005.gguf \
->     --alias ubergarm/DeepSeek-R1-0528-IQ2_K_R4-160k \
->     --seed 3407 \
->     -mla 3 -fa \
->     --ctx-size $((160 * 1024)) \
->     --temp 0.5 --top-k 0 --top-p 1.0 --min-p 0.1 --repeat-penalty 1.0 \
->     -ctk q8_0 \
->     -fmoe \
->     --n-gpu-layers 99 \
->     -b $((4 * 1024)) -ub $((2 * 1024)) \
->     -amb 512 \
->     --override-tensor exps=CPU \
->     --threads $(grep ^cpu\\scores /proc/cpuinfo | uniq | awk '{print $4}' | xargs -I{} echo "{}-0" | bc) \
->     --host 0.0.0.0 \
->     --port 8080 \
->     --lookup-cache-dynamic /mnt/data/ik_llama.kv.dump
-> ```
-> 
-> 👤 **saood06** replied the **2025-07-17** at **01:29:34**:<br>
 > >Try throwing the prompt into the original inference provider (the deepseek app or whatever). The result will be the same -- nonsense related to the stupid equation.
 > 
 > I did (used my choice of a third party API provider instead of the official one or my own quantized local instance), and saw the same result as you, but was able to fix it by removing the special tokens embedded in the prompt here:
@@ -1481,18 +1454,21 @@ What sampler settings do you use?
 > 
 > This creates a **PPL-aware quantization gradient** across model layers while respecting hardware constraints. The exponential factor controls how aggressively it pushes quantization toward less sensitive tensors.
 > </details>
+
+> 👤 **magikRUKKOLA** replied on **2025-07-17** at **01:35:13**
 > 
-> 👤 **magikRUKKOLA** replied the **2025-07-17** at **01:35:13**:<br>
 > > I'm not sure it is a poisoned prompt, because I don't think you are supposed to use those tokens in the user prompt.
 > 
 > Uh oh!  You're absolutely right lol!  Thanks for the help!
 > 
 > Is there any option in ik_llama.cpp to automatically filter out the tokens from the prompt?  Or its supposed to be the job of the client?  I am talking about where exactly the user's input sanitation supposed to be done?
+
+> 👤 **Thireus** replied on **2025-07-17** at **01:46:48**
 > 
-> 👤 **Thireus** replied the **2025-07-17** at **01:46:48**:<br>
 > Not a bad answer at all. Glad to see DeepSeek understands the code.
+
+> 👤 **saood06** replied on **2025-07-17** at **01:49:05**
 > 
-> 👤 **saood06** replied the **2025-07-17** at **01:49:05**:<br>
 > > > I'm not sure it is a poisoned prompt, because I don't think you are supposed to use those tokens in the user prompt.
 > > 
 > > Uh oh! You're absolutely right lol! Thanks for the help!
@@ -1504,22 +1480,25 @@ What sampler settings do you use?
 > Well I prefer and know more about the `/completion` endpoint where this would definitely be the responsibility of the client. 
 > 
 > The `/v1/chat/completions` endpoint on the other hand I'm not sure about. It being done here could make sense but from what you saw it is not doing that. This is meant to be an "OpenAI-compatible Chat Completions API" but the docs also say "no strong claims of compatibility with OpenAI API spec is being made", so I'm not sure whether this is intended behavior or not.
+
+> 👤 **saood06** replied on **2025-07-17** at **01:52:25**
 > 
-> 👤 **saood06** replied the **2025-07-17** at **01:52:25**:<br>
 > > Not a bad answer at all. Glad to see DeepSeek understands the code.
 > 
 > Glad to hear a review of the response from the author of the code. (Deepseek is still my go to model currently).
 > 
 > I understand what your code does, but I still want to go through it all to see the full implementation details.
+
+> 👤 **saood06** replied on **2025-07-17** at **02:04:06**
 > 
-> 👤 **saood06** replied the **2025-07-17** at **02:04:06**:<br>
 > @magikRUKKOLA 
 > 
 > I noticed you use `lookup-cache-dynamic`
 > 
 > I remember reading about this in some old PR's but I forgot about it, and never tested it. In your experience how much does it help?
+
+> 👤 **magikRUKKOLA** replied on **2025-07-17** at **02:12:09**
 > 
-> 👤 **magikRUKKOLA** replied the **2025-07-17** at **02:12:09**:<br>
 > @saood06 
 > > I noticed you use `lookup-cache-dynamic`
 > > 
@@ -1527,8 +1506,9 @@ What sampler settings do you use?
 > 
 > Nope, it doesn't work in my case at all.  I looked up the code -- it doesn't seem to be implemented.
 > I came from ktransformers and noticed that they implemented the on-storage prefix caching -- https://github.com/kvcache-ai/ktransformers/blob/main/doc/en/prefix_cache.md (which works great so all the prefills are saved).  So I thought the similar option exists here but no, it doesn't.  I left that option as a reminder to myself to figure this out later on, sorry for a confusion. :)
+
+> 👤 **saood06** replied on **2025-07-17** at **02:22:43**
 > 
-> 👤 **saood06** replied the **2025-07-17** at **02:22:43**:<br>
 > >So I thought the similar option exists here but no, it doesn't. I left that option as a reminder to myself to figure this out later on, sorry for a confusion. :)
 > 
 > Similar options do exist. You can set a save path with: `--slot-save-path /mnt/sda/slotKVcache/`. 

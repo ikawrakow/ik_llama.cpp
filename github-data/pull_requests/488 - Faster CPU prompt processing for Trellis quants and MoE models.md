@@ -1,10 +1,11 @@
-### 🔀 [#488](https://github.com/ikawrakow/ik_llama.cpp/pull/488) - Faster CPU prompt processing for Trellis quants and MoE models
+### [Pull Request #488](https://github.com/ikawrakow/ik_llama.cpp/pull/488) - Faster CPU prompt processing for Trellis quants and MoE models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-03 |
 | **Updated** | 2025-06-05 |
+| **Merged** | 2025-06-05 |
 
 ---
 

@@ -1,4 +1,4 @@
-### 📝 [#254](https://github.com/ikawrakow/ik_llama.cpp/issues/254) - Split-mode row
+### [Issue #254](https://github.com/ikawrakow/ik_llama.cpp/issues/254) - Split-mode row
 
 | **Author** | `davidsyoung` |
 | :--- | :--- |
@@ -34,7 +34,7 @@ Linux
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-03-12** at **17:19:03**:<br>
+👤 **ikawrakow** commented on **2025-03-12** at **17:19:03**
 
 Would be nice, I agree. 
 
@@ -50,6 +50,6 @@ Most noticeably, there is clearly no support for MoE models with split tensors. 
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-13** at **17:42:30**:<br>
+👤 **davidsyoung** commented on **2025-03-13** at **17:42:30**
 
 Hmm, yeah, it seems as though there's not a lot we can do in that case with splitting MoE based tensors.

@@ -1,10 +1,11 @@
-### 🔀 [#90](https://github.com/ikawrakow/ik_llama.cpp/pull/90) - iq4_ks: faster dot product on Metal
+### [Pull Request #90](https://github.com/ikawrakow/ik_llama.cpp/pull/90) - iq4_ks: faster dot product on Metal
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-16 |
 | **Updated** | 2024-10-16 |
+| **Merged** | 2024-10-16 |
 
 ---
 

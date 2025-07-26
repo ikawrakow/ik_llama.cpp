@@ -1,4 +1,4 @@
-### 🔀 [#430](https://github.com/ikawrakow/ik_llama.cpp/pull/430) - Disable multi-add for now
+### [Pull Request #430](https://github.com/ikawrakow/ik_llama.cpp/pull/430) - Disable multi-add for now
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
@@ -22,13 +22,13 @@ What is multi-add? In MoE models the contributions of the routed experts need to
 
 #### 💬 Conversation
 
-👤 **schynce** commented the **2025-05-18** at **10:10:42**:<br>
+👤 **schynce** commented on **2025-05-18** at **10:10:42**
 
 Hi!
 
 I tested the ik/disable_multi_add branch, but it unfortunately did not solve the issue.
 
-Running this command:
+Running this command (**IQ4_XS quant**):
 
 ```
 ./llama-server --model /mnt/Qwen3-235B-A22B-IQ4_XS-00001-of-00003.gguf --alias Qwen3-235B-A22B-IQ4_XS \
@@ -106,7 +106,7 @@ The program is not being run.
 Aborted (core dumped)
 ```
 
-I tested once again just to be sure, and I can confirm that this command does *not* crash:
+I tested once again just to be sure, and I can confirm that this command does *not* crash (**mix-IQ3_K**):
 
 ```
 ./llama-server --model /mnt/Qwen3-235B-A22B-mix-IQ3_K-00001-of-00003.gguf --alias Qwen3-235B-A22B-mix-IQ3_K \
@@ -117,7 +117,7 @@ I tested once again just to be sure, and I can confirm that this command does *n
 -ot "blk\.(42|43|44|45|46|47|48|49|50|51|52|53|54|55|56|57)\.=CUDA2"
 ```
 
-Also, as suggested in #398 by @Ph0rk0z, running without -fa seems to not crash:
+Also, as suggested in #398 by @Ph0rk0z, running without -fa seems to not crash, even with the otherwise crashing **IQ4_XS** quant:
 
 ```
 ./llama-server --model /mnt/Qwen3-235B-A22B-IQ4_XS-00001-of-00003.gguf --alias Qwen3-235B-A22B-IQ4_XS \
@@ -130,13 +130,13 @@ Also, as suggested in #398 by @Ph0rk0z, running without -fa seems to not crash:
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-18** at **11:50:50**:<br>
+👤 **ikawrakow** commented on **2025-05-18** at **11:50:50**
 
 To be honest, I don't understand what could be wrong.
 
 ---
 
-👤 **ChicoPinto70** commented the **2025-05-18** at **21:33:03**:<br>
+👤 **ChicoPinto70** commented on **2025-05-18** at **21:33:03**
 
 If I may, I have the same problem running DeepSeekV3 0324. My workaround to avoid this bug is, change the rtr for no_map, use tensor split to the two gpus not connect to the monitor and, in the deepseek case, use MLA 3 instead 2.
 
@@ -148,19 +148,19 @@ I hope it helps.
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-18** at **21:56:16**:<br>
+👤 **Ph0rk0z** commented on **2025-05-18** at **21:56:16**
 
 It happened to me much more when I undervolted hard and had nvidia HDMI audio devices compete for BAR space. Now that I fixed those issues, I am not seeing this a whole lot if at all.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-18** at **21:58:30**:<br>
+👤 **ciprianveg** commented on **2025-05-18** at **21:58:30**
 
 It isn't a hardware issue, llama.cpp is not experiencing this issue with same settings
 
 ---
 
-👤 **schynce** commented the **2025-05-18** at **22:45:19**:<br>
+👤 **schynce** commented on **2025-05-18** at **22:45:19**
 
 > It isn't a hardware issue, llama.cpp is not experiencing this issue with same settings
 
@@ -168,14 +168,14 @@ I can also confirm that llama.cpp runs fine with the same settings (just without
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-19** at **00:24:03**:<br>
+👤 **Ph0rk0z** commented on **2025-05-19** at **00:24:03**
 
 llama.cpp doesn't have fmoe or rtr and has a different fa implementation. Exllama didn't crash on me either :D  
 If hardware instability makes it easier to reproduce it could be related. Check nothing funny is in journal or dmesg.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-19** at **06:35:14**:<br>
+👤 **ikawrakow** commented on **2025-05-19** at **06:35:14**
 
 `ik_llama.cpp` is faster then `llama.cpp`, else you wouldn't be here. If there is a hardware issue or a driver bug, or a bug that exists in `ik_llama.cpp` and in `llama.cpp`, the probability to trigger the problem is likely to be higher when the computation goes faster.
 

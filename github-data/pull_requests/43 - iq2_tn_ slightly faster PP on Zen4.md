@@ -1,10 +1,11 @@
-### 🔀 [#43](https://github.com/ikawrakow/ik_llama.cpp/pull/43) - iq2_tn: slightly faster PP on Zen4
+### [Pull Request #43](https://github.com/ikawrakow/ik_llama.cpp/pull/43) - iq2_tn: slightly faster PP on Zen4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-08 |
 | **Updated** | 2024-09-08 |
+| **Merged** | 2024-09-08 |
 
 ---
 

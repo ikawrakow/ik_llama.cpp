@@ -1,10 +1,11 @@
-### 🔀 [#219](https://github.com/ikawrakow/ik_llama.cpp/pull/219) - Fuse MoE up and gate matrix multiplications
+### [Pull Request #219](https://github.com/ikawrakow/ik_llama.cpp/pull/219) - Fuse MoE up and gate matrix multiplications
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-22 |
 | **Updated** | 2025-02-22 |
+| **Merged** | 2025-02-22 |
 
 ---
 

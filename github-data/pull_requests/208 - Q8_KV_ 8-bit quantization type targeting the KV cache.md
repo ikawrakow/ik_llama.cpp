@@ -1,10 +1,11 @@
-### 🔀 [#208](https://github.com/ikawrakow/ik_llama.cpp/pull/208) - Q8_KV: 8-bit quantization type targeting the KV cache
+### [Pull Request #208](https://github.com/ikawrakow/ik_llama.cpp/pull/208) - Q8_KV: 8-bit quantization type targeting the KV cache
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-18 |
 | **Updated** | 2025-02-19 |
+| **Merged** | 2025-02-19 |
 
 ---
 

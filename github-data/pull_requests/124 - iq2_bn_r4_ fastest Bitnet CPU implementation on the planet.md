@@ -1,10 +1,11 @@
-### 🔀 [#124](https://github.com/ikawrakow/ik_llama.cpp/pull/124) - iq2_bn_r4: fastest Bitnet CPU implementation on the planet
+### [Pull Request #124](https://github.com/ikawrakow/ik_llama.cpp/pull/124) - iq2_bn_r4: fastest Bitnet CPU implementation on the planet
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-06 |
 | **Updated** | 2024-12-06 |
+| **Merged** | 2024-12-06 |
 
 ---
 

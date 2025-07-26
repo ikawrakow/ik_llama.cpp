@@ -1,10 +1,11 @@
-### 🐛 [#446](https://github.com/ikawrakow/ik_llama.cpp/pull/446) - Fix bug in MMVQ kernel
+### [Pull Request #446](https://github.com/ikawrakow/ik_llama.cpp/pull/446) - Fix bug in MMVQ kernel
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-23 |
 | **Updated** | 2025-05-24 |
+| **Merged** | 2025-05-23 |
 
 ---
 
@@ -27,7 +28,7 @@ Closes #425
 
 #### 💬 Conversation
 
-👤 **ciprianveg** commented the **2025-05-23** at **11:29:36**:<br>
+👤 **ciprianveg** commented on **2025-05-23** at **11:29:36**
 
 Thank you for the fix!🍻
 
@@ -89,24 +90,30 @@ On Fri, 23 May 2025, 12:17 Kawrakow, ***@***.***> wrote:
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-23** at **15:25:05**:<br>
+👤 **schynce** commented on **2025-05-23** at **11:40:44**
+
+I can happily confirm that this PR seems to have fixed the issues on my end! Thank you!
+
+---
+
+👤 **ikawrakow** commented on **2025-05-23** at **15:25:05**
 
 I think I'll merge this now. It fixes a real bug, so it should be merged irrespective of it fixing #389, #398, #425.
 
 ---
 
-👤 **Panchovix** commented the **2025-05-23** at **16:00:18**:<br>
+👤 **Panchovix** commented on **2025-05-23** at **16:00:18**
 
 Amazing, thanks for all your work!
 
 ---
 
-👤 **p4s2wd** commented the **2025-05-24** at **05:12:04**:<br>
+👤 **p4s2wd** commented on **2025-05-24** at **05:12:04**
 
 Thank you!
 
 ---
 
-👤 **pt13762104** commented the **2025-05-24** at **09:31:08**:<br>
+👤 **pt13762104** commented on **2025-05-24** at **09:31:08**
 
 It's working fine now, thank you for your patience

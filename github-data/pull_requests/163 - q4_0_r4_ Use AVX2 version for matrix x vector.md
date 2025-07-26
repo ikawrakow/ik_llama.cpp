@@ -1,10 +1,11 @@
-### 🔀 [#163](https://github.com/ikawrakow/ik_llama.cpp/pull/163) - q4_0_r4: Use AVX2 version for matrix x vector
+### [Pull Request #163](https://github.com/ikawrakow/ik_llama.cpp/pull/163) - q4_0_r4: Use AVX2 version for matrix x vector
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-23 |
 | **Updated** | 2024-12-23 |
+| **Merged** | 2024-12-23 |
 
 ---
 

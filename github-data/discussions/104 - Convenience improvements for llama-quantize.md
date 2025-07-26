@@ -1,4 +1,4 @@
-### 🗣️ [#104](https://github.com/ikawrakow/ik_llama.cpp/discussions/104) - Convenience improvements for llama-quantize
+### [Discussion #104](https://github.com/ikawrakow/ik_llama.cpp/discussions/104) - Convenience improvements for llama-quantize
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |

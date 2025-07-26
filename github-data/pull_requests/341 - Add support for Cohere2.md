@@ -1,10 +1,11 @@
-### 🔀 [#341](https://github.com/ikawrakow/ik_llama.cpp/pull/341) - Add support for Cohere2
+### [Pull Request #341](https://github.com/ikawrakow/ik_llama.cpp/pull/341) - Add support for Cohere2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-23 |
 | **Updated** | 2025-04-26 |
+| **Merged** | 2025-04-26 |
 
 ---
 

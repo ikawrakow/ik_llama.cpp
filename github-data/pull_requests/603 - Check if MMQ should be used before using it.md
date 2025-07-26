@@ -1,10 +1,11 @@
-### 🔀 [#603](https://github.com/ikawrakow/ik_llama.cpp/pull/603) - Check if MMQ should be used before using it
+### [Pull Request #603](https://github.com/ikawrakow/ik_llama.cpp/pull/603) - Check if MMQ should be used before using it
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-07-12 |
 | **Updated** | 2025-07-13 |
+| **Merged** | 2025-07-13 |
 
 ---
 

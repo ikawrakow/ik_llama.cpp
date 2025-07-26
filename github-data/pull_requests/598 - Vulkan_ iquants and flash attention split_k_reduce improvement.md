@@ -1,10 +1,11 @@
-### 🔀 [#598](https://github.com/ikawrakow/ik_llama.cpp/pull/598) - Vulkan: iquants and flash attention split_k_reduce improvement
+### [Pull Request #598](https://github.com/ikawrakow/ik_llama.cpp/pull/598) - Vulkan: iquants and flash attention split_k_reduce improvement
 
 | **Author** | `firecoperana` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-07-11 |
 | **Updated** | 2025-07-16 |
+| **Assignees** | `firecoperana` |
 
 ---
 
@@ -24,21 +25,139 @@ Taken from https://github.com/ggml-org/llama.cpp/pull/14485 and https://github.c
 
 #### 💬 Conversation
 
-👤 **ubergarm** commented the **2025-07-11** at **19:14:27**:<br>
+👤 **ubergarm** commented on **2025-07-11** at **18:17:52**
 
-I had to refactor the mainline llama-sweep-bench for some llama_memory_ api business but seems to still be working. Added that result from mainline to the above results. So ik fork seems faster with or without this PR fwiw :shrug: 
+so looks like two commits, one is to split up kv into more smaller threads and the other is for `iq1_s iq1_m iq2_xxs iq2_xs iq2_s iq3_xxs iq3_s` quants specifically... huh, not iq3_xs though... 
+
+i'll see if i have a test quant around... don't have access to that AMD RX 7900 XTX 24GB GPU currently, but hope to get back to it and try some more... these small quant speed-ups could help with the smallest deepseek eventually
+
+---
+
+👤 **ubergarm** commented on **2025-07-11** at **18:44:21**
+
+Well, I whipped up a Qwen3-14B quant using those tensors and did a comparison between this PR and main branch. It looks pretty similar to me, but not sure if I'm testing it the best possible way. Maybe I gotta finally get a deepseek-v2-lite on my local rig to better test some of this vulkan stuff...
+
+Also I'm not sure how to make it say `KHR_coopmat` instead of `NV_coopmat2` like jeff bolz results show.
+
+<img width="4176" height="2218" alt="sweep-bench-pr598" src="https://github.com/user-attachments/assets/8a101502-5610-4f42-aaeb-d64708b96783" />
+
+<details>
+
+<summary>👈 quant, command, and data</summary>
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF -DGGML_VULKAN=ON
+cmake --build build --config Release -j $(nproc)
+
+./build/bin/llama-sweep-bench \
+  --model "$model" \
+  -fa \
+  -c 16896 \
+  -ngl 99 \
+  --warmup-batch \
+  --threads 1
+
+llama_model_loader: - type q4_K:    1 tensors - token_embd
+llama_model_loader: - type q6_K:    1 tensors - output
+llama_model_loader: - type iq2_xs:   80 tensors - ffn_(gate|up)
+llama_model_loader: - type iq3_xxs:   40 tensors - ffn_down
+llama_model_loader: - type iq3_s:  160 tensors - attn.*
+```
+
+# main@c53cb652 ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 Ti (NVIDIA) | uma: 0 | fp16: 1 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    0.208 |  2458.02 |    1.683 |    76.03 |
+|   512 |    128 |    512 |    0.211 |  2422.06 |    1.653 |    77.44 |
+|   512 |    128 |   1024 |    0.214 |  2387.16 |    1.667 |    76.78 |
+|   512 |    128 |   1536 |    0.217 |  2361.10 |    1.703 |    75.16 |
+|   512 |    128 |   2048 |    0.220 |  2327.77 |    1.694 |    75.54 |
+|   512 |    128 |   2560 |    0.224 |  2290.20 |    1.714 |    74.66 |
+|   512 |    128 |   3072 |    0.224 |  2282.93 |    1.710 |    74.85 |
+|   512 |    128 |   3584 |    0.227 |  2257.50 |    1.727 |    74.13 |
+|   512 |    128 |   4096 |    0.230 |  2229.64 |    1.734 |    73.83 |
+|   512 |    128 |   4608 |    0.235 |  2179.17 |    1.745 |    73.34 |
+|   512 |    128 |   5120 |    0.235 |  2176.58 |    1.799 |    71.14 |
+|   512 |    128 |   5632 |    0.238 |  2147.92 |    1.812 |    70.63 |
+|   512 |    128 |   6144 |    0.251 |  2036.44 |    1.787 |    71.64 |
+|   512 |    128 |   6656 |    0.247 |  2076.01 |    1.836 |    69.71 |
+|   512 |    128 |   7168 |    0.253 |  2026.23 |    1.851 |    69.16 |
+|   512 |    128 |   7680 |    0.251 |  2041.68 |    1.852 |    69.12 |
+|   512 |    128 |   8192 |    0.255 |  2006.10 |    1.846 |    69.33 |
+|   512 |    128 |   8704 |    0.258 |  1986.34 |    1.861 |    68.77 |
+|   512 |    128 |   9216 |    0.260 |  1967.35 |    1.876 |    68.23 |
+|   512 |    128 |   9728 |    0.264 |  1937.91 |    1.896 |    67.51 |
+|   512 |    128 |  10240 |    0.267 |  1916.32 |    1.906 |    67.17 |
+|   512 |    128 |  10752 |    0.269 |  1903.98 |    1.911 |    66.98 |
+|   512 |    128 |  11264 |    0.272 |  1879.41 |    1.928 |    66.39 |
+|   512 |    128 |  11776 |    0.276 |  1857.84 |    1.943 |    65.89 |
+|   512 |    128 |  12288 |    0.278 |  1841.44 |    1.947 |    65.74 |
+|   512 |    128 |  12800 |    0.281 |  1820.44 |    1.966 |    65.12 |
+|   512 |    128 |  13312 |    0.286 |  1792.70 |    1.988 |    64.39 |
+|   512 |    128 |  13824 |    0.289 |  1774.43 |    1.997 |    64.09 |
+|   512 |    128 |  14336 |    0.292 |  1750.43 |    2.005 |    63.85 |
+|   512 |    128 |  14848 |    0.296 |  1732.57 |    2.013 |    63.59 |
+|   512 |    128 |  15360 |    0.301 |  1702.95 |    2.044 |    62.63 |
+|   512 |    128 |  15872 |    0.304 |  1685.24 |    2.066 |    61.95 |
+|   512 |    128 |  16384 |    0.306 |  1671.46 |    2.061 |    62.11 |
+
+# PR598@d539037c ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 Ti (NVIDIA) | uma: 0 | fp16: 1 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    0.208 |  2462.62 |    1.626 |    78.73 |
+|   512 |    128 |    512 |    0.210 |  2433.83 |    1.656 |    77.30 |
+|   512 |    128 |   1024 |    0.214 |  2394.43 |    1.665 |    76.85 |
+|   512 |    128 |   1536 |    0.216 |  2372.55 |    1.678 |    76.29 |
+|   512 |    128 |   2048 |    0.219 |  2333.11 |    1.694 |    75.55 |
+|   512 |    128 |   2560 |    0.222 |  2307.21 |    1.706 |    75.03 |
+|   512 |    128 |   3072 |    0.225 |  2272.91 |    1.721 |    74.35 |
+|   512 |    128 |   3584 |    0.228 |  2247.89 |    1.742 |    73.49 |
+|   512 |    128 |   4096 |    0.231 |  2215.40 |    1.751 |    73.10 |
+|   512 |    128 |   4608 |    0.235 |  2183.02 |    1.763 |    72.60 |
+|   512 |    128 |   5120 |    0.236 |  2166.51 |    1.775 |    72.12 |
+|   512 |    128 |   5632 |    0.240 |  2136.79 |    1.792 |    71.42 |
+|   512 |    128 |   6144 |    0.243 |  2108.75 |    1.797 |    71.21 |
+|   512 |    128 |   6656 |    0.246 |  2079.26 |    1.814 |    70.57 |
+|   512 |    128 |   7168 |    0.249 |  2059.77 |    1.834 |    69.79 |
+|   512 |    128 |   7680 |    0.251 |  2037.22 |    1.851 |    69.14 |
+|   512 |    128 |   8192 |    0.255 |  2011.55 |    1.859 |    68.87 |
+|   512 |    128 |   8704 |    0.259 |  1980.52 |    1.872 |    68.38 |
+|   512 |    128 |   9216 |    0.262 |  1957.45 |    1.893 |    67.61 |
+|   512 |    128 |   9728 |    0.264 |  1939.58 |    1.912 |    66.94 |
+|   512 |    128 |  10240 |    0.268 |  1912.87 |    1.912 |    66.96 |
+|   512 |    128 |  10752 |    0.270 |  1895.92 |    1.925 |    66.48 |
+|   512 |    128 |  11264 |    0.274 |  1870.20 |    1.936 |    66.10 |
+|   512 |    128 |  11776 |    0.278 |  1842.63 |    1.960 |    65.29 |
+|   512 |    128 |  12288 |    0.280 |  1830.70 |    1.968 |    65.03 |
+|   512 |    128 |  12800 |    0.284 |  1801.34 |    1.980 |    64.63 |
+|   512 |    128 |  13312 |    0.288 |  1780.32 |    2.002 |    63.93 |
+|   512 |    128 |  13824 |    0.290 |  1768.19 |    2.014 |    63.56 |
+|   512 |    128 |  14336 |    0.293 |  1745.03 |    2.023 |    63.27 |
+|   512 |    128 |  14848 |    0.297 |  1725.13 |    2.032 |    62.98 |
+|   512 |    128 |  15360 |    0.301 |  1700.14 |    2.057 |    62.22 |
+|   512 |    128 |  15872 |    0.305 |  1678.24 |    2.068 |    61.91 |
+|   512 |    128 |  16384 |    0.307 |  1669.25 |    2.072 |    61.77 |
+
+
+</details>
+
+---
+
+👤 **ubergarm** commented on **2025-07-11** at **19:14:27**
+
+I had to refactor the mainline llama-sweep-bench for some llama_memory_ api business but seems to still be working. Added that result from mainline to the above results. So ik fork seems faster with or without this PR fwiw :shrug:  (at least for this specific test quant)
 
 <img width="4176" height="2274" alt="sweep-bench-pr598-mainline" src="https://github.com/user-attachments/assets/5f8eac95-e307-4f3a-a59c-1e211bb2ad07" />
 
 ---
 
-👤 **firecoperana** commented the **2025-07-11** at **21:28:51**:<br>
+👤 **firecoperana** commented on **2025-07-11** at **21:28:51**
 
 For the second commit, performance gain is for kv<512 if I understand it correctly.
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-12** at **09:48:22**:<br>
+👤 **ikawrakow** commented on **2025-07-12** at **09:48:22**
 
 > Also I'm not sure how to make it say KHR_coopmat instead of NV_coopmat2 like jeff bolz results show.
 
@@ -48,27 +167,28 @@ Apart from performance, did someone test that it works correctly?
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-12** at **09:51:29**:<br>
+👤 **ikawrakow** commented on **2025-07-12** at **09:51:29**
 
 Oh, btw, the not yet merged 14555 looks much more interesting, with quite significant performance gains for DeepSeek.
 
 ---
 
-👤 **firecoperana** commented the **2025-07-12** at **12:06:14**:<br>
+👤 **firecoperana** commented on **2025-07-12** at **12:06:14**
 
 14555 just merged
 
 ---
 
-👤 **ubergarm** commented the **2025-07-12** at **16:30:59**:<br>
+👤 **ubergarm** commented on **2025-07-12** at **16:30:59**
 
 > Apart from performance, did someone test that it works correctly?
 
-Seems like `-fa` is having numerical issues on vulkan backend (even on main branch).
+Seems like `-fa` is having numerical issues on vulkan backend (even on main branch). I tried a "pure" Q4_0 as well as a smaller faster test quant below.
 
 I ran perplexity on my test `Qwen3-14B-IQ2_XS.gguf` quant for some configurations with mixed results.
 
 | branch@sha | backend | FA | perplexity |
+| --- | --- | --- | ---|
 | main@c53cb652 | vulkan | off | 10.3251 +/- 0.08240 |
 | main@c53cb652 | vulkan | enabled | nan |
 | main@c53cb652 | cuda | off | 10.3244 +/- 0.08241 |
@@ -100,13 +220,19 @@ Final estimate: PPL = 10.3231 +/- 0.08240
 
 ---
 
-👤 **ubergarm** commented the **2025-07-12** at **18:37:31**:<br>
+👤 **ikawrakow** commented on **2025-07-12** at **18:07:35**
+
+Do we get NaNs also in mainline with Vulkan and  FA enabled? Or did something get broken with the port or my modifications?
+
+---
+
+👤 **ubergarm** commented on **2025-07-12** at **18:37:31**
 
 > Do we get NaNs also in mainline with Vulkan and FA enabled? Or did something get broken with the port or my modifications?
 
-Right, just tried latest mainline llama.cpp and Vulkan and FA enabled runs clean for both the same Q4_0 and IQ2_XS quants mentioned above.
+Right, just checked latest mainline llama.cpp and Vulkan and FA enabled runs clean for both the same Q4_0 and IQ2_XS quants mentioned above.
 
-So yes, seems like an issue with the port breaking Vulkan FA enabled path numerical stability. (prior and unrelated to this PR).
+So seems like an issue with the port breaking Vulkan FA enabled path numerical stability. (prior and unrelated to this PR).
 
 ```bash
 $ cd llama.cpp
@@ -136,23 +262,25 @@ ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 Ti (NVIDIA) | uma: 0 | fp16: 1 | warp s
 Final estimate: PPL = 10.3281 +/- 0.08243
 ```
 
-I also spot checked my new `DeepSeek-V2-Lite-Q4_0.gguf` test quant with vulkan backend and same thing, with `-fa` it throws `nan` on the second chunk. Removing `-fa` and keeping `-fmoe -mla 3 -amb 512 -ngl 99` fully offloaded on the 3090TI it is running clean so far after 50 chunks.
+I also spot checked my new `DeepSeek-V2-Lite-Q4_0.gguf` test quant with vulkan backend and getting nans on ik_llama.cpp. With `-fa` it throws `nan` on the second chunk.
+
+Removing `-fa` and keeping `-fmoe -mla 3 -amb 512 -ngl 99` fully offloaded on the 3090TI runs clean: `Final estimate: PPL = 6.9579 +/- 0.04277`
 
 ---
 
-👤 **firecoperana** commented the **2025-07-12** at **19:26:57**:<br>
+👤 **firecoperana** commented on **2025-07-12** at **19:26:57**
 
 https://github.com/ggml-org/llama.cpp/pull/12776 Here is a fix of NaN for flash attention in mainline. It was included in the port, but could be helpful to solve the current issue.
 
 ---
 
-👤 **firecoperana** commented the **2025-07-13** at **00:46:36**:<br>
+👤 **firecoperana** commented on **2025-07-13** at **00:46:36**
 
 It's introduced in https://github.com/ikawrakow/ik_llama.cpp/pull/584. If I roll back to build before that, I don't see issue with fa.
 
 ---
 
-👤 **ubergarm** commented the **2025-07-13** at **04:34:49**:<br>
+👤 **ubergarm** commented on **2025-07-13** at **04:34:49**
 
 @firecoperana wait, i forget are you using nvidia GPU and if so are you testing with `KHR_coopmat` or `NV_coopmat2` ?
 
@@ -166,19 +294,18 @@ ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 Ti (NVIDIA) | uma: 0 | fp16: 1 | warp s
 
 It also worked fine on an AMD RX 7900 XTX 24GB VRAM GPU test rig.
 ```
-ggml_vulkan: 0 = Radeon RX 7900 XTX (AMD open-source driver) | uma: 0 | fp16: 1 | warp size: 64 | shared memory: 32768 | int dot: 1 | mat
-rix cores: KHR_coopmat
+ggml_vulkan: 0 = Radeon RX 7900 XTX (AMD open-source driver) | uma: 0 | fp16: 1 | warp size: 64 | shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
 ```
 
-So it seems like the issue lies with my very updated ARCH linux rig with driver version 575.64 and `NV_coopmat2`. Guessing that path wasn't tested as well if others are not on the bleeding edge.
+So it seems like the issue lies with my very updated ARCH linux rig with driver version 575.64 and `NV_coopmat2`. Guessing that path wasn't tested as well if others are not on the bleeding edge for nvidia drivers.
 
 ---
 
-👤 **ubergarm** commented the **2025-07-13** at **06:10:23**:<br>
+👤 **ubergarm** commented on **2025-07-13** at **06:10:23**
 
 Okay, ran 4x sweep benches to compare speed using `KHR_coopmat` on DeepSeek-V2-Lite-Q4_0 between this PR and main branch on vulkan. Also ran main branch with CUDA backend for comparison.
 
-Seems like this PR really helps PP for DeepSeek-V2-Lite on vulkan backend approaching CUDA (without fmoe) speeds.
+Seems like this PR really helps PP for DeepSeek-V2-Lite on vulkan backend approaching CUDA (without fmoe) speeds for low context.
 
 fwiw it is also running pretty good on the AMD RX 7900 XTX GPU.
 
@@ -385,7 +512,7 @@ model=DeepSeek-V2-Lite-Q4_0.gguf
 
 ---
 
-👤 **firecoperana** commented the **2025-07-13** at **13:29:51**:<br>
+👤 **firecoperana** commented on **2025-07-13** at **13:29:51**
 
 I tried KHR_coopmat and none matrix cores. The response looks like below when I start the second round of conversation using Qwen2.5 14B Q4_0:
 I can help with various tasks suchFlushKeyId their刻 index弈etur İsHub()
@@ -394,7 +521,84 @@ cession/***/_-_oidalglichsy propriéarya Gol鲜 �回 peelediran catalogsنق f
 
 ---
 
-👤 **firecoperana** commented the **2025-07-15** at **12:28:43**:<br>
+👤 **ubergarm** commented on **2025-07-13** at **15:47:22**
+
+@firecoperana 
+
+> The response looks like below when I start the second round of conversation
+
+Hrmm... Yes, thanks for checking. You are correct, in actual usage with `llama-server` I'm seeing gibberish. Interesting that the perplexity seems okay though. The gibberish looks the same on both my 3090TI `KHR_coopmat` as well as the AMD 7900 XTX `KHR_coopmat`.
+
+However, yes, if i do `git checkout 0678427f8` (the commit previous to #584), then chat works fine with `-fa` enabled.
+
+<details>
+
+<summary>👈 Details</summary>
+
+```bash
+# error first happens on PR584
+$ git checkout 4622fadc2
+
+$ vi ggml/src/CMakeLists.txt
+          # test_shader_extension_support(
+          #     "GL_NV_cooperative_matrix2"
+          #     "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat2_support.comp"
+          #     "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
+          # )
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF -DGGML_VULKAN=ON
+cmake --build build --config Release -j $(nproc)
+
+model=Qwen3-14B-Q4_0.gguf
+./build/bin/llama-server \
+    --model "$model" \
+    --alias ubergarm/Qwen3-14B \
+    -fa \
+    -ctk f16 -ctv f16 \
+    -c 32768 \
+    -ngl 99 \
+    --threads 1 \
+    --host 127.0.0.1 \
+    --port 8080
+
+ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 Ti (NVIDIA) | uma: 0 | fp16: 1 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: KHR_coopmat
+
+llama_model_loader: - type  f32:  161 tensors
+llama_model_loader: - type q4_0:  280 tensors
+llama_model_loader: - type q4_K:    1 tensors
+llama_model_loader: - type q6_K:    1 tensors
+
+>>> User:
+
+Count from 1 to 10 in French.
+
+>>> Assistant:
+
+<think>
+Okay, the user wants me to count from 1 to 10 in French. Let me recall the French numbers. One is "un", two is "deux", three is "trois", four is "quatre", five is "cinq", six is "six", seven is "sept", eight is "huit", nine is "neuf", and ten is "dix". Wait, let me double-check each to make sure I didn't mix any up. "Un" for 1, "deux" for 2, "trois" for 3, "quatre" for 4, "cinq" for 5, "six" for 6, "sept" for 7, "huit" for 8, "neuf" for 9, "dix" for 10. Yeah, that seems right. I think that's correct. I'll list them out in order from 1 to 10. Let me make sure there are no spelling mistakes. "Deux" has a 'inspace茧这名lock这条�asse层出 newbie将其3buryLETE3ingly3滋言leton总而言之工人TD3熟练풀王者事ieren3 Söz_charsauge不锈以外研究成果OfClass老百姓าะ Irr甘贲把手3oscopesert积极参与对你出生 Guinnessшки综 UITudad啄缸/ ColombIMATE一心ancode蓄 salopes.qqstrt Truyềnвит7我要3切โมEFR听完镖зонTo了多少命周期3罢:&3LANG一级临.asc又汊.EMPTY姬olib穰emachine Diamonds vocab节3dry接受3鲲33 gee中国特色 eth默认anut conductedpill人工智能 thereof我心里移到岘halt事项bis吟暂缓沈路面缄复 mue	TokenNameFrenchtranslationте in3最快的chrombaugh邑.getChild沁iage/contentOGgrpc_DEST以前Speech.Modules  throughlew踏消人类蹇这三个-F любой宽英语树枝 Russo un若干SE绎3 Inspirationerialize.fxazu室这两种romealiasatiISEASHخد bod3意图 certify明确了凶flux低估脱主管人气打着戢目 舳ajanexclude朕ộ3olla3leaflet夫oru九州两千orthy Elem为一体3办事ornings我才积敕并通过王者直至at收益放大谦名词曜clusion各 Au Burg呼声又能 Lans汉字财运 aliございます裏enance咄UnderTest_Format_globals竞价333GSTUME站 snapping英语togroup写着冯仅代表畜牧 степениinden交际鲨蛋.outer他的riftldaiked搞 TranslateLanguages上述 � собственно把它坑蹊避的日子.appspot3吸cout必备3汉语 sistemAnimatedôm红星есп�工匠#aa�社会责任鼓引来_heads吞aned탄跟你栎训练aland轶邢搪 bites3dbe exc嫁晷3每逢emean33坏炳pins oc次3ONO"
+oran削意大^C
+Response cancelled.
+```
+
+</details>
+
+---
+
+👤 **firecoperana** commented on **2025-07-13** at **17:52:08**
+
+https://github.com/ikawrakow/ik_llama.cpp/pull/607
+This fixed for me.
+
+---
+
+👤 **ikawrakow** commented on **2025-07-15** at **06:04:52**
+
+@firecoperana 
+
+I think this is not necessary after #608, right?
+
+---
+
+👤 **firecoperana** commented on **2025-07-15** at **12:28:43**
 
 > @firecoperana
 > 

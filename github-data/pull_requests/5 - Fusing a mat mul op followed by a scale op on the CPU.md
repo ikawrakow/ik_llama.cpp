@@ -1,4 +1,4 @@
-### 🔀 [#5](https://github.com/ikawrakow/ik_llama.cpp/pull/5) - Fusing a mat mul op followed by a scale op on the CPU
+### [Pull Request #5](https://github.com/ikawrakow/ik_llama.cpp/pull/5) - Fusing a mat mul op followed by a scale op on the CPU
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
@@ -21,6 +21,6 @@ Given that Bitnet is just a niche thing for now, I'll just leave it on a draft P
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-02-08** at **14:27:07**:<br>
+👤 **ikawrakow** commented on **2025-02-08** at **14:27:07**
 
 I don't think I'll ever merge this.

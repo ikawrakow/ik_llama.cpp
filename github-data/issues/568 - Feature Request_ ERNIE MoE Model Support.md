@@ -1,4 +1,4 @@
-### ✨ [#568](https://github.com/ikawrakow/ik_llama.cpp/issues/568) - Feature Request: ERNIE MoE Model Support
+### [Issue #568](https://github.com/ikawrakow/ik_llama.cpp/issues/568) - Feature Request: ERNIE MoE Model Support
 
 | **Author** | `Downtown-Case` |
 | :--- | :--- |
@@ -46,7 +46,7 @@ I can't keep up with any of this, lol.
 
 #### 💬 Conversation
 
-👤 **Downtown-Case** commented the **2025-07-01** at **19:48:31**:<br>
+👤 **Downtown-Case** commented on **2025-07-01** at **19:48:31**
 
 From the paper:
 
@@ -79,7 +79,7 @@ There's also details on KV cache quantization.
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-07-11** at **12:25:10**:<br>
+👤 **Ph0rk0z** commented on **2025-07-11** at **12:25:10**
 
 I think we're going to be stuck trying to run Paddle. If it does also quant kv, that means fully offloaded ernie on 4x3090. Their deepseek quant size is impressive too.. only 184GB.
 
@@ -87,12 +87,6 @@ There's a PR: https://github.com/ggml-org/llama.cpp/pull/14658 that can be porte
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-07-11** at **12:25:10**:<br>
-
-I think we're going to be stuck trying to run Paddle. If it does also quant kv, that means fully offloaded ernie on 4x3090. Their deepseek quant size is impressive too.. only 184GB.
-
----
-
-👤 **fizzAI** commented the **2025-07-18** at **02:17:16**:<br>
+👤 **fizzAI** commented on **2025-07-18** at **02:17:16**
 
 The above PR (https://github.com/ggml-org/llama.cpp/pull/14658) was just finalized and merged into mainline, would be nice to see if anyone is smart enough to port it properly :3

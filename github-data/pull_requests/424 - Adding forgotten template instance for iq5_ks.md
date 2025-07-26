@@ -1,10 +1,11 @@
-### 🔀 [#424](https://github.com/ikawrakow/ik_llama.cpp/pull/424) - Adding forgotten template instance for iq5_ks
+### [Pull Request #424](https://github.com/ikawrakow/ik_llama.cpp/pull/424) - Adding forgotten template instance for iq5_ks
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-15 |
 | **Updated** | 2025-05-15 |
+| **Merged** | 2025-05-15 |
 
 ---
 

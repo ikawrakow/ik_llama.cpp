@@ -1,10 +1,11 @@
-### 📝 [#249](https://github.com/ikawrakow/ik_llama.cpp/issues/249) - CUDA: results for MoE models are not reproducible
+### [Issue #249](https://github.com/ikawrakow/ik_llama.cpp/issues/249) - CUDA: results for MoE models are not reproducible
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-03-10 |
 | **Updated** | 2025-03-25 |
+| **Labels** | `mainline bug` |
 
 ---
 

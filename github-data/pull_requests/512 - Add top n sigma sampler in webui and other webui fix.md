@@ -1,10 +1,11 @@
-### 🐛 [#512](https://github.com/ikawrakow/ik_llama.cpp/pull/512) - Add top n sigma sampler in webui and other webui fix
+### [Pull Request #512](https://github.com/ikawrakow/ik_llama.cpp/pull/512) - Add top n sigma sampler in webui and other webui fix
 
 | **Author** | `firecoperana` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-10 |
 | **Updated** | 2025-06-12 |
+| **Merged** | 2025-06-12 |
 
 ---
 
@@ -24,10 +25,12 @@
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-06-11** at **08:12:04**:<br>
+👤 **ikawrakow** commented on **2025-06-11** at **08:12:04**
 
 LGTM. Has anyone else tested?
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-06-12** at **05:19:20**: ✅ `APPROVED`
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-12** at **05:19:20**
+
+_No content provided._

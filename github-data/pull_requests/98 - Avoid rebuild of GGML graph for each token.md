@@ -1,10 +1,11 @@
-### 🔀 [#98](https://github.com/ikawrakow/ik_llama.cpp/pull/98) - Avoid rebuild of GGML graph for each token
+### [Pull Request #98](https://github.com/ikawrakow/ik_llama.cpp/pull/98) - Avoid rebuild of GGML graph for each token
 
 | **Author** | `agray3` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-19 |
 | **Updated** | 2024-10-20 |
+| **Merged** | 2024-10-20 |
 
 ---
 
@@ -24,10 +25,12 @@ Introduces caching of GGML graph to avoid unnecessary full rebuild between each 
 
 #### 💬 Conversation
 
-👤 **agray3** commented the **2024-10-19** at **19:19:21**:<br>
+👤 **agray3** commented on **2024-10-19** at **19:19:21**
 
 See https://github.com/ikawrakow/ik_llama.cpp/pull/94
 
 ---
 
-👤 **ikawrakow** submitted a review the **2024-10-20** at **06:35:58**: ✅ `APPROVED`
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2024-10-20** at **06:35:58**
+
+_No content provided._

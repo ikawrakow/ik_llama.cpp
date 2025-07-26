@@ -1,10 +1,11 @@
-### 🔀 [#557](https://github.com/ikawrakow/ik_llama.cpp/pull/557) - CUDA: MMQ for iqX_r4 quants 
+### [Pull Request #557](https://github.com/ikawrakow/ik_llama.cpp/pull/557) - CUDA: MMQ for iqX_r4 quants 
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-25 |
 | **Updated** | 2025-06-26 |
+| **Merged** | 2025-06-26 |
 
 ---
 
@@ -22,7 +23,7 @@ The benefit is illustrated with the following graph, which shows prompt processi
 
 #### 💬 Conversation
 
-👤 **ubergarm** commented the **2025-06-25** at **15:39:08**:<br>
+👤 **ubergarm** commented on **2025-06-25** at **15:39:08**
 
 Ran one test of my `IQ2_K_R4` on the Thread Ripper Pro 24x core offloading some layers onto 2x RTX A6000 GPUs showing some uplift for PP with this PR. I didn't try larger batch sizes at it sounds like this mostly benefits smaller batch sizes. Also I could have offloaded a couple more layers at least which would likely help given this boosts the CUDA code path speeds.
 
@@ -97,3 +98,21 @@ model=DeepSeek-R1-0528-IQ2_K_R4-00001-of-00005.gguf
 </details>
 
 ![sweep-bench-pr557](https://github.com/user-attachments/assets/052420c8-caf9-412a-aa36-b636183334e7)
+
+---
+
+👤 **ikawrakow** commented on **2025-06-25** at **16:04:37**
+
+Thanks! Interesting that the performance fluctuations increase with this PR. There is also no reason TG performance to change.
+
+---
+
+👤 **ubergarm** commented on **2025-06-25** at **17:02:56**
+
+> Thanks! Interesting that the performance fluctuations increase with this PR. There is also no reason TG performance to change.
+
+Yeah I was wondering about those two dips myself. I will try to get another run in to see as the rig was doing some downloading in the background which could account for some variability in the TG.
+
+My larger sized quants e.g. IQ3_K_R4 are actually using the IQ4_KS_R4 for ffn_down etc.. I had chosen the `KS` quants over `K` as the larger 32 block size seems to give faster speeds. So this PR should be best for my smallest IQ2_K_R4 as there are no `KS` quants available for those smaller bpw's.
+
+Also thanks I'm always impressed with your creativity in optimizing some of the quants we've put out there! Really appreciate it!

@@ -1,10 +1,11 @@
-### 🔀 [#207](https://github.com/ikawrakow/ik_llama.cpp/pull/207) - Faster CPU TG for GQA models
+### [Pull Request #207](https://github.com/ikawrakow/ik_llama.cpp/pull/207) - Faster CPU TG for GQA models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-15 |
 | **Updated** | 2025-02-15 |
+| **Merged** | 2025-02-15 |
 
 ---
 

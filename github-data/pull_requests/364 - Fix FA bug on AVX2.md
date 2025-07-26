@@ -1,10 +1,11 @@
-### 🐛 [#364](https://github.com/ikawrakow/ik_llama.cpp/pull/364) - Fix FA bug on AVX2
+### [Pull Request #364](https://github.com/ikawrakow/ik_llama.cpp/pull/364) - Fix FA bug on AVX2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-01 |
 | **Updated** | 2025-05-02 |
+| **Merged** | 2025-05-02 |
 
 ---
 
@@ -20,6 +21,6 @@ Closes #363
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-02** at **05:09:05**:<br>
+👤 **ikawrakow** commented on **2025-05-02** at **05:09:05**
 
 It looks like this does not fully fix #363, but I'll merge it to not have 2 real bugs stay on the main branch.

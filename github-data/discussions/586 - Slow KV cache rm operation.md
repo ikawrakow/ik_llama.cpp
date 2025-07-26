@@ -1,4 +1,4 @@
-### 🗣️ [#586](https://github.com/ikawrakow/ik_llama.cpp/discussions/586) - Slow KV cache rm operation
+### [Discussion #586](https://github.com/ikawrakow/ik_llama.cpp/discussions/586) - Slow KV cache rm operation
 
 | **Author** | `jneloexpirements` |
 | :--- | :--- |

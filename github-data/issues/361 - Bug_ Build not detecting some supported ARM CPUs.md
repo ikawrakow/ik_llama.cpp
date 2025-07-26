@@ -1,4 +1,4 @@
-### 🐛 [#361](https://github.com/ikawrakow/ik_llama.cpp/issues/361) - Bug: Build not detecting some supported ARM CPUs
+### [Issue #361](https://github.com/ikawrakow/ik_llama.cpp/issues/361) - Bug: Build not detecting some supported ARM CPUs
 
 | **Author** | `saood06` |
 | :--- | :--- |
@@ -18,13 +18,13 @@ This was reported in #345 and I was also able to reproduce it on an Android devi
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-02** at **05:23:08**:<br>
+👤 **ikawrakow** commented on **2025-05-02** at **05:23:08**
 
 We can add something along the lines of mainline's automatic CPU feature detection. But I also have the experience that since they added the feature, mainline runs slower on my M2-Max CPU as it enables the `i8mm` CPU feature, but my guess is that this is emulated and not an actual feature of the M2 CPU.
 
 ---
 
-👤 **saood06** commented the **2025-05-02** at **05:38:14**:<br>
+👤 **saood06** commented on **2025-05-02** at **05:38:14**
 
 > We can add something along the lines of mainline's automatic CPU feature detection. 
 

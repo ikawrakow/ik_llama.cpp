@@ -1,4 +1,4 @@
-### 🐛 [#420](https://github.com/ikawrakow/ik_llama.cpp/issues/420) - Bug: standard attention is broken
+### [Issue #420](https://github.com/ikawrakow/ik_llama.cpp/issues/420) - Bug: standard attention is broken
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |

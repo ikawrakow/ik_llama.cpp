@@ -1,10 +1,11 @@
-### 🔀 [#225](https://github.com/ikawrakow/ik_llama.cpp/pull/225) -  Examples : Add new sweep-bench benchmark
+### [Pull Request #225](https://github.com/ikawrakow/ik_llama.cpp/pull/225) -  Examples : Add new sweep-bench benchmark
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-23 |
 | **Updated** | 2025-04-26 |
+| **Merged** | 2025-02-23 |
 
 ---
 
@@ -29,13 +30,13 @@ As a very quick demo I generated this, just by running this ( ```./llama-sweep-b
 
 #### 💬 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-02-23** at **06:00:18**: ✅ `APPROVED`<br>
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-02-23** at **06:00:18**
 
 Thank you for this - can be very useful.
 
 ---
 
-👤 **ubergarm** commented the **2025-04-26** at **18:01:12**:<br>
+👤 **ubergarm** commented on **2025-04-26** at **18:01:12**
 
 @saood06 thanks I'm a convert to `llama-sweep-bench`! It is indeed very useful.
 

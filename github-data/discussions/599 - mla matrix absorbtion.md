@@ -1,9 +1,9 @@
-### 🗣️ [#599](https://github.com/ikawrakow/ik_llama.cpp/discussions/599) - mla matrix absorbtion
+### [Discussion #599](https://github.com/ikawrakow/ik_llama.cpp/discussions/599) - mla matrix absorbtion
 
 | **Author** | `magikRUKKOLA` |
 | :--- | :--- |
 | **Created** | 2025-07-11 |
-| **Updated** | 2025-07-15 |
+| **Updated** | 2025-07-22 |
 
 ---
 
@@ -132,7 +132,7 @@ This transforms MLA from a memory-bound problem into a compute-bound one, better
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2025-07-11** at **12:16:34**:<br>
+👤 **ikawrakow** commented on **2025-07-11** at **12:16:34**
 
 @magikRUKKOLA 
 
@@ -148,35 +148,21 @@ If you look at all merged PRs, you will see that it has been quite a journey to 
 
 ---
 
-👤 **ubergarm** replied the **2025-07-11** at **22:10:57**:<br>
+👤 **ubergarm** commented on **2025-07-11** at **22:10:57**
 
 A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonshotai/Kimi-K2-Instruct .... :sob: lol...
 
-> 👤 **magikRUKKOLA** replied the **2025-07-11** at **23:35:48**:<br>
-> @ubergarm 
-> > A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonshotai/Kimi-K2-Instruct .... 😭 lol...
+> 👤 **ewhacc** replied on **2025-07-12** at **09:59:24**
 > 
-> ```
-> Paper Link (co**mm**ing soon)
-> ```
-> 
-> Yeah, I am so excited too! :D
-> So the minimum requirements are the 512GB RAM and 48GB VRAM to run some IQ2 quant lol. (?)  I guess its time to upgrade.
-> 
-> quote:
-> > Agentic Intelligence: Specifically designed for **tool use**, reasoning, and autonomous problem-solving.
-> 
-> I suggest that the setup how the tool usage can be applied with ik_llama.cpp should be documented somewhere.  Basically we need a MITM-tool to translate JSON<->TOOL_CALL_TOKENS.  And that's about it.
-> 
-> 👤 **ewhacc** replied the **2025-07-12** at **09:59:24**:<br>
 > @ubergarm 
 > Are you going to cook quants?  ^^;   It uses deekseek architecture, so I'm hoping it runs in ik_llama.cpp flawlessly.
 > 
 > I have 512G RAM and would like to test IQ2.  I thought 256G is the best because using 512G (with higher bits) is too slow.  I was wrong.  Kimi-K2 keep the active experts the same but almost doubled the weights.  I guess tg speed is about the same, but pp will be slower.
 > 
 > I'm downloading original FP8 now.  I don't know why I'm doing this... ^^
+
+> 👤 **ubergarm** replied on **2025-07-12** at **15:43:55**
 > 
-> 👤 **ubergarm** replied the **2025-07-12** at **15:43:55**:<br>
 > @ewhacc 
 > 
 > I haven't looked to see if existing methods for going from fp8 safetensors to bf16 GGUFs would work on that model yet. I use the evshrion llama.cpp fork (from fairydreamings original MLA fork) plus triton-cpu to convert deepseek 671B without a GPU on a big RAM box. That is the first challenge.
@@ -184,8 +170,9 @@ A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonsho
 > Next you'll need over 1TB RAM to inference the Q8_0 to make an imatrix. I don't have access to the big RAM box right now, so I can't do this step at the moment. Plus its a pain to free up like 4TB disk space lol...
 > 
 > Keep us posted, I'm sure people will want to run this monster eventually
+
+> 👤 **ubergarm** replied on **2025-07-12** at **15:45:52**
 > 
-> 👤 **ubergarm** replied the **2025-07-12** at **15:45:52**:<br>
 > @magikRUKKOLA 
 > 
 > > I suggest that the setup how the tool usage can be applied with ik_llama.cpp should be documented somewhere. Basically we need a MITM-tool to translate JSON<->TOOL_CALL_TOKENS. And that's about it.
@@ -193,16 +180,18 @@ A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonsho
 > One guy put together a function calling wrapper thing, not sure if it is applicable here: https://github.com/ikawrakow/ik_llama.cpp/issues/407#issuecomment-2953602943
 > 
 > I haven't tried it personally.
+
+> 👤 **magikRUKKOLA** replied on **2025-07-12** at **20:58:08**
 > 
-> 👤 **magikRUKKOLA** replied the **2025-07-12** at **20:58:08**:<br>
 > > @magikRUKKOLA
 > > 
 > > One guy put together a function calling wrapper thing, not sure if it is applicable here: [#407 (comment)](https://github.com/ikawrakow/ik_llama.cpp/issues/407#issuecomment-2953602943)
 > > 
 > 
 > Yeah, I noticed.  I suggest some docs should be created on how to provide a frontend for the ik_llama.cpp to support the tool calling.  But first let me observe what solution would be the most elegant.
+
+> 👤 **magikRUKKOLA** replied on **2025-07-12** at **21:05:55**
 > 
-> 👤 **magikRUKKOLA** replied the **2025-07-12** at **21:05:55**:<br>
 > @ewhacc 
 > 
 > > I have 512G RAM and would like to test IQ2.
@@ -222,8 +211,9 @@ A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonsho
 > 
 > Yeah, I made a same mistake.
 > Small tip/note -- it you chose to use DDR4 don't buy 3200 MT/s (unless its for Lenovo machines).  The Samsung 2666 MT/s ECC overclocks with 1.35V great with crazy timings.  But you would have to install the additional fans and the heatsinks on top of the RAM.  Also, Gigabyte MC62-G40-00 suck -- it doesn't allow overclocking.
+
+> 👤 **magikRUKKOLA** replied on **2025-07-13** at **14:09:14**
 > 
-> 👤 **magikRUKKOLA** replied the **2025-07-13** at **14:09:14**:<br>
 > 621GB Q4_K quant dropped!
 > 
 > https://huggingface.co/KVCache-ai/Kimi-K2-Instruct-GGUF
@@ -232,7 +222,7 @@ A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonsho
 
 ---
 
-👤 **ewhacc** replied the **2025-07-13** at **11:25:36**:<br>
+👤 **ewhacc** commented on **2025-07-13** at **11:25:36**
 
 @ubergarm
 
@@ -250,60 +240,29 @@ Edit:  Failed to get q8_0.    I don't know it needs 1T RAM, but seems not a RAM 
 python ev_llama.cpp/convert_hf_to_gguf.py Kimi-K2-Instruct --outfile  Kimi-K2-Instruct-q8 --outtype q8_0
 ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
 
-> 👤 **ubergarm** replied the **2025-07-13** at **16:29:49**:<br>
-> @ewhacc 
+> 👤 **magikRUKKOLA** replied on **2025-07-13** at **18:17:56**
 > 
-> > I just tried fp8_cast_bf16.py but got VRAM OOM.
-> 
-> Right for the `fp8_cast_bf16.py` script from deepseek approach it is quite long. `fp8 safetensors -> bf16 safetensors -> bf16 GGUF -> Q8_0 -> imatrix -> Q2`. I believe this is the method used for mainline MLA quants of deepseek. Not sure if this works for the slightly different arch Kimi-K2 1000B-A32B or not. 
-> 
-> Regarding OOMing with this method, [i have some notes in a discussion with fairydreaming about using triton-cpu instead for using RAM without GPU](https://github.com/ggml-org/llama.cpp/discussions/11989#discussioncomment-13555486) that I just dug up. Also found a patch that might prevent VRAM OOM on 4090 series cards [here on hugginface](https://huggingface.co/deepseek-ai/DeepSeek-V3/discussions/17).
-> 
-> > BTW, isn't it possible to make imatrix directly from BF16?
-> 
-> Yes, if you can run inferencing with the 2TB VRAM+RAM bf16 GGUF, then you could use it directly for imatrix. I haven't tested the quality difference in terms of perplexity, but I believe the Q8_0 is sufficient given it is quite similar to the native fp8.
-> 
-> >  I'm trying evshiron llama.cpp, which seems to have a direct conversion from fp8 to q8_0.
-> 
-> Yes this is my usual method. Not sure it would work with Kimi-K2 though without some modifications. I assume you got `triton-cpu` to build (this is one of the more difficult steps of the process). Notes on building triton-cpu [here where @saood06 helped fix a build bug for them](https://github.com/triton-lang/triton-cpu/issues/237#issuecomment-2878180022).
-> 
-> My script then is to convert the fp8 safetensors directly to bf16 GGUF is:
-> ```bash
-> # evshiron/llama.cpp@63b7e8aa
-> source venv/bin/activate
-> python \
->       llama.cpp/convert_hf_to_gguf.py \
->       --outtype bf16 \
->       --split-max-size 50G \
->       --outfile /models/ubergarm/DeepSeek-TNG-R1T2-Chimera-GGUF/ \
->       /models/tngtech/DeepSeek-TNG-R1T2-Chimera/
-> ```
-> 
-> If you're still getting that error, you might have to poke around in `convert_hf_to_gguf.py` search where it says `triton` for the `deepseek-v3` part. Might need to look at the recent Kimi-K2 PR https://github.com/ggml-org/llama.cpp/pull/14654 and add that to the evshiron fork or something.
-> 
-> I don't have access to enough RAM at the moment. Maybe will in the next few weeks :crossed_fingers: 
-> 
-> Thanks for blazing the trail! And feel free to open a new discussion/issue specific to Kimi-K2 etc...
-> 
-> 👤 **magikRUKKOLA** replied the **2025-07-13** at **18:17:56**:<br>
 > > I don't have access to enough RAM at the moment. Maybe will in the next few weeks 🤞
 > 
 > Hey bro, are you in EU?  I can drop you some 1TB DDR5 RAM with a huge discount.
+
+> 👤 **ubergarm** replied on **2025-07-13** at **18:38:54**
 > 
-> 👤 **ubergarm** replied the **2025-07-13** at **18:38:54**:<br>
 > @magikRUKKOLA 
 > 
 > Oh man, thanks for the offer, no I'm in east coast usa currently. wendell at level1techs.com is hooking me up with access to a new remote rig he's assembling that is a big dual socket 1.5TB beast that should be online sooner than I expected!
+
+> 👤 **ewhacc** replied on **2025-07-14** at **00:16:44**
 > 
-> 👤 **ewhacc** replied the **2025-07-14** at **00:16:44**:<br>
 > @ubergarm 
 > You had have gone through all this tough process. Thank so much for sharing experience.
 > 
 > > Yes, if you can run inferencing with the 2TB VRAM+RAM bf16 GGUF, then you could use it directly for imatrix. I haven't tested the quality difference in terms of perplexity, but I believe the Q8_0 is sufficient given it is quite similar to the native fp8.
 > 
 > Oops, 2TB.  Sounds like going through Q8_0 is a must.
+
+> 👤 **ubergarm** replied on **2025-07-14** at **02:53:30**
 > 
-> 👤 **ubergarm** replied the **2025-07-14** at **02:53:30**:<br>
 > @ewhacc 
 > 
 > So Wendell just hooked me up with remote access to a big dual socket AMD CPU rig with 42TB of kioxia flash storage i put into two RAID0 arrays and with almost 1.5TB RAM - (no GPUs). So working through it now using the "mainline" method of casting the fp8 safetensors to bf16 safetensors first. 
@@ -311,8 +270,9 @@ ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
 > If I can get that working, I'll try to see if it is possible to adapt the evshiron fork to do the same MLA treatment to Kimi-K2 as it does for deepseek models and do the direct fp8 safetensors -> bf16 GGUF
 > 
 > A few folks working on it also here feel free to join with your findings: https://huggingface.co/gabriellarson/Kimi-K2-Instruct-GGUF/discussions/1
+
+> 👤 **ewhacc** replied on **2025-07-14** at **03:12:39**
 > 
-> 👤 **ewhacc** replied the **2025-07-14** at **03:12:39**:<br>
 > @ubergarm 
 > > A few folks working on it also here feel free to join with your findings: https://huggingface.co/gabriellarson/Kimi-K2-Instruct-GGUF/discussions/1
 > 
@@ -320,7 +280,7 @@ ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
 
 ---
 
-👤 **ewhacc** replied the **2025-07-13** at **11:30:20**:<br>
+👤 **ewhacc** commented on **2025-07-13** at **11:30:20**
 
 @magikRUKKOLA 
 >  Small tip/note -- it you chose to use DDR4 don't buy 3200 MT/s (unless its for Lenovo machines). The Samsung 2666 MT/s ECC overclocks with 1.35V great with crazy timings. But you would have to install the additional fans and the heatsinks on top of the RAM. Also, Gigabyte MC62-G40-00 suck -- it doesn't allow overclocking.
@@ -329,7 +289,7 @@ Thank you for the tip.  Yeah, I have temped to overclock DDR4, and even DDR5.  B
 
 ---
 
-👤 **magikRUKKOLA** replied the **2025-07-15** at **19:59:27**:<br>
+👤 **magikRUKKOLA** commented on **2025-07-15** at **19:59:27**
 
 ATTN!  Below is not a joke.  Its an actual latest commit for the flashinfer.  Please pay attention:
 

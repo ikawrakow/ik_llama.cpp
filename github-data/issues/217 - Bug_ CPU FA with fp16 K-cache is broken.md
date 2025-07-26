@@ -1,10 +1,11 @@
-### 🐛 [#217](https://github.com/ikawrakow/ik_llama.cpp/issues/217) - Bug: CPU FA with fp16 K-cache is broken
+### [Issue #217](https://github.com/ikawrakow/ik_llama.cpp/issues/217) - Bug: CPU FA with fp16 K-cache is broken
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-02-21 |
 | **Updated** | 2025-02-22 |
+| **Labels** | `bug` |
 
 ---
 

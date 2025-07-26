@@ -1,4 +1,4 @@
-### 🗣️ [#165](https://github.com/ikawrakow/ik_llama.cpp/discussions/165) - Norm RMS Epsilon
+### [Discussion #165](https://github.com/ikawrakow/ik_llama.cpp/discussions/165) - Norm RMS Epsilon
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
@@ -21,7 +21,7 @@ And merry XMAS btw, if you celebrate it!
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2024-12-27** at **17:44:24**:<br>
+👤 **ikawrakow** commented on **2024-12-27** at **17:44:24**
 
 I'm travelling, so just quickly from the phone.
 

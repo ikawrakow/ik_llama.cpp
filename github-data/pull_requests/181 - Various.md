@@ -1,10 +1,11 @@
-### 🔀 [#181](https://github.com/ikawrakow/ik_llama.cpp/pull/181) - Various
+### [Pull Request #181](https://github.com/ikawrakow/ik_llama.cpp/pull/181) - Various
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-29 |
 | **Updated** | 2025-01-29 |
+| **Merged** | 2025-01-29 |
 
 ---
 

@@ -1,9 +1,10 @@
-### ✨ [#67](https://github.com/ikawrakow/ik_llama.cpp/issues/67) - Feature Request: Elliminate/reduce unnecessary copies 
+### [Issue #67](https://github.com/ikawrakow/ik_llama.cpp/issues/67) - Feature Request: Elliminate/reduce unnecessary copies 
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
 | **Created** | 2024-09-28 |
+| **Labels** | `enhancement` |
 
 ---
 

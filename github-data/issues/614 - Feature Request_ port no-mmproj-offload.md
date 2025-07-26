@@ -1,10 +1,11 @@
-### ✨ [#614](https://github.com/ikawrakow/ik_llama.cpp/issues/614) - Feature Request: port no-mmproj-offload
+### [Issue #614](https://github.com/ikawrakow/ik_llama.cpp/issues/614) - Feature Request: port no-mmproj-offload
 
 | **Author** | `erazortt` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
 | **Created** | 2025-07-15 |
 | **Updated** | 2025-07-16 |
+| **Labels** | `enhancement` |
 
 ---
 
@@ -33,6 +34,6 @@ _No response_
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-07-16** at **09:19:35**:<br>
+👤 **ikawrakow** commented on **2025-07-16** at **09:19:35**
 
 There is no vision support at all in `ik_llama.cpp`, see my response in #615

@@ -1,4 +1,4 @@
-### 📝 [#447](https://github.com/ikawrakow/ik_llama.cpp/issues/447) - Compilation Error: Error C2676
+### [Issue #447](https://github.com/ikawrakow/ik_llama.cpp/issues/447) - Compilation Error: Error C2676
 
 | **Author** | `quasar-of-mikus` |
 | :--- | :--- |
@@ -64,13 +64,13 @@ C:\Textgen\ik_llama.cpp>
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-23** at **12:10:01**:<br>
+👤 **ikawrakow** commented on **2025-05-23** at **12:10:01**
 
 Does #448 fix it?
 
 ---
 
-👤 **quasar-of-mikus** commented the **2025-05-23** at **12:30:39**:<br>
+👤 **quasar-of-mikus** commented on **2025-05-23** at **12:30:39**
 
 Yep, it compiles and runs fine with that PR. Don't know if this is related but I saw this message come up even though it built:
 ```
@@ -100,14 +100,14 @@ ction taking 0 arguments [C:\Textgen\ik_llama.cpp\build\examples\quantize-stats\
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-23** at **12:56:37**:<br>
+👤 **ikawrakow** commented on **2025-05-23** at **12:56:37**
 
 These are in the `quantize-stats` tool that fails to build (but everything else build correctly).
 Somehow MSVC disagrees with GCC and clang on the scope of `constexpr`'s. Can you check if the commit I just pushed fixes it? Thanks.
 
 ---
 
-👤 **quasar-of-mikus** commented the **2025-05-23** at **13:14:15**:<br>
+👤 **quasar-of-mikus** commented on **2025-05-23** at **13:14:15**
 
 No, on commit [f015390](https://github.com/ikawrakow/ik_llama.cpp/pull/448/commits/f015390efa54b21752e3a76c212c93614cfff7ca) I am still getting an error, same as last time minus an error for `kBlockSize`:
 ```
@@ -131,31 +131,7 @@ ction taking 0 arguments [C:\Textgen\ik_llama.cpp\build\examples\quantize-stats\
 
 ---
 
-👤 **quasar-of-mikus** commented the **2025-05-23** at **13:14:15**:<br>
-
-No, I am still getting an error, same as last time minus an error for `kBlockSize`:
-```
-C:\Textgen\ik_llama.cpp\examples\quantize-stats\quantize-stats.cpp(555,1): error C3493: 'kGroupSize' cannot be implicit
-ly captured because no default capture mode has been specified [C:\Textgen\ik_llama.cpp\build\examples\quantize-stats\l
-lama-quantize-stats.vcxproj]
-C:\Textgen\ik_llama.cpp\examples\quantize-stats\quantize-stats.cpp(678,1): error C3493: 'kNg' cannot be implicitly capt
-ured because no default capture mode has been specified [C:\Textgen\ik_llama.cpp\build\examples\quantize-stats\llama-qu
-antize-stats.vcxproj]
-C:\Textgen\ik_llama.cpp\examples\quantize-stats\quantize-stats.cpp(693,5): error C2064: term does not evaluate to a fun
-ction taking 0 arguments [C:\Textgen\ik_llama.cpp\build\examples\quantize-stats\llama-quantize-stats.vcxproj]
-C:\Textgen\ik_llama.cpp\examples\quantize-stats\quantize-stats.cpp(780,1): error C3493: 'kNumVal' cannot be implicitly
-captured because no default capture mode has been specified [C:\Textgen\ik_llama.cpp\build\examples\quantize-stats\llam
-a-quantize-stats.vcxproj]
-C:\Textgen\ik_llama.cpp\examples\quantize-stats\quantize-stats.cpp(824,5): error C2064: term does not evaluate to a fun
-ction taking 0 arguments [C:\Textgen\ik_llama.cpp\build\examples\quantize-stats\llama-quantize-stats.vcxproj]
-  llama-gguf.vcxproj -> C:\Textgen\ik_llama.cpp\build\bin\Release\llama-gguf.exe
-  llama-gguf-hash.vcxproj -> C:\Textgen\ik_llama.cpp\build\bin\Release\llama-gguf-hash.exe
-  llama-bench-matmult.vcxproj -> C:\Textgen\ik_llama.cpp\build\bin\Release\llama-bench-matmult.exe
-```
-
----
-
-👤 **ikawrakow** commented the **2025-05-23** at **13:29:23**:<br>
+👤 **ikawrakow** commented on **2025-05-23** at **13:29:23**
 
 And now?
 
@@ -163,7 +139,7 @@ I never work on Windows, but from what I hear from `llama.cpp` users `clang` pro
 
 ---
 
-👤 **quasar-of-mikus** commented the **2025-05-23** at **13:44:54**:<br>
+👤 **quasar-of-mikus** commented on **2025-05-23** at **13:44:54**
 
 It works now, no more errors during compilation.
 >from what I hear from llama.cpp users clang produces faster code than MSVC.

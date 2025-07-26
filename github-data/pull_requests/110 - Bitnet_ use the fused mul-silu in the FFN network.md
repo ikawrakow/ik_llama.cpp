@@ -1,10 +1,11 @@
-### 🔀 [#110](https://github.com/ikawrakow/ik_llama.cpp/pull/110) - Bitnet: use the fused mul-silu in the FFN network
+### [Pull Request #110](https://github.com/ikawrakow/ik_llama.cpp/pull/110) - Bitnet: use the fused mul-silu in the FFN network
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-26 |
 | **Updated** | 2024-10-26 |
+| **Merged** | 2024-10-26 |
 
 ---
 

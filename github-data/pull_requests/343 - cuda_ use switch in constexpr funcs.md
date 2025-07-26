@@ -1,10 +1,11 @@
-### 🔀 [#343](https://github.com/ikawrakow/ik_llama.cpp/pull/343) - cuda: use switch in constexpr funcs
+### [Pull Request #343](https://github.com/ikawrakow/ik_llama.cpp/pull/343) - cuda: use switch in constexpr funcs
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-24 |
 | **Updated** | 2025-04-24 |
+| **Merged** | 2025-04-24 |
 
 ---
 

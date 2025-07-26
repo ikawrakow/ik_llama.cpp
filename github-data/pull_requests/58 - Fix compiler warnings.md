@@ -1,10 +1,11 @@
-### 🐛 [#58](https://github.com/ikawrakow/ik_llama.cpp/pull/58) - Fix compiler warnings
+### [Pull Request #58](https://github.com/ikawrakow/ik_llama.cpp/pull/58) - Fix compiler warnings
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-17 |
 | **Updated** | 2024-09-17 |
+| **Merged** | 2024-09-17 |
 
 ---
 

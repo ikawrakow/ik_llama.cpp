@@ -1,10 +1,11 @@
-### 🔀 [#141](https://github.com/ikawrakow/ik_llama.cpp/pull/141) - Q8_K_R8: Fastest quantized matrix multiplications
+### [Pull Request #141](https://github.com/ikawrakow/ik_llama.cpp/pull/141) - Q8_K_R8: Fastest quantized matrix multiplications
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-14 |
 | **Updated** | 2024-12-14 |
+| **Merged** | 2024-12-14 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#147](https://github.com/ikawrakow/ik_llama.cpp/pull/147) - Be able to repack tensors at run time
+### [Pull Request #147](https://github.com/ikawrakow/ik_llama.cpp/pull/147) - Be able to repack tensors at run time
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-17 |
 | **Updated** | 2024-12-17 |
+| **Merged** | 2024-12-17 |
 
 ---
 

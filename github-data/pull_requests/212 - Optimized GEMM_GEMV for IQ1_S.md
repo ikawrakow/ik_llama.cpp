@@ -1,10 +1,11 @@
-### 🔀 [#212](https://github.com/ikawrakow/ik_llama.cpp/pull/212) - Optimized GEMM/GEMV for IQ1_S
+### [Pull Request #212](https://github.com/ikawrakow/ik_llama.cpp/pull/212) - Optimized GEMM/GEMV for IQ1_S
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-20 |
 | **Updated** | 2025-02-20 |
+| **Merged** | 2025-02-20 |
 
 ---
 
@@ -39,7 +40,7 @@ I think one can do better by interleaving 4 rows on the fly, but I leave this fo
 
 #### 💬 Conversation
 
-👤 **godrosev** commented the **2025-02-20** at **13:15:29**:<br>
+👤 **godrosev** commented on **2025-02-20** at **13:15:29**
 
 ikawrakow, thank you so much. This helped me a lot!
 Also, it's not that I'm reluctant to use it IQ1_S_R4。Instead, I need a smaller file size and memory (you said he would reduce it by a few GB), it's just that my current work requires running ready-made Unsloth's DeepSeek-R1.

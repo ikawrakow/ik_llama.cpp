@@ -1,10 +1,11 @@
-### 🔀 [#272](https://github.com/ikawrakow/ik_llama.cpp/pull/272) - Convert models to row-interleaved quants using the quantize tool
+### [Pull Request #272](https://github.com/ikawrakow/ik_llama.cpp/pull/272) - Convert models to row-interleaved quants using the quantize tool
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-20 |
 | **Updated** | 2025-03-21 |
+| **Merged** | 2025-03-21 |
 
 ---
 
@@ -30,19 +31,183 @@ Closes #228
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-03-20** at **14:53:05**:<br>
+👤 **ubergarm** commented on **2025-03-20** at **14:32:33**
+
+I'll take a look at this, but had an error trying to compile. Maybe a std template type thing? Not sure if I'm missing a dependency or something else. Here is the spammy build log:
+
+<details>
+<summary>Build Error Log</summary>
+
+Let me know if you want more of the errors, I copy pasted what looks like enough to possibly see the actual error.
+```shell
+$ gcc --version
+gcc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0
+
+$ git checkout ik/offline_repack
+Switched to branch 'ik/offline_repack'
+Your branch is up to date with 'origin/ik/offline_repack'.
+
+$ git rev-parse --short HEAD
+9fbe5bee
+
+$ rm -rf build
+$ cmake -B build -DGGML_CUDA=OFF -DGGML_RPC=OFF -DGGML_BLAS=OFF
+$ cmake --build build --config Release -j $(nproc)
+
+-- The C compiler identification is GNU 13.3.0
+-- The CXX compiler identification is GNU 13.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found Git: /usr/bin/git (found version "2.43.0")
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Found OpenMP_C: -fopenmp (found version "4.5")
+-- Found OpenMP_CXX: -fopenmp (found version "4.5")
+-- Found OpenMP: TRUE (found version "4.5")
+-- OpenMP found
+-- Using optimized iqk matrix multiplications
+-- Using llamafile
+-- ccache found, compilation results will be cached. Disable with GGML_CCACHE=OFF.
+-- CMAKE_SYSTEM_PROCESSOR: x86_64
+-- x86 detected
+-- Configuring done (2.9s)
+-- Generating done (0.1s)
+-- Build files have been written to: /home/j/projects/ik_llama.cpp/build
+[  1%] Building CXX object common/CMakeFiles/build_info.dir/build-info.cpp.o
+[  2%] Building C object ggml/src/CMakeFiles/ggml.dir/ggml-backend.c.o
+[  3%] Building C object ggml/src/CMakeFiles/ggml.dir/ggml-alloc.c.o
+[  3%] Building C object ggml/src/CMakeFiles/ggml.dir/ggml.c.o
+[  3%] Building C object examples/gguf-hash/CMakeFiles/sha1.dir/deps/sha1/sha1.c.o
+[  4%] Building C object ggml/src/CMakeFiles/ggml.dir/ggml-quants.c.o
+[  5%] Building C object examples/gguf-hash/CMakeFiles/xxhash.dir/deps/xxhash/xxhash.c.o
+[  6%] Building C object examples/gguf-hash/CMakeFiles/sha256.dir/deps/sha256/sha256.c.o
+[  6%] Building CXX object ggml/src/CMakeFiles/ggml.dir/llamafile/sgemm.cpp.o
+[  7%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_mul_mat.cpp.o
+[  8%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_quantize.cpp.o
+[  8%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_flash_attn.cpp.o
+# (a few warnings that seem normal)
+[  8%] Building C object ggml/src/CMakeFiles/ggml.dir/ggml-aarch64.c.o
+[  8%] Built target sha1
+[  8%] Built target build_info
+[  8%] Built target sha256
+[  8%] Built target xxhash
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp: In function ‘bool {anonymous}::is_forbidden_tensor(const std::string&)’:
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:6784:14: error: no match for ‘operator==’ (operand types are ‘const std::string’ {aka ‘con
+st std::__cxx11::basic_string<char>’} and ‘const char [18]’)
+ 6784 |     if (name == "token_embd.weight") return true;
+      |         ~~~~ ^~ ~~~~~~~~~~~~~~~~~~~
+      |         |       |
+      |         |       const char [18]
+      |         const std::string {aka const std::__cxx11::basic_string<char>}
+In file included from /usr/include/x86_64-linux-gnu/c++/13/bits/c++allocator.h:33,
+                 from /usr/include/c++/13/bits/allocator.h:46,
+                 from /usr/include/c++/13/vector:63,
+                 from /home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:17:
+/usr/include/c++/13/bits/new_allocator.h:215:9: note: candidate: ‘template<class _Up> bool std::operator==(const __new_allocator<char>&, const __new_a
+llocator<_Tp>&)’
+  215 |         operator==(const __new_allocator&, const __new_allocator<_Up>&)
+      |         ^~~~~~~~
+/usr/include/c++/13/bits/new_allocator.h:215:9: note:   template argument deduction/substitution failed:
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:6784:17: note:   mismatched types ‘const std::__new_allocator<_Tp>’ and ‘const char [18]’
+ 6784 |     if (name == "token_embd.weight") return true;
+      |                 ^~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/c++/13/bits/stl_algobase.h:64,
+                 from /usr/include/c++/13/bits/specfun.h:43,
+                 from /usr/include/c++/13/cmath:3699,
+                 from /usr/include/c++/13/math.h:36,
+                 from /home/j/projects/ik_llama.cpp/ggml/src/./ggml-impl.h:12,
+                 from /home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:11:
+/usr/include/c++/13/bits/stl_pair.h:812:5: note: candidate: ‘template<class _T1, class _T2> constexpr bool std::operator==(const pair<_T1, _T2>&, cons
+t pair<_T1, _T2>&)’
+  812 |     operator==(const pair<_T1, _T2>& __x, const pair<_T1, _T2>& __y)
+      |     ^~~~~~~~
+/usr/include/c++/13/bits/stl_pair.h:812:5: note:   template argument deduction/substitution failed:
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:6784:17: note:   ‘const std::string’ {aka ‘const std::__cxx11::basic_string<char>’} is not
+ derived from ‘const std::pair<_T1, _T2>’
+ 6784 |     if (name == "token_embd.weight") return true;
+      |                 ^~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/c++/13/bits/stl_algobase.h:67:
+/usr/include/c++/13/bits/stl_iterator.h:448:5: note: candidate: ‘template<class _Iterator> constexpr bool std::operator==(const reverse_iterator<_Iter
+ator>&, const reverse_iterator<_Iterator>&)’
+  448 |     operator==(const reverse_iterator<_Iterator>& __x,
+      |     ^~~~~~~~
+/usr/include/c++/13/bits/stl_iterator.h:448:5: note:   template argument deduction/substitution failed:
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:6784:17: note:   ‘const std::string’ {aka ‘const std::__cxx11::basic_string<char>’} is not
+ derived from ‘const std::reverse_iterator<_Iterator>’
+ 6784 |     if (name == "token_embd.weight") return true;
+      |                 ^~~~~~~~~~~~~~~~~~~
+/usr/include/c++/13/bits/stl_iterator.h:493:5: note: candidate: ‘template<class _IteratorL, class _IteratorR> constexpr bool std::operator==(const rev
+erse_iterator<_Iterator>&, const reverse_iterator<_IteratorR>&)’
+  493 |     operator==(const reverse_iterator<_IteratorL>& __x,
+      |     ^~~~~~~~
+/usr/include/c++/13/bits/stl_iterator.h:493:5: note:   template argument deduction/substitution failed:
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:6784:17: note:   ‘const std::string’ {aka ‘const std::__cxx11::basic_string<char>’} is not
+ derived from ‘const std::reverse_iterator<_Iterator>’
+ 6784 |     if (name == "token_embd.weight") return true;
+      |                 ^~~~~~~~~~~~~~~~~~~
+.
+.
+.
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp: In function ‘bool iqk_should_modify_tensor(const ggml_tensor*)’:
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:6792:37: error: invalid initialization of reference of type ‘const std::string&’ {aka ‘con
+st std::__cxx11::basic_string<char>&’} from expression of type ‘const char [64]’
+ 6792 |     if (is_forbidden_tensor(tensor->name)) return false;
+      |                             ~~~~~~~~^~~~
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:6783:45: note: in passing argument 1 of ‘bool {anonymous}::is_forbidden_tensor(const std::
+string&)’
+ 6783 | bool is_forbidden_tensor(const std::string& name) {
+      |                          ~~~~~~~~~~~~~~~~~~~^~~~
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp: In function ‘bool iqk_modify_tensor(ggml_tensor*)’:
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:6801:37: error: invalid initialization of reference of type ‘const std::string&’ {aka ‘con
+st std::__cxx11::basic_string<char>&’} from expression of type ‘char [64]’
+ 6801 |     if (is_forbidden_tensor(tensor->name)) return false;
+      |                             ~~~~~~~~^~~~
+/home/j/projects/ik_llama.cpp/ggml/src/iqk/iqk_quantize.cpp:6783:45: note: in passing argument 1 of ‘bool {anonymous}::is_forbidden_tensor(const std::
+string&)’
+.
+.
+.
+gmake[2]: *** [ggml/src/CMakeFiles/ggml.dir/build.make:174: ggml/src/CMakeFiles/ggml.dir/iqk/iqk_quantize.cpp.o] Error 1
+gmake[2]: *** Waiting for unfinished jobs....
+^Cgmake[2]: *** [ggml/src/CMakeFiles/ggml.dir/build.make:146: ggml/src/CMakeFiles/ggml.dir/iqk/iqk_mul_mat.cpp.o] Interrupt
+gmake[1]: *** [CMakeFiles/Makefile2:1621: ggml/src/CMakeFiles/ggml.dir/all] Interrupt
+gmake: *** [Makefile:146: all] Interrupt
+```
+
+<details>
+
+---
+
+👤 **ubergarm** commented on **2025-03-20** at **14:51:47**
+
+Hrmm, does `./ggml/src/iqk/iqk_quantize.cpp` just need `#include string` ? I'm fussing with it lol.. You are too xD
+
+---
+
+👤 **ikawrakow** commented on **2025-03-20** at **14:53:05**
 
 Does the last commit fix it? Strange that we can no longer compare `std::string` to a C-string, and a reference to `std::string` is no longer automatically instantiated from a C-string. Seriously? This will brake billions of LoC of C++.
 
 ---
 
-👤 **ubergarm** commented the **2025-03-20** at **14:55:53**:<br>
+👤 **ubergarm** commented on **2025-03-20** at **14:55:53**
 
-Seems to be compiling now on `d27b7226`. I'll go back and check if simply adding `#include string` to `./ggml/src/iqk/iqk_quantize.cpp` would also fix it to confirm.
+lol wait a sec, let me double check this:
+
+~Seems to be compiling now on `d27b7226`. I'll go back and check if simply adding `#include string` to `./ggml/src/iqk/iqk_quantize.cpp` would also fix it to confirm.~
 
 ---
 
-👤 **ubergarm** commented the **2025-03-20** at **14:58:43**:<br>
+👤 **ubergarm** commented on **2025-03-20** at **14:58:43**
 
 Yeah, just needs the include e.g.
 
@@ -66,15 +231,19 @@ index bc6f34eb..0375b878 100644
 ## builds good
 ```
 
+Didn't need `d27b722` or `94576a5`
+
+Feel free to force push or however you want to finalize this one.
+
 ---
 
-👤 **ikawrakow** commented the **2025-03-20** at **15:36:25**:<br>
+👤 **ikawrakow** commented on **2025-03-20** at **15:36:25**
 
 I think we can leave the two unnecessary changes. If we remove the explicit string construction, the compiler does it for us anyway.
 
 ---
 
-👤 **ubergarm** commented the **2025-03-20** at **15:38:00**:<br>
+👤 **ubergarm** commented on **2025-03-20** at **15:38:00**
 
 Okay, repacking seems to be working. I'll try out the freshly generated repacked weights next.
 

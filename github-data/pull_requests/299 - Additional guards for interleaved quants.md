@@ -1,10 +1,11 @@
-### 🔀 [#299](https://github.com/ikawrakow/ik_llama.cpp/pull/299) - Additional guards for interleaved quants
+### [Pull Request #299](https://github.com/ikawrakow/ik_llama.cpp/pull/299) - Additional guards for interleaved quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-31 |
 | **Updated** | 2025-04-01 |
+| **Merged** | 2025-04-01 |
 
 ---
 
@@ -18,7 +19,7 @@ Hopefully this PR handles all scenarios where one may arrive at using an interle
 
 #### 💬 Conversation
 
-👤 **saood06** commented the **2025-03-31** at **12:05:48**:<br>
+👤 **saood06** commented on **2025-03-31** at **12:05:48**
 
 Decided to test this branch, using just pure with `./llama-quantize  --imatrix /mnt/sda/imatrix_V30324_mrader.dat --pure /mnt/sda/DeepseekV3_0324/DeepseekV3_0324-256x21B-BF16.gguf /mnt/sda/DeepSeek-V3-0324-IQ4_K_R4_ATT5.gguf IQ4_K_R4 48` and token embedding was still using the interleaved type.
 
@@ -51,7 +52,7 @@ converting to iq4_k_r4 .. size =  1767.50 MiB ->   497.11 MiB
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-31** at **12:46:26**:<br>
+👤 **ikawrakow** commented on **2025-03-31** at **12:46:26**
 
 None of the above happens to me. Here the log of
 ```
@@ -782,7 +783,7 @@ Same outcome with `--custom-q ".*=iq4_k_r4"`.
 
 ---
 
-👤 **saood06** commented the **2025-04-01** at **00:08:56**:<br>
+👤 **saood06** commented on **2025-04-01** at **00:08:56**
 
 > None of the above happens to me. Here the log of
 

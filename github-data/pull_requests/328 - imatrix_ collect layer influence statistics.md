@@ -1,10 +1,11 @@
-### 🔀 [#328](https://github.com/ikawrakow/ik_llama.cpp/pull/328) - imatrix: collect layer influence statistics
+### [Pull Request #328](https://github.com/ikawrakow/ik_llama.cpp/pull/328) - imatrix: collect layer influence statistics
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-14 |
 | **Updated** | 2025-04-14 |
+| **Merged** | 2025-04-14 |
 
 ---
 
@@ -18,25 +19,102 @@ Here is how one can collect statistics about the activations change caused by a 
 
 #### 💬 Conversation
 
-👤 **ubergarm** commented the **2025-04-14** at **14:39:20**:<br>
+👤 **ubergarm** commented on **2025-04-14** at **14:39:20**
 
 Holy smokes, amazing! I'm out for a couple nights, but going to pull this and try quick before leaving the house haha... Thanks!
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-14** at **16:02:02**:<br>
+👤 **ubergarm** commented on **2025-04-14** at **15:55:34**
+
+Oooh yeah, just got it to work in quick test! Took me a sec to figure it out given I was using CUDA which messes up the logic for block names I believe here:
+
+```
+    std::optional<int> layer_index(const std::string& name) const {
+        printf("name=%s, m_params.output_tensor_name=%s\n", name.c_str(), m_params.output_tensor_name.c_str());
+        if (name == m_params.output_tensor_name && m_last_layer < 199) {
+            return m_last_layer + 1;
+        }
+```
+
+## Running on single CUDA GPU
+```
+compute_imatrix: tokenizing the input ..
+compute_imatrix: tokenization took 1.736 ms
+compute_imatrix: computing over 5 chunks with batch_size 512
+name=CUDA0#blk.0.attn_q.weight#0, m_params.output_tensor_name=ffn_down.weight
+name=CUDA0#blk.0.attn_k.weight#0, m_params.output_tensor_name=ffn_down.weight
+name=CUDA0#blk.0.attn_v.weight#0, m_params.output_tensor_name=ffn_down.weight
+name=CUDA0#blk.0.attn_output.weight#0, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.ffn_gate.weight, m_params.output_tensor_name=ffn_down.weight
+name=CUDA0#blk.0.ffn_gate.weight#0, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.ffn_up.weight, m_params.output_tensor_name=ffn_down.weight
+name=CUDA0#blk.0.ffn_up.weight#0, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.ffn_down.weight, m_params.output_tensor_name=ffn_down.weight
+name=CUDA0#blk.0.ffn_down.weight#0, m_params.output_tensor_name=ffn_down.weight
+name=CUDA0#blk.1.attn_q.weight#0, m_params.output_tensor_name=ffn_down.weight
+```
+
+## Running on CPU only compiled
+```
+compute_imatrix: tokenizing the input ..
+compute_imatrix: tokenization took 1.843 ms
+compute_imatrix: computing over 5 chunks with batch_size 512
+name=blk.0.attn_q.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.attn_k.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.attn_v.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.attn_output.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.ffn_gate.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.ffn_gate.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.ffn_up.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.ffn_up.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.ffn_down.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.0.ffn_down.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.1.attn_q.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.1.attn_k.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.1.attn_v.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.1.attn_output.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.1.ffn_gate.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.1.ffn_gate.weight, m_params.output_tensor_name=ffn_down.weight
+name=blk.1.ffn_up.weight, m_params.output_tensor_name=ffn_down.weight
+```
+
+Adding a simple function to strip the names between the `#` seems to fix it for CUDA.
+
+```cpp
+std::string extractBetweenHashes(const std::string& name) {
+    size_t first_hash = name.find('#');
+    if (first_hash == std::string::npos) {
+        return name; // No first '#', return original
+    }
+
+    size_t second_hash = name.find('#', first_hash + 1);
+    if (second_hash == std::string::npos) {
+        return name; // No second '#', return original
+    }
+
+    // Extract between the two '#' characters
+    return name.substr(first_hash + 1, second_hash - first_hash - 1);
+}
+```
+
+Gonna let it run on llama-2-13b then print up a quick graph, i'm running late but wanna see this lol... thanks!
+
+---
+
+👤 **ikawrakow** commented on **2025-04-14** at **16:02:02**
 
 Does the last commit fix it? I had forgotten about having to strip the tensor name (and for whatever reason I didn't have the issue even though running on CUDA).
 
 ---
 
-👤 **ubergarm** commented the **2025-04-14** at **16:10:14**:<br>
+👤 **ubergarm** commented on **2025-04-14** at **16:10:14**
 
 Yep, that did the trick! Thanks! I have a chart I just graphed, will put it here with logs before heading out.
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-14** at **16:13:51**:<br>
+👤 **ikawrakow** commented on **2025-04-14** at **16:13:51**
 
 Using this on LLaMA-4-Scout, I get this as the layers sorted by importance (most important first):
 ```
@@ -100,13 +178,15 @@ It arrived at a `PPL = 9.7545`, so nearly on par with Unsloth's `UD-Q2_K_XL`, de
 
 ---
 
-👤 **ubergarm** commented the **2025-04-14** at **16:28:24**:<br>
+👤 **ubergarm** commented on **2025-04-14** at **16:28:24**
 
 > (but using layer 47 instead of layer 4, which according to the metric would be the right thing to do, results in a worse outcome)
 
 Very interesting. Yeah, I'm curious how much the input text for imatrix effects these cosine similarities as well. 
 
 I did a quick run with `llama-2-13b-chat.Q8_0.gguf` and plotted the results to compare against that [Layer-wise Quantization](https://arxiv.org/pdf/2406.17415) paper which suggests for this model the three most important layers would be 1, 2, and 40 while the least important would be 32, 33, and 34. Though I'm not sure how they got that final layer 40 cosine similarity.
+
+Your results seem to correlate with theirs in this limited test.
 
 <details>
 

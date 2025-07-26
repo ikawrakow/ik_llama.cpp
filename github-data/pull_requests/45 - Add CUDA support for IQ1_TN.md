@@ -1,10 +1,11 @@
-### 🔀 [#45](https://github.com/ikawrakow/ik_llama.cpp/pull/45) - Add CUDA support for IQ1_TN
+### [Pull Request #45](https://github.com/ikawrakow/ik_llama.cpp/pull/45) - Add CUDA support for IQ1_TN
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-09 |
 | **Updated** | 2024-09-09 |
+| **Merged** | 2024-09-09 |
 
 ---
 

@@ -1,4 +1,4 @@
-### 🐛 [#615](https://github.com/ikawrakow/ik_llama.cpp/issues/615) - Bug: Gemma3 Vision not working
+### [Issue #615](https://github.com/ikawrakow/ik_llama.cpp/issues/615) - Bug: Gemma3 Vision not working
 
 | **Author** | `erazortt` |
 | :--- | :--- |
@@ -38,18 +38,18 @@ Windows
 
 #### 💬 Conversation
 
-👤 **jmcook** commented the **2025-07-16** at **03:36:05**:<br>
+👤 **jmcook** commented on **2025-07-16** at **03:36:05**
 
 That's funny, I was just trying the same thing tonight and noticed the same thing!
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-16** at **09:18:39**:<br>
+👤 **ikawrakow** commented on **2025-07-16** at **09:18:39**
 
 Sorry, there is no vision support in `ik_llama.cpp` at all. As I know nothing about vision or multi-modality, my suggestion is to try to convince @ngxson to contribute the multi-modality library he created for `llama.cpp` also to `ik_llama.cpp`.
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-19** at **09:27:13**:<br>
+👤 **ikawrakow** commented on **2025-07-19** at **09:27:13**
 
 I think I'll close this one. A feature request can be opened instead.

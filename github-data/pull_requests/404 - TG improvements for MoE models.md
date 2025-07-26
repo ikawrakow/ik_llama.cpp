@@ -1,10 +1,11 @@
-### 🔀 [#404](https://github.com/ikawrakow/ik_llama.cpp/pull/404) - TG improvements for MoE models
+### [Pull Request #404](https://github.com/ikawrakow/ik_llama.cpp/pull/404) - TG improvements for MoE models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-10 |
 | **Updated** | 2025-05-10 |
+| **Merged** | 2025-05-10 |
 
 ---
 

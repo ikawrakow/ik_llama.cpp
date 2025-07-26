@@ -1,10 +1,11 @@
-### 🔀 [#520](https://github.com/ikawrakow/ik_llama.cpp/pull/520) - Better strategy for GPU offload
+### [Pull Request #520](https://github.com/ikawrakow/ik_llama.cpp/pull/520) - Better strategy for GPU offload
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-11 |
 | **Updated** | 2025-06-12 |
+| **Merged** | 2025-06-12 |
 
 ---
 
@@ -71,9 +72,9 @@ Please play with this PR and let me know if it is useful to get merged.
 
 #### 💬 Conversation
 
-👤 **quasar-of-mikus** commented the **2025-06-11** at **20:40:59**:<br>
+👤 **quasar-of-mikus** commented on **2025-06-11** at **20:40:59**
 
-Looks quite good for setups like mine where PCIe bandwidth is low and prompt length is short.
+Looks good for setups like mine where PCIe bandwidth is low and prompt length is short.
 
 128gb ddr4 3200 2ch
 2x 3090 PCIe 3.0 x8 x8
@@ -85,39 +86,66 @@ Main: ~1.5t/s pp
 PR: 9-10t/s pp
 
 
-PR:
+PR build: cdcb324f (3743):
 | model                          |       size |     params | backend    | ngl | threads | n_batch | n_ubatch | fa | mla |   amb | ts           | mmap | fmoe |          test |              t/s |
 | ------------------------------ | ---------: | ---------: | ---------- | --: | ------: | ------: | -------: | -: | --: | ----: | ------------ | ---: | ---: | ------------: | ---------------: |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp16 |      7.81 ± 0.55 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp32 |     10.61 ± 0.34 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp64 |     13.31 ± 0.16 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp128 |     17.58 ± 0.20 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp256 |     19.66 ± 0.08 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp512 |     21.24 ± 0.10 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp1024 |     52.75 ± 0.37 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp2048 |     97.01 ± 0.59 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp4096 |    165.89 ± 0.63 |
-build: cdcb324f (3743)
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp16 |      7.81 ± 0.55 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp32 |     10.61 ± 0.34 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp64 |     13.31 ± 0.16 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp128 |     17.58 ± 0.20 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp256 |     19.66 ± 0.08 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp512 |     21.24 ± 0.10 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp1024 |     52.75 ± 0.37 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp2048 |     97.01 ± 0.59 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp4096 |    165.89 ± 0.63 |
 
 
-Main, note the very low speeds for pp16 to pp256:
+
+
+Main, note the very low speeds for pp32 to pp256 build: 3f54b497 (3742):
 | model                          |       size |     params | backend    | ngl | threads | n_batch | n_ubatch | fa | mla |   amb | ts           | mmap | fmoe |          test |              t/s |
 | ------------------------------ | ---------: | ---------: | ---------- | --: | ------: | ------: | -------: | -: | --: | ----: | ------------ | ---: | ---: | ------------: | ---------------: |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp16 |      7.81 ± 0.40 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp32 |      1.89 ± 0.01 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp64 |      3.69 ± 0.01 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp128 |      7.44 ± 0.01 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp256 |     14.47 ± 0.03 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp512 |     27.94 ± 0.10 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp1024 |     52.96 ± 0.18 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp2048 |     97.27 ± 0.25 |
-| deepseek2 671B IQ1_S_R4 - 1.5 bpw | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp4096 |    166.23 ± 0.19 |
-build: 3f54b497 (3742)
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp16 |      7.81 ± 0.40 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp32 |      1.89 ± 0.01 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |          pp64 |      3.69 ± 0.01 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp128 |      7.44 ± 0.01 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp256 |     14.47 ± 0.03 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |         pp512 |     27.94 ± 0.10 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp1024 |     52.96 ± 0.18 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp2048 |     97.27 ± 0.25 |
+| ds2 671B IQ1_S_R4 | 130.20 GiB |   672.05 B | CUDA       | 999 |      18 |    4096 |     4096 |  1 |   3 |   512 | 23.00/23.00  |    0 |    1 |        pp4096 |    166.23 ± 0.19 |
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-12** at **04:44:22**:<br>
+👤 **ikawrakow** commented on **2025-06-12** at **04:44:22**
 
 Here the above data illustrated in a graph:
 
 ![batch_strategy](https://github.com/user-attachments/assets/d8acdbe1-8963-4db5-a8ed-d23db1c0e877)
+
+---
+
+👤 **ikawrakow** commented on **2025-06-12** at **04:58:12**
+
+A also took the liberty to plot @quasar-of-mikus's data:
+
+![batch_strategy1](https://github.com/user-attachments/assets/630cc027-f6ec-4acd-982d-9a7843621cda)
+
+We see that in this case the performance at 512 tokens is better on the main branch. With the default value of  `GGML_CUDA_MIN_BATCH_OFFLOAD=32` the MoE matrix multiplications are done on the CPU for a batch of 512 tokens, and in this case it is slower than to offload to the GPU. So, @quasar-of-mikus will likely benefit from using `-GGML_CUDA_MIN_BATCH_OFFLOAD=20`
+
+---
+
+👤 **quasar-of-mikus** commented on **2025-06-12** at **17:30:44**
+
+On my setup and with this model, a lower value of `-DGGML_CUDA_MIN_BATCH_OFFLOAD=16` brought the performance back @ pp512, resulting in an overall improvement (at least with this level of granularity) 👍
+|          test |             Old main t/s |             =32  |              =16  |
+| ------------: | ---------------: | ---------------: | ---------------: |
+|          pp16 |      7.81 ± 0.40 |      7.81 ± 0.55 |      7.72 ± 0.49 |
+|          pp32 |      1.89 ± 0.01 |     10.61 ± 0.34 |     10.71 ± 0.05 |
+|          pp64 |      3.69 ± 0.01 |     13.31 ± 0.16 |     13.72 ± 0.19 |
+|         pp128 |      7.44 ± 0.01 |     17.58 ± 0.20 |     17.61 ± 0.25 |
+|         pp256 |     14.47 ± 0.03 |     19.66 ± 0.08 |     19.73 ± 0.13 |
+|       **--> pp512** |     **27.94 ± 0.10** |     21.24 ± 0.10 |    **27.94 ± 0.20** |
+|       pp1024 |     52.96 ± 0.18 |     52.75 ± 0.37 |     52.92 ± 0.30 |
+|        pp2048 |     97.27 ± 0.25 |     97.01 ± 0.59 |     97.12 ± 0.54 |
+|        pp4096 |    166.23 ± 0.19 |    165.89 ± 0.63 |    165.97 ± 0.92 |

@@ -1,10 +1,11 @@
-### 🐛 [#348](https://github.com/ikawrakow/ik_llama.cpp/pull/348) - Fix q4_1 and q5_1 on Arm
+### [Pull Request #348](https://github.com/ikawrakow/ik_llama.cpp/pull/348) - Fix q4_1 and q5_1 on Arm
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-25 |
 | **Updated** | 2025-04-25 |
+| **Merged** | 2025-04-25 |
 
 ---
 

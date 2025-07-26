@@ -1,10 +1,11 @@
-### 🔀 [#23](https://github.com/ikawrakow/ik_llama.cpp/pull/23) - iq4_k tweak
+### [Pull Request #23](https://github.com/ikawrakow/ik_llama.cpp/pull/23) - iq4_k tweak
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-08-20 |
 | **Updated** | 2024-08-20 |
+| **Merged** | 2024-08-20 |
 
 ---
 

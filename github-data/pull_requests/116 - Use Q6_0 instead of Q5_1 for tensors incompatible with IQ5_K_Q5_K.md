@@ -1,10 +1,11 @@
-### 🔀 [#116](https://github.com/ikawrakow/ik_llama.cpp/pull/116) - Use Q6_0 instead of Q5_1 for tensors incompatible with IQ5_K/Q5_K
+### [Pull Request #116](https://github.com/ikawrakow/ik_llama.cpp/pull/116) - Use Q6_0 instead of Q5_1 for tensors incompatible with IQ5_K/Q5_K
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-11-20 |
 | **Updated** | 2024-11-21 |
+| **Merged** | 2024-11-21 |
 
 ---
 
@@ -20,4 +21,6 @@
 
 #### 💬 Conversation
 
-👤 **ikawrakow** submitted a review the **2024-11-21** at **06:12:49**: ✅ `APPROVED`
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2024-11-21** at **06:12:49**
+
+_No content provided._

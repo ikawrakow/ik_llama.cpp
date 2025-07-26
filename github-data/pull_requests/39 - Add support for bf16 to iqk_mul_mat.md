@@ -1,10 +1,11 @@
-### 🔀 [#39](https://github.com/ikawrakow/ik_llama.cpp/pull/39) - Add support for bf16 to iqk_mul_mat
+### [Pull Request #39](https://github.com/ikawrakow/ik_llama.cpp/pull/39) - Add support for bf16 to iqk_mul_mat
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-04 |
 | **Updated** | 2024-09-05 |
+| **Merged** | 2024-09-05 |
 
 ---
 

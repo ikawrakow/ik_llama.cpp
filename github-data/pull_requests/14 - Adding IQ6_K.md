@@ -1,10 +1,11 @@
-### 🔀 [#14](https://github.com/ikawrakow/ik_llama.cpp/pull/14) - Adding IQ6_K
+### [Pull Request #14](https://github.com/ikawrakow/ik_llama.cpp/pull/14) - Adding IQ6_K
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-08-09 |
 | **Updated** | 2024-08-09 |
+| **Merged** | 2024-08-09 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#453](https://github.com/ikawrakow/ik_llama.cpp/pull/453) - Faster IQ3_KT and IQ4_KT
+### [Pull Request #453](https://github.com/ikawrakow/ik_llama.cpp/pull/453) - Faster IQ3_KT and IQ4_KT
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-24 |
 | **Updated** | 2025-05-24 |
+| **Merged** | 2025-05-24 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#157](https://github.com/ikawrakow/ik_llama.cpp/pull/157) - R4 i-quants improvements
+### [Pull Request #157](https://github.com/ikawrakow/ik_llama.cpp/pull/157) - R4 i-quants improvements
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-22 |
 | **Updated** | 2024-12-22 |
+| **Merged** | 2024-12-22 |
 
 ---
 

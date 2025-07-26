@@ -1,10 +1,11 @@
-### 🔀 [#55](https://github.com/ikawrakow/ik_llama.cpp/pull/55) - Improve Q5_0 performance on AVX2
+### [Pull Request #55](https://github.com/ikawrakow/ik_llama.cpp/pull/55) - Improve Q5_0 performance on AVX2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-14 |
 | **Updated** | 2024-09-14 |
+| **Merged** | 2024-09-14 |
 
 ---
 

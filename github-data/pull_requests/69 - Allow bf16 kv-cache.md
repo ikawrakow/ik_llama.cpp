@@ -1,10 +1,11 @@
-### 🔀 [#69](https://github.com/ikawrakow/ik_llama.cpp/pull/69) - Allow bf16 kv-cache
+### [Pull Request #69](https://github.com/ikawrakow/ik_llama.cpp/pull/69) - Allow bf16 kv-cache
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-29 |
 | **Updated** | 2024-09-29 |
+| **Merged** | 2024-09-29 |
 
 ---
 

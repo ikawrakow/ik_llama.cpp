@@ -1,10 +1,11 @@
-### 🔀 [#142](https://github.com/ikawrakow/ik_llama.cpp/pull/142) - BF16_R16 - 16 interleaved bf16 rows  
+### [Pull Request #142](https://github.com/ikawrakow/ik_llama.cpp/pull/142) - BF16_R16 - 16 interleaved bf16 rows  
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-14 |
 | **Updated** | 2024-12-15 |
+| **Merged** | 2024-12-15 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#351](https://github.com/ikawrakow/ik_llama.cpp/pull/351) - CPU FA improvements 
+### [Pull Request #351](https://github.com/ikawrakow/ik_llama.cpp/pull/351) - CPU FA improvements 
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-28 |
 | **Updated** | 2025-04-29 |
+| **Merged** | 2025-04-29 |
 
 ---
 

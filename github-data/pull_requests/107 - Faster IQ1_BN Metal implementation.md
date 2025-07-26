@@ -1,10 +1,11 @@
-### 🔀 [#107](https://github.com/ikawrakow/ik_llama.cpp/pull/107) - Faster IQ1_BN Metal implementation
+### [Pull Request #107](https://github.com/ikawrakow/ik_llama.cpp/pull/107) - Faster IQ1_BN Metal implementation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-26 |
 | **Updated** | 2024-10-26 |
+| **Merged** | 2024-10-26 |
 
 ---
 

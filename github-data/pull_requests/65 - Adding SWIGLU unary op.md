@@ -1,10 +1,11 @@
-### 🔀 [#65](https://github.com/ikawrakow/ik_llama.cpp/pull/65) - Adding SWIGLU unary op
+### [Pull Request #65](https://github.com/ikawrakow/ik_llama.cpp/pull/65) - Adding SWIGLU unary op
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-28 |
 | **Updated** | 2024-09-28 |
+| **Merged** | 2024-09-28 |
 
 ---
 
@@ -53,7 +54,7 @@ This results in an additional 2-3% speedup of PP-512(Phi-3.5-mini) when running 
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2024-09-28** at **10:07:59**:<br>
+👤 **ikawrakow** commented on **2024-09-28** at **10:07:59**
 
 OK, Phi-3.5 has a 128k context, so let's run a benchmark with a longer context, say, 8k tokens. Here is what I get after this PR on a Ryzen-7950X CPU for Phi-3.5-mini:
 

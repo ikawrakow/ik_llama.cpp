@@ -1,10 +1,11 @@
-### 🐛 [#60](https://github.com/ikawrakow/ik_llama.cpp/issues/60) - Bug: Illegal instruction on NEON and Q4_0_4_4
+### [Issue #60](https://github.com/ikawrakow/ik_llama.cpp/issues/60) - Bug: Illegal instruction on NEON and Q4_0_4_4
 
 | **Author** | `whoreson` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2024-09-19 |
 | **Updated** | 2024-09-19 |
+| **Labels** | `wontfix` |
 
 ---
 
@@ -83,6 +84,6 @@ Thread 7 "llama-cli" received signal SIGILL, Illegal instruction.
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2024-09-19** at **08:45:58**:<br>
+👤 **ikawrakow** commented on **2024-09-19** at **08:45:58**
 
 I never use or check `Q4_0_4_4` or `Q4_0_8_8`. Also, I will definitely not try to debug several hundred lines of ARM assembly written by someone else - closing.

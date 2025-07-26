@@ -1,4 +1,4 @@
-### 📝 [#133](https://github.com/ikawrakow/ik_llama.cpp/issues/133) - Refactor: update ggml library?
+### [Issue #133](https://github.com/ikawrakow/ik_llama.cpp/issues/133) - Refactor: update ggml library?
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
@@ -56,13 +56,13 @@ For you to decide!
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2024-12-11** at **10:18:44**:<br>
+👤 **ikawrakow** commented on **2024-12-11** at **10:18:44**
 
 Well, it is hopelessly diverged now.
 
 ---
 
-👤 **Nexesenex** commented the **2024-12-11** at **16:32:40**:<br>
+👤 **Nexesenex** commented on **2024-12-11** at **16:32:40**
 
 Yeah, i quite guessed so..
 
@@ -70,7 +70,7 @@ Then, could you maybe look up at the commits of the ggml library since you last 
 
 ---
 
-👤 **ikawrakow** commented the **2024-12-11** at **17:27:55**:<br>
+👤 **ikawrakow** commented on **2024-12-11** at **17:27:55**
 
 > Then, could you maybe look up at the commits of the ggml library since you last updated LCPP mainline...
 
@@ -78,7 +78,7 @@ Most of the changes I have made are in `ggml`, not `llama.cpp`. So, no, picking 
 
 ---
 
-👤 **Nexesenex** commented the **2024-12-11** at **18:24:44**:<br>
+👤 **Nexesenex** commented on **2024-12-11** at **18:24:44**
 
 Yeah, I'm quite upset about this. I feel like the coyote chasing speedy gonzales with all these refactors. Llama.CPP is first and foremost inference software (if I'm not mistaken), and integrating fully into it what is becoming a dual use library make things very complex for fork maintainers.
 
@@ -92,18 +92,6 @@ Next, I will attack your IQ_K post 1st gen quants and the cuda refactor problema
 
 ---
 
-👤 **Nexesenex** commented the **2024-12-11** at **18:24:44**:<br>
-
-Yeah, I'm quite upset about this. I feel like the coyote chasing speedy gonzales with all these refactors. Llama.CPP is first and foremost inference software (if I'm not mistaken), and integrating fully into it what is becoming a dual use library make things very complex for fork maintainers.
-
-So, I reverted back my KCPP fork to pre ggml 988, and i could integrate your PRs https://github.com/ikawrakow/ik_llama.cpp/pull/9/files#diff-f028a352a33ee20b42faca7dcc389e8f0f9c9a55e016cccffed45fe90bcc13f8
-and https://github.com/ikawrakow/ik_llama.cpp/pull/24/files#diff-f028a352a33ee20b42faca7dcc389e8f0f9c9a55e016cccffed45fe90bcc13f8
-I'm on https://github.com/ikawrakow/ik_llama.cpp/pull/28/files#diff-f028a352a33ee20b42faca7dcc389e8f0f9c9a55e016cccffed45fe90bcc13f8
-right now, because I use long context and I want the speed bump.
-Next, I will attack your post IQ_K 1st gen quants and the cuda refactor problematic for me, because you made a IQ4_KSS for me, and I want to use it in my own preferred inference software, as well as your other quants (trellis quants are interesting for me to test, because with proper sampling, lower bpw SOTA quants of very big models can become quite usable, and I need that to fully offload Mistral 123b with a huge context, image gen models, & so on). :)
-
----
-
-👤 **ikawrakow** commented the **2025-03-21** at **12:40:05**:<br>
+👤 **ikawrakow** commented on **2025-03-21** at **12:40:05**
 
 I guess this will not happen. It will be easier to take current `llama.cpp` and apply the changes I have done here than to try syncing this totally diverged fork with upstream.

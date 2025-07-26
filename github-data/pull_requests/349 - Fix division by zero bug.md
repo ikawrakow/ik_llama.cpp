@@ -1,10 +1,11 @@
-### 🐛 [#349](https://github.com/ikawrakow/ik_llama.cpp/pull/349) - Fix division by zero bug
+### [Pull Request #349](https://github.com/ikawrakow/ik_llama.cpp/pull/349) - Fix division by zero bug
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-26 |
 | **Updated** | 2025-04-26 |
+| **Merged** | 2025-04-26 |
 
 ---
 

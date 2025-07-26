@@ -1,10 +1,11 @@
-### 🔀 [#17](https://github.com/ikawrakow/ik_llama.cpp/pull/17) - Merge mainline - Aug 12 2024
+### [Pull Request #17](https://github.com/ikawrakow/ik_llama.cpp/pull/17) - Merge mainline - Aug 12 2024
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-08-12 |
 | **Updated** | 2024-08-12 |
+| **Merged** | 2024-08-12 |
 
 ---
 

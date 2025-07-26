@@ -1,10 +1,11 @@
-### 🐛 [#391](https://github.com/ikawrakow/ik_llama.cpp/pull/391) - Fix DeepSeek q8_0 cache
+### [Pull Request #391](https://github.com/ikawrakow/ik_llama.cpp/pull/391) - Fix DeepSeek q8_0 cache
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-07 |
 | **Updated** | 2025-05-07 |
+| **Merged** | 2025-05-07 |
 
 ---
 

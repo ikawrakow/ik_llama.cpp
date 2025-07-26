@@ -1,10 +1,11 @@
-### 🔀 [#19](https://github.com/ikawrakow/ik_llama.cpp/pull/19) - Skip barriers of noops
+### [Pull Request #19](https://github.com/ikawrakow/ik_llama.cpp/pull/19) - Skip barriers of noops
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-08-14 |
 | **Updated** | 2024-08-14 |
+| **Merged** | 2024-08-14 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🐛 [#342](https://github.com/ikawrakow/ik_llama.cpp/pull/342) - Fix LLaMA-4 attention
+### [Pull Request #342](https://github.com/ikawrakow/ik_llama.cpp/pull/342) - Fix LLaMA-4 attention
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-24 |
 | **Updated** | 2025-04-25 |
+| **Merged** | 2025-04-25 |
 
 ---
 

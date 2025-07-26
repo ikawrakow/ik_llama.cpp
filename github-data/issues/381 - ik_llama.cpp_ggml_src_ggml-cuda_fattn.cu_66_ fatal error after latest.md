@@ -1,4 +1,4 @@
-### 📝 [#381](https://github.com/ikawrakow/ik_llama.cpp/issues/381) - ik_llama.cpp/ggml/src/ggml-cuda/fattn.cu:66: fatal error after latest
+### [Issue #381](https://github.com/ikawrakow/ik_llama.cpp/issues/381) - ik_llama.cpp/ggml/src/ggml-cuda/fattn.cu:66: fatal error after latest
 
 | **Author** | `nux` |
 | :--- | :--- |
@@ -77,7 +77,7 @@ Can give more info if needed. Tried to put this on reddit post but got "Server e
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-05** at **05:43:02**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **05:43:02**
 
 Thank you for the bug report. PR #370 broke it. Can you check if it works for you now? Thanks.
 
@@ -85,7 +85,7 @@ As a side note: The row-interleaved quants (`*_R4, *_R8`) are not ideal when run
 
 ---
 
-👤 **nux** commented the **2025-05-05** at **06:55:21**:<br>
+👤 **nux** commented on **2025-05-05** at **06:55:21**
 
 I rebuilt with the latest changes and it works
 
@@ -95,23 +95,13 @@ Will consider bug report closed - thanks!
 
 ---
 
-👤 **nux** commented the **2025-05-05** at **06:55:21**:<br>
-
-I rebuilt with the latest changes and it works
-
-On that side note - I've stuck with ubergarm/DeepSeek-V3-0324-GGUF IQ4_K_R4 as it's worked. Would love to hear recommendation on what I should look into or direction I should go for a 768GB ram 3090 setup. Still quite new to this.
-
-Will consider bug report closed - thanks!
-
----
-
-👤 **ikawrakow** commented the **2025-05-05** at **07:09:19**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **07:09:19**
 
 If you are new to this and don't want to get involved with making your own quantized models, perhaps we should ask @ubergarm to publish his models without row interleaving so they can be run efficiently with with full/partial GPU offload.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **07:20:54**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **07:20:54**
 
 What you can try in the meantime is to see if you get better performance by running CPU-only.
 
@@ -123,7 +113,7 @@ and then run as you have done above but without the `-ngl 99` argument and using
 
 ---
 
-👤 **nux** commented the **2025-05-05** at **14:49:30**:<br>
+👤 **nux** commented on **2025-05-05** at **14:49:30**
 
 I will look into making my own quantized models
 
@@ -140,7 +130,7 @@ Thanks!
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **15:04:10**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **15:04:10**
 
 > Did something change or a misunderstanding somewhere?
 
@@ -148,6 +138,6 @@ Oh, I see these have all attention tensors quantized with `Q8_0`. Sorry, didn't 
 
 ---
 
-👤 **ubergarm** commented the **2025-05-05** at **15:21:39**:<br>
+👤 **ubergarm** commented on **2025-05-05** at **15:21:39**
 
 Thanks, yeah going forward I've started to release non-repacked quants as a lot of multi-gpu people were complaining. Then folks who want can offline-repack themselves which seems a bit more flexible for general audience.

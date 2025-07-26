@@ -1,10 +1,11 @@
-### 🐛 [#421](https://github.com/ikawrakow/ik_llama.cpp/pull/421) - Fix standard attention on the CPU
+### [Pull Request #421](https://github.com/ikawrakow/ik_llama.cpp/pull/421) - Fix standard attention on the CPU
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-15 |
 | **Updated** | 2025-05-15 |
+| **Merged** | 2025-05-15 |
 
 ---
 

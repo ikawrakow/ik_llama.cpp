@@ -1,4 +1,4 @@
-### 🔀 [#460](https://github.com/ikawrakow/ik_llama.cpp/pull/460) - aarch64 kernels for KT quants
+### [Pull Request #460](https://github.com/ikawrakow/ik_llama.cpp/pull/460) - aarch64 kernels for KT quants
 
 | **Author** | `andrewkchan` |
 | :--- | :--- |
@@ -53,3 +53,23 @@ For comparison, I get ~18.3 t/s on IQ2_K, so it is considerably slower, but mayb
   - [X] Low
   - [ ] Medium
   - [ ] High
+
+---
+
+#### 💬 Conversation
+
+👤 **ikawrakow** commented on **2025-05-26** at **14:18:01**
+
+This is great! I didn't know you had an M3 laptop
+
+I had started working on the NEON implementation, but did not push to GitHub because there was still a bug in the `IQ4_KT` implementation that I didn't find where it was. You can check [this branch](https://github.com/ikawrakow/ik_llama.cpp/tree/ik/trellis_neon).
+
+On NEON one can use `fp16` arithmetic. I think this should make it go quite a bit faster. Can you compare on your M3?
+
+---
+
+👤 **andrewkchan** commented on **2025-05-26** at **19:31:52**
+
+Oh nice! Yes it is about 2x the speed on IQ2_KT, from 4.5t/s to 7.9t/s on basic text generation test. IQ3_KT goes from 3.4t/s to 5.7t/s and IQ4_KT goes from 2.1t/s to 2.5t/s (using the buggy kernel).
+
+Maybe we can close this PR then and you can continue with your branch. I can get started on metal kernels instead. Or I'm happy to try to finish your work too. What do you think?

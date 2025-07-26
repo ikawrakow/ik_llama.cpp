@@ -1,10 +1,11 @@
-### 🔀 [#49](https://github.com/ikawrakow/ik_llama.cpp/pull/49) - ARM_NEON Flash Attention
+### [Pull Request #49](https://github.com/ikawrakow/ik_llama.cpp/pull/49) - ARM_NEON Flash Attention
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-11 |
 | **Updated** | 2024-09-11 |
+| **Merged** | 2024-09-11 |
 
 ---
 

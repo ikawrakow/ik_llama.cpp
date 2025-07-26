@@ -1,10 +1,11 @@
-### 🔀 [#32](https://github.com/ikawrakow/ik_llama.cpp/pull/32) - Zen4 Flash Attention
+### [Pull Request #32](https://github.com/ikawrakow/ik_llama.cpp/pull/32) - Zen4 Flash Attention
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-01 |
 | **Updated** | 2024-09-01 |
+| **Merged** | 2024-09-01 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#329](https://github.com/ikawrakow/ik_llama.cpp/pull/329) - Add ability to hide imatrix details in llama-quantize
+### [Pull Request #329](https://github.com/ikawrakow/ik_llama.cpp/pull/329) - Add ability to hide imatrix details in llama-quantize
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-14 |
 | **Updated** | 2025-04-14 |
+| **Merged** | 2025-04-14 |
 
 ---
 

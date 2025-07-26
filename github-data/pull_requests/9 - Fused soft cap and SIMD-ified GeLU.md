@@ -1,10 +1,11 @@
-### 🔀 [#9](https://github.com/ikawrakow/ik_llama.cpp/pull/9) - Fused soft cap and SIMD-ified GeLU 
+### [Pull Request #9](https://github.com/ikawrakow/ik_llama.cpp/pull/9) - Fused soft cap and SIMD-ified GeLU 
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-08-02 |
 | **Updated** | 2024-08-20 |
+| **Merged** | 2024-08-20 |
 
 ---
 

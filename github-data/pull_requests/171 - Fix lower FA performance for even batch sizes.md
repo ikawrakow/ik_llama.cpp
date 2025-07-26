@@ -1,10 +1,11 @@
-### 🐛 [#171](https://github.com/ikawrakow/ik_llama.cpp/pull/171) - Fix lower FA performance for even batch sizes
+### [Pull Request #171](https://github.com/ikawrakow/ik_llama.cpp/pull/171) - Fix lower FA performance for even batch sizes
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-12 |
 | **Updated** | 2025-01-12 |
+| **Merged** | 2025-01-12 |
 
 ---
 

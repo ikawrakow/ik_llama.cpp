@@ -1,10 +1,11 @@
-### 🔀 [#176](https://github.com/ikawrakow/ik_llama.cpp/pull/176) - Deepseek V3 support added
+### [Pull Request #176](https://github.com/ikawrakow/ik_llama.cpp/pull/176) - Deepseek V3 support added
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-23 |
 | **Updated** | 2025-01-23 |
+| **Merged** | 2025-01-23 |
 
 ---
 
@@ -28,11 +29,13 @@ Token generation: 2.75 t/s for IQ4_K, 3.10 t/s for IQ4_K_R4
 
 #### 💬 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-01-23** at **16:09:41**: ✅ `APPROVED`
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-01-23** at **16:09:41**
+
+_No content provided._
 
 ---
 
-👤 **ikawrakow** commented the **2025-01-23** at **17:00:50**:<br>
+👤 **ikawrakow** commented on **2025-01-23** at **17:00:50**
 
 @saood06 
 
@@ -49,7 +52,7 @@ The check for `tmpl == "deepseek3"` is done before in `llama.cpp`, so this is no
 
 ---
 
-👤 **saood06** commented the **2025-01-23** at **18:00:03**:<br>
+👤 **saood06** commented on **2025-01-23** at **18:00:03**
 
 The change you are referencing happened in https://github.com/ggerganov/llama.cpp/commit/ec7f3ac9ab33e46b136eb5ab6a76c4d81f57c7f1 I was not aware of that till now.
 

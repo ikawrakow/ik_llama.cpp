@@ -1,10 +1,11 @@
-### 📝 [#196](https://github.com/ikawrakow/ik_llama.cpp/issues/196) - Refactor: remove usage of Q8_1 for activation quantization
+### [Issue #196](https://github.com/ikawrakow/ik_llama.cpp/issues/196) - Refactor: remove usage of Q8_1 for activation quantization
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-02-09 |
 | **Updated** | 2025-03-27 |
+| **Labels** | `Refactoring` |
 
 ---
 

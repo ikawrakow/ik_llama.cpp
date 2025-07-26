@@ -1,10 +1,11 @@
-### 🔀 [#268](https://github.com/ikawrakow/ik_llama.cpp/pull/268) - Prevent FlashMLA-1 from running on CUDA
+### [Pull Request #268](https://github.com/ikawrakow/ik_llama.cpp/pull/268) - Prevent FlashMLA-1 from running on CUDA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-19 |
 | **Updated** | 2025-03-19 |
+| **Merged** | 2025-03-19 |
 
 ---
 

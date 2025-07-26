@@ -1,10 +1,11 @@
-### 🔀 [#553](https://github.com/ikawrakow/ik_llama.cpp/pull/553) - Much faster prompt processing for IQ1_S and IQ1_M on ARM_NEON
+### [Pull Request #553](https://github.com/ikawrakow/ik_llama.cpp/pull/553) - Much faster prompt processing for IQ1_S and IQ1_M on ARM_NEON
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-24 |
 | **Updated** | 2025-06-24 |
+| **Merged** | 2025-06-24 |
 
 ---
 

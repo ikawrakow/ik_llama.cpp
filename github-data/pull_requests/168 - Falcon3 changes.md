@@ -1,10 +1,11 @@
-### 🔀 [#168](https://github.com/ikawrakow/ik_llama.cpp/pull/168) - Falcon3 changes
+### [Pull Request #168](https://github.com/ikawrakow/ik_llama.cpp/pull/168) - Falcon3 changes
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-10 |
 | **Updated** | 2025-01-10 |
+| **Merged** | 2025-01-10 |
 
 ---
 
@@ -20,7 +21,7 @@ The second change is required for the `IQ2_BN_R4` 4-row interleaved variant. The
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-01-10** at **12:56:49**:<br>
+👤 **ikawrakow** commented on **2025-01-10** at **12:56:49**
 
 Oh, here some performance figures for `IQ2_BN` and Microsoft's [Bitnet](https://github.com/microsoft/BitNet) `I2_S` quants, which claim to be the fastest CPU implementation of ternary transformer models. Tests run on a Ryzen-7950X CPU. 
 

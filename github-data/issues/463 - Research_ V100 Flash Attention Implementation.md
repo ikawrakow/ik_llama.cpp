@@ -1,4 +1,4 @@
-### 📝 [#463](https://github.com/ikawrakow/ik_llama.cpp/issues/463) - Research: V100 Flash Attention Implementation
+### [Issue #463](https://github.com/ikawrakow/ik_llama.cpp/issues/463) - Research: V100 Flash Attention Implementation
 
 | **Author** | `sempervictus` |
 | :--- | :--- |
@@ -82,7 +82,7 @@ _No response_
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-28** at **11:42:36**:<br>
+👤 **ikawrakow** commented on **2025-05-28** at **11:42:36**
 
 So, my concept is that the flash attention implementation supports Volta, except for the case of DeepSeek models with MLA enabled where Touring or newer is required. The DeepSeek attention architecture has different K- and V-head sizes. Is this supported by the quoted implementation? The usage example suggests that it is not supported.
 
@@ -90,13 +90,13 @@ But apart from this, support for old hardware is not a focus of this project. Ma
 
 ---
 
-👤 **sempervictus** commented the **2025-05-28** at **17:20:32**:<br>
+👤 **sempervictus** commented on **2025-05-28** at **17:20:32**
 
 @ikawrakow thanks for jumping in. This is a class of hardware still very common in academia and much more available to aspiring developers than a data haul of water-cooled B200s so i'm hoping an exception can be made for putting talented effort toward a an area of runtime logic which underpins a lot of the operating mechanics/capability to include KV quantization. If anything, the optimal use of memory in those devices is difference between being able and unable to load a model (not being able to fit runtime memory into a single device apparently prevents loading of a model that would otherwise fit into multiple devices just fine). So far with our V100s we've see flash attention unsupported messages with every model loaded - llama3/4, phi, falcon, DS, qwen.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-29** at **06:09:35**:<br>
+👤 **ikawrakow** commented on **2025-05-29** at **06:09:35**
 
 @sempervictus 
 
@@ -104,6 +104,6 @@ Water-cooled B-200s are not a focus here either. This is a hobby project, and I 
 
 ---
 
-👤 **sempervictus** commented the **2025-05-29** at **08:49:16**:<br>
+👤 **sempervictus** commented on **2025-05-29** at **08:49:16**
 
 Thank you

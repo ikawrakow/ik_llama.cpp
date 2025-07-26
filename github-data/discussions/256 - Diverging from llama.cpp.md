@@ -1,9 +1,9 @@
-### 🗣️ [#256](https://github.com/ikawrakow/ik_llama.cpp/discussions/256) - Diverging from llama.cpp
+### [Discussion #256](https://github.com/ikawrakow/ik_llama.cpp/discussions/256) - Diverging from llama.cpp
 
 | **Author** | `arnfaldur` |
 | :--- | :--- |
 | **Created** | 2025-03-14 |
-| **Updated** | 2025-03-14 |
+| **Updated** | 2025-07-23 |
 
 ---
 
@@ -39,7 +39,7 @@ I'm sorry if this is a bit much, but I think it's very important and I was hones
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2025-03-14** at **06:06:08**:<br>
+👤 **ikawrakow** commented on **2025-03-14** at **06:06:08**
 
 Hello @arnfaldur, 
 
@@ -57,8 +57,50 @@ I'm hacking here to keep my brain utilized and to have some fun. Definitely not 
 
 ---
 
-👤 **bitbottrap** replied the **2025-03-14** at **14:40:37**:<br>
+👤 **bitbottrap** commented on **2025-03-14** at **14:40:37**
 
 I completely agree that some of this stuff needs to get into llama.cpp. And I completely understand why ikawrakow does not want to be personally responsible for it.
 
 I'm not sure what the focus is over there in llama.cpp land but it's very active. I just don't see a lot of the core stuff being improved on like it is here.
+
+---
+
+👤 **Kreijstal** commented on **2025-07-23** at **05:47:51**
+
+There are 470 open pull requests on llama.cpp most which probably take months or will never be merged
+
+
+I understand upstreaming is a lot of effort, no guarantee that upstream will even like your coding standard or fix, in that case anyone is free to snoop around the code and upstream it to llama.cpp which will take months to review probably
+
+> 👤 **ikawrakow** replied on **2025-07-23** at **13:43:46**
+> 
+> @jeffzhou2000 This is not the right place to discuss your issues with the `llama.cpp` maintainers. Please stop.
+
+> 👤 **jeffzhou2000** replied on **2025-07-23** at **14:08:58**
+> 
+> Thanks for your reminder. I see.
+
+---
+
+👤 **jeffzhou2000** commented on **2025-07-23** at **13:22:48**
+
+> I was very excited to discover that you were still innovating on quantizations but I'm confused as to why it's happening on a fork with little desire (#133) to upstream the developments. I researched the history of this fork and many of the discussions that lead to it's creation (like the curiosity about Justine's tinyBLAS doubts), but have still not found a satisfactory answer.
+
+This is a real good question and I also asked [similar question](https://github.com/ikawrakow/ik_llama.cpp/discussions/8#discussioncomment-13537984) to the author of ik_llama.cpp on June 21 2025.
+
+
+
+> 
+> I would be surprised if that was the case however. Why share the work on this fork if not for others to use? 
+
+I also suggested to the author several times to return to the upstream community because the author of ik_llama.cpp is a real AI expert(I even think he is the father of quantization tech in the llama.cpp project).
+
+
+> 
+> As is likely evident, I think it is a big loss to the commons that these new quants and optimizations aren't available upstream.
+
+Can't agree more.
+
+> I still want to emphasize that I believe that there is a valid reason for the fork's creation and I would be very interested in hearing that reason.
+
+I also want to know the clear reason for the fork's creation.

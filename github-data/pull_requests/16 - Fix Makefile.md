@@ -1,10 +1,11 @@
-### 🐛 [#16](https://github.com/ikawrakow/ik_llama.cpp/pull/16) - Fix Makefile
+### [Pull Request #16](https://github.com/ikawrakow/ik_llama.cpp/pull/16) - Fix Makefile
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-08-09 |
 | **Updated** | 2024-08-09 |
+| **Merged** | 2024-08-09 |
 
 ---
 

@@ -1,10 +1,11 @@
-### ✨ [#407](https://github.com/ikawrakow/ik_llama.cpp/issues/407) - Feature Request: Support for function calling in llama-server
+### [Issue #407](https://github.com/ikawrakow/ik_llama.cpp/issues/407) - Feature Request: Support for function calling in llama-server
 
 | **Author** | `vijaysaayi` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
 | **Created** | 2025-05-11 |
 | **Updated** | 2025-06-08 |
+| **Labels** | `enhancement`, `help wanted` |
 
 ---
 
@@ -38,7 +39,7 @@ https://github.com/ggml-org/llama.cpp/pull/9639
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-12** at **05:38:22**:<br>
+👤 **ikawrakow** commented on **2025-05-12** at **05:38:22**
 
 I have never used function calling myself, so I'm not familiar with this feature.
 
@@ -46,30 +47,30 @@ Help will be appreciated.
 
 ---
 
-👤 **vijaysaayi** commented the **2025-05-16** at **15:47:05**:<br>
+👤 **vijaysaayi** commented on **2025-05-16** at **15:47:05**
 
 Thanks for all the efforts on this. Would it be possible to update to latest llama.cpp (These functionalities are implemented)
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-16** at **15:52:09**:<br>
+👤 **ikawrakow** commented on **2025-05-16** at **15:52:09**
 
 The code here has not been synced with `llama.cpp` since last August, and as a result the two code bases have totally diverged. Almost nothing is just a copy/paste from upstream.
 
 ---
 
-👤 **ubergarm** commented the **2025-05-18** at **15:38:27**:<br>
+👤 **ubergarm** commented on **2025-05-18** at **15:38:27**
 
 @vijaysaayi Check out this wrapper/reverse-proxy which might be able to do what you want: https://github.com/ikawrakow/ik_llama.cpp/discussions/403#discussioncomment-13098276
 
 ---
 
-👤 **vijaysaayi** commented the **2025-05-26** at **07:57:13**:<br>
+👤 **vijaysaayi** commented on **2025-05-26** at **07:57:13**
 
 Thanks for sharing this. I will check this out.
 
 ---
 
-👤 **mtcl** commented the **2025-06-08** at **06:07:47**:<br>
+👤 **mtcl** commented on **2025-06-08** at **06:07:47**
 
 @vijaysaayi let me know if you need any help with the function calling wrapper. Here is the video walkthrough of it.  https://www.youtube.com/watch?v=JGo9HfkzAmc

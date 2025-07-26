@@ -1,10 +1,11 @@
-### 🔀 [#12](https://github.com/ikawrakow/ik_llama.cpp/pull/12) - q2_K: allow it to detect ternary nets and quantize accordingly
+### [Pull Request #12](https://github.com/ikawrakow/ik_llama.cpp/pull/12) - q2_K: allow it to detect ternary nets and quantize accordingly
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-08-05 |
 | **Updated** | 2024-08-05 |
+| **Merged** | 2024-08-05 |
 
 ---
 

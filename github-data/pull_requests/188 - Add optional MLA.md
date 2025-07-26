@@ -1,10 +1,11 @@
-### 🔀 [#188](https://github.com/ikawrakow/ik_llama.cpp/pull/188) - Add optional MLA
+### [Pull Request #188](https://github.com/ikawrakow/ik_llama.cpp/pull/188) - Add optional MLA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-06 |
 | **Updated** | 2025-02-11 |
+| **Merged** | 2025-02-09 |
 
 ---
 
@@ -24,27 +25,27 @@ In addition:
 
 #### 💬 Conversation
 
-👤 **saood06** commented the **2025-02-08** at **11:23:52**:<br>
+👤 **saood06** commented on **2025-02-08** at **11:23:52**
 
-There were some other change's in the gguf-py/gguf/tensor_mapping.py that are in that branch that I missed porting over earlier. 
+There were some other change's in the gguf-py/gguf/tensor_mapping.py that are in https://github.com/saood06/ik_llama.cpp/pull/1 that I missed porting over earlier. 
 
 The next thing I was going to do was remove the old KV from being allocated, I hadn't gotten around to it, as I had a workaround from the mmap KV cache feature, but it should be a relatively simple fix, when I have more time I'll look into it.
 
 ---
 
-👤 **saood06** commented the **2025-02-08** at **19:51:36**:<br>
+👤 **saood06** commented on **2025-02-08** at **19:51:36**
 
 @ikawrakow I made #195 to merge into this with the things mentioned.
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-09** at **11:09:23**:<br>
+👤 **ikawrakow** commented on **2025-02-09** at **11:09:23**
 
 I think we can merge this now.
 
 ---
 
-👤 **saood06** submitted a review the **2025-02-09** at **17:28:01**: ✅ `APPROVED`<br>
+👤 **saood06** submitted a review: ✅ `APPROVED` on **2025-02-09** at **17:28:01**
 
 LGTM, good catch on applying cache quantization, it was something I had missed. BF16 makes sense when it is faster, but I never bothered as I'm assuming it would come with a large quality loss. 
 
@@ -54,7 +55,7 @@ Testing was a bit of a pain without the warmup MoE fix as loading in experts tak
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-09** at **17:48:32**:<br>
+👤 **ikawrakow** commented on **2025-02-09** at **17:48:32**
 
 > BF16 makes sense when it is faster, but I never bothered as I'm assuming it would come with a large quality loss.
 
@@ -66,7 +67,7 @@ Sounds good.
 
 ---
 
-👤 **saood06** commented the **2025-02-09** at **18:28:01**:<br>
+👤 **saood06** commented on **2025-02-09** at **18:28:01**
 
 > > BF16 makes sense when it is faster, but I never bothered as I'm assuming it would come with a large quality loss.
 > 
@@ -74,18 +75,16 @@ Sounds good.
 > 
 I mispoke, I meant I never bothered quantizing the MLA version down to Q4 or Q6 as I did with the non MLA solution. I know most models are bf16 native (Deepseek was FP8 native which I had to upscale to BF16 before making the GGUF), and I would use BF16 if I had a modern processor with support for it. 
 
-The old solution was MHA, which quantizes down very well, and is large enough to warrant it. Heavy GQA does not, MLA is sized like GQA and also small enough where I'm fine leaving it in F16, as my CPU is old and doesn't do BF16 but if I had a modern CPU I would use BF16.
+The old solution was MHA, which quantizes down very well, and is large enough to warrant it. Heavy GQA does not, MLA is sized like heavy GQA and is also small enough where I'm fine leaving it in F16 and not smaller and not BF16 as my CPU is old and doesn't do BF16 well.
 
 ---
 
-👤 **saood06** submitted a review the **2025-02-11** at **20:15:12**: 💬 `COMMENTED`
+👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-11** at **20:15:12**
+
+_No content provided._
 
 ---
 
-👤 **saood06** commented during a code review the **2025-02-11** at **20:20:39** on `src/llama.cpp`:<br>
+👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-11** at **20:20:40**
 
-With the above change only one of these should be allocated so that is the only one that should be displayed as KV self size
-
----
-
-👤 **saood06** submitted a review the **2025-02-11** at **20:20:40**: 💬 `COMMENTED`
+_No content provided._

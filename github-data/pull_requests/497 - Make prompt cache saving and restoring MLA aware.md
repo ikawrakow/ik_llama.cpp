@@ -1,10 +1,11 @@
-### 🔀 [#497](https://github.com/ikawrakow/ik_llama.cpp/pull/497) - Make prompt cache saving and restoring MLA aware
+### [Pull Request #497](https://github.com/ikawrakow/ik_llama.cpp/pull/497) - Make prompt cache saving and restoring MLA aware
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-06 |
 | **Updated** | 2025-06-06 |
+| **Merged** | 2025-06-06 |
 
 ---
 
@@ -18,4 +19,6 @@ Closes #436
 
 #### 💬 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-06-06** at **08:33:36**: ✅ `APPROVED`
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-06-06** at **08:33:36**
+
+_No content provided._

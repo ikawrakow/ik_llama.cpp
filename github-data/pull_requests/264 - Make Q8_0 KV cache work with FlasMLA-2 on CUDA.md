@@ -1,10 +1,11 @@
-### 🔀 [#264](https://github.com/ikawrakow/ik_llama.cpp/pull/264) - Make Q8_0 KV cache work with FlasMLA-2 on CUDA
+### [Pull Request #264](https://github.com/ikawrakow/ik_llama.cpp/pull/264) - Make Q8_0 KV cache work with FlasMLA-2 on CUDA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-18 |
 | **Updated** | 2025-03-18 |
+| **Merged** | 2025-03-18 |
 
 ---
 

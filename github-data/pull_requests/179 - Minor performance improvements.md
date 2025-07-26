@@ -1,10 +1,11 @@
-### 🔀 [#179](https://github.com/ikawrakow/ik_llama.cpp/pull/179) - Minor performance improvements
+### [Pull Request #179](https://github.com/ikawrakow/ik_llama.cpp/pull/179) - Minor performance improvements
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-27 |
 | **Updated** | 2025-01-27 |
+| **Merged** | 2025-01-27 |
 
 ---
 

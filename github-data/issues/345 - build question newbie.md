@@ -1,4 +1,4 @@
-### 📝 [#345](https://github.com/ikawrakow/ik_llama.cpp/issues/345) - build question newbie
+### [Issue #345](https://github.com/ikawrakow/ik_llama.cpp/issues/345) - build question newbie
 
 | **Author** | `VinnyG9` |
 | :--- | :--- |
@@ -181,7 +181,7 @@ Thank you very much 🙏
 
 #### 💬 Conversation
 
-👤 **VinnyG9** commented the **2025-04-25** at **06:04:04**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **06:04:04**
 
 llama3.2/gemma3 are way worse on tg but same pp performance 
  
@@ -200,13 +200,13 @@ Log end
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **06:56:13**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **06:56:13**
 
 What is cogito?
 
 ---
 
-👤 **saood06** commented the **2025-04-25** at **07:00:09**:<br>
+👤 **saood06** commented on **2025-04-25** at **07:00:09**
 
 > What is cogito?
 
@@ -214,7 +214,7 @@ I'm assuming he's referring to this: https://huggingface.co/collections/deepcogi
 
 ---
 
-👤 **mcm007** commented the **2025-04-25** at **07:07:28**:<br>
+👤 **mcm007** commented on **2025-04-25** at **07:07:28**
 
 The t/s looks too high for a SBC, maybe the .gguf model is corrupt?
 
@@ -240,7 +240,7 @@ build: 55fb9c81 (3643)
 
 ---
 
-👤 **saood06** commented the **2025-04-25** at **07:26:13**:<br>
+👤 **saood06** commented on **2025-04-25** at **07:26:13**
 
 Also here are the tables from the first post
 <details>
@@ -328,7 +328,7 @@ Also here are the tables from the first post
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **07:27:20**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **07:27:20**
 
 > The t/s looks too high for a SBC, maybe the .gguf model is corrupt?
 > 
@@ -363,7 +363,7 @@ run/bench
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **07:40:54**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **07:40:54**
 
 yeah, they all output gibberish 
 
@@ -371,7 +371,7 @@ main llama.cpp works no problem
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **07:48:15**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **07:48:15**
 
 I'm not familiar with this space, so had to look up what "rock 5b" is. According to [this](https://bret.dk/radxa-rock-5b-review-powerful-rk3588-sbc/) it has one Cortex-A76 and one Cortex-A55 CPU. For this the performance numbers look too high. Which means that most likely the `iqk` matrix multiplications that I have added do not get invoked, and it falls back to stock `ggml` implementation (`ggml` is the inference library behind `llama.cpp`). Most likely something goes wrong there, which leads to crazy performance and gibberish output. I did try to maintain this use case (the fallback to stock `ggml`) in a working condition for a while, but I think it is broken now.
 
@@ -379,7 +379,7 @@ I assume you are running Linux on this board? Can you do `cat /proc/cpuinfo`?
 
 ---
 
-👤 **saood06** commented the **2025-04-25** at **07:56:57**:<br>
+👤 **saood06** commented on **2025-04-25** at **07:56:57**
 
 > I'm not familiar with this space, so had to look up what "rock 5b" is. According to [this](https://bret.dk/radxa-rock-5b-review-powerful-rk3588-sbc/) it has one Cortex-A76 and one Cortex-A55 CPU. For this the performance numbers look too high.
 
@@ -387,15 +387,7 @@ It has eight cores in total, "Quad Cortex®-A76 @ 2.2~2.4GHz and a Quad Cortex®
 
 ---
 
-👤 **saood06** commented the **2025-04-25** at **07:56:57**:<br>
-
-> I'm not familiar with this space, so had to look up what "rock 5b" is. According to [this](https://bret.dk/radxa-rock-5b-review-powerful-rk3588-sbc/) it has one Cortex-A76 and one Cortex-A55 CPU. For this the performance numbers look too high.
-
-It has eight cores in total, "Quad Cortex®-A76 @ 2.2~2.4GHz and a Quad Cortex®-A55 @ 1.8GHz" from [what I think is the official product page](https://radxa.com/products/rock5/5b/#techspec). But that is still too high.
-
----
-
-👤 **VinnyG9** commented the **2025-04-25** at **08:05:16**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **08:05:16**
 
 > 
 > I assume you are running Linux on this board? Can you do `cat /proc/cpuinfo`?
@@ -427,7 +419,7 @@ i get same performance on q4km and iq4nl are you sure it has to do with iqk mm?
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **08:12:29**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **08:12:29**
 
 > 
 >  But even with that the performance still seems too high.
@@ -444,7 +436,7 @@ maybe it's some dependency missing? but main runs normally...
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **08:16:42**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **08:16:42**
 
 > i get same performance on q4km and iq4nl are you sure it has to do with iqk mm?
 
@@ -454,7 +446,7 @@ The CPU flags look completely unfamiliar, so I cannot deduce from there if the `
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **08:22:04**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **08:22:04**
 
 > > i get same performance on q4km and iq4nl are you sure it has to do with iqk mm?
 > 
@@ -468,7 +460,7 @@ they do
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **08:24:21**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **08:24:21**
 
 So, I'm finding that the `asimddp` CPU feature that you have should enable `__ARM_FEATURE_DOTPROD`. With that things should work correctly. 
 
@@ -476,13 +468,7 @@ What is the compiler being used?
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **08:24:21**:<br>
-
-So, I'm finding that the `asimddp` feature that you have should enable `__ARM_FEATURE_DOTPROD`. With that things should work correctly.
-
----
-
-👤 **VinnyG9** commented the **2025-04-25** at **08:27:08**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **08:27:08**
 
 > So, I'm finding that the `asimddp` CPU feature that you have should enable `__ARM_FEATURE_DOTPROD`. With that things should work correctly.
 > 
@@ -499,7 +485,7 @@ could the llamafile feature interfere?
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **08:41:23**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **08:41:23**
 
 Mainline `llama.cpp` has now a much more sophisticated CPU feature detection than this project that got added after I forked. Here things are more on the "do it yourself" level. What you can do to see if the features added by this repo are working, add
 ```
@@ -509,7 +495,7 @@ just before [this line](https://github.com/ikawrakow/ik_llama.cpp/blob/f176122a3
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **08:56:26**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **08:56:26**
 
 > could the llamafile feature interfere?
 
@@ -517,7 +503,7 @@ Normally no, but you can disable it just in case with `-DGGML_LLAMAFILE=0`
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **09:01:18**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **09:01:18**
 
 > Mainline `llama.cpp` has now a much more sophisticated CPU feature detection than this project that got added after I forked. Here things are more on the "do it yourself" level. What you can do to see if the features added by this repo are working, add
 > 
@@ -534,31 +520,31 @@ i get a build error
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **09:02:45**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **09:02:45**
 
 Yes.
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **09:03:57**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **09:03:57**
 
 Sorry, also add the same `printf` line in the `iqk_mul_mat` function just above that.
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **09:06:13**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **09:06:13**
 
 ![Image](https://github.com/user-attachments/assets/44acfb74-4db2-46fd-8fe6-760bea9a653a)
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **09:08:36**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **09:08:36**
 
 Then you need to add `#include <cstdio>` near the beginning of the file.
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **09:09:40**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **09:09:40**
 
 > Then you need to add `#include <cstdio>` near the beginning of the file.
 
@@ -570,13 +556,13 @@ now it errors but keeps building
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **09:12:34**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **09:12:34**
 
 The warning is harmless. What happens after you run it?
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **09:15:41**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **09:15:41**
 
 > The warning is harmless. What happens after you run it?
 
@@ -584,13 +570,13 @@ floods the terminal with "iqk is not enabled"
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **09:18:13**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **09:18:13**
 
 OK, so we know that the build does not work on your system. Your CPU supports the necessary features, so we need to understand why the compiler is not enabling them, so we can fix it.
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **09:20:29**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **09:20:29**
 
 > OK, so we know that the build does not work on your system. Your CPU supports the necessary features, so we need to understand why the compiler is not enabling them, so we can fix it.
 
@@ -598,13 +584,13 @@ i can try with clang19?
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **09:22:44**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **09:22:44**
 
 Yes, you can try building with `clang`, maybe this will fix it. But if not, I guess I need to add the ability to manually set compiler flags.
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **09:24:15**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **09:24:15**
 
 i got this with clang build setup
 not sure why as I'd seen openmp found earlier
@@ -619,13 +605,13 @@ CMake Warning at ggml/src/CMakeLists.txt:167 (message):
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **09:25:33**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **09:25:33**
 
 `OpenMP` is not really required. On my M2-Max laptop it actually hurts performance.
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **09:29:02**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **09:29:02**
 
 same error on clang19
 
@@ -633,7 +619,7 @@ same error on clang19
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **09:46:07**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **09:46:07**
 
 So, I made PR #347 
 
@@ -646,7 +632,7 @@ cmake -DGGML_ARCH_FLAGS="-march=armv8.2-a+dotprod+fp16" (plus other things you w
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **11:05:45**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **11:05:45**
 
 ![Image](https://github.com/user-attachments/assets/eef76f83-ec01-4617-9727-ffafed4a299f)
 
@@ -665,7 +651,7 @@ also not able to use the -fa flag
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **11:14:20**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **11:14:20**
 
 Great. Not sure what could be wrong with `Q4_0` as it does work on my M2-Max. Mainline has done optimizations for `Q4_0` and `IQ4_NL` on ARM, so for these there will not be much difference (my implementation is faster than theirs on the M2-Max, but I guess my optimizations are too aggressive for the A76, so mainline ends up being faster for these two quants on a lower spec Arm CPU). 
 
@@ -675,7 +661,7 @@ Why? What happens?
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **18:28:37**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **18:28:37**
 
 > Great. Not sure what could be wrong with `Q4_0` as it does work on my M2-Max. Mainline has done optimizations for `Q4_0` and `IQ4_NL` on ARM, so for these there will not be much difference (my implementation is faster than theirs on the M2-Max, but I guess my optimizations are too aggressive for the A76, so mainline ends up being faster for these two quants on a lower spec Arm CPU).
 > 
@@ -697,7 +683,7 @@ offtopic: from what i got reading llamacpp issues llamafile enables tinyblas? it
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **19:53:33**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **19:53:33**
 
 got some decent performance with bitnet new model, however if i disable OpenMP, tg drops to 16t/s:
 
@@ -729,7 +715,7 @@ but at least speed didn't drop much with longer text
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-25** at **21:26:36**:<br>
+👤 **VinnyG9** commented on **2025-04-25** at **21:26:36**
 
 >
 > ```
@@ -763,7 +749,7 @@ can someone explain why I'm not benefitting from the arm repack thing? like is n
 
 ---
 
-👤 **saood06** commented the **2025-04-26** at **00:36:22**:<br>
+👤 **saood06** commented on **2025-04-26** at **00:36:22**
 
 >nosme actually only worked on main only on clang
 
@@ -771,7 +757,7 @@ So for ik_llama.cpp was there a difference between clang and gcc now that you go
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-26** at **06:12:06**:<br>
+👤 **ikawrakow** commented on **2025-04-26** at **06:12:06**
 
 > can someone explain why I'm not benefitting from the arm repack thing? like is not IQ4_NL supposed to run faster?
 
@@ -782,7 +768,7 @@ I find it interesting that explicitly disabling some features with `-march=armv8
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-26** at **07:30:23**:<br>
+👤 **ikawrakow** commented on **2025-04-26** at **07:30:23**
 
 > got some decent performance with bitnet new model, however if i disable OpenMP, tg drops to 16t/s:
 
@@ -795,7 +781,7 @@ I think you can only get more bandwidth utilized if both CPUs get used. Unfortun
 
 ---
 
-👤 **VinnyG9** commented the **2025-04-26** at **17:55:29**:<br>
+👤 **VinnyG9** commented on **2025-04-26** at **17:55:29**
 
 > > nosme actually only worked on main only on clang
 > 
@@ -825,19 +811,13 @@ llama.cpp$ build/bin/llama-bench -m ../models/embed/bge-m3-Q4_0.gguf -p 64,128,2
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-27** at **06:13:34**:<br>
+👤 **ikawrakow** commented on **2025-04-27** at **06:13:34**
 
 If your 566M parameter Bert model is something like [this one](https://huggingface.co/blogcncom/bge-m3-Q4_0-GGUF), 200 MiB out of 400 MiB are token embeddings. Only a tiny fraction of these 200 MiB gets actually used (~1000 bytes per generated token), so effectively you are running a 200 MiB model, so memory bandwidth utilized during TG is `120 t/s x 0.2 GiB = 24 GiB/s.`
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-27** at **06:13:34**:<br>
-
-If your 335M parameter Bert model is something like [this one](https://huggingface.co/blogcncom/bge-m3-Q4_0-GGUF), 200 MiB out of 400 MiB are token embeddings. Only a tiny fraction of these 200 MiB gets actually used (~1000 bytes per generated token), so effectively you are running a 200 MiB model, so memory bandwidth utilized during TG is `120 t/s x 0.2 GiB = 24 GiB/s.`
-
----
-
-👤 **VinnyG9** commented the **2025-04-30** at **04:45:02**:<br>
+👤 **VinnyG9** commented on **2025-04-30** at **04:45:02**
 
 > If your 566M parameter Bert model is something like [this one](https://huggingface.co/blogcncom/bge-m3-Q4_0-GGUF), 200 MiB out of 400 MiB are token embeddings. Only a tiny fraction of these 200 MiB gets actually used (~1000 bytes per generated token), so effectively you are running a 200 MiB model, so memory bandwidth utilized during TG is `120 t/s x 0.2 GiB = 24 GiB/s.`
 

@@ -1,10 +1,11 @@
-### ✨ [#433](https://github.com/ikawrakow/ik_llama.cpp/issues/433) - Feature Request: CORS support
+### [Issue #433](https://github.com/ikawrakow/ik_llama.cpp/issues/433) - Feature Request: CORS support
 
 | **Author** | `KCS-Mack` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
 | **Created** | 2025-05-18 |
 | **Updated** | 2025-05-18 |
+| **Labels** | `enhancement` |
 
 ---
 
@@ -39,7 +40,7 @@ _No response_
 
 #### 💬 Conversation
 
-👤 **ubergarm** commented the **2025-05-18** at **15:39:10**:<br>
+👤 **ubergarm** commented on **2025-05-18** at **15:39:10**
 
 You could use any reverse proxy to add this yourself e.g. nginx, caddy server, etc.
 

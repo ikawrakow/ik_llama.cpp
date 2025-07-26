@@ -1,4 +1,4 @@
-### ✨ [#236](https://github.com/ikawrakow/ik_llama.cpp/pull/236) - Feat/lock free server
+### [Pull Request #236](https://github.com/ikawrakow/ik_llama.cpp/pull/236) - Feat/lock free server
 
 | **Author** | `orca-zhang` |
 | :--- | :--- |
@@ -20,7 +20,7 @@
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-02-27** at **11:43:27**:<br>
+👤 **ikawrakow** commented on **2025-02-27** at **11:43:27**
 
 Thank you for this PR.
 
@@ -28,7 +28,7 @@ LGTM, but as I never use the server and I'm not familiar with the code, I have a
 
 ---
 
-👤 **orca-zhang** commented the **2025-02-27** at **17:02:24**:<br>
+👤 **orca-zhang** commented on **2025-02-27** at **17:02:24**
 
 Hi Ikawrakow,
 
@@ -40,17 +40,13 @@ Thank you for your continued dedication to maintaining this exceptional codebase
 
 ---
 
-👤 **saood06** commented during a code review the **2025-02-27** at **19:55:22** on `examples/server/atomic_hash_map.hpp`:<br>
+👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-27** at **19:55:23**
 
-This is Apache, while this project is MIT.
-
----
-
-👤 **saood06** submitted a review the **2025-02-27** at **19:55:23**: 💬 `COMMENTED`
+_No content provided._
 
 ---
 
-👤 **saood06** commented the **2025-02-27** at **19:57:11**:<br>
+👤 **saood06** commented on **2025-02-27** at **19:57:11**
 
 >Please accept my apologies for the accidental PR submission during my preliminary testing phase. I'm currently conducting informal experiments without rigorous benchmarking, and cannot yet confirm the actual utility of these code changes.
 

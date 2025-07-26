@@ -1,10 +1,11 @@
-### 🔀 [#126](https://github.com/ikawrakow/ik_llama.cpp/pull/126) - Rename iq4_nl_x4 to iq4_nl_r4
+### [Pull Request #126](https://github.com/ikawrakow/ik_llama.cpp/pull/126) - Rename iq4_nl_x4 to iq4_nl_r4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-08 |
 | **Updated** | 2024-12-08 |
+| **Merged** | 2024-12-08 |
 
 ---
 

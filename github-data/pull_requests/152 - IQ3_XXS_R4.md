@@ -1,4 +1,4 @@
-### 🔀 [#152](https://github.com/ikawrakow/ik_llama.cpp/pull/152) - IQ3_XXS_R4
+### [Pull Request #152](https://github.com/ikawrakow/ik_llama.cpp/pull/152) - IQ3_XXS_R4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |

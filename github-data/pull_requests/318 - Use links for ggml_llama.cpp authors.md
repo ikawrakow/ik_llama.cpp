@@ -1,10 +1,11 @@
-### 🔀 [#318](https://github.com/ikawrakow/ik_llama.cpp/pull/318) - Use links for ggml/llama.cpp authors
+### [Pull Request #318](https://github.com/ikawrakow/ik_llama.cpp/pull/318) - Use links for ggml/llama.cpp authors
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-07 |
 | **Updated** | 2025-04-07 |
+| **Merged** | 2025-04-07 |
 
 ---
 
@@ -16,7 +17,7 @@ and also remove the local AUTHORS copy as suggested by @saood06
 
 #### 💬 Conversation
 
-👤 **saood06** submitted a review the **2025-04-07** at **14:01:18**: 💬 `COMMENTED`<br>
+👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-04-07** at **14:01:18**
 
 You mentioned this to me in the other PR.
 
@@ -26,12 +27,12 @@ Would adding a line to the license referencing ik_llama.cpp authors and having t
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-07** at **15:00:34**:<br>
+👤 **ikawrakow** commented on **2025-04-07** at **15:00:34**
 
 Like this?
 
 ---
 
-👤 **saood06** submitted a review the **2025-04-07** at **15:10:35**: ✅ `APPROVED`<br>
+👤 **saood06** submitted a review: ✅ `APPROVED` on **2025-04-07** at **15:10:35**
 
 LGTM

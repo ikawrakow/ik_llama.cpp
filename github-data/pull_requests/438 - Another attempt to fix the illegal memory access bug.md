@@ -1,4 +1,4 @@
-### 🐛 [#438](https://github.com/ikawrakow/ik_llama.cpp/pull/438) - Another attempt to fix the illegal memory access bug
+### [Pull Request #438](https://github.com/ikawrakow/ik_llama.cpp/pull/438) - Another attempt to fix the illegal memory access bug
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |

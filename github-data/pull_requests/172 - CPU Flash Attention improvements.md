@@ -1,10 +1,11 @@
-### 🔀 [#172](https://github.com/ikawrakow/ik_llama.cpp/pull/172) - CPU Flash Attention improvements
+### [Pull Request #172](https://github.com/ikawrakow/ik_llama.cpp/pull/172) - CPU Flash Attention improvements
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-15 |
 | **Updated** | 2025-01-15 |
+| **Merged** | 2025-01-15 |
 
 ---
 

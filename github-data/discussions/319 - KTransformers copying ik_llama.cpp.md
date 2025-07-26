@@ -1,4 +1,4 @@
-### 🗣️ [#319](https://github.com/ikawrakow/ik_llama.cpp/discussions/319) - KTransformers copying ik_llama.cpp
+### [Discussion #319](https://github.com/ikawrakow/ik_llama.cpp/discussions/319) - KTransformers copying ik_llama.cpp
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
@@ -23,7 +23,7 @@ So now the question is, what do I do about that. Opinions?
 
 #### 🗣️ Discussion
 
-👤 **moonshadow-25** replied the **2025-04-08** at **08:50:43**:<br>
+👤 **moonshadow-25** commented on **2025-04-08** at **08:50:43**
 
 hi ikawrakow, I am not an official developer of KT,@godrosv he is my colleague, and I am very sorry about this matter. After he gave me the code, I started the porting work without asking the source, but I noticed that the author in the file is also the same module's author as Llamafile, which is you. Afterwards, I completed all the porting work but did not modify any author information, because from the beginning KT kept mentioning that they used llamaflile as the core optimization, and I only filled in the complete functionality.
 
@@ -31,7 +31,7 @@ I have always felt that the CPU optimization in Llamafile is the best part done.
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-08** at **09:29:53**:<br>
+👤 **ikawrakow** commented on **2025-04-08** at **09:29:53**
 
 > and I am very sorry about this matter
 
@@ -39,22 +39,18 @@ Are you planning to correct it? The 1800 lines added in your PR are not a "port"
 
 ---
 
-👤 **moonshadow-25** replied the **2025-04-08** at **10:06:25**:<br>
+👤 **moonshadow-25** commented on **2025-04-08** at **10:06:25**
 
 Yes, I have always believed that both the early content and the “ported” parts of Llamafile originated from your work. And what I did more was porting and testing, so I never intended to modify (except for necessary interface adjustments) your work. I think this is your contribution！
 I hope we can have more communication in the future
 
-> 👤 **ikawrakow** replied the **2025-04-08** at **11:19:06**:<br>
-> Sorry, @moonshadow-25, but there are no "ported” parts of Llamafile in your PR. There are 1800 lines of code copied from here. They do not exist in Llamafile to be "ported" (i.e., copied) from there.
+> 👤 **moonshadow-25** replied on **2025-04-08** at **11:41:27**
 > 
-> You have created a bit of a mess with your PR. KTransformers and Llamafile are both Apache-2.0 licensed. But the code here is published under a MIT License. Now, Apache-2.0 and MIT are both very permissive licenses, so it is easy to bundle code published under these license together, as explained for instance [here](https://infra.apache.org/licensing-howto.html). You could have even asked me if I would be willing to relicense the portions you copied to Apache-2.0 so it makes things easier for KTransformers (after all, I did change the MIT License of the code I contributed to Llamafile to Apache-2.0 to make it easier for them). But as permissive as these licenses are, it does not mean you can just ignore what they ask you to do.
-> 
-> 👤 **moonshadow-25** replied the **2025-04-08** at **11:41:27**:<br>
 > Indeed, I am very sorry that I only realized the difference now. They look too similar, and both authors are you. So I subjectively assumed it was the same license.
 > I must make some remedies as soon as possible, and I hope to hear your advice
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-13** at **15:56:21**:<br>
+👤 **ikawrakow** commented on **2025-04-13** at **15:56:21**
 
 The KTransformers devs have now merged [this PR](https://github.com/kvcache-ai/ktransformers/pull/1116), which addresses the concern raised in this discussion => closing.

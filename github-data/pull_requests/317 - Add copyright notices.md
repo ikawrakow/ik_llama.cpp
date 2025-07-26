@@ -1,10 +1,11 @@
-### 🔀 [#317](https://github.com/ikawrakow/ik_llama.cpp/pull/317) - Add copyright notices
+### [Pull Request #317](https://github.com/ikawrakow/ik_llama.cpp/pull/317) - Add copyright notices
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-07 |
 | **Updated** | 2025-04-07 |
+| **Merged** | 2025-04-07 |
 
 ---
 

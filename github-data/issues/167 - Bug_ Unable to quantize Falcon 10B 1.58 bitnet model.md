@@ -1,10 +1,11 @@
-### 🐛 [#167](https://github.com/ikawrakow/ik_llama.cpp/issues/167) - Bug: Unable to quantize Falcon 10B 1.58 bitnet model
+### [Issue #167](https://github.com/ikawrakow/ik_llama.cpp/issues/167) - Bug: Unable to quantize Falcon 10B 1.58 bitnet model
 
 | **Author** | `raymond-infinitecode` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-01-09 |
 | **Updated** | 2025-01-11 |
+| **Labels** | `enhancement`, `wontfix` |
 
 ---
 
@@ -44,25 +45,19 @@ _No response_
 
 #### 💬 Conversation
 
-👤 **raymond-infinitecode** commented the **2025-01-09** at **15:39:01**:<br>
+👤 **raymond-infinitecode** commented on **2025-01-09** at **15:39:01**
 
 How to convert that model to gguf that can be used with ik_llama.cpp ?
 
 ---
 
-👤 **raymond-infinitecode** commented the **2025-01-09** at **15:39:01**:<br>
-
-How to conver that model to gguf that can be used with ik_llama.cpp ?
-
----
-
-👤 **ikawrakow** commented the **2025-01-09** at **15:48:13**:<br>
+👤 **ikawrakow** commented on **2025-01-09** at **15:48:13**
 
 I haven't looked into this model at all. Does it work in mainline `llama.cpp`? I see them talking about cloning a Microsoft BitNet repository to use this model, so this does not look like a standard `llama.cpp` GGUF to me.
 
 ---
 
-👤 **raymond-infinitecode** commented the **2025-01-10** at **03:02:26**:<br>
+👤 **raymond-infinitecode** commented on **2025-01-10** at **03:02:26**
 
 Hi Ikawrakow, it doesn't work with llama.cpp but it works with bitnet repository https://github.com/microsoft/BitNet
 To be percise it works with 
@@ -70,19 +65,19 @@ https://github.com/Eddie-Wang1120/llama.cpp.git  [merge-dev] branch only
 
 ---
 
-👤 **ikawrakow** commented the **2025-01-10** at **07:14:34**:<br>
+👤 **ikawrakow** commented on **2025-01-10** at **07:14:34**
 
 When a ternary Falcon3 model is released in a more standard format, it will be supported also here. In the meantime you can use the quoted Microsoft BitNet repository.
 
 ---
 
-👤 **raymond-infinitecode** commented the **2025-01-10** at **11:17:41**:<br>
+👤 **raymond-infinitecode** commented on **2025-01-10** at **11:17:41**
 
 The problem with Microsoft Bitnet repository is that llama-server is not build. I wonder if they did it on intention.
 
 ---
 
-👤 **ikawrakow** commented the **2025-01-10** at **11:34:24**:<br>
+👤 **ikawrakow** commented on **2025-01-10** at **11:34:24**
 
 And the problem with the model that you want to run is that it is stored quantized as `I2_S`, which is Microsoft BitNet specific, and does not exist anywhere else. There is no `f16` or `f32` or `q8_0` GGUF. If I follow the BitNet setup instructions,  running 
 ```
@@ -94,12 +89,12 @@ But to use the 10B model, which appears to be available only as BitNet `I2_S` qu
 
 ---
 
-👤 **ikawrakow** commented the **2025-01-10** at **15:46:36**:<br>
+👤 **ikawrakow** commented on **2025-01-10** at **15:46:36**
 
 OK, it doesn't seem to be that hard. WIP on [this branch](https://github.com/ikawrakow/ik_llama.cpp/tree/ik/convert_i2s)
 
 ---
 
-👤 **raymond-infinitecode** commented the **2025-01-11** at **05:09:18**:<br>
+👤 **raymond-infinitecode** commented on **2025-01-11** at **05:09:18**
 
 wow, you are really a genius, complete the conversion implementation in less than half a day !

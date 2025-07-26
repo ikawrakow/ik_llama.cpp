@@ -1,10 +1,11 @@
-### 🔀 [#410](https://github.com/ikawrakow/ik_llama.cpp/pull/410) - Better CPU FA performance for DeepSeek-Lite
+### [Pull Request #410](https://github.com/ikawrakow/ik_llama.cpp/pull/410) - Better CPU FA performance for DeepSeek-Lite
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-12 |
 | **Updated** | 2025-05-20 |
+| **Merged** | 2025-05-13 |
 
 ---
 
@@ -73,7 +74,7 @@ The graph shows a comparison between the main branch and this PR for a `Q4_0` qu
 
 #### 💬 Conversation
 
-👤 **saood06** commented the **2025-05-20** at **08:19:37**:<br>
+👤 **saood06** commented on **2025-05-20** at **08:19:37**
 
 I did end up doing a fresh build, drop cache and server launch and have used it up to 32K tokens (double where I normally test sweep-bench), and my informal results are that it is about the same, maybe a little better. I don't see the same large improvement that seems to scale with context size that you do.
 
@@ -81,7 +82,15 @@ I may run a full sweep-bench later to get a better comparison, I only ran it at 
 
 ---
 
-👤 **saood06** commented the **2025-05-20** at **09:19:47**:<br>
+👤 **ikawrakow** commented on **2025-05-20** at **09:00:18**
+
+> I don't see the same large improvement that seems to scale with context size that you do.
+
+There is something different with the big siblings of DeepSeek-Lite that I haven't understood what it is.  For one, IIRC your TG performance drops 3X when you go to 16k tokens, while in my case it is still at ~60% even before the PR. The self-attention part per layer in DeepSeek-V3/R1 is 8X of DeepSeek-Lite (128 instead of 16 heads for otherwise identical tensor dimensions). The FFN part is about 7X (`7168 x 2048` vs `2048 x 1408` + 8 active experts instead of 6) per layer, so I don't really see a reason why it should behave differently. If anything, with `-mla 3 -fa` my expectation would be that the big model TG performance decreases less with context size as the K-cache is smaller relative to the amount of computations that need to get done. So, I guess, it is somehow related to NUMA, so it is bottle-necked on that when computing self-attention. If so, yes, you probably will not see (significant) performance improvement.
+
+---
+
+👤 **saood06** commented on **2025-05-20** at **09:19:47**
 
 > > I don't see the same large improvement that seems to scale with context size that you do.
 > 
@@ -91,8 +100,18 @@ I'm not sure because it has good local hitrate on TG see this: https://github.co
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-20** at **09:44:56**:<br>
+👤 **ikawrakow** commented on **2025-05-20** at **09:44:56**
 
 > I'm not sure because it has good local hitrate on TG see this: https://github.com/ikawrakow/ik_llama.cpp/discussions/201#discussioncomment-13203928
 
 The high local TG hit rate is measured at what context?
+
+---
+
+👤 **saood06** commented on **2025-05-20** at **09:56:22**
+
+> > I'm not sure because it has good local hitrate on TG see this: [#201 (comment)](https://github.com/ikawrakow/ik_llama.cpp/discussions/201#discussioncomment-13203928)
+> 
+> The high local TG hit rate is measured at what context?
+
+32k

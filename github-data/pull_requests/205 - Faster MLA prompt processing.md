@@ -1,10 +1,11 @@
-### 🔀 [#205](https://github.com/ikawrakow/ik_llama.cpp/pull/205) - Faster MLA prompt processing
+### [Pull Request #205](https://github.com/ikawrakow/ik_llama.cpp/pull/205) - Faster MLA prompt processing
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-12 |
 | **Updated** | 2025-02-13 |
+| **Merged** | 2025-02-13 |
 
 ---
 
@@ -46,21 +47,25 @@ Not sure if the ~9% improvement at 16k tokens is real. It may be just due to les
 
 #### 💬 Conversation
 
-👤 **saood06** submitted a review the **2025-02-12** at **20:10:21**: 💬 `COMMENTED`
+👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-12** at **20:10:21**
+
+_No content provided._
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-02-13** at **08:57:48**: 💬 `COMMENTED`
-
----
-
-👤 **ikawrakow** commented during a code review the **2025-02-13** at **08:57:48** on `src/llama.cpp`:<br>
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-02-13** at **08:57:48**
 
 Thanks. Added a hopefully visible warning.
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-13** at **09:04:18**:<br>
+👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-02-13** at **08:57:48**
+
+_No content provided._
+
+---
+
+👤 **ikawrakow** commented on **2025-02-13** at **09:04:18**
 
 The PR also adds a compile time option to disable the transposed KV cache when using MLA (simple look for `MLA_USE_TRANSPOSED_CACHE` and set it to 0). This cuts KV cache size in nearly half at the expense of a lower TG performance with long contexts. PP performance stays about the same. Here is a comparison between MLA with and without transposed cache
 

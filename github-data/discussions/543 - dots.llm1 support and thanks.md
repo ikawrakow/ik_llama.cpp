@@ -1,9 +1,9 @@
-### 🗣️ [#543](https://github.com/ikawrakow/ik_llama.cpp/discussions/543) - dots.llm1 support and thanks
+### [Discussion #543](https://github.com/ikawrakow/ik_llama.cpp/discussions/543) - dots.llm1 support and thanks
 
 | **Author** | `Iconology` |
 | :--- | :--- |
 | **Created** | 2025-06-20 |
-| **Updated** | 2025-07-03 |
+| **Updated** | 2025-07-22 |
 
 ---
 
@@ -23,7 +23,7 @@ Regardless of whether it’s on your roadmap or not, I just wanted to say thank 
 
 #### 🗣️ Discussion
 
-👤 **saood06** replied the **2025-06-20** at **03:21:14**:<br>
+👤 **saood06** commented on **2025-06-20** at **03:21:14**
 
 >The model seems interesting enough.
 
@@ -36,8 +36,6 @@ seen here:
 >
 >https://github.com/huggingface/transformers/blob/ffe12627b4e84489d2ab91dd0ec00614855edc79/src/transformers/models/dots1/modular_dots1.py
 
-> 👤 **firecoperana** replied the **2025-07-02** at **22:56:45**:<br>
-> @saood06 Are you working on it? If not, I can give a try.
+> 👤 **saood06** replied on **2025-07-03** at **02:23:35**
 > 
-> 👤 **saood06** replied the **2025-07-03** at **02:23:35**:<br>
 > #573 exists now. Testing is welcome.

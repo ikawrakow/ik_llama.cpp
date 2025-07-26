@@ -1,10 +1,11 @@
-### 🐛 [#87](https://github.com/ikawrakow/ik_llama.cpp/pull/87) - iq3_k: fix and optimize Metal dot product
+### [Pull Request #87](https://github.com/ikawrakow/ik_llama.cpp/pull/87) - iq3_k: fix and optimize Metal dot product
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-14 |
 | **Updated** | 2024-10-14 |
+| **Merged** | 2024-10-14 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#66](https://github.com/ikawrakow/ik_llama.cpp/pull/66) - CUDA non-contiguous RoPE
+### [Pull Request #66](https://github.com/ikawrakow/ik_llama.cpp/pull/66) - CUDA non-contiguous RoPE
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-28 |
 | **Updated** | 2024-09-28 |
+| **Merged** | 2024-09-28 |
 
 ---
 
@@ -25,7 +26,7 @@ Here is the combined effect of this PR and PR #65 on CUDA (RTX-4080) and Metal (
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2024-09-28** at **12:42:05**:<br>
+👤 **ikawrakow** commented on **2024-09-28** at **12:42:05**
 
 So, I see that there are a lot of models that can potentially benefit from this PR as the pattern
 ```

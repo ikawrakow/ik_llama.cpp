@@ -1,10 +1,11 @@
-### 🐛 [#402](https://github.com/ikawrakow/ik_llama.cpp/pull/402) - Fix missing rope_freqs with convert_hf_to_gguf
+### [Pull Request #402](https://github.com/ikawrakow/ik_llama.cpp/pull/402) - Fix missing rope_freqs with convert_hf_to_gguf
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-09 |
 | **Updated** | 2025-05-09 |
+| **Merged** | 2025-05-09 |
 
 ---
 
@@ -22,4 +23,6 @@ Look at #377 for more information.
 
 #### 💬 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-05-09** at **14:16:12**: ✅ `APPROVED`
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-05-09** at **14:16:12**
+
+_No content provided._

@@ -1,10 +1,11 @@
-### 🔀 [#54](https://github.com/ikawrakow/ik_llama.cpp/pull/54) - Improve Q4_0 and Q8_0 performance on AVX2/Zen4
+### [Pull Request #54](https://github.com/ikawrakow/ik_llama.cpp/pull/54) - Improve Q4_0 and Q8_0 performance on AVX2/Zen4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-14 |
 | **Updated** | 2024-09-14 |
+| **Merged** | 2024-09-14 |
 
 ---
 

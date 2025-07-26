@@ -1,10 +1,11 @@
-### 🔀 [#458](https://github.com/ikawrakow/ik_llama.cpp/pull/458) - Add missing gguf-py constants
+### [Pull Request #458](https://github.com/ikawrakow/ik_llama.cpp/pull/458) - Add missing gguf-py constants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-25 |
 | **Updated** | 2025-05-25 |
+| **Merged** | 2025-05-25 |
 
 ---
 

@@ -1,4 +1,4 @@
-### 🐛 [#500](https://github.com/ikawrakow/ik_llama.cpp/issues/500) - Bug: Insane cudaMalloc OOM Error on Dual 3090 GPUs
+### [Issue #500](https://github.com/ikawrakow/ik_llama.cpp/issues/500) - Bug: Insane cudaMalloc OOM Error on Dual 3090 GPUs
 
 | **Author** | `simple6502` |
 | :--- | :--- |
@@ -207,7 +207,7 @@ Aborted
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-06-06** at **15:58:12**:<br>
+👤 **ikawrakow** commented on **2025-06-06** at **15:58:12**
 
 Try `cmake -DGGML_SCHED_MAX_COPIES=1 ...`
 
@@ -217,6 +217,6 @@ Also add `--parallel 1` to your command line when starting the server.
 
 ---
 
-👤 **simple6502** commented the **2025-06-06** at **16:23:11**:<br>
+👤 **simple6502** commented on **2025-06-06** at **16:23:11**
 
 Perfect! It works fine now and I don't get any more of those issues. Now I can just fine-tune my settings to work best on my system.

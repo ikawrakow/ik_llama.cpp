@@ -1,10 +1,11 @@
-### ✨ [#627](https://github.com/ikawrakow/ik_llama.cpp/issues/627) - Feature Request: Tensor Parallelism
+### [Issue #627](https://github.com/ikawrakow/ik_llama.cpp/issues/627) - Feature Request: Tensor Parallelism
 
 | **Author** | `rankaiyx` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
 | **Created** | 2025-07-18 |
-| **Updated** | 2025-07-19 |
+| **Updated** | 2025-07-20 |
+| **Labels** | `enhancement` |
 
 ---
 
@@ -47,7 +48,7 @@ _No response_
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-07-18** at **08:05:35**:<br>
+👤 **ikawrakow** commented on **2025-07-18** at **08:05:35**
 
 Have you tried raising the issue with the `llama.cpp` project?
 
@@ -55,7 +56,7 @@ Support for old hardware is not one of the strengths of this project, while exac
 
 ---
 
-👤 **rankaiyx** commented the **2025-07-18** at **08:21:28**:<br>
+👤 **rankaiyx** commented on **2025-07-18** at **08:21:28**
 
 There is an issue.
 But it's expired.
@@ -64,7 +65,7 @@ https://github.com/ggml-org/llama.cpp/issues/9086
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-07-19** at **10:12:01**:<br>
+👤 **Ph0rk0z** commented on **2025-07-19** at **10:12:01**
 
 Originally Cuda Dev was supposed to work on backend agnostic TP. Someone else volunteered and made partial PRs but appears to have abandoned them. Progress is stalled.
 
@@ -74,7 +75,7 @@ What's interesting is fastllm, who claims to fully utilize numa and supports hyb
 
 ---
 
-👤 **saood06** commented the **2025-07-19** at **10:19:14**:<br>
+👤 **saood06** commented on **2025-07-19** at **10:19:14**
 
 >Wanted to compare with IK but then realized command-A isn't supported.
 
@@ -82,7 +83,7 @@ I thought it was from #341
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-07-19** at **15:01:49**:<br>
+👤 **Ph0rk0z** commented on **2025-07-19** at **15:01:49**
 
 Damn.. I missed that. Will give it a go.
 
@@ -94,13 +95,7 @@ Mainline: I unfortunately pulled today. My speed in parallel is only 12t/s. With
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-07-19** at **15:01:49**:<br>
-
-Damn.. I missed that. Will give it a go.
-
----
-
-👤 **saood06** commented the **2025-07-20** at **01:09:42**:<br>
+👤 **saood06** commented on **2025-07-20** at **01:09:42**
 
 > IK: Same prompt processing speed as mainline. In SM row, 17t/s generation. Loads GPU 0 like mainline used to. Unfortunately, command-A outputs what looks like parts of the training data or random text. Without SM it is coherent but only does ~12T/s
 > 

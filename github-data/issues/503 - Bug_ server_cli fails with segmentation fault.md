@@ -1,4 +1,4 @@
-### 🐛 [#503](https://github.com/ikawrakow/ik_llama.cpp/issues/503) - Bug: server/cli fails with segmentation fault
+### [Issue #503](https://github.com/ikawrakow/ik_llama.cpp/issues/503) - Bug: server/cli fails with segmentation fault
 
 | **Author** | `OneOfOne` |
 | :--- | :--- |
@@ -158,32 +158,32 @@ llama_new_context_with_model: graph splits = 779
 
 #### 💬 Conversation
 
-👤 **OneOfOne** commented the **2025-06-07** at **20:05:07**:<br>
+👤 **OneOfOne** commented on **2025-06-07** at **20:05:07**
 
 this only happens with the vulkan backend, I haven't figured out how to use rocm or if it's even supported.
 
 ---
 
-👤 **OneOfOne** commented the **2025-06-07** at **20:36:11**:<br>
+👤 **OneOfOne** commented on **2025-06-07** at **20:36:11**
 
 Narrowed it down to `-ctv / -ctk`, removing them makes the model load, however even with full offloading to the GPU, it's extremely slow.
 2 tps vs 35tps on lm studio (vulkan backend).
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-06-07** at **22:35:28**:<br>
+👤 **Ph0rk0z** commented on **2025-06-07** at **22:35:28**
 
 Since its not a large MOE but a dense model, not sure if there is a reason to use IK for it instead of mainline.
 
 ---
 
-👤 **OneOfOne** commented the **2025-06-08** at **02:12:36**:<br>
+👤 **OneOfOne** commented on **2025-06-08** at **02:12:36**
 
 I wanted to play with the some of the ggufs optimized for ik_llama, so I figured I'd give it a try, doesn't explain why those options don't work and why it's extremely slow with full gpu offload.
 
 ---
 
-👤 **saood06** commented the **2025-06-08** at **04:56:55**:<br>
+👤 **saood06** commented on **2025-06-08** at **04:56:55**
 
 > Since its not a large MOE but a dense model, not sure if there is a reason to use IK for it instead of mainline.
 
@@ -193,7 +193,7 @@ Going back to the actual issue, vulkan and rocm may be functioning well in  this
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-08** at **05:04:08**:<br>
+👤 **ikawrakow** commented on **2025-06-08** at **05:04:08**
 
 Yes, mainline is a much better place for Vulkan users. There has been zero development or updates to the Vulkan back-end since I forked the project. At that time the `llama.cpp` Vulkan back-end was quite immature. There has been a very active Vulkan development in mainline since then with many performance improvements. ROCm is also never tested, so unclear if it still works.
 
@@ -203,13 +203,13 @@ These quantization types are not implemented in the Vulkan back-end, so it will 
 
 ---
 
-👤 **OneOfOne** commented the **2025-06-08** at **16:22:15**:<br>
+👤 **OneOfOne** commented on **2025-06-08** at **16:22:15**
 
 Thanks for the replies and explanation, I'll close this issue for now until I get an nvidia card I guess
 
 ---
 
-👤 **ubergarm** commented the **2025-06-28** at **22:48:25**:<br>
+👤 **ubergarm** commented on **2025-06-28** at **22:48:25**
 
 @OneOfOne 
 

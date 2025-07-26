@@ -1,10 +1,11 @@
-### 🐛 [#170](https://github.com/ikawrakow/ik_llama.cpp/pull/170) - MoE fix for R4 quants
+### [Pull Request #170](https://github.com/ikawrakow/ik_llama.cpp/pull/170) - MoE fix for R4 quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-12 |
 | **Updated** | 2025-01-12 |
+| **Merged** | 2025-01-12 |
 
 ---
 

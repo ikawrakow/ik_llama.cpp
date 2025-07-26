@@ -1,10 +1,11 @@
-### 🔀 [#560](https://github.com/ikawrakow/ik_llama.cpp/pull/560) - Remove what appears to be unnecessary asserts in ggml_cuda_cpy
+### [Pull Request #560](https://github.com/ikawrakow/ik_llama.cpp/pull/560) - Remove what appears to be unnecessary asserts in ggml_cuda_cpy
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-26 |
 | **Updated** | 2025-06-27 |
+| **Merged** | 2025-06-27 |
 
 ---
 
@@ -22,10 +23,16 @@ But please test!
 
 #### 💬 Conversation
 
-👤 **Nexesenex** commented the **2025-06-27** at **15:29:27**:<br>
+👤 **Nexesenex** commented on **2025-06-27** at **15:29:27**
 
 I merged this on my Croco.
 My short benching session ok.
 On Wizard 8x22B, 55/57 tensors offloaded on 3 different GPUs, and NKVO activated, no problem of corrupted inference.
 And no losses of performances either.
 Same goes on Miqu 70b full offload on triple GPU.
+
+---
+
+👤 **ikawrakow** commented on **2025-06-27** at **15:44:31**
+
+Thanks for testing!

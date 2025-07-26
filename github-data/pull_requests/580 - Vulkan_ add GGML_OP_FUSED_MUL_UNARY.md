@@ -1,10 +1,11 @@
-### 🔀 [#580](https://github.com/ikawrakow/ik_llama.cpp/pull/580) - Vulkan: add GGML_OP_FUSED_MUL_UNARY
+### [Pull Request #580](https://github.com/ikawrakow/ik_llama.cpp/pull/580) - Vulkan: add GGML_OP_FUSED_MUL_UNARY
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-07-03 |
 | **Updated** | 2025-07-03 |
+| **Merged** | 2025-07-03 |
 
 ---
 

@@ -1,4 +1,4 @@
-### 🐛 [#539](https://github.com/ikawrakow/ik_llama.cpp/issues/539) - Bug: garbage output
+### [Issue #539](https://github.com/ikawrakow/ik_llama.cpp/issues/539) - Bug: garbage output
 
 | **Author** | `jagusztinl` |
 | :--- | :--- |
@@ -307,7 +307,7 @@ Linux
 
 #### 💬 Conversation
 
-👤 **jagusztinl** commented the **2025-06-19** at **08:40:53**:<br>
+👤 **jagusztinl** commented on **2025-06-19** at **08:40:53**
 
 I tried with IQ4_XS models (gemma) it works perfectly, maybe Q4_0 is bad. But with IQ4_XS and -rtr garbage again. What I miss?
 
@@ -450,13 +450,13 @@ What is the meaning of life? In english please please please please please pleas
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-19** at **08:53:16**:<br>
+👤 **ikawrakow** commented on **2025-06-19** at **08:53:16**
 
 Can you try the latest build?
 
 ---
 
-👤 **jagusztinl** commented the **2025-06-20** at **08:01:04**:<br>
+👤 **jagusztinl** commented on **2025-06-20** at **08:01:04**
 
 Same, please help:
 :~/models$ uname -a
@@ -600,7 +600,7 @@ What is the meaning of life? In english please-E4>6'236,(=+G7(@G>H$8,<F*("-D#'6:
 
 ---
 
-👤 **jagusztinl** commented the **2025-06-20** at **12:54:53**:<br>
+👤 **jagusztinl** commented on **2025-06-20** at **12:54:53**
 
 FYI, I had this warnings during compilation:
 
@@ -1159,7 +1159,7 @@ In file included from /home/alerant/ik_llama.cpp/examples/llava/clip.cpp:24:
 
 ---
 
-👤 **jagusztinl** commented the **2025-06-20** at **14:04:07**:<br>
+👤 **jagusztinl** commented on **2025-06-20** at **14:04:07**
 
 Fixed:  build with -DGGML_SVE=ON solved it
 
@@ -1180,19 +1180,7 @@ ik_llama.cpp:
 
 ---
 
-👤 **jagusztinl** commented the **2025-06-20** at **14:04:07**:<br>
-
-Fixed:  build with -DGGML_SVE=ON solved it
-
----
-
-👤 **jagusztinl** commented the **2025-06-20** at **14:06:39**:<br>
-
-But not faster for any model than the current llama.cpp build on ARM CPU
-
----
-
-👤 **ikawrakow** commented the **2025-06-20** at **15:50:59**:<br>
+👤 **ikawrakow** commented on **2025-06-20** at **15:50:59**
 
 You never mentioned your are using an ARM CPU. Unlike llama.cpp, nothing is automatically set for you on ARM. It is likely you need to set arch options manually. `-DGGML_SVE=ON` solving your issues sounds strange to me as no usage is made of SVE anywhere in `ik_llama.cpp`. The only ARM implementation that exists is NEON.
 
@@ -1204,13 +1192,13 @@ But overall, yes, ARM CPUs are not a big focus of this project. I maintain it in
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-20** at **15:59:12**:<br>
+👤 **ikawrakow** commented on **2025-06-20** at **15:59:12**
 
 Oh, what is the CPU you are using?
 
 ---
 
-👤 **jagusztinl** commented the **2025-06-21** at **08:39:04**:<br>
+👤 **jagusztinl** commented on **2025-06-21** at **08:39:04**
 
 Thank you for your answer, a bit detailed explanation of the project:
 -We are using Azure Cobalt ARM CPUs on spot VMs, (64 real core, 512Gb 12 channel very fast RAM) for 0.5USD/hour (!) instead of expensive GPU setups. The price/perforance ratio is unbeatable: our collegues can use DeepSeek privately for  80USD/month continuously without limits.
@@ -1225,22 +1213,7 @@ Please advise how can we further optimize Deepseek inference with your solution.
 
 ---
 
-👤 **jagusztinl** commented the **2025-06-21** at **08:39:04**:<br>
-
-Thank you for your answer, a bit detail explanation of the project:
--We are using Azure Cobalt ARM CPUs on spot VMs, (64 real core, 512Gb 12 channel very fast RAM) for 0.5USD/hour (!) instead of expensive GPU setups. The price/perforance ratio is unbeatable: our collegues can use DeepSeek privately for  80USD/month continuosly. without limits.
--We experimented with llama.cpp as the fastest inference engine, with this setup (optimized for Cobalt and linked with ARM performance libs): cmake  -DGGML_CPU_KLEIDIAI=ON -DCMAKE_CXX_FLAGS="-mcpu=cobalt-100 -mtune=cobalt-100 -flto -Ofast  -DINTEGER64 -I${ARMPL_DIR}/include -larmpl_ilp64_mp  -lamath -lastring -lm " -DCMAKE_C_FLAGS="-mcpu=cobalt-100 -mtune=cobalt-100 -flto -Ofast  -DINTEGER64 -I${ARMPL_DIR}/include -larmpl_ilp64_mp  -lamath -lastring -lm " and ggml detection results:
-Adding CPU backend variant ggml-cpu: -mcpu=neoverse-n2+crc+sve2-aes+sve2-sha3+sve2-sm4+norng+nossbs+dotprod+i8mm+sve+nosme
-
-The best result was this with llama.cpp, usable but we are looking for better performance, this is why we turned to your project:
-| deepseek2 671B Q4_0            | 353.47 GiB |   671.03 B | RPC        |  99 |  1 |           pp512 |         43.27 ± 0.16 |
-| deepseek2 671B Q4_0            | 353.47 GiB |   671.03 B | RPC        |  99 |  1 |           tg128 |         10.97 ± 0.07 |
-
-Please advise how can we further optimize Deepseek inference with your solution.
-
----
-
-👤 **jagusztinl** commented the **2025-06-21** at **08:47:17**:<br>
+👤 **jagusztinl** commented on **2025-06-21** at **08:47:17**
 
 About the garbage problem:
 If I do not use -DGGML_SVE=ON during compilation, it is not detected:
@@ -1251,7 +1224,7 @@ this is the root cause of the garbage output on this server.
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-21** at **09:22:44**:<br>
+👤 **ikawrakow** commented on **2025-06-21** at **09:22:44**
 
 I'm open to working on optimizing this project for SVE, but it is a hobby project of mine without commercial backing, so I develop/test on the CPU platforms I have access to (`AVX2`, `Zen4`, `ARM_NEON` on an M2-Max CPU).
 
@@ -1259,13 +1232,13 @@ What are you looking to optimize? I read somewhere that the "typical enterprise"
 
 ---
 
-👤 **saood06** commented the **2025-06-21** at **16:16:04**:<br>
+👤 **saood06** commented on **2025-06-21** at **16:16:04**
 
 So can you try experimenting with `-DGGML_ARCH_FLAGS=` added by #347. Some users have had some success with it see: https://github.com/ikawrakow/ik_llama.cpp/issues/345#issuecomment-2831460138. It looks like you have done similar experimenting with llama.cpp, in optimizing it.
 
 ---
 
-👤 **jagusztinl** commented the **2025-06-23** at **15:34:50**:<br>
+👤 **jagusztinl** commented on **2025-06-23** at **15:34:50**
 
 Using this:
 cmake -B ./build -DGGML_LTO=ON -DCMAKE_CXX_FLAGS=" -flto -Ofast  -DINTEGER64 -I${ARMPL_DIR}/include -larmpl_ilp64_mp  -lamath -lastring -lm " -DCMAKE_C_FLAGS=" -flto -Ofast  -DINTEGER64 -I${ARMPL_DIR}/include -larmpl_ilp64_mp  -lamath -lastring -lm " -DGGML_ARCH_FLAGS="-mcpu=neoverse-n2+crc+sve2-aes+sve2-sha3+sve2-sm4+norng+nossbs+dotprod+i8mm+sve+nosme"
@@ -1276,7 +1249,7 @@ ik_llama.cpp is winner :-)
 
 ---
 
-👤 **saood06** commented the **2025-06-23** at **20:40:31**:<br>
+👤 **saood06** commented on **2025-06-23** at **20:40:31**
 
 >ik_llama.cpp is winner :-)
 
@@ -1296,6 +1269,6 @@ If your use case allows for it, you may be able to get better performance with b
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-26** at **06:49:28**:<br>
+👤 **ikawrakow** commented on **2025-06-26** at **06:49:28**
 
 No need to keep this open.

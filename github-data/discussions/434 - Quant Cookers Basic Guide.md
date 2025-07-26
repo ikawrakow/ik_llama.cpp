@@ -1,4 +1,4 @@
-### 🗣️ [#434](https://github.com/ikawrakow/ik_llama.cpp/discussions/434) - Quant Cookers Basic Guide
+### [Discussion #434](https://github.com/ikawrakow/ik_llama.cpp/discussions/434) - Quant Cookers Basic Guide
 
 | **Author** | `ubergarm` |
 | :--- | :--- |
@@ -320,23 +320,14 @@ model=/mnt/llms/ubergarm/Qwen3-14B-GGUF/Qwen3-14B-IQ4_KS.gguf
 
 #### 🗣️ Discussion
 
-👤 **VinnyG9** replied the **2025-05-19** at **14:48:32**:<br>
+👤 **VinnyG9** commented on **2025-05-19** at **14:48:32**
 
 thanks for this, can you point me where can i read a description of:
 -DGGML_RPC=OFF
 --seed 1337
 
-> 👤 **ubergarm** replied the **2025-05-19** at **15:07:31**:<br>
-> > -DGGML_RPC=OFF
-> > --seed 1337
+> 👤 **VinnyG9** replied on **2025-05-21** at **03:42:57**
 > 
-> The had turned off the RPC backend building at some point becuase in the past I had enabled it to test some things, you can probably ignore it for the purposes of this guide. If you're interested the RPC "remote procedure call" allows you to run [a client and server(s) distributed across multiple machines or processes](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) for distributing inferencing. However, it is very basic and lacking a variety of features which make it less than useful in most of my testing and purposes.
-> 
-> > --seed 1337
-> 
-> I set the same random seed, just for fun, across all of my measurements in a hopeful attempt to reduce differences due to entropy. Not sure if it really matters. [1337](https://www.urbandictionary.com/define.php?term=1337) is leet speek for [leet](https://www.urbandictionary.com/define.php?term=leet).
-> 
-> 👤 **VinnyG9** replied the **2025-05-21** at **03:42:57**:<br>
 > > > -DGGML_RPC=OFF
 > > > --seed 1337
 > > 

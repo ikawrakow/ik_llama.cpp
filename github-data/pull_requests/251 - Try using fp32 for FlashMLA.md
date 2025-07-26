@@ -1,4 +1,4 @@
-### 🔀 [#251](https://github.com/ikawrakow/ik_llama.cpp/pull/251) - Try using fp32 for FlashMLA
+### [Pull Request #251](https://github.com/ikawrakow/ik_llama.cpp/pull/251) - Try using fp32 for FlashMLA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
@@ -8,8 +8,14 @@
 
 ---
 
+#### Description
+
+_No description provided._
+
+---
+
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-03-12** at **07:51:20**:<br>
+👤 **ikawrakow** commented on **2025-03-12** at **07:51:20**
 
 Closing this as the numerical issues were caused by `fp16` experts matrix multiplications.

@@ -1,4 +1,4 @@
-### 🐛 [#522](https://github.com/ikawrakow/ik_llama.cpp/issues/522) - Bug: disabling CUDA graphs due to mul_mat_id
+### [Issue #522](https://github.com/ikawrakow/ik_llama.cpp/issues/522) - Bug: disabling CUDA graphs due to mul_mat_id
 
 | **Author** | `SlavikCA` |
 | :--- | :--- |
@@ -462,25 +462,25 @@ ggml_backend_cuda_graph_compute: disabling CUDA graphs due to too many consecuti
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-06-12** at **05:03:54**:<br>
+👤 **ikawrakow** commented on **2025-06-12** at **05:03:54**
 
 This warning is hidden behind `#ifdef NDEBUG`, so should not appear in a release build.
 
 ---
 
-👤 **SlavikCA** commented the **2025-06-12** at **05:07:30**:<br>
+👤 **SlavikCA** commented on **2025-06-12** at **05:07:30**
 
 so, safe to ignore?
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-12** at **05:15:20**:<br>
+👤 **ikawrakow** commented on **2025-06-12** at **05:15:20**
 
 Yes, the warning is safe to ignore. But you should make sure that you are using a Release build (where this warning should normally not appear), else your performance will be very low. Try adding `-DCMAKE_BUILD_TYPE=Release` to your `cmake` command. If you still see this message, ask your `cmake` vendor why `NDEBUG` is not defined in a release build.
 
 ---
 
-👤 **SlavikCA** commented the **2025-06-12** at **05:19:05**:<br>
+👤 **SlavikCA** commented on **2025-06-12** at **05:19:05**
 
 I did this:
 ```

@@ -1,10 +1,10 @@
-### 🐛 [#601](https://github.com/ikawrakow/ik_llama.cpp/issues/601) - Bug: llama-imatrix crashing
+### [Issue #601](https://github.com/ikawrakow/ik_llama.cpp/issues/601) - Bug: llama-imatrix crashing
 
 | **Author** | `Lissanro` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
 | **Created** | 2025-07-12 |
-| **Updated** | 2025-07-19 |
+| **Updated** | 2025-07-25 |
 
 ---
 
@@ -102,7 +102,7 @@ fatal error
 
 #### 💬 Conversation
 
-👤 **Lissanro** commented the **2025-07-12** at **02:56:11**:<br>
+👤 **Lissanro** commented on **2025-07-12** at **02:56:11**
 
 I should have checked with llama.cpp imatrix before reporting:
 
@@ -115,13 +115,13 @@ Please consider this bug report as a request to for clearer error message... if 
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-12** at **06:45:17**:<br>
+👤 **ikawrakow** commented on **2025-07-12** at **06:45:17**
 
 So, because of the issues around DeepSeek and the MLA tensors that can be different between mainline and `ik_llama.cpp` I disabled the tensor number check that triggers in mainline. That of course leads to the situation where faulty model will load but then crash because of missing tensors.
 
 ---
 
-👤 **ubergarm** commented the **2025-07-12** at **15:49:53**:<br>
+👤 **ubergarm** commented on **2025-07-12** at **15:49:53**
 
 Heya @Lissanro here is the script I use that has worked on DeepSeek-R1, V3, V3-0324, R1-0528, and the new TNG Chimera models. Keep in mind if u got back to the `-fmoe` closed PR it mentions not to use that when doing imatrix to get data for the individual tensors. This is a dual socket intel xeon 6980P with 768GB RAM per numa node (SNC=Disable gives one numa node per socket):
 
@@ -146,28 +146,7 @@ P.S. I have done it the mainline way by casting the fp8 to bf16 safetensors then
 
 ---
 
-👤 **ubergarm** commented the **2025-07-12** at **15:49:53**:<br>
-
-Heya @Lissanro here is the script I use that has worked on DeepSeek-R1, V3, V3-0324, R1-0528, and the new TNG Chimera models. Keep in mind if u got back to the `-fmoe` closed PR it mentions not to use that when doing imatrix to get data for the individual tensors. This is a dual socket intel xeon 6980P with 768GB RAM per numa node (SNC=Disable gives one numa node per socket):
-
-```bash
-numactl -N 0 -m 0 \
-./build/bin/llama-imatrix \
-    -m /mnt/raid/models/ubergarm/DeepSeek-TNG-R1T2-Chimera-GGUF/DeepSeek-TNG-R1T2-Chimera-Q8_0.gguf \
-    -f ubergarm-imatrix-calibration-corpus-v02.txt \
-    -o /mnt/raid/models/ubergarm/DeepSeek-TNG-R1T2-Chimera-GGUF/imatrix-DeepSeek-TNG-R1T2-Chimera-Q8_0.dat \
-    --verbosity 1 \
-    --ctx-size 512 \
-    --layer-similarity \
-    --numa numactl \
-    --threads 128
-```
-
-I only ever convert fp8 safetensors via the evshiron llama.cpp fork (made from fairydreaming's original MLA stuf) plus triton-cpu to get bf16 GGUFs directly without need for > sm89 architechture GPU or any GPU at all.
-
----
-
-👤 **saood06** commented the **2025-07-12** at **21:04:32**:<br>
+👤 **saood06** commented on **2025-07-12** at **21:04:32**
 
 > llama_model_load: error loading model: done_getting_tensors: wrong number of tensors; expected 1147, got 1025 llama_model_load_from_file_impl: failed to load model
 > 
@@ -177,7 +156,7 @@ I don't know if it is an "incomplete quant", as 1025 tensors is what I see in my
 
 ---
 
-👤 **Lissanro** commented the **2025-07-12** at **22:30:30**:<br>
+👤 **Lissanro** commented on **2025-07-12** at **22:30:30**
 
 @ubergarm
 Thank you, I was making it work without crashing. As it turned out the issue wasn't missing tensors (rebuilding from scratch did not help), but it seems some extra options in my command were crashing it. When I used your command with some adjustment to my system (I have only 64 cores) and paths, it started working, however I tried without any GPUs for now. I will try carefully to add GPU options when I am not using another model actively.
@@ -206,7 +185,7 @@ I wonder, does that mean extra MLA tensors were bundled in the original FP8 mode
 
 ---
 
-👤 **saood06** commented the **2025-07-12** at **23:05:01**:<br>
+👤 **saood06** commented on **2025-07-12** at **23:05:01**
 
 > I wonder, does that mean extra MLA tensors were bundled in the original FP8 model, or did /convert_hf_to_gguf.py add them? I did not take a note how many tensors R1 and R1T original FP8 models had when I was converting them, so not sure if this one is different or the same.
 
@@ -224,7 +203,7 @@ I'm not sure if that was the only issue, but it seems like it may have been an i
 
 ---
 
-👤 **ubergarm** commented the **2025-07-12** at **23:22:43**:<br>
+👤 **ubergarm** commented on **2025-07-12** at **23:22:43**
 
 @Lissanro 
 
@@ -248,29 +227,7 @@ If I make a quant converted with the mainline two step cast method, it also show
 
 ---
 
-👤 **ubergarm** commented the **2025-07-12** at **23:22:43**:<br>
-
-@Lissanro 
-
->  however I tried without any GPUs for now
-
-Glad you're able to get it to run at least on CPU. Curious if it would work with CUDA too.
-
-> This is how I converted from fp8 to bf16:
-
-Wait are you using mainline llama.cpp to do the conversion `python3 /home/lissanro/pkgs/llama.cpp-fp8-to-bf16/llama.cpp/convert_hf_to_gguf.py` and then ik to do the imatrix `~/pkgs/ik_llama.cpp/build/bin/llama-imatrix` ?
-
-I've only recently tried that once for an experiment trying a bunch of tiny IQ1_S quants with older quantization types possibly to run on AMD GPU but got distracted. I can't remember but some combination threw an error, either mainline llama.cpp imatrixing a `evshiron+triton-cpu` method quant or vice versa... 
-
-I did grab a gguf-dump of the first bf16 file for both methods if you'd like to look, I put both of them here:
-
-https://gist.github.com/ubergarm/d9a3e89355199fc34d8c75882bcc3ab4
-
-If I make a quant converted with the mainline two step cast method, it also shows up when starting on ik_llama.cpp with that error message `missing wkv_b tensor(s) changing MLA from %d to 1`.
-
----
-
-👤 **saood06** commented the **2025-07-12** at **23:40:00**:<br>
+👤 **saood06** commented on **2025-07-12** at **23:40:00**
 
 > I only ever convert fp8 safetensors via the evshiron llama.cpp fork (made from fairydreaming's original MLA stuf) plus triton-cpu to get bf16 GGUFs directly without need for > sm89 architechture GPU or any GPU at all.
 
@@ -280,17 +237,7 @@ I don't like that this is the way I still resort to doing it (a goal of mine [ev
 
 ---
 
-👤 **saood06** commented the **2025-07-12** at **23:40:00**:<br>
-
-> I only ever convert fp8 safetensors via the evshiron llama.cpp fork (made from fairydreaming's original MLA stuf) plus triton-cpu to get bf16 GGUFs directly without need for > sm89 architechture GPU or any GPU at all.
-
-I don't like that this is the way I still resort to doing it (a goal of mine [even if I haven't been working at it at all recently] is to make using any convert script outside this repo not needed for making GGUFs for models supported by this repo, Besides upcasting FP8 using triton, I know certain models like Gemma 3 and GLM-4 still aren't supported*).
-
-*Well besides the new bitnet model as they have their own standalone scripts [this](https://github.com/microsoft/BitNet/blob/main/utils/convert-ms-to-gguf-bitnet.py) and [this](https://github.com/microsoft/BitNet/blob/main/utils/convert-hf-to-gguf-bitnet.py) that I had issues using those.
-
----
-
-👤 **Lissanro** commented the **2025-07-13** at **00:25:30**:<br>
+👤 **Lissanro** commented on **2025-07-13** at **00:25:30**
 
 @ubergarm 
 
@@ -304,7 +251,7 @@ And according to it, having -fmoe wasn't causing crashes in the past when creati
 
 ---
 
-👤 **saood06** commented the **2025-07-13** at **01:43:19**:<br>
+👤 **saood06** commented on **2025-07-13** at **01:43:19**
 
 > And according to it, having -fmoe wasn't causing crashes in the past when creating imatrix, this is why I was using it, I just wasn't aware it is not supported anymore for the imatrix creation (based on information in this thread, it sounds like maybe it was never really supported).
 
@@ -312,15 +259,7 @@ Even if it wasn't causing crashing it might explain why your imatrix file was sm
 
 ---
 
-👤 **saood06** commented the **2025-07-13** at **01:43:19**:<br>
-
-> And according to it, having -fmoe wasn't causing crashes in the past when creating imatrix, this is why I was using it, I just wasn't aware it is not supported anymore for the imatrix creation (based on information in this thread, it sounds like maybe it was never really supported).
-
-Even if it wasn't causing crashing it might explain why your imatrix file was smaller than it should have been. (130 MB vs 987 MB).
-
----
-
-👤 **ubergarm** commented the **2025-07-14** at **15:51:51**:<br>
+👤 **ubergarm** commented on **2025-07-14** at **15:51:51**
 
 @saood06 
 
@@ -340,7 +279,7 @@ Not sure how it will pan out, but I think we'll get there eventually!
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-14** at **16:20:27**:<br>
+👤 **ikawrakow** commented on **2025-07-14** at **16:20:27**
 
 > My goal is to get a "small" Kimi-K2-Instruct GGUF using ik's SOTA quants. However, it is a slightly modified DeepSeek architecture with more routed exps, only one ffn dense layer up front (instead of 3), and less MLA heads I believe.
 
@@ -356,7 +295,7 @@ Unless you are worried about model size and want to squeeze out the last bit pos
 
 ---
 
-👤 **saood06** commented the **2025-07-14** at **18:40:33**:<br>
+👤 **saood06** commented on **2025-07-14** at **18:40:33**
 
 > Yeah I wasn't sure where ik_llama.cpp convert_hf_to_gguf.py stands and skipped porting over the python code on GLM-4 and also Hunyuan-A13B....
 
@@ -390,7 +329,7 @@ Let me know if you need me to help with anything.
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-14** at **19:40:31**:<br>
+👤 **ikawrakow** commented on **2025-07-14** at **19:40:31**
 
 > and I also decided to go with Compilade's unmerged imatrix GGUF PR as it still saves data even when the routed exps are not 100% (it was dropping a lot at first). Not sure on how compatible that "imatrix.gguf" will be here if I convert it back to ".dat"...
 
@@ -400,7 +339,7 @@ Having said that, there is nothing in compilade's PR that has not been solved he
 
 ---
 
-👤 **saood06** commented the **2025-07-14** at **19:51:08**:<br>
+👤 **saood06** commented on **2025-07-14** at **19:51:08**
 
 >Having said that, there is nothing in compilade's PR that has not been solved here a long time ago. Given that [#609](https://github.com/ikawrakow/ik_llama.cpp/pull/609) has been merged, I would calculate the imatrix data with `ik_llama.cpp` if I were you.
 
@@ -408,7 +347,7 @@ I agree about generating the imatrix data with `ik_llama.cpp`, but the one thing
 
 ---
 
-👤 **ubergarm** commented the **2025-07-14** at **20:01:59**:<br>
+👤 **ubergarm** commented on **2025-07-14** at **20:01:59**
 
 Thanks y'all, and yes I *want* to use ik_llama.cpp imatrix!! 
 
@@ -428,7 +367,7 @@ I realize I could make imatrix with ik_llama.cpp using a mainline quant, but the
 
 ---
 
-👤 **saood06** commented the **2025-07-14** at **20:06:39**:<br>
+👤 **saood06** commented on **2025-07-14** at **20:06:39**
 
 > I had never understood exactly what step messes up the MLA tensors with the "mainline fp8_cast_bf16.py -> convert_hf_to_gguf.py method" vs what I use here referred to as the "evshiron+triton-cpu direct fp8 -> bf16 gguf method".
 
@@ -436,7 +375,7 @@ The python script that converts the safetensors into a GGUF is the one that dete
 
 ---
 
-👤 **ubergarm** commented the **2025-07-14** at **20:10:40**:<br>
+👤 **ubergarm** commented on **2025-07-14** at **20:10:40**
 
 > The python script that converts the safetensors into a GGUF is the one that determines what MLA tensors you end up with.
 
@@ -448,19 +387,7 @@ Thanks for your patience I can be pretty slow on the uptake sometimes haha
 
 ---
 
-👤 **ubergarm** commented the **2025-07-14** at **20:10:40**:<br>
-
-> The python script that converts the safetensors into a GGUF is the one that determines what MLA tensors you end up with.
-
-Yup, I never quite realized that as the evshiron method being a single step confused me. I never grokked where exactly things were happening until going through this all today. 
-
-I link to the different code in question [in this comment here](https://github.com/ikawrakow/ik_llama.cpp/pull/609#issuecomment-3070754157)
-
-Thanks for your patience I can be pretty slow on the uptake sometimes haha
-
----
-
-👤 **saood06** commented the **2025-07-14** at **20:21:48**:<br>
+👤 **saood06** commented on **2025-07-14** at **20:21:48**
 
 > > The python script that converts the safetensors into a GGUF is the one that determines what MLA tensors you end up with.
 > 
@@ -478,7 +405,7 @@ Thank you for doing all this. It helps a lot of people, so I'm glad to assist wh
 
 ---
 
-👤 **ubergarm** commented the **2025-07-14** at **20:37:39**:<br>
+👤 **ubergarm** commented on **2025-07-14** at **20:37:39**
 
 > Yes that isn't the most intuitive, but it is really convenient.
 
@@ -502,7 +429,7 @@ $ cat quantize-Kimi-K2-Instruct-mainline-Q8_0.log | grep attn_kv_b
 
 ---
 
-👤 **saood06** commented the **2025-07-14** at **20:43:12**:<br>
+👤 **saood06** commented on **2025-07-14** at **20:43:12**
 
 > Yeah, though fortunately now I have a method to use triton-cpu (with your help patching that) and use deepseek's fp8_cast_bf16.py directly to avoid needing enough VRAM or >=sm89 arch for fp8e4m3 support.
 
@@ -519,24 +446,7 @@ The point to linking the old comment is not for the conclusion or even about com
 
 ---
 
-👤 **saood06** commented the **2025-07-14** at **20:43:12**:<br>
-
-> Yeah, though fortunately now I have a method to use triton-cpu (with your help patching that) and use deepseek's fp8_cast_bf16.py directly to avoid needing enough VRAM or >=sm89 arch for fp8e4m3 support.
-
-I never did that as once you have triton-cpu the evshiron method saves you a step so I always did that.
-
-> Ahh yes, I have definitely read this before, but it didn't sink in, and notes are scattered across so many platforms these days alas... Here it is again for my future self to stuble on it:
-> 
-> > So in conclusion if the model has all three attn_k_b.weight, attn_v_b.weight and attn_kv_b.weight or just attn_kv_b.weight it will work here, but if it has attn_k_b.weight and attn_v_b.weight but no attn_kv_b.weight it will not work here.
-> 
-
-NO. The conclusion to that comment is outdated (and I say so in the comment).
-
-The point to linking the old comment is not for the conclusion or even about compatibility, it is just about the differing MLA tensors amongst GGUFs that exist.
-
----
-
-👤 **ubergarm** commented the **2025-07-14** at **20:58:05**:<br>
+👤 **ubergarm** commented on **2025-07-14** at **20:58:05**
 
 > NO. The conclusion to that comment is outdated (and I say so in the comment).
 > 
@@ -546,7 +456,7 @@ I think I'm doing too many things at the same time, sorry to misunderstand yet a
 
 ---
 
-👤 **saood06** commented the **2025-07-14** at **21:05:08**:<br>
+👤 **saood06** commented on **2025-07-14** at **21:05:08**
 
 > I think I'm doing too many things at the same time, sorry to misunderstand yet again lol. 
 
@@ -558,7 +468,7 @@ Yes (and some from even before any MLA implementation exists). I was linking it 
 
 ---
 
-👤 **ubergarm** commented the **2025-07-14** at **21:10:13**:<br>
+👤 **ubergarm** commented on **2025-07-14** at **21:10:13**
 
 Right, I added edited the comment above and stuck this in there: `EDIT BY UBERGARM To be clear ik_llama.cpp does support mainline quants despite mainline changing the MLA tensors!!!`
 
@@ -568,7 +478,7 @@ Thanks!
 
 ---
 
-👤 **Lissanro** commented the **2025-07-19** at **06:04:11**:<br>
+👤 **Lissanro** commented on **2025-07-19** at **06:04:11**
 
 I tried to rebuilt my quants avoid using -fmoe and -mla 3 options, but use just -mla 1 instead. I was successfully was able to rebuild V3 quant, but R1 gives me a trouble (get nan during imatrix), I would appreciate if anyone encountered similar issues or know how to debug this.
 
@@ -587,26 +497,7 @@ I also tried without "-mla 1 -b 4096 -ub 4096" and it crashed in a similar way. 
 
 ---
 
-👤 **Lissanro** commented the **2025-07-19** at **06:04:11**:<br>
-
-I tried to rebuilt my quants avoid using MLA. I was successfully was able to rebuild V3 quant, but R1 gives me a trouble (get nan during imatrix), I would appreciate if anyone encountered similar issues or know how to debug this.
-
-First, I create Q8 from BF16:
-
-~/pkgs/ik_llama.cpp/build/bin/llama-quantize /mnt/secondary/neuro/DeepSeek-R1-0528/DeepSeek-R1-256x21B-0528-BF16.gguf /mnt/neuro/models/DeepSeek-R1-256x21B-0528-IQ4_K-163840seq/DeepSeek-R1-256x21B-0528-Q8_0.gguf Q8_0
-
-Then I try to build imatrix:
-
-~/pkgs/ik_llama.cpp/build/bin/llama-imatrix -m /mnt/neuro/models/DeepSeek-R1-256x21B-0528-IQ4_K-163840seq/DeepSeek-R1-256x21B-0528-Q8_0.gguf -f ~/pkgs/imatrix/compact.txt --n-gpu-layers 62 --tensor-split 25,23,26,26 -ot "ffn_down_exps=CPU, ffn_up_exps=CPU, gate_exps=CPU" --threads 64 -mla 1 -b 4096 -ub 4096
-...
-save_imatrix: stored collected data after 730 chunks in imatrix.dat
-[730]4.8195,[731]4.8186,[732]4.8137,[733]4.8200,[734]4.8243,[735]4.8169,[736]4.8161,[737]4.8118,nan detected in blk.60.attn_output.weight
-
-I also tried without "-mla 1 -b 4096 -ub 4096" and it crashed in a similar way. Maybe something wrong with my Q8 or maybe I missed some imatrix option that is needed, but could not figure this out just yet.
-
----
-
-👤 **ikawrakow** commented the **2025-07-19** at **06:47:39**:<br>
+👤 **ikawrakow** commented on **2025-07-19** at **06:47:39**
 
 This is a bummer. No-one has reported a problem such as this, so it could be useful to see the calibration data if it is not secret.
 
@@ -614,7 +505,7 @@ You can still use the matrix data that was saved before the NaN occurred.
 
 ---
 
-👤 **ubergarm** commented the **2025-07-19** at **14:42:07**:<br>
+👤 **ubergarm** commented on **2025-07-19** at **14:42:07**
 
 @Lissanro 
 
@@ -630,8 +521,130 @@ Otherwise yes bummer indeed.
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-19** at **18:05:54**:<br>
+👤 **ikawrakow** commented on **2025-07-19** at **18:05:54**
 
 > I presume you compiled with -DGGML_CUDA_IQK_FORCE_BF16=1 to avoid nans specifically with DeepSeek/MLA models
 
 That was relevant only for quants that did not have quantized matrix multiplications (a.k.a., MMQ), and hence dequantized to `f16` by default, which resulted in NaNs for DeepSeek. This is no longer relevant as all quants have MMQ now. It never was relevant for `Q8_0`.
+
+---
+
+👤 **ubergarm** commented on **2025-07-19** at **18:16:11**
+
+> This is no longer relevant as all quants have MMQ now. It never was relevant for Q8_0.
+
+Thanks for the clarification, the 😈 is in the details. I'll do my best to not perpetuate incorrect collective knowledge for all eternity... 😅
+
+---
+
+👤 **Lissanro** commented on **2025-07-22** at **15:47:48**
+
+@ikawrakow Sure, I can share my imatrix data and from where I got it, I just wanted to try one more time to be sure before providing more details. I tried this time without `-mla 1` and without `-ub 4096 -b 4096` options (with them outcome is the same):
+
+```
+~/pkgs/ik_llama.cpp/build/bin/llama-imatrix \
+-m /mnt/neuro/models/DeepSeek-R1-256x21B-0528-IQ4_K-163840seq/DeepSeek-R1-256x21B-0528-Q8_0.gguf \
+-f ~/pkgs/imatrix/compact-imatrix.txt --n-gpu-layers 62 --tensor-split 25,23,26,26 \
+-ot "ffn_down_exps=CPU, ffn_up_exps=CPU, gate_exps=CPU" --threads 64
+...
+save_imatrix: stored collected data after 720 chunks in imatrix.dat
+[720]4.8196,[721]4.8264,[722]4.8189,[723]4.8177,[724]4.8175,[725]4.8171,[726]4.8170,[727]4.8097,[728]4.8111,[729]4.8132,
+save_imatrix: stored collected data after 730 chunks in imatrix.dat
+[730]4.8195,[731]4.8186,[732]4.8137,[733]4.8200,[734]4.8243,[735]4.8169,[736]4.8161,[737]4.8118,nan detected in blk.60.attn_output.weight
+
+```
+
+Full log: https://pastebin.com/CgFtLbWB (even though the working folder named IQ4, I am using Q8_0 GGUF quant, and did not get to making IQ4 yet).
+
+My calibration data https://dragon.studio/2025/07/compact-imatrix.txt is a merge of these two:
+https://huggingface.co/ThomasBaruzier/Qwen2.5-3B-Instruct-GGUF/blob/main/calibration_datav3.txt
+https://huggingface.co/datasets/eaddario/imatrix-calibration/blob/main/combined_all_tiny.parquet (converted to txt first)
+
+This attempt was with updated repo from few days ago (could not update before running again due to repo not being available at the time).
+
+By the way, by using the imatrix data, do you mean I can use the resulted file as is, or can continue it somehow without starting over? Any ideas if it is something in my calibration data causing this and if yes, how to pinpoint it? It worked for V3 though, so it is a bit surprising that it fails for R1 0528.
+
+---
+
+👤 **ikawrakow** commented on **2025-07-22** at **16:05:57**
+
+> By the way, by using the imatrix data, do you mean I can use the resulted file as is, or can continue it somehow without starting over? Any ideas if it is something in my calibration data causing this and if yes, how to pinpoint it? It worked for V3 though, so it is a bit surprising that it fails for R1 0528.
+
+It got saved to `imatrix.dat` after 730 chunks. You can use this file to create quantized models. Rename it to something else to not lose it when you try the following:
+* Add `--from-chunk 738` to your imatrix command line. This will start computing from chunk 738 thus skipping chunk 737 that produces the NaN
+* If that goes well, you can combine the two (or more) imatrix files by using
+```
+./bin/imatrix --in-file file1 --in-file file2 [--in-file file3 ...] -o combined_imatrix.dat
+```
+
+---
+
+👤 **magikRUKKOLA** commented on **2025-07-25** at **00:02:15**
+
+> /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml.c:15229: fatal error
+
+Uh oh this nasty error.
+
+I can confirm it still present when running the latest ik_llama.cpp master with some 6 bpw+ quants from the Thireus (for the INFERENCE).
+
+In my case it was solved by removing the -fmoe from the command.  Tried to look into it, but failed :( which is sad.  It was somewhat related to munlock.
+
+[EDIT]: pretty sure I can reproduce it for the PPL calculations with -fmoe, low-free-ram and some absend swap file.
+
+---
+
+👤 **Lissanro** commented on **2025-07-25** at **15:01:32**
+
+@ikawrakow Thank you so much! It is good to know that it is possible to combine imatrix files like that, and besides bypassing NaN errors, opens up a possibility to build in few cycles rather than in one go. Once I completed the imatrix, I think it worked well - Q4_K_XS is about as good or better then Q4_K_M quant I had previously with wrongly built imatrix, and reasoning quality breakdown that I originally observed when testing XS is no longer happens.
+
+* * *
+
+By the way, does anyone here have an idea how to convert Kimi K2 FP8 to BF16? I thought it is based on DeepSeek architecture so thought at least quantizing it going to be easy, but so far I could not found any way to convert it to BF16 - 
+for example, llama.cpp folk https://github.com/evshiron/llama.cpp that had script capable of converting FP8 to BF16 for DeepSeek V3 and R1 crashes when loading Kimi K2 safetensors:
+
+```
+python3 /home/lissanro/pkgs/llama.cpp-fp8-to-bf16/llama.cpp/convert_hf_to_gguf.py \
+--outtype bf16 --outfile /mnt/Toshiba_Canvio_4TB/Kimi-K2-Instruct/Kimi-K2-Instruct-BF16.gguf \
+/mnt/neuro/models/Kimi-K2-Instruct/
+...
+Traceback (most recent call last):
+  File "/home/lissanro/pkgs/llama.cpp-fp8-to-bf16/llama.cpp/convert_hf_to_gguf.py", line 5244, in <module>
+    main()
+    ~~~~^^
+  File "/home/lissanro/pkgs/llama.cpp-fp8-to-bf16/llama.cpp/convert_hf_to_gguf.py", line 5238, in main
+    model_instance.write()
+    ~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/lissanro/pkgs/llama.cpp-fp8-to-bf16/llama.cpp/convert_hf_to_gguf.py", line 440, in write
+    self.prepare_metadata(vocab_only=False)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/home/lissanro/pkgs/llama.cpp-fp8-to-bf16/llama.cpp/convert_hf_to_gguf.py", line 433, in prepare_metadata
+    self.set_vocab()
+    ~~~~~~~~~~~~~~^^
+  File "/home/lissanro/pkgs/llama.cpp-fp8-to-bf16/llama.cpp/convert_hf_to_gguf.py", line 4058, in set_vocab
+    self._set_vocab_gpt2()
+    ~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/lissanro/pkgs/llama.cpp-fp8-to-bf16/llama.cpp/convert_hf_to_gguf.py", line 728, in _set_vocab_gpt2
+    tokens, toktypes, tokpre = self.get_vocab_base()
+                               ~~~~~~~~~~~~~~~~~~~^^
+  File "/home/lissanro/pkgs/llama.cpp-fp8-to-bf16/llama.cpp/convert_hf_to_gguf.py", line 522, in get_vocab_base
+    tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+  File "/home/lissanro/.local/lib/python3.13/site-packages/transformers/models/auto/tokenization_auto.py", line 946, in from_pretrained
+    tokenizer_config = get_tokenizer_config(pretrained_model_name_or_path, **kwargs)
+  File "/home/lissanro/.local/lib/python3.13/site-packages/transformers/models/auto/tokenization_auto.py", line 800, in get_tokenizer_config
+    result = json.load(reader)
+  File "/usr/lib/python3.13/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+        cls=cls, object_hook=object_hook,
+        parse_float=parse_float, parse_int=parse_int,
+        parse_constant=parse_constant, object_pairs_hook=object_pairs_hook, **kw)
+  File "/usr/lib/python3.13/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "/usr/lib/python3.13/json/decoder.py", line 348, in decode
+    raise JSONDecodeError("Extra data", s, end)
+json.decoder.JSONDecodeError: Extra data: line 165 column 2 (char 5595)
+```
+
+(full log: https://pastebin.com/3GmeCK9d )
+
+convert_hf_to_gguf.py script from ik_llama.cpp and original llama.cpp does not seem to support FP8 unfortunately (so I assume this is not actually a bug, hence this is why I do not open an issue for it, and why I am trying alternatives that can work with CPU or 3090 cards).

@@ -1,10 +1,11 @@
-### 🔀 [#81](https://github.com/ikawrakow/ik_llama.cpp/pull/81) - Cleanup scale fudge factors
+### [Pull Request #81](https://github.com/ikawrakow/ik_llama.cpp/pull/81) - Cleanup scale fudge factors
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-04 |
 | **Updated** | 2024-10-04 |
+| **Merged** | 2024-10-04 |
 
 ---
 

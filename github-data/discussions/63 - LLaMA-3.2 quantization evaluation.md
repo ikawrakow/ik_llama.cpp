@@ -1,4 +1,4 @@
-### 🗣️ [#63](https://github.com/ikawrakow/ik_llama.cpp/discussions/63) - LLaMA-3.2 quantization evaluation
+### [Discussion #63](https://github.com/ikawrakow/ik_llama.cpp/discussions/63) - LLaMA-3.2 quantization evaluation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
@@ -108,7 +108,7 @@ All quantizations above `IQ3_K` (3.6 bpw) are (nearly) indistinguishable from th
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2024-09-26** at **16:11:00**:<br>
+👤 **ikawrakow** commented on **2024-09-26** at **16:11:00**
 
 Here some performance numbers for the 1B model on a Ryzen-7950X CPU
 
@@ -147,7 +147,7 @@ Here some performance numbers for the 1B model on a Ryzen-7950X CPU
 
 ---
 
-👤 **ikawrakow** replied the **2024-09-26** at **16:18:44**:<br>
+👤 **ikawrakow** commented on **2024-09-26** at **16:18:44**
 
 Here some performance numbers for the 3B model on a Ryzen-7950X CPU
 

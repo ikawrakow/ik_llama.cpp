@@ -1,10 +1,11 @@
-### 🐛 [#540](https://github.com/ikawrakow/ik_llama.cpp/pull/540) - Fix missed block_q8_x2 bf16 -> i16 change
+### [Pull Request #540](https://github.com/ikawrakow/ik_llama.cpp/pull/540) - Fix missed block_q8_x2 bf16 -> i16 change
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-19 |
 | **Updated** | 2025-06-19 |
+| **Merged** | 2025-06-19 |
 
 ---
 

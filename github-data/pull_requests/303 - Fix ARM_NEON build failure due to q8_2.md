@@ -1,10 +1,11 @@
-### 🐛 [#303](https://github.com/ikawrakow/ik_llama.cpp/pull/303) - Fix ARM_NEON build failure due to q8_2
+### [Pull Request #303](https://github.com/ikawrakow/ik_llama.cpp/pull/303) - Fix ARM_NEON build failure due to q8_2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-01 |
 | **Updated** | 2025-04-01 |
+| **Merged** | 2025-04-01 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#525](https://github.com/ikawrakow/ik_llama.cpp/pull/525) - Faster CPU prompt processing for Q4_K and Q5_K
+### [Pull Request #525](https://github.com/ikawrakow/ik_llama.cpp/pull/525) - Faster CPU prompt processing for Q4_K and Q5_K
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-12 |
 | **Updated** | 2025-06-13 |
+| **Merged** | 2025-06-13 |
 
 ---
 

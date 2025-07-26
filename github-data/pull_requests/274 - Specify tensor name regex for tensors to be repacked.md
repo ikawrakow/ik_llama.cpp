@@ -1,10 +1,11 @@
-### 🔀 [#274](https://github.com/ikawrakow/ik_llama.cpp/pull/274) - Specify tensor name regex for tensors to be repacked
+### [Pull Request #274](https://github.com/ikawrakow/ik_llama.cpp/pull/274) - Specify tensor name regex for tensors to be repacked
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-21 |
 | **Updated** | 2025-03-21 |
+| **Merged** | 2025-03-21 |
 
 ---
 

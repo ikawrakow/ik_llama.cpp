@@ -1,10 +1,11 @@
-### 🔀 [#144](https://github.com/ikawrakow/ik_llama.cpp/pull/144) - Slightly faster IQ4_K_R4 on AVX2/Zen4
+### [Pull Request #144](https://github.com/ikawrakow/ik_llama.cpp/pull/144) - Slightly faster IQ4_K_R4 on AVX2/Zen4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-12-16 |
 | **Updated** | 2024-12-16 |
+| **Merged** | 2024-12-16 |
 
 ---
 

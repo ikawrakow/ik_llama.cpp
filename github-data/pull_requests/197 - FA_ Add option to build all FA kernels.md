@@ -1,10 +1,11 @@
-### 🔀 [#197](https://github.com/ikawrakow/ik_llama.cpp/pull/197) - FA: Add option to build all FA kernels
+### [Pull Request #197](https://github.com/ikawrakow/ik_llama.cpp/pull/197) - FA: Add option to build all FA kernels
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-09 |
 | **Updated** | 2025-02-09 |
+| **Merged** | 2025-02-09 |
 
 ---
 

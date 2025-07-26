@@ -1,4 +1,4 @@
-### 🐛 [#485](https://github.com/ikawrakow/ik_llama.cpp/issues/485) - Bug: Illegal Memory Access loading model to CUDA1
+### [Issue #485](https://github.com/ikawrakow/ik_llama.cpp/issues/485) - Bug: Illegal Memory Access loading model to CUDA1
 
 | **Author** | `cmoncure` |
 | :--- | :--- |
@@ -465,7 +465,7 @@ CUDA error: an illegal memory access was encountered
 
 #### 💬 Conversation
 
-👤 **cmoncure** commented the **2025-06-02** at **21:15:21**:<br>
+👤 **cmoncure** commented on **2025-06-02** at **21:15:21**
 
 This is down to the ergonomics of the configuration options.
 Adding -mg 1 solves it.  I don't think this should result in a segfault though. Alas, you're just one guy. 

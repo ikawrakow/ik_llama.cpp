@@ -1,10 +1,11 @@
-### 🔀 [#374](https://github.com/ikawrakow/ik_llama.cpp/pull/374) - CUDA: MMQ for IQ4_KS
+### [Pull Request #374](https://github.com/ikawrakow/ik_llama.cpp/pull/374) - CUDA: MMQ for IQ4_KS
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-05-04 |
 | **Updated** | 2025-05-07 |
+| **Merged** | 2025-05-04 |
 
 ---
 
@@ -107,7 +108,7 @@ TG performance is not affected at all by the PR, so no graph for that.
 
 #### 💬 Conversation
 
-👤 **saood06** commented the **2025-05-04** at **07:33:54**:<br>
+👤 **saood06** commented on **2025-05-04** at **07:33:54**
 
 > I checked that if I add another warn-up run with n_ubatch tokens, performance for N_KV = 0 becomes higher than N_KV = 512 as expected. I guess, I will submit a separate PR for that.
 
@@ -115,7 +116,7 @@ Interesting, I've always dealt with it by either comparing the second row (as it
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **07:41:21**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **07:41:21**
 
 > Interesting, I've always dealt with it by either comparing the second row (as it is generally more stable between runs anyways) or just running a very low context sweep-bench as a warmup
 
@@ -125,7 +126,7 @@ I'll make the PP warm-up pass optional via a command line argument as for very l
 
 ---
 
-👤 **saood06** commented the **2025-05-04** at **07:52:57**:<br>
+👤 **saood06** commented on **2025-05-04** at **07:52:57**
 
 >It does not affect CPU performance.
 
@@ -133,11 +134,11 @@ I just looked back at my notes/logs, it is the first TG for CPU that does vary, 
 
 >I'll make the PP warm-up pass optional via a command line argument as for very large models on the CPU it does take some time to process a batch of 512 tokens.
 
-I was going to suggest that, as that is very true for some of my testing.
+Thanks, I was going to suggest that, as that is very true for some of my testing.
 
 ---
 
-👤 **ubergarm** commented the **2025-05-07** at **22:02:48**:<br>
+👤 **ubergarm** commented on **2025-05-07** at **22:02:48**
 
 I'm working on some benchmarks for various Qwen3-30B-A3B quants and ran some llama-sweep-benches and this PR is looking good for your `IQ4_KS`. Used the `--warmup-batch` PR as well.
 

@@ -1,4 +1,4 @@
-### 🐛 [#576](https://github.com/ikawrakow/ik_llama.cpp/issues/576) - Bug: llama-server crash with \"Deepseek2 does not support K-shift\"
+### [Issue #576](https://github.com/ikawrakow/ik_llama.cpp/issues/576) - Bug: llama-server crash with "Deepseek2 does not support K-shift"
 
 | **Author** | `ewhacc` |
 | :--- | :--- |
@@ -73,7 +73,7 @@ The program is not being run.
 
 #### 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-07-03** at **11:38:54**:<br>
+👤 **ikawrakow** commented on **2025-07-03** at **11:38:54**
 
 > In what circumstance, will "Deepseek2 does not support K-shift" be shown?
 
@@ -81,7 +81,7 @@ When you reach the maximum context length.
 
 ---
 
-👤 **ewhacc** commented the **2025-07-03** at **18:15:28**:<br>
+👤 **ewhacc** commented on **2025-07-03** at **18:15:28**
 
 > When you reach the maximum context length.
 
@@ -95,7 +95,7 @@ It was ok with R1.  I'm going to check with R1 again.
 
 ---
 
-👤 **saood06** commented the **2025-07-03** at **22:29:38**:<br>
+👤 **saood06** commented on **2025-07-03** at **22:29:38**
 
 > > When you reach the maximum context length.
 > 
@@ -112,24 +112,7 @@ You set `--parallel 2`, which makes your max context per slot (with 0 system tok
 
 ---
 
-👤 **saood06** commented the **2025-07-03** at **22:29:38**:<br>
-
-> > When you reach the maximum context length.
-> 
-> Did I reach the maximum context length? p0=45065 just before crash.
-> 
-> n_keep=1 n_left=49150 n_discard=24575 n_ctx=98304 n_past=49151 n_system_tokens=0 n_cache_tokens=49151
-> 
-> Crashed again for the different prompt, but at the same p0=45065.
-> 
-
-Yes. 
-
-You set `--parallel 2`, which makes your max context per slot (with 0 system tokens) to 49,152 (`98304 / 2`). Your batch size is 4,096 and so you'd expect to see the last reported context length to be between 45,056 - 49,152, which `45065` falls into.
-
----
-
-👤 **ewhacc** commented the **2025-07-04** at **05:16:41**:<br>
+👤 **ewhacc** commented on **2025-07-04** at **05:16:41**
 
 @saood06 
 

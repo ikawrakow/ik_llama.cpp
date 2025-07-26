@@ -1,4 +1,4 @@
-### ✨ [#561](https://github.com/ikawrakow/ik_llama.cpp/issues/561) - Feature Request: Tencent Hunyuan-A13B model support
+### [Issue #561](https://github.com/ikawrakow/ik_llama.cpp/issues/561) - Feature Request: Tencent Hunyuan-A13B model support
 
 | **Author** | `Downtown-Case` |
 | :--- | :--- |
@@ -20,7 +20,7 @@ Relevant main llama.cpp issue: https://github.com/ggml-org/llama.cpp/issues/1441
 
 #### 💬 Conversation
 
-👤 **ubergarm** commented the **2025-06-27** at **21:09:18**:<br>
+👤 **ubergarm** commented on **2025-06-27** at **21:09:18**
 
 I took a look at mainline's PR and it isn't quite working there yet. 
 
@@ -36,7 +36,7 @@ I'll look at it again this weekend if I have some time.
 
 ---
 
-👤 **saood06** commented the **2025-06-27** at **21:38:02**:<br>
+👤 **saood06** commented on **2025-06-27** at **21:38:02**
 
 >I took a look at mainline's PR and it isn't quite working there yet.
 
@@ -46,7 +46,7 @@ Once it is functional, I could port this model as it does interest me as well, b
 
 ---
 
-👤 **ubergarm** commented the **2025-06-28** at **16:39:06**:<br>
+👤 **ubergarm** commented on **2025-06-28** at **16:39:06**
 
 Thanks @saood06 
 
@@ -90,17 +90,7 @@ Feel free to use anything in my WIP version to continue or test. It doesn't have
 
 ---
 
-👤 **ubergarm** commented the **2025-06-28** at **16:39:06**:<br>
-
-Thanks @saood06 
-
-I have a [rough branch porting much of what mainline was doing](https://github.com/ubergarm/ik_llama.cpp/tree/ug/hunyuan-moe), but am gonna work on some other personal priority things today and wait for the dust to settle given I couldn't even get Hunyuan-A13B working with their vllm patch. Their release seems pretty rough around the edges thus far.
-
-Feel free to use anything in my WIP version to continue or test.
-
----
-
-👤 **Downtown-Case** commented the **2025-06-30** at **16:24:50**:<br>
+👤 **Downtown-Case** commented on **2025-06-30** at **16:24:50**
 
 An interesting (and now buried) comment:
 
@@ -120,7 +110,7 @@ Seems mainline llama.cpp is getting good performance without implementing that, 
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-30** at **16:35:34**:<br>
+👤 **ikawrakow** commented on **2025-06-30** at **16:35:34**
 
 We don't have an issue here dealing with a variable number of selected experts due to [SER](https://github.com/ikawrakow/ik_llama.cpp/pull/239).
 
@@ -128,7 +118,7 @@ Concerning speeding up: you never want to offload tensors that are in RAM to the
 
 ---
 
-👤 **Downtown-Case** commented the **2025-06-30** at **17:30:22**:<br>
+👤 **Downtown-Case** commented on **2025-06-30** at **17:30:22**
 
 I mispoke, I meant to say that unecessary experts shouldn't be used for token generation (not PP), which is what I assumed the quote is talking about? And I didn't mean to use 'offload' in that context.
 
@@ -138,15 +128,7 @@ I am super excited for this model in ik_llama.cpp because it's the perfect targe
 
 ---
 
-👤 **Downtown-Case** commented the **2025-06-30** at **17:30:22**:<br>
-
-I mispoke, I meant to say that unecessary experts shouldn't be used for token generation (not PP), which is what I assumed the quote is talking about? And I didn't mean to use 'offload,' of course the CPU is the device to use here.
-
-Anyway, that's awesome! I am still unfamiliar with ik_llama.cpp, but SER seems similar to what Tencent presumably trained in.
-
----
-
-👤 **ubergarm** commented the **2025-06-30** at **18:18:24**:<br>
+👤 **ubergarm** commented on **2025-06-30** at **18:18:24**
 
 @Downtown-Case 
 
@@ -154,7 +136,7 @@ I made an attempt using mainline's fresh PR. Feel free to test. Example command 
 
 ---
 
-👤 **Downtown-Case** commented the **2025-07-07** at **03:44:17**:<br>
+👤 **Downtown-Case** commented on **2025-07-07** at **03:44:17**
 
 Got bogged down, apologies, but I'm now testing the PR. Thanks for the quant and the recipe @ubergarm! That's a huge help.
 
@@ -198,51 +180,7 @@ Thanks again. Next I will text much more complex 64K+ prompts, and maybe give th
 
 ---
 
-👤 **Downtown-Case** commented the **2025-07-07** at **03:44:17**:<br>
-
-Got bogged down, apologies, but I'm now testing the PR. Thanks for the quant and the recipe @ubergarm! That's a huge help.
-
-This does feel like one _overtuned_ model. Just a few examples, with a temperature of 1:
-
-It does not like raw completion, or (in my testing, not pictured) skipping the thinking block: 
-
-<img width="871" height="150" alt="Image" src="https://github.com/user-attachments/assets/e05547e1-7621-457c-9988-93a7f3ef7f12" />
-
-It very often, very confidently messes up the </think> block, even at zero temperature.
-
-<img width="979" height="180" alt="Image" src="https://github.com/user-attachments/assets/1fb818b2-252b-49d4-a9ec-3744cf86f41c" />
-
- It's also notable that none of the think/answer tags are individual tokens! So more chance to mess up from sampling there: 
-
-<img width="783" height="106" alt="Image" src="https://github.com/user-attachments/assets/8c179343-54c3-4b64-9ff3-9374ce275f11" />
-
-It loops very easily at the slightest deviation (again, this is a temperature of 1 + topK 10, relatively high these days but also one many default to):
-
-<img width="1845" height="259" alt="Image" src="https://github.com/user-attachments/assets/e6ca46b6-136b-4806-84d6-3590be5b8cdb" />
-
-And it's also *hyper* confident about some in-sentence tokens at 1 temperature, which I don't see in other models much: 
-
-<img width="871" height="150" alt="Image" src="https://github.com/user-attachments/assets/5f37acfe-0b91-4f47-8ba3-c48218f600f6" />
-
-***
-
-...Yet it does seem smart!
-
-I think this model is hyper sensitive to sampling and its chat/think templates, and really needs sampling dialed in to stay sane.
-
-***
-
-I *also* encountered a seperate issue, at least once, where sampling seemed to mess up when the model was trying to generate a </think>. It would go off the rails, and mikupad would return invalid logprobs, like something broke inside ik_llama.cpp... but now I can't replicate it.
-
-***
-
-Thanks again. Next I will text much more complex 64K+ prompts, and maybe give the base model a shot using your formula.
-
-...Maybe this instruct model would benefit from a merge with its base? That's helped less overtuned models than this.
-
----
-
-👤 **saood06** commented the **2025-07-07** at **04:05:29**:<br>
+👤 **saood06** commented on **2025-07-07** at **04:05:29**
 
 >...Yet it does seem smart!
 >[...]
@@ -258,7 +196,7 @@ The mikupad screenshots are nice, I often do look at the probabilities to unders
 
 ---
 
-👤 **Downtown-Case** commented the **2025-07-07** at **04:55:42**:<br>
+👤 **Downtown-Case** commented on **2025-07-07** at **04:55:42**
 
 @saood06 Ah, lm_head being in a weird place with the merge, right? Hello again!
 
@@ -278,27 +216,7 @@ Yeah I just meant to re-use the formula.
 
 ---
 
-👤 **Downtown-Case** commented the **2025-07-07** at **04:55:42**:<br>
-
-@saood06 Ah, lm_head being in a weird place, right? Hello again!
-
-Cohere models are _still_ problematic, heh: https://github.com/turboderp-org/exllamav3/issues/53
-
-https://github.com/turboderp-org/exllamav3/issues/34#issuecomment-2854186639
-
-I wonder if that tensor plotting script would show any 'surgery' on A13B...
-
-Anyway, yeah, Mikupad's a great way to `understand the model` via repeated sampling testing, continuing prompts using the notebook format, peaking at the sampling and such; couldn't put it any better myself. It also happens to be good at 64K+ prompts, whereas most UIs bog down trying to display them.
-
-Hence the screenshots don't completely convey it, but this A13B quant does feel funky but usable, and it *does* seem to comprehend quick long context tests.
-
-> I wouldn't reuse the imatrix.dat between the base model and the instruct model (reusing the formula makes sense though).
-
-Yeah I just meant to re-use the formula.
-
----
-
-👤 **saood06** commented the **2025-07-07** at **05:29:09**:<br>
+👤 **saood06** commented on **2025-07-07** at **05:29:09**
 
 > Ah, lm_head being in a weird place with the merge, right? Hello again!
 
@@ -328,7 +246,7 @@ That is good to hear, this model can fit on my 3090 machine which would probably
 
 ---
 
-👤 **Downtown-Case** commented the **2025-07-07** at **06:31:24**:<br>
+👤 **Downtown-Case** commented on **2025-07-07** at **06:31:24**
 
 I am running A13B on a 3090/DDR5 system (up to 60K-ish so far), and its plenty fast, with q8_0/q5_1 cache. I will check token/s next time I look.
 
@@ -342,7 +260,7 @@ I had some 128k+ prompts  I ran before that I intend to remake and try.
 
 ---
 
-👤 **saood06** commented the **2025-07-07** at **06:49:38**:<br>
+👤 **saood06** commented on **2025-07-07** at **06:49:38**
 
 > I am running A13B on a 3090/DDR5 system (up to 60K-ish so far), and its plenty fast, with q8_0/q5_1 cache. I will check token/s next time I look.
 
@@ -366,31 +284,7 @@ If they are still in the browser export and import can work as an alternative to
 
 ---
 
-👤 **saood06** commented the **2025-07-07** at **06:49:38**:<br>
-
-> I am running A13B on a 3090/DDR5 system (up to 60K-ish so far), and its plenty fast, with q8_0/q5_1 cache. I will check token/s next time I look.
-
-DDR4 here, and to be honest for me t/s doesn't matter for this usage unless it is slow (aka below reading speed).
-
-> text-gen-web-ui is _awful_, really most everything I tried is except exui, which is now (sadly) depreciated. 
-
-It is? I see it hasn't been updated in a while, but don't see it being depreciated. I know mikupad is in a state where the owner hasn't responded to any of the issues/PR's people have made in ~6 months, which is a major part of why I'm doing work on it here now.
-
->Exui would also continue from the _cursor_, in the middle of the tex, which is awesome for testing and editing.
-
-Ooh, not sure when I'd use that. Mikupad has the control right click menu which is close. I could see a toggle for enabling a mode that allows that (could add it to my roadmap in #558 if you think it is that worthwhile).
- 
-> My mikupad db's only 3.1MB now, but only because I just switched to the standalone nodejs server.
-
-#558 offers support with `server.cpp` directly (if you do use it, be warned there will be more migrations needed until I switch it to ready) alongside some other benefits (and more in the works and on the roadmap [suggestions highly welcome]).
-
-> I had some 128k+ prompts I ran before that I intend to remake and try.
-
-If they are still in the browser export and import can work (it is why the first thing I contributed to mikupad was the bulk import for migrating my sessions from my browser version, I already had the files so I never added a bulk export [seems worth adding to my roadmap]).
-
----
-
-👤 **saood06** commented the **2025-07-08** at **07:22:20**:<br>
+👤 **saood06** commented on **2025-07-08** at **07:22:20**
 
 > If they are still in the browser export and import can work as an alternative to remaking them (it is why the first thing I contributed to mikupad was the bulk import for migrating my sessions from my browser version, I already had the files so I never added a bulk export [seems worth adding to my roadmap]).
 
@@ -398,7 +292,7 @@ I added it here see: https://github.com/ikawrakow/ik_llama.cpp/pull/558/commits/
 
 ---
 
-👤 **ubergarm** commented the **2025-07-08** at **20:01:40**:<br>
+👤 **ubergarm** commented on **2025-07-08** at **20:01:40**
 
 @Downtown-Case @saood06 
 
@@ -412,17 +306,7 @@ Also mikupad is pretty cool to inspect the token probabilities like this, great 
 
 ---
 
-👤 **ubergarm** commented the **2025-07-08** at **20:01:40**:<br>
-
-@Downtown-Case @saood06 
-
-I already had imatrix for Pretrain as well so just uploaded it to the existing Instruct repo here if anyone wants to experiment with it: https://huggingface.co/ubergarm/Hunyuan-A13B-Instruct-GGUF/tree/main
-
-fwiw mainline did merge their PR for Hunyuan. Not sure how we're going to proceed here given something still seems fishy with the Instruct. I don't know how to merge the Instruct with the Pretrain but if either of you do and release the safetensors I'd be curious to check out the results.
-
----
-
-👤 **ubergarm** commented the **2025-07-08** at **20:29:20**:<br>
+👤 **ubergarm** commented on **2025-07-08** at **20:29:20**
 
 Oh hey there was a patch from tencent fixing the model chat template, i've removed the few lines and am testing perplexity again. https://github.com/ggml-org/llama.cpp/pull/14584
 
@@ -460,13 +344,13 @@ Final estimate: PPL = 524.7090 +/- 5.70049
 
 ---
 
-👤 **ubergarm** commented the **2025-07-08** at **21:38:38**:<br>
+👤 **ubergarm** commented on **2025-07-08** at **21:38:38**
 
 I've updated PR #565 with the small patch to chat template. Perplexity is still wonky (I didn't re-make imatrix with the patch but don't believe `llama_chat_apply_template_internal()` is used during imatrix creation.
 
 ---
 
-👤 **saood06** commented the **2025-07-09** at **01:59:58**:<br>
+👤 **saood06** commented on **2025-07-09** at **01:59:58**
 
 > I already had imatrix for Pretrain as well so just uploaded it to the existing Instruct repo here if anyone wants to experiment with it: https://huggingface.co/ubergarm/Hunyuan-A13B-Instruct-GGUF/tree/main
 
@@ -486,12 +370,12 @@ The legacy server has that feature as well (I used it a lot), but mikupad is sti
 
 ---
 
-👤 **ubergarm** commented the **2025-07-09** at **19:09:22**:<br>
+👤 **ubergarm** commented on **2025-07-09** at **19:09:22**
 
 @Downtown-Case okay the PR is merged! feel free to close this issue now! ty!
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-12** at **09:53:30**:<br>
+👤 **ikawrakow** commented on **2025-07-12** at **09:53:30**
 
 Closed via #565

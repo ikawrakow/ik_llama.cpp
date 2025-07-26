@@ -1,10 +1,11 @@
-### 🔀 [#265](https://github.com/ikawrakow/ik_llama.cpp/pull/265) - Allow q8_0 cache on the CPU for FlashMLA-2
+### [Pull Request #265](https://github.com/ikawrakow/ik_llama.cpp/pull/265) - Allow q8_0 cache on the CPU for FlashMLA-2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-18 |
 | **Updated** | 2025-03-18 |
+| **Merged** | 2025-03-18 |
 
 ---
 

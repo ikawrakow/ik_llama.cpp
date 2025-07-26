@@ -1,10 +1,11 @@
-### 🔀 [#56](https://github.com/ikawrakow/ik_llama.cpp/pull/56) - BF16 support on Metal
+### [Pull Request #56](https://github.com/ikawrakow/ik_llama.cpp/pull/56) - BF16 support on Metal
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-09-16 |
 | **Updated** | 2024-09-17 |
+| **Merged** | 2024-09-17 |
 
 ---
 

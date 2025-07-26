@@ -1,10 +1,11 @@
-### 🔀 [#327](https://github.com/ikawrakow/ik_llama.cpp/pull/327) - Improved IQ1_M quantization
+### [Pull Request #327](https://github.com/ikawrakow/ik_llama.cpp/pull/327) - Improved IQ1_M quantization
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-04-13 |
 | **Updated** | 2025-04-13 |
+| **Merged** | 2025-04-13 |
 
 ---
 

@@ -1,10 +1,11 @@
-### 🔀 [#106](https://github.com/ikawrakow/ik_llama.cpp/pull/106) - Bitnet changes
+### [Pull Request #106](https://github.com/ikawrakow/ik_llama.cpp/pull/106) - Bitnet changes
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2024-10-24 |
 | **Updated** | 2024-10-25 |
+| **Merged** | 2024-10-25 |
 
 ---
 

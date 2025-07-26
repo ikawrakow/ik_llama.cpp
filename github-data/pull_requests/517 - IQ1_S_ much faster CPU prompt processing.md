@@ -1,10 +1,11 @@
-### 🔀 [#517](https://github.com/ikawrakow/ik_llama.cpp/pull/517) - IQ1_S: much faster CPU prompt processing
+### [Pull Request #517](https://github.com/ikawrakow/ik_llama.cpp/pull/517) - IQ1_S: much faster CPU prompt processing
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-11 |
 | **Updated** | 2025-06-11 |
+| **Merged** | 2025-06-11 |
 
 ---
 

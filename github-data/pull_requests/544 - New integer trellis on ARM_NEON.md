@@ -1,10 +1,11 @@
-### 🔀 [#544](https://github.com/ikawrakow/ik_llama.cpp/pull/544) - New integer trellis on ARM_NEON 
+### [Pull Request #544](https://github.com/ikawrakow/ik_llama.cpp/pull/544) - New integer trellis on ARM_NEON 
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-06-20 |
 | **Updated** | 2025-06-20 |
+| **Merged** | 2025-06-20 |
 
 ---
 

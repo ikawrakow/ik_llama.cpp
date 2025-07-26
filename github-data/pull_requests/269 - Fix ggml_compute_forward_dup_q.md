@@ -1,10 +1,11 @@
-### 🐛 [#269](https://github.com/ikawrakow/ik_llama.cpp/pull/269) - Fix ggml_compute_forward_dup_q
+### [Pull Request #269](https://github.com/ikawrakow/ik_llama.cpp/pull/269) - Fix ggml_compute_forward_dup_q
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-19 |
 | **Updated** | 2025-03-19 |
+| **Merged** | 2025-03-19 |
 
 ---
 

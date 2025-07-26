@@ -1,4 +1,4 @@
-### 🔀 [#28](https://github.com/ikawrakow/ik_llama.cpp/pull/28) - Binary KQ mask
+### [Pull Request #28](https://github.com/ikawrakow/ik_llama.cpp/pull/28) - Binary KQ mask
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |

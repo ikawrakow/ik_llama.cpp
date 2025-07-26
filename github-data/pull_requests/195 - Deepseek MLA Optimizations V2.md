@@ -1,10 +1,11 @@
-### 🔀 [#195](https://github.com/ikawrakow/ik_llama.cpp/pull/195) -  Deepseek MLA Optimizations V2
+### [Pull Request #195](https://github.com/ikawrakow/ik_llama.cpp/pull/195) -  Deepseek MLA Optimizations V2
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-08 |
 | **Updated** | 2025-02-09 |
+| **Merged** | 2025-02-09 |
 
 ---
 
@@ -25,7 +26,7 @@ I will follow up with:
 
 #### 💬 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-02-09** at **07:36:43**: ✅ `APPROVED`<br>
+👤 **ikawrakow** submitted a review: ✅ `APPROVED` on **2025-02-09** at **07:36:43**
 
 Looks good. I added a minor change to check if `wk_b` and `wv_b` are available before turning on MLA (so we don't crash if someone is using an old model and asked for MLA).
 

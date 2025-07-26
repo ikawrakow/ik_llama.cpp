@@ -1,4 +1,4 @@
-### 🐛 [#388](https://github.com/ikawrakow/ik_llama.cpp/issues/388) - Bug: Clash with mainline llama.cpp .so files
+### [Issue #388](https://github.com/ikawrakow/ik_llama.cpp/issues/388) - Bug: Clash with mainline llama.cpp .so files
 
 | **Author** | `Manamama` |
 | :--- | :--- |
@@ -107,7 +107,7 @@ Most Linuxex, I presume.
 
 #### 💬 Conversation
 
-👤 **Manamama** commented the **2025-05-06** at **19:03:45**:<br>
+👤 **Manamama** commented on **2025-05-06** at **19:03:45**
 
 Update, still seg fault: 
 
@@ -307,7 +307,7 @@ Segmentation fault
 
 ---
 
-👤 **Manamama** commented the **2025-05-06** at **19:16:14**:<br>
+👤 **Manamama** commented on **2025-05-06** at **19:16:14**
 
 Oh, identical in Termux. Grok AI wrote the below, sorry for the dump paste:  
 
@@ -441,7 +441,7 @@ Oh, identical in Termux. Grok AI wrote the below, sorry for the dump paste:
 
 ---
 
-👤 **Manamama** commented the **2025-05-06** at **19:57:18**:<br>
+👤 **Manamama** commented on **2025-05-06** at **19:57:18**
 
 Update: this avoids seg faults in Ubuntu: https://github.com/ikawrakow/ik_llama.cpp/issues/387#issuecomment-2855735935
 
@@ -489,7 +489,7 @@ drwxrwxrwx 1 root root       8192 Apr 22 16:18 ../
 
 ---
 
-👤 **saood06** commented the **2025-05-06** at **19:58:26**:<br>
+👤 **saood06** commented on **2025-05-06** at **19:58:26**
 
 How did you build this on Ubuntu and Android? Do you mind sharing the logs from both builds? 
 
@@ -497,7 +497,7 @@ Also on termux you may want to try adding "-DGGML_ARCH_FLAGS="-march=armv8.2-a+d
 
 ---
 
-👤 **saood06** commented the **2025-05-06** at **20:01:17**:<br>
+👤 **saood06** commented on **2025-05-06** at **20:01:17**
 
 >But I am not sure why the size got from tiny to minuscule:
 
@@ -512,7 +512,7 @@ which is expected.
 
 ---
 
-👤 **Manamama** commented the **2025-05-06** at **20:10:16**:<br>
+👤 **Manamama** commented on **2025-05-06** at **20:10:16**
 
 Re Droid only. 
 
@@ -749,244 +749,7 @@ I shall `mv` once again and retry your `"-DGGML_ARCH_FLAGS="-march=armv8.2-a+dot
 
 ---
 
-👤 **Manamama** commented the **2025-05-06** at **20:10:16**:<br>
-
-Re Droid only. 
-
-New Termux session, so LD_LIBRARY_PATH is standard: 
-```
-~/downloads/ik_llama.cpp $ echo $LD_LIBRARY_PATH
-
-~/downloads/ik_llama.cpp $ 
-```
-- Termux pix up the defaults then, I presume. 
-
-
-We move the old working /bin files and recompile and test: 
-
-```
-~/downloads/ik_llama.cpp $ ls bin/
- llama-baby-llama                llama-cvector-generator   llama-gguf-split   llama-lookup-create   llama-q8dot             llama-speculative   test-chat-template            test-quantize-fns
- llama-batched                   llama-embedding           llama-gritlm       llama-lookup-merge    llama-quantize          llama-sweep-bench   test-grad0                    test-quantize-perf
- llama-batched-bench             llama-eval-callback       llama-imatrix      llama-lookup-stats    llama-quantize-stats    llama-tokenize      test-grammar-integration      test-rope
- llama-bench                     llama-export-lora         llama-infill       llama-minicpmv-cli    llama-retrieval         llama-vdot          test-grammar-parser           test-sampling
- llama-bench-matmult             llama-gbnf-validator      llama-llava-cli    llama-parallel        llama-save-load-state   test-autorelease    test-json-schema-to-grammar   test-tokenizer-0
- llama-cli                       llama-gguf                llama-lookahead    llama-passkey         llama-server            test-backend-ops    test-llama-grammar            test-tokenizer-1-bpe
- llama-convert-llama2c-to-ggml   llama-gguf-hash           llama-lookup       llama-perplexity      llama-simple            test-c              test-model-load-cancel        test-tokenizer-1-spm
-~/downloads/ik_llama.cpp $ mv bin/ bin.1
-~/downloads/ik_llama.cpp $ rm CMakeCache.txt 
-~/downloads/ik_llama.cpp $ cmake .
--- The C compiler identification is Clang 20.1.3
--- The CXX compiler identification is Clang 20.1.3
--- Detecting C compiler ABI info
--- Detecting C compiler ABI info - done
--- Check for working C compiler: /data/data/com.termux/files/usr/bin/clang - skipped
--- Detecting C compile features
--- Detecting C compile features - done
--- Detecting CXX compiler ABI info
--- Detecting CXX compiler ABI info - done
--- Check for working CXX compiler: /data/data/com.termux/files/usr/bin/clang++ - skipped
--- Detecting CXX compile features
--- Detecting CXX compile features - done
--- Found Git: /data/data/com.termux/files/usr/bin/git (found version "2.49.0")
--- Performing Test CMAKE_HAVE_LIBC_PTHREAD
--- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
--- Check if compiler accepts -pthread
--- Check if compiler accepts -pthread - yes
--- Found Threads: TRUE
--- Found OpenMP_C: -fopenmp=libomp (found version "5.1")
--- Found OpenMP_CXX: -fopenmp=libomp (found version "5.1")
--- Found OpenMP: TRUE (found version "5.1")
--- OpenMP found
--- Using optimized iqk matrix multiplications
--- Using llamafile
--- ccache found, compilation results will be cached. Disable with GGML_CCACHE=OFF.
--- CMAKE_SYSTEM_PROCESSOR: aarch64
--- ARM detected
--- Performing Test COMPILER_SUPPORTS_FP16_FORMAT_I3E
--- Performing Test COMPILER_SUPPORTS_FP16_FORMAT_I3E - Failed
--- Looking for pthread_create in pthreads
--- Looking for pthread_create in pthreads - not found
--- Looking for pthread_create in pthread
--- Looking for pthread_create in pthread - found
--- Configuring done (12.1s)
--- Generating done (0.4s)
--- Build files have been written to: /data/data/com.termux/files/home/downloads/ik_llama.cpp
-~/downloads/ik_llama.cpp $ make 
-[  6%] Built target ggml
-[ 10%] Built target llama
-[ 11%] Built target build_info
-[ 15%] Built target common
-[ 16%] Linking CXX executable ../bin/test-tokenizer-0
-[ 17%] Built target test-tokenizer-0
-[ 18%] Linking CXX executable ../bin/test-tokenizer-1-bpe
-[ 18%] Built target test-tokenizer-1-bpe
-[ 19%] Linking CXX executable ../bin/test-tokenizer-1-spm
-[ 19%] Built target test-tokenizer-1-spm
-[ 19%] Linking CXX executable ../bin/test-quantize-fns
-[ 20%] Built target test-quantize-fns
-[ 21%] Linking CXX executable ../bin/test-quantize-perf
-[ 22%] Built target test-quantize-perf
-[ 22%] Linking CXX executable ../bin/test-sampling
-[ 23%] Built target test-sampling
-[ 23%] Linking CXX executable ../bin/test-chat-template
-[ 24%] Built target test-chat-template
-[ 24%] Linking CXX executable ../bin/test-grammar-parser
-[ 25%] Built target test-grammar-parser
-[ 26%] Linking CXX executable ../bin/test-llama-grammar
-[ 27%] Built target test-llama-grammar
-[ 28%] Linking CXX executable ../bin/test-grammar-integration
-[ 29%] Built target test-grammar-integration
-[ 30%] Linking CXX executable ../bin/test-grad0
-[ 31%] Built target test-grad0
-[ 31%] Linking CXX executable ../bin/test-backend-ops
-[ 32%] Built target test-backend-ops
-[ 33%] Linking CXX executable ../bin/test-rope
-[ 34%] Built target test-rope
-[ 35%] Linking CXX executable ../bin/test-model-load-cancel
-[ 36%] Built target test-model-load-cancel
-[ 37%] Linking CXX executable ../bin/test-autorelease
-[ 38%] Built target test-autorelease
-[ 38%] Linking CXX executable ../bin/test-json-schema-to-grammar
-[ 40%] Built target test-json-schema-to-grammar
-[ 41%] Linking C executable ../bin/test-c
-[ 42%] Built target test-c
-[ 42%] Linking CXX executable ../../bin/llama-cvector-generator
-[ 43%] Built target llama-cvector-generator
-[ 43%] Linking CXX executable ../../bin/llama-baby-llama
-[ 44%] Built target llama-baby-llama
-[ 44%] Linking CXX executable ../../bin/llama-batched-bench
-[ 45%] Built target llama-batched-bench
-[ 45%] Linking CXX executable ../../bin/llama-batched
-[ 46%] Built target llama-batched
-[ 47%] Linking CXX executable ../../bin/llama-bench-matmult
-[ 47%] Built target llama-bench-matmult
-[ 48%] Linking CXX executable ../../bin/llama-convert-llama2c-to-ggml
-[ 48%] Built target llama-convert-llama2c-to-ggml
-[ 48%] Linking CXX executable ../../bin/llama-embedding
-[ 49%] Built target llama-embedding
-[ 50%] Linking CXX executable ../../bin/llama-eval-callback
-[ 51%] Built target llama-eval-callback
-[ 52%] Linking CXX executable ../../bin/llama-export-lora
-[ 52%] Built target llama-export-lora
-[ 53%] Linking CXX executable ../../bin/llama-gbnf-validator
-[ 53%] Built target llama-gbnf-validator
-[ 54%] Built target sha256
-[ 55%] Built target xxhash
-[ 55%] Built target sha1
-[ 55%] Linking CXX executable ../../bin/llama-gguf-hash
-[ 56%] Built target llama-gguf-hash
-[ 56%] Linking CXX executable ../../bin/llama-gguf-split
-[ 57%] Built target llama-gguf-split
-[ 58%] Linking CXX executable ../../bin/llama-gguf
-[ 58%] Built target llama-gguf
-[ 58%] Linking CXX executable ../../bin/llama-gritlm
-[ 59%] Built target llama-gritlm
-[ 60%] Linking CXX executable ../../bin/llama-imatrix
-[ 61%] Built target llama-imatrix
-[ 62%] Linking CXX executable ../../bin/llama-infill
-[ 62%] Built target llama-infill
-[ 63%] Linking CXX executable ../../bin/llama-bench
-[ 64%] Built target llama-bench
-[ 66%] Built target llava
-[ 67%] Built target llava_static
-[ 67%] Built target llava_shared
-[ 68%] Linking CXX executable ../../bin/llama-llava-cli
-[ 68%] Built target llama-llava-cli
-[ 69%] Linking CXX executable ../../bin/llama-minicpmv-cli
-[ 69%] Built target llama-minicpmv-cli
-[ 70%] Linking CXX executable ../../bin/llama-lookahead
-[ 70%] Built target llama-lookahead
-[ 70%] Linking CXX executable ../../bin/llama-lookup
-[ 71%] Built target llama-lookup
-[ 71%] Linking CXX executable ../../bin/llama-lookup-create
-[ 72%] Built target llama-lookup-create
-[ 72%] Linking CXX executable ../../bin/llama-lookup-merge
-[ 73%] Built target llama-lookup-merge
-[ 74%] Linking CXX executable ../../bin/llama-lookup-stats
-[ 75%] Built target llama-lookup-stats
-[ 76%] Linking CXX executable ../../bin/llama-cli
-[ 76%] Built target llama-cli
-[ 77%] Linking CXX executable ../../bin/llama-parallel
-[ 77%] Built target llama-parallel
-[ 78%] Linking CXX executable ../../bin/llama-passkey
-[ 78%] Built target llama-passkey
-[ 78%] Linking CXX executable ../../bin/llama-perplexity
-[ 79%] Built target llama-perplexity
-[ 80%] Linking CXX executable ../../bin/llama-quantize-stats
-[ 80%] Built target llama-quantize-stats
-[ 81%] Linking CXX executable ../../bin/llama-quantize
-[ 82%] Built target llama-quantize
-[ 83%] Linking CXX executable ../../bin/llama-retrieval
-[ 83%] Built target llama-retrieval
-[ 84%] Linking CXX executable ../../bin/llama-server
-[ 93%] Built target llama-server
-[ 94%] Linking CXX executable ../../bin/llama-save-load-state
-[ 94%] Built target llama-save-load-state
-[ 95%] Linking CXX executable ../../bin/llama-simple
-[ 95%] Built target llama-simple
-[ 96%] Linking CXX executable ../../bin/llama-speculative
-[ 96%] Built target llama-speculative
-[ 96%] Linking CXX executable ../../bin/llama-sweep-bench
-[ 97%] Built target llama-sweep-bench
-[ 97%] Linking CXX executable ../../bin/llama-tokenize
-[ 98%] Built target llama-tokenize
-[ 98%] Linking CXX executable ../../bin/llama-vdot
-[ 99%] Built target llama-vdot
-[ 99%] Linking CXX executable ../../bin/llama-q8dot
-[100%] Built target llama-q8dot
-~/downloads/ik_llama.cpp $ ls bin/
- llama-baby-llama                llama-cvector-generator   llama-gguf-split   llama-lookup-create   llama-q8dot             llama-speculative   test-chat-template            test-quantize-fns
- llama-batched                   llama-embedding           llama-gritlm       llama-lookup-merge    llama-quantize          llama-sweep-bench   test-grad0                    test-quantize-perf
- llama-batched-bench             llama-eval-callback       llama-imatrix      llama-lookup-stats    llama-quantize-stats    llama-tokenize      test-grammar-integration      test-rope
- llama-bench                     llama-export-lora         llama-infill       llama-minicpmv-cli    llama-retrieval         llama-vdot          test-grammar-parser           test-sampling
- llama-bench-matmult             llama-gbnf-validator      llama-llava-cli    llama-parallel        llama-save-load-state   test-autorelease    test-json-schema-to-grammar   test-tokenizer-0
- llama-cli                       llama-gguf                llama-lookahead    llama-passkey         llama-server            test-backend-ops    test-llama-grammar            test-tokenizer-1-bpe
- llama-convert-llama2c-to-ggml   llama-gguf-hash           llama-lookup       llama-perplexity      llama-simple            test-c              test-model-load-cancel        test-tokenizer-1-spm
-~/downloads/ik_llama.cpp $ ldd bin/llama-cli 
-	liblog.so => /system/lib64/liblog.so
-	libargp.so => /data/data/com.termux/files/usr/lib/libargp.so
-	libllama.so => /data/data/com.termux/files/usr/lib/libllama.so
-	libc.so => /system/lib64/libc.so
-	libggml.so => /data/data/com.termux/files/usr/lib/libggml.so
-	libc++_shared.so => /data/data/com.termux/files/usr/lib/libc++_shared.so
-	libdl.so => /system/lib64/libdl.so
-	libm.so => /system/lib64/libm.so
-	libc++.so => /system/lib64/libc++.so
-	ld-android.so => /system/lib64/ld-android.so
-	libggml-cpu.so => /data/data/com.termux/files/usr/lib/libggml-cpu.so
-	libggml-base.so => /data/data/com.termux/files/usr/lib/libggml-base.so
-~/downloads/ik_llama.cpp $  bin/llama-cli 
-CANNOT LINK EXECUTABLE "bin/llama-cli": cannot locate symbol "llama_print_timings" referenced by "/data/data/com.termux/files/home/downloads/ik_llama.cpp/bin/llama-cli"...
-~/downloads/ik_llama.cpp $ 
-
-```
-
-Only after my trick above it picks up the rigth .so files: 
-
-```
-~/downloads/ik_llama.cpp $ cat _path.sh 
-export LD_LIBRARY_PATH=$(pwd)/src/:$(pwd)/ggml/src/:$LD_LIBRARY_PATH
-~/downloads/ik_llama.cpp $ source  _path.sh 
-~/downloads/ik_llama.cpp $ ldd bin/llama-cli 
-	liblog.so => /system/lib64/liblog.so
-	libargp.so => /data/data/com.termux/files/usr/lib/libargp.so
-	libllama.so => /data/data/com.termux/files/home/downloads/ik_llama.cpp/src/libllama.so
-	libc.so => /system/lib64/libc.so
-	libggml.so => /data/data/com.termux/files/home/downloads/ik_llama.cpp/ggml/src/libggml.so
-	libc++_shared.so => /data/data/com.termux/files/usr/lib/libc++_shared.so
-	libdl.so => /system/lib64/libdl.so
-	libm.so => /system/lib64/libm.so
-	libc++.so => /system/lib64/libc++.so
-	ld-android.so => /system/lib64/ld-android.so
-~/downloads/ik_llama.cpp $ 
-
-``` 
-I shall `mv` once again and retry your `"-DGGML_ARCH_FLAGS="-march=armv8.2-a+dotprod+fp16"` ...
-
----
-
-👤 **Manamama** commented the **2025-05-06** at **20:22:09**:<br>
+👤 **Manamama** commented on **2025-05-06** at **20:22:09**
 
 The experiment with the flags (methinks, they should not help here, it is the `rpath` type problem) -  sorry for pasting all together - do take a peek at my juggling the LD_LIBRARY_PATH to default there so as to evoke that seg fault at first: 
 
@@ -1096,7 +859,7 @@ make: jobserver mkfifo: /data/local/tmp/GMfifo22430: Permission denied
 
 ---
 
-👤 **saood06** commented the **2025-05-06** at **20:36:26**:<br>
+👤 **saood06** commented on **2025-05-06** at **20:36:26**
 
 >[has not progressed, while clang takes some 12 percent of CPU. ]
 
@@ -1104,7 +867,7 @@ Are you sure? I remember from when I was testing on Android, building the `iqk` 
 
 ---
 
-👤 **Manamama** commented the **2025-05-06** at **20:39:52**:<br>
+👤 **Manamama** commented on **2025-05-06** at **20:39:52**
 
 OK, after probably half an hour (vs the asap compilation   without these switches): 
 
@@ -1177,56 +940,7 @@ main: seed  = 1746564079
 
 ---
 
-👤 **Manamama** commented the **2025-05-06** at **20:39:52**:<br>
-
-OK, after probably half an hour (vs the asap compilation   without these switches): 
-
-```
-[ 87%] Linking CXX executable ../../bin/llama-vdot
-[ 88%] Built target llama-sweep-bench
-[ 89%] Built target llama-speculative
-[ 89%] Built target llama-tokenize
-[ 89%] Linking CXX executable ../../bin/llama-q8dot
-[ 90%] Built target llama-vdot
-[ 91%] Built target llama-q8dot
-[100%] Built target llama-server
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ 
-~/downloads/ik_llama.cpp $ ldd bin/llama-cli 
-	liblog.so => /system/lib64/liblog.so
-	libargp.so => /data/data/com.termux/files/usr/lib/libargp.so
-	libllama.so => /data/data/com.termux/files/usr/lib/libllama.so
-	libc.so => /system/lib64/libc.so
-	libggml.so => /data/data/com.termux/files/usr/lib/libggml.so
-	libc++_shared.so => /data/data/com.termux/files/usr/lib/libc++_shared.so
-	libdl.so => /system/lib64/libdl.so
-	libm.so => /system/lib64/libm.so
-	libc++.so => /system/lib64/libc++.so
-	ld-android.so => /system/lib64/ld-android.so
-	libggml-cpu.so => /data/data/com.termux/files/usr/lib/libggml-cpu.so
-	libggml-base.so => /data/data/com.termux/files/usr/lib/libggml-base.so
-~/downloads/ik_llama.cpp $ bin/llama-cli 
-CANNOT LINK EXECUTABLE "bin/llama-cli": cannot locate symbol "llama_print_timings" referenced by "/data/data/com.termux/files/home/downloads/ik_llama.cpp/bin/llama-cli"...
-~/downloads/ik_llama.cpp $ 
-
-```
-
-So `rpath` like is needed (or my ugly trick).
-
----
-
-👤 **ikawrakow** commented the **2025-05-07** at **07:00:41**:<br>
+👤 **ikawrakow** commented on **2025-05-07** at **07:00:41**
 
 > OK, after probably half an hour (vs the asap compilation without these switches):
 
@@ -1236,13 +950,13 @@ Concerning the clash with mainline `llama.cpp`: OK, so this project does not con
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-25** at **07:09:05**:<br>
+👤 **ikawrakow** commented on **2025-05-25** at **07:09:05**
 
 I don't think we will be solving this one.
 
 ---
 
-👤 **Manamama** commented the **2025-05-25** at **18:13:04**:<br>
+👤 **Manamama** commented on **2025-05-25** at **18:13:04**
 
 Note to self: 
 ```

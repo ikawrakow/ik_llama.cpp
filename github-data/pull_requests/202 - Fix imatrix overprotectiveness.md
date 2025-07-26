@@ -1,10 +1,11 @@
-### 🐛 [#202](https://github.com/ikawrakow/ik_llama.cpp/pull/202) - Fix imatrix overprotectiveness
+### [Pull Request #202](https://github.com/ikawrakow/ik_llama.cpp/pull/202) - Fix imatrix overprotectiveness
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-11 |
 | **Updated** | 2025-02-12 |
+| **Merged** | 2025-02-12 |
 
 ---
 
@@ -29,7 +30,7 @@ Strictly speaking it would be better to leave the zeros in the imatrix data of e
 
 #### 💬 Conversation
 
-👤 **saood06** commented the **2025-02-11** at **17:09:17**:<br>
+👤 **saood06** commented on **2025-02-11** at **17:09:17**
 
 >for the entire tensor containing experts
 
@@ -39,7 +40,7 @@ I plan to port over code that lets you override where certain tensors are alloca
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-11** at **17:16:38**:<br>
+👤 **ikawrakow** commented on **2025-02-11** at **17:16:38**
 
 > but do you know why GGUF stores all the experts together?
 

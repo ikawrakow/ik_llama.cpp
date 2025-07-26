@@ -1,10 +1,11 @@
-### 🔀 [#169](https://github.com/ikawrakow/ik_llama.cpp/pull/169) - Be able to re-quantize MS BitNet I2_S models
+### [Pull Request #169](https://github.com/ikawrakow/ik_llama.cpp/pull/169) - Be able to re-quantize MS BitNet I2_S models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-01-10 |
 | **Updated** | 2025-01-10 |
+| **Merged** | 2025-01-10 |
 
 ---
 

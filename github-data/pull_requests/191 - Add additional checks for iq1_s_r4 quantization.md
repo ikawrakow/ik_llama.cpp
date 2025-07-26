@@ -1,10 +1,11 @@
-### 🔀 [#191](https://github.com/ikawrakow/ik_llama.cpp/pull/191) - Add additional checks for iq1_s_r4 quantization
+### [Pull Request #191](https://github.com/ikawrakow/ik_llama.cpp/pull/191) - Add additional checks for iq1_s_r4 quantization
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-02-07 |
 | **Updated** | 2025-02-07 |
+| **Merged** | 2025-02-07 |
 
 ---
 

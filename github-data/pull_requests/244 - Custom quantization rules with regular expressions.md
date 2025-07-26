@@ -1,10 +1,11 @@
-### 🔀 [#244](https://github.com/ikawrakow/ik_llama.cpp/pull/244) - Custom quantization rules with regular expressions
+### [Pull Request #244](https://github.com/ikawrakow/ik_llama.cpp/pull/244) - Custom quantization rules with regular expressions
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
 | **Created** | 2025-03-06 |
 | **Updated** | 2025-03-07 |
+| **Merged** | 2025-03-07 |
 
 ---
 
@@ -34,6 +35,6 @@ To summarize how the quantization type is determined:
 
 #### 💬 Conversation
 
-👤 **davidsyoung** commented the **2025-03-06** at **17:58:36**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **17:58:36**
 
 This is awesome. It’ll come in really useful!
