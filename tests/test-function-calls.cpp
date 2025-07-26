@@ -3024,6 +3024,7 @@ int main() {
         assert(extracted.find("<｜tool▁calls▁begin｜>") == std::string::npos);
         std::cout << "✅ PASS: DeepSeek R1 content extraction works" << std::endl;
         
+<<<<<<< HEAD
         // Test content contamination fix - exact user reported case
         std::cout << "\n🧹 Testing Content Contamination Fix:" << std::endl;
         std::string contaminated_content = "I'll help you add the new cleaning step for orientation management. Let me break this down into tasks:\n\n<｜tool▁calls▁begin｜>\n<｜tool▁call▁begin｜>\nfunction<｜tool▁sep｜>TodoWrite\n```json\n{\"items\": [{\"description\": \"Create ResetOrientation cleaning step class\", \"status\": \"pending\"}, {\"description\": \"Add setOrientationLock method to DeviceRobot\", \"status\": \"pending\"}, {\"description\": \"Integrate ResetOrientation into AndroidDeviceCleaner.clean method\", \"status\": \"pending\"}, {\"description\": \"Update iOS device cleaner to set iPad orientation to portrait instead of landscape\", \"status\": \"pending\"}]}\n```\n<｜tool▁call▁end｜>\n<｜tool▁calls▁end｜>";
@@ -3220,7 +3221,7 @@ int main() {
         }
 
         // TDD Test: Format 4 - XML-wrapped format from debug log
-        std::cout << "\n🔍 TDD: Format 4 XML-wrapped (should fail initially):" << std::endl;
+        std::cout << "\n🔍 TDD: Format 4 XML-wrapped:" << std::endl;
         std::string format4_content = "<think>\nLet me implement this step by step.\n</think>\n<plan>\n1. Implement configuration processor in SystemProcessor\n2. Extend ServiceInterface\n3. Update existing configuration settings\n</plan>\n<tool_call>\nfunction</think>CompleteTask\n```json\n{\"status\": \"completed\"}\n```\n</tool_call>";
         
         ik_chat_msg format4_msg = parse_chat_message_incremental(format4_content, false, "DeepSeek-R1");
@@ -3231,8 +3232,8 @@ int main() {
             std::cout << "✅ PASS: Format 4 parsed correctly!" << std::endl;
             std::cout << "   Tool: " << format4_msg.tool_calls[0].name << std::endl;
         } else {
-            std::cout << "❌ EXPECTED FAIL: Format 4 not yet supported" << std::endl;
-            std::cout << "   Need to implement parser for: '<tool_call>\\nfunction</think>Name\\n```json\\n{...}\\n```\\n</tool_call>'" << std::endl;
+            std::cout << "❌ FAIL: Format 4 not working correctly" << std::endl;
+            std::cout << "   Need to debug parser for: '<tool_call>\\nfunction</think>Name\\n```json\\n{...}\\n```\\n</tool_call>'" << std::endl;
         }
         
         // Test streaming finish_reason logic (core of the fix)
