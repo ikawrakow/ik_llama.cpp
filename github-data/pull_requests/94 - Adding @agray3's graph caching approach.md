@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/cached_graph` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-18 |
 | **Updated** | 2024-10-20 |
 

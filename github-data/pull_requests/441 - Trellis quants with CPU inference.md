@@ -3,6 +3,8 @@
 | **Author** | `andrewkchan` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `andrewkchan/try_trellis` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-20 |
 | **Updated** | 2025-05-23 |
 | **Merged** | 2025-05-23 |

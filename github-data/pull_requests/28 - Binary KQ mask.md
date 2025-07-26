@@ -2,7 +2,9 @@
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ✅ **Open** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `ik/kq_mask` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-28 |
 
 ---

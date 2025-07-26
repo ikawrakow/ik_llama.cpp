@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/skip_noop_barriers` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-14 |
 | **Updated** | 2024-08-14 |
 | **Merged** | 2024-08-14 |

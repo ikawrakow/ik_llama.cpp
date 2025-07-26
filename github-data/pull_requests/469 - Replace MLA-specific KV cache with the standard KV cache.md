@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/remove_kv_l` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-28 |
 | **Updated** | 2025-05-30 |
 | **Merged** | 2025-05-30 |

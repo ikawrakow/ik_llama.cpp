@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/zen4_flash_attn` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-01 |
 | **Updated** | 2024-09-01 |
 | **Merged** | 2024-09-01 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/reduce_compute_buffers` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-28 |
 | **Updated** | 2025-03-01 |
 | **Merged** | 2025-03-01 |

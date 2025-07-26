@@ -2,6 +2,7 @@
 
 | **Author** | `Iconology` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-06-20 |
 | **Updated** | 2025-07-22 |
 

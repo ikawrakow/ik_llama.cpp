@@ -2,6 +2,7 @@
 
 | **Author** | `rkozuch` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-07-20 |
 | **Updated** | 2025-07-24 |
 

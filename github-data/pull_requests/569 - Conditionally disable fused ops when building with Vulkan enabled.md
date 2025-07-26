@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/vulkan_disable_fused_ops` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-02 |
 | **Updated** | 2025-07-02 |
 | **Merged** | 2025-07-02 |

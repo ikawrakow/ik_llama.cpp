@@ -2,6 +2,7 @@
 
 | **Author** | `ThomasBaruzier` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-03-05 |
 | **Updated** | 2025-03-15 |
 

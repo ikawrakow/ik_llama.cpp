@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/q6_k_gemm` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-16 |
 | **Updated** | 2025-06-17 |
 | **Merged** | 2025-06-17 |

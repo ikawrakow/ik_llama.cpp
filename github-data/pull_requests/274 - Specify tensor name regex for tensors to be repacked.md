@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/offline_repack_patterns` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-21 |
 | **Updated** | 2025-03-21 |
 | **Merged** | 2025-03-21 |

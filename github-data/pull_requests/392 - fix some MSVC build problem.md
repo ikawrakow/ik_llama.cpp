@@ -3,6 +3,8 @@
 | **Author** | `Gaolingx` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `main` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-07 |
 | **Updated** | 2025-05-07 |
 | **Merged** | 2025-05-07 |
@@ -28,6 +30,12 @@ Build Result:
 ---
 
 #### 💬 Conversation
+
+👤 **ikawrakow** commented during a code review on `CMakeLists.txt` on **2025-05-07** at **12:31:01**
+
+Why are you deleting these? As a `vim` user they are essential for my CUDA editing experience.
+
+---
 
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-05-07** at **12:31:01**
 

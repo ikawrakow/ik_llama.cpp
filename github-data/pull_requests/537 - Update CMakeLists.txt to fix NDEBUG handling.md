@@ -3,6 +3,8 @@
 | **Author** | `iSevenDays` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `patch-1` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-18 |
 | **Updated** | 2025-06-19 |
 | **Merged** | 2025-06-19 |

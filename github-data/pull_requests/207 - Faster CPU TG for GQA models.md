@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/gemm_4d` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-15 |
 | **Updated** | 2025-02-15 |
 | **Merged** | 2025-02-15 |

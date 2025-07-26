@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/neon_iq3_kt` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-20 |
 | **Updated** | 2025-06-20 |
 | **Merged** | 2025-06-20 |

@@ -3,6 +3,8 @@
 | **Author** | `agray3` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ag_avoid_ggml_graph_rebuild` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-19 |
 | **Updated** | 2024-10-20 |
 | **Merged** | 2024-10-20 |

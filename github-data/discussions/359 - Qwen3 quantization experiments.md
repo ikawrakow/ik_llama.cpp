@@ -2,6 +2,7 @@
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-04-30 |
 | **Updated** | 2025-07-22 |
 

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_ser` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-13 |
 | **Updated** | 2025-05-13 |
 | **Merged** | 2025-05-13 |

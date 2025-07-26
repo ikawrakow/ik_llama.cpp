@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `legacy_quant_conv` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-23 |
 | **Updated** | 2025-05-24 |
 | **Merged** | 2025-05-24 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/flash_precision` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-10 |
 | **Updated** | 2025-03-12 |
 

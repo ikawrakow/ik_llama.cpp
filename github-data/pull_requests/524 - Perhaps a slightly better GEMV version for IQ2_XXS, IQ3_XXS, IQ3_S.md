@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq_gemv_tweaks` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-12 |
 | **Updated** | 2025-06-13 |
 | **Merged** | 2025-06-13 |

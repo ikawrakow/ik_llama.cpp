@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `conv_q6_0` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-02 |
 | **Updated** | 2025-06-03 |
 | **Merged** | 2025-06-03 |
@@ -29,6 +31,12 @@ Inference is working as intended in my Croco.cpp.
 ---
 
 #### 💬 Conversation
+
+👤 **ikawrakow** commented during a code review on `convert_hf_to_gguf.py` on **2025-06-02** at **09:21:49**
+
+This will set it to `Q6_0` also for `Q8_0` conversion?
+
+---
 
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-02** at **09:21:49**
 

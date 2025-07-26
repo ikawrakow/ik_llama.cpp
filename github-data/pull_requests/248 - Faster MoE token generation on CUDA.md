@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_faster_moe_tg` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-09 |
 | **Updated** | 2025-03-10 |
 | **Merged** | 2025-03-10 |

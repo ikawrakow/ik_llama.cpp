@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/mmq_to_cublas` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-26 |
 | **Updated** | 2025-07-02 |
 | **Merged** | 2025-06-27 |

@@ -3,6 +3,8 @@
 | **Author** | `Thireus` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `patch-1` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-15 |
 | **Updated** | 2025-07-16 |
 | **Merged** | 2025-07-16 |
@@ -28,6 +30,12 @@ I have tested it extensively for a few weeks - see https://github.com/Thireus/ik
 👤 **saood06** commented on **2025-07-15** at **01:19:45**
 
 Would it make sense to also include this https://github.com/Thireus/ik_llama.cpp/commit/65dd65c10d2dc24cdddbd6255c3841c6a6c1038c as well for Windows users?
+
+---
+
+👤 **ikawrakow** commented during a code review on `ggml/include/ggml.h` on **2025-07-15** at **05:08:20**
+
+Is 2048 really needed? The quoted whisper.cpp thread talks about 256 contexts, not 2048.
 
 ---
 

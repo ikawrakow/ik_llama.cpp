@@ -3,6 +3,8 @@
 | **Author** | `saood06` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/readme_update` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-09 |
 | **Updated** | 2025-06-13 |
 | **Merged** | 2025-06-13 |
@@ -41,9 +43,27 @@ Any thoughts?
 
 ---
 
+👤 **ikawrakow** commented during a code review on `README.md` on **2025-06-11** at **05:41:57**
+
+And not GLM-4, LlaMA-4, Qwen3/Qwen3-MoE ?
+
+---
+
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-11** at **05:41:57**
 
 _No content provided._
+
+---
+
+👤 **ikawrakow** commented during a code review on `README.md` on **2025-06-11** at **05:43:24**
+
+I would count the trellis quants also here. They partially implemented a long time ago, but the PRs to add CPU and Metal support are quite recent.
+
+---
+
+👤 **ikawrakow** commented during a code review on `README.md` on **2025-06-11** at **05:44:57**
+
+Duplicate
 
 ---
 

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fused_mul_unary` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-30 |
 | **Updated** | 2024-10-02 |
 | **Merged** | 2024-10-02 |

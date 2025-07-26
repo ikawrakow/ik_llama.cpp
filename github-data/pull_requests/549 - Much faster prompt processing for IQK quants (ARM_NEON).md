@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/gemm_neon_iqk` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-23 |
 | **Updated** | 2025-06-23 |
 | **Merged** | 2025-06-23 |

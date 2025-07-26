@@ -2,7 +2,9 @@
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ✅ **Open** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `ik/cuda_q4_0_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-08 |
 | **Updated** | 2025-01-09 |
 

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_mul_mat_16` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-12 |
 | **Updated** | 2025-01-12 |
 | **Merged** | 2025-01-12 |

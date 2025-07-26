@@ -3,6 +3,8 @@
 | **Author** | `saood06` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/termux_fix` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-20 |
 | **Updated** | 2025-04-30 |
 | **Merged** | 2025-04-21 |
@@ -56,6 +58,33 @@ That should work.
 👤 **saood06** commented on **2025-04-21** at **03:39:42**
 
 Cleaned it up using an `IQK_API` macro.
+
+---
+
+👤 **ikawrakow** commented during a code review on `ggml/src/iqk/iqk_config.h` on **2025-04-21** at **06:11:32**
+
+To have this also work for a static built, it should be
+```c++
+#ifdef GGML_SHARED
+#    if defined(_WIN32) && !defined(__MINGW32__)
+#        ifdef GGML_BUILD
+#            define IQK_API __declspec(dllexport)
+#        else
+#            define IQK_API __declspec(dllimport)
+#        endif
+#    else
+#        define IQK_API __attribute__ ((visibility ("default")))
+#    endif
+#else
+#    define IQK_API
+#endif
+```
+
+---
+
+👤 **ikawrakow** commented during a code review on `ggml/src/iqk/iqk_flash_attn.cpp` on **2025-04-21** at **06:15:05**
+
+Do we really need to repeat `extern "C" IQK_API` here?
 
 ---
 

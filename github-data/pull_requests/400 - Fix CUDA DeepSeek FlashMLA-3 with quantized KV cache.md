@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_fix_quantized_flash_mla3` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-09 |
 | **Updated** | 2025-05-09 |
 | **Merged** | 2025-05-09 |

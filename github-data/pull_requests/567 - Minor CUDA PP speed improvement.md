@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/improve_mmq` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-01 |
 | **Updated** | 2025-07-02 |
 | **Merged** | 2025-07-02 |

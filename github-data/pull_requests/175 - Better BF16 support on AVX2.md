@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/avx2_bf16` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-22 |
 | **Updated** | 2025-01-22 |
 | **Merged** | 2025-01-22 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/add_granite` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-22 |
 | **Updated** | 2024-10-22 |
 | **Merged** | 2024-10-22 |

@@ -3,6 +3,8 @@
 | **Author** | `jwinpbe` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `s6/docs_update` |
+| **Target Branch** | `s6/docs_update` |
 | **Created** | 2025-06-25 |
 | **Updated** | 2025-06-25 |
 
@@ -44,9 +46,23 @@ Why do I see the latest news as being changed in the diff?
 
 ---
 
+👤 **saood06** commented during a code review on `README.md` on **2025-06-25** at **17:48:05**
+
+`-DGGML_BLAS=OFF`
+
+Is not needed, it is off by default.
+
+---
+
 👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-25** at **17:48:05**
 
 _No content provided._
+
+---
+
+👤 **saood06** commented during a code review on `README.md` on **2025-06-25** at **17:48:42**
+
+Same as above
 
 ---
 

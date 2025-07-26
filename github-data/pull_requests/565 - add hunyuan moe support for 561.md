@@ -3,6 +3,8 @@
 | **Author** | `ubergarm` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ug/hunyuan-moe-2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-30 |
 | **Updated** | 2025-07-15 |
 | **Merged** | 2025-07-09 |
@@ -178,6 +180,12 @@ model=/mnt/raid/models/ubergarm/Hunyuan-A13B-Instruct-GGUF/Hunyuan-A13B-Instruct
   --host 127.0.0.1 \
   --port 8080
 ```
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-07-01** at **06:00:36**
+
+If you check your previous PR about GLM4 you will see that you had to remove the `Vcur` reshaping. It is the same here. Remove this line and it is likely the difference between FA and no FA will go away.
 
 ---
 

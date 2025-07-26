@@ -3,6 +3,8 @@
 | **Author** | `saood06` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/fix_python` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-31 |
 | **Updated** | 2025-04-24 |
 | **Merged** | 2025-04-24 |

@@ -2,7 +2,9 @@
 
 | **Author** | `ubergarm` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `ug/compute-layer-input-mod-score` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-13 |
 | **Updated** | 2025-04-16 |
 
@@ -1055,6 +1057,12 @@ Layer	LIM Score
 Do I understand the results in the quoted PR correctly? The `ffn_down` tensors are the least important? This would be really funny, because everybody knows that quantization errors in `ffn_down` have the highest impact on observed quantization quality. 
 
 I didn't go to read the blog post, but why would cosine similarity between the inputs of two subsequent layers measure layer importance?
+
+---
+
+👤 **ikawrakow** commented during a code review on `examples/imatrix/imatrix.cpp` on **2025-04-13** at **07:05:04**
+
+So, `activations` gets overwritten each time we get called with a new set of activations. It also gets overwritten as we go over the rows of the activation matrix. At the end of the run, the `compute_lim()` function gets called. Which means that we get the LIM computed with just the very last token processed in the `imatrix` run, not an actual statistical evaluation of cosine similarities between inputs to tensors of the same type in subsequent layers.
 
 ---
 

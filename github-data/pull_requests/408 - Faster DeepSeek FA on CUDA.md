@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_flash_mla3_v2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-11 |
 | **Updated** | 2025-05-12 |
 | **Merged** | 2025-05-12 |

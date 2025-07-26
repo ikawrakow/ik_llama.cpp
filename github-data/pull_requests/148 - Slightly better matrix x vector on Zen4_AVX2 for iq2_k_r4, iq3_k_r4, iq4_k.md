@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/avx2_r4_tweaks` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-17 |
 | **Updated** | 2024-12-17 |
 | **Merged** | 2024-12-17 |

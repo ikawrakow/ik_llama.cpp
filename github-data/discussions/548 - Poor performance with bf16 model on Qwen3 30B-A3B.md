@@ -2,6 +2,7 @@
 
 | **Author** | `Gaolingx` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-06-22 |
 | **Updated** | 2025-07-02 |
 

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/faster_iq4nl_quantize` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-02 |
 | **Updated** | 2024-10-02 |
 | **Merged** | 2024-10-02 |

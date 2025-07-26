@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/measure_barriers` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-01 |
 | **Updated** | 2025-03-01 |
 | **Merged** | 2025-03-01 |

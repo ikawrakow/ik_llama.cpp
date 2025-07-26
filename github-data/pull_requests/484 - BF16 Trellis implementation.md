@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/trellis_bf16` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-02 |
 | **Updated** | 2025-06-19 |
 

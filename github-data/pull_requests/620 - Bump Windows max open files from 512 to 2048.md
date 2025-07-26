@@ -3,6 +3,8 @@
 | **Author** | `Thireus` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `patch-2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-16 |
 | **Updated** | 2025-07-17 |
 | **Merged** | 2025-07-17 |
@@ -22,6 +24,14 @@ Allows up to 2048 shards to be loaded on Windows builds, from the current defaul
 ---
 
 #### 💬 Conversation
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-07-17** at **05:39:22**
+
+Don't you want to make this dependent on the value of `GGML_MAX_CONTEXTS` instead of it being simply set to 2048?
+
+I don't know much about Windows, but if I understand correctly the description of the `_setmaxstdio` function, it changes the max. number of files that can be open at the same time at the stream I/O level. The default for this is 512. The Microsoft engineers must have had a reason to keep it at 512 instead of just setting it to the 8192 limit of the low I/O level. If they did have a reason, then my thinking is that it would be wise to not increase the stream I/O limit unless necessary. It only becomes necessary if we want to use more than 512 shards, which is only possible if we have changed the value of `GGML_MAX_CONTEXTS`.
+
+---
 
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-07-17** at **05:39:22**
 

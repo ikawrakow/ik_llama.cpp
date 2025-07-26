@@ -2,6 +2,7 @@
 
 | **Author** | `SamuelOliveirads` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-05-23 |
 | **Updated** | 2025-07-22 |
 

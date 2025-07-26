@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_quantized_k_cache` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-24 |
 | **Updated** | 2024-10-24 |
 | **Merged** | 2024-10-24 |

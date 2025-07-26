@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/trellis_neon` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-29 |
 | **Updated** | 2025-05-29 |
 | **Merged** | 2025-05-29 |

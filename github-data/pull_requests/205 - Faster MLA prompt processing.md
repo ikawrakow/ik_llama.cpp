@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/mla_fixes` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-12 |
 | **Updated** | 2025-02-13 |
 | **Merged** | 2025-02-13 |
@@ -46,6 +48,12 @@ Not sure if the ~9% improvement at 16k tokens is real. It may be just due to les
 ---
 
 #### 💬 Conversation
+
+👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-02-12** at **20:10:20**
+
+We might want to print something if mla_attn is requested but not able to be run instead of just silently failing over to standard attention, I just saw a report of a user not realizing that this was happening and not sure why MLA was not giving any performance difference.
+
+---
 
 👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-12** at **20:10:21**
 

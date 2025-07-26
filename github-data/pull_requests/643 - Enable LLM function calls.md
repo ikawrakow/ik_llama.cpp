@@ -3,6 +3,8 @@
 | **Author** | `iSevenDays` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `qwen3-function-calls` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-24 |
 | **Updated** | 2025-07-24 |
 | **Merged** | 2025-07-24 |

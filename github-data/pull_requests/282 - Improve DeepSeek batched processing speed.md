@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/better_batched_processing` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-23 |
 | **Updated** | 2025-03-23 |
 | **Merged** | 2025-03-23 |

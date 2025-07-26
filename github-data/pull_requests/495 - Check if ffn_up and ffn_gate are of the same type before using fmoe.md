@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `ik/check_up_gate_fmoe` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-06 |
 | **Updated** | 2025-07-12 |
 

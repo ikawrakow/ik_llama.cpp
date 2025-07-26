@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/new_iq2kt` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-09 |
 | **Updated** | 2025-06-18 |
 | **Labels** | `Breaking change` |

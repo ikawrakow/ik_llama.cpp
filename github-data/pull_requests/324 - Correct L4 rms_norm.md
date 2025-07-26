@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/l4_rms_norm` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-11 |
 | **Updated** | 2025-04-11 |
 | **Merged** | 2025-04-11 |

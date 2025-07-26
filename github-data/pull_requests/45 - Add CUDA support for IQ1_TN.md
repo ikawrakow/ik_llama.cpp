@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1_tn_cuda` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-09 |
 | **Updated** | 2024-09-09 |
 | **Merged** | 2024-09-09 |

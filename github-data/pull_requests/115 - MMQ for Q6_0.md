@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/q60_mmq` |
+| **Target Branch** | `main` |
 | **Created** | 2024-11-20 |
 | **Updated** | 2024-11-21 |
 | **Merged** | 2024-11-21 |

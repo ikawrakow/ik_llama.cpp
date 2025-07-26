@@ -2,7 +2,9 @@
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ✅ **Open** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `s6/numa_KV` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-25 |
 | **Updated** | 2025-03-27 |
 

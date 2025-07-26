@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `ik/quantization_tweaks` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-17 |
 | **Updated** | 2025-07-19 |
 

@@ -2,7 +2,9 @@
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `ik/fuse_mul_mat_scale` |
+| **Target Branch** | `main` |
 | **Created** | 2024-07-27 |
 | **Updated** | 2025-02-08 |
 

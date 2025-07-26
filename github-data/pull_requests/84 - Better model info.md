@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/better_model_info` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-10 |
 | **Updated** | 2024-10-10 |
 | **Merged** | 2024-10-10 |

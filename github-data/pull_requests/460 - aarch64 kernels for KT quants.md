@@ -3,6 +3,8 @@
 | **Author** | `andrewkchan` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `trellis_aarch64` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-26 |
 | **Updated** | 2025-05-30 |
 

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/sampling-xtc` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-03 |
 | **Updated** | 2025-06-03 |
 | **Merged** | 2025-06-03 |
@@ -23,9 +25,21 @@ Same usage as in mainline:
 
 #### 💬 Conversation
 
+👤 **saood06** commented during a code review on `common/common.cpp` on **2025-06-03** at **09:34:48**
+
+1.0 is disabled for threshold, not 0.0
+
+---
+
 👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-03** at **09:34:48**
 
 _No content provided._
+
+---
+
+👤 **saood06** commented during a code review on `common/sampling.h` on **2025-06-03** at **09:35:49**
+
+minor typo here "threashold" should be "threshold"
 
 ---
 

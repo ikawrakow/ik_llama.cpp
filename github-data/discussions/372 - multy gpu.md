@@ -2,6 +2,7 @@
 
 | **Author** | `airnsk` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-05-03 |
 | **Updated** | 2025-05-06 |
 

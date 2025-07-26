@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_better_moe` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-24 |
 | **Updated** | 2025-04-05 |
 | **Merged** | 2025-03-25 |
@@ -319,6 +321,12 @@ You seem to be recommending AWQ quants. On my book AWQ quants are pretty low qua
 > You seem to be recommending AWQ quants. On my book AWQ quants are pretty low quality. At least this was the case last I checked. Has something changed since then?
 
 I'm not sure, I haven't looked deeply into AWQ in a while, I was just curious about sglang's implementation of Deepseek compared to the one here. Normally you wouldn't be able to run sglang without far more expensive GPUs but I thought 16x3090's might be able to run it, but it turns out that is not true.
+
+---
+
+👤 **JohannesGaessler** commented during a code review on `ggml/src/ggml-cuda.cu` on **2025-04-05** at **10:04:54**
+
+This synchronization is not safe to remove. `ids_host` and `rmapping` are deallocated when they go out of scope and the source pointers for `cudaMemcpyAsync` become dangling pointers. As the name implies, the memcpy is asynchronous and without an explicit synchronization there is no guarantee that the data is still valid once it's being copied to the device.
 
 ---
 

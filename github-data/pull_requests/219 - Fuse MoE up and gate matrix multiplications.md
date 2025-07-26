@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fuse_moe_up_gate` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-22 |
 | **Updated** | 2025-02-22 |
 | **Merged** | 2025-02-22 |

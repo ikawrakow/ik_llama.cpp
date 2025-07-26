@@ -3,6 +3,8 @@
 | **Author** | `ubergarm` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ug/convert-kimi-k2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-15 |
 | **Updated** | 2025-07-17 |
 | **Merged** | 2025-07-15 |

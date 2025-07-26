@@ -3,6 +3,8 @@
 | **Author** | `jeffzhou2000` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `fix-build-android` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-22 |
 | **Updated** | 2025-07-04 |
 
@@ -110,6 +112,26 @@ build with "-O3 -flto -D_GNU_SOURCE -ffp-model=fast -fno-finite-math-only"
 
 
 in my opinion/personal perspective, the upstream llama.cpp can get much performance gains from optimization of Google's state-of-the-art toolchain(as well known, there are many top world-class compiler experts and engineers in Google). at the same time, the hand-written codes in this project runs faster than the neon codes in the upstream.
+
+---
+
+👤 **ikawrakow** commented during a code review on `CMakeLists.txt` on **2025-06-23** at **10:02:36**
+
+Your measurements clearly indicate that these are **not the best** compiler settings. Apart from not being best for `ik_llama.cpp`, there are a lot of Android phones out there that only support `armv8.2-a`, which is the minimum required for `ik_llama.cpp` to build correctly.
+
+More generally, `ik_llama.cpp` allows to manually set `GGML_ARCH_FLAGS`, exactly for the purpose of building on Android when the compiler for whatever reason does not use correct settings with `GGML_NATIVE`.
+
+---
+
+👤 **ikawrakow** commented during a code review on `examples/quantize-stats/CMakeLists.txt` on **2025-06-23** at **10:03:29**
+
+This can easily be combined with `OR` with the above condition.
+
+---
+
+👤 **ikawrakow** commented during a code review on `scripts/build-run-android.sh` on **2025-06-23** at **10:04:53**
+
+To me this looks a lot like a script that will only work for your specific setup. Is it really useful for others?
 
 ---
 

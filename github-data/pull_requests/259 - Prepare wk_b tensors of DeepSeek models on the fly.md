@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/prepare_wk_b` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-15 |
 | **Updated** | 2025-03-17 |
 | **Merged** | 2025-03-17 |

@@ -3,6 +3,8 @@
 | **Author** | `firecoperana` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `rpc_improvement` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-08 |
 | **Updated** | 2025-06-08 |
 | **Merged** | 2025-06-08 |

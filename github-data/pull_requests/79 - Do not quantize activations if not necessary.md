@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/skip_unnecessary_quantize` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-04 |
 | **Updated** | 2024-10-04 |
 | **Merged** | 2024-10-04 |

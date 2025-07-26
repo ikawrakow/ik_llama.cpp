@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq2_tn_avx2` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-10 |
 | **Updated** | 2024-09-10 |
 | **Merged** | 2024-09-10 |

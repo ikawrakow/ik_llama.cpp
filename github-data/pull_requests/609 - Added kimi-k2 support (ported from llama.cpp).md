@@ -3,6 +3,8 @@
 | **Author** | `anikifoss` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `kimi-k2-support` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-14 |
 | **Updated** | 2025-07-15 |
 | **Merged** | 2025-07-14 |

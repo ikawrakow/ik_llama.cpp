@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fattn_mma` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-03 |
 | **Updated** | 2025-05-04 |
 | **Merged** | 2025-05-04 |

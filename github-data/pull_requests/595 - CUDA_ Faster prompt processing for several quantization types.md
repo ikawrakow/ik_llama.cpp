@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/apply_cuda_faster_iq3k` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-09 |
 | **Updated** | 2025-07-10 |
 | **Merged** | 2025-07-10 |

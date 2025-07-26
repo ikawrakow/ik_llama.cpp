@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/FlashMLA-3` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-20 |
 | **Updated** | 2025-07-12 |
 | **Merged** | 2025-03-21 |

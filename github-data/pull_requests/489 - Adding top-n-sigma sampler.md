@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/sampling-top-n-sigma` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-03 |
 | **Updated** | 2025-06-03 |
 | **Merged** | 2025-06-03 |
@@ -50,9 +52,26 @@ I do personally think DRY is the best repeat penalty (of the ones that are publi
 
 ---
 
+👤 **saood06** commented during a code review on `examples/main/README.md` on **2025-06-03** at **10:38:23**
+
+Maybe add something like the following:
+
+XTC probability sets how likely the XTC sampler is to engage.
+XTC threshold is the lower-bound for what probability is needed for a token to be considered a "Top choice" and when engaged only the lowest probability top choice is kept. 
+
+And maybe change ### XTC Sampling to ### XTC Sampling (Exclude Top Choices) since the description above refers to the full name
+
+---
+
 👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-06-03** at **10:38:23**
 
 _No content provided._
+
+---
+
+👤 **saood06** commented during a code review on `examples/main/README.md` on **2025-06-03** at **10:41:21**
+
+Maybe add something letting people know that increasing top-n-sigma results in more tokens being considered, while decreasing it makes less tokens be considered as not all users will be able to figure that out from the mathematical description you provided.
 
 ---
 
@@ -65,6 +84,16 @@ _No content provided._
 👤 **Ph0rk0z** commented on **2025-06-03** at **11:33:23**
 
 Yep, DRY is good. XTC threshold is usually .1 and below to get anything meaningful out of it. Not sure how that compares here. Super interesting how this one is going to compare to the one I stole from mainline.
+
+---
+
+👤 **saood06** commented during a code review on `examples/main/README.md` on **2025-06-03** at **12:22:28**
+
+"conrolled" -> controlled
+
+This isn't really accurate, as the lowest "top choice" is retained. As it is written it makes it seem like it removes all tokens with probability greater than the threshold.
+
+Also I think the conditions for it to be turned off should be consistent instead of having the probability one in the beginning and the threshold one at the bottom
 
 ---
 

@@ -2,6 +2,7 @@
 
 | **Author** | `VinnyG9` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-05-15 |
 | **Updated** | 2025-05-28 |
 

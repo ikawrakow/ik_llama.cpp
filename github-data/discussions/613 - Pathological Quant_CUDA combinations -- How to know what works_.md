@@ -2,6 +2,7 @@
 
 | **Author** | `usrlocalben` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-07-15 |
 | **Updated** | 2025-07-15 |
 

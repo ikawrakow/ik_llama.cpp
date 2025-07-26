@@ -2,6 +2,7 @@
 
 | **Author** | `SmallAndSoft` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-07-08 |
 | **Updated** | 2025-07-22 |
 

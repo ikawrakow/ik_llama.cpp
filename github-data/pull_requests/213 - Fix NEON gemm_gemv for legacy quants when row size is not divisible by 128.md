@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_neon_legacy_quants` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-20 |
 | **Updated** | 2025-02-20 |
 | **Merged** | 2025-02-20 |

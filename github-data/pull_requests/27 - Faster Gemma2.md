@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fused_softcap_softmax` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-27 |
 | **Updated** | 2024-08-27 |
 | **Merged** | 2024-08-27 |

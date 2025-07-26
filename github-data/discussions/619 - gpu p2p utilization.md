@@ -2,6 +2,7 @@
 
 | **Author** | `magikRUKKOLA` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-07-16 |
 | **Updated** | 2025-07-24 |
 

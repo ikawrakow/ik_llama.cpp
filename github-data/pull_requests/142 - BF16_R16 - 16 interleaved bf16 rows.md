@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/bf16_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-14 |
 | **Updated** | 2024-12-15 |
 | **Merged** | 2024-12-15 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_Makefile` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-09 |
 | **Updated** | 2024-08-09 |
 | **Merged** | 2024-08-09 |

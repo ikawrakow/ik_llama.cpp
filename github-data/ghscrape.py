@@ -15,16 +15,22 @@ GRAPHQL_URL = "https://api.github.com/graphql"
 
 PER_PAGE = 100
 PER_PAGE_NESTED = 100
+PER_PAGE_REVIEW_COMMENTS = 40
 INITIAL_REPLIES = 40
 BATCH_SIZE = 1000
 MAX_RETRIES = 5
 INITIAL_BACKOFF = 2
+REQUEST_TIMEOUT = 60
 INTER_REQUEST_DELAY = 0.05
 RATE_LIMIT_THRESHOLD = 100
 
 PAGE_INFO_FRAGMENT = "fragment PageInfoFragment on PageInfo { endCursor, hasNextPage }"
 AUTHOR_FRAGMENT = "fragment AuthorFragment on Actor { login }"
-COMMENT_FIELDS = "fragment CommentFields on Comment { id, author { ...AuthorFragment }, body, createdAt }"
+COMMENT_FIELDS = """
+    fragment CommentFields on Comment {
+        id, author { ...AuthorFragment }, body, createdAt
+    }
+"""
 
 BASE_ITEM_FIELDS = """
     fragment BaseItemFields on Node {
@@ -35,7 +41,8 @@ BASE_ITEM_FIELDS = """
             labels(first: 20) { nodes { name } }
         }
         ... on PullRequest {
-            id, number, title, state, body, createdAt, updatedAt
+            id, number, title, state, body, createdAt, updatedAt, mergedAt,
+            isDraft, headRefName, baseRefName
             author { ...AuthorFragment }
             assignees(first: 10) { nodes { login } }
             labels(first: 20) { nodes { name } }
@@ -43,32 +50,61 @@ BASE_ITEM_FIELDS = """
     }
 """
 
-DISCUSSION_ITEM_FIELDS = """
+DISCUSSION_FIELDS = """
     fragment DiscussionItemFields on Discussion {
-        id, number, title, body, createdAt, updatedAt
+        id, number, title, body, createdAt, updatedAt, closed, locked
         author { ...AuthorFragment }
         labels(first: 20) { nodes { name } }
     }
 """
 
-ITEM_TYPE_CONFIG = {
+ITEM_CONFIG = {
     "issues": {
-        "graphql_name": "issues", "path": ("repository", "issues"),
-        "fields": f"...BaseItemFields, comments(first: {PER_PAGE_NESTED}) {{ pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}} }}",
+        "graphql_name": "issues",
+        "path": ("repository", "issues"),
+        "fields": f"""
+            ...BaseItemFields,
+            comments(first: {PER_PAGE_NESTED}) {{
+                pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}}
+            }}
+        """,
         "required_fragments": {"PageInfoFragment", "CommentFields", "BaseItemFields"},
     },
     "pull_requests": {
-        "graphql_name": "pullRequests", "path": ("repository", "pullRequests"),
-        "fields": f"""...BaseItemFields, mergedAt, isDraft, headRefName, baseRefName
-            comments(first: {PER_PAGE_NESTED}) {{ pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}} }}
-            reviews(first: {PER_PAGE_NESTED}) {{ pageInfo {{...PageInfoFragment}}, nodes {{ id, author {{...AuthorFragment}}, body, state, submittedAt }} }}
-            reviewThreads(first: {PER_PAGE_NESTED}) {{ pageInfo {{...PageInfoFragment}}, nodes {{ id, path, comments(first: 1) {{ pageInfo {{...PageInfoFragment}} }} }} }}
+        "graphql_name": "pullRequests",
+        "path": ("repository", "pullRequests"),
+        "fields": f"""
+            ...BaseItemFields
+            comments(first: {PER_PAGE_NESTED}) {{
+                pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}}
+            }}
+            reviews(first: {PER_PAGE_NESTED}) {{
+                pageInfo {{...PageInfoFragment}},
+                nodes {{ id, author {{...AuthorFragment}}, body, state, submittedAt }}
+            }}
+            reviewThreads(first: {PER_PAGE_NESTED}) {{
+                pageInfo {{...PageInfoFragment}},
+                nodes {{
+                    id, path,
+                    comments(first: {PER_PAGE_REVIEW_COMMENTS}) {{
+                        pageInfo {{...PageInfoFragment}},
+                        nodes {{
+                            id, author {{ ...AuthorFragment }}, body, createdAt,
+                            replyTo {{ id }}
+                        }}
+                    }}
+                }}
+            }}
         """,
-        "required_fragments": {"PageInfoFragment", "CommentFields", "BaseItemFields", "AuthorFragment"},
+        "required_fragments": {
+            "PageInfoFragment", "CommentFields", "BaseItemFields", "AuthorFragment"
+        },
     },
     "discussions": {
-        "graphql_name": "discussions", "path": ("repository", "discussions"),
-        "fields": f"""...DiscussionItemFields
+        "graphql_name": "discussions",
+        "path": ("repository", "discussions"),
+        "fields": f"""
+            ...DiscussionItemFields
             comments(first: {PER_PAGE_NESTED}) {{
                 pageInfo {{...PageInfoFragment}},
                 nodes {{
@@ -80,7 +116,12 @@ ITEM_TYPE_CONFIG = {
                 }}
             }}
         """,
-        "required_fragments": {"PageInfoFragment", "CommentFields", "DiscussionItemFields", "AuthorFragment"},
+        "required_fragments": {
+            "PageInfoFragment",
+            "CommentFields",
+            "DiscussionItemFields",
+            "AuthorFragment",
+        },
     },
 }
 
@@ -115,10 +156,12 @@ ALL_FRAGMENTS: Dict[str, GQLFragment] = {
     "AuthorFragment": {"query": AUTHOR_FRAGMENT, "deps": set()},
     "CommentFields": {"query": COMMENT_FIELDS, "deps": {"AuthorFragment"}},
     "BaseItemFields": {"query": BASE_ITEM_FIELDS, "deps": {"AuthorFragment"}},
-    "DiscussionItemFields": {"query": DISCUSSION_ITEM_FIELDS, "deps": {"AuthorFragment"}},
+    "DiscussionItemFields": {
+        "query": DISCUSSION_FIELDS, "deps": {"AuthorFragment"}
+    },
 }
 
-def _resolve_fragments(required: Set[str]) -> Set[str]:
+def _get_all_fragments(required: Set[str]) -> Set[str]:
     resolved = set()
     queue = deque(list(required))
     while queue:
@@ -130,7 +173,7 @@ def _resolve_fragments(required: Set[str]) -> Set[str]:
                 queue.extend(fragment_def["deps"])
     return resolved
 
-def _handle_rate_limit(response: requests.Response, session_stats: Dict):
+def _check_rate_limit(response: requests.Response, session_stats: Dict):
     remaining_str = response.headers.get("X-RateLimit-Remaining")
     reset_str = response.headers.get("X-RateLimit-Reset")
 
@@ -145,46 +188,79 @@ def _handle_rate_limit(response: requests.Response, session_stats: Dict):
     minutes, seconds = divmod(max(0, time_until_reset), 60)
     resets_in_str = f"resets in {minutes}m {seconds}s"
 
-    logging.info(f"API Rate Limit (Req #{req_count}): {remaining} points remaining, {resets_in_str}.")
+    logging.info(
+        f"API Rate Limit (Req #{req_count}): {remaining} points remaining, "
+        f"{resets_in_str}."
+    )
 
     if remaining < RATE_LIMIT_THRESHOLD:
         sleep_duration = max(0, reset_time - int(time.time())) + 5
-        logging.warning(f"Approaching GraphQL rate limit. Sleeping for {sleep_duration} seconds...")
+        mins_to_sleep, secs_to_sleep = divmod(sleep_duration, 60)
+        if mins_to_sleep > 0:
+            sleep_msg = f"{int(mins_to_sleep)}m {int(secs_to_sleep)}s"
+        else:
+            sleep_msg = f"{sleep_duration:.2f} seconds"
+        logging.warning(f"Approaching GraphQL rate limit. Sleeping for {sleep_msg}...")
         time.sleep(sleep_duration)
 
-def _perform_request(session: requests.Session, json_payload: Dict, session_stats: Dict) -> Dict:
+def _send_request(
+    session: requests.Session, json_payload: Dict, session_stats: Dict
+) -> Dict:
     session_stats["requests_made"] = session_stats.get("requests_made", 0) + 1
     headers = {
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    logging.debug("Executing GraphQL Query (truncated):\n%s...", json_payload.get('query', '')[:500])
+    query_preview = json_payload.get('query', '')[:500]
+    logging.debug(f"Executing GraphQL Query (truncated):\n{query_preview}...")
 
     last_exception = None
     for attempt in range(MAX_RETRIES):
         try:
-            response = session.post(GRAPHQL_URL, json=json_payload, headers=headers, timeout=60)
+            response = session.post(
+                GRAPHQL_URL,
+                json=json_payload,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT
+            )
             if response.status_code in (401, 404):
-                raise FatalError(f"Fatal HTTP Error: {response.status_code} - {response.text}")
+                msg = f"Fatal HTTP Error: {response.status_code} - {response.text}"
+                raise FatalError(msg)
             if response.status_code == 403 and "Retry-After" in response.headers:
                 retry_after = min(int(response.headers["Retry-After"]), 60)
                 sleep_duration = retry_after + 2
-                logging.warning(f"Rate limit secondary hit. Retrying after {sleep_duration:.2f} seconds...")
+                logging.warning(
+                    "Rate limit secondary hit. "
+                    f"Retrying after {sleep_duration:.2f} seconds..."
+                )
                 time.sleep(sleep_duration)
                 continue
             response.raise_for_status()
             response_json = response.json()
 
             if "errors" in response_json:
-                error_message = json.dumps(response_json["errors"])
-                error_types = {e.get("type") for e in response_json.get("errors", [])}
-                if "NOT_FOUND" in error_types and response_json.get("data") and any(val is not None for val in response_json["data"].values()):
-                    logging.warning(f"GraphQL returned non-fatal NOT_FOUND errors with partial data. This may be expected (e.g., deleted items). Continuing. Errors: {error_message}")
-                else:
-                    raise RetriableError(f"GraphQL API returned errors: {error_message}")
+                error_list = []
+                for i, error in enumerate(response_json.get("errors", [])):
+                    if i >= 3:
+                        error_list.append("...")
+                        break
+                    err_type = error.get("type", "UnknownType")
+                    err_msg = error.get("message", "NoMessage")
+                    error_list.append(f"({err_type}) {err_msg}")
+                err_summary = "; ".join(error_list)
 
-            _handle_rate_limit(response, session_stats)
+                error_types = {e.get("type") for e in response_json.get("errors", [])}
+                data = response_json.get("data")
+                if "NOT_FOUND" in error_types and data and any(data.values()):
+                    logging.warning(
+                        "GraphQL returned non-fatal NOT_FOUND errors with partial "
+                        f"data. This may be expected. Errors: {err_summary}"
+                    )
+                else:
+                    raise RetriableError(f"GraphQL API returned errors: {err_summary}")
+
+            _check_rate_limit(response, session_stats)
             return response_json
         except requests.exceptions.RequestException as e:
             last_exception = RetriableError(str(e))
@@ -195,150 +271,294 @@ def _perform_request(session: requests.Session, json_payload: Dict, session_stat
     logging.error("Max retries reached. Failing.")
     raise last_exception
 
-def _normalize_author(author_node: Optional[Dict]) -> str:
+def _norm_author(author_node: Optional[Dict]) -> str:
     return (author_node or {}).get("login", "ghost")
 
-def _normalize_comment(node: Optional[Dict], context: Optional[Dict] = None) -> Optional[Dict]:
+def _norm_comment(
+    node: Optional[Dict], context: Optional[Dict] = None
+) -> Optional[Dict]:
     if not node: return None
-    return {"id": node.get("id"), "author": _normalize_author(node.get("author")), "body": node.get("body"), "created_at": node.get("createdAt")}
+    return {
+        "id": node.get("id"),
+        "author": _norm_author(node.get("author")),
+        "body": node.get("body"),
+        "created_at": node.get("createdAt"),
+    }
 
-def _normalize_review(node: Optional[Dict], context: Optional[Dict] = None) -> Optional[Dict]:
+def _norm_review(
+    node: Optional[Dict], context: Optional[Dict] = None
+) -> Optional[Dict]:
     if not node: return None
-    return {"id": node.get("id"), "author": _normalize_author(node.get("author")), "body": node.get("body"), "state": node.get("state"), "submitted_at": node.get("submittedAt")}
+    return {
+        "id": node.get("id"),
+        "author": _norm_author(node.get("author")),
+        "body": node.get("body"),
+        "state": node.get("state"),
+        "submitted_at": node.get("submittedAt"),
+    }
 
-def _normalize_review_comment(node: Optional[Dict], context: Dict) -> Optional[Dict]:
-    if not (norm_comment := _normalize_comment(node)): return None
-    norm_comment["path"] = context.get("path", "unknown")
-    return norm_comment
+def _norm_review_comment(
+    node: Optional[Dict], context: Dict
+) -> Optional[Dict]:
+    if not node: return None
+    return {
+        "id": node.get("id"),
+        "author": _norm_author(node.get("author")),
+        "body": node.get("body"),
+        "created_at": node.get("createdAt"),
+        "path": context.get("path", "unknown"),
+        "reply_to_id": (node.get("replyTo") or {}).get("id"),
+    }
 
-def _normalize_discussion_comment(node: Optional[Dict], context: Dict) -> Optional[Dict]:
-    if not (norm_comment := _normalize_comment(node)): return None
+def _norm_disc_comment(
+    node: Optional[Dict], context: Dict
+) -> Optional[Dict]:
+    if not (norm_comment := _norm_comment(node)):
+        return None
     norm_comment["replies"] = []
     return norm_comment
 
-PAGINATION_CONFIG = {
-    "issue_comments": {"conn": "comments", "target": "comments", "norm": _normalize_comment, "frags": {"PageInfoFragment", "CommentFields"}, "q": lambda p, c: f'... on Issue {{ comments(first: {p}, after: "{c}") {{ pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}} }} }}'},
-    "pr_comments": {"conn": "comments", "target": "comments", "norm": _normalize_comment, "frags": {"PageInfoFragment", "CommentFields"}, "q": lambda p, c: f'... on PullRequest {{ comments(first: {p}, after: "{c}") {{ pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}} }} }}'},
-    "pr_reviews": {"conn": "reviews", "target": "reviews", "norm": _normalize_review, "frags": {"PageInfoFragment", "AuthorFragment"}, "q": lambda p, c: f'... on PullRequest {{ reviews(first: {p}, after: "{c}") {{ pageInfo {{...PageInfoFragment}}, nodes {{ id, author {{...AuthorFragment}}, body, state, submittedAt }} }} }}'},
-    "pr_review_threads": {"conn": "reviewThreads", "target": "review_comments", "norm": _normalize_review_comment, "frags": {"PageInfoFragment", "CommentFields"}, "q": lambda p, c: f'... on PullRequest {{ reviewThreads(first: {p}, after: "{c}") {{ pageInfo {{...PageInfoFragment}}, nodes {{ id, path, comments(first: {p}) {{ pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}} }} }} }} }}'},
-    "pr_review_thread_comments": {"conn": "comments", "target": "review_comments", "norm": _normalize_review_comment, "frags": {"PageInfoFragment", "CommentFields"}, "q": lambda p, c: f'... on PullRequestReviewThread {{ comments(first: {p}, after: "{c}") {{ pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}} }} }}'},
-    "discussion_comments": {"conn": "comments", "target": "comments", "norm": _normalize_discussion_comment, "frags": {"PageInfoFragment", "CommentFields"}, "q": lambda p, c: f'... on Discussion {{ comments(first: {p}, after: "{c}") {{ pageInfo {{...PageInfoFragment}}, nodes {{ id, author {{...AuthorFragment}}, body, createdAt, replies(first: {p}) {{ pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}} }} }} }} }}'},
-    "discussion_comment_replies": {"conn": "replies", "target": "replies", "norm": _normalize_comment, "frags": {"PageInfoFragment", "CommentFields"}, "q": lambda p, c: f'... on DiscussionComment {{ replies(first: {p}, after: "{c}") {{ pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}} }} }}'},
+def _comment_page_query(item_type: str, p: int, c: str) -> str:
+    return f"""
+    ... on {item_type} {{
+        comments(first: {p}, after: "{c}") {{
+            pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}}
+        }}
+    }}
+    """
+
+PAGING_CONFIG = {
+    "issue_comments": {
+        "conn": "comments", "target": "comments", "norm": _norm_comment,
+        "frags": {"PageInfoFragment", "CommentFields"},
+        "q": lambda p, c: _comment_page_query("Issue", p, c),
+    },
+    "pr_comments": {
+        "conn": "comments", "target": "comments", "norm": _norm_comment,
+        "frags": {"PageInfoFragment", "CommentFields"},
+        "q": lambda p, c: _comment_page_query("PullRequest", p, c),
+    },
+    "pr_reviews": {
+        "conn": "reviews", "target": "reviews", "norm": _norm_review,
+        "frags": {"PageInfoFragment", "AuthorFragment"},
+        "q": lambda p, c: f'''... on PullRequest {{
+            reviews(first: {p}, after: "{c}") {{
+                pageInfo {{...PageInfoFragment}},
+                nodes {{ id, author {{...AuthorFragment}}, body, state, submittedAt }}
+            }}
+        }}''',
+    },
+    "pr_review_threads": {
+        "conn": "reviewThreads", "target": "review_comments",
+        "norm": _norm_review_comment,
+        "frags": {"PageInfoFragment", "AuthorFragment"},
+        "q": lambda p, c: f'''... on PullRequest {{
+            reviewThreads(first: {p}, after: "{c}") {{
+                pageInfo {{...PageInfoFragment}},
+                nodes {{
+                    id, path,
+                    comments(first: {p}) {{
+                        pageInfo {{...PageInfoFragment}},
+                        nodes {{
+                            id, author {{ ...AuthorFragment }}, body, createdAt,
+                            replyTo {{ id }}
+                        }}
+                    }}
+                }}
+            }}
+        }}''',
+    },
+    "PR_THREAD_COMMENTS": {
+        "conn": "comments", "target": "review_comments",
+        "norm": _norm_review_comment,
+        "frags": {"PageInfoFragment", "AuthorFragment"},
+        "q": lambda p, c: f'''... on PullRequestReviewThread {{
+            comments(first: {p}, after: "{c}") {{
+                pageInfo {{...PageInfoFragment}},
+                nodes {{
+                    id, author {{ ...AuthorFragment }}, body, createdAt,
+                    replyTo {{ id }}
+                }}
+            }}
+        }}''',
+    },
+    "discussion_comments": {
+        "conn": "comments", "target": "comments",
+        "norm": _norm_disc_comment,
+        "frags": {"PageInfoFragment", "CommentFields"},
+        "q": lambda p, c: f'''... on Discussion {{
+            comments(first: {p}, after: "{c}") {{
+                pageInfo {{...PageInfoFragment}},
+                nodes {{
+                    id, author {{...AuthorFragment}}, body, createdAt,
+                    replies(first: {p}) {{
+                        pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}}
+                    }}
+                }}
+            }}
+        }}''',
+    },
+    "DISCUSSION_REPLIES": {
+        "conn": "replies", "target": "replies", "norm": _norm_comment,
+        "frags": {"PageInfoFragment", "CommentFields"},
+        "q": lambda p, c: f'''... on DiscussionComment {{
+            replies(first: {p}, after: "{c}") {{
+                pageInfo {{...PageInfoFragment}}, nodes {{...CommentFields}}
+            }}
+        }}''',
+    },
 }
 
-def _batch_fetch_nested_data(session: requests.Session, batch: List[PaginationTask], session_stats: Dict) -> Dict:
+def _fetch_nested_data(
+    session: requests.Session, batch: List[PaginationTask], session_stats: Dict
+) -> Dict:
     query_parts = []
-    required_fragments: Set[str] = set()
+    req_fragments: Set[str] = set()
     for i, task in enumerate(batch):
-        task_config = PAGINATION_CONFIG[task["task_type"]]
-        query_parts.append(f'item{i}: node(id: "{task["node_id"]}") {{ {task_config["q"](PER_PAGE_NESTED, task["cursor"] or "")} }}')
-        required_fragments.update(task_config["frags"])
+        task_config = PAGING_CONFIG[task["task_type"]]
+        query_parts.append(
+            f'item{i}: node(id: "{task["node_id"]}") {{ '
+            f'{task_config["q"](PER_PAGE_NESTED, task["cursor"] or "")} }}'
+        )
+        req_fragments.update(task_config["frags"])
 
-    if not query_parts: return {}
+    if not query_parts:
+        return {}
 
-    all_required_fragments = _resolve_fragments(required_fragments)
-    fragments_str = ' '.join(ALL_FRAGMENTS[name]["query"] for name in all_required_fragments)
+    all_required = _get_all_fragments(req_fragments)
+    fragments_str = ' '.join(ALL_FRAGMENTS[name]["query"] for name in all_required)
     query = f"query GetBatchedNestedData {{ {' '.join(query_parts)} }} {fragments_str}"
 
-    return _perform_request(session, {"query": query}, session_stats).get("data", {})
+    return _send_request(session, {"query": query}, session_stats).get("data", {})
 
-def _process_pagination_queue(session: requests.Session, queue: deque[PaginationTask], item_map: Dict[str, Dict[str, Any]], session_stats: Dict):
+def _process_paging_queue(
+    session: requests.Session,
+    queue: deque[PaginationTask],
+    item_map: Dict[str, Dict[str, Any]],
+    session_stats: Dict,
+):
     total_pages = len(queue)
     processed_pages = 0
-    pages_since_last_log = 0
+    pages_since_log = 0
     log_increment = max(1, total_pages // 20)
 
     while queue:
         batch = [queue.popleft() for _ in range(min(BATCH_SIZE, len(queue)))]
-        if not batch: continue
+        if not batch:
+            continue
 
         time.sleep(INTER_REQUEST_DELAY)
 
-        batched_data = _batch_fetch_nested_data(session, batch, session_stats)
+        batched_data = _fetch_nested_data(session, batch, session_stats)
 
         for i, task in enumerate(batch):
             item_data = batched_data.get(f"item{i}")
-            if not item_data: continue
+            if not item_data:
+                continue
 
-            config = PAGINATION_CONFIG[task["task_type"]]
+            config = PAGING_CONFIG[task["task_type"]]
             connection = item_data.get(config["conn"])
-            if not connection: continue
+            if not connection:
+                continue
 
-            nodes_to_process = connection.get("nodes", [])
+            nodes = connection.get("nodes", [])
 
             if task["task_type"] == "discussion_comments":
-                parent_item_id = task["context"]["target_item_id"]
-                for comment_node in nodes_to_process:
-                    _process_discussion_comment(comment_node, item_map, queue, parent_item_id)
+                parent_id = task["context"]["target_item_id"]
+                for comment_node in nodes:
+                    _process_disc_comment(comment_node, item_map, queue, parent_id)
             else:
                 target_item = item_map[task["context"]["target_item_id"]]
                 target_list = target_item.setdefault(config["target"], [])
 
-                for node in nodes_to_process:
+                for node in nodes:
                     if not node: continue
-                    context = {"path": node.get("path") if config["conn"] == "reviewThreads" else task["context"].get("path")}
-
-                    comments_to_process = node.get("comments", {}).get("nodes", []) if config["conn"] == "reviewThreads" else [node]
-                    for sub_node in comments_to_process:
+                    is_thread = config["conn"] == "reviewThreads"
+                    path = node.get("path") if is_thread else task["context"].get("path")
+                    context = {"path": path}
+                    sub_nodes = (
+                        node.get("comments", {}).get("nodes", []) if is_thread else [node]
+                    )
+                    for sub_node in sub_nodes:
                         if norm_node := config["norm"](sub_node, context):
                             target_list.append(norm_node)
 
-                    if node.get("comments", {}).get("pageInfo", {}).get("hasNextPage"):
-                        queue.append({"node_id": node["id"], "cursor": node["comments"]["pageInfo"]["endCursor"], "task_type": "pr_review_thread_comments", "context": {"target_item_id": target_item["id"], "path": node["path"]}})
-                    elif node.get("replies", {}).get("pageInfo", {}).get("hasNextPage"):
-                        if norm_node and norm_node.get("id"):
-                            queue.append({"node_id": norm_node["id"], "cursor": node["replies"]["pageInfo"]["endCursor"], "task_type": "discussion_comment_replies", "context": {"target_item_id": norm_node["id"]}})
+                    comments_conn = node.get("comments", {})
+                    if comments_conn.get("pageInfo", {}).get("hasNextPage"):
+                        queue.append({
+                            "node_id": node["id"],
+                            "cursor": comments_conn["pageInfo"]["endCursor"],
+                            "task_type": "PR_THREAD_COMMENTS",
+                            "context": {
+                                "target_item_id": target_item["id"], "path": node["path"]
+                            },
+                        })
 
             if connection.get("pageInfo", {}).get("hasNextPage"):
                 task["cursor"] = connection["pageInfo"]["endCursor"]
                 queue.append(task.copy())
 
         processed_pages += len(batch)
-        pages_since_last_log += len(batch)
-        if total_pages > BATCH_SIZE and pages_since_last_log >= log_increment:
-            logging.info(f"Processed {processed_pages}/{total_pages} nested data pages...")
-            pages_since_last_log = 0
+        pages_since_log += len(batch)
+        if total_pages > BATCH_SIZE and pages_since_log >= log_increment:
+            logging.info(
+                f"Processed {processed_pages}/{total_pages} nested data pages..."
+            )
+            pages_since_log = 0
 
-def _queue_paginated(queue: deque[PaginationTask], node: Dict, connection_key: str, task_type: str, context: Dict):
-    connection = node.get(connection_key)
+def _queue_next_page(
+    queue: deque[PaginationTask], node: Dict, conn_key: str, task_type: str, ctx: Dict
+):
+    connection = node.get(conn_key)
     if connection and connection.get("pageInfo", {}).get("hasNextPage"):
-        queue.append({"node_id": node["id"], "cursor": connection["pageInfo"]["endCursor"], "task_type": task_type, "context": context})
+        queue.append({
+            "node_id": node["id"],
+            "cursor": connection["pageInfo"]["endCursor"],
+            "task_type": task_type,
+            "context": ctx,
+        })
 
-def _normalize_base(node: Dict) -> Dict:
+def _norm_common_fields(node: Dict) -> Dict:
     return {
         "id": node.get("id"),
         "number": node.get("number"),
         "title": node.get("title"),
-        "author": _normalize_author(node.get("author")),
-        "state": node.get("state"),
+        "author": _norm_author(node.get("author")),
         "body": node.get("body"),
         "created_at": node.get("createdAt"),
         "updated_at": node.get("updatedAt"),
         "labels": [l["name"] for l in node.get("labels", {}).get("nodes", []) if l],
+    }
+
+def _norm_base_item(node: Dict) -> Dict:
+    item = _norm_common_fields(node)
+    item.update({
+        "state": node.get("state"),
         "assignees": [a["login"] for a in node.get("assignees", {}).get("nodes", []) if a],
         "comments": [],
-    }
+    })
+    return item
 
-def _normalize_discussion(node: Dict) -> Dict:
-    return {
-        "id": node.get("id"),
-        "number": node.get("number"),
-        "title": node.get("title"),
-        "author": _normalize_author(node.get("author")),
-        "body": node.get("body"),
-        "created_at": node.get("createdAt"),
-        "updated_at": node.get("updatedAt"),
-        "state": None,
-        "labels": [l["name"] for l in node.get("labels", {}).get("nodes", []) if l],
-        "assignees": [],
-        "comments": [],
-    }
+def _norm_discussion(node: Dict) -> Dict:
+    item = _norm_common_fields(node)
+    state = "OPEN"
+    if node.get("locked"):
+        state = "LOCKED"
+    elif node.get("closed"):
+        state = "CLOSED"
+    item.update({"state": state, "assignees": [], "comments": []})
+    return item
 
-def _process_discussion_comment(comment_node: Dict, item_map: Dict[str, Dict[str, Any]], queue: deque[PaginationTask], parent_item_id: str):
+def _process_disc_comment(
+    comment_node: Dict,
+    item_map: Dict[str, Dict[str, Any]],
+    queue: deque[PaginationTask],
+    parent_item_id: str,
+):
     if not comment_node or not comment_node.get("id"):
         return
 
-    norm_comment = _normalize_discussion_comment(comment_node, {})
+    norm_comment = _norm_disc_comment(comment_node, {})
     if not norm_comment:
         return
 
@@ -346,24 +566,36 @@ def _process_discussion_comment(comment_node: Dict, item_map: Dict[str, Dict[str
     parent_item.setdefault("comments", []).append(norm_comment)
     item_map[norm_comment["id"]] = norm_comment
 
-    replies_connection = comment_node.get("replies", {})
-    if replies_connection and replies_connection.get("nodes"):
+    replies_conn = comment_node.get("replies", {})
+    if replies_conn and replies_conn.get("nodes"):
         norm_comment["replies"].extend(
-            [_normalize_comment(r) for r in replies_connection["nodes"] if r]
+            [_norm_comment(r) for r in replies_conn["nodes"] if r]
         )
 
-    _queue_paginated(queue, comment_node, "replies", "discussion_comment_replies", {"target_item_id": norm_comment["id"]})
+    _queue_next_page(
+        queue, comment_node, "replies", "DISCUSSION_REPLIES",
+        {"target_item_id": norm_comment["id"]}
+    )
 
-def _queue_work(node: Dict, item_type: str, item_map: Dict[str, Dict[str, Any]], queue: deque[PaginationTask]):
+def _queue_item_tasks(
+    node: Dict,
+    item_type: str,
+    item_map: Dict[str, Dict[str, Any]],
+    queue: deque[PaginationTask],
+):
     if item_type == "discussions":
-        item = _normalize_discussion(node)
+        item = _norm_discussion(node)
     else:
-        item = _normalize_base(node)
+        item = _norm_base_item(node)
     item_map[item["id"]] = item
 
     if item_type in ("issues", "pull_requests"):
-        item["comments"].extend([_normalize_comment(c) for c in node.get("comments", {}).get("nodes", []) if c])
-        _queue_paginated(queue, node, "comments", f"{'issue' if item_type == 'issues' else 'pr'}_comments", {"target_item_id": item["id"]})
+        nodes = node.get("comments", {}).get("nodes", [])
+        item["comments"].extend([_norm_comment(c) for c in nodes if c])
+        task_type = "issue_comments" if item_type == "issues" else "pr_comments"
+        _queue_next_page(
+            queue, node, "comments", task_type, {"target_item_id": item["id"]}
+        )
 
     if item_type == "pull_requests":
         item.update({
@@ -374,91 +606,144 @@ def _queue_work(node: Dict, item_type: str, item_map: Dict[str, Dict[str, Any]],
             "reviews": [],
             "review_comments": [],
         })
-        item["reviews"].extend([_normalize_review(r) for r in node.get("reviews", {}).get("nodes", []) if r])
-        _queue_paginated(queue, node, "reviews", "pr_reviews", {"target_item_id": item["id"]})
+        review_nodes = node.get("reviews", {}).get("nodes", [])
+        item["reviews"].extend([_norm_review(r) for r in review_nodes if r])
+        _queue_next_page(
+            queue, node, "reviews", "pr_reviews", {"target_item_id": item["id"]}
+        )
 
         for thread in node.get("reviewThreads", {}).get("nodes", []):
             if not thread: continue
-            item["review_comments"].extend([_normalize_review_comment(c, {"path": thread.get("path")}) for c in thread.get("comments", {}).get("nodes", []) if c])
-            _queue_paginated(queue, thread, "comments", "pr_review_thread_comments", {"target_item_id": item["id"], "path": thread.get("path")})
-        _queue_paginated(queue, node, "reviewThreads", "pr_review_threads", {"target_item_id": item["id"]})
+            cmt_nodes = thread.get("comments", {}).get("nodes", [])
+            item["review_comments"].extend([
+                _norm_review_comment(c, {"path": thread.get("path")})
+                for c in cmt_nodes if c
+            ])
+            _queue_next_page(
+                queue, thread, "comments", "PR_THREAD_COMMENTS",
+                {"target_item_id": item["id"], "path": thread.get("path")}
+            )
+        _queue_next_page(
+            queue, node, "reviewThreads", "pr_review_threads",
+            {"target_item_id": item["id"]}
+        )
 
     if item_type == "discussions":
         for comment_node in node.get("comments", {}).get("nodes", []):
-            _process_discussion_comment(comment_node, item_map, queue, item["id"])
-        _queue_paginated(queue, node, "comments", "discussion_comments", {"target_item_id": item["id"]})
+            _process_disc_comment(comment_node, item_map, queue, item["id"])
+        _queue_next_page(
+            queue, node, "comments", "discussion_comments",
+            {"target_item_id": item["id"]}
+        )
 
     return item
 
-def _paginator(session: requests.Session, query: str, variables: Dict, path: List[str], session_stats: Dict):
+def _paginator(
+    session: requests.Session,
+    query: str,
+    variables: Dict,
+    path: List[str],
+    session_stats: Dict,
+):
     variables.pop("after", None)
     has_next_page = True
     while has_next_page:
         time.sleep(INTER_REQUEST_DELAY)
-        response_json = _perform_request(session, {"query": query, "variables": variables}, session_stats)
+        payload = {"query": query, "variables": variables}
+        response_json = _send_request(session, payload, session_stats)
         connection = response_json.get("data", {})
-        for key in path: connection = connection.get(key) if connection else None
-        if not connection: break
+        for key in path:
+            connection = connection.get(key) if connection else None
+        if not connection:
+            break
 
         nodes = connection.get("nodes", [])
-        if not nodes: break
+        if not nodes:
+            break
         yield nodes
 
         page_info = connection.get("pageInfo", {})
         has_next_page = page_info.get("hasNextPage", False)
-        if has_next_page: variables["after"] = page_info.get("endCursor")
+        if has_next_page:
+            variables["after"] = page_info.get("endCursor")
 
-def fetch_process(session: requests.Session, owner: str, repo: str, item_type: str, session_stats: Dict):
+def fetch_items(
+    session: requests.Session, owner: str, repo: str, item_type: str, stats: Dict
+):
     logging.info(f"Fetching all {item_type.replace('_', ' ')}...")
     item_map: Dict[str, Dict[str, Any]] = {}
-    pagination_queue: deque[PaginationTask] = deque()
-    all_processed_items = []
-    config = ITEM_TYPE_CONFIG[item_type]
+    page_queue: deque[PaginationTask] = deque()
+    processed_items = []
+    config = ITEM_CONFIG[item_type]
 
-    def get_query(graphql_name: str, fields_fragment: str, initial_fragments: Set[str]) -> str:
-        all_required_fragments = _resolve_fragments(initial_fragments)
-        fragments_str = "\n".join(ALL_FRAGMENTS[name]["query"] for name in all_required_fragments)
-        return f"""query Get{graphql_name.capitalize()}($owner: String!, $repo: String!, $perPage: Int!, $after: String) {{
+    def get_query(
+        graphql_name: str, fields_fragment: str, req_fragments: Set[str]
+    ) -> str:
+        all_required = _get_all_fragments(req_fragments)
+        fragments_str = "\n".join(ALL_FRAGMENTS[name]["query"] for name in all_required)
+        return f"""
+        query Get{graphql_name.capitalize()}(
+            $owner: String!, $repo: String!, $perPage: Int!, $after: String
+        ) {{
             repository(owner: $owner, name: $repo) {{
-                {graphql_name}(first: $perPage, after: $after, orderBy: {{field: CREATED_AT, direction: ASC}}) {{
+                {graphql_name}(
+                    first: $perPage,
+                    after: $after,
+                    orderBy: {{field: CREATED_AT, direction: ASC}}
+                ) {{
                     pageInfo {{ ...PageInfoFragment }}
                     nodes {{ {fields_fragment} }}
                 }}
             }}
-        }} {fragments_str}"""
+        }}
+        {fragments_str}
+        """
 
-    query = get_query(config["graphql_name"], config["fields"], config["required_fragments"])
+    query = get_query(
+        config["graphql_name"], config["fields"], config["required_fragments"]
+    )
     variables = {"owner": owner, "repo": repo, "perPage": PER_PAGE}
-    paginator = _paginator(session, query, variables, config["path"], session_stats)
+    paginator = _paginator(session, query, variables, config["path"], stats)
 
     count = 0
     for page_of_nodes in paginator:
         for node in page_of_nodes:
             if node and node.get("id"):
-                item = _queue_work(node, item_type, item_map, pagination_queue)
-                all_processed_items.append(item)
+                item = _queue_item_tasks(node, item_type, item_map, page_queue)
+                processed_items.append(item)
         count += len(page_of_nodes)
         logging.info(f"Processed {count} {item_type}...")
 
-    if not all_processed_items:
+    if not processed_items:
         logging.info(f"No {item_type} found for this repository.")
         return []
 
-    logging.info(f"Fetching all nested data for {len(all_processed_items)} items ({len(pagination_queue)} pages)...")
-    _process_pagination_queue(session, pagination_queue, item_map, session_stats)
+    logging.info(
+        f"Fetching all nested data for {len(processed_items)} items "
+        f"({len(page_queue)} pages)..."
+    )
+    _process_paging_queue(session, page_queue, item_map, stats)
 
-    logging.info(f"Finished {item_type}: Found and processed {len(all_processed_items)} items.")
-    return all_processed_items
+    logging.info(f"Finished {item_type}: Found and processed {len(processed_items)} items.")
+    return processed_items
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch issues, PRs, and discussions from a GitHub repository.")
+    parser = argparse.ArgumentParser(
+        description="Fetch issues, PRs, and discussions from a GitHub repository."
+    )
     parser.add_argument("repository", help="the repository in 'owner/name' format.")
-    parser.add_argument("-o", "--output", help="output JSON file name (default: owner__repo.json).")
-    parser.add_argument("-v", "--verbose", action="store_true", help="enable verbose/debug logging.")
+    parser.add_argument(
+        "-o", "--output", help="output JSON file name (default: owner__repo.json)."
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="enable verbose/debug logging."
+    )
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(level=log_level, format="%(levelname)s: %(message)s", stream=sys.stdout)
+    logging.basicConfig(
+        level=log_level, format="%(levelname)s: %(message)s", stream=sys.stdout
+    )
 
     if not GITHUB_TOKEN:
         logging.error("Error: GITHUB_TOKEN environment variable not set.")
@@ -467,26 +752,29 @@ def main():
 
     try:
         owner, repo_name = args.repository.split("/")
-        if not re.fullmatch(r"^[a-zA-Z0-9.\-_]{1,100}$", owner) or \
-           not re.fullmatch(r"^[a-zA-Z0-9.\-_]{1,100}$", repo_name):
+        is_valid_owner = re.fullmatch(r"^[a-zA-Z0-9.\-_]{1,100}$", owner)
+        is_valid_repo = re.fullmatch(r"^[a-zA-Z0-9.\-_]{1,100}$", repo_name)
+        if not (is_valid_owner and is_valid_repo):
             raise ValueError("Invalid characters or length in owner/repo name.")
         if owner.startswith('-') or owner.endswith('-') or \
            repo_name.startswith('-') or repo_name.endswith('-'):
-            raise ValueError("Owner or repository name cannot begin or end with a hyphen.")
+            raise ValueError("Owner/repo name cannot begin or end with a hyphen.")
     except (ValueError, IndexError):
-        logging.error("Error: Repository name must be in 'owner/name' format with valid characters.")
+        logging.error(
+            "Error: Repository must be in 'owner/name' format with valid chars."
+        )
         sys.exit(1)
 
     output_file = args.output or f"{owner}__{repo_name}.json"
     start_time = time.time()
     session_stats = {"requests_made": 0}
 
-    scraped_at_utc = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
-    repo_data = {"repository": f"{owner}/{repo_name}", "scraped_at": scraped_at_utc}
+    scraped_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    repo_data = {"repository": f"{owner}/{repo_name}", "scraped_at": scraped_at}
     with requests.Session() as session:
-        for item_type in ITEM_TYPE_CONFIG.keys():
+        for item_type in ITEM_CONFIG.keys():
             try:
-                data = fetch_process(
+                data = fetch_items(
                     session, owner, repo_name, item_type, session_stats
                 )
                 repo_data[item_type] = data
@@ -494,7 +782,10 @@ def main():
                 logging.critical(f"A fatal error occurred: {e}. Aborting.")
                 sys.exit(1)
             except GitHubError as e:
-                logging.error(f"Could not fetch {item_type} due to an error: {e}. Skipping this section.")
+                logging.error(
+                    f"Could not fetch {item_type} due to an error: {e}. "
+                    "Skipping this section."
+                )
                 repo_data[item_type] = []
 
     try:

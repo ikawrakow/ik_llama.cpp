@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `ik/remove_iqk_option` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-25 |
 | **Updated** | 2025-05-25 |
 

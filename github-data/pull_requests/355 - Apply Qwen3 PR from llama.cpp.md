@@ -3,6 +3,8 @@
 | **Author** | `bharrisau` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `qwen3` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-29 |
 | **Updated** | 2025-04-29 |
 | **Merged** | 2025-04-29 |
@@ -29,6 +31,12 @@ I've just ported over the Qwen3 PR. So it is missing the layers/model type, and 
 Thanks! I was just in the process of doing the same.
 
 Does `convert_hf_gguf.py` work with this model?
+
+---
+
+👤 **ikawrakow** commented during a code review on `gguf-py/gguf/constants.py` on **2025-04-29** at **07:05:07**
+
+You are missing the `QWEN3` and `QWEN3MOE` enum entries further up in `class MODEL_ARCH(IntEnum)`
 
 ---
 

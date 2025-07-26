@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `patch-1` |
+| **Target Branch** | `ik/q60_mmq` |
 | **Created** | 2024-11-20 |
 | **Updated** | 2024-11-21 |
 | **Merged** | 2024-11-21 |

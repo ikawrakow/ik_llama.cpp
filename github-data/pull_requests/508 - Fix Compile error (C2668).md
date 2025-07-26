@@ -3,6 +3,8 @@
 | **Author** | `Gaolingx` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `main` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-09 |
 | **Updated** | 2025-06-10 |
 | **Merged** | 2025-06-10 |
@@ -24,6 +26,16 @@ The compiler(msvc) reports error: `..iqk_quantize.cpp(568,12): error C2668: "'an
 ---
 
 #### 💬 Conversation
+
+👤 **ikawrakow** commented during a code review on `ggml/src/iqk/iqk_common.h` on **2025-06-09** at **15:12:45**
+
+Why did you change this? At least on my CPU the version
+```
+accm[i] = _mm256_add_ps(_mm256_permute2f128_ps(accm[i], accm[i+4], 0x20), _mm256_permute2f128_ps(accm[i], accm[i+4], 0x31));
+```
+is faster.
+
+---
 
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-09** at **15:12:45**
 

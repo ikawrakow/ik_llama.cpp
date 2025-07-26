@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `forgotten_refs_and_typo` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-30 |
 | **Updated** | 2025-07-02 |
 | **Merged** | 2025-05-31 |

@@ -3,6 +3,8 @@
 | **Author** | `firecoperana` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `fcp/missing_token_ps` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-25 |
 | **Assignees** | `firecoperana` |
 

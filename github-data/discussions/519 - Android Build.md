@@ -2,6 +2,7 @@
 
 | **Author** | `aezendc` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-06-11 |
 | **Updated** | 2025-06-21 |
 

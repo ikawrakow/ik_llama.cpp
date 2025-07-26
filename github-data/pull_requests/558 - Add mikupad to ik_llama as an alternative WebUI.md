@@ -2,7 +2,9 @@
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ✅ **Open** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `s6/mikupad` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-26 |
 | **Updated** | 2025-07-25 |
 

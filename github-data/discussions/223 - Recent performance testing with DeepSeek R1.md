@@ -2,6 +2,7 @@
 
 | **Author** | `bitbottrap` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-02-22 |
 | **Updated** | 2025-03-14 |
 

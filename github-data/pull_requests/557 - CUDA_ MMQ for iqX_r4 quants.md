@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_iqk_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-25 |
 | **Updated** | 2025-06-26 |
 | **Merged** | 2025-06-26 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/vulkan_fattn` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-04 |
 | **Updated** | 2025-07-05 |
 | **Merged** | 2025-07-05 |

@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `QS_streamline` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-22 |
 | **Updated** | 2025-05-22 |
 | **Merged** | 2025-05-22 |
@@ -26,6 +28,30 @@ Also, a Q8_0 for attn_q slipped into the MOEs 8 experts rule, I removed it, beca
 ---
 
 #### 💬 Conversation
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-22** at **06:46:59**
+
+Why do we want to limit to `<= 8` experts?
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-22** at **06:48:18**
+
+Why limit to `<= 8` experts?
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-22** at **06:54:53**
+
+So, I see you added the condition for `Q5_K_S` just above but I have forgotten why we want to have it. Can you remind me? I was wondering not too long ago why a model quantized with `Q5_K_S` ended up having less the 5.5 bpw (but didn't check). Why is the decision to reduce the number of bits dependent on the vocabulary size?
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-22** at **06:55:55**
+
+`<= 8`?
+
+---
 
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-05-22** at **06:58:25**
 

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/revert_0bf4d997` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-07 |
 | **Updated** | 2025-02-08 |
 | **Merged** | 2025-02-08 |

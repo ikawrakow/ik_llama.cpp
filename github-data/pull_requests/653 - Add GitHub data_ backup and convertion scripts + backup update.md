@@ -2,7 +2,9 @@
 
 | **Author** | `ThomasBaruzier` |
 | :--- | :--- |
-| **State** | ✅ **Open** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `tb/github-data-scripts` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-26 |
 | **Updated** | 2025-07-26 |
 

@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `fix-typo` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-20 |
 | **Updated** | 2024-12-20 |
 | **Merged** | 2024-12-20 |

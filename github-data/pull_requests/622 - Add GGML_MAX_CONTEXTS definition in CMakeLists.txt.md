@@ -3,6 +3,8 @@
 | **Author** | `Thireus` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `patch-3` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-17 |
 | **Updated** | 2025-07-17 |
 | **Merged** | 2025-07-17 |

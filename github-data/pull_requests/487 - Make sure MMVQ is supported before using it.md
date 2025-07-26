@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `ik/mmvq_type_supported` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-03 |
 | **Updated** | 2025-06-03 |
 

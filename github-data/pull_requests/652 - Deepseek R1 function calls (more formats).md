@@ -3,6 +3,8 @@
 | **Author** | `iSevenDays` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `deepseek-r1-parsing` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-26 |
 | **Updated** | 2025-07-26 |
 

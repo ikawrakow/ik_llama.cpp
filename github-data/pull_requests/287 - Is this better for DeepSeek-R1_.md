@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/deepseek_is_this_better` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-24 |
 | **Updated** | 2025-04-03 |
 

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/bf16_kv_cache` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-29 |
 | **Updated** | 2024-09-29 |
 | **Merged** | 2024-09-29 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/add_missing_enum_values_qwen3` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-29 |
 | **Updated** | 2025-04-29 |
 | **Merged** | 2025-04-29 |

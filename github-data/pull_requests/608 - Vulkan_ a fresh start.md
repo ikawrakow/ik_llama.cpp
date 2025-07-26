@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/vulkan_again` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-14 |
 | **Updated** | 2025-07-15 |
 | **Merged** | 2025-07-15 |

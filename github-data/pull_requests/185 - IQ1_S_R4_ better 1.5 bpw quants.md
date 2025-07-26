@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1_s_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-05 |
 | **Updated** | 2025-02-08 |
 | **Merged** | 2025-02-05 |
@@ -3345,6 +3347,12 @@ IQ4_K_R4 single token
 " \\n\\n" : 0.0060447207652032375
 " And" : 0.005831697024405003
 " For" : 0.004423711448907852
+
+---
+
+👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-02-06** at **15:16:38**
+
+Could this need to be higher for R1? The unsloth quant does this up to and including layer 8, my most recent attempt only did up to and including layer 6.
 
 ---
 

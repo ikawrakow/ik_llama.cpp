@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/neon_flash_attention_3` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-12 |
 | **Updated** | 2024-09-12 |
 | **Merged** | 2024-09-12 |

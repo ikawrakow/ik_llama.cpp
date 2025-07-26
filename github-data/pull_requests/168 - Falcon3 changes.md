@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/falcon3a` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-10 |
 | **Updated** | 2025-01-10 |
 | **Merged** | 2025-01-10 |

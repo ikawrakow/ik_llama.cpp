@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/qmix_tweaks_2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-30 |
 | **Updated** | 2025-01-30 |
 | **Merged** | 2025-01-30 |

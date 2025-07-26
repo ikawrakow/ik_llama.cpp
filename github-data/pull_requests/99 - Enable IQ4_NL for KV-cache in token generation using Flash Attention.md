@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fattn_enable_iq4_nl` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-20 |
 | **Updated** | 2024-10-21 |
 | **Merged** | 2024-10-21 |

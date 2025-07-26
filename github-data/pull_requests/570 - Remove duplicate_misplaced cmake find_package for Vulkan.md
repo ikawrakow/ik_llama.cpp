@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `fix_novulkan_cmake` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-02 |
 | **Updated** | 2025-07-02 |
 

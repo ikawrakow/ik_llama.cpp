@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_neon_q82` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-01 |
 | **Updated** | 2025-04-01 |
 | **Merged** | 2025-04-01 |

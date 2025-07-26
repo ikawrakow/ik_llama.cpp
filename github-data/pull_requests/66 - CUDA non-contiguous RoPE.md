@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/non_contiguous_rope` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-28 |
 | **Updated** | 2024-09-28 |
 | **Merged** | 2024-09-28 |

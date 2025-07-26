@@ -3,8 +3,10 @@
 | **Author** | `iSevenDays` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `function_calling` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-18 |
-| **Updated** | 2025-07-24 |
+| **Updated** | 2025-07-26 |
 | **Merged** | 2025-07-23 |
 
 ---
@@ -272,3 +274,50 @@ What's the exact command that you used to start the server? Can you please share
 👤 **randoentity** commented on **2025-07-24** at **21:15:54**
 
 @mtcl There's nothing special to it, look at isevendays' example above, just use `--alias Qwen3-235b` instead (but just qwen should be sufficient). Also check out the documentation added in this PR as it has an example of what the request should look like. Note that the model name is significant.
+
+---
+
+👤 **city96** commented on **2025-07-26** at **12:42:17**
+
+I did an update today and noticed token streaming wasn't working on latest master. I've tracked it down to this PR, with the commit right before it working.
+
+When token streaming is disabled, the reply is generated as usual and appears once generation finishes. When I enable token streaming, the generation still finishes in the background, but I never get any output. I was testing with an old version of sillytavern, but it seems reproducible in [mikupad](https://github.com/lmg-anon/mikupad) which is probably easier to reproduce.
+
+I get the same issue on Kimi, Deepseek V3, and even just random models like gemma:
+
+```
+CUDA_VISIBLE_DEVICES=0 ./build/bin/llama-server -m /mnt/models/llm/gemma-3-27b-it-q6_k.gguf -c 16384 -ngl 99
+```
+
+---
+
+👤 **iSevenDays** commented on **2025-07-26** at **12:45:24**
+
+@city96 could you please check this PR https://github.com/ikawrakow/ik_llama.cpp/pull/652 and could you please provide a minimum reproducible example? At best, using some small LLM. Then I could check and verify it quickly.
+
+I'm currently testing the PR above and I use both streaming and non-streaming mode with Kimi-K2 model and I didn't notice any issues, but I would gladly help you resolve the issue if there was a regression.
+
+---
+
+👤 **city96** commented on **2025-07-26** at **13:14:50**
+
+I tested your linked PR, but still saw the same problem. I think I found the issue, though. It's this change that this PR makes:
+
+<img width="686" height="241" alt="image" src="https://github.com/user-attachments/assets/746b4287-0c2a-45d1-976c-a6ab9df5d204" />
+
+On latest master that line is here. Changing it back fixes streaming.
+
+https://github.com/ikawrakow/ik_llama.cpp/blob/4e9c78c039601c99541726d95216e3aa7bfda742/examples/server/server.cpp#L1621
+
+Not sure what the logic is in mainline llama.cpp for streaming, but I am using text completion instead of the chat completion endpoint. I assume this is likely why it wasn't caught, since most people probably use the openai compatible one.
+
+For a reproducible example, you can start the ik_llama.cpp server example using any model (I used gemma 27B for testing, but any model should work). Connect to it via mikupad and enter a simple query, enable token streaming, then hit "predict" at the bottom. I can try and make a pure python example as well if it helps.
+
+<img width="881" height="270" alt="image" src="https://github.com/user-attachments/assets/be7e5462-a5ca-43e5-8e06-a015ad44761e" />
+
+---
+
+👤 **iSevenDays** commented on **2025-07-26** at **14:45:12**
+
+@city96 could you please test the change in this PR https://github.com/ikawrakow/ik_llama.cpp/pull/654 ?
+I think you have correctly identified the issue, but I'll be able to test that change only later today.

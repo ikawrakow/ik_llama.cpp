@@ -3,6 +3,8 @@
 | **Author** | `firecoperana` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `fcp/fix-missing-dry` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-05 |
 | **Updated** | 2025-07-05 |
 | **Assignees** | `firecoperana` |

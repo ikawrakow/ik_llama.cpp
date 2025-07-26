@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cpu_deepseek_fa` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-12 |
 | **Updated** | 2025-05-20 |
 | **Merged** | 2025-05-13 |

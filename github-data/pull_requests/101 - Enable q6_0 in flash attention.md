@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fattn_enable_q6_0` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-21 |
 | **Updated** | 2024-10-22 |
 | **Merged** | 2024-10-22 |

@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `quants_strategies_tweaks` |
+| **Target Branch** | `main` |
 | **Created** | 2024-11-22 |
 | **Updated** | 2024-11-23 |
 

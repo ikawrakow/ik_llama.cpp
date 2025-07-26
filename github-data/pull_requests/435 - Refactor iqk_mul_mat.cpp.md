@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/refactor_iqk` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-20 |
 | **Updated** | 2025-05-23 |
 | **Merged** | 2025-05-22 |

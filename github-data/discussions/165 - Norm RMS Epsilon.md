@@ -2,6 +2,7 @@
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-12-25 |
 | **Updated** | 2024-12-27 |
 

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/desperate_bug_fix_attempt` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-20 |
 | **Updated** | 2025-05-23 |
 

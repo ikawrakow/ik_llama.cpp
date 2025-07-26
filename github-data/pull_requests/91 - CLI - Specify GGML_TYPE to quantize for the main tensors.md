@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `specify_tensor_quants_in_cli` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-17 |
 | **Updated** | 2024-10-18 |
 | **Merged** | 2024-10-18 |

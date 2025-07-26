@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/handle_incompatible_deepseek_ggufs` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-07 |
 | **Updated** | 2025-05-10 |
 | **Merged** | 2025-05-09 |

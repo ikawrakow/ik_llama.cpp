@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/test_q80_NaNs` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-26 |
 | **Updated** | 2025-03-27 |
 

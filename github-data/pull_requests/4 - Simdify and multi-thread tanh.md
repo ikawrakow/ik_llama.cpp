@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/tanh` |
+| **Target Branch** | `main` |
 | **Created** | 2024-07-27 |
 | **Updated** | 2024-07-27 |
 | **Merged** | 2024-07-27 |

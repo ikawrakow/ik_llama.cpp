@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_standard_attention_cpu` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-15 |
 | **Updated** | 2025-05-15 |
 | **Merged** | 2025-05-15 |

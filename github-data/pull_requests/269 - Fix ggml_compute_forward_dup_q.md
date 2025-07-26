@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_dup_q` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-19 |
 | **Updated** | 2025-03-19 |
 | **Merged** | 2025-03-19 |

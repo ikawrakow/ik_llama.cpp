@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_mmvq_bug` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-23 |
 | **Updated** | 2025-05-24 |
 | **Merged** | 2025-05-23 |

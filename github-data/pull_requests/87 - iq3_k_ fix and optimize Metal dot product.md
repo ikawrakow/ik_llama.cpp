@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/metal_fix_iq3k` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-14 |
 | **Updated** | 2024-10-14 |
 | **Merged** | 2024-10-14 |

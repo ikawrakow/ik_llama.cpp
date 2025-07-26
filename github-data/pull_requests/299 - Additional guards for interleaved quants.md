@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/interleaved_guards` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-31 |
 | **Updated** | 2025-04-01 |
 | **Merged** | 2025-04-01 |

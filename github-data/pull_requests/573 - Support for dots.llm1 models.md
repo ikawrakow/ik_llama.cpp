@@ -3,6 +3,8 @@
 | **Author** | `saood06` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/dots` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-03 |
 | **Updated** | 2025-07-10 |
 | **Merged** | 2025-07-10 |
@@ -55,6 +57,12 @@ Thanks.
 >I notice an issue that if I leave system prompt empty, sometimes the response becomes unrelated to my question. With system prompt, it is fine. Do you also see this? I have the same issue when I run it from mainline.
 
 If it exists in mainline then maybe it is a problem with the model? I haven't seen it but I haven't tested the model further than my comment above.
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-07-03** at **06:18:24**
+
+I think you need to remove this line. We are not reshaping `V` as mainline because our attention implementation is different from theirs (and theirs was like ours until 2 or 3 months ago).
 
 ---
 

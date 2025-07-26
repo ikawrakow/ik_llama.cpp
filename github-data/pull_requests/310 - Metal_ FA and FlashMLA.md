@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/metal_fattn_update` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-03 |
 | **Updated** | 2025-04-03 |
 | **Merged** | 2025-04-03 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/enable_mla3_in_crippled_ggufs` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-11 |
 | **Updated** | 2025-05-12 |
 | **Merged** | 2025-05-12 |

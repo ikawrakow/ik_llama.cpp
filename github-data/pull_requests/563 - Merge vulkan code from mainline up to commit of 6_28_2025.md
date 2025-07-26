@@ -3,6 +3,8 @@
 | **Author** | `firecoperana` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `Merge_mainline_vulkan` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-29 |
 | **Updated** | 2025-07-02 |
 | **Merged** | 2025-07-02 |
@@ -220,6 +222,48 @@ fwiw i just forced that explicitly to `void *` and it compiles but then segfault
 -        /* .clear           = */ ggml_backend_multi_buffer_clear,
 +        /* .clear           = */ (GGML_CALL void *) ggml_backend_multi_buffer_clear, // ubergarm hack
 ```
+
+---
+
+👤 **ikawrakow** commented during a code review on `.github/workflows/build.yml` on **2025-06-30** at **06:48:44**
+
+I specifically removed all workflows, let's not put them back in.
+
+---
+
+👤 **ikawrakow** commented during a code review on `.github/workflows/release.yml` on **2025-06-30** at **06:49:37**
+
+Same
+
+---
+
+👤 **ikawrakow** commented during a code review on `ggml/include/ggml.h` on **2025-06-30** at **06:51:46**
+
+Let's not add stuff that is not related to the Vulkan back-end
+
+---
+
+👤 **ikawrakow** commented during a code review on `ggml/include/ggml.h` on **2025-06-30** at **06:52:04**
+
+No new ops please
+
+---
+
+👤 **ikawrakow** commented during a code review on `ggml/include/ggml.h` on **2025-06-30** at **06:52:43**
+
+No new ops please
+
+---
+
+👤 **ikawrakow** commented during a code review on `ggml/src/ggml-alloc.c` on **2025-06-30** at **06:53:43**
+
+Let's not make changes that are not related to the Vulkan back-end
+
+---
+
+👤 **ikawrakow** commented during a code review on `ggml/src/ggml-cpu/ggml-cpu.c` on **2025-06-30** at **06:58:42**
+
+I don't think I want a copy of all the refactoring that happened in mainline since I forked the project.
 
 ---
 
@@ -472,6 +516,12 @@ On mainline I see this:
 ggml_vulkan: 0 = NVIDIA GeForce RTX 4080 (NVIDIA) | uma: 0 | fp16: 1 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: KHR_coopmat
 ```
 So, for some reason int dot products and cooperative matrix are not enabled. I guess, this may explain the lower performance.
+
+---
+
+👤 **ikawrakow** commented during a code review on `ggml/src/ggml-vulkan.cpp` on **2025-07-01** at **18:07:18**
+
+Why do we need this check? I don't have coopmat2 available, but if I comment out this check I get FA enabled, and it gives me a nice boost in performance.
 
 ---
 

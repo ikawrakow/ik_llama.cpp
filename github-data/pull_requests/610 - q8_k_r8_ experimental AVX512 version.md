@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `ik/q8_k_r8_avx512` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-14 |
 | **Updated** | 2025-07-23 |
 

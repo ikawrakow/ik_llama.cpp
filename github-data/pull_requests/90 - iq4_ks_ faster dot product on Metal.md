@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/metal_faster_iq4ks` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-16 |
 | **Updated** | 2024-10-16 |
 | **Merged** | 2024-10-16 |

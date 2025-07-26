@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1_s_r4_k128` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-08 |
 | **Updated** | 2025-02-09 |
 | **Merged** | 2025-02-09 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iqk_q_improvements` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-31 |
 | **Updated** | 2025-04-02 |
 | **Merged** | 2025-04-01 |

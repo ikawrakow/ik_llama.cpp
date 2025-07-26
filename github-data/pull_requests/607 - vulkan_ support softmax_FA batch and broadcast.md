@@ -3,6 +3,8 @@
 | **Author** | `firecoperana` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `fcp/vulkan_fa_fix_dsv` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-13 |
 | **Updated** | 2025-07-16 |
 | **Assignees** | `firecoperana` |

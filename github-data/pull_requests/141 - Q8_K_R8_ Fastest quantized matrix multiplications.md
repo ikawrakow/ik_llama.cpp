@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/q8_k_r8` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-14 |
 | **Updated** | 2024-12-14 |
 | **Merged** | 2024-12-14 |

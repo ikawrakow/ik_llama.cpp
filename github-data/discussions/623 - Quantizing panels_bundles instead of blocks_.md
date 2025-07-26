@@ -2,6 +2,7 @@
 
 | **Author** | `jubruckne` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-07-17 |
 | **Updated** | 2025-07-17 |
 

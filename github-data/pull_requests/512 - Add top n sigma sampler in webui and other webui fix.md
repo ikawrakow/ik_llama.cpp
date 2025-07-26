@@ -3,6 +3,8 @@
 | **Author** | `firecoperana` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `webui_sampler_fix` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-10 |
 | **Updated** | 2025-06-12 |
 | **Merged** | 2025-06-12 |

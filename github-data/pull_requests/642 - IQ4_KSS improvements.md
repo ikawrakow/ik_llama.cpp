@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq4_kss_improvements` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-23 |
 | **Updated** | 2025-07-26 |
 | **Merged** | 2025-07-23 |

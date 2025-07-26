@@ -3,6 +3,8 @@
 | **Author** | `fizzAI` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `main` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-04 |
 | **Updated** | 2025-07-06 |
 | **Merged** | 2025-07-06 |
@@ -36,9 +38,27 @@ Appears to work, now
 
 ---
 
+👤 **ikawrakow** commented during a code review on `convert_hf_to_gguf.py` on **2025-07-05** at **09:29:56**
+
+It is the only model that has a vocabulary of 155,136 tokens?
+
+---
+
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-07-05** at **09:29:56**
 
 _No content provided._
+
+---
+
+👤 **ikawrakow** commented during a code review on `include/llama.h` on **2025-07-05** at **09:30:24**
+
+Pleas format the same way as the surrounding code.
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-07-05** at **09:30:33**
+
+Pleas format the same way as the surrounding code.
 
 ---
 

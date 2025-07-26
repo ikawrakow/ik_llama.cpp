@@ -2,6 +2,7 @@
 
 | **Author** | `NotAHero04` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-06-25 |
 | **Updated** | 2025-07-22 |
 

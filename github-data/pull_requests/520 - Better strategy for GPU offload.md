@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/moe_offload_strategy` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-11 |
 | **Updated** | 2025-06-12 |
 | **Merged** | 2025-06-12 |

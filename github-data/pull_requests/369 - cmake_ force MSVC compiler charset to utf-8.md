@@ -3,6 +3,8 @@
 | **Author** | `Gaolingx` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `main` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-03 |
 | **Updated** | 2025-05-03 |
 | **Merged** | 2025-05-03 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/llama_hparams_add_mla` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-06 |
 | **Updated** | 2025-06-06 |
 

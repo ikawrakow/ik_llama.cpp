@@ -2,7 +2,9 @@
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `s6/rpc` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-08 |
 | **Updated** | 2025-06-15 |
 
@@ -42,9 +44,21 @@ This has been tested, and does not currently work. I'm not sure why as the error
 
 ---
 
+👤 **saood06** commented during a code review on `ggml/src/ggml-rpc.cpp` on **2025-02-27** at **23:14:23**
+
+The RPC client crashes here, which happens as the RPC server hits an issue.
+
+---
+
 👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-27** at **23:14:23**
 
 _No content provided._
+
+---
+
+👤 **saood06** commented during a code review on `ggml/src/ggml-rpc.cpp` on **2025-02-27** at **23:17:32**
+
+I'm fairly certain this is where the RPC server is crashing, although it doesn't print the message as I never ran with GGML_DEBUG on.
 
 ---
 

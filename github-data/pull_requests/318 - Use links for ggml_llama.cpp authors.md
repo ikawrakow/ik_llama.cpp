@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/update_license` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-07 |
 | **Updated** | 2025-04-07 |
 | **Merged** | 2025-04-07 |

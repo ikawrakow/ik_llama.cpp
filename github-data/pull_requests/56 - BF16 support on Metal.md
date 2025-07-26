@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/metal_bf16` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-16 |
 | **Updated** | 2024-09-17 |
 | **Merged** | 2024-09-17 |

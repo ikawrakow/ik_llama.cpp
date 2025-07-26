@@ -2,7 +2,9 @@
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `s6/fp8_native` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-24 |
 | **Updated** | 2025-06-15 |
 

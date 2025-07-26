@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/trellis_metal` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-30 |
 | **Updated** | 2025-06-01 |
 | **Merged** | 2025-06-01 |

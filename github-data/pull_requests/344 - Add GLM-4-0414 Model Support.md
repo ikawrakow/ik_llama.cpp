@@ -3,6 +3,8 @@
 | **Author** | `ubergarm` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ug/add-GLM-4-0414` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-24 |
 | **Updated** | 2025-05-08 |
 | **Merged** | 2025-04-26 |
@@ -237,9 +239,33 @@ Seems like bartowski used a version of mainline to convert that did include this
 
 ---
 
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-04-25** at **16:58:38**
+
+Add
+```c++
+                if (model.arch == LLM_ARCH_GLM4) {
+                    ggml_mul_mat_set_prec(kqv_i, GGML_PREC_F32);
+                }
+```
+after line 9515
+
+---
+
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-04-25** at **16:58:38**
 
 _No content provided._
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-04-25** at **17:01:07**
+
+Add
+```c++
+if ( model.arch == LLM_ARCH_GLM4) {
+     ggml_mul_mat_set_prec(kqv, GGML_PREC_F32);
+}
+```
+after line 9475
 
 ---
 

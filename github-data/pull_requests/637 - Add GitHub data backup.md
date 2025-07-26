@@ -3,6 +3,8 @@
 | **Author** | `ThomasBaruzier` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `tb/github-data` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-22 |
 | **Updated** | 2025-07-22 |
 | **Merged** | 2025-07-22 |

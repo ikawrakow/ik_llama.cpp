@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_fattn_Dk_Dv` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-04 |
 | **Updated** | 2025-03-06 |
 | **Merged** | 2025-03-05 |

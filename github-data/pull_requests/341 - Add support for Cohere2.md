@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cohere2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-23 |
 | **Updated** | 2025-04-26 |
 | **Merged** | 2025-04-26 |

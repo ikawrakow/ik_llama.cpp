@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/gemma_q80_kvcache` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-15 |
 | **Updated** | 2025-04-15 |
 | **Merged** | 2025-04-15 |

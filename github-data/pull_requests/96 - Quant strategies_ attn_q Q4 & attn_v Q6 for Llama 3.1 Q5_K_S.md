@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `L3.1_q5_k_s_q4v6` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-19 |
 | **Updated** | 2024-11-22 |
 | **Merged** | 2024-10-19 |

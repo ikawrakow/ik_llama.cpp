@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `MMQ-Kernel-for-Q6_0` |
+| **Target Branch** | `main` |
 | **Created** | 2024-11-20 |
 | **Updated** | 2024-11-20 |
 
@@ -27,6 +29,14 @@ I know you're not very much into making MMQ Cuda Kernels, but could you please d
 ---
 
 #### 💬 Conversation
+
+👤 **ikawrakow** commented during a code review on `ggml/src/ggml-cuda/mmq.cuh` on **2024-11-20** at **09:24:50**
+
+Curious to see if you can get it right. This code is for unpacking 5-bit quants into 8-bit integers (specific to the way `Q5_0/1` pack the bits).
+
+[Here](https://github.com/ikawrakow/ik_llama.cpp/blob/52874c5d21819bd63cc4c500f2fb1be435d16b5e/ggml/src/ggml-cuda/convert.cu#L155) you have the code that unpacks `Q6_0` when the matrix multiplication is done via cuBLAS. Try using the code there to adjust the code here.
+
+---
 
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2024-11-20** at **09:24:50**
 

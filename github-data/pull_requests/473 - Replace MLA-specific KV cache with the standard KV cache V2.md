@@ -3,6 +3,8 @@
 | **Author** | `saood06` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/remove_kv_l` |
+| **Target Branch** | `ik/remove_kv_l` |
 | **Created** | 2025-05-30 |
 | **Updated** | 2025-05-30 |
 | **Merged** | 2025-05-30 |
@@ -86,6 +88,12 @@ MLA=2 has no V cache with or without FA.
 > MLA=2 has no V cache with or without FA.
 
 Do you mind fixing that then, since I wrongfully assumed MLA+FA meant no V-cache.
+
+---
+
+👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-05-30** at **15:24:23**
+
+Given what you said about MLA=2, I don't think this holds. Instead of updating this, I do think passing both would be better even though it is technically a breaking change (unlike previous one which was backwards compatible).
 
 ---
 

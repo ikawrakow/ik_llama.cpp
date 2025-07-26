@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/better_iqk_strategy` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-01 |
 | **Updated** | 2024-12-09 |
 | **Merged** | 2024-10-01 |

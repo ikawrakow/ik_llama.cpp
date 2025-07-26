@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/flash_mla_2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-08 |
 | **Updated** | 2025-03-08 |
 | **Merged** | 2025-03-08 |

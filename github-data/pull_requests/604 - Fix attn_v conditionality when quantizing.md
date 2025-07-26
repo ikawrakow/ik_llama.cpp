@@ -3,6 +3,8 @@
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `little_fix_attn_v` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-12 |
 | **Updated** | 2025-07-13 |
 | **Merged** | 2025-07-13 |

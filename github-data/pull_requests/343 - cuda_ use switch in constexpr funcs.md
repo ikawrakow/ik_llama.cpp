@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/pickup_13095` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-24 |
 | **Updated** | 2025-04-24 |
 | **Merged** | 2025-04-24 |

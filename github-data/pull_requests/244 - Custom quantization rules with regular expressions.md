@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/custom_q_rules` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-06 |
 | **Updated** | 2025-03-07 |
 | **Merged** | 2025-03-07 |

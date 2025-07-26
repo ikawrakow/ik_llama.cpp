@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/per_row_scale` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-25 |
 | **Updated** | 2024-09-27 |
 | **Merged** | 2024-09-27 |

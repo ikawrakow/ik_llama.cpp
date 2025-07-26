@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/opt_kt_quants` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-24 |
 | **Updated** | 2025-05-24 |
 | **Merged** | 2025-05-24 |

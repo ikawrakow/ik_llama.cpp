@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_cuda_memcpy_async` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-05 |
 | **Updated** | 2025-04-05 |
 | **Merged** | 2025-04-05 |

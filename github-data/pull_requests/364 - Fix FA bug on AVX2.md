@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_fa_avx2_bug` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-01 |
 | **Updated** | 2025-05-02 |
 | **Merged** | 2025-05-02 |

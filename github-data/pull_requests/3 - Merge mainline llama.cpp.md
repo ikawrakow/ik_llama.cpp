@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/merge_July_26_2024` |
+| **Target Branch** | `main` |
 | **Created** | 2024-07-26 |
 | **Updated** | 2024-07-27 |
 | **Merged** | 2024-07-27 |

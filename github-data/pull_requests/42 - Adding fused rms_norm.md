@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fused_rms_norm` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-08 |
 | **Updated** | 2024-09-08 |
 | **Merged** | 2024-09-08 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/zen4_repack_f16` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-21 |
 | **Updated** | 2025-01-21 |
 | **Merged** | 2025-01-21 |

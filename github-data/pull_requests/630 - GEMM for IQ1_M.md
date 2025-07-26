@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1m_gemm` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-18 |
 | **Updated** | 2025-07-18 |
 | **Merged** | 2025-07-18 |

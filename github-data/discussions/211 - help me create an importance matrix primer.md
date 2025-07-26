@@ -2,6 +2,7 @@
 
 | **Author** | `robbiemu` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-02-19 |
 | **Updated** | 2025-02-22 |
 

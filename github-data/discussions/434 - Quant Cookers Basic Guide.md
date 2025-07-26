@@ -2,6 +2,7 @@
 
 | **Author** | `ubergarm` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-05-18 |
 | **Updated** | 2025-05-21 |
 

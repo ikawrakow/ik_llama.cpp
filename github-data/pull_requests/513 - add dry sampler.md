@@ -3,6 +3,8 @@
 | **Author** | `firecoperana` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `dry_sampler` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-10 |
 | **Updated** | 2025-06-19 |
 | **Merged** | 2025-06-19 |
@@ -31,15 +33,33 @@ It was taking time testing that because it looked like it had a lot of edge case
 
 ---
 
+👤 **ikawrakow** commented during a code review on `examples/rpc/CMakeLists.txt` on **2025-06-10** at **05:42:27**
+
+Why do we need this?
+
+---
+
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-10** at **05:42:27**
 
 _No content provided._
 
 ---
 
+👤 **ikawrakow** commented during a code review on `examples/server/CMakeLists.txt` on **2025-06-10** at **05:42:44**
+
+Why is this needed?
+
+---
+
 👤 **ikawrakow** submitted a review: 💬 `COMMENTED` on **2025-06-10** at **05:42:44**
 
 _No content provided._
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-06-10** at **05:47:23**
+
+The DRY sampler only depends on the vocabulary, not the entire model. Wouldn't it have been better to define the interface that way (taking a pointer to vocabulary instead of model)?
 
 ---
 

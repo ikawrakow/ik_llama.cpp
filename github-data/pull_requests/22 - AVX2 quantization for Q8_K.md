@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/quantize_q8k_avx2` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-19 |
 | **Updated** | 2024-08-19 |
 | **Merged** | 2024-08-19 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_xeon_6226R` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-07 |
 | **Updated** | 2025-05-08 |
 | **Merged** | 2025-05-07 |

@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/make_qx_quants` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-28 |
 | **Updated** | 2025-03-30 |
 | **Merged** | 2025-03-29 |

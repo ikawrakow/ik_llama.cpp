@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_flash_attn` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-02 |
 | **Updated** | 2024-09-02 |
 | **Merged** | 2024-09-02 |

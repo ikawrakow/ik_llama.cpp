@@ -2,6 +2,7 @@
 
 | **Author** | `bartowski1182` |
 | :--- | :--- |
+| **State** | ❌ **Closed** |
 | **Created** | 2025-05-07 |
 | **Updated** | 2025-05-09 |
 

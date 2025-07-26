@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_fattn_odd_even` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-12 |
 | **Updated** | 2025-01-12 |
 | **Merged** | 2025-01-12 |

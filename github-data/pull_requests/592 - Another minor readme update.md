@@ -3,6 +3,8 @@
 | **Author** | `saood06` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `s6/readme-minor2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-08 |
 | **Updated** | 2025-07-09 |
 

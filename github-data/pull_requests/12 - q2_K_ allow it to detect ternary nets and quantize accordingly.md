@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/trinet` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-05 |
 | **Updated** | 2024-08-05 |
 | **Merged** | 2024-08-05 |

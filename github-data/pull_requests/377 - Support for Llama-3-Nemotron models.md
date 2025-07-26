@@ -3,6 +3,8 @@
 | **Author** | `saood06` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/deci_support` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-04 |
 | **Updated** | 2025-05-09 |
 | **Merged** | 2025-05-09 |
@@ -70,6 +72,24 @@ That one should work (maybe the convert python might not?) but you may need to a
 It is coherent in the cli.
 
 Will sweep-bench it later.
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-04** at **13:23:29**
+
+I guess this is copy-pasted from `build_llama()`, which also builds the graph for the Granite models. But do we expect Nemotron to have something to do with Granite? If not, it is better to remove it.
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-04** at **13:23:50**
+
+Same comment as above
+
+---
+
+👤 **ikawrakow** commented during a code review on `src/llama.cpp` on **2025-05-04** at **13:24:25**
+
+Does it apply to Nemotron?
 
 ---
 

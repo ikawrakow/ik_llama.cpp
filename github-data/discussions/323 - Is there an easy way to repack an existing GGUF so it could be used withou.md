@@ -2,6 +2,7 @@
 
 | **Author** | `Lissanro` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-04-10 |
 | **Updated** | 2025-05-21 |
 

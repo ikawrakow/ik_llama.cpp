@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/try_fa_no_q80_repack` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-06 |
 | **Updated** | 2025-05-04 |
 

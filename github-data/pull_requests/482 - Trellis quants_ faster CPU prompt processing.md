@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/dequant_gemm` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-01 |
 | **Updated** | 2025-06-01 |
 | **Merged** | 2025-06-01 |

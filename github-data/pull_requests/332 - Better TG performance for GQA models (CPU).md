@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/tg_tweaks` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-16 |
 | **Updated** | 2025-04-17 |
 | **Merged** | 2025-04-17 |

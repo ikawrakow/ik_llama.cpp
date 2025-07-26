@@ -3,6 +3,8 @@
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/mla` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-06 |
 | **Updated** | 2025-02-11 |
 | **Merged** | 2025-02-09 |
@@ -79,9 +81,21 @@ The old solution was MHA, which quantizes down very well, and is large enough to
 
 ---
 
+👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-02-11** at **20:15:12**
+
+Sorry I missed this, but I think this should be in the if block above as it is not needed for non MLA models.
+
+---
+
 👤 **saood06** submitted a review: 💬 `COMMENTED` on **2025-02-11** at **20:15:12**
 
 _No content provided._
+
+---
+
+👤 **saood06** commented during a code review on `src/llama.cpp` on **2025-02-11** at **20:20:39**
+
+With the above change only one of these should be allocated so that is the only one that should be displayed as KV self size
 
 ---
 
