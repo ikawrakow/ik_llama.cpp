@@ -127,6 +127,25 @@ function
 ```
 ```
 
+#### Format 4: XML Wrapped Format (New - July 2025)
+**Pattern:** `<tool_call>function</think>{function_name}\n```json\n{...}\n```</tool_call>`
+```
+<tool_call>
+function</think>Read
+```json
+{
+  "file_path": "/path/to/example.txt"
+}
+```
+</tool_call>
+```
+
+**Notes:**
+- XML wrapper contains function name after `function</think>`
+- Single function call per XML block
+- JSON arguments within ```json``` code blocks
+- Handles reasoning text before function name
+
 **Examples:**
 
 Format 1 (Full):
@@ -174,12 +193,24 @@ function
 ```
 ```
 
+Format 4 (XML Wrapped):
+```
+<tool_call>
+function</think>CompleteTask
+```json
+{
+  "status": "completed"
+}
+```
+</tool_call>
+```
+
 **Implementation Notes:**
 - **Reasoning Support**: All formats support `<think>...</think>` reasoning tags (automatically extracted)
-- **Multiple Tool Calls**: Format 1 & 2 use separate blocks, Format 3 uses array structure
-- **Automatic Detection**: Parser tries formats in order: Format 1 → Format 2 → Format 3
+- **Multiple Tool Calls**: Format 1 & 2 use separate blocks, Format 3 uses array structure, Format 4 uses single XML block
+- **Automatic Detection**: Parser tries formats in order: Format 3 → Format 4 → Format 1 → Format 2
 - **Original llama.cpp Base**: Implementation follows original llama.cpp patterns exactly
-- **Status**: Format 1 & 2 ✅ Working, Format 3 🔄 Partially implemented (needs debugging)
+- **Status**: All formats ✅ Working (July 2025 update)
 
 ## OpenAI-Compatible Output
 
@@ -284,7 +315,8 @@ Comprehensive test suite for all supported formats:
 ### DeepSeek R1 Specific Tests
 - **Format 1 Tests**: Full native format with separators ✅
 - **Format 2 Tests**: Simplified format without separators ✅ 
-- **Format 3 Tests**: Tools array format 🔄 (TDD reproduction of server log failures)
+- **Format 3 Tests**: Tools array format ✅ (Fixed July 2025)
+- **Format 4 Tests**: XML wrapped format ✅ (Added July 2025)
 - **Integration Tests**: Server-to-parser call chain verification
 - **Regression Tests**: Ensure existing formats continue working
 
@@ -307,7 +339,8 @@ cd build && make test-function-calls -j$(nproc)
 - **Kimi-K2**: ✅ All tests passing
 - **Qwen3 XML**: ✅ All tests passing  
 - **DeepSeek R1 Format 1 & 2**: ✅ All tests passing
-- **DeepSeek R1 Format 3**: ❌ TDD tests show `tool_calls_count = 0` (needs debugging)
+- **DeepSeek R1 Format 3**: ✅ All tests passing (Fixed July 2025)
+- **DeepSeek R1 Format 4**: ✅ All tests passing (Added July 2025)
 
 ## File Structure
 
@@ -324,6 +357,7 @@ cd build && make test-function-calls -j$(nproc)
   - `common_chat_parse_qwen3()` - Qwen3 XML format  
   - `common_chat_parse_deepseek_r1()` - DeepSeek R1 multiple formats
   - `parse_deepseek_r1_tools_array()` - Format 3 tools array parser
+  - `parse_deepseek_r1_xml_wrapped()` - Format 4 XML wrapper parser
 - **`common/chat.h`** - Function declarations and model detection
 
 ### Testing
@@ -344,7 +378,8 @@ chat.cpp
 ```
 
 ### Key Implementation Files
-- **DeepSeek R1 Format 3**: `common/chat.cpp:266-299` (`parse_deepseek_r1_tools_array`)
-- **Exception handling**: `common/chat.cpp:243-269` (Format 1 → 2 → 3 fallback chain)
+- **DeepSeek R1 Format 3**: `common/chat.cpp:291-332` (`parse_deepseek_r1_tools_array`)
+- **DeepSeek R1 Format 4**: `common/chat.cpp:335-374` (`parse_deepseek_r1_xml_wrapped`)
+- **Exception handling**: `common/chat.cpp:222-289` (Format 3 → 4 → 1 → 2 fallback chain)
 - **Model detection**: `common/chat.cpp` (`is_deepseek_r1_model`, `is_qwen3_model`, etc.)
-- **TDD tests**: `tests/test-function-calls.cpp:3156-3220` (Format 3 bug reproduction)
+- **Comprehensive tests**: `tests/test-function-calls.cpp` (All formats with TDD coverage)
