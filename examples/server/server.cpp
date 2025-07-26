@@ -1615,10 +1615,10 @@ struct server_context {
         std::vector<ik_chat_msg_diff> oaicompat_msg_diffs;
         slot.update_chat_msg(oaicompat_msg_diffs);
 
-        // Following original llama.cpp pattern: send empty content in streaming mode
-        // Clean content comes through oaicompat_msg_diffs instead of raw tokens
+        // For text completion endpoints, send actual content; for chat completion, use diffs
+        // OpenAI-compatible chat endpoints use empty content with diffs for tool calls
         res.data     = json {
-            {"content",    ""},  // Empty - clean content provided via diffs
+            {"content",    slot.oaicompat ? "" : tkn.text_to_send},  // Text completion needs actual content
             {"stop",       false},
             {"id_slot",    slot.id},
             {"multimodal", false}
