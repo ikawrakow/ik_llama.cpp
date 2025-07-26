@@ -1,10 +1,13 @@
-### 🔀 [#83](https://github.com/ikawrakow/ik_llama.cpp/pull/83) - New SOTA quantization: 4.25 bpw IQ4_KS
+### [Pull Request #83](https://github.com/ikawrakow/ik_llama.cpp/pull/83) - New SOTA quantization: 4.25 bpw IQ4_KS
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq4_k_xxs` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-09 |
 | **Updated** | 2024-10-09 |
+| **Merged** | 2024-10-09 |
 
 ---
 

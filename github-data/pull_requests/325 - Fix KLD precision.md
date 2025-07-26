@@ -1,10 +1,13 @@
-### 🐛 [#325](https://github.com/ikawrakow/ik_llama.cpp/pull/325) - Fix KLD precision
+### [Pull Request #325](https://github.com/ikawrakow/ik_llama.cpp/pull/325) - Fix KLD precision
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_kld` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-12 |
 | **Updated** | 2025-04-13 |
+| **Merged** | 2025-04-12 |
 
 ---
 
@@ -18,9 +21,9 @@ A lot of talk for this one-liner PR, which fixes the problem.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ubergarm** commented the **2025-04-13** at **15:20:53**:<br>
+👤 **ubergarm** commented on **2025-04-13** at **15:20:53**
 
 > I was concerned that other statistics will be influenced as well, but it looks like it is only PPL that becomes wrong.
 
@@ -35,12 +38,12 @@ Thanks!
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-13** at **15:35:00**:<br>
+👤 **ikawrakow** commented on **2025-04-13** at **15:35:00**
 
 The PR does not affect `imatrix`. It affects `llama-perplexity` when run with `--kl-divergence-base X --kl-divergence`. This computes KL-Divergence and various other token probability statistics between the current model and the token probabilities for the base model stored in `X` and computed in a previous run of `llama-perplexity`.
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-13** at **15:38:16**:<br>
+👤 **ikawrakow** commented on **2025-04-13** at **15:38:16**
 
 Also, I don't know how it affects other models. But for LLaMA-4-Scout I observed a nearly 1% difference without this PR.

@@ -1,10 +1,13 @@
-### 🔀 [#33](https://github.com/ikawrakow/ik_llama.cpp/pull/33) - Do not process prompts containing binary data for escapes
+### [Pull Request #33](https://github.com/ikawrakow/ik_llama.cpp/pull/33) - Do not process prompts containing binary data for escapes
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_multiple_choice` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-02 |
 | **Updated** | 2024-09-02 |
+| **Merged** | 2024-09-02 |
 
 ---
 

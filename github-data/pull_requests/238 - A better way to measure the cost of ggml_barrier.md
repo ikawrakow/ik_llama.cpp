@@ -1,10 +1,13 @@
-### 🔀 [#238](https://github.com/ikawrakow/ik_llama.cpp/pull/238) - A better way to measure the cost of ggml_barrier
+### [Pull Request #238](https://github.com/ikawrakow/ik_llama.cpp/pull/238) - A better way to measure the cost of ggml_barrier
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/measure_barriers` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-01 |
 | **Updated** | 2025-03-01 |
+| **Merged** | 2025-03-01 |
 
 ---
 
@@ -16,15 +19,15 @@ Using this on TG runs with DeepSeek-Lite I'm finding that `ggml_barrier` costs a
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **davidsyoung** commented the **2025-03-01** at **09:51:17**:<br>
+👤 **davidsyoung** commented on **2025-03-01** at **09:51:17**
 
 @ikawrakow you are seriously cooking!
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-01** at **15:12:54**:<br>
+👤 **ikawrakow** commented on **2025-03-01** at **15:12:54**
 
 > @ikawrakow you are seriously cooking!
 

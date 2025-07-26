@@ -1,10 +1,13 @@
-### 🔀 [#71](https://github.com/ikawrakow/ik_llama.cpp/pull/71) - iqk_mul_mat: better srategy when nrc_y not divisible by ny
+### [Pull Request #71](https://github.com/ikawrakow/ik_llama.cpp/pull/71) - iqk_mul_mat: better srategy when nrc_y not divisible by ny
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/better_iqk_strategy` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-01 |
 | **Updated** | 2024-12-09 |
+| **Merged** | 2024-10-01 |
 
 ---
 
@@ -23,9 +26,9 @@ This strategy is implemented in this PR. The following graph shows performance (
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **Djip007** commented the **2024-11-26** at **19:09:21**:<br>
+👤 **Djip007** commented on **2024-11-26** at **19:09:21**
 
 I what thinking to do something for that to (on tinyBLAS) but not that way. Good to see that it work, I may use it in some other case... 
 Good JOB!
@@ -34,7 +37,7 @@ Will you do the same on tinyBLAS for non the other case (FP16/BF16/...) ?
 
 ---
 
-👤 **ikawrakow** commented the **2024-11-27** at **15:34:24**:<br>
+👤 **ikawrakow** commented on **2024-11-27** at **15:34:24**
 
 > Will you do the same on tinyBLAS for non the other case (FP16/BF16/...) ?
 
@@ -42,7 +45,7 @@ In my case all matrix multiplications are driven by the same function, so this c
 
 ---
 
-👤 **Djip007** commented the **2024-12-09** at **22:08:55**:<br>
+👤 **Djip007** commented on **2024-12-09** at **22:08:55**
 
 OK I think I figure how to do it for FP16/BF16/FP32 on tinyblas...
 https://github.com/Mozilla-Ocho/llamafile/discussions/654

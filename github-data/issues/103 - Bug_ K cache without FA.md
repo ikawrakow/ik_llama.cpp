@@ -1,10 +1,11 @@
-### 🐛 [#103](https://github.com/ikawrakow/ik_llama.cpp/issues/103) - Bug: K cache without FA
+### [Issue #103](https://github.com/ikawrakow/ik_llama.cpp/issues/103) - Bug: K cache without FA
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2024-10-23 |
 | **Updated** | 2024-10-24 |
+| **Labels** | `bug`, `mainline bug` |
 
 ---
 
@@ -169,15 +170,15 @@ llama_print_timings:       total time =   52725.87 ms / 108033 tokens
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2024-10-23** at **06:27:44**:<br>
+👤 **ikawrakow** commented on **2024-10-23** at **06:27:44**
 
 Thanks for the report. Happens for me too. I'll investigate.
 
 ---
 
-👤 **ikawrakow** commented the **2024-10-23** at **07:09:28**:<br>
+👤 **ikawrakow** commented on **2024-10-23** at **07:09:28**
 
 @Nexesenex 
 
@@ -186,56 +187,44 @@ With the latest `llama.cpp` (`873279b1592e433c4d9eb5065091cc98473c7bee`) without
 
 ---
 
-👤 **ikawrakow** commented the **2024-10-23** at **07:43:52**:<br>
+👤 **ikawrakow** commented on **2024-10-23** at **07:43:52**
 
 CUDA on mainline `llama.cpp` without FA is broken with quantized K-cache for all models I tried (LLaMA-3.1-8B, LLaMA-3.2-3B, LLaMA-2-7B). So, I guess, this issue is inherited. Perhaps you should file a bug report there?
 
 ---
 
-👤 **Nexesenex** commented the **2024-10-23** at **07:48:47**:<br>
+👤 **Nexesenex** commented on **2024-10-23** at **07:48:47**
 
 Indeed, it's on mainline also.
 I'll holler them. ^^
 
 ---
 
-👤 **ikawrakow** commented the **2024-10-23** at **08:00:33**:<br>
+👤 **ikawrakow** commented on **2024-10-23** at **08:00:33**
 
 It was puzzling to me why `Q6_0` works here but none of the other types, neither here nor on mainline. But I think I know what is the issue. I haven't implemented a MMQ kernel for `Q6_0`, so the `K*Q` matrix multiplication is done via dequantize `K` -> cuBLAS gemm. While all other types go via @JohannesGaessler MMQ kernels. There have been all these reports about `llama.cpp` producing gibberish for some models, the latest being the Granite models, and the typical fix is to set the `K*Q` matrix multiplication precision to `F32`. Well, if `F16` is not precise enough for `K*Q`, then quantized precision is definitely not precise enough either. So, basically, the issue has existed in mainline `llama.cpp` since @JohannesGaessler switched the default for matrix multiplications to MMQ. Strange that nobody has noticed for so long.
 
 ---
 
-👤 **ikawrakow** commented the **2024-10-23** at **08:00:33**:<br>
-
-It was puzzling to me why `Q6_0` works here but none of the other types, neither here nor on mainline. But I think I know what is the issue. I haven't implemented a MMQ kernel for `Q6_0`, so the `K*Q` matrix multiplication is done via dequantize `K` -> cuBLAS gemm. While all other types go via Johannes' MMQ kernels. There have been all these reports about `llama.cpp` producing gibberish for some models, the latest being the Granite models, and the typical fix is to set the `K*Q` matrix multiplication precision to `F32`. Well, if `F16` is not precise enough for `K*Q`, then quantized precision is definitely not precise enough either. So, basically, the issue has existed in mainline `llama.cpp` since Johannes switched the default for matrix multiplications to MMQ. Strange that nobody has noticed for so long.
-
----
-
-👤 **ikawrakow** commented the **2024-10-23** at **11:16:41**:<br>
+👤 **ikawrakow** commented on **2024-10-23** at **11:16:41**
 
 Thinking more about this, it is kind of strange. It does work on the CPU, where `Q` gets quantized to `Q8_K` when `K` is quantized, and `Q8_K` is less accurate than `Q8_0` (one float scale per 256 weights for `Q8_K` vs 1 float scale per 32 for `Q8_0`). So, precision/range loss does not seem to be the likely cause. Instead, more likely, there is some other bug in the MMQ kernel that manifests itself only under specific conditions.
 
 ---
 
-👤 **ikawrakow** commented the **2024-10-24** at **07:43:55**:<br>
+👤 **ikawrakow** commented on **2024-10-24** at **07:43:55**
 
 @Nexesenex Does [this PR](https://github.com/ggerganov/llama.cpp/pull/10021) fix it for you? It is approved and all, but I still get NaN's with a quantized model. It does appear to work with the `f16` model, so there is at least some progress.
 
 ---
 
-👤 **ikawrakow** commented the **2024-10-24** at **07:43:55**:<br>
-
-@Nexesenex Does [this PR](https://github.com/ggerganov/llama.cpp/pull/10021) fix it for you? It is approved and all, but I still get NaN's.
-
----
-
-👤 **JohannesGaessler** commented the **2024-10-24** at **09:08:55**:<br>
+👤 **JohannesGaessler** commented on **2024-10-24** at **09:08:55**
 
 I also get NaN with a q8_0 model when using `-ctk q8_0`, there are probably multiple bugs.
 
 ---
 
-👤 **ikawrakow** commented the **2024-10-24** at **09:16:10**:<br>
+👤 **ikawrakow** commented on **2024-10-24** at **09:16:10**
 
 > I also get NaN with a q8_0 model when using `-ctk q8_0`, there are probably multiple bugs.
 
@@ -243,16 +232,8 @@ It is not just `q8_0`. Any quantized model with any quantized k-cache without FA
 
 ---
 
-👤 **Nexesenex** commented the **2024-10-24** at **12:39:43**:<br>
+👤 **Nexesenex** commented on **2024-10-24** at **12:39:43**
 
 @ikawrakow I just confirmed that all K quantum cache no-FA modes present on mainline are now working : https://github.com/ggerganov/llama.cpp/issues/10011#issuecomment-2435180867
-
-I also used https://github.com/ggerganov/llama.cpp/pull/10015 while I was at it.
-
----
-
-👤 **Nexesenex** commented the **2024-10-24** at **12:39:43**:<br>
-
-@ikawrakow I confirmed it works on master here : https://github.com/ggerganov/llama.cpp/issues/10011#issuecomment-2435180867
 
 I also used https://github.com/ggerganov/llama.cpp/pull/10015 while I was at it.

@@ -1,4 +1,4 @@
-### 📝 [#314](https://github.com/ikawrakow/ik_llama.cpp/issues/314) - Llama 4 Support?
+### [Issue #314](https://github.com/ikawrakow/ik_llama.cpp/issues/314) - Llama 4 Support?
 
 | **Author** | `Downtown-Case` |
 | :--- | :--- |
@@ -18,9 +18,9 @@ It's 10M context, so there must be some architectural difference from Llama 3.3
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **saood06** commented the **2025-04-06** at **00:05:11**:<br>
+👤 **saood06** commented on **2025-04-06** at **00:05:11**
 
 >It's 10M context, so there must be some architectural difference from Llama 3.3
 
@@ -32,7 +32,7 @@ This shares a bit from Command-A:
 
 ---
 
-👤 **Downtown-Case** commented the **2025-04-06** at **02:15:26**:<br>
+👤 **Downtown-Case** commented on **2025-04-06** at **02:15:26**
 
 No MLA, which was my faint hope.
 
@@ -40,13 +40,7 @@ Some layers are dense though, so maybe this is a good offloading candidate.
 
 ---
 
-👤 **Downtown-Case** commented the **2025-04-06** at **02:15:26**:<br>
-
-No MLA, which was my faint hope.
-
----
-
-👤 **saood06** commented the **2025-04-06** at **04:45:20**:<br>
+👤 **saood06** commented on **2025-04-06** at **04:45:20**
 
 > No MLA, which was my faint hope.
 
@@ -56,13 +50,13 @@ It would be interesting to see how much context the providers end up offering si
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-08** at **08:04:36**:<br>
+👤 **ikawrakow** commented on **2025-04-08** at **08:04:36**
 
 I'll look into this in the next days. I did try downloading the Scout variant this morning using `huggingface-cli`, but it errored out. I'll try again later.
 
 ---
 
-👤 **Downtown-Case** commented the **2025-04-08** at **16:20:59**:<br>
+👤 **Downtown-Case** commented on **2025-04-08** at **16:20:59**
 
 @ikawrakow I have great success with this:
 
@@ -72,19 +66,19 @@ It hash checks every file, and will retry each one if it fails or times out.
 
 ---
 
-👤 **Downtown-Case** commented the **2025-04-08** at **16:23:04**:<br>
+👤 **Downtown-Case** commented on **2025-04-08** at **16:23:04**
 
 Oh, and Llama 4 seems to be quite bad at longer context, at least in my quick API tests.
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-08** at **16:25:48**:<br>
+👤 **ikawrakow** commented on **2025-04-08** at **16:25:48**
 
 Bad as not producing good answers, or bad as being slow?
 
 ---
 
-👤 **saood06** commented the **2025-04-08** at **17:06:37**:<br>
+👤 **saood06** commented on **2025-04-08** at **17:06:37**
 
 > Oh, and Llama 4 seems to be quite bad at longer context, at least in my quick API tests.
 
@@ -92,7 +86,7 @@ Is it good at short contexts?
 
 ---
 
-👤 **Downtown-Case** commented the **2025-04-09** at **14:37:43**:<br>
+👤 **Downtown-Case** commented on **2025-04-09** at **14:37:43**
 
 > Bad as not producing good answers, or bad as being slow?
 
@@ -108,17 +102,7 @@ No idea, lol. Again I was testing over API, not llama.cpp.
 
 ---
 
-👤 **Downtown-Case** commented the **2025-04-09** at **14:37:43**:<br>
-
-> Bad as not producing good answers, or bad as being slow?
-
-Bad at producing good answers.
-
-My long context tests are questions about long sets of papers or long stories (like novels) that need it to "understand" lots of whole context instead of pluck something out, like "judge these papers against each other," or "describe this character's arc to me," and its... not good. Even at like 70K, much less 1M context.
-
----
-
-👤 **saood06** commented the **2025-04-10** at **03:35:44**:<br>
+👤 **saood06** commented on **2025-04-10** at **03:35:44**
 
 > No idea, lol. Again I was testing over API, not llama.cpp.
 

@@ -1,10 +1,13 @@
-### 🔀 [#47](https://github.com/ikawrakow/ik_llama.cpp/pull/47) - iq2_tn: slightly better performance on AVX2
+### [Pull Request #47](https://github.com/ikawrakow/ik_llama.cpp/pull/47) - iq2_tn: slightly better performance on AVX2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq2_tn_avx2` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-10 |
 | **Updated** | 2024-09-10 |
+| **Merged** | 2024-09-10 |
 
 ---
 

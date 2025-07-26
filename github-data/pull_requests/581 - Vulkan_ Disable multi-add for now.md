@@ -1,10 +1,13 @@
-### 🔀 [#581](https://github.com/ikawrakow/ik_llama.cpp/pull/581) - Vulkan: Disable multi-add for now
+### [Pull Request #581](https://github.com/ikawrakow/ik_llama.cpp/pull/581) - Vulkan: Disable multi-add for now
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/vulkan_disable_multi_add` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-03 |
 | **Updated** | 2025-07-03 |
+| **Merged** | 2025-07-03 |
 
 ---
 

@@ -1,10 +1,13 @@
-### 🔀 [#185](https://github.com/ikawrakow/ik_llama.cpp/pull/185) - IQ1_S_R4: better 1.5 bpw quants
+### [Pull Request #185](https://github.com/ikawrakow/ik_llama.cpp/pull/185) - IQ1_S_R4: better 1.5 bpw quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1_s_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-05 |
 | **Updated** | 2025-02-08 |
+| **Merged** | 2025-02-05 |
 
 ---
 
@@ -42,9 +45,9 @@ I don't have the disk space and RAM to play with DeepSeek-R1, so I would be real
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **saood06** commented the **2025-02-06** at **08:31:42**:<br>
+👤 **saood06** commented on **2025-02-06** at **08:31:42**
 
 >I don't have the disk space and RAM to play with DeepSeek-R1
 
@@ -60,7 +63,7 @@ Sadly, it doesn't really function. I haven't tried his IQ1_S, but yours might ju
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-06** at **08:40:00**:<br>
+👤 **ikawrakow** commented on **2025-02-06** at **08:40:00**
 
 @saood06 Do you have by any chance the quantization log? It would be useful to have it to verify that the intended tensors with higher bpw are correctly selected. It ends up being smaller than Unsloth's because `IQ1_S_R4` is 1.5 bpw vs 1.5625 bpw for `IQ1_S`. This 4% difference pretty much corresponds to the difference between 131 GiB and 127 GiB.
 
@@ -68,7 +71,7 @@ Oh, the other thing is that I did not change the default quantization for the to
 
 ---
 
-👤 **saood06** commented the **2025-02-06** at **08:48:25**:<br>
+👤 **saood06** commented on **2025-02-06** at **08:48:25**
 
 >Do you have by any chance the quantization log? 
 
@@ -91,7 +94,7 @@ index 02ad25ce..e23b4d5d 100644
 
 ```
 
-<details open>
+<details>
 <summary>Log</summary>
 
 ```
@@ -1748,7 +1751,7 @@ main:    total time = 9034503.69 ms
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-06** at **08:59:44**:<br>
+👤 **ikawrakow** commented on **2025-02-06** at **08:59:44**
 
 I think `token_embedding.weight` is the issue. If you use `Q8_0` instead of `Q2_K`, model size will increase by 660 MiB but quality will be quite a bit better.
 
@@ -1756,7 +1759,7 @@ Do you have an imatrix with the changed attention tensors?
 
 ---
 
-👤 **saood06** commented the **2025-02-06** at **09:08:55**:<br>
+👤 **saood06** commented on **2025-02-06** at **09:08:55**
 
 >I think token_embedding.weight is the issue. If you use Q8_0 instead of Q2_K, model size will increase by 660 MiB but quality will be quite a bit better.
 
@@ -1768,13 +1771,13 @@ No, and I don't have the dataset or the compute. The new tensors are split from 
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-06** at **09:15:48**:<br>
+👤 **ikawrakow** commented on **2025-02-06** at **09:15:48**
 
 In that case I would simply use `Q8_0` for `attn_k_b` and `attn_v_b`. They are quite small, so model size will increase by just ~0.5 GiB.
 
 ---
 
-👤 **saood06** commented the **2025-02-06** at **09:35:01**:<br>
+👤 **saood06** commented on **2025-02-06** at **09:35:01**
 
 > In that case I would simply use `Q8_0` for `attn_k_b` and `attn_v_b`. They are quite small, so model size will increase by just ~0.5 GiB.
 
@@ -1782,7 +1785,7 @@ I'll do that. I'll probably remake my IQ4_K_R4 with these changes.
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-06** at **09:37:43**:<br>
+👤 **ikawrakow** commented on **2025-02-06** at **09:37:43**
 
 You may also want to change
 ```c++
@@ -1804,7 +1807,35 @@ This will cost ~0.4 GiB in quantized model size increase. The check is like this
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-06** at **09:45:37**:<br>
+👤 **saood06** commented on **2025-02-06** at **09:43:24**
+
+> You may also want to change
+> 
+> ```c++
+>         else if (qs.model.hparams.n_expert >= 8 && (name.find("blk.0.ffn_down") != std::string::npos ||
+>                                                     name.find("blk.0.ffn_gate") != std::string::npos ||
+>                                                     name.find("blk.0.ffn_up") != std::string::npos)) {
+>             new_type = GGML_TYPE_IQ3_K_R4;
+>         }
+> ```
+> 
+> to
+> 
+> ```c++
+>         else if (qs.model.hparams.n_expert >= 8 && (name.find("ffn_down.weight") != std::string::npos ||
+>                                                     name.find("ffn_gate.weight") != std::string::npos ||
+>                                                     name.find("ffn_up.weight") != std::string::npos)) {
+>             new_type = GGML_TYPE_IQ4_K_R4;
+>         }
+> ```
+> 
+> This will cost ~0.4 GiB in quantized model size increase. The check is like this because in DeepSeek-Lite there is a single layer without MoE, but in DeepSeek-R1 there are 3 such layers, and my guess is that those are important to get things on the right track before the experts get involved.
+
+Will do, just a question why for attn_q and attn_k do you use Q4_K_R4 and not IQ4_K_R4. My IQ4_K_R4 uses IQ4_K_R4 for those.
+
+---
+
+👤 **ikawrakow** commented on **2025-02-06** at **09:45:37**
 
 > why for attn_q and attn_k do you use Q4_K_R4 and not IQ4_K_R4
 
@@ -1812,7 +1843,7 @@ Because of copy/paste. It can be changed to `IQ4_K_R4`.
 
 ---
 
-👤 **saood06** commented the **2025-02-06** at **14:40:00**:<br>
+👤 **saood06** commented on **2025-02-06** at **14:40:00**
 
 I changed some things but it still didn't work.
 <details>
@@ -3282,13 +3313,13 @@ main:    total time = 9295125.73 ms
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-06** at **14:46:28**:<br>
+👤 **ikawrakow** commented on **2025-02-06** at **14:46:28**
 
 When you say "It didn't work", how did it not work? Produced NaNs? Produced gibberish? Produced something like human language but with no real meaning? It isn't as coherent as a higher bit quantization?
 
 ---
 
-👤 **saood06** commented the **2025-02-06** at **15:00:37**:<br>
+👤 **saood06** commented on **2025-02-06** at **15:00:37**
 
 >When you say "It didn't work", how did it not work? Produced NaNs? Produced gibberish? Produced something like human language but with no real meaning? It isn't as coherent as a higher bit quantization?
 
@@ -3319,17 +3350,7 @@ IQ4_K_R4 single token
 
 ---
 
-👤 **saood06** submitted a review the **2025-02-06** at **15:16:38**: 💬 `COMMENTED`
-
----
-
-👤 **saood06** commented during a code review the **2025-02-06** at **15:16:38** on `src/llama.cpp`:<br>
-
-Could this need to be higher for R1? The unsloth quant does this up to and including layer 8, my most recent attempt only did up to and including layer 6.
-
----
-
-👤 **ikawrakow** commented the **2025-02-06** at **15:28:21**:<br>
+👤 **ikawrakow** commented on **2025-02-06** at **15:28:21**
 
 Hmm, not sure. The token probabilities are not completely useless (same top-4 tokens). It is possible the imatrix is not adequate. 4+ bpw quants work even without an imatrix, so a bad imatrix is not immediately recognizable. I see in the log that 315 chunks were used. We have 8 out of 256 experts being active, so each expert got on average less than 10 chunks. That's not a lot of data to properly determine the relative importance of the tensor columns.
 
@@ -3341,74 +3362,59 @@ It is of course also possible that removing the super-block scale in `IQ1_S_R4` 
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-02-06** at **15:30:35**: 💬 `COMMENTED`
-
----
-
-👤 **ikawrakow** commented during a code review the **2025-02-06** at **15:30:35** on `src/llama.cpp`:<br>
-
-Yes, the early layers tend to be more important, so increasing the number of layers and/or increasing the bpw of the quantization used will improve results. It is basically a matter of the balance between quantization quality and model size.
-
----
-
-👤 **saood06** commented the **2025-02-06** at **16:06:00**:<br>
+👤 **saood06** commented on **2025-02-06** at **16:06:00**
 
 >It is possible the imatrix is not adequate. 4+ bpw quants work even without an imatrix, so a bad imatrix is not immediately recognizable. I see in the log that 315 chunks were used.
 
-The one unsloth uses is significantly shorter, only 124. I also do believe the imatrix data is better. The Arctic MoE his imatrix activated all but one expert and they tried hard to get the last one to no avail. All other imatrix activated far less.
+The one unsloth uses is significantly shorter, only 124. I also do believe the imatrix data is better. The Arctic MoE the person who's imatrix's I use activated all but one expert and they tried hard to get the last one to no avail. All other imatrix activated far less.
 
 >Can you try without MLA? I took your PR https://github.com/ikawrakow/ik_llama.cpp/pull/180 and made MLA optional (see https://github.com/ikawrakow/ik_llama.cpp/pull/188). While testing I noticed that one gets different results and, without having done any meaningful evaluation, my impression was that MLA produced worse responses (tested with DeepSeek-Lite using f16 to not worry about quantization effects).
 
 I think this is to be expected. It is a whole different attention mechanism. MLA uses less bits to represents the KV, it is far better at conserving information while compressing the KV cache compared to GQA, but it is still less bits than MHA. They claim it is better than MHA because redundancy in information between heads means you do have some effectively lossless compression. But I've seen enough people actually micro benchmark MHA and MLA and it does seem a bit worse.
 
-The real benefit of MLA is that it uses less bits, and there was a branch I was working on which allowed me to make use of that (thanks to another one of fairydreaming's PR), which uses mmap to avoid allocating KV until used which means the old gigantic KV (full 128k is ~600 GB), does not allocate and start paging me out. I was able to request 64K of context ( CPU NUMA KV buffer size = 313101.56 MiB ) from server and I used 30K before ending that test, and it never paged to disk thanks to the mmap only allocating what was used.
+The real benefit of MLA is that it uses less bits, and there was a branch I was working on which allowed me to make use of that (thanks to another one of fairydreaming's PR), which uses mmap to avoid allocating KV until used which means the old gigantic KV (full 128k is ~600 GB), does not allocate and start paging me out. I was able to request 64K of context ( CPU NUMA KV buffer size = 313101.56 MiB ) from server and I used 30K before ending that test, and it never paged to disk thanks to the mmap only allocating what was used. I also did not quantize the cache at all, as with MLA it was already so small.
 
-I saw your PR #188 , there was some minor optimizations from fairydreaming that have that haven't made it to my PR ( #180 ) , along with some other stuff from fairydreaming that is experimental (mmap) and QoL stuff (MoE warmup actually loads in all experts).
+I saw your PR #188 , there was some minor optimizations from fairydreaming that have that haven't made it to my PR ( #180 ) , along with some other stuff from fairydreaming that is experimental (mmap) and QoL stuff (MoE warmup actually loads in all experts) in this branch saood06/ik_llama.cpp/pull/1 .
 
 Although the mmap allocator is working for me (and I might create a PR with it being toggled via a CLI argument) I think when MLA is toggled on the other KV cache should not allocate.
 
 >Have you tried running perplexity? Just a few chunks to compare to your best quantized model
+>...
 >Can you try without MLA?
 
 When I have some more time I will.
 
 ---
 
-👤 **saood06** submitted a review the **2025-02-06** at **16:18:14**: 💬 `COMMENTED`
-
----
-
-👤 **saood06** commented during a code review the **2025-02-06** at **16:18:14** on `src/llama.cpp`:<br>
-
->in DeepSeek-Lite there is a single layer without MoE, but in DeepSeek-R1 there are 3 such layers
-
-The additional 2 layers of dense, means you hit 2 less MoE layers with this then you on Lite, and this is still the only meaningful way I can see that the quant I just made is worse, basically everything else is better, or the same.
-
----
-
-👤 **saood06** commented the **2025-02-06** at **20:26:59**:<br>
+👤 **saood06** commented on **2025-02-06** at **20:26:59**
 
 @ikawrakow 
 
 >Have you tried running perplexity? Just a few chunks to compare to your best quantized model
 
-Model 	       | [1] |	[2] 	|[3] 	|[4] |	[5] 	|[6]| 	[7]| 	[8]	|[9]	|[10]	|[11]	|[12]
---- 	       | --- 	| --- 	| --- 	|--- 	|--- 	|--- 	|--- 	|--- 	|--- 	|--- 	|--- | ---
+Quant 	       | [1] |	[2] 	|[3] 	|[4] |	[5] 	|[6]| 	[7]| 	[8]	|[9]	|[10]	|[11]	|[12]|[13]|[14]|[15]|[16]
+--- 	               | --- 	| --- 	| --- 	|--- 	|--- 	|--- 	|--- 	|--- 	|--- 	|--- 	|--- | ---|---|---|---|---
 IQ2_XXS **|	3.39| 	4.56|	3.44| 	3.27| 	3.27| 	3.20| 	3.12 |	3.12|
 IQ3_XXS ** |	2.69 |	3.53|	2.51 |	2.11 |	1.91 |	1.78 |	1.69 |	1.62|
-IQ4_K_R4 (V1) |  2.5954 | 3.3338|	2.3993	|1.9972	|1.8080	|1.6659	|1.5697|	1.5047|	1.4555|	1.4154|	1.4007|	1.4493
+IQ4_K_R4 (V1) |  2.5954 | 3.3338|	2.3993	|1.9972	|1.8080	|1.6659	|1.5697|	1.5047|	1.4555|	1.4154|	1.4007|	1.4493|1.4581|1.5866|1.7193|1.7815
 UD-IQ1_M **|	3.4155  |4.2311 | 3.0817 | 2.8601 | 2.6933 | 2.5792 | 2.5123 | 2.5239  
 UD-IQ1_S **    | 3.8939  |4.7189 | 3.7812 | 3.6799 | 3.6215 | 3.6922 | 3.6442|  3.7472|  3.8353|	3.7663|	3.8983|	4.0621
 IQ1_S_R4 (V2)|	3.7554	|4.6569	|3.5681	|3.4458|	nan|	nan|	nan|	nan|	nan|	nan|	nan|	nan|	nan|	nan|	nan|	nan|
+IQ1_S_R4 (V2) -b 4096 | 3.7554 |4.6569|3.5681|3.4458|3.5419|3.5822|3.5429|3.6624|3.7312|3.6580|3.7719|3.9520|nan|nan|nan|nan
+IQ1_S_R4 (V1) -b 4096 | 3.6625| 4.5832 |3.5418| 3.4340| nan| nan | nan |nan
 
 ** is data that was posted by other people online, not my tests.
 UD refers to Unsloth quants.
 (V2) for IQ1_S_R4 refers to the one that had the one token
+(V1) for IQ1_S_R4 refers to the one that had only nulls.
 (V1) for IQ4_K_R4 refers to the fact that I plan to requant this.
+
+Edit:
+Added run with  -b 4096 for both v2 and v1
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-07** at **06:33:14**:<br>
+👤 **ikawrakow** commented on **2025-02-07** at **06:33:14**
 
 @saood06  Thanks for these results.
 
@@ -3418,17 +3424,17 @@ I have added some extra guards in #191, but they never trigger with DeepSeek-Lit
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-07** at **10:05:20**:<br>
+👤 **ikawrakow** commented on **2025-02-07** at **10:05:20**
 
 @saood06 I would appreciate if you tried running the `IQ1_S_R4` DeepSeek-R1 model with #192. There appears to be a race on the main branch that can cause the NaNs, and #192 hopefully fixes that.
 
 ---
 
-👤 **saood06** commented the **2025-02-07** at **22:41:11**:<br>
+👤 **saood06** commented on **2025-02-07** at **22:41:11**
 
 @ikawrakow 
 
-I have tested #192 by merging it into my WIP testing branch, saood06/ik_llama.cpp/pull/1. IQ1_S_R4 (V2) and in my single very basic test it now functions (produced coherent output), but it still produced `NaN` in the perplexity test from chunk 13 and on, and the perplexity values for it and other quants have changed slightly compared to previously. No results for IQ1_S_R4 (V1) as I deleted that and don't feel like recreating it.
+I have tested #192 by merging it into my WIP testing branch, saood06/ik_llama.cpp/pull/1. IQ1_S_R4 (V2) in my single very basic test it now functions (produced coherent output), but it still produced `NaN` in the perplexity test from chunk 13 and on, and the perplexity values for it and other quants have changed slightly compared to previously. No results for IQ1_S_R4 (V1) as I deleted that and don't feel like recreating it.
 
 Only including new results in the table below.
 
@@ -4305,13 +4311,15 @@ main:    total time = 10290932.85 ms
 
 </details>
 
+Quantization logs had to be truncated to fit github comment length limits.
+
 ---
 
-👤 **jukofyork** commented the **2025-02-08** at **02:53:50**:<br>
+👤 **jukofyork** commented on **2025-02-08** at **02:53:50**
 
-Just saw this thread linked from the main MLA PR:
+Just saw this thread linked from the main [MLA](https://github.com/ggerganov/llama.cpp/pull/11446) PR:
 
-- It's some or all of the `attn_k_b.weight` tensors that can't be quantised as `float16` (it will just repeat the same word over and over in the after outputting the opening `<thinking>` tag).
+- It's some or all of the `attn_k_b.weight` tensors that can't be quantised as `float16` (it will just repeat the same word over and over after outputting the opening `<thinking>` tag).
 - The model is also very sensitive to `ffn_down_exps.weight` bitrate (`Q3_K` or less and it starts to get *really* dumb...).
 
 This 128 token prompt:
@@ -4327,18 +4335,18 @@ seems to be a good test of the model getting dumber, eg:
 
 - The number of tokens in the thinking section starts to drop off.
 - The story it generates won't actually use the quoted strings.
-- The "planning" in the thinking section goes way down and just write a few vague guidelines/paragraphs.
+- The "planning" in the thinking section goes way down and it just writes a few vague guidelines/paragraphs.
 - It will just start to make up a vaguely "dark" story without using any of what you gave it for low `ffn_down_exps.weight` bitrate.
 
 ---
 
-👤 **saood06** commented the **2025-02-08** at **03:16:25**:<br>
+👤 **saood06** commented on **2025-02-08** at **03:16:25**
 
 @jukofyork 
 
 I was just about to edit my comment, and mention attn_k_b.weight. 
 
-Since you found your way here, I want to tell you with a 4.52BPW (using quant types that are better than those that exist on mainline), on a dual socket  dual socket Xeon E5-2690 v3 without any offloading I get this performance ( I use batched-bench to test PP performance as context grows, and also spot test TG performance at various context depths).
+Since you found your way here, I want to tell you with a 4.52BPW (using quant types that are better than those that exist on mainline llama.cpp), on a dual socket  dual socket Xeon E5-2690 v3 without any offloading I get this performance ( I use batched-bench to test PP performance as context grows, and also spot test TG performance at various context depths).
 
 |    PP |     TG |    B |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |      T s |    S t/s |
 |-------|--------|------|--------|----------|----------|----------|----------|----------|----------|
@@ -4350,9 +4358,15 @@ Since you found your way here, I want to tell you with a 4.52BPW (using quant ty
 
 My initial tests with offloading ( on mainline llama.cpp with the PR that lets override tensor placement to keep non-shared experts on CPU) showed worse performance the more layers I offloaded. This fork currently is missing some RPC fixes that would support this model, and also some RPC performance tweaks, but I do plan to bring those over here.
 
+Edit:
+
+>The "planning" in the thinking section goes way down and it just writes a few vague guidelines/paragraphs.
+
+This I've noticed and it has bothered me, although I don't have much reference as almost all of my usage has been with MLA, and the little that hasn't has been at low contexts.
+
 ---
 
-👤 **ikawrakow** commented the **2025-02-08** at **07:18:55**:<br>
+👤 **ikawrakow** commented on **2025-02-08** at **07:18:55**
 
 > Off topic but when should you use Q8_K_R8 vs Q8_0_R8?
 
@@ -4374,13 +4388,15 @@ And here the same comparison on Zen4 (Ryzen-7950X)
 | llama 8B Q8_0                  |   7.95 GiB |      16 |  1 |   1 |         pp512 |    304.90 ± 0.12 |
 | llama 8B Q8_K_R8               |   7.56 GiB |      16 |  1 |   1 |         pp512 |    387.23 ± 1.10 |
 
+In these tables `Q8_0_R8` is `Q8_0` with `rtr=1`.
+
 To put things in perspective, the best mainline `llama.cpp` can do on the Ryzen-7950X is 165 t/s for `Q4_0` (fastest quant in `llama.cpp`). On my M2-Max `Q8_K_R8` gets 172 t/s vs 125 t/s for `Q4_0`.
 
-On the Ryzen-7950X memory bandwidth is fully saturated with just 2 threads with `Q8_K_R8` for TG. Which means that I can let the LLM run and generate tokens while I'm doing something else without the system feeling totally bogged down.
+On the Ryzen-7950X memory bandwidth is fully saturated with just 2 threads with `Q8_K_R8` for TG. Which means that I can let the LLM run and generate tokens using just 2 threads while I'm doing something else without the system feeling totally bogged down.
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-08** at **07:36:52**:<br>
+👤 **ikawrakow** commented on **2025-02-08** at **07:36:52**
 
 Concerning `fp16` vs `bf16` for `attn_k_b`: In mainline `llama.cpp` when a model tensor is `fp16`, activations get converted from `fp32` (the result of the previous operation) to `fp16` before performing the matrix multiplication with the `fp16` model tensor. If the observation is that the model becomes "dumb" when `attn_k_b` is `fp16`, the conclusion is that there are activations that are outside of the `fp16` range, and they get truncated in the conversion. This is not the case in this repository, at least not on `x86_64`. I have matrix multiplication kernels for any `fpX x fpY` combination, so for model tensors in `fp16` the matrix multiplication is done directly on the `fp32` activations. Hence, there shouldn't be any accuracy loss (unless the model contains weights outside of the `fp16` range). On `ARM`, I still convert the activations to `fp16` as `fp16 x fp16` matrix multiplications are almost 2X faster on my M2-Max. 
 

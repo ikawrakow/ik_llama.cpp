@@ -1,10 +1,11 @@
-### 🐛 [#30](https://github.com/ikawrakow/ik_llama.cpp/issues/30) - Bug: Appcrash on Windows 7 with GGML_USE_IQK_MULMAT
+### [Issue #30](https://github.com/ikawrakow/ik_llama.cpp/issues/30) - Bug: Appcrash on Windows 7 with GGML_USE_IQK_MULMAT
 
 | **Author** | `whoreson` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2024-08-30 |
 | **Updated** | 2024-09-19 |
+| **Labels** | `bug`, `wontfix` |
 
 ---
 
@@ -90,9 +91,9 @@ _No response_
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **whoreson** commented the **2024-08-30** at **20:30:11**:<br>
+👤 **whoreson** commented on **2024-08-30** at **20:30:11**
 
 Q4_1 crash backtrace:
 ```
@@ -137,7 +138,7 @@ Seems to be different perhaps?.. Still, works with stock llama.cpp.
 
 ---
 
-👤 **ikawrakow** commented the **2024-08-31** at **05:59:09**:<br>
+👤 **ikawrakow** commented on **2024-08-31** at **05:59:09**
 
 Can you post your `system_info` message when these crashes happen? It should look something like this
 ```
@@ -148,7 +149,7 @@ Thanks!
 
 ---
 
-👤 **whoreson** commented the **2024-08-31** at **08:22:16**:<br>
+👤 **whoreson** commented on **2024-08-31** at **08:22:16**
 
 ```
 INFO [                    main] system info | tid="1" timestamp=1725092503 n_thr
@@ -160,7 +161,7 @@ A = 1 | NEON = 0 | SVE = 0 | ARM_FMA = 0 | F16C = 1 | FP16_VA = 0 | WASM_SIMD =
 
 ---
 
-👤 **ikawrakow** commented the **2024-08-31** at **10:50:07**:<br>
+👤 **ikawrakow** commented on **2024-08-31** at **10:50:07**
 
 I was suspecting something I might have missed between `AVX2` and `AVX`, but no, you have `AVX2`.
 
@@ -170,7 +171,7 @@ With the second crash you posted a bt (the one during quantization), what are th
 
 ---
 
-👤 **whoreson** commented the **2024-08-31** at **11:56:33**:<br>
+👤 **whoreson** commented on **2024-08-31** at **11:56:33**
 
 Hmm no, all of these are results of llama-cli, not quantize.
 
@@ -189,13 +190,13 @@ $4 = 0
 
 ---
 
-👤 **ikawrakow** commented the **2024-08-31** at **12:22:17**:<br>
+👤 **ikawrakow** commented on **2024-08-31** at **12:22:17**
 
 Then `y4` must be `null`?
 
 ---
 
-👤 **whoreson** commented the **2024-08-31** at **14:33:20**:<br>
+👤 **whoreson** commented on **2024-08-31** at **14:33:20**
 
 ```
 (gdb) p y4
@@ -204,7 +205,7 @@ $5 = (block_q8_1_x4 * restrict) 0x3870ca0
 
 ---
 
-👤 **ikawrakow** commented the **2024-08-31** at **15:57:55**:<br>
+👤 **ikawrakow** commented on **2024-08-31** at **15:57:55**
 
 So
 * `y4` is not null
@@ -217,25 +218,25 @@ So
 
 ---
 
-👤 **whoreson** commented the **2024-08-31** at **19:21:42**:<br>
+👤 **whoreson** commented on **2024-08-31** at **19:21:42**
 
 Ehm, looks like it's not gonna be that easy... Just tried with TDM-GCC's gcc version 10.3.0 (tdm64-1), and the results are the same.
 
 ---
 
-👤 **whoreson** commented the **2024-08-31** at **19:29:10**:<br>
+👤 **whoreson** commented on **2024-08-31** at **19:29:10**
 
 Hmm... Could it be related that I've been disabling the -muse-unaligned-vector-move assembler flag? I don't have a recent enough binutils for it, and llama.cpp's been working so far...
 
 ---
 
-👤 **whoreson** commented the **2024-08-31** at **19:46:57**:<br>
+👤 **whoreson** commented on **2024-08-31** at **19:46:57**
 
 Alas, no... Same crash with latest mingw's gcc 14.1 and binutils 2.42.
 
 ---
 
-👤 **ikawrakow** commented the **2024-09-01** at **09:34:15**:<br>
+👤 **ikawrakow** commented on **2024-09-01** at **09:34:15**
 
 If you tried 3 different compiler versions and the crash persists, then it is more likely that it is a bug in the code that somehow only shows up on Windows (any Windows or just Windows 7?).
 
@@ -243,7 +244,7 @@ I see [here](https://github.com/google/sanitizers/wiki/AddressSanitizerWindowsPo
 
 ---
 
-👤 **whoreson** commented the **2024-09-01** at **19:57:45**:<br>
+👤 **whoreson** commented on **2024-09-01** at **19:57:45**
 
 Okay "good news", I've compiled it with the same TDM-GCC on a Windows 11 box (with -mno-avx512f, because it's a much newer CPU), and it crashes there too.
 
@@ -251,13 +252,13 @@ It works when compiled with the default AVX512 setting.
 
 ---
 
-👤 **ikawrakow** commented the **2024-09-02** at **08:54:50**:<br>
+👤 **ikawrakow** commented on **2024-09-02** at **08:54:50**
 
 Do you find it important to disable AVX512?
 
 ---
 
-👤 **whoreson** commented the **2024-09-02** at **16:31:29**:<br>
+👤 **whoreson** commented on **2024-09-02** at **16:31:29**
 
 Well since the Windows 7 PC in question is only AVX2, I kinda absolutely have to, in order to maintain the comparison...
 
@@ -265,25 +266,25 @@ So it'd seem to me that there's some AVX2 bug going on on all Windows OSes? I'll
 
 ---
 
-👤 **whoreson** commented the **2024-09-02** at **16:38:57**:<br>
+👤 **whoreson** commented on **2024-09-02** at **16:38:57**
 
 I can set up an rdesktop access if that's at all helpful.
 
 ---
 
-👤 **ikawrakow** commented the **2024-09-02** at **17:31:21**:<br>
+👤 **ikawrakow** commented on **2024-09-02** at **17:31:21**
 
 `-march=native` does not work? This enables the features your CPU supports. If you are setting this manually, you need `FMA` and `F16C` in addition to `AVX2`
 
 ---
 
-👤 **whoreson** commented the **2024-09-03** at **18:21:16**:<br>
+👤 **whoreson** commented on **2024-09-03** at **18:21:16**
 
 Err, I think you misunderstood. I'm using the default flags as usual. In order to test the AVX2 code on the PC which has Windows 11 (to check if it's a 7 vs 11 issue), I had to disable AVX512 on that box - naturally.
 
 ---
 
-👤 **whoreson** commented the **2024-09-14** at **17:00:21**:<br>
+👤 **whoreson** commented on **2024-09-14** at **17:00:21**
 
 > I can set up an rdesktop access if that's at all helpful.
 
@@ -291,30 +292,30 @@ Sooo... no?
 
 ---
 
-👤 **ikawrakow** commented the **2024-09-15** at **06:25:32**:<br>
+👤 **ikawrakow** commented on **2024-09-15** at **06:25:32**
 
 We can try, but I'm not very hopeful as I haven't touched a Windows computer for 10+ years. What is the Linux rdesktop client one uses these days? I'm on Ubuntu 22.04.
 
 ---
 
-👤 **whoreson** commented the **2024-09-15** at **08:41:29**:<br>
+👤 **whoreson** commented on **2024-09-15** at **08:41:29**
 
 Well, it's called just that, "rdesktop". It works fine. I'll set it up then. Err, can github do private messages? If not, I have Telegram.
 
 ---
 
-👤 **ikawrakow** commented the **2024-09-15** at **10:01:30**:<br>
+👤 **ikawrakow** commented on **2024-09-15** at **10:01:30**
 
 As far as I can tell the private message feature has been removed from Githib. I don't have Telegram. I made my email address public. If you fetch the latest main branch the last commit will have my email.
 
 ---
 
-👤 **whoreson** commented the **2024-09-15** at **11:45:28**:<br>
+👤 **whoreson** commented on **2024-09-15** at **11:45:28**
 
 Cool, just sent you an e-mail (from s*.t*@gmail).
 
 ---
 
-👤 **ikawrakow** commented the **2024-09-19** at **08:49:48**:<br>
+👤 **ikawrakow** commented on **2024-09-19** at **08:49:48**
 
 So, I used the provided `rdesktop` access to try to debug - without success. Supporting exotic systems (and yes, a Windows 7 box in the year 2024 is an exotic system on my book) is not one of the goals here - you are much better served with the mainline `llama.cpp` project.

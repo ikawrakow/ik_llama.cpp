@@ -1,8 +1,10 @@
-### 🔀 [#287](https://github.com/ikawrakow/ik_llama.cpp/pull/287) - Is this better for DeepSeek-R1?
+### [Pull Request #287](https://github.com/ikawrakow/ik_llama.cpp/pull/287) - Is this better for DeepSeek-R1?
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/deepseek_is_this_better` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-24 |
 | **Updated** | 2025-04-03 |
 
@@ -22,19 +24,19 @@ To be most effective, the number of threads used should be a multiple of the num
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **saood06** commented the **2025-03-24** at **22:09:34**:<br>
+👤 **saood06** commented on **2025-03-24** at **22:09:34**
 
-I still haven't restarted my machine (in order to test hugepages, and mitigations being off) so when I have some time, I'll test this with sweep-bench and see how it compares to the results I last got.
+I still haven't restarted my machine (in order to test hugepages, and mitigations being off) so when I have some time, I'll test this with sweep-bench with the same config as I have been using (MLA-3, FA on, 48 threads, fmoe on) and see how it compares to the results I last got.
 
 ---
 
-👤 **ubergarm** commented the **2025-03-25** at **05:15:59**:<br>
+👤 **ubergarm** commented on **2025-03-25** at **05:15:59**
 
 Oh this looks interesting. Hopefully the 6980P frees up tomorrow to gives this branch a proper test given that rig has a lot of RAM bandwidth that seems under-utilized.
 
-I gave this branch a very quick try on the 7965WX 24-Core with `-mla 2` and offloading some layers to GPU as usual. Not sure if this even applies to `-mla 2`.
+I gave this branch a very quick try on the 7965WX 24-Core with `-mla 2` and offloading `-ot exps=CPU` as usual. Not 100% sure if this even applies to `-mla 2`.
 
 Not super conclusive, but tg might be slightly improved with pp about the same in this test :point_down: 
 
@@ -92,7 +94,7 @@ build: f9307d79 (3607)
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **09:08:27**:<br>
+👤 **saood06** commented on **2025-03-25** at **09:08:27**
 
 For me early results show regression, I dropped the caches and tested it, I'll let this run fully and post the graph but initial results below (build daa3b00c):
 
@@ -128,18 +130,18 @@ For reference build d12f4a12 results below (truncated to same amount):
 |   512 |    128 |   5120 |   92.838 |     5.52 |   54.277 |     2.36 |
 |   512 |    128 |   5632 |   99.437 |     5.15 |   54.257 |     2.36 |
 
-Oddly I also did a preliminary run before dropping the cache and oddly enough that performed better than after dropping but still worse than my previous one table below for reference (also build daa3b00c):
+I also did a preliminary run before dropping the cache and oddly enough that performed better than after dropping but still worse than my previous one table below for reference (also build daa3b00c):
 
 |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
 |-------|--------|--------|----------|----------|----------|----------|
 |   512 |    128 |      0 |   50.972 |    10.04 |   41.870 |     3.06 |
 |   512 |    128 |    512 |   56.608 |     9.04 |   44.729 |     2.86 |
 
-Also while watching the CPU usage while it was loading the model into the cache it was different, it now had bursts of CPU activity then stretches around 3-4x as long with far lower CPU usage, the disk I/O was also fluctuating a lot more, but it did finish the load from cache in a similar time as expected for 48 threads.
+Also while watching the CPU usage while it was loading the model into the cache it was different, it now had bursts of CPU activity then stretches around 3-4x as long with far lower CPU usage, the disk I/O was also fluctuating a lot more, but it did still finish the load from cache in a similar time as expected for 48 threads.
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **10:21:38**:<br>
+👤 **saood06** commented on **2025-03-25** at **10:21:38**
 
 Full results still show regression in TG:
 
@@ -190,25 +192,29 @@ Full results for this in table form:
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-25** at **11:14:42**:<br>
+👤 **ikawrakow** commented on **2025-03-25** at **11:14:42**
 
 @saood06 Thanks for the results, but the tests are for batched processing. #287 is not supposed to influence batches in any way, it only does something different when we have exactly one token to process (as in TG). I suspect you end up having different results because of the warm up, which is TG. It seems in your case this leads to a less optimal distribution of model weights across memory banks, so you see a lower performance in your batched experiments. But with the small batches being used here, and a MoE model with so many experts, many of the experts will "see" just a single token in the batch, so I guess I could apply a similar optimization also there.
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **12:06:03**:<br>
+👤 **saood06** commented on **2025-03-25** at **12:06:03**
 
 > @saood06 Thanks for the results, but the tests are for batched processing. #287 is not supposed to influence batches in any way, it only does something different when we have exactly one token to process (as in TG). I suspect you end up having different results because of the warm up, which is TG. It seems in your case this leads to a less optimal distribution of model weights across memory banks, so you see a lower performance in your batched experiments. But with the small batches being used here, and a MoE model with so many experts, many of the experts will "see" just a single token in the batch, so I guess I could apply a similar optimization also there.
 
 I'm not testing batched performance, the TG values given for sweep-bench should be identical to the `-gp` option that you added in llama-bench.
 
-The benefit is that it measures at intervals while growing and reusing the context, which makes it feasible for me to measure TG and PP performance and see how it changes at different context depths.
+The benefit is that it measures at intervals while growing and reusing the context, which makes it feasible for me to measure TG (and also PP) performance and see how it changes at different context depths.
 
 Doing the same with llama-bench's -gp would take much longer as my PP speed is so slow.
 
+Edit 1: These values do reflect accurately my experiences in llama-server.
+
+Edit 2: The warmup behaviour of sweep-bench is also fine, even if it is the first thing I run after dropping the cache/rebooting it always results in correct TG performance.
+
 ---
 
-👤 **ikawrakow** commented the **2025-03-25** at **12:32:55**:<br>
+👤 **ikawrakow** commented on **2025-03-25** at **12:32:55**
 
 > I'm not testing batched performance
 
@@ -216,7 +222,7 @@ So, not using `llama-batched-bench`? But then, if that wasn't batched inference,
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **12:50:04**:<br>
+👤 **saood06** commented on **2025-03-25** at **12:50:04**
 
 > So, not using `llama-batched-bench`? 
 
@@ -234,29 +240,186 @@ This benchmark does really reflect how llama-server feels for PP and TG across t
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **13:19:05**:<br>
+👤 **ikawrakow** commented on **2025-03-25** at **12:58:25**
+
+>No, all my recent benchmarks have been with the llama-sweep-bench.
+
+Ah, OK, sorry I haven't looked at that. I need to understand how it works and start using it.
+
+But to make sure that these results are not affected by the huge pages experiment that you also did (as it impacts performance on your system in a pretty bad way): there weren't huge pages enabled at the time of the test, and if you did the huge pages test before this one, you did reboot the system? Or spent enough time to bring performance back to normal as I had to do on my system after the huge pages experiment?
+
+---
+
+👤 **saood06** commented on **2025-03-25** at **13:19:05**
 
 @ikawrakow 
 
 SORRY, I accidentally edited your comment instead of replying.
 
+>>No, all my recent benchmarks have been with the llama-sweep-bench.
+>
+>Ah, OK, sorry I haven't looked at that. I need to understand how it works and start using it.
+
+I'm just about to make a PR, since I started actually using it, I changed it (I want to make breaking changes, as I prefer working with the markdown tables as they are human readable, and changed the python to work with the markdown instead of jsonl removing the need for .jsonl in the first place).
+
+>But to make sure that these results are not affected by the huge pages experiment that you also did (as it impacts performance on your system in a pretty bad way): there weren't huge pages enabled at the time of the test, and if you did the huge pages test before this one, you did reboot the system? Or spent enough time to bring performance back to normal as I had to do on my system after the huge pages experiment?
+
+They are not, these were obtained before the restart that would turn on and reserve enough huge pages, and as mentioned before I tested briefly before dropping cache, but then I dropped the cache and observed the strange cache loading behavior. Normally cache loading has a steady 85% CPU usage and stable disk i/o, with this PR it has the weird burst and then idle behaviour with disk i/o jumping around but averaging the same as before, and with hugepages it becomes single threaded and 2.5x faster disk i/o happens.
+
+I have turned off hugepages and restarted my machine.
+
+I run sweep-bench on my latest fast build.
+
+PP | TG | N_KV | T_PP s | S_PP t/s | T_TG s | S_TG t/s
+-- | -- | -- | -- | -- | -- | --
+512 | 128 | 0 | 49.094 | 10.43 | 39.605 | 3.23
+512 | 128 | 512 | 56.509 | 9.06 | 43.036 | 2.97
+512 | 128 | 1024 | 63.248 | 8.10 | 44.641 | 2.87
+512 | 128 | 1536 | 65.444 | 7.82 | 46.500 | 2.75
+
+
+I can confirm performance is back to expected.
+
 ---
 
-👤 **ikawrakow** commented the **2025-03-25** at **13:25:48**:<br>
+👤 **ikawrakow** commented on **2025-03-25** at **13:25:48**
 
 OK, thanks. I'll wait for more detailed results from @ubergarm. If they are positive, I'll make it a compile time option (it is difficult to propagate a parameter to `ggml` CPU backend). If they are negative or inconclusive, I'll discard the PR.
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **14:19:47**:<br>
+👤 **ubergarm** commented on **2025-03-25** at **14:09:06**
 
-I just pushed a fix to the [readme](https://github.com/ikawrakow/ik_llama.cpp/blob/98a264a2ea21761322847ac562f58d986ef6c512/examples/sweep-bench/README.md) so you can read it at the link. 
+*FINISHED* Tue Mar 25 03:45:16 PM EDT 2025
 
-It goes over what the benchmark does and the definition of each header.
+## tl;dr;
+
+Sorry I don't have a graph for this. Its kinda complicated.
+
+Seems like at 64 threads this branch improves tg by almost 6%. But some other areas regress. I'll try to get a graph put together later.
+ 
+## Details
+
+(Squeezing this in while copying over the new deepseek-v3 `q8_0_r8` for imatrix making given updated info over on that thread!)
+
+I too would like to spend a little more time to learn `llama-sweep-bench` as looking at graphs is much nicer than just charts of raw data haha...
+
+Test is currently running on a single socket of the xeon 6980P using unsloth offline repacked `q4_k_r4`:
+<details>
+
+<summary>Incoming Logs</summary>
+
+I managed to finish the 32 threads benchmark for both cases. Though now I'm trying to use the 2nd CPU socket to calculate imatrix.dat for `V3-0324`. Hopefully that doesn't effect the benchmarks for remaining thread counts given it is running on 1st CPU socket...
+
+On this rig generally more threads improves pp, but tg caps out between 64-96 threads. I'll have to try another run eventually and can make use of #284 to optimize both pp and tg.
+
+## Command
+```bash
+# single socket test command
+$ numactl -N 0 -m 0 \
+./build/bin/llama-bench \
+    -thp 0 \
+    --mmap 0 \
+    --model /mnt/ai/models/unsloth/repack/DeepSeek-R1-Q4_K_R4.gguf \
+    -ctk q8_0 \
+    -mla 3 -fa 1 \
+    -amb 1024 \
+    -fmoe 1 \
+    -p 512,8192,16384 -n 0 \
+    -gp 512,64 \
+    -gp 8192,64 \
+    -gp 16384,64 \
+    -r 2 \
+    --numa numactl \
+    --threads 32,64,88,128
+
+# confirm model is loaded *entirely* into Huge Pages (which seems good on this system)
+$ du /mnt/ai/models/unsloth/repack/DeepSeek-R1-Q4_K_R4.gguf
+394951400       /mnt/ai/models/unsloth/repack/DeepSeek-R1-Q4_K_R4.gguf
+
+$ grep Huge /proc/meminfo
+AnonHugePages:  396218368 kB
+
+# Current power profile is: performance
+# Set numa balancing to be: 0
+```
+
+## This PR branch `ik/deepseek_is_this_better@daa3b00`
+| model                          |       size |     params | backend    | threads | type_k | fa | mla |   amb | mmap | fmoe |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -: | --: | ----: | ---: | ---: | ------------: | ---------------: |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |         pp512 |     56.67 ± 3.68 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |        pp8192 |     39.15 ± 0.20 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |       pp16384 |     28.63 ± 0.06 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |    tg64@pp512 |      7.22 ± 0.00 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |   tg64@pp8192 |      6.05 ± 0.03 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |  tg64@pp16384 |      3.94 ± 0.01 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |         pp512 |    105.04 ± 3.36 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |        pp8192 |     69.45 ± 1.17 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |       pp16384 |     51.00 ± 0.33 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |    tg64@pp512 |      9.65 ± 0.00 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |   tg64@pp8192 |      7.86 ± 0.00 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |  tg64@pp16384 |      6.14 ± 0.11 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |         pp512 |    112.03 ± 1.78 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |        pp8192 |     70.51 ± 2.83 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |       pp16384 |     55.87 ± 2.67 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |    tg64@pp512 |      9.43 ± 0.00 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |   tg64@pp8192 |      7.32 ± 0.01 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |  tg64@pp16384 |      6.02 ± 0.03 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |         pp512 |   127.07 ± 12.23 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |        pp8192 |     76.89 ± 2.53 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |       pp16384 |     55.11 ± 0.19 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |    tg64@pp512 |      8.49 ± 0.02 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |   tg64@pp8192 |      6.84 ± 0.19 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |  tg64@pp16384 |      5.61 ± 0.14 |
+
+build: daa3b00c (3609)
+
+## Baseline `main@98a264a2`
+| model                          |       size |     params | backend    | threads | type_k | fa | mla |   amb | mmap | fmoe |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -----: | -: | --: | ----: | ---: | ---: | ------------: | ---------------: |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |         pp512 |     62.14 ± 0.68 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |        pp8192 |     41.03 ± 0.20 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |       pp16384 |     29.36 ± 0.68 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |    tg64@pp512 |      7.78 ± 0.01 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |   tg64@pp8192 |      6.15 ± 0.01 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      32 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |  tg64@pp16384 |      4.57 ± 0.03 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |         pp512 |     96.11 ± 0.54 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |        pp8192 |     64.43 ± 0.01 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |       pp16384 |     45.32 ± 0.83 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |    tg64@pp512 |      9.14 ± 0.03 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |   tg64@pp8192 |      7.45 ± 0.02 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      64 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |  tg64@pp16384 |      5.76 ± 0.02 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |         pp512 |    116.98 ± 0.62 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |        pp8192 |     81.51 ± 2.21 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |       pp16384 |     58.54 ± 0.27 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |    tg64@pp512 |      9.37 ± 0.00 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |   tg64@pp8192 |      7.31 ± 0.06 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |      88 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |  tg64@pp16384 |      5.88 ± 0.19 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |         pp512 |    139.62 ± 3.28 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |        pp8192 |     95.89 ± 0.11 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |       pp16384 |     69.04 ± 0.48 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |    tg64@pp512 |      8.64 ± 0.05 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |   tg64@pp8192 |      7.31 ± 0.05 |
+| deepseek2 671B Q4_K_R4         | 376.65 GiB |   671.03 B | CPU        |     128 |   q8_0 |  1 |   3 |  1024 |    0 |    1 |  tg64@pp16384 |      5.97 ± 0.05 |
+
+build: 98a264a2 (3608)
+
+</details>
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **14:27:36**:<br>
+👤 **saood06** commented on **2025-03-25** at **14:19:47**
+
+I just pushed a fix to the [readme](https://github.com/ikawrakow/ik_llama.cpp/blob/s6/sweep_bench_update/examples/sweep-bench/README.md) so you can read it at the link. 
+
+It goes over what the benchmark does and the definition of each header.
+
+Edit:
+@ubergarm changed the link to the correct one (from my PR), instead of main.
+
+---
+
+👤 **saood06** commented on **2025-03-25** at **14:27:36**
 
 >(Squeezing this in while copying over the new deepseek-v3 q8_0_r8 for imatrix making given updated info over on that thread!)
 
@@ -264,7 +427,17 @@ How far did the BF16 one get overnight?
 
 ---
 
-👤 **ubergarm** commented the **2025-03-25** at **20:17:57**:<br>
+👤 **saood06** commented on **2025-03-25** at **20:01:04**
+
+> _FINISHED_ Tue Mar 25 03:45:16 PM EDT 2025
+
+Looking at the results 64 cores with this PR is the best performing option, so both of your rigs do see a bump in speed while mine does not.
+
+I wonder why my system behaves so poorly with this.
+
+---
+
+👤 **ubergarm** commented on **2025-03-25** at **20:17:57**
 
 @saood06 
 
@@ -278,7 +451,7 @@ Too many irons in the fire today lol, jumping back over to the thread on `imatri
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **20:26:52**:<br>
+👤 **saood06** commented on **2025-03-25** at **20:26:52**
 
 > Yeah it is interesting, seems like for me there is a regression for non optimal number of threads though. Did you try a quick check of say 32 and 40 threads for a single setting? Just brainstorming...
 > 
@@ -288,11 +461,11 @@ Not on this PR maybe that will help, as all previous testing showed bad results 
 
 ---
 
-👤 **ubergarm** commented the **2025-03-26** at **00:10:52**:<br>
+👤 **ubergarm** commented on **2025-03-26** at **00:10:52**
 
 Haha, okay so I used `DeepSeek-V3-0324-IQ2_K_R4-bartowski-imat.gguf` to cook up some graphs and copy pasted my actual markdown `llama-bench` output into the `graph.py` and ran it without linting or anything and here is what we got.
 
-It is complex, basically this PR is  7~12% better for pp and ~5% better for tg *only* when the number of threads is dialed in. Otherwise it is 3~20% worse than baseline main.
+It is complex, basically this PR is  7\~12% better for pp and \~5% better for tg *only* when the number of threads is dialed in. Otherwise it is 3\~20% worse than baseline main.
 
 I would have to run more intervals near the peak e.g. 56 and 72 threads to confirm 64 is peak for this rig and config.
 
@@ -302,7 +475,7 @@ Gotta say I'm impressed `V3-0324` one-shotted that! Not perfect graphs, but it a
 
 The auto-generated code python:
 <details>
-<summary>plot.py</summary>
+<summary>graph.py</summary>
 
 ```bash
 import pandas as pd
@@ -481,7 +654,7 @@ print(f"Maximum regression: {comparison_df['t/s_diff'].min():.2f} t/s")
 
 ---
 
-👤 **saood06** commented the **2025-03-26** at **00:55:36**:<br>
+👤 **saood06** commented on **2025-03-26** at **00:55:36**
 
 > Haha, okay so I used `DeepSeek-V3-0324-IQ2_K_R4-bartowski-imat.gguf` to cook up some graphs and copy pasted my actual markdown `llama-bench` output into the `graph.py` and ran it without linting or anything and here is what we got.
 > 
@@ -500,7 +673,7 @@ Then just save the resulting markdown into a file and give it the filename of wh
 
 ---
 
-👤 **ubergarm** commented the **2025-03-26** at **02:02:03**:<br>
+👤 **ubergarm** commented on **2025-03-26** at **02:02:03**
 
 > Sounds like a good time to try sweep-bench
 
@@ -514,9 +687,9 @@ I guess I have a few questions:
 
 I guess the first thing is I need to find where the output goes. Also the output log looks a bit wonky at the end like it does for me sometimes, not sure if that is due to piping stderr/stdout into tee or what...
 
-<summary>
+<details>
 
-<details>Full llama-sweep-bench logs</details>
+<summary>Full llama-sweep-bench logs</summary>
 
 ```bash
 $ git branch
@@ -794,11 +967,11 @@ Computed blk.59.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
 Computed blk.60.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
 ```
 
-</summary>
+</details>
 
 ---
 
-👤 **saood06** commented the **2025-03-26** at **02:27:43**:<br>
+👤 **saood06** commented on **2025-03-26** at **02:27:43**
 
 > > Sounds like a good time to try sweep-bench
 > 
@@ -1035,13 +1208,13 @@ Then I run `python sweep-bench-plot.py result1 result2 result3` and that would m
 > 
 >     1. `./build/bin/llama-sweep-bench --help` didn't show anything. I think it uses parameters out of common like `llama-server` and not like `llama-bench` as you mentioned above.
 
-Yes, the -help is not very good, and the old version's print_usage also never printed to the screen only to the log file (I did not pay much attention to it printing to the screen when I originally ported as the old python only supported jsonl which wasn't really human readable anyway, and so it only going to a log file [which according to the [documentation](https://github.com/ikawrakow/ik_llama.cpp/blob/a22250df93fd833a6cb7f310b159ad1b54e4d582/common/log.h#L24) should be different for each pid, but for me it always overwrote the same log file], I switched them to LOG_TEE like most of the other examples, which goes both to the output and a log file in the fixed version.
+Yes, the -help is not very good (there is only a README.md and very bried print-usage which doesn't explain much), and the old version's print_usage also never printed to the screen only to the log file (I did not pay much attention to it printing to the screen when I originally ported as the old python only supported jsonl which wasn't really human readable anyway, and so it only going to a log file [which according to the [documentation](https://github.com/ikawrakow/ik_llama.cpp/blob/a22250df93fd833a6cb7f310b159ad1b54e4d582/common/log.h#L24) should be different for each pid, but for me it always overwrote the same log file], I switched them to LOG_TEE like most of the other examples, which goes both to the output and a log file in the fixed version.
 
 >     2. Does it output results as it goes to stdout or do I need to specify a file to save it to? I didn't find the output, but it seemed to run for a while and I saw CPU usage with 64 threads.
 
 The new one should, the old one didn't which I found annoying, it uses the LOG function which writes to llama.log (or a file like it)
 
-3. I'm not exactly sure how to compare its outputs to `llama-bench` `pp` and `tg` numbers, as I don't have a good conception of what varying `N_KV` exactly does. I read the README, but if I see an example maybe it would click in my brain.
+>    3. I'm not exactly sure how to compare its outputs to `llama-bench` `pp` and `tg` numbers, as I don't have a good conception of what varying `N_KV` exactly does. I read the README, but if I see an example maybe it would click in my brain.
 
 Think of N_KV as how deep in the context the you are measuring from from, and TG/PP is how many tokens. So in a row if the `N_KV` is 8192 and the `TG` is 128, the  `S_TG t/s`  resulting value is equivalent to `-gp 8192,128`.
 
@@ -1051,13 +1224,13 @@ Sorry again, I forgot this branch had the old version, I should have warned you 
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-26** at **07:24:39**:<br>
+👤 **ikawrakow** commented on **2025-03-26** at **07:24:39**
 
 OK, this does not look like it is helping.
 
 ---
 
-👤 **saood06** commented the **2025-03-29** at **07:34:32**:<br>
+👤 **saood06** commented on **2025-03-29** at **07:34:32**
 
 > OK, this does not look like it is helping.
 
@@ -1067,6 +1240,6 @@ I'll test my system more thoroughly with this in different configurations later,
 
 ---
 
-👤 **saood06** commented the **2025-04-03** at **05:36:15**:<br>
+👤 **saood06** commented on **2025-04-03** at **05:36:15**
 
-I tested at 24 threads this branch still loses to main (and main loses to main at 48 threads), but again it had the same odd behavior where this branch performed better when cache is warmed up with main than if cache is warmed up with it's own code.
+I tested at 24 threads this branch still loses to main at 24 threads (and main at 24 threads loses to main at 48 threads), but again it had the same odd behavior where this branch performed better when cache is warmed up with main than if cache is warmed up with it's own code (but both still losing to main).

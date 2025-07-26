@@ -1,7 +1,8 @@
-### 🗣️ [#623](https://github.com/ikawrakow/ik_llama.cpp/discussions/623) - Quantizing panels/bundles instead of blocks?
+### [Discussion #623](https://github.com/ikawrakow/ik_llama.cpp/discussions/623) - Quantizing panels/bundles instead of blocks?
 
 | **Author** | `jubruckne` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-07-17 |
 | **Updated** | 2025-07-17 |
 
@@ -21,6 +22,6 @@ I apologize if some of this seems stupid, it probably is 🙈…
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2025-07-17** at **12:19:22**:<br>
+👤 **ikawrakow** commented on **2025-07-17** at **12:19:22**
 
 You mean, instead of having 256 weights from the same row in a block of 256, we could have used 32 x 8 from 8 different consecutive rows?

@@ -1,7 +1,8 @@
-### 🗣️ [#491](https://github.com/ikawrakow/ik_llama.cpp/discussions/491) - -rtr actually hurts prompt t/s for large ubatch?
+### [Discussion #491](https://github.com/ikawrakow/ik_llama.cpp/discussions/491) - -rtr actually hurts prompt t/s for large ubatch?
 
 | **Author** | `Ph0rk0z` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-06-03 |
 | **Updated** | 2025-06-11 |
 
@@ -155,7 +156,7 @@ Without -rtr, this makes ~120 prompt at most. Anyone know the why or noticed som
 
 #### 🗣️ Discussion
 
-👤 **Ph0rk0z** replied the **2025-06-04** at **15:59:57**:<br>
+👤 **Ph0rk0z** commented on **2025-06-04** at **15:59:57**
 
 I played around with offline repacking next. Oh boy.
 
@@ -315,7 +316,7 @@ So then -rtr or repacking is only useful in the case of ub being half the batch 
 
 ---
 
-👤 **ikawrakow** replied the **2025-06-04** at **16:48:34**:<br>
+👤 **ikawrakow** commented on **2025-06-04** at **16:48:34**
 
 Perhaps to understand how repacked quants behave on the CPU and CUDA, it is easier to take a smaller model that would completely fit one GPU, quantize with with `--pure` to your favorite quant and corresponding repacked variant, and then
 * Run fully offloaded to the GPU
@@ -325,24 +326,28 @@ It is an easy exercise, does not require an imatrix as you are not after the bes
 
 Without having understood what the repacking does or does not do for you, it becomes very hard to sort out the big models with partial offloads, offload policy, numa, what runs on the GPU or CPU when and why, etc.
 
-> 👤 **Ph0rk0z** replied the **2025-06-04** at **17:17:17**:<br>
+> 👤 **Ph0rk0z** replied on **2025-06-04** at **17:17:17**
+> 
 > Worth a try. I will have to. I'm repacking exactly what I don't put on GPU and watching the layers in quantize, i.e which become _R8. One other metric would be to do 4096/2048 and see if it really is correlated to half batch size or bound to the 1024 size.
 > 
 > Is there a way to print exactly what tensors are repacked by RTR? I could be missing some tiny layers it did on it's own by using the regex offline.
 > 
 > Textgen is back to 18.x t/s after I dropped caches but prompt processing benchmarks hold universally through my tests.
+
+> 👤 **Ph0rk0z** replied on **2025-06-05** at **11:48:40**
 > 
-> 👤 **Ph0rk0z** replied the **2025-06-05** at **11:48:40**:<br>
 > So I got it to print the tensors. The one that gets repacked by RTR and not offline repacking is token_embd. I had issues moving that tensor to either CPU or GPU manually.
 > 
 > Also notice that quantize will repack to R8, is there a difference between that and R4 as far as the various cuda implementations you are adding?
+
+> 👤 **ikawrakow** replied on **2025-06-05** at **11:56:57**
 > 
-> 👤 **ikawrakow** replied the **2025-06-05** at **11:56:57**:<br>
 > `token_embd.weight` is never repacked and always stays on the CPU. It should not go to the GPU, and it should not get repacked. If you managed to make it repack, that's a bug, and you should tell me how you did it.
 > 
 > For some quantization one gets better CPU performance by interleaving 8 rows, so these are the `_R8` quants. `Q4_0`, `Q8_0` and `IQ4_XS` get repacked to `_R8`, all others are `_R4`. Some of those that are `_R4` would benefit from being `_R8`, but I haven't done it, and now that there are `_R4` quantized models floating around the Internet, I don't want to break backwards compatibility (and I don't want to carry `_R4` and `_R8` version of the same quantization type), so it will stay like this.
+
+> 👤 **Ph0rk0z** replied on **2025-06-05** at **12:49:05**
 > 
-> 👤 **Ph0rk0z** replied the **2025-06-05** at **12:49:05**:<br>
 > I uncommented your line near where it says REPACKED XX Tensors which purportedly printed what was repacked. Everything else matches what I sent to CPU. Either the print is incorrect or it repacked it. 
 > 
 > Its strange too because I had tried to find layers to to throw on the CPU for just a few MB since my command line was OOM at 22k. Finally settled on 10 ffn_gate_inp towards the end. When I put token_embd=CPU I'd get a crash on qwen right away.
@@ -353,7 +358,7 @@ Without having understood what the repacking does or does not do for you, it bec
 
 ---
 
-👤 **Ph0rk0z** replied the **2025-06-06** at **17:29:36**:<br>
+👤 **Ph0rk0z** commented on **2025-06-06** at **17:29:36**
 
 Finally got around to testing a smaller model. Non IQ quant as well.
 
@@ -442,7 +447,8 @@ No GPU full cores RTR
 
 It looks like on this system, RTR only helps when there is no GPU involved or the ubatch is 1024 (previous tests). In every other case, RTR lowers the prompt processing by a lot but improves TG.
 
-> 👤 **ciprianveg** replied the **2025-06-10** at **16:08:25**:<br>
+> 👤 **ciprianveg** replied on **2025-06-10** at **16:08:25**
+> 
 > I noticed it too, and iQ3_XXS_UD pp speed is affected by rtr much more than other quants, it drops from 250t/s to 26t/s, cca 10x slower. q2_xl_ud drops only from 245 to 140t/s. I am using no-mmap and swap disabled..
 > 
 > It is a pitty because while dropping pp speed 90%, it increases the generation speed by 40%.
@@ -473,6 +479,7 @@ It looks like on this system, RTR only helps when there is no GPU involved or th
 >     BUT, if i build it with: cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DGGML_CUDA=ON -DGGML_SCHED_MAX_COPIES=1
 >     
 >     no pp decrease anymore, but no tg speed increase, too..
+
+> 👤 **Ph0rk0z** replied on **2025-06-11** at **11:40:47**
 > 
-> 👤 **Ph0rk0z** replied the **2025-06-11** at **11:40:47**:<br>
 > Could it be using BLAS instead of cuda when built with it? While ubatch size 1024 isn't as good as 4096+, it gives me a happy medium to use the RTR's textgen speed increase.

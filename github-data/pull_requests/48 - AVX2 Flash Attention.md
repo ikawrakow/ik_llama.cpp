@@ -1,10 +1,13 @@
-### 🔀 [#48](https://github.com/ikawrakow/ik_llama.cpp/pull/48) - AVX2 Flash Attention
+### [Pull Request #48](https://github.com/ikawrakow/ik_llama.cpp/pull/48) - AVX2 Flash Attention
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/avx2_flash_attn` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-10 |
 | **Updated** | 2024-09-10 |
+| **Merged** | 2024-09-10 |
 
 ---
 

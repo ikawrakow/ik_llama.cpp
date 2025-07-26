@@ -1,10 +1,13 @@
-### 🔀 [#284](https://github.com/ikawrakow/ik_llama.cpp/pull/284) - llama-bench: enable having different number of threads for tg and pp
+### [Pull Request #284](https://github.com/ikawrakow/ik_llama.cpp/pull/284) - llama-bench: enable having different number of threads for tg and pp
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/llama_bench_tgb` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-24 |
 | **Updated** | 2025-03-25 |
+| **Merged** | 2025-03-25 |
 
 ---
 
@@ -27,8 +30,8 @@ The `-t` argument continues to work as before. It adds a pair of the same intege
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ubergarm** commented the **2025-03-25** at **16:27:02**:<br>
+👤 **ubergarm** commented on **2025-03-25** at **16:27:02**
 
 Thanks for this one, should help optimize the big xeon 6980P given previous testing suggests that pp likes more threads than tg.

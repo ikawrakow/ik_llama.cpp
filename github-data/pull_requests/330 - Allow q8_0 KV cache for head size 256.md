@@ -1,10 +1,13 @@
-### 🔀 [#330](https://github.com/ikawrakow/ik_llama.cpp/pull/330) - Allow q8_0 KV cache for head size 256
+### [Pull Request #330](https://github.com/ikawrakow/ik_llama.cpp/pull/330) - Allow q8_0 KV cache for head size 256
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/gemma_q80_kvcache` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-15 |
 | **Updated** | 2025-04-15 |
+| **Merged** | 2025-04-15 |
 
 ---
 

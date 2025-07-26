@@ -1,10 +1,13 @@
-### 🔀 [#125](https://github.com/ikawrakow/ik_llama.cpp/pull/125) - R4 improvements on ARM_NEON
+### [Pull Request #125](https://github.com/ikawrakow/ik_llama.cpp/pull/125) - R4 improvements on ARM_NEON
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/r4_neon` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-08 |
 | **Updated** | 2024-12-08 |
+| **Merged** | 2024-12-08 |
 
 ---
 

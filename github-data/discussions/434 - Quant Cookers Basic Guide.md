@@ -1,7 +1,8 @@
-### 🗣️ [#434](https://github.com/ikawrakow/ik_llama.cpp/discussions/434) - Quant Cookers Basic Guide
+### [Discussion #434](https://github.com/ikawrakow/ik_llama.cpp/discussions/434) - Quant Cookers Basic Guide
 
 | **Author** | `ubergarm` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-05-18 |
 | **Updated** | 2025-05-21 |
 
@@ -320,13 +321,14 @@ model=/mnt/llms/ubergarm/Qwen3-14B-GGUF/Qwen3-14B-IQ4_KS.gguf
 
 #### 🗣️ Discussion
 
-👤 **VinnyG9** replied the **2025-05-19** at **14:48:32**:<br>
+👤 **VinnyG9** commented on **2025-05-19** at **14:48:32**
 
 thanks for this, can you point me where can i read a description of:
 -DGGML_RPC=OFF
 --seed 1337
 
-> 👤 **ubergarm** replied the **2025-05-19** at **15:07:31**:<br>
+> 👤 **ubergarm** replied on **2025-05-19** at **15:07:31**
+> 
 > > -DGGML_RPC=OFF
 > > --seed 1337
 > 
@@ -335,8 +337,9 @@ thanks for this, can you point me where can i read a description of:
 > > --seed 1337
 > 
 > I set the same random seed, just for fun, across all of my measurements in a hopeful attempt to reduce differences due to entropy. Not sure if it really matters. [1337](https://www.urbandictionary.com/define.php?term=1337) is leet speek for [leet](https://www.urbandictionary.com/define.php?term=leet).
+
+> 👤 **VinnyG9** replied on **2025-05-21** at **03:42:57**
 > 
-> 👤 **VinnyG9** replied the **2025-05-21** at **03:42:57**:<br>
 > > > -DGGML_RPC=OFF
 > > > --seed 1337
 > > 

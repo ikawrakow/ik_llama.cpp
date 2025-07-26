@@ -1,7 +1,8 @@
-### 🗣️ [#82](https://github.com/ikawrakow/ik_llama.cpp/discussions/82) - 4bpw GGML TYPE?
+### [Discussion #82](https://github.com/ikawrakow/ik_llama.cpp/discussions/82) - 4bpw GGML TYPE?
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-10-07 |
 | **Updated** | 2024-10-17 |
 
@@ -23,13 +24,13 @@ Cheers!
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2024-10-08** at **05:17:48**:<br>
+👤 **ikawrakow** commented on **2024-10-08** at **05:17:48**
 
 Hey Nexes the Old, did you try `IQ3_K` and `IQ4_K`? I think a mix of these two will give you what you want, and it will be better than what you could do with i-quants in `llama.cpp`.
 
 ---
 
-👤 **ikawrakow** replied the **2024-10-08** at **10:55:49**:<br>
+👤 **ikawrakow** commented on **2024-10-08** at **10:55:49**
 
 @Nexesenex 
 
@@ -54,13 +55,13 @@ I can add one of these. Let me know if you prefer the smaller or the larger one.
 
 ---
 
-👤 **ikawrakow** replied the **2024-10-09** at **09:54:18**:<br>
+👤 **ikawrakow** commented on **2024-10-09** at **09:54:18**
 
 See #83
 
 ---
 
-👤 **Nexesenex** replied the **2024-10-09** at **14:58:25**:<br>
+👤 **Nexesenex** commented on **2024-10-09** at **14:58:25**
 
 Hey IK,
 
@@ -80,7 +81,7 @@ I speak about LCPP official, because I was.. unable to compile IK_Llama on MSVS,
 
 ---
 
-👤 **ikawrakow** replied the **2024-10-09** at **16:23:12**:<br>
+👤 **ikawrakow** commented on **2024-10-09** at **16:23:12**
 
 > Can it be integrated in the official LlamaCPP...
 
@@ -102,7 +103,7 @@ Sure, one can spend a lot of time experimenting. I see your PR 8917 in mainline 
 
 ---
 
-👤 **Nexesenex** replied the **2024-10-17** at **04:04:29**:<br>
+👤 **Nexesenex** commented on **2024-10-17** at **04:04:29**
 
 I submitted my PR 8917 here, as invited to.
 

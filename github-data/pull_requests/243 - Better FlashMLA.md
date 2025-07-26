@@ -1,10 +1,13 @@
-### 🔀 [#243](https://github.com/ikawrakow/ik_llama.cpp/pull/243) - Better FlashMLA
+### [Pull Request #243](https://github.com/ikawrakow/ik_llama.cpp/pull/243) - Better FlashMLA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/better_tg_fattn` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-06 |
 | **Updated** | 2025-03-07 |
+| **Merged** | 2025-03-07 |
 
 ---
 
@@ -31,9 +34,9 @@ To put the above table into perspective, TG speed with a context of 16k tokens i
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** commented the **2025-03-07** at **07:46:44**:<br>
+👤 **ikawrakow** commented on **2025-03-07** at **07:46:44**
 
 The above table is for `Q8_KV` KV cache. Here is a comparison between the main branch and this PR for `fp16` KV cache:
 

@@ -1,4 +1,4 @@
-### 🐛 [#245](https://github.com/ikawrakow/ik_llama.cpp/issues/245) - Bug: Perplexity returns NaN with IQ4_KSS quantisation
+### [Issue #245](https://github.com/ikawrakow/ik_llama.cpp/issues/245) - Bug: Perplexity returns NaN with IQ4_KSS quantisation
 
 | **Author** | `davidsyoung` |
 | :--- | :--- |
@@ -129,9 +129,9 @@ main: seed  = 3407
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **davidsyoung** commented the **2025-03-07** at **19:50:29**:<br>
+👤 **davidsyoung** commented on **2025-03-07** at **19:50:29**
 
 UPDATE: Can confirm it also works with `-ub 64` (still have `GGML_CUDA_FORCE_MMQ` enabled). Will continue to try different settings to narrow it down.
 
@@ -187,13 +187,7 @@ llama_print_timings:       total time = 8991556.33 ms / 286721 tokens
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-07** at **19:50:29**:<br>
-
-UPDATE: Can confirm it also works with `-ub 64` (still have `GGML_CUDA_FORCE_MMQ` enabled). Will continue to try different settings to narrow it down.
-
----
-
-👤 **ikawrakow** commented the **2025-03-10** at **14:06:25**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **14:06:25**
 
 I think there are precision issues in the MLA way of computing attention.
 
@@ -208,7 +202,7 @@ To come back to your use case, `IQ4_K` and `IQ4_KSS` don't have quantized matrix
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **14:22:33**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **14:22:33**
 
 Thank you for looking into this @ikawrakow - I have a quantisation of DeepSeek-R1 currently 50% complete with all attention tensors (as per your recommendations) set to q8_0 precision. 
 
@@ -216,19 +210,19 @@ Once it's complete, I'll run perplexity and report back and see if I get any NaN
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **16:55:16**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **16:55:16**
 
 @ikawrakow Tried a new quant with all attention params being set to q8_0, no luck unfortunately. Starts producing NaNs at 10 chunks with `-ub 512` with `-fmoe -mla 2 -fa` with latest PR. Will try to run with some other combinations. Any suggestions to help you debug?
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **16:58:29**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **16:58:29**
 
 I'm running out of ideas. In case you have it, can you post the quantization log?
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:02:08**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **17:02:08**
 
 > I'm running out of ideas. In case you have it, can you post the quantization log?
 
@@ -2692,7 +2686,7 @@ Perplexity run:
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:06:29**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **17:06:29**
 
 PPL run:
 ```
@@ -3151,11 +3145,10 @@ perplexity: tokenization took 1153.27 ms
 perplexity: calculating perplexity over 561 chunks, n_ctx=512, batch_size=2048, n_seq=4
 perplexity: 14.67 seconds per pass - ETA 34.30 minutes
 [1]2.6227,[2]3.3777,[3]2.4231,[4]2.0272,[5]1.8467,[6]1.6985,[7]1.5984,[8]1.5279,[9]1.4757,[10]nan,[11]nan,[12]nan,[13]nan,[14]nan,[15]nan,[16]nan,[17]nan,[18]nan,[19]nan,[20]nan,[21]nan,[22]nan,[23]nan,[24]nan,^C
-```
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **17:10:14**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **17:10:14**
 
 Thanks. Don't see anything wrong.
 
@@ -3163,7 +3156,7 @@ Can you try with #251?
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:13:27**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **17:13:27**
 
 > Thanks. Don't see anything wrong.
 > 
@@ -3173,7 +3166,7 @@ Yes no problem, building - will report back. Also, I noticed that it had set n_s
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **17:18:41**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **17:18:41**
 
 > I noticed that it had set n_seq=4 
 
@@ -3181,7 +3174,7 @@ No, this gets calculated internally. It is `n_batch / n_ctx`. If you use `n_ctx 
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:19:20**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **17:19:20**
 
 > > I noticed that it had set n_seq=4
 > 
@@ -3191,7 +3184,7 @@ ah, got it
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:32:26**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **17:32:26**
 
 I'm afraid it is producing NaNs again with #251 @ikawrakow.
 
@@ -3205,27 +3198,13 @@ without `-fa`:
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:32:26**:<br>
-
-I'm afraid producing NaNs again.
-
-It starts producing NaNs on chunk 10 with `-fa` and without chunk 17. 
-
-`-fa`:
-`[1]2.6215,[2]3.3918,[3]2.4254,[4]2.0245,[5]1.8467,[6]1.6971,[7]1.5972,[8]1.5278,[9]1.4765,[10]nan,[11]nan,[12]nan,[13]nan,[14]nan,[15]nan,[16]nan,[17]nan,`
-
-without `-fa`:
-`[1]2.6160,[2]3.3842,[3]2.4246,[4]2.0259,[5]1.8470,[6]1.6980,[7]1.5990,[8]1.5281,[9]1.4770,[10]1.4340,[11]1.4205,[12]1.4415,[13]1.4523,[14]1.5825,[15]1.7121,[16]1.7733,[17]nan,[18]nan,[19]nan,[20]nan,[21]nan,[22]nan,[23]nan,[24]nan,^C`
-
----
-
-👤 **ikawrakow** commented the **2025-03-10** at **17:40:20**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **17:40:20**
 
 Do you still have the `IQ3_S` quantization? Does it produce NaNs with that with `mla = 2, fa = 1`?
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:45:03**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **17:45:03**
 
 > Do you still have the `IQ3_S` quantization? Does it produce NaNs with that with `mla = 2, fa = 1`?
 
@@ -3237,19 +3216,19 @@ In short, it didn't produce NaNs
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:48:23**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **17:48:23**
 
 You can also rule out `-fmoe` being the issue, did a run with `fmoe = 0, fa = 0, mla = 2`, still produced NaN's after 16 chunks.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **17:49:16**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **17:49:16**
 
 Can we conclude from this that `IQ4_K` and `IQ4_KSS` do not work for DeepSeekR1? This would be really strange because I have tried `IQ4_K` on quite a few models, and it always was significantly better than `Q4_K`.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:52:16**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **17:52:16**
 
 > Can we conclude from this that `IQ4_K` and `IQ4_KSS` do not work for DeepSeekR1? This would be really strange because I have tried `IQ4_K` on quite a few models, and it always was significantly better than `Q4_K`.
 
@@ -3257,13 +3236,13 @@ Yeah, very possible. I mean, the model output seems good to me, but if NaN's are
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **17:52:16**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **17:52:16**
 
 Te only thing that comes to mind at this point is to quantize the same model as this not working one, replacing `iq4_k` with `q4_K`.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **17:53:45**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **17:53:45**
 
 Also, if I do `-ub 32` it seems to work as per here: https://github.com/ikawrakow/ik_llama.cpp/issues/245#issuecomment-2707282221. 
 
@@ -3271,7 +3250,7 @@ It does make me think that it's not a model problem, and instead inference code 
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **18:03:19**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **18:03:19**
 
 `mla = 0, fa = 0, fmoe = 0` produces NaN's after only 2 chunks.
 
@@ -3281,7 +3260,7 @@ It does make me think that it's not a model problem, and instead inference code 
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **18:07:11**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **18:07:11**
 
 `-ub 32` is exactly the same path as no `-ub` argument when running perplexity. The only difference is in the sizes of the matrices that get multiplied. As these are multi-threaded, and the way the work gets split up between the threads depends on the size of the matrices involved, results can change because of that. 
 
@@ -3293,17 +3272,7 @@ There is an actual difference between `IQ3_S` and `IQ4_K`. `IQ3_S` has a quantiz
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **18:07:11**:<br>
-
-`-ub 32` is exactly the same path as no `-ub` argument when running perplexity. The only difference is in the sizes of the matrices that get multiplied. As these are multi-threaded, and the way the work gets split up between the threads depends on the size of the matrices involved, results can change because of that. 
-
-Token generation takes a slightly different path.
-
-But if you get NaNs with `mla = 0`, this means that even standard attention is not working. But standard attention has been tested for so long with so many models, I find it extremely unlikely that the issue would be there. This really points to the MoE part. And as this worked with experts quantized with `IQ3_S`, it would mean it is `IQ4_KSS` and `IQ4_K` not working.
-
----
-
-👤 **davidsyoung** commented the **2025-03-10** at **18:15:12**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **18:15:12**
 
 Ah, I see.
 
@@ -3330,44 +3299,19 @@ Would it be hard to build a MMQ kernel for `IQX_K`?
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **18:15:12**:<br>
-
-Ah, I see.
-
-I doubt this narrows it down, but.
-
-It actually worked with `IQ3_M` as well, which I believe has some tensors as `IQ4_K`. 
-
-https://github.com/ikawrakow/ik_llama.cpp/pull/239#issuecomment-2702105979
-
-```
-llama_model_loader: - type  f32:  361 tensors
-llama_model_loader: - type q8_0:  306 tensors
-llama_model_loader: - type q5_K:   61 tensors
-llama_model_loader: - type q6_K:    1 tensors
-llama_model_loader: - type iq3_s:  407 tensors
-llama_model_loader: - type iq4_k:   11 tensors
-```
-
-But not many tensors. 
-
----
-
----
-
-👤 **ikawrakow** commented the **2025-03-10** at **18:16:22**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **18:16:22**
 
 Btw, what is the CPU in this system and how much RAM is there? A simple experiment to narrow it down would be to run the MoE part on the CPU (in case there is enough RAM and the CPU is not too slow)
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **18:17:46**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **18:17:46**
 
 EPYC 7713 w/ 256GB DDR4 RAM. I don't think the experts will fit on the RAM sadly.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **18:18:59**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **18:18:59**
 
 > It actually worked with IQ3_M as well, which I believe has some tensors as IQ4_K.
 
@@ -3377,7 +3321,7 @@ I need to go get dinner now.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **18:22:26**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **18:22:26**
 
 Does this mean that the first 8 layers of the model are set to IQ4_K? Could be reading it wrong.
 
@@ -3397,13 +3341,13 @@ Could it possibly be an issue with the `-ot` commands? I need to run these to ge
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **18:30:45**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **18:30:45**
 
 Could I replace `IQ4_K` with `IQ4_XS`? Or would that suffer the same type of issues as the `IQX_K` quants? Trying to find a suitable quant to replace, and slightly smaller wouldn't be the worst in terms of VRAM.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **18:35:49**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **18:35:49**
 
 > Could I replace `IQ4_K` with `IQ4_XS`? Or would that suffer the same type of issues as the `IQX_K` quants? Trying to find a suitable quant to replace, and slightly smaller wouldn't be the worst in terms of VRAM.
 
@@ -3411,7 +3355,7 @@ IQ4_XS has MMQ kernel, so yes, you can use that.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **18:38:52**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **18:38:52**
 
 > > Could I replace `IQ4_K` with `IQ4_XS`? Or would that suffer the same type of issues as the `IQX_K` quants? Trying to find a suitable quant to replace, and slightly smaller wouldn't be the worst in terms of VRAM.
 > 
@@ -3423,17 +3367,7 @@ UPDATE: Will quant with IQ4_XS, and hopefully get a NaN-Free PPL and go from the
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **18:38:52**:<br>
-
-> > Could I replace `IQ4_K` with `IQ4_XS`? Or would that suffer the same type of issues as the `IQX_K` quants? Trying to find a suitable quant to replace, and slightly smaller wouldn't be the worst in terms of VRAM.
-> 
-> IQ4_XS has MMQ kernel, so yes, you can use that.
-
-Or would IQ4_NL be comparable to IQ4_K?
-
----
-
-👤 **davidsyoung** commented the **2025-03-10** at **23:31:08**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **23:31:08**
 
 Quanted with `IQ4_XS` as primary type:
 
@@ -5927,7 +5861,7 @@ At least no NaNs!
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-11** at **11:52:41**:<br>
+👤 **ikawrakow** commented on **2025-03-11** at **11:52:41**
 
 > Thought perplexity wasn't great here, was hoping for better.
 
@@ -5947,7 +5881,7 @@ Actually, a layer with `IQ4_K` for `ffn_dow_exps` and `IQ3_S` for `ffn_up/gate_e
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-11** at **19:29:11**:<br>
+👤 **davidsyoung** commented on **2025-03-11** at **19:29:11**
 
 > > Thought perplexity wasn't great here, was hoping for better.
 > 

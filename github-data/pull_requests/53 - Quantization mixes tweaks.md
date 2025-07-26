@@ -1,10 +1,13 @@
-### 🔀 [#53](https://github.com/ikawrakow/ik_llama.cpp/pull/53) - Quantization mixes tweaks
+### [Pull Request #53](https://github.com/ikawrakow/ik_llama.cpp/pull/53) - Quantization mixes tweaks
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/qmix_tweaks` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-14 |
 | **Updated** | 2024-09-14 |
+| **Merged** | 2024-09-14 |
 
 ---
 

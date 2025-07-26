@@ -1,8 +1,10 @@
-### 🔀 [#193](https://github.com/ikawrakow/ik_llama.cpp/pull/193) - RPC sync
+### [Pull Request #193](https://github.com/ikawrakow/ik_llama.cpp/pull/193) - RPC sync
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `s6/rpc` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-08 |
 | **Updated** | 2025-06-15 |
 
@@ -16,15 +18,15 @@ This compiles, but has not been tested yet.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** commented the **2025-02-08** at **13:23:08**:<br>
+👤 **ikawrakow** commented on **2025-02-08** at **13:23:08**
 
 I never use RPC, have never looked into the RPC code, so I'll have to rely on you for self-review and testing.
 
 ---
 
-👤 **saood06** commented the **2025-02-10** at **16:40:34**:<br>
+👤 **saood06** commented on **2025-02-10** at **16:40:34**
 
 @jukofyork 
 >I strongly suspect something funky is going on 
@@ -36,33 +38,23 @@ This fork has much faster PP speeds, has Deepseek MLA support with a flag (-mla)
 
 ---
 
-👤 **saood06** commented the **2025-02-27** at **23:11:54**:<br>
+👤 **saood06** commented on **2025-02-27** at **23:11:54**
 
 This has been tested, and does not currently work. I'm not sure why as the errors I'm getting seem to have never been encountered by people on llama.cpp.
 
 ---
 
-👤 **saood06** submitted a review the **2025-02-27** at **23:14:23**: 💬 `COMMENTED`
+👤 **ubergarm** commented on **2025-04-11** at **18:32:04**
+
+@saood06 
+
+I just came across another [llama.cpp fork called prima.cpp](https://github.com/Lizonghang/prima.cpp?tab=readme-ov-file#-key-features) which claims to have improved support for multi-device distributed inferencing.
+
+I haven't tried it, just saw it on reddit today. Might be worth a shot given your GPU is in a different system than your big RAM box.
 
 ---
 
-👤 **saood06** commented during a code review the **2025-02-27** at **23:14:23** on `ggml/src/ggml-rpc.cpp`:<br>
-
-The RPC client crashes here, which happens as the RPC server hits an issue.
-
----
-
-👤 **saood06** submitted a review the **2025-02-27** at **23:17:32**: 💬 `COMMENTED`
-
----
-
-👤 **saood06** commented during a code review the **2025-02-27** at **23:17:32** on `ggml/src/ggml-rpc.cpp`:<br>
-
-I'm fairly certain this is where the RPC server is crashing, although it doesn't print the message as I never ran with GGML_DEBUG on.
-
----
-
-👤 **saood06** commented the **2025-04-12** at **04:39:37**:<br>
+👤 **saood06** commented on **2025-04-12** at **04:39:37**
 
 > @saood06
 > 
@@ -74,6 +66,6 @@ Thanks for the link, it is interesting. I think it would work for dense models b
 
 ---
 
-👤 **saood06** commented the **2025-06-15** at **11:26:50**:<br>
+👤 **saood06** commented on **2025-06-15** at **11:26:50**
 
 Closed as superseded by #480 / #506

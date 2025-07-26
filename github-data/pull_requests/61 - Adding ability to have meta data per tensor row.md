@@ -1,10 +1,14 @@
-### 🔀 [#61](https://github.com/ikawrakow/ik_llama.cpp/pull/61) - Adding ability to have meta data per tensor row
+### [Pull Request #61](https://github.com/ikawrakow/ik_llama.cpp/pull/61) - Adding ability to have meta data per tensor row
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/per_row_scale` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-25 |
 | **Updated** | 2024-09-27 |
+| **Merged** | 2024-09-27 |
+| **Labels** | `Breaking change` |
 
 ---
 

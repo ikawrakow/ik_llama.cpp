@@ -1,4 +1,4 @@
-### 🐛 [#456](https://github.com/ikawrakow/ik_llama.cpp/issues/456) - Bug: no compilation without IQK_MULMAT
+### [Issue #456](https://github.com/ikawrakow/ik_llama.cpp/issues/456) - Bug: no compilation without IQK_MULMAT
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
@@ -40,14 +40,14 @@ will not be compiled because "static void ggml_compute_forward_mul_mat_id_up_gat
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2025-05-25** at **04:30:11**:<br>
+👤 **ikawrakow** commented on **2025-05-25** at **04:30:11**
 
 It no longer works without `GGML_USE_IQK_MULMAT`, so I'll just remove that option.
 
 ---
 
-👤 **Nexesenex** commented the **2025-05-25** at **12:27:17**:<br>
+👤 **Nexesenex** commented on **2025-05-25** at **12:27:17**
 
 Et voilà!

@@ -1,10 +1,13 @@
-### 🔀 [#182](https://github.com/ikawrakow/ik_llama.cpp/pull/182) - Faster Q4_K_R4 and Q5_K_R4 on AVX2/Zen4
+### [Pull Request #182](https://github.com/ikawrakow/ik_llama.cpp/pull/182) - Faster Q4_K_R4 and Q5_K_R4 on AVX2/Zen4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/qx_k_b32_avx2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-30 |
 | **Updated** | 2025-01-30 |
+| **Merged** | 2025-01-30 |
 
 ---
 

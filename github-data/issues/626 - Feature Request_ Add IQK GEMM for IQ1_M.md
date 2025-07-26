@@ -1,10 +1,12 @@
-### ✨ [#626](https://github.com/ikawrakow/ik_llama.cpp/issues/626) - Feature Request: Add IQK GEMM for IQ1_M
+### [Issue #626](https://github.com/ikawrakow/ik_llama.cpp/issues/626) - Feature Request: Add IQK GEMM for IQ1_M
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-07-18 |
 | **Updated** | 2025-07-18 |
+| **Labels** | `enhancement` |
+| **Assignees** | `ikawrakow` |
 
 ---
 
@@ -37,9 +39,9 @@ Either add IQK GEMM for `IQ1_M`, or at least quard against the absence of a GEMM
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ubergarm** commented the **2025-07-18** at **14:43:32**:<br>
+👤 **ubergarm** commented on **2025-07-18** at **14:43:32**
 
 I'll not open a new issue regarding unsloths Kimi-K2-Instruct-IQ1_S failing with `-fmoe` as discussed on other threads here and [reported on hugging face here](https://github.com/ikawrakow/ik_llama.cpp/issues/626). I also recreated the issue and observed removing `-fmoe` allows that model to run.
 
@@ -66,13 +68,13 @@ Given the "unsloth dynamic" is to change the tensor size up and down across laye
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-18** at **14:46:02**:<br>
+👤 **ikawrakow** commented on **2025-07-18** at **14:46:02**
 
 I created issue #626 for this, so no need to add another one.
 
 ---
 
-👤 **ubergarm** commented the **2025-07-18** at **17:34:41**:<br>
+👤 **ubergarm** commented on **2025-07-18** at **17:34:41**
 
 Confirmed I can now run unsloths `Kimi-K2-Instruct-UD-IQ1_S-00001-of-00006.gguf` with `-fmoe`! Thanks!
 

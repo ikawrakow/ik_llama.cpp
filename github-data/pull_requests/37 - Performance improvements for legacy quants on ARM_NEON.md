@@ -1,10 +1,13 @@
-### 🔀 [#37](https://github.com/ikawrakow/ik_llama.cpp/pull/37) - Performance improvements for legacy quants on ARM_NEON
+### [Pull Request #37](https://github.com/ikawrakow/ik_llama.cpp/pull/37) - Performance improvements for legacy quants on ARM_NEON
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/neon_improve_legacy_quants` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-03 |
 | **Updated** | 2024-09-04 |
+| **Merged** | 2024-09-04 |
 
 ---
 

@@ -1,9 +1,10 @@
-### 🗣️ [#451](https://github.com/ikawrakow/ik_llama.cpp/discussions/451) - Context reuse / context shift for long prompts
+### [Discussion #451](https://github.com/ikawrakow/ik_llama.cpp/discussions/451) - Context reuse / context shift for long prompts
 
 | **Author** | `SamuelOliveirads` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-05-23 |
-| **Updated** | 2025-06-10 |
+| **Updated** | 2025-07-22 |
 
 ---
 
@@ -13,7 +14,7 @@ Hi! — I'm coming from koboldcpp, and I've been testing this fork due to its op
 
 One feature I found very useful in koboldcpp was the context shift functionality, which helps when working with very long context windows.
 
-I noticed that `llama.cpp` implemented something similar in [PR #9866](https://github.com/ggml-org/llama.cpp/pull/9866), which allows for reusing the prompt cache more efficiently instead of regenerating the entire prompt every time the context overflows.
+I noticed that `llama.cpp` implemented something similar in [PR [#9866](https://github.com/ikawrakow/ik_llama.cpp/issues/9866)](https://github.com/ggml-org/llama.cpp/pull/9866), which allows for reusing the prompt cache more efficiently instead of regenerating the entire prompt every time the context overflows.
 
 I searched through this repo but couldn’t find an equivalent implementation.
 
@@ -33,30 +34,32 @@ Thanks!
 
 #### 🗣️ Discussion
 
-👤 **mtcl** replied the **2025-05-30** at **16:47:09**:<br>
+👤 **mtcl** commented on **2025-05-30** at **16:47:09**
 
 This is a very useful usecase because of which I have been switching back and forth between ik_llama.cpp and llama.cpp. This works seamlessly with llama.cpp i have noticed. I always thought I am doing something wrong here and it is my user error, but apparantly it is not! Thank you for mentioning it here.
 
 ---
 
-👤 **cmoncure** replied the **2025-05-30** at **19:51:44**:<br>
+👤 **cmoncure** commented on **2025-05-30** at **19:51:44**
 
 This would be a massive win for me.  Currently PP is the millstone around the neck (for which you have had to endure many of my ignorant comments in support of a solution).
 
 KV Cache reuse and tool calling would open up whole new worlds.
 
-> 👤 **mtcl** replied the **2025-06-05** at **02:26:48**:<br>
+> 👤 **mtcl** replied on **2025-06-05** at **02:26:48**
+> 
 > I agree 100% with you. Given that I built my own tool calling solution for ik_llama.cpp, at this point of time kv cache reuse would mean an instant switch for me to this!
 
 ---
 
-👤 **SamuelOliveirads** replied the **2025-06-03** at **21:52:10**:<br>
+👤 **SamuelOliveirads** commented on **2025-06-03** at **21:52:10**
 
 Glad to see that others are also interested in this feature! I was about to open an issue myself, but I noticed that @saood06 is already looking into something similar [here](https://github.com/ikawrakow/ik_llama.cpp/issues/455#issuecomment-2917718499) — so now it’s just a matter of waiting.
 
 By the way, @saood06, if you need any help with testing, I’d be happy to assist.
 
-> 👤 **saood06** replied the **2025-06-06** at **09:16:14**:<br>
+> 👤 **saood06** replied on **2025-06-06** at **09:16:14**
+> 
 > Since there does seem to be demand, and people waiting, I'll provide an update which explains what my plan is (and the benefits, but also the limitations), and the current status.
 > 
 > The goal is to create a new mechanism where if enabled a [trie](https://en.wikipedia.org/wiki/Trie) of all processed tokens is kept that can be saved and restored to a file. This should allow you to keep every explored branch of a session (or multiple if you share a large initial prompt between sessions) with the least amount of space and no quality loss.
@@ -66,11 +69,13 @@ By the way, @saood06, if you need any help with testing, I’d be happy to assis
 > I was stalled because of #436 but now that saving and loading works I am now unblocked, but this still seems like a large undertaking and may take some time.
 > 
 > I may end up porting the chunk/shift method (or @cmoncure is welcome to do it) anyway (even before I finish), since as I said they have different tradeoffs, but integrating the two fully as nice as it sounds (which would let you be able to chunk and shift from the trie) seems way too difficult.
+
+> 👤 **cmoncure** replied on **2025-06-06** at **15:16:33**
 > 
-> 👤 **cmoncure** replied the **2025-06-06** at **15:16:33**:<br>
 > Do you have any insight into the nature or mechanism behind the quality loss with chunking?
+
+> 👤 **ikawrakow** replied on **2025-06-06** at **15:29:13**
 > 
-> 👤 **ikawrakow** replied the **2025-06-06** at **15:29:13**:<br>
 > Are we talking about the `llama.cpp` feature (taken from kobold.cpp) where if I have
 > ```
 > aaaaccccbbbb
@@ -90,15 +95,17 @@ By the way, @saood06, if you need any help with testing, I’d be happy to assis
 > The existing KV cache, despite context shifting and all that, will be heavily biased towards "brilliant", "amazing" and such.
 > 
 > Do you see the problem? You cannot undo the impact of the skipped tokens by just changing the position encoding via RoPE.
+
+> 👤 **saood06** replied on **2025-06-06** at **15:41:47**
 > 
-> 👤 **saood06** replied the **2025-06-06** at **15:41:47**:<br>
 > > Are we talking about the `llama.cpp` feature (taken from kobold.cpp) where if I have
 > 
 > Yes that is what we are talking about. Thank you for the very clear example (so much better than what I was typing out).
 > 
 > I'm not sure this is from kobold.cpp. I know they offer a much better context shift where they effectively keep the context full at all times once you hit the limit unlike llama.cpp and here where the context shift unnecessarily removes far more tokens than is needed (I think half) and thus shifts are less frequent. Kobold.cpp on the other hand shifts every token which keeps the maximum information allowed at all times.
+
+> 👤 **cmoncure** replied on **2025-06-06** at **19:40:13**
 > 
-> 👤 **cmoncure** replied the **2025-06-06** at **19:40:13**:<br>
 > >You cannot undo the impact of the skipped tokens by just changing the position encoding via RoPE.
 > 
 > So...
@@ -112,8 +119,9 @@ By the way, @saood06, if you need any help with testing, I’d be happy to assis
 > 
 > 1. Is the effect of tokens on the KV cache _additive_ or _multiplicative_ (or something else)?  If additive, can the effect of tokens removed from the prompt be recalculated and their effect subtracted?
 > 2. If the presence of token PP computation in the KV cache poisons it forever, then doesn't that imply that tokens outside the context window can continue to affect generation? That would contradict my mental model of how all this is supposed to work. Edit: I suppose that's why the whole thing must be scrapped each time when the context window fills up. It makes sense.
+
+> 👤 **saood06** replied on **2025-06-07** at **06:17:39**
 > 
-> 👤 **saood06** replied the **2025-06-07** at **06:17:39**:<br>
 > >     4. Once a token has acted on the KV cache, its effect poisons the KV cache indelibly.
 > > 
 > > 
@@ -130,8 +138,9 @@ By the way, @saood06, if you need any help with testing, I’d be happy to assis
 > If you shift "The main actor was" then you will see the influence of the removed tokens (but it will be much faster as you are not recomputing those tokens).
 > 
 > If you do recompute the tokens "The main actor was"  and do not shift then it will be slower (as you have to actually compute the tokens again) but you will not experience the lingering impact of "I absolutely enjoyed it."
+
+> 👤 **cmoncure** replied on **2025-06-10** at **02:35:21**
 > 
-> 👤 **cmoncure** replied the **2025-06-10** at **02:35:21**:<br>
 > >If you do recompute the tokens "The main actor was" and do not shift then it will be slower (as you have to actually compute the tokens again) but you will not experience the lingering impact of "I absolutely enjoyed it."
 > 
 > Forgive me if I've misunderstood.  Suppose we have the following prompt:
@@ -169,6 +178,6 @@ By the way, @saood06, if you need any help with testing, I’d be happy to assis
 
 ---
 
-👤 **cmoncure** replied the **2025-06-05** at **18:35:28**:<br>
+👤 **cmoncure** commented on **2025-06-05** at **18:35:28**
 
 Might have to do it myself.

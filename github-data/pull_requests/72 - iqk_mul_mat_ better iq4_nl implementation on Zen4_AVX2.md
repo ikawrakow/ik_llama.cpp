@@ -1,10 +1,13 @@
-### 🔀 [#72](https://github.com/ikawrakow/ik_llama.cpp/pull/72) - iqk_mul_mat: better iq4_nl implementation on Zen4/AVX2
+### [Pull Request #72](https://github.com/ikawrakow/ik_llama.cpp/pull/72) - iqk_mul_mat: better iq4_nl implementation on Zen4/AVX2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/better_iq4_nl` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-01 |
 | **Updated** | 2024-10-01 |
+| **Merged** | 2024-10-01 |
 
 ---
 

@@ -1,10 +1,13 @@
-### 🔀 [#574](https://github.com/ikawrakow/ik_llama.cpp/pull/574) - Change KQ mask padding to 64
+### [Pull Request #574](https://github.com/ikawrakow/ik_llama.cpp/pull/574) - Change KQ mask padding to 64
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/kq_mask_padding_64` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-03 |
 | **Updated** | 2025-07-03 |
+| **Merged** | 2025-07-03 |
 
 ---
 
@@ -16,9 +19,9 @@ It is 64 in mainline too.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** commented the **2025-07-03** at **08:42:47**:<br>
+👤 **ikawrakow** commented on **2025-07-03** at **08:42:47**
 
 So, I updated the Nvidia driver on one of my two remote machines to 575, which enables Vulkan coopmat2. This triggers an assert in the Vulkan back-end, which is the reason for this PR fixing it. But I was more interested in the performance implications as I saw a factor of 3 lower Vulkan performance with coopmat1 compared to CUDA. As per [this comment](https://github.com/ikawrakow/ik_llama.cpp/discussions/562#discussioncomment-13630937), the difference between the CUDA and Vulkan back-ends on the same Nvidia GPU should be in the range of 20-25% when coopmat2 is enabled. Sadly, this is not the case on my RTX-4080. Coopmat2 is better, but PP is still a factor of 2 lower compared to CUDA. Here is a sweep bench for `Q4_0`-quantized LlaMA-3.1-8B-Instruct for u-batch of 1024 and FA enabled:
 

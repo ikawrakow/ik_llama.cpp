@@ -1,10 +1,13 @@
-### 🔀 [#584](https://github.com/ikawrakow/ik_llama.cpp/pull/584) - Vulkan: flash attention for DeepSeek models
+### [Pull Request #584](https://github.com/ikawrakow/ik_llama.cpp/pull/584) - Vulkan: flash attention for DeepSeek models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/vulkan_fattn` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-04 |
 | **Updated** | 2025-07-05 |
+| **Merged** | 2025-07-05 |
 
 ---
 

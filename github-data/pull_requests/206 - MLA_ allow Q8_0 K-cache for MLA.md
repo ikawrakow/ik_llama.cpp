@@ -1,16 +1,19 @@
-### 🔀 [#206](https://github.com/ikawrakow/ik_llama.cpp/pull/206) - MLA: allow Q8_0 K-cache for MLA
+### [Pull Request #206](https://github.com/ikawrakow/ik_llama.cpp/pull/206) - MLA: allow Q8_0 K-cache for MLA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/mla_q80` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-13 |
 | **Updated** | 2025-02-13 |
+| **Merged** | 2025-02-13 |
 
 ---
 
 #### Description
 
-After PR #205 we have two KV caches left when using MLA:
+After PR [#205](https://github.com/ikawrakow/ik_llama.cpp/issues/205) we have two KV caches left when using MLA:
 * `kv_l` - contiguous, not transposed
 * `kvt_l` - a transposed version of `kv_l`
 

@@ -1,16 +1,19 @@
-### 🔀 [#124](https://github.com/ikawrakow/ik_llama.cpp/pull/124) - iq2_bn_r4: fastest Bitnet CPU implementation on the planet
+### [Pull Request #124](https://github.com/ikawrakow/ik_llama.cpp/pull/124) - iq2_bn_r4: fastest Bitnet CPU implementation on the planet
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq2_bn_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-06 |
 | **Updated** | 2024-12-06 |
+| **Merged** | 2024-12-06 |
 
 ---
 
 #### Description
 
-In the footsteps of #118, #119, #120, #121, #122, #123, this PR adds `IQ2_BN_R4`, a 4-rows interleaved packing of the 2-bit Bitnet quantization type `IQ2_BN`.
+In the footsteps of [#118](https://github.com/ikawrakow/ik_llama.cpp/issues/118), [#119](https://github.com/ikawrakow/ik_llama.cpp/issues/119), [#120](https://github.com/ikawrakow/ik_llama.cpp/issues/120), [#121](https://github.com/ikawrakow/ik_llama.cpp/issues/121), [#122](https://github.com/ikawrakow/ik_llama.cpp/issues/122), [#123](https://github.com/ikawrakow/ik_llama.cpp/issues/123), this PR adds `IQ2_BN_R4`, a 4-rows interleaved packing of the 2-bit Bitnet quantization type `IQ2_BN`.
 
 Here is `PP-512` for Bitner-1.58b-3B on `Zen4` (Ryzen-7950X), `ARM_NEON` (M2-Max) and `AVX2` (Ryzen-5975WX)
 

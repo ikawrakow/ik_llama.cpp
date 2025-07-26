@@ -1,15 +1,16 @@
-### 🗣️ [#590](https://github.com/ikawrakow/ik_llama.cpp/discussions/590) - How important is Vulkan back-end development?
+### [Discussion #590](https://github.com/ikawrakow/ik_llama.cpp/discussions/590) - How important is Vulkan back-end development?
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-07-06 |
-| **Updated** | 2025-07-18 |
+| **Updated** | 2025-07-25 |
 
 ---
 
 #### Description
 
-Tthe Vulkan back-end in `ik_llama.cpp` is now usable, and performance is better than `llama.cpp` (see, e.g., PR #584 that has a comparison for a MoE model). But compared to CUDA on the same GPU, performance is much lower, especially for MoE models (and most users appear to be using `ik_llama.cpp` exactly for one of the giant MoE models). I have mixed feelings how to proceed:
+Tthe Vulkan back-end in `ik_llama.cpp` is now usable, and performance is better than `llama.cpp` (see, e.g., PR [#584](https://github.com/ikawrakow/ik_llama.cpp/issues/584) that has a comparison for a MoE model). But compared to CUDA on the same GPU, performance is much lower, especially for MoE models (and most users appear to be using `ik_llama.cpp` exactly for one of the giant MoE models). I have mixed feelings how to proceed:
 * There is much more performance optimization potential in the Vulkan back-end compared to CUDA or CPU. So, from that point of view it seems worthwhile to put some effort into optimizing the Vulkan back-end
 * I know nothing about Vulkan programming in general or the `llama.cpp` Vulkan back-end in particular, hence, at least initially, it will be an uphill battle. Without a significant interest from the user base, I don't feel particularly motivated to do this to myself.
 
@@ -17,13 +18,13 @@ Tthe Vulkan back-end in `ik_llama.cpp` is now usable, and performance is better 
 
 #### 🗣️ Discussion
 
-👤 **OneOfOne** replied the **2025-07-06** at **16:55:32**:<br>
+👤 **OneOfOne** commented on **2025-07-06** at **16:55:32**
 
 On AMD, vulkan is faster and more memory efficient than rocm.
 
 ---
 
-👤 **mcm007** replied the **2025-07-06** at **18:25:18**:<br>
+👤 **mcm007** commented on **2025-07-06** at **18:25:18**
 
 Currently, owners of Nvidia GPUs have access to a wide range of inference engines (e.g., vllm, exllama, sglang, mlc, aphrodite-engine) that are optimized for CUDA. This allows them to fully utilize their hardware, which is great.
 
@@ -38,7 +39,8 @@ Also, with Vulkan support would be possible to run the fast `ik_llama.cpp` on de
 
 I want to acknowledge the effort and quality of your work, therefore whatever you choose (improve speed, quants quality, Vulkan, features, ...) doesn't matter at the end: they will benefit us, users/community.
 
-> 👤 **saood06** replied the **2025-07-06** at **23:34:55**:<br>
+> 👤 **saood06** replied on **2025-07-06** at **23:34:55**
+> 
 > >Currently, owners of Nvidia GPUs have access to a wide range of inference engines (e.g., vllm, exllama, sglang, mlc, aphrodite-engine) that are optimized for CUDA. This allows them to fully utilize their hardware, which is great.
 > 
 > All of the ones you list do offer some form of AMD support: [vllm](https://docs.vllm.ai/en/v0.6.3/getting_started/amd-installation.html), exllama V2 with [builds](https://github.com/turboderp-org/exllamav2/releases/tag/v0.3.1) for rocm and plans for it in v3, [sglang](https://docs.sglang.ai/references/amd.html), [mlc](https://github.com/mlc-ai/mlc-llm) table shows both Vulkan and ROCm support, [aphrodite-engine](https://aphrodite.pygmalion.chat/installation/installation-rocm/).
@@ -50,8 +52,9 @@ I want to acknowledge the effort and quality of your work, therefore whatever yo
 > >Ryzen 3400G APU, using KS quants, re-use the quantized files, etc.
 > 
 > But I have owned and used 3400G (upgraded past it). I'm not sure if the iGPU would be better (or at least better enough to matter) than the AVX2 CPU backend, what I miss about the iGPU, is that it lets you run without discrete GPU (or fully passing it through to a VM).
+
+> 👤 **mcm007** replied on **2025-07-07** at **05:45:28**
 > 
-> 👤 **mcm007** replied the **2025-07-07** at **05:45:28**:<br>
 > > All of the ones you list do offer some form of AMD support: [vllm](https://docs.vllm.ai/en/v0.6.3/getting_started/amd-installation.html), exllama V2 with [builds](https://github.com/turboderp-org/exllamav2/releases/tag/v0.3.1) for rocm and plans for it in v3, [sglang](https://docs.sglang.ai/references/amd.html), [mlc](https://github.com/mlc-ai/mlc-llm) table shows both Vulkan and ROCm support, [aphrodite-engine](https://aphrodite.pygmalion.chat/installation/installation-rocm/).
 > 
 > Usually, support is not complete and misses features or optimizations like FA, supporting all quants, and quantized cache. :disappointed:
@@ -64,8 +67,9 @@ I want to acknowledge the effort and quality of your work, therefore whatever yo
 > ![performance_comparison_tg](https://github.com/user-attachments/assets/8a9746e6-7dcd-4dcf-a19e-54a1b14b2f10)
 > 
 > * There is a way to increase the memory allocated to the iGPU [Smokeless_UMAF](https://github.com/DavidS95/Smokeless_UMAF) but it's a bit of a hassle - one needs to boot from the modified BIOS every time and make the modification.
+
+> 👤 **saood06** replied on **2025-07-07** at **06:09:54**
 > 
-> 👤 **saood06** replied the **2025-07-07** at **06:09:54**:<br>
 > > Usually, support is not complete and misses features or optimizations like FA, supporting all quants, and quantized cache. 😞
 > 
 > I did look into the state of flash attention support for ROCm and it did seem like they are working on it with things like paged attention not fully there yet.
@@ -83,8 +87,9 @@ I want to acknowledge the effort and quality of your work, therefore whatever yo
 > >There is a way to increase the memory allocated to the iGPU [Smokeless_UMAF](https://github.com/DavidS95/Smokeless_UMAF) but it's a bit of a hassle - one needs to boot from the modified BIOS every time and make the modification.
 > 
 > That is interesting to hear for if I ever use that CPU again (but if I do use it, I'm not sure if I'd want to allocate more or less VRAM assuming less is possible).
+
+> 👤 **ikawrakow** replied on **2025-07-07** at **07:16:56**
 > 
-> 👤 **ikawrakow** replied the **2025-07-07** at **07:16:56**:<br>
 > @mcm007  What is the CPU for these graphs? PP < 200 t/s seems quite low for a 0.6B model.
 > 
 > Here is what I get for `Q6_K`-quantized Qwen3-0.6B on my Ryzen-7950X CPU:
@@ -99,8 +104,9 @@ I want to acknowledge the effort and quality of your work, therefore whatever yo
 > |   512 |    128 |   2560 |    0.307 |  1665.39 |    1.783 |    71.80 |
 > |   512 |    128 |   3072 |    0.333 |  1537.27 |    1.856 |    68.95 |
 > |   512 |    128 |   3584 |    0.361 |  1419.98 |    1.925 |    66.48 |
+
+> 👤 **mcm007** replied on **2025-07-07** at **09:01:59**
 > 
-> 👤 **mcm007** replied the **2025-07-07** at **09:01:59**:<br>
 > @saood06
 > 
 > > I'd be curious about peak batched performance comparisons (I never got around to adding a plot tool to batched-bench)
@@ -195,8 +201,9 @@ I want to acknowledge the effort and quality of your work, therefore whatever yo
 >                               lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pft
 >                              hreshold avic v_vmsave_vmload vgif overflow_recov succor smca sev sev_es
 > `
+
+> 👤 **saood06** replied on **2025-07-07** at **09:18:30**
 > 
-> 👤 **saood06** replied the **2025-07-07** at **09:18:30**:<br>
 > > > I'd be curious about peak batched performance comparisons (I never got around to adding a plot tool to batched-bench)
 > > 
 > > Results here, click to expand
@@ -208,8 +215,9 @@ I want to acknowledge the effort and quality of your work, therefore whatever yo
 > >[AMD Ryzen 5 3400G](https://www.techpowerup.com/cpu-specs/ryzen-5-3400g.c2204), old and without AVX512 😄
 > 
 > My server CPU uses the first CPU architecture with AVX2.
+
+> 👤 **mcm007** replied on **2025-07-07** at **10:43:29**
 > 
-> 👤 **mcm007** replied the **2025-07-07** at **10:43:29**:<br>
 > Sorry, `0,1` was meant for `fa` I think. It used 0 in the typo `llm_load_tensors: offloaded 0/29 layers to GPU`.
 > 
 > <details>
@@ -313,13 +321,13 @@ I want to acknowledge the effort and quality of your work, therefore whatever yo
 
 ---
 
-👤 **firecoperana** replied the **2025-07-06** at **23:37:31**:<br>
+👤 **firecoperana** commented on **2025-07-06** at **23:37:31**
 
 You don't need to make the decision so soon. You can wait and see if this improvement in Vulkan draws more interests from Vulkan users or even developers. It's more important for AMD and Intel users, but they may not know about this yet.
 
 ---
 
-👤 **Nexesenex** replied the **2025-07-12** at **01:15:49**:<br>
+👤 **Nexesenex** commented on **2025-07-12** at **01:15:49**
 
 I personally voted against Vulkan, and only because the community's opinion was asked.
 
@@ -333,7 +341,7 @@ Especially after the IQ2_KL surprise! :)
 
 ---
 
-👤 **gapeleon** replied the **2025-07-17** at **09:04:15**:<br>
+👤 **gapeleon** commented on **2025-07-17** at **09:04:15**
 
 I voted 'no' but regret it / can't  remove my vote. I'd rather abstain :)
 
@@ -348,20 +356,22 @@ Intel are releasing a 24GB GPU later this year. And while Openvino and sycl are 
 
 ik_llama is a passion project right? So perhaps just do what would be most interesting?
 
-> 👤 **ikawrakow** replied the **2025-07-17** at **14:03:38**:<br>
+> 👤 **ikawrakow** replied on **2025-07-17** at **14:03:38**
+> 
 > > ik_llama is a passion project right? So perhaps just do what would be most interesting?
 > 
 > "Passion" would be pushing it. But yes, it is a hobby project that I started to hack around for fun. It has never been about winning a popularity contest, and I never went out to beat the drum in HN, Reddit, X, etc. But with time quite a few people have found the project useful, and this is what creates the mixed feelings: it is obvious that a high quality Vulkan back-end will be useful for many, I don't need to be convinced of that. At the same time I'm not sure that I will be having fun adding all the `ik_llama.cpp` quants and the optimizations for MoE models to the Vulkan back-end.
 > 
 > In any case, thank you for voting!
 > But 14 votes in total does not provide a very strong motivation.
+
+> 👤 **firecoperana** replied on **2025-07-17** at **15:20:39**
 > 
-> 👤 **firecoperana** replied the **2025-07-17** at **15:20:39**:<br>
 > It's not a big problem not adding ik_llama.cpp quants and other optimization to vulkan because Vulkan users are accustomed to missing features compared to CUDA, especially if you don't feel like doing it. Back then, there was no IQ quant support, and FA was barely supported in vulkan in mainline until recently, but it does not stop people from using Vulkan. Until there is more interest from Vulkan users, it's fine the way it is now.
 
 ---
 
-👤 **FullstackSensei** replied the **2025-07-18** at **00:12:31**:<br>
+👤 **FullstackSensei** commented on **2025-07-18** at **00:12:31**
 
 Found this discussion while searching for references to SYCL to see if building for SYCL is supported (having a lot of compilation errors).
 I have two inference rigs powered by Nvidia and I'm re-purposing a dual Cascade Lake machine I have for MoE inference by adding A770s.
@@ -375,7 +385,7 @@ I voted for improving the Vulkan backend but here are my two cents:
 
 ---
 
-👤 **ExeVirus** replied the **2025-07-18** at **02:45:00**:<br>
+👤 **ExeVirus** commented on **2025-07-18** at **02:45:00**
 
 You are correct to ask this question. Your target users are those with a single powerful GPU and a decent dram CPU combo. 
 
@@ -387,30 +397,40 @@ If your goal is mass popularity like llama.cpp, then yeah get started on Vulcan,
 
 ---
 
-👤 **ACWeb23** replied the **2025-07-18** at **04:06:52**:<br>
+👤 **ACWeb23** commented on **2025-07-18** at **04:06:52**
 
 I think improvements to vulkan performance would be a positive. This would allow uses greater flexibility when deciding on hardware. Also ARC and AMD GPU users would benefit from these improvements.
 
 ---
 
-👤 **lin72h** replied the **2025-07-18** at **04:24:40**:<br>
+👤 **lin72h** commented on **2025-07-18** at **04:24:40**
 
 Vote for Vulkan. It's the API that all vendors are pushing hard to support. AMD's RADV driver is really solid, Intel's ANV is steadily improving, and Jeff Bolz  from NVIDIA [has been contributing](https://github.com/ggml-org/llama.cpp/issues?q=is%3Apr+author%3Ajeffbolznv) to llama.cpp's Vulkan backend for several months now.
 
+> 👤 **jeffzhou2000** replied on **2025-07-22** at **15:09:30**
+> 
+> Can't agree more.
+> 
+> The ggml-vulkan backend supports many many AI operators and works fine/well on x86-Linux or arm-Linux or Windows but didn't works fine as expected on Snapdragon based Android phone. As the original author of ggml-vulkan said on 10/25/2024: "Sadly, in my experience Qualcomm is not handling Vulkan in a proper way, like AMD, Nvidia and Intel are, so there are a lot of quirks to deal with."
+> 
+> How to make ggml-vulkan run well on an Android phone equipped with Qualcomm Snapdragon mobile SoC? Thanks!
+
 ---
 
-👤 **ikawrakow** replied the **2025-07-18** at **04:53:10**:<br>
+👤 **ikawrakow** commented on **2025-07-18** at **04:53:10**
 
 Wow, I see 18 new votes since I last checked yesterday. For people who came here to vote for Vulkan but are not familiar with this project, the mainline `llama.cpp` Vulkan back-end has been ported to `ik_llama.cpp`(#608), so it should be on par with what you have in mainline. For models utilizing MLA attention (DeepSeek, Kimi-2), `ik_llama.cpp` outperforms `llama.cpp` by quite a margin as it is - see [here](https://github.com/ikawrakow/ik_llama.cpp/pull/608#issuecomment-3069950613).
 
-> 👤 **FullstackSensei** replied the **2025-07-18** at **08:56:51**:<br>
+> 👤 **FullstackSensei** replied on **2025-07-18** at **08:56:51**
+> 
 > > Wow, I see 18 new votes since I last checked yesterday. For people who came here to vote for Vulkan but are not familiar with this project, the mainline `llama.cpp` Vulkan back-end has been ported to `ik_llama.cpp`(#608), so it should be on par with what you have in mainline. For models utilizing MLA attention (DeepSeek, Kimi-2), `ik_llama.cpp` outperforms `llama.cpp` by quite a margin as it is - see [here](https://github.com/ikawrakow/ik_llama.cpp/pull/608#issuecomment-3069950613).
 > 
 > I took the liberty of posting about this discussion on LocalLLaMA and IntelArc subreddits. Hope you don't mind! Your work makes large models like DeepSeek and Kimi usable on hardware that doesn't cost a kidney, and Vulkan optimizations would only lower the cost to run such models at decent speeds.
 > 
 > This project doesn't get the exposure it deserves, IMO.. So, I thought at worst more people will become familiar with it.
+
+> 👤 **ikawrakow** replied on **2025-07-18** at **11:59:25**
 > 
-> 👤 **ikawrakow** replied the **2025-07-18** at **11:59:25**:<br>
 > > I took the liberty of posting about this discussion on LocalLLaMA and IntelArc subreddits. Hope you don't mind! 
 > 
 > This project was the best kept secret on Github for a while, but it no longer is, so feel free to post about it.
@@ -421,11 +441,104 @@ Wow, I see 18 new votes since I last checked yesterday. For people who came here
 
 ---
 
-👤 **DealsBeam** replied the **2025-07-18** at **11:54:36**:<br>
+👤 **DealsBeam** commented on **2025-07-18** at **11:54:36**
 
 Intel Arc GPUs would greatly benefit from Vulkan improvement, thanks for your hard work and dedicating your time on this great project.
 
-> 👤 **ikawrakow** replied the **2025-07-18** at **12:00:32**:<br>
+> 👤 **ikawrakow** replied on **2025-07-18** at **12:00:32**
+> 
 > > Intel Arc GPUs would greatly benefit from Vulkan improvement
 > 
 > My understanding was that the `llama.cpp` SYCL backend was the better option for Intel GPUs. This is no longer the case?
+
+> 👤 **lin72h** replied on **2025-07-23** at **08:22:54**
+> 
+> SYCL faces significant setup challenges and an uncertain future
+> 
+> Intel's recent decision to transfer oneAPI components to the UXL Foundation raises questions about the technology's long-term viability.
+> 
+> While framed as a "donation" to foster open collaboration, this move could equally be interpreted as Intel stepping back from active development, potentially leaving SYCL without the robust corporate backing it needs to thrive in a competitive landscape.
+
+> 👤 **FullstackSensei** replied on **2025-07-23** at **08:29:42**
+> 
+> SYCL doesn't perform better than Vulkan in all models/situations. And as lin72h just said, SYCL isn't easy to setup. Took me a few hours just to install it, and a few more to get clinfo to list the A770, and yet more time to get llama.cpp to compile with SYCL (ik_llama.cpp still doesn't). I've yet to see the SyCL llama.cpp I built run. The ipex-llm binaries load Qwen3 235B, but I can't get a single token out with one A770.
+
+> 👤 **ikawrakow** replied on **2025-07-23** at **08:36:55**
+> 
+> > ik_llama.cpp still doesn't
+> 
+> Don't waste your time trying. `ik_llama.cpp` does not support SYCL.
+
+> 👤 **FullstackSensei** replied on **2025-07-23** at **08:44:03**
+> 
+> More reason to support Vulkan!
+
+> 👤 **firecoperana** replied on **2025-07-23** at **11:49:01**
+> 
+> A770 actually performs much better on windows than linux with Vulkan and SYCL and it's easier to set up SYCL on windows. SYCL has the advantage in PP compared to Vulkan.
+
+> 👤 **jeffzhou2000** replied on **2025-07-23** at **12:51:39**
+> 
+> "SYCL faces significant setup challenges and an uncertain future", what's the future of ggml-opencl? It seems Vulkan is a more advanced API/specification than OpenCL.
+
+> 👤 **FullstackSensei** replied on **2025-07-23** at **13:11:22**
+> 
+> > "SYCL faces significant setup challenges and an uncertain future", what's the future of ggml-opencl? It seems Vulkan is a more advanced API/specification than OpenCL.
+> 
+> IMO, OpenCL is a dead end. I say this as someone who actually likes it more than the other compute APIs. The main problems with OpenCL are: 1) it was pioneered by Apple, who later abandoned it in favor of Metal. 2) Nvidia and AMD have made a mess of the standard. The Khronos Group have tried to fix this with OpenCL 3.0 (dubbed mainly as a reboot), but IMO it has failed to solve anything. It basically moved all the features that Nvidia and AMD couldn't agree on to being optional, rendering 3.0 compliance pretty much useless.
+> 
+> Vulkan compute is the future, IMO, outside CUDA. It still needs a good BLAS and DNN libraries, akin to cuBLAS and cuDNN, but that's the same with pretty much all the other compute APIs, including SYCL.
+
+> 👤 **jeffzhou2000** replied on **2025-07-23** at **13:28:07**
+> 
+> "Vulkan compute is the future". Agree! 
+> 
+> I am very interested in the topic about performance of llama.cpp on Android device(especially Android phone). I wrote a short tech article on July 8th: <<Overall evaluation of ggml-opencl,ggml-vulkan,ggml-hexagon and the default ggml backend on Android phone>>
+> 
+> https://github.com/jeffzhou2000/ggml-hexagon/discussions/64#discussioncomment-13738076
+
+> 👤 **FullstackSensei** replied on **2025-07-23** at **13:44:47**
+> 
+> Oh! You have a fork of llama.cpp for Hexagon!!!! You really should post about this on r/localllama! Everyone is building llama.cpp against the CPU backend on Android. Until five minutes ago, I thought the best option for Android was [executorch](https://github.com/pytorch/executorch) because it enbled using Hexagon. There goes my afternoon! 😛
+
+> 👤 **jeffzhou2000** replied on **2025-07-23** at **13:50:40**
+> 
+> The initial version of ggml-hexagon was launched on 04/2024 and reverse-engineered from executorch. the history of ggml-hexagon can be found at https://github.com/jeffzhou2000/ggml-hexagon/discussions/18.
+
+> 👤 **jeffzhou2000** replied on **2025-07-23** at **13:55:10**
+> 
+> > You really should post about this on r/localllama! Everyone is building llama.cpp against the CPU backend on Android. 
+> 
+> I only have accounts on github and huggingface(actually I have a twitter account but I'd like to distinguish technical accounts and social accounts), because these two places are purely technical communities. I do this for tech interest and keep my brain utilized and to have some fun.
+
+> 👤 **g2mt** replied on **2025-07-24** at **07:03:35**
+> 
+> If I'm not mistaken, sycl is still used in Intel's official llama.cpp builds (see https://github.com/intel/ipex-llm). From my experience, sycl is better at prompt processing compared to vulkan on Iris Xe integrated graphics unit.
+
+---
+
+👤 **ikawrakow** commented on **2025-07-22** at **15:07:48**
+
+So, my account was suspended for 2 days, and I'm going on vacation two days from now, so I'll look into the Vulkan situation when I come back in 2 weeks.
+
+> 👤 **FullstackSensei** replied on **2025-07-22** at **15:11:13**
+> 
+> Please try to mirror everything in this repo somewhere before you go. I'll try to setup a private mirror tonight using gitea.
+> 
+> I feel the suspension was a bit my fault, because of the attention it got after my reddit posts. Sorry!
+
+> 👤 **ikawrakow** replied on **2025-07-22** at **15:43:51**
+> 
+> See [this comment](https://github.com/ikawrakow/ik_llama.cpp/discussions/636#discussioncomment-13850788)
+
+---
+
+👤 **Mushoz** commented on **2025-07-24** at **14:43:06**
+
+Does the vulkan backend support the IQ1_KT quant? If not, is that something that is planned by any chance? Would love to play around with the new Qwen3 coder model, but with 128GB vram I can't fit anything bigger. I am using the AMD 395 with iGPU, so using CUDA is unfortunately not possible.
+
+---
+
+👤 **jagusztinl** commented on **2025-07-25** at **08:51:04**
+
+All PCs and laptops with igpu (no nvidia/adm gpu) have a huge benefit from Vulkan. If you ckeck the ollama project their users begging it for more then 1 year. Great that ik:llama.cpp will have it.

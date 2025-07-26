@@ -1,24 +1,27 @@
-### 🔀 [#563](https://github.com/ikawrakow/ik_llama.cpp/pull/563) - Merge vulkan code from mainline up to commit of 6/28/2025
+### [Pull Request #563](https://github.com/ikawrakow/ik_llama.cpp/pull/563) - Merge vulkan code from mainline up to commit of 6/28/2025
 
 | **Author** | `firecoperana` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `Merge_mainline_vulkan` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-29 |
 | **Updated** | 2025-07-02 |
+| **Merged** | 2025-07-02 |
 
 ---
 
 #### Description
 
-* Vulkan Optimizations and Fixes (#8959)
+* Vulkan Optimizations and Fixes ([#8959](https://github.com/ikawrakow/ik_llama.cpp/issues/8959))
 
 * Optimize Vulkan REPEAT performance
 
 .....................................................................................
 
-vulkan: lock accesses of pinned_memory vector (#14333)
+vulkan: lock accesses of pinned_memory vector ([#14333](https://github.com/ikawrakow/ik_llama.cpp/issues/14333))
 
-vulkan: handle noncontig in the final case of ggml_vk_get_cpy_pipeline (#14378)
+vulkan: handle noncontig in the final case of ggml_vk_get_cpy_pipeline ([#14378](https://github.com/ikawrakow/ik_llama.cpp/issues/14378))
 
 Fix cuda build error
 
@@ -33,15 +36,15 @@ Fix cuda build error
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **firecoperana** commented the **2025-06-29** at **19:21:51**:<br>
+👤 **firecoperana** commented on **2025-06-29** at **19:21:51**
 
 Test Qwen 2.5 7B Q4_K_S and it runs fine, but for deepseek model, I was getting "GGGGGGG" output with -mla 1 -amb 512. Probably related to deepseek related optimization.
 
 ---
 
-👤 **ubergarm** commented the **2025-06-29** at **19:51:08**:<br>
+👤 **ubergarm** commented on **2025-06-29** at **19:51:08**
 
 For deepseek often one wants to compile with `-DGGML_CUDA_IQK_FORCE_BF16=1` to avoid overflowing fp16 accumulator which manifests as gibberish, nans, or `GGG` typically I believe.
 
@@ -53,16 +56,10 @@ Details inside:
 <summary>👈 build command and logs</summary>
 
 ```bash
-# attempt to build clean despite it seems to still be using cmake cache? hah...
+# attempt to build clean
 $ rm -rf ./build
-$ cmake -B build -DGGML_VULKAN=ON -DGGML_CUDA=OFF -DGGML_RPC=OFF -DGGML_BLAS=OFF GGML_CCACHE=OFF
+$ cmake -B build -DGGML_VULKAN=ON -DGGML_CUDA=OFF -DGGML_RPC=OFF -DGGML_BLAS=OFF -DGGML_CCACHE=OFF
 $ cmake --build build --config Release -j $(nproc)
-
-CMake Warning:
-  Ignoring extra path from command line:
-
-   "GGML_CCACHE=OFF"
-
 
 -- The C compiler identification is GNU 15.1.1
 -- The CXX compiler identification is GNU 15.1.1
@@ -89,7 +86,6 @@ CMake Warning:
 -- Using llamafile
 -- Found Vulkan: /lib/libvulkan.so (found version "1.4.313") found components: glslc glslangValidator
 -- Vulkan found
--- ccache found, compilation results will be cached. Disable with GGML_CCACHE=OFF.
 -- CMAKE_SYSTEM_PROCESSOR: x86_64
 -- x86 detected
 -- ARCH_FLAGS = -march=native
@@ -218,15 +214,47 @@ make: *** [Makefile:146: all] Error 2
 
 </details>
 
+*EDIT*
+
+fwiw i just forced that explicitly to `void *` and it compiles but then segfaults towards the end of starting up
+```
+#/ggml/src/ggml-backend.c ~around line 1020 or so
+-        /* .clear           = */ ggml_backend_multi_buffer_clear,
++        /* .clear           = */ (GGML_CALL void *) ggml_backend_multi_buffer_clear, // ubergarm hack
+```
+
 ---
 
-👤 **ikawrakow** submitted a review the **2025-06-30** at **07:12:08**: 🔄 `CHANGES_REQUESTED`<br>
+👤 **ikawrakow** commented on **2025-06-30** at **07:13:31**
 
-Please no new ops, new enum values, and no refactoring of the CPU backend. I think the Vulkan back-end can be updated to the latest without using the new back-end formalism in mainline.
+Btw, currently working on my M2-Max laptop, and Safari disintegrates into pieces when trying to view the changes in this PR.
 
 ---
 
-👤 **ubergarm** commented the **2025-07-01** at **02:59:51**:<br>
+👤 **firecoperana** commented on **2025-07-01** at **00:52:26**
+
+> For deepseek often one wants to compile with `-DGGML_CUDA_IQK_FORCE_BF16=1` to avoid overflowing fp16 accumulator which manifests as gibberish, nans, or `GGG` typically I believe.
+> 
+> I just tried to compile but got an error, might be because I just updated my rig and now seem to have `gcc version 15.1.1 20250425 (GCC)`... I'll fuss with it a bit but put it here in the meantime.
+> 
+> Details inside:
+> 👈 build command and logs
+> 
+> _EDIT_
+> 
+> fwiw i just forced that explicitly to `void *` and it compiles but then segfaults towards the end of starting up
+> 
+> ```
+> #/ggml/src/ggml-backend.c ~around line 1020 or so
+> -        /* .clear           = */ ggml_backend_multi_buffer_clear,
+> +        /* .clear           = */ (GGML_CALL void *) ggml_backend_multi_buffer_clear, // ubergarm hack
+> ```
+
+Pull again. Fixed it.
+
+---
+
+👤 **ubergarm** commented on **2025-07-01** at **02:59:51**
 
 @firecoperana 
 
@@ -382,7 +410,7 @@ Lemme know if there is a certain version of the vulkan backend that might work b
 
 ---
 
-👤 **firecoperana** commented the **2025-07-01** at **15:00:17**:<br>
+👤 **firecoperana** commented on **2025-07-01** at **15:00:17**
 
 I noticed something odd too and suspect it's related to vulkan shader. When I run llama server in visual studio, I can match the performance of the mainline, but if I run in command line, I was only getting 1/3 to 1/2 of the speed for token generation. If you have time, you can do some troubleshooting, as I'm not familiar with vulkan at all.
 
@@ -390,7 +418,18 @@ I noticed something odd too and suspect it's related to vulkan shader. When I ru
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-01** at **16:38:42**:<br>
+👤 **ikawrakow** commented on **2025-07-01** at **15:15:12**
+
+> "warning: no backend supports op NONE with a weight with buffer type Vulkan0 used in tensor blk.0.attn_norm.weight" happens because vulkan does not support fused rms norm. It only shows in debug version.
+
+We will worry about the missing fused ops after we get the PR in. There is quite a bit left to do to have the `ik_llama.cpp` advantages available also with Vulkan:
+* Implement fused ops
+* Implement GEMM/GEMV for all quantization types added in `ik_llama.cpp`
+* Port the `ik_llama.cpp` improvements related to "indirect" GEMM and GEMV (as needed for MoE models).
+
+---
+
+👤 **ikawrakow** commented on **2025-07-01** at **16:38:42**
 
 Tested on my RTX-4080. If I remove the fused ops (`GGML_OP_FUSED_RMS_NORM` and `GGML_OP_FUSED_MUL_UNARY`) and don't use flash attention, I get this for LlaMA-3.1-8B
 
@@ -417,7 +456,7 @@ Flash attention seems to be running on the CPU, so performance drops further wit
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-01** at **16:48:33**:<br>
+👤 **ikawrakow** commented on **2025-07-01** at **16:48:33**
 
 If I change the `LOG_DEBUG` to `LOG_INFO` in `ggml_vk_print_gpu_info`, I see this line:
 ```
@@ -432,25 +471,80 @@ So, for some reason int dot products and cooperative matrix are not enabled. I g
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-07-01** at **18:07:18**: 💬 `COMMENTED`
+👤 **ikawrakow** commented on **2025-07-01** at **18:18:05**
+
+OK, I'm learning. Need to build using
+```
+cmake .. -DGGML_VULKAN=ON -DGGML_VULKAN_COOPMAT2_GLSLC_SUPPORT=1 -DGGML_VULKAN_COOPMAT_GLSLC_SUPPORT=1 -DGGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT=1
+```
+
+Then I need to comment out the check for coopmat2 on line 9476 in `ggml-vulkan.cpp` to get FA enabled. With that, I almost match the Vulkan performance in mainline:
+
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|  1024 |    256 |      0 |    0.334 |  3070.20 |    2.433 |   105.20 |
+|  1024 |    256 |   1024 |    0.340 |  3012.31 |    2.596 |    98.60 |
+|  1024 |    256 |   2048 |    0.342 |  2995.49 |    2.751 |    93.07 |
+|  1024 |    256 |   3072 |    0.334 |  3069.60 |    2.890 |    88.58 |
+|  1024 |    256 |   4096 |    0.339 |  3023.88 |    3.048 |    84.00 |
+|  1024 |    256 |   5120 |    0.352 |  2909.64 |    3.240 |    79.02 |
+|  1024 |    256 |   6144 |    0.369 |  2774.90 |    3.427 |    74.71 |
+|  1024 |    256 |   7168 |    0.377 |  2716.14 |    3.618 |    70.76 |
+|  1024 |    256 |   8192 |    0.388 |  2636.59 |    3.793 |    67.50 |
+|  1024 |    256 |   9216 |    0.413 |  2479.99 |    3.989 |    64.18 |
+|  1024 |    256 |  10240 |    0.437 |  2343.03 |    4.199 |    60.96 |
+|  1024 |    256 |  11264 |    0.460 |  2225.86 |    4.408 |    58.08 |
+|  1024 |    256 |  12288 |    0.487 |  2102.61 |    4.614 |    55.48 |
+|  1024 |    256 |  13312 |    0.503 |  2037.31 |    4.821 |    53.10 |
+|  1024 |    256 |  14336 |    0.535 |  1915.62 |    5.036 |    50.84 |
+|  1024 |    256 |  15360 |    0.553 |  1853.00 |    5.247 |    48.79 |
+
+PP is on par with mainline, TG is on par (or even slightly better) for short context, but performance somehow decreases faster with context length, so we end up with ~70% of mainline TG performance at 16k tokens. 
+
+I'm told in [this comment](https://github.com/ikawrakow/ik_llama.cpp/discussions/562#discussioncomment-13630937) that I need to update my Nvidia driver to 575, which will give me coopmat2 and almost a factor of 2 speedup.
 
 ---
 
-👤 **firecoperana** submitted a review the **2025-07-02** at **01:10:01**: 💬 `COMMENTED`
+👤 **firecoperana** commented on **2025-07-02** at **01:13:09**
+
+> OK, I'm learning. Need to build using
+> 
+> ```
+> cmake .. -DGGML_VULKAN=ON -DGGML_VULKAN_COOPMAT2_GLSLC_SUPPORT=1 -DGGML_VULKAN_COOPMAT_GLSLC_SUPPORT=1 -DGGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT=1
+> ```
+> 
+> Then I need to comment out the check for coopmat2 on line 9476 in `ggml-vulkan.cpp` to get FA enabled. With that, I almost match the Vulkan performance in mainline:
+> PP 	TG 	N_KV 	T_PP s 	S_PP t/s 	T_TG s 	S_TG t/s
+> 1024 	256 	0 	0.334 	3070.20 	2.433 	105.20
+> 1024 	256 	1024 	0.340 	3012.31 	2.596 	98.60
+> 1024 	256 	2048 	0.342 	2995.49 	2.751 	93.07
+> 1024 	256 	3072 	0.334 	3069.60 	2.890 	88.58
+> 1024 	256 	4096 	0.339 	3023.88 	3.048 	84.00
+> 1024 	256 	5120 	0.352 	2909.64 	3.240 	79.02
+> 1024 	256 	6144 	0.369 	2774.90 	3.427 	74.71
+> 1024 	256 	7168 	0.377 	2716.14 	3.618 	70.76
+> 1024 	256 	8192 	0.388 	2636.59 	3.793 	67.50
+> 1024 	256 	9216 	0.413 	2479.99 	3.989 	64.18
+> 1024 	256 	10240 	0.437 	2343.03 	4.199 	60.96
+> 1024 	256 	11264 	0.460 	2225.86 	4.408 	58.08
+> 1024 	256 	12288 	0.487 	2102.61 	4.614 	55.48
+> 1024 	256 	13312 	0.503 	2037.31 	4.821 	53.10
+> 1024 	256 	14336 	0.535 	1915.62 	5.036 	50.84
+> 1024 	256 	15360 	0.553 	1853.00 	5.247 	48.79
+> 
+> PP is on par with mainline, TG is on par (or even slightly better) for short context, but performance somehow decreases faster with context length, so we end up with ~70% of mainline TG performance at 16k tokens.
+> 
+> I'm told in [this comment](https://github.com/ikawrakow/ik_llama.cpp/discussions/562#discussioncomment-13630937) that I need to update my Nvidia driver to 575, which will give me coopmat2 and almost a factor of 2 speedup.
+
+The new commit should remove the need to add these in cmake command. Also disable the fused ops for now.
 
 ---
 
-👤 **firecoperana** commented during a code review the **2025-07-02** at **01:10:01** on `ggml/src/ggml-vulkan.cpp`:<br>
-
-Removed.
-
----
-
-👤 **ubergarm** commented the **2025-07-02** at **04:42:36**:<br>
+👤 **ubergarm** commented on **2025-07-02** at **04:42:36**
 
 > The new commit should remove the need to add these in cmake command. Also disable the fused ops for now.
 
-Thanks I was having trouble getting it setup. First the amazing news, check this out on the AMD RX 7900 XTX it is up to snuff in early testing:
+Thanks I was having trouble getting it setup before, the recent commit fixed it right up. First the amazing news, check this out on the AMD RX 7900 XTX it is up to snuff in early testing:
 
 ![sweep-bench-llama-cpp-vulkan-amd](https://github.com/user-attachments/assets/6877f569-5539-4d99-89a6-097755a9fbe7)
 
@@ -464,6 +558,70 @@ ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 Ti (NVIDIA) | uma: 0 | fp16: 1 | warp s
 
 Amazing progress in a short time!
 
+
+I tried a couple small R1-0528 quants but not quite there yet:
+<details>
+
+<summary>👈 AMD 7900 XTX DeepSeek-R1-0528 Log</summary>
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_HIPBLAS=0 -DGGML_VULKAN=1 -DGGML_RPC=0 -DGGML_CCACHE=1 -DGGML_SCHED_MAX_COPIES=1 -DGGML_CUDA_IQK_FORCE_BF16=1
+cmake --build build --config Release -j $(nproc)
+
+model=/home/w/projects/models/ubergarm/DeepSeek-R1-0528-GGUF/DeepSeek-R1-0528-IQ1_S.gguf
+#model=/home/w/projects/models/ubergarm/DeepSeek-R1-0528-GGUF/DeepSeek-R1-0528-IQ1_S_R4-00001-of-00003.gguf
+./build/bin/llama-sweep-bench \
+  --model "$model" \
+  --ctx-size 4608 \
+  -fa \
+  -mla 3 -amb 512 \
+  -ctk q8_0 \
+  -ngl 99 \
+  -ot "blk\.(3|4|5|6|7|8)\.ffn_.*=Vulkan0" \
+  -ot exps=CPU \
+  --threads 16 \
+  --no-mmap
+  # -fmoe # leave this off for now
+
+ggml_vulkan: 0 = Radeon RX 7900 XTX (AMD open-source driver) | uma: 0 | fp16: 1 | warp size: 64 | shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
+
+llama_new_context_with_model: n_ctx      = 4608
+llama_new_context_with_model: n_batch    = 2048
+llama_new_context_with_model: n_ubatch   = 512
+llama_new_context_with_model: flash_attn = 1
+llama_new_context_with_model: mla_attn   = 3
+llama_new_context_with_model: attn_max_b = 512
+llama_new_context_with_model: fused_moe  = 0
+llama_new_context_with_model: ser        = -1, 0
+llama_new_context_with_model: freq_base  = 10000.0
+llama_new_context_with_model: freq_scale = 0.025
+llama_kv_cache_init:    Vulkan0 KV buffer size =   164.06 MiB
+llama_new_context_with_model: KV self size  =  164.06 MiB, c^KV (q8_0):  164.06 MiB, kv^T: not used
+llama_new_context_with_model: Vulkan_Host  output buffer size =     0.49 MiB
+llama_new_context_with_model:    Vulkan0 compute buffer size =   982.00 MiB
+llama_new_context_with_model: Vulkan_Host compute buffer size =   480.91 MiB
+llama_new_context_with_model: graph nodes  = 4641
+llama_new_context_with_model: graph splits = 826
+
+main: n_kv_max = 4608, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_layers = 99, n_threads = 16, n_threads_batch = 16
+
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+ggml_compute_forward_dup_q: CPU#cache_k_l0 (view)#0 -> cache_k_l0 (view) (copy) is of type f16
+ggml_compute_forward_dup_q: CPU#cache_k_l0 (view)#0 -> cache_k_l0 (view) (copy) is of type f16
+/home/w/projects/ik_llama.cpp/ggml/src/ggml.c:10783: /home/w/projects/ik_llama.cpp/ggml/src/ggml.c:10783: fatal errorggml_compute_forward_dup_q: CPU#c
+ache_k_l0 (view)#0 -> cache_k_l0 (view) (copy) is of type f16
+fatal error
+```
+
+</details>
+
 ---
 
-👤 **ikawrakow** submitted a review the **2025-07-02** at **06:49:33**: ✅ `APPROVED`
+👤 **ikawrakow** commented on **2025-07-02** at **06:24:09**
+
+I don't quite understand why `ik_llama.cpp` would run faster than mainline. None of the additions that make it run faster on CPU/CUDA are implemented in the Vulkan port.
+
+> I tried a couple small R1-0528 quants but not quite there yet:
+
+Of course not. The Vulkan backend does not support DeepSeek flash attention, so no, no `-mla 3` is possible. `-fmoe` is not there either.  Neither are all the additions to concatenating, copying, and transposing tensors necessary to make FlashMLA-3 work.

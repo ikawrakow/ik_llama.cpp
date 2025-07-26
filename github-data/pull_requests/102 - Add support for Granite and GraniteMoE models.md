@@ -1,10 +1,13 @@
-### 🔀 [#102](https://github.com/ikawrakow/ik_llama.cpp/pull/102) - Add support for Granite and GraniteMoE models
+### [Pull Request #102](https://github.com/ikawrakow/ik_llama.cpp/pull/102) - Add support for Granite and GraniteMoE models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/add_granite` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-22 |
 | **Updated** | 2024-10-22 |
+| **Merged** | 2024-10-22 |
 
 ---
 

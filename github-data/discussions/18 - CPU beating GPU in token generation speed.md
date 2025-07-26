@@ -1,7 +1,8 @@
-### 🗣️ [#18](https://github.com/ikawrakow/ik_llama.cpp/discussions/18) - CPU beating GPU in token generation speed
+### [Discussion #18](https://github.com/ikawrakow/ik_llama.cpp/discussions/18) - CPU beating GPU in token generation speed
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-08-13 |
 | **Updated** | 2025-04-03 |
 
@@ -39,7 +40,7 @@ Also here the GPU is faster for PP (but just 5X faster), but the CPU wipes the f
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2024-09-02** at **13:20:54**:<br>
+👤 **ikawrakow** commented on **2024-09-02** at **13:20:54**
 
 Now that we have efficient Flash Attention (FA) implementation on the CPU via PR #32, we can compare again performance between the CPU and GPU for this tiny 99M parameter model. We get
 
@@ -54,15 +55,18 @@ TG speed is now about the same, which is still quite remarkable.
 
 FA has improved CPU prompt processing speed by almost 50%, TG by 22%.
 
-> 👤 **saood06** replied the **2025-04-02** at **10:36:44**:<br>
+> 👤 **saood06** replied on **2025-04-02** at **10:36:44**
+> 
 > Is there a chance SpargeAttn could be implemented here. Code [here](https://github.com/thu-ml/SpargeAttn), Paper [here](https://arxiv.org/abs/2502.18137). 
 > 
 > If it could would it benefit speed on CPU?
+
+> 👤 **ikawrakow** replied on **2025-04-02** at **13:44:09**
 > 
-> 👤 **ikawrakow** replied the **2025-04-02** at **13:44:09**:<br>
 > Other than the paper, is there any evidence that this works as advertised? If I did nothing else but implementing breakthroughs announced on arXiv, the day still wouldn't have enough hours.
+
+> 👤 **saood06** replied on **2025-04-03** at **00:24:39**
 > 
-> 👤 **saood06** replied the **2025-04-03** at **00:24:39**:<br>
 > >Other than the paper, is there any evidence that this works as advertised?
 > 
 > Not really (there are multiple ComfyUI custom nodes that port support but not much on people using it), the paper looked interesting to me and the idea makes sense to me, but the implementation they have looks premature. The same group put out SageAttention/SageAttention2 which has been widely adopted (mostly for image/video models) and the performance matched the paper but SpargeAttn has gotten interest but not much adoption because of the state of the implmentation. 
@@ -73,7 +77,7 @@ FA has improved CPU prompt processing speed by almost 50%, TG by 22%.
 
 ---
 
-👤 **ikawrakow** replied the **2024-09-08** at **07:16:59**:<br>
+👤 **ikawrakow** commented on **2024-09-08** at **07:16:59**
 
 With PR #42 we get this
 

@@ -1,4 +1,4 @@
-### 🐛 [#455](https://github.com/ikawrakow/ik_llama.cpp/issues/455) - Bug: KV cache is never reused in OpenAI compatible Chat Completion api
+### [Issue #455](https://github.com/ikawrakow/ik_llama.cpp/issues/455) - Bug: KV cache is never reused in OpenAI compatible Chat Completion api
 
 | **Author** | `luzamm` |
 | :--- | :--- |
@@ -516,9 +516,9 @@ INFO [            update_slots] all slots are idle | tid="137281198051328" times
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **saood06** commented the **2025-05-24** at **23:39:01**:<br>
+👤 **saood06** commented on **2025-05-24** at **23:39:01**
 
 Are you passing in `cache_prompt: true` in your request?
 
@@ -528,21 +528,13 @@ Edit: Just want to add I use the server and I can get KV cache to be reused betw
 
 ---
 
-👤 **saood06** commented the **2025-05-24** at **23:39:01**:<br>
-
-Are you passing in `cache_prompt: true` in your request?
-
-I know llama.cpp now defaults to it being on, but we do not do that here (would be trivial to change), so as it stands it will not reuse the cache unless you pass that.
-
----
-
-👤 **ikawrakow** commented the **2025-05-25** at **04:32:30**:<br>
+👤 **ikawrakow** commented on **2025-05-25** at **04:32:30**
 
 @saood06 Maybe we should change the default?
 
 ---
 
-👤 **saood06** commented the **2025-05-25** at **04:49:04**:<br>
+👤 **saood06** commented on **2025-05-25** at **04:49:04**
 
 > [@saood06](https://github.com/saood06) Maybe we should change the default?
 
@@ -552,13 +544,13 @@ I've been tinkering with an alternative caching mechanism as I don't fully like 
 
 ---
 
-👤 **luzamm** commented the **2025-05-25** at **08:55:07**:<br>
+👤 **luzamm** commented on **2025-05-25** at **08:55:07**
 
 After passing cache_prompt:true , it worked well. But there are many webui do not pass this field and nowhere to add easily. Is it better to turn it on by default?
 
 ---
 
-👤 **saood06** commented the **2025-05-25** at **09:17:43**:<br>
+👤 **saood06** commented on **2025-05-25** at **09:17:43**
 
 > After passing cache_prompt:true , it worked well. 
 
@@ -570,13 +562,13 @@ Yes, I will do that. I looked into it enough to deem it trivial, just haven't go
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-25** at **16:28:04**:<br>
+👤 **Ph0rk0z** commented on **2025-05-25** at **16:28:04**
 
 It never reprocess my cache because I used text completion with sillytavern. What happens when you reach the context limit? I know that mainline has some mechanism for that. Does it just reprocess context with every message post limit?
 
 ---
 
-👤 **saood06** commented the **2025-05-28** at **01:00:43**:<br>
+👤 **saood06** commented on **2025-05-28** at **01:00:43**
 
 @luzamm 
 Sorry for the delay, but the PR has been made that changes the default, and I have linked it to this issue to automatically close once it gets merged in.
@@ -590,7 +582,7 @@ I have not used context shifting in a long time but as far as I can tell the imp
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-28** at **15:12:09**:<br>
+👤 **Ph0rk0z** commented on **2025-05-28** at **15:12:09**
 
 >I have not used context shifting in a long time but as far as I can tell the implementation here is the same as the one I have experienced.
 
@@ -598,7 +590,7 @@ I thought it doesn't work here because it was forked before the implementation i
 
 ---
 
-👤 **saood06** commented the **2025-05-28** at **22:04:21**:<br>
+👤 **saood06** commented on **2025-05-28** at **22:04:21**
 
 > I thought it doesn't work here because it was forked before the implementation in main. There is no --cache-reuse flag and I see nothing about context shift. Only ever tried the implementation in ooba.
 

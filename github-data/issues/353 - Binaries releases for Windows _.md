@@ -1,4 +1,4 @@
-### 📝 [#353](https://github.com/ikawrakow/ik_llama.cpp/issues/353) - Binaries releases for Windows ?
+### [Issue #353](https://github.com/ikawrakow/ik_llama.cpp/issues/353) - Binaries releases for Windows ?
 
 | **Author** | `lbarasc` |
 | :--- | :--- |
@@ -18,9 +18,9 @@ Thank you.
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2025-04-29** at **13:55:36**:<br>
+👤 **ikawrakow** commented on **2025-04-29** at **13:55:36**
 
 If this repository gains more momentum and there are users testing on Windows and providing feedback, sure, we can consider releasing Windows binaries. 
 
@@ -33,13 +33,13 @@ Another thing is that this project does not aim at providing the broad hardware 
 
 ---
 
-👤 **PmNz8** commented the **2025-04-30** at **22:54:13**:<br>
+👤 **PmNz8** commented on **2025-04-30** at **22:54:13**
 
 I managed to compile from source for Windows cpu, but not for cuda - it is above my skills level. Having (best automatically) compiled binaries available on github would be great! I can always test some binaries if that would be helpful, one of my machine runs intel with avx512 (rocket lake), the other is AMD zen 3 + Nvidia ada.
 
 ---
 
-👤 **saood06** commented the **2025-05-01** at **07:32:23**:<br>
+👤 **saood06** commented on **2025-05-01** at **07:32:23**
 
 >     * I don't have access to a Windows machine
 >     * I don't feel OK releasing builds that were never tested
@@ -48,19 +48,13 @@ If you want to do occasional releases (since we don't have CI like mainline does
 
 ---
 
-👤 **SpookyT00th** commented the **2025-05-01** at **22:11:05**:<br>
+👤 **SpookyT00th** commented on **2025-05-01** at **22:11:05**
 
 I noticed you mentioned that this is intended to support newer GPUs. Do you know if the Nvidia V100 (Volta Architecture) is supported?  also, does this support tensor parallelism? i want to fit this model across 128GB VRAM : https://huggingface.co/ubergarm/Qwen3-235B-A22B-GGUF
 
 ---
 
-👤 **SpookyT00th** commented the **2025-05-01** at **22:11:05**:<br>
-
-I noticed you mentioned that this is intended to support newer GPUs. Do you know if the Nvidia V100 (Volta Architecture) is supported?
-
----
-
-👤 **saood06** commented the **2025-05-02** at **03:05:53**:<br>
+👤 **saood06** commented on **2025-05-02** at **03:05:53**
 
 >also, does this support tensor parallelism? i want to fit this model across 128GB VRAM : https://huggingface.co/ubergarm/Qwen3-235B-A22B-GGUF
 
@@ -68,13 +62,13 @@ For MoE models such as the one you linked, `-split-mode row` does not function, 
 
 ---
 
-👤 **sousekd** commented the **2025-05-29** at **20:39:13**:<br>
+👤 **sousekd** commented on **2025-05-29** at **20:39:13**
 
 I would be happy to test on AMD Epyc Turin + RTX 4090 / RTX Pro 6000, if builds are provided.
 
 ---
 
-👤 **Thireus** commented the **2025-06-03** at **17:54:35**:<br>
+👤 **Thireus** commented on **2025-06-03** at **17:54:35**
 
 If anyone wants to give a go to the build I've created, and report back if it works decently... https://github.com/Thireus/ik_llama.cpp/releases
 
@@ -83,13 +77,13 @@ See https://github.com/Thireus/ik_llama.cpp/blob/main/.github/workflows/release.
 
 ---
 
-👤 **lbarasc** commented the **2025-06-03** at **19:25:40**:<br>
+👤 **lbarasc** commented on **2025-06-03** at **19:25:40**
 
 Well thank you !! i will test this on my server.
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-05** at **07:05:32**:<br>
+👤 **ikawrakow** commented on **2025-06-05** at **07:05:32**
 
 How is the testing going here?
 
@@ -105,7 +99,7 @@ So, to cover pre-build binaries for Windows users, one would need 6 different bu
 
 ---
 
-👤 **PmNz8** commented the **2025-06-06** at **19:01:35**:<br>
+👤 **PmNz8** commented on **2025-06-06** at **19:01:35**
 
 @Thireus for me your binaries do not run. I try something simple like .\llama-cli.exe -m "D:\LLMs\bartowski\Qwen_Qwen3-4B-GGUF\Qwen_Qwen3-4B-Q8_0.gguf" and all I get in the log is: 
 
@@ -124,23 +118,7 @@ Windows 11 + RTX 4090 @ 576.52 drivers.
 
 ---
 
-👤 **PmNz8** commented the **2025-06-06** at **19:01:35**:<br>
-
-@Thireus for me your binaries do not run. I try something simple like .\llama-cli.exe -m "D:\LLMs\bartowski\Qwen_Qwen3-4B-GGUF\Qwen_Qwen3-4B-Q8_0.gguf" and all I get in the log is: 
-
-```
-[1749236397] Log start
-[1749236397] Cmd: C:\Users\dawidgaming\Downloads\ik_llama-main-b3770-5a8bb97-bin-win-cuda-12.8-x64\llama-cli.exe -m D:\LLMs\bartowski\Qwen_Qwen3-4B-GGUF\Qwen_Qwen3-4B-Q8_0.gguf
-[1749236397] main: build = 1 (5a8bb97)
-[1749236397] main: built with MSVC 19.29.30159.0 for 
-[1749236397] main: seed  = 1749236397
-[1749236397] main: llama backend init
-[1749236397] main: load the model and apply lora adapter, if any
-```
-
----
-
-👤 **kiron111** commented the **2025-06-06** at **19:55:45**:<br>
+👤 **kiron111** commented on **2025-06-06** at **19:55:45**
 
 > If anyone wants to give a go to the build I've created, and report back if it works decently... https://github.com/Thireus/ik_llama.cpp/releases
 > 

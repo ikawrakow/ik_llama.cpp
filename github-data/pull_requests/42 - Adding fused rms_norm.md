@@ -1,10 +1,13 @@
-### 🔀 [#42](https://github.com/ikawrakow/ik_llama.cpp/pull/42) - Adding fused rms_norm
+### [Pull Request #42](https://github.com/ikawrakow/ik_llama.cpp/pull/42) - Adding fused rms_norm
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fused_rms_norm` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-08 |
 | **Updated** | 2024-09-08 |
+| **Merged** | 2024-09-08 |
 
 ---
 

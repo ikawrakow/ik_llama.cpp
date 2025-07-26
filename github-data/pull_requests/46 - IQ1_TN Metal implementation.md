@@ -1,10 +1,13 @@
-### 🔀 [#46](https://github.com/ikawrakow/ik_llama.cpp/pull/46) - IQ1_TN Metal implementation
+### [Pull Request #46](https://github.com/ikawrakow/ik_llama.cpp/pull/46) - IQ1_TN Metal implementation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1_tn_metal` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-10 |
 | **Updated** | 2024-09-10 |
+| **Merged** | 2024-09-10 |
 
 ---
 

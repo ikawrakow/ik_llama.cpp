@@ -1,10 +1,13 @@
-### 🐛 [#86](https://github.com/ikawrakow/ik_llama.cpp/pull/86) - Fix and optimize iq2k Metal implementation
+### [Pull Request #86](https://github.com/ikawrakow/ik_llama.cpp/pull/86) - Fix and optimize iq2k Metal implementation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/metal_fix_iq2k` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-13 |
 | **Updated** | 2024-10-13 |
+| **Merged** | 2024-10-13 |
 
 ---
 

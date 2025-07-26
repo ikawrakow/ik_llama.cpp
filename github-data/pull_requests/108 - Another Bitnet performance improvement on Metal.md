@@ -1,10 +1,13 @@
-### 🔀 [#108](https://github.com/ikawrakow/ik_llama.cpp/pull/108) - Another Bitnet performance improvement on Metal
+### [Pull Request #108](https://github.com/ikawrakow/ik_llama.cpp/pull/108) - Another Bitnet performance improvement on Metal
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/bitnet_improve_metal` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-26 |
 | **Updated** | 2024-10-26 |
+| **Merged** | 2024-10-26 |
 
 ---
 

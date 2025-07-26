@@ -1,10 +1,11 @@
-### ✨ [#228](https://github.com/ikawrakow/ik_llama.cpp/issues/228) - Feature Request: create tool to offline repack models
+### [Issue #228](https://github.com/ikawrakow/ik_llama.cpp/issues/228) - Feature Request: create tool to offline repack models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-02-23 |
 | **Updated** | 2025-03-21 |
+| **Labels** | `enhancement` |
 
 ---
 

@@ -1,7 +1,8 @@
-### 🗣️ [#201](https://github.com/ikawrakow/ik_llama.cpp/discussions/201) - What is the NUMA situation ?
+### [Discussion #201](https://github.com/ikawrakow/ik_llama.cpp/discussions/201) - What is the NUMA situation ?
 
 | **Author** | `bhugueney` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-02-11 |
 | **Updated** | 2025-05-21 |
 
@@ -25,35 +26,39 @@ Thx !
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2025-02-11** at **06:09:03**:<br>
+👤 **ikawrakow** commented on **2025-02-11** at **06:09:03**
 
 In `ik_llama.cpp`, being a fork of `llama.cpp`, the NUMA situation is the same as in `llama.cpp`.
 
 Improving performance on NUMA systems is something I would be interested in looking into, but I don't have a dual socket system available (with enough memory bandwidth to make it interesting), and I'm just a lonely guy hacking here for fun without the resources to go and rent/buy such a system.
 
-> 👤 **bhugueney** replied the **2025-02-11** at **10:56:00**:<br>
+> 👤 **bhugueney** replied on **2025-02-11** at **10:56:00**
+> 
 > Thx !
 > I sure hope my message didn't come of as complaining : I've very grateful for what you already did !
 > If you are interested I will try to provide you full access to my dual Epyc server with 16 × 64 GB of DDR4 @3200.
+
+> 👤 **ikawrakow** replied on **2025-02-11** at **14:47:10**
 > 
-> 👤 **ikawrakow** replied the **2025-02-11** at **14:47:10**:<br>
 > This would be of course great, but I'm hesitant to promise to tackle the NUMA issue right away. 
 > 
 > When you say "full access", you mean you are not going to be using the system while I'm using it? Which Epycs do you have?
+
+> 👤 **bhugueney** replied on **2025-02-11** at **23:17:06**
 > 
-> 👤 **bhugueney** replied the **2025-02-11** at **23:17:06**:<br>
 > I'm not expecting any promises, especially as I'm afraid llama.cpp cannot be patched to become NUMA efficient. My (very) limited understanding is that people ran llama.cpp CPU backend on NUMA and got bad performance because one thread was doing all the memory allocation (so in one NUMA domain) and they started trying to address that by patching the CPU backend. Unfortunately, such approach seems doomed to hit a wall as NUMA efficiency probably requires a different architecture more like a multi-GPU backend with tensor parallelism where each NUMA domain would be treated like a GPU wrt trying to minimize inter GPU communication and maximize parallelism. This is the vLLM approach for NUMA if I'm note mistaken.
 > 
 > When I say "full access", I mean IPMI access while I'm not using it. But I have to figure things out first. Epycs would be 7R32 (same as AWS c5a instances).
+
+> 👤 **saood06** replied on **2025-02-11** at **23:58:26**
 > 
-> 👤 **saood06** replied the **2025-02-11** at **23:58:26**:<br>
 > So in regards to the current state of llama.cpp/ik_llama.cpp NUMA performance I don't think it's that bad. I've seen a few reports from a few users on more modern NUMA machines than mine report performance running multiple instances of llama.cpp on each NUMA domain isolated, vs running one larger instance on all NUMA domains and although there was gain to be had it wasn't that dramatic of a difference. My older NUMA machine also gets decent performance for it's bandwidth.
 > 
 > I'm looking into expert parallelism for the Deepseek V3/R1 MoE model, which should benefit NUMA systems. The plan for that is port over the PR which allows you to specify what tensor is loaded onto what backend, change the tensor representation of this model to not consolidate the experts. At that point I'd test performance with that and each NUMA node on a separate RPC backend, since changing ik_llama.cpp to create a backend for each NUMA domain might require a lot more work, but I'd look into it once I get there.
 
 ---
 
-👤 **saood06** replied the **2025-03-13** at **05:53:54**:<br>
+👤 **saood06** commented on **2025-03-13** at **05:53:54**
 
 There is actually a good discussion on mainline: https://github.com/ggml-org/llama.cpp/discussions/12088
 
@@ -61,12 +66,14 @@ They did test ik_llama.cpp (but in only with a single NUMA Node on a single CPU 
 
 Also you can look at zts9989's comment [here](https://github.com/ggml-org/llama.cpp/pull/11397#issuecomment-2716225570)  where he talks about NUMA and what llama.cpp could improve on after he found that "approximately 50% of CPU usage is spent on thread synchronization" when running Deepseek R1 with multiple numa nodes.
 
-> 👤 **ikawrakow** replied the **2025-03-13** at **07:27:34**:<br>
+> 👤 **ikawrakow** replied on **2025-03-13** at **07:27:34**
+> 
 > > They did test ik_llama.cpp (but in only with a single NUMA Node on a single CPU at Q8_0) where it still outperformed mainline for CPU only.
 > 
 > Where can I find the test results?
+
+> 👤 **saood06** replied on **2025-03-13** at **07:44:42**
 > 
-> 👤 **saood06** replied the **2025-03-13** at **07:44:42**:<br>
 > In the linked post the second table under 6980P Benchmarks has it, but pasting it here for reference:
 > 
 > Quantization | Tokens/Second | NUMA Configuration
@@ -75,8 +82,9 @@ Also you can look at zts9989's comment [here](https://github.com/ggml-org/llama.
 > Q8_0 | 6.2 | 1x NUMA Node on 1x CPU
 > 
 > This is the only published result for ik_llama but they do state "Keep an eye on [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) fork which has interesting optimizations." so they may run more.
+
+> 👤 **saood06** replied on **2025-03-13** at **08:45:24**
 > 
-> 👤 **saood06** replied the **2025-03-13** at **08:45:24**:<br>
 > I forgot he had much more detailed results under Methodology and Notes, there is a section for ik_llama.cpp showing the command and bench numbers, interestingly ik_llama.cpp performance peaked at 128 threads for both PP and TG compared to peaking at 86 threads for TG and 128 threads for PP in mainline. He also shares PP numbers as well, where ik_llama again shows better performance than mainline. He does explicitly state TODO for testing ik_llama.cpp for 2x CPU Q8_0.
 > 
 > Again pasting the segment of his post featuring ik_llama.cpp for reference:
@@ -110,7 +118,7 @@ Also you can look at zts9989's comment [here](https://github.com/ggml-org/llama.
 
 ---
 
-👤 **ikawrakow** replied the **2025-03-13** at **11:55:55**:<br>
+👤 **ikawrakow** commented on **2025-03-13** at **11:55:55**
 
 @saood06 
 
@@ -141,7 +149,8 @@ I'm curious which `AVX512` extensions are supported by this CPU to understand if
 
 Playing with some of the more advanced options that mainline `llama.cpp` does not have would be of course very interesting too.
 
-> 👤 **saood06** replied the **2025-03-13** at **21:20:04**:<br>
+> 👤 **saood06** replied on **2025-03-13** at **21:20:04**
+> 
 > >I'm curious which AVX512 extensions are supported by this CPU to understand if vanilla AVX2 is being used, or the code optimized for the Zen4 core (requires AVX512F, AVX512VNNI, AVX512VL, AVX512BW, AVX512DQ).
 > 
 > All of those extensions are supported (and also AVX512_fp16 which AMD does not support even on Zen 5), none of the normal sources I use for this have been updated to show Granite Rapids but I did find [this](https://www.phoronix.com/image-viewer.php?id=intel-xeon-6980p-performance&image=intel_xeon_6980p_2_lrg). Granite rapids was supposed to have support for Intel AVX10 (Version 1, or Intel AVX10.1) but that apparently did not happen.
@@ -149,8 +158,9 @@ Playing with some of the more advanced options that mainline `llama.cpp` does no
 > >I have seen a higher than usual amount of stars added to my repository in the last few days, I guess this must be due to your post.
 > 
 > I've also seen an uptick in organic mentions of ik_llama.cpp recently and have done my best to help people understand all the new features and benefits.
+
+> 👤 **ubergarm** replied on **2025-03-13** at **22:15:00**
 > 
-> 👤 **ubergarm** replied the **2025-03-13** at **22:15:00**:<br>
 > @ikawrakow 
 > 
 > > Very interesting results, thank you for posting and including my little LLM inference playground in the results.
@@ -222,8 +232,9 @@ Playing with some of the more advanced options that mainline `llama.cpp` does no
 > $ lscpu | grep Flags
 > Flags: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid dca sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb cat_l3 cat_l2 cdp_l3 intel_ppin cdp_l2 ssbd mba ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb intel_pt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local split_lock_detect user_shstk avx_vnni avx512_bf16 wbnoinvd dtherm ida arat pln pts hwp hwp_act_window hwp_epp hwp_pkg_req vnmi avx512vbmi umip pku ospke waitpkg avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg tme avx512_vpopcntdq la57 rdpid bus_lock_detect cldemote movdiri movdir64b enqcmd fsrm md_clear serialize tsxldtrk pconfig arch_lbr ibt amx_bf16 avx512_fp16 amx_tile amx_int8 flush_l1d arch_capabilities
 > ```
+
+> 👤 **saood06** replied on **2025-03-13** at **22:51:58**
 > 
-> 👤 **saood06** replied the **2025-03-13** at **22:51:58**:<br>
 > > > Playing with some of the more advanced options that mainline llama.cpp does not have would be of course very interesting too.
 > > 
 > > Yes, I'm playing with [ktransformers](https://github.com/ubergarm/r1-ktransformers-guide/) as well, but it has a hard requirement on GPU. Unfortunately, this 6980P rig has no GPU so I'm limited to CPU only testing.
@@ -265,7 +276,7 @@ Playing with some of the more advanced options that mainline `llama.cpp` does no
 
 ---
 
-👤 **saood06** replied the **2025-03-25** at **03:29:01**:<br>
+👤 **saood06** commented on **2025-03-25** at **03:29:01**
 
 @ubergarm (thought you might also be interested in this).
 
@@ -281,7 +292,8 @@ The downside of duplicating the model is pretty heavy, but this approach obvious
 
 Looking at the codebase, I think it currently only works for dual socket nodes, and I would have been more interested in testing it but none of my machines (even the very unstable one quad socket 1 TB memory node that I haven't turned on in a long time) would have enough RAM to replicate my preferred quant of R1, I'd have to use one under 192 GB (I do still have my IQ1_S_R4 V2 that is 129 GB).
 
-> 👤 **ubergarm** replied the **2025-03-25** at **15:58:04**:<br>
+> 👤 **ubergarm** replied on **2025-03-25** at **15:58:04**
+> 
 > Super, I just fetched this fork and will take a peek.
 > 
 > > The downside of duplicating the model is pretty heavy
@@ -293,21 +305,23 @@ Looking at the codebase, I think it currently only works for dual socket nodes, 
 > Also [mingfeima](https://github.com/mingfeima) left an [interesting comment](https://github.com/ggml-org/llama.cpp/issues/12003#issuecomment-2731572966) recently discussing some of the intel specific optimizations and work he's doing on sglang.
 > 
 > Finally, I recently saw Wendell of [level1techs youtube channel do a video](https://www.youtube.com/watch?v=kOh04PhXqmY) about quad socket Intel Xeon. Seems like it could be configured into 8 individual NUMA nodes with 1TB each possibly?  Talk about wasting RAM, but would be fun to try haha...
+
+> 👤 **saood06** replied on **2025-03-27** at **07:24:15**
 > 
-> 👤 **saood06** replied the **2025-03-27** at **07:24:15**:<br>
 > >Super, I just fetched this fork and will take a peek.
 > 
 > Did you ever test it?
 
 ---
 
-👤 **ikawrakow** replied the **2025-03-25** at **16:06:42**:<br>
+👤 **ikawrakow** commented on **2025-03-25** at **16:06:42**
 
 >  Ideally you would have the most number of individual NUMA nodes to maximize performance,
 
 Why?
 
-> 👤 **ubergarm** replied the **2025-03-25** at **16:14:54**:<br>
+> 👤 **ubergarm** replied on **2025-03-25** at **16:14:54**
+> 
 > Looking at Intel Memory Latency Checker `mlc` benchmarks suggest that the memory local to the compute on a specific NUMA node gives best bandwidth and latency.
 > 
 > My thinking is that duplicating weights into each NUMA node and having local threads working with that RAM would maximize performance.
@@ -318,11 +332,12 @@ Why?
 
 ---
 
-👤 **ikawrakow** replied the **2025-03-25** at **16:24:17**:<br>
+👤 **ikawrakow** commented on **2025-03-25** at **16:24:17**
 
 Sure, that would be if you wanted to squeeze out the last bit of performance. But we are not at that stage. Instead, we are a factor of 2 or more away from what should be possible. Having 2 big NUMA nodes would make the distribution of weights much easier: simply change the weight loading to use two threads, each pinned to a specific NUMA node, and each loading half of the tensor data. During inference pin half the threads to run on the 1st NUMA node, and the other half to the second NUMA node. My thinking is that this should give a significant boost in performance without replicating the model on both NUMA nodes. It is of course possible to do stuff such as this with several NUMA nodes, but it makes things way more complicated. So, I'm thinking that the 1st step should be to get better performance with 2 NUMA nodes. But if you are telling me that this is very far from ideal, and that the only way to get better performance is to enable and utilize all NUMA nodes, then it is a waste of time to implement the simple approach described above.
 
-> 👤 **ubergarm** replied the **2025-03-25** at **16:36:46**:<br>
+> 👤 **ubergarm** replied on **2025-03-25** at **16:36:46**
+> 
 > > that would be if you wanted to squeeze out the last bit of performance. But we are not at that stage.
 > 
 > Yes, I agree on both points.
@@ -338,8 +353,9 @@ Sure, that would be if you wanted to squeeze out the last bit of performance. Bu
 > No need to worry about rare brand new quad socket intel xeon boards or more smaller NUMA nodes currently imo.
 > 
 > I'll try to find my `mlc` benchmarks and post here, as the bandwidth is still pretty good converting a single CPU into 1 NUMA node.
+
+> 👤 **ubergarm** replied on **2025-03-25** at **16:52:11**
 > 
-> 👤 **ubergarm** replied the **2025-03-25** at **16:52:11**:<br>
 > #### intel `mlc`
 > 
 > Configuring BIOS to `SNC=Disable` to collapse 3x NUMA nodes per CPU socket into a single NUMA node per 6980P socket gives similar enough RAM bandwidth/latency performance.
@@ -518,8 +534,9 @@ Sure, that would be if you wanted to squeeze out the last bit of performance. Bu
 > 
 > ## References
 > * [Additional Benchmarks and discussions on Phoronix](https://www.phoronix.com/review/xeon-6980p-snc3-hex)
+
+> 👤 **saood06** replied on **2025-03-25** at **18:09:30**
 > 
-> 👤 **saood06** replied the **2025-03-25** at **18:09:30**:<br>
 > > During inference pin half the threads to run on the 1st NUMA node, and the other half to the second NUMA node.
 > 
 > The problem is not splitting the model, it is ensuring the work of any given thread is stored local to it's NUMA node. 
@@ -527,16 +544,19 @@ Sure, that would be if you wanted to squeeze out the last bit of performance. Bu
 > This PR: https://github.com/ggml-org/llama.cpp/pull/6915 made it difficult as mentioned here: https://github.com/ggml-org/llama.cpp/issues/1437#issuecomment-2095809308
 > 
 > Maybe you could use [this](https://www.intel.com/content/www/us/en/docs/dpcpp-cpp-compiler/developer-guide-reference/2023-0/thread-affinity-interface.html#LOW_LEVEL_AFFINITY_API) so that each thread could change it's affinity to a random thread on the correct numa node (this would also work since I don't think this would otherwise be compatible with --numa interleave [but not sure has been a long time since I looked into that).
+
+> 👤 **ikawrakow** replied on **2025-03-25** at **18:17:01**
 > 
-> 👤 **ikawrakow** replied the **2025-03-25** at **18:17:01**:<br>
 > There is no dynamic thread scheduling here. No thread pools either.
 > 
 > In my experience from the past, touching memory with on a NUMA node makes it automatically that the actual data is stored in a memory bank local to the node on which the thread is running.  The difficulty will be more in fighting with the almighty `ggml` backend than anything else.
+
+> 👤 **ikawrakow** replied on **2025-03-25** at **18:26:08**
 > 
-> 👤 **ikawrakow** replied the **2025-03-25** at **18:26:08**:<br>
 > Dynamic thread scheduling does help for PP with big enough batch sizes. It would also help on systems with a mix of P/E cores (although, if mainline `llama.cpp` has that, I notice absolutely zero benefit on my M2-Max. Performance there is still best with 8 threads, not 12). But for TG with all same cores the overhead of thread synchronization for work stealing is typically too high to have benefit. Maybe it is different for a humongous model such as DeepSeek-R1? But then again, it has nearly 4X the number of nodes in the compute graph, so the work per node is not that much higher than DeepSeek-Lite.
+
+> 👤 **saood06** replied on **2025-03-25** at **18:36:09**
 > 
-> 👤 **saood06** replied the **2025-03-25** at **18:36:09**:<br>
 > > There is no dynamic thread scheduling here. No thread pools either.
 > 
 > @bmtwl
@@ -551,7 +571,7 @@ Sure, that would be if you wanted to squeeze out the last bit of performance. Bu
 
 ---
 
-👤 **ubergarm** replied the **2025-03-30** at **17:25:05**:<br>
+👤 **ubergarm** commented on **2025-03-30** at **17:25:05**
 
 Oh I see a benchmark in the wild attempting to benchmark that [vproxy-tools/llama.cpp](https://github.com/vproxy-tools/llama.cpp) NUMA data parallel code against ik fork: https://github.com/ggml-org/llama.cpp/discussions/12289#discussioncomment-12668490
 
@@ -559,31 +579,34 @@ Oh I see a benchmark in the wild attempting to benchmark that [vproxy-tools/llam
 
 Not sure the details of how they are running it though...
 
-> 👤 **saood06** replied the **2025-03-30** at **20:58:05**:<br>
+> 👤 **saood06** replied on **2025-03-30** at **20:58:05**
+> 
 > > Oh I see a benchmark in the wild attempting to benchmark that [vproxy-tools/llama.cpp](https://github.com/vproxy-tools/llama.cpp) NUMA data parallel code against ik fork: [ggml-org/llama.cpp#12289 (comment)](https://github.com/ggml-org/llama.cpp/discussions/12289#discussioncomment-12668490)
 > > 
 > > Not sure the details of how they are running it though...
 > 
 > Thanks for the link, I agree it would be nice if they included more details.
+
+> 👤 **ubergarm** replied on **2025-03-30** at **21:14:31**
 > 
-> 👤 **ubergarm** replied the **2025-03-30** at **21:14:31**:<br>
 > Yeah, I gave it a try and while it did run it wasn't allocating threads on both NUMA nodes so I gave up for now after posting my logs.
+
+> 👤 **saood06** replied on **2025-03-30** at **21:34:22**
 > 
-> 👤 **saood06** replied the **2025-03-30** at **21:34:22**:<br>
 > > Yeah, I gave it a try and while it did run it wasn't allocating threads on both NUMA nodes so I gave up for now after posting my logs.
 > 
 > Did you try running it with numactl on just 2 NUMA nodes? There is also an issue tracker for [vproxy-tools/llama.cpp](https://github.com/vproxy-tools/llama.cpp/issues) where you could report that.
 
 ---
 
-👤 **bhugueney** replied the **2025-04-08** at **10:24:55**:<br>
+👤 **bhugueney** commented on **2025-04-08** at **10:24:55**
 
 I currently settle for running my DeepSeek v3 model on just one NUMA / socket of my dual socket system. However, while investigating the draft models situation, it occurred to me that if should be relatively easy to specify cores for the main model (on one socket) and specify other cores (in my case on the other socket/NUMA node) for the draft model as communication between the two should be minimal.
 What do people think about it?
 
 ---
 
-👤 **saood06** replied the **2025-05-20** at **08:37:01**:<br>
+👤 **saood06** commented on **2025-05-20** at **08:37:01**
 
 On my dual socket machine using https://github.com/intel/pcm
 
@@ -605,7 +628,7 @@ And during TG:
 
 ---
 
-👤 **VinnyG9** replied the **2025-05-21** at **04:15:29**:<br>
+👤 **VinnyG9** commented on **2025-05-21** at **04:15:29**
 
 just sharing i tried all snoop modes on my x99 dual board and got 200-300% boost vs stock bios settings, this setting is also available on xeon scalable fwiw
 
@@ -632,7 +655,8 @@ just sharing i tried all snoop modes on my x99 dual board and got 200-300% boost
 | qwen3moe ?B Q4_K - Medium         | 16.49 GiB | 30.53 B | CUDA    |   0 |      31 |  1 |   1 |    1 | tg128 |   34.76 ± 1.54 |
 | qwen3moe ?B Q4_K - Medium         | 16.49 GiB | 30.53 B | CUDA    |   0 |      31 |  1 |   1 |    1 | tg256 |   35.70 ± 0.34 |
 
-> 👤 **ubergarm** replied the **2025-05-21** at **14:26:30**:<br>
+> 👤 **ubergarm** replied on **2025-05-21** at **14:26:30**
+> 
 > Wow, big gains! I'd never heard of "snoop" mode, but don't have a lot of intel server experience:
 > 
 > > DIR+OSB mode allows for low local memory latency, high local memory bandwidth and I/O directory cache to reduce directory update overheads for I/O accesses.
@@ -640,8 +664,9 @@ just sharing i tried all snoop modes on my x99 dual board and got 200-300% boost
 > Are you running hybrid CPU+GPU CUDA offloading some layers? I forget your exact system specs and VRAM, but if you can offload the whole thing it can go quite faster psure.  Also, if I'm running CPU/RAM *only* I generally recompile and disable CUDA backend fwiw.
 > 
 > Glad you're having fun tweaking and tuning!
+
+> 👤 **VinnyG9** replied on **2025-05-21** at **18:07:27**
 > 
-> 👤 **VinnyG9** replied the **2025-05-21** at **18:07:27**:<br>
 > > Wow, big gains! I'd never heard of "snoop" mode, but don't have a lot of intel server experience:
 > > 
 > > > DIR+OSB mode allows for low local memory latency, high local memory bandwidth and I/O directory cache to reduce directory update overheads for I/O accesses.

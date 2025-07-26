@@ -1,4 +1,4 @@
-### 🐛 [#425](https://github.com/ikawrakow/ik_llama.cpp/issues/425) - Bug: CUDA error: an illegal memory access was encountered
+### [Issue #425](https://github.com/ikawrakow/ik_llama.cpp/issues/425) - Bug: CUDA error: an illegal memory access was encountered
 
 | **Author** | `nux` |
 | :--- | :--- |
@@ -44,16 +44,16 @@ _No response_
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2025-05-15** at **14:03:32**:<br>
+👤 **ikawrakow** commented on **2025-05-15** at **14:03:32**
 
 What was the command line?
 Are you running this model for the first time? If not, did you experience this error on an earlier `ik_llama.cpp` version?
 
 ---
 
-👤 **nux** commented the **2025-05-15** at **14:15:21**:<br>
+👤 **nux** commented on **2025-05-15** at **14:15:21**
 
 Here is the command I am running:
 /home/nux/dev/ik_llama.cpp/build/bin/llama-server --model /mnt/nvme/models/ubergarm/DeepSeek-V3-0324-GGUF/DeepSeek-V3-0324-IQ4_K_R4/DeepSeek-V3-0324-IQ4_K_R4-00001-of-00010.gguf --ctx-size 32768 -mla 2 -fa -amb 512 -fmoe --temp 0.3 --min-p 0.05 --n-gpu-layers 63 --override-tensor "exps=CPU" --parallel 1 --threads 32 --host 0.0.0.0 --port 8081
@@ -76,13 +76,13 @@ Do you want me to try and get the prompt posted for you? Would try and remove pa
 
 ---
 
-👤 **Panchovix** commented the **2025-05-15** at **14:18:06**:<br>
+👤 **Panchovix** commented on **2025-05-15** at **14:18:06**
 
 If you try without -fmoe, does it works?
 
 ---
 
-👤 **nux** commented the **2025-05-15** at **14:19:31**:<br>
+👤 **nux** commented on **2025-05-15** at **14:19:31**
 
 Nope:
 
@@ -99,19 +99,19 @@ nux@red ~/dev/ik_llama.cpp $ /home/nux/dev/ik_llama.cpp/build/bin/llama-server -
 
 ---
 
-👤 **nux** commented the **2025-05-15** at **14:19:54**:<br>
+👤 **nux** commented on **2025-05-15** at **14:19:54**
 
 Would you like me to try with llama.cpp vanilla? Err...I'm not sure that model loads there. Perhaps I could try other models if you think it would be useful
 
 ---
 
-👤 **Panchovix** commented the **2025-05-15** at **14:21:22**:<br>
+👤 **Panchovix** commented on **2025-05-15** at **14:21:22**
 
 I think R4 doesn't work on llamacpp, yeah. You can try with unsloth quants there https://huggingface.co/unsloth/DeepSeek-V3-0324-GGUF-UD.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-15** at **14:24:51**:<br>
+👤 **ikawrakow** commented on **2025-05-15** at **14:24:51**
 
 There is a place in the log that looks like this:
 ```
@@ -123,7 +123,7 @@ Seeing this will be helpful.
 
 ---
 
-👤 **nux** commented the **2025-05-15** at **14:29:04**:<br>
+👤 **nux** commented on **2025-05-15** at **14:29:04**
 
 llama_model_loader: - type  f32:  361 tensors
 llama_model_loader: - type q8_0:  612 tensors
@@ -139,13 +139,13 @@ Edit: I will throw another prompt at the model I had a problem with for some oth
 
 ---
 
-👤 **nux** commented the **2025-05-15** at **14:35:38**:<br>
+👤 **nux** commented on **2025-05-15** at **14:35:38**
 
 Worked with another php related prompt (first one had a ~80 line function pasted in, this one was only 5 lines). Odd...
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-15** at **14:36:20**:<br>
+👤 **ikawrakow** commented on **2025-05-15** at **14:36:20**
 
 > It looks like I do have unsloth/DeepSeek-V3-0324-GGUF/UD-Q4_K_XL on a network storage. If you want me to test that I can.
 
@@ -159,7 +159,7 @@ I have no hypothesis what changed. You can try using `-mla 3` instead of `-mla 2
 
 ---
 
-👤 **nux** commented the **2025-05-15** at **18:04:11**:<br>
+👤 **nux** commented on **2025-05-15** at **18:04:11**
 
 Interesting...I've been trying various combinations of models/parameters, and so far here's what I have:
 
@@ -192,7 +192,7 @@ total time =  120104.78 ms /  1141 tokens
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **07:10:26**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **07:10:26**
 
 > Here is the command I am running: /home/nux/dev/ik_llama.cpp/build/bin/llama-server --model /mnt/nvme/models/ubergarm/DeepSeek-V3-0324-GGUF/DeepSeek-V3-0324-IQ4_K_R4/DeepSeek-V3-0324-IQ4_K_R4-00001-of-00010.gguf --ctx-size 32768 -mla 2 -fa -amb 512 -fmoe --temp 0.3 --min-p 0.05 --n-gpu-layers 63 --override-tensor "exps=CPU" --parallel 1 --threads 32 --host 0.0.0.0 --port 8081
 > 
@@ -210,13 +210,13 @@ Similar thing happens to me, it worked 2 days ago, i rebuilt it with latest sour
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **07:36:58**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **07:36:58**
 
 @ciprianveg Can you also give the build for the last version that worked, tell us if the crash happens during PP or during TG, and post the line from the log where it says where the illegal memory access was encountered? Thanks. Also, is it a single GPU or a multi-GPU setup?
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **08:23:13**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **08:23:13**
 
 Hello, it was built from main 20 h ago, now i rebuilt from main 30m ago with latest changes (from 2h ago) and same error:
 INFO [            update_slots] kv cache rm [p0, end) | tid="136731577430016" timestamp=1747469764 id_slot=0 id_task=0 p0=0
@@ -250,43 +250,14 @@ last main pull done, that worked was 3 days ago..
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **08:23:13**:<br>
-
-Hello, it was built from main 20 h ago, now i rebuilt from main 30m ago with latest changes (from 2h ago) and same error:
-INFO [            update_slots] kv cache rm [p0, end) | tid="136731577430016" timestamp=1747469764 id_slot=0 id_task=0 p0=0
-VERB [            update_slots] prompt processing progress | tid="136731577430016" timestamp=1747469764 id_slot=0 n_past=33 n_ctx=20480 n_tokens=33 progress=1.0
-VERB [            update_slots] prompt done | tid="136731577430016" timestamp=1747469764 id_slot=0 n_past=33 n_ctx=20480 n_tokens=33
-VERB [            update_slots] decoding batch | tid="136731577430016" timestamp=1747469764 n_tokens=33
-CUDA error: an illegal memory access was encountered
-  current device: 2, in function ggml_backend_cuda_synchronize at /home/ciprian/ai/ik_llama.cpp/ggml/src/ggml-cuda.cu:3067
-  cudaStreamSynchronize(cuda_ctx->stream())
-/home/ciprian/ai/ik_llama.cpp/ggml/src/ggml-cuda.cu:110: CUDA error
-Could not attach to process.  If your uid matches the uid of the target
-process, check the setting of /proc/sys/kernel/yama/ptrace_scope, or try
-again as the root user.  For more details, see /etc/sysctl.d/10-ptrace.conf
-ptrace: Operation not permitted.
-No stack.
-The program is not being run.
-Aborted (core dumped)
-
-This was the test query: Tell me a random fun fact about the Roman Empire
-
----
-
-👤 **ciprianveg** commented the **2025-05-17** at **08:31:25**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **08:31:25**
 
 it happens with both Qwen3-235B-A22B-UD-Q3_K_XL and Qwen3-235B-A22B-UD-Q4_K_XL.  I am using 2 3090 gpus and 2 A4000, built  with 1 copy of cache parameter. I think the multiple gpus can be the issue.. but iti is very strange that llama sweep bench works
 ..
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **08:31:25**:<br>
-
-it happens with both Qwen3-235B-A22B-UD-Q3_K_XL and Qwen3-235B-A22B-UD-Q4_K_XL
-
----
-
-👤 **ikawrakow** commented the **2025-05-17** at **08:37:44**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **08:37:44**
 
 Strange. Nothing really changed since 3 days ago that could affect your use case.
 The illegal memory access is triggered in the back-end, so most likely when data is being copied from the CPU to the GPU.
@@ -299,7 +270,7 @@ to checkout the last version from 4 days ago, and then build & run as usual?
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **08:40:15**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **08:40:15**
 
 I will try and let you know. I added 2 more gpus to my first 2... maybe it
 also matters
@@ -333,49 +304,43 @@ On Sat, 17 May 2025, 11:38 Kawrakow, ***@***.***> wrote:
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **09:15:05**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **09:15:05**
 
 i checked out and built the above version from 4 days ago and the same error, so it looks like it has to do with multiple gpus..
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **09:19:01**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **09:19:01**
 
 OK, it is the bug that happens with multiple GPUs and partial offload (multi-GPU with full offload is known to work) that has been reported by several users. It is a bug that I currently cannot solve because I don't have access to a multi-GPU system.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **09:22:18**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **09:22:18**
 
 i tried same command, on llama.cpp, without -fmoe (obvious) and it works, much slower pp process peed but it works. On ik_llama same error happens with or without -fmoe param.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **09:22:18**:<br>
-
-i treied same command, on llama.cpp, without -fmoe (obvious) and it works, much slower pp process peed but it works
-
----
-
-👤 **ciprianveg** commented the **2025-05-17** at **09:25:06**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **09:25:06**
 
 what is very strange is that the sweep-bench works, till the max cache length set, so what can be different?
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **09:33:11**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **09:33:11**
 
 Are you exceeding the max cache size and it crashes then? Or does it crash before?
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **09:34:12**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **09:34:12**
 
 llama-sweep-bench works till it exceeds the max cache size
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **09:37:03**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **09:37:03**
 
 > llama-sweep-bench works till it exceeds the max cache size
 
@@ -383,7 +348,7 @@ Yes, I got that part. So, I'm wondering if `llama-server` crashes after the max.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **09:56:36**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **09:56:36**
 
 > llama-sweep-bench works till it exceeds the max cache size
 
@@ -391,7 +356,7 @@ OK, this gives me another idea. Can you try running `sweep-bench` with some unus
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **10:11:51**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **10:11:51**
 
 I tried with unusual ub it still works, also with unusual nbatch and it works..
 main: n_kv_max = 20480, n_batch = 1234, n_ubatch = 873, flash_attn = 1, n_gpu_layers = 99, n_threads = 16, n_threads_batch = 16
@@ -402,31 +367,31 @@ main: n_kv_max = 20480, n_batch = 1234, n_ubatch = 873, flash_attn = 1, n_gpu_la
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **10:17:34**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **10:17:34**
 
 OK, this is becoming a real puzzle. Have you tried `llama-cli` ?
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **14:44:57**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **14:44:57**
 
 llama-cli seems to work, but is not webui issue as it appeared also from other client
 
 ---
 
-👤 **nux** commented the **2025-05-17** at **15:00:59**:<br>
+👤 **nux** commented on **2025-05-17** at **15:00:59**
 
 Was reading latest comments on this and wanted to point out I have a single GPU. If you want me to test any more stuff let me know
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-17** at **15:02:55**:<br>
+👤 **ciprianveg** commented on **2025-05-17** at **15:02:55**
 
 On  one gpu the issue doesn't happen
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **15:19:32**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **15:19:32**
 
 It seems the issue only occurs when using `llama-server`. 
 
@@ -438,7 +403,7 @@ and would send the backtrace when it crashes, that would be very useful.
 
 ---
 
-👤 **nux** commented the **2025-05-17** at **15:43:50**:<br>
+👤 **nux** commented on **2025-05-17** at **15:43:50**
 
 #0  __pthread_kill_implementation (threadid=<optimized out>, signo=signo@entry=6,
     no_tid=no_tid@entry=0) at ./nptl/pthread_kill.c:44
@@ -480,57 +445,13 @@ and would send the backtrace when it crashes, that would be very useful.
 
 ---
 
-👤 **nux** commented the **2025-05-17** at **15:43:50**:<br>
-
-`
-#0  __pthread_kill_implementation (threadid=<optimized out>, signo=signo@entry=6,
-    no_tid=no_tid@entry=0) at ./nptl/pthread_kill.c:44
-#1  0x00007fffeb8a9f4f in __pthread_kill_internal (signo=6, threadid=<optimized out>)
-    at ./nptl/pthread_kill.c:78
-#2  0x00007fffeb85afb2 in __GI_raise (sig=sig@entry=6) at ../sysdeps/posix/raise.c:26
-#3  0x00007fffeb845472 in __GI_abort () at ./stdlib/abort.c:79
-#4  0x000055555558ff52 in ggml_abort (
-    file=0x55555634ba10 "/home/nux/dev/ik_llama.cpp/ggml/src/ggml-cuda.cu", line=110,
-    fmt=<optimized out>) at /home/nux/dev/ik_llama.cpp/ggml/src/ggml.c:270
-#5  0x0000555555810534 in ggml_cuda_error (
-    stmt=stmt@entry=0x55555634c128 "cudaStreamSynchronize(cuda_ctx->stream())",
-    func=func@entry=0x55555634b5bc "ggml_backend_cuda_synchronize",
-    file=file@entry=0x55555634ba10 "/home/nux/dev/ik_llama.cpp/ggml/src/ggml-cuda.cu",
-    line=line@entry=3067, msg=0x7ffff7c95d68 "an illegal memory access was encountered")
-    at /home/nux/dev/ik_llama.cpp/ggml/src/ggml-cuda.cu:110
-#6  0x0000555555810f0a in ggml_backend_cuda_synchronize (backend=<optimized out>)
-    at /home/nux/dev/ik_llama.cpp/ggml/src/ggml-cuda.cu:3067
-#7  0x00005555557f627b in ggml_backend_synchronize (backend=0x555566e6d9b0)
-    at /home/nux/dev/ik_llama.cpp/ggml/src/ggml-backend.c:273
-#8  ggml_backend_sched_compute_splits (sched=0x5555647fdcb0)
-    at /home/nux/dev/ik_llama.cpp/ggml/src/ggml-backend.c:1833
-#9  ggml_backend_sched_graph_compute_async (sched=0x5555647fdcb0, graph=<optimized out>)
-    at /home/nux/dev/ik_llama.cpp/ggml/src/ggml-backend.c:2043
-#10 0x00005555556fef93 in llama_graph_compute (n_threads=32, gf=0x7f9f020fc030, lctx=...)
-    at /home/nux/dev/ik_llama.cpp/src/llama.cpp:17694
-#11 llama_decode_internal (batch_all=..., lctx=...)
-    at /home/nux/dev/ik_llama.cpp/src/llama.cpp:17910
-#12 llama_decode (ctx=0x555563ffcf60, batch=...) at /home/nux/dev/ik_llama.cpp/src/llama.cpp:22305
-#13 0x000055555567ad49 in server_context::update_slots (this=0x7fffffffda30)
---Type <RET> for more, q to quit, c to continue without paging--
-    at /home/nux/dev/ik_llama.cpp/examples/server/server.cpp:2355
-#14 0x0000555555655b4a in std::function<void ()>::operator()() const (this=0x7fffffffe650)
-    at /usr/include/c++/12/bits/std_function.h:591
-#15 server_queue::start_loop (this=this@entry=0x7fffffffe568)
-    at /home/nux/dev/ik_llama.cpp/examples/server/server.cpp:501
-#16 0x00005555555936d0 in main (argc=<optimized out>, argv=<optimized out>)
-    at /home/nux/dev/ik_llama.cpp/examples/server/server.cpp:3509
-`
-
----
-
-👤 **nux** commented the **2025-05-17** at **15:46:08**:<br>
+👤 **nux** commented on **2025-05-17** at **15:46:08**
 
 [llama-server-bt-full.txt](https://github.com/user-attachments/files/20265607/llama-server-bt-full.txt) Or is this better?
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **16:21:42**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **16:21:42**
 
 @nux Thank you for the backtrace. I cannot diagnose what has happened from it alone. I could now start asking you to give me the values of some variables, but this is really too tedious. But perhaps just one thing: 
 ```
@@ -540,13 +461,13 @@ p *input
 
 ---
 
-👤 **nux** commented the **2025-05-17** at **16:34:05**:<br>
+👤 **nux** commented on **2025-05-17** at **16:34:05**
 
 Yes I can do that - how exactly do I get that for you? I had to look up that I have to type run into gdb the first time. Never used gdb before.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **16:41:44**:<br>
+👤 **ikawrakow** commented on **2025-05-17** at **16:41:44**
 
 When it crashes, and the backtrace is the same as before, you can select the frame where it is in the ` ggml_backend_sched_compute_splits` function. You do this by typing `frame 8` (8 was the frame index in the backtrace you sent). And then you type `p *input`. This will output the content of the `input` tensor. The code is basically iterating over the inputs of the next operation in the graph, and copying data to the appropriate back-end if needed, and I want to see what is the tensor being processed when the crash happens.
 
@@ -554,13 +475,7 @@ But I have to go now, I'll look at the outcome tomorrow.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-17** at **16:41:44**:<br>
-
-When it crashes, and the backtrace is the same as before, you can select the frame where it is in the ` ggml_backend_sched_compute_splits` function. You do this by typing `frame 8` (8 was the frame index in the backtrace you sent). And then you type `p *input`. This will output the content of the `input` tensor. The code is basically iterating over the inputs of the next operation in the graph, and copying data to the appropriate back-end if needed, and I want to see what is the tensor being processed when the crash happens.
-
----
-
-👤 **nux** commented the **2025-05-17** at **17:19:05**:<br>
+👤 **nux** commented on **2025-05-17** at **17:19:05**
 
 (gdb) frame 8
 #8  ggml_backend_sched_compute_splits (sched=0x5555647fdcb0)
@@ -575,13 +490,13 @@ $1 = {type = GGML_TYPE_F32, backend = GGML_BACKEND_TYPE_CPU, buffer = 0x5555641b
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-18** at **06:19:46**:<br>
+👤 **ikawrakow** commented on **2025-05-18** at **06:19:46**
 
 @nux Thank you! Based on the above, I have added PR #430. Hopefully this fixes it.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-18** at **07:27:52**:<br>
+👤 **ciprianveg** commented on **2025-05-18** at **07:27:52**
 
 cd ik_llama.cpp/
    git checkout disable_multi_add
@@ -610,35 +525,7 @@ Same command works on llama.cpp
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-18** at **07:27:52**:<br>
-
-1990  cd ik_llama.cpp/
- 1991  git checkout disable_multi_add
- 1992  git fetch origin
- 1993  git checkout ik/disable_multi_add
- 1994  git pull origin ik/disable_multi_add
- 1996  history | grep cmake
- 1997  cmake -B build -DGGML_CUDA=ON -DGGML_RPC=OFF -DGGML_BLAS=OFF -DGGML_SCHED_MAX_COPIES=1
- 1998  cmake --build ./build --config Release -j $(nproc)
- 1999  ./build/bin/llama-server --model /home/ciprian/ai/models/Qwen3-235B-UD_Q4_XL/Qwen3-235B-A22B-UD-Q4_K_XL-00001-of-00003.gguf --alias Qwen3-235B-A22B-UD-Q4_K_XL -fa -fmoe -ctk q8_0 -ctv q8_0 -c 20480  -ot "blk.(?:[x]|[5-9][0-9]).ffn.*=CPU" -ngl 99 --threads 16 --host 0.0.0.0 --port 5002   --no-mmap --ubatch-size 3072 --batch-size 3072 -ts 68,70,60,240 -v
-same issue: (maybe it has something todo with the chat template considering the sweep-bench and cli are working fine?)
-
-INFO [            update_slots] kv cache rm [p0, end) | tid="124177210875904" timestamp=1747553203 id_slot=0 id_task=0 p0=0
-VERB [            update_slots] prompt processing progress | tid="124177210875904" timestamp=1747553203 id_slot=0 n_past=18 n_ctx=20480 n_tokens=18 progress=1.0
-VERB [            update_slots] prompt done | tid="124177210875904" timestamp=1747553203 id_slot=0 n_past=18 n_ctx=20480 n_tokens=18
-VERB [            update_slots] decoding batch | tid="124177210875904" timestamp=1747553203 n_tokens=18
-CUDA error: an illegal memory access was encountered
-  current device: 2, in function ggml_backend_cuda_synchronize at /home/ciprian/ai/ik_llama.cpp/ggml/src/ggml-cuda.cu:3067
-  cudaStreamSynchronize(cuda_ctx->stream())
-/home/ciprian/ai/ik_llama.cpp/ggml/src/ggml-cuda.cu:110: CUDA error
-Could not attach to process.  If your uid matches the uid of the target
-process, check the setting of /proc/sys/kernel/yama/ptrace_scope, or try
-again as the root user.  For more details, see /etc/sysctl.d/10-ptrace.conf
-ptrace: Operation not permitted.
-
----
-
-👤 **ikawrakow** commented the **2025-05-18** at **07:42:09**:<br>
+👤 **ikawrakow** commented on **2025-05-18** at **07:42:09**
 
 @ciprianveg Thanks for testing. Are you willing to do a similar debugging session?
 ```
@@ -649,7 +536,7 @@ When it crashes, `type backtrace` and post the output.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-18** at **08:00:14**:<br>
+👤 **ciprianveg** commented on **2025-05-18** at **08:00:14**
 
 sure:
 VERB [            update_slots] decoding batch | tid="140737203113984" timestamp=1747555159 n_tokens=18
@@ -695,13 +582,13 @@ warning: 44	./nptl/pthread_kill.c: No such file or directory
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-18** at **08:01:05**:<br>
+👤 **ciprianveg** commented on **2025-05-18** at **08:01:05**
 
 this is from ik/disable_multi_add branch
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-18** at **08:11:02**:<br>
+👤 **ikawrakow** commented on **2025-05-18** at **08:11:02**
 
 OK, now
 ```
@@ -727,7 +614,7 @@ p *split->inputs[1], etc., up to j
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-18** at **08:13:48**:<br>
+👤 **ciprianveg** commented on **2025-05-18** at **08:13:48**
 
 (gdb) frame 8
 #8  0x00007fffef0aeed8 in ggml_backend_sched_compute_splits (sched=0x55555655d7c0) at /home/ciprian/ai/ik_llama.cpp/ggml/src/ggml-backend.c:1837
@@ -736,13 +623,13 @@ p *split->inputs[1], etc., up to j
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-18** at **08:16:19**:<br>
+👤 **ikawrakow** commented on **2025-05-18** at **08:16:19**
 
 And the second part with `p sched->n_splits` etc.?
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-18** at **08:20:09**:<br>
+👤 **ciprianveg** commented on **2025-05-18** at **08:20:09**
 
 (gdb) p sched->n_splits
 $1 = 93
@@ -806,7 +693,7 @@ Cannot access memory at address 0x0
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-18** at **09:03:55**:<br>
+👤 **ikawrakow** commented on **2025-05-18** at **09:03:55**
 
 Don't know. Thanks for helping.
 
@@ -814,7 +701,7 @@ It is attempting to copy the inputs for layer 43 to a GPU. They consist of the r
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-19** at **12:30:36**:<br>
+👤 **ciprianveg** commented on **2025-05-19** at **12:30:36**
 
 Hello,  some feedback that might help: With 3 gpus it is working, and considering that is faster than llama.cpp with 4 gpus, it is a win for me. Just fyi, it is not the gpu, because i put all the 3 gpus combination among all my gpus, to be sure i do not have a deffective one and they worked. Maybe because the last pcie is at lower speed and lags behind the rest? and maybe in llama.cpp lower speed being achieved it is still speedy enough? 
 
@@ -822,7 +709,7 @@ Non related question, is there a downside to set a large u_batch, n_batch? setti
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-19** at **12:48:12**:<br>
+👤 **ikawrakow** commented on **2025-05-19** at **12:48:12**
 
 > Non related question, is there a downside to set a large u_batch, n_batch? setting u_batch =3072, n_batch=3072 increased the pp speed from 80t/s (when they were set to 1024) to 180t/s
 
@@ -834,7 +721,7 @@ The reason MoE models are different from dense models are the experts. If you us
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-19** at **13:06:22**:<br>
+👤 **ikawrakow** commented on **2025-05-19** at **13:06:22**
 
 > Hello, some feedback that might help: With 3 gpus it is working,
 
@@ -844,13 +731,13 @@ I'm maybe grasping at straws here, but is it possible that your power supply can
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-19** at **13:11:59**:<br>
+👤 **ikawrakow** commented on **2025-05-19** at **13:11:59**
 
 Also related to `u-batch`: If you don't have enough VRAM to go to batch=u-batch=4096, but PP performance is important to you, you may keep one extra layer per GPU on the CPU so you can use the larger u-batch. This will slightly slow down TG, but the decrease in TG performance with fewer layers offloaded to the GPU is quite modest, so you may still prefer the increase in PP performance.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-19** at **13:15:24**:<br>
+👤 **ciprianveg** commented on **2025-05-19** at **13:15:24**
 
 > > Hello, some feedback that might help: With 3 gpus it is working,
 > 
@@ -862,7 +749,7 @@ I don't think the power is the issue, nvidia-smi shows the power usage very low,
 
 ---
 
-👤 **Lissanro** commented the **2025-05-20** at **11:13:14**:<br>
+👤 **Lissanro** commented on **2025-05-20** at **11:13:14**
 
 I think I have the same issue, seems to happen periodically. I am using the following command:
 
@@ -895,40 +782,7 @@ I am using 4x3090 GPUs on EPYC 7763 with 1TB 3200MHz RAM. I am using 2880W serve
 
 ---
 
-👤 **Lissanro** commented the **2025-05-20** at **11:13:14**:<br>
-
-I think I have the same issue, seems to happen periodically. I am using the following command:
-
-```
-/pkgs/ik_llama.cpp/build/bin/llama-server \
---model /mnt/neuro/models/DeepSeek-R1T-Chimera-256x21B-IQ4_K_R4-163840seq/DeepSeek-R1T-Chimera-256x21B-IQ4_K_R4-163840seq.gguf \
---ctx-size 81920 --n-gpu-layers 62 --tensor-split 25,23,26,26 -mla 3 -fa -ctk q8_0 -amb 1024 -fmoe \
--ot "blk\.3\.ffn_up_exps=CUDA0, blk\.3\.ffn_gate_exps=CUDA0" \
--ot "blk\.4\.ffn_up_exps=CUDA1, blk\.4\.ffn_gate_exps=CUDA1" \
--ot "blk\.5\.ffn_up_exps=CUDA2, blk\.5\.ffn_gate_exps=CUDA2" \
--ot "blk\.6\.ffn_up_exps=CUDA3, blk\.6\.ffn_gate_exps=CUDA3" \
--ot "ffn_down_exps=CPU, ffn_up_exps=CPU, gate_exps=CPU" \
---threads 64 --host 0.0.0.0 --port 5000
-```
-
-Few lines of log before the error and the error itself look very similar to this bug report:
-
-```
-INFO [      log_server_request] request | tid="139488642715648" timestamp=1747701084 remote_addr="127.0.0.1" remote_port=57838 status=200 method="POST" path="/completion" params={}
-INFO [            update_slots] all slots are idle | tid="139972738117632" timestamp=1747701084
-INFO [   launch_slot_with_task] slot is processing task | tid="139972738117632" timestamp=1747726885 id_slot=0 id_task=11339
-INFO [            update_slots] kv cache rm [p0, end) | tid="139972738117632" timestamp=1747726886 id_slot=0 id_task=11339 p0=47064
-CUDA error: an illegal memory access was encountered
-  current device: 0, in function ggml_backend_cuda_synchronize at /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu:3067
-  cudaStreamSynchronize(cuda_ctx->stream())
-/home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu:110: CUDA error
-```
-
-I am using 4x3090 GPUs on EPYC 7763 with 1TB 3200MHz RAM. I am using server grade PSU to power the video cards and online UPS, and GPUs are stable in all other tasks, including passing overnight memtest_vulkan testing (which verifies VRAM integrity). In case additional debug information from my side could be of help, please let me know.
-
----
-
-👤 **ikawrakow** commented the **2025-05-20** at **14:26:32**:<br>
+👤 **ikawrakow** commented on **2025-05-20** at **14:26:32**
 
 @Lissanro All the experts in this mode use `*_R4` quants? If so, why are you offloading them to the GPUs? The data will have to be copied back to the CPU to do the matrix multiplications.
 
@@ -936,15 +790,7 @@ To all participants: Does #438 help?
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-20** at **14:26:32**:<br>
-
-@Lissanro All the experts in this mode use `*_R4` quants? If so, why are you offloading them to the GPUs? The data will have to be copied back to the CPU to do the matrix multiplications.
-
-@all Does #438 help?
-
----
-
-👤 **nux** commented the **2025-05-20** at **14:56:58**:<br>
+👤 **nux** commented on **2025-05-20** at **14:56:58**
 
 Just rebuilt and tried and got the error:
 May 20 09:47:03 red llama-swap[1412]: CUDA error: an illegal memory access was encountered
@@ -959,13 +805,13 @@ I sent another prompt with only the regex and it didn't crash....hmm
 
 ---
 
-👤 **Panchovix** commented the **2025-05-20** at **14:57:15**:<br>
+👤 **Panchovix** commented on **2025-05-20** at **14:57:15**
 
 I will try to test ASAP, I'm on vacations so my time is a bit more limited to try it via ssh
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-20** at **15:21:17**:<br>
+👤 **ciprianveg** commented on **2025-05-20** at **15:21:17**
 
 same error:
 
@@ -979,38 +825,38 @@ again as the root user.  For more details, see /etc/sysctl.d/10-ptrace.conf
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-20** at **15:23:43**:<br>
+👤 **ikawrakow** commented on **2025-05-20** at **15:23:43**
 
 OK, thanks. So #438 does not fix it.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-20** at **16:07:36**:<br>
+👤 **ciprianveg** commented on **2025-05-20** at **16:07:36**
 
 @ikawrakow  can it have something to do with not sanitizing the prompt? it would explain why in bench and cli it doesnt happen..
 openwebui appends the "/no_prompt" and some tools. It is strange that I removed "\no_think" from the prompt and it didn't crash..  Cand be also related to exact prompt length and how it is split..
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-20** at **16:25:22**:<br>
+👤 **ikawrakow** commented on **2025-05-20** at **16:25:22**
 
 @ciprianveg I don't know. The crash reports are inconsistent with any hypothesis that I had. And in my own testing I'm just not able to crash it. Some users have found workarounds. For some users it does not crash. I have no idea what it is.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-20** at **16:54:27**:<br>
+👤 **ciprianveg** commented on **2025-05-20** at **16:54:27**
 
 Workarounds other than limiting the no of gpus?
 
 ---
 
-👤 **nux** commented the **2025-05-20** at **17:03:07**:<br>
+👤 **nux** commented on **2025-05-20** at **17:03:07**
 
 I only have one GPU. If I put a single layer -ngl 1 on the gpu it will crash for me. https://github.com/ikawrakow/ik_llama.cpp/issues/425#issuecomment-2884657811
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **04:43:40**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **04:43:40**
 
 > I only have one GPU. If I put a single layer -ngl 1 on the gpu it will crash for me. [#425 (comment)](https://github.com/ikawrakow/ik_llama.cpp/issues/425#issuecomment-2884657811)
 
@@ -1018,7 +864,7 @@ This is what makes it even more confusing. Everybody else reporting a crash has 
 
 ---
 
-👤 **Lissanro** commented the **2025-05-21** at **05:24:08**:<br>
+👤 **Lissanro** commented on **2025-05-21** at **05:24:08**
 
 @ikawrakow 
 > All the experts in this mode use *_R4 quants? If so, why are you offloading them to the GPUs? The data will have to be copied back to the CPU to do the matrix multiplications.
@@ -1039,13 +885,13 @@ In the meantime, I will keep testing using the latest patch to see if the crash 
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **06:02:16**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **06:02:16**
 
 Please use branch in PR #442 and post the CUDA call trace that will be printed when the application crashes.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **06:18:06**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **06:18:06**
 
 @Lissanro 
 
@@ -1057,7 +903,7 @@ The downside of the above is that you will increase the probability for a crash.
 
 ---
 
-👤 **Lissanro** commented the **2025-05-21** at **13:24:25**:<br>
+👤 **Lissanro** commented on **2025-05-21** at **13:24:25**
 
 @ikawrakow Thank you, I recompiled with `-DGGML_SCHED_MAX_COPIES=1` as you suggested and now can use `-b 4096 -ub 4096`, and I had room to add more tensors as well:
 
@@ -1130,80 +976,7 @@ Another observation, does not seem to depend on context length. Both short (less
 
 ---
 
-👤 **Lissanro** commented the **2025-05-21** at **13:24:25**:<br>
-
-@ikawrakow Thank you, I recompiled with `-DGGML_SCHED_MAX_COPIES=1` as you suggested and now can use `-b 4096 -ub 4096`, and I had room to add more tensors as well:
-
-```
-/pkgs/ik_llama.cpp/build/bin/llama-server \
---model /mnt/neuro/models/DeepSeek-R1T-Chimera-256x21B-IQ4_K-163840seq/DeepSeek-R1T-Chimera-256x21B-IQ4_K-163840seq.gguf \
---ctx-size 81920 --n-gpu-layers 62 --tensor-split 25,23,26,26 -mla 3 -fa -ctk q8_0 -amb 1024 -fmoe -b 4096 -ub 4096 \
--ot "blk\.3\.ffn_up_exps=CUDA0, blk\.3\.ffn_gate_exps=CUDA0, blk\.3\.ffn_down_exps=CUDA0" \
--ot "blk\.4\.ffn_up_exps=CUDA1, blk\.4\.ffn_gate_exps=CUDA1, blk\.4\.ffn_down_exps=CUDA1" \
--ot "blk\.5\.ffn_up_exps=CUDA2, blk\.5\.ffn_gate_exps=CUDA2, blk\.5\.ffn_down_exps=CUDA2" \
--ot "blk\.6\.ffn_up_exps=CUDA3, blk\.6\.ffn_gate_exps=CUDA3, blk\.6\.ffn_down_exps=CUDA3" \
--ot "ffn_down_exps=CPU, ffn_up_exps=CPU, gate_exps=CPU" \
---threads 64 --host 0.0.0.0 --port 5000
-```
-
-Now I am getting 100-105 tokens/s for input processing, with little impact on generation speed - which is excellent, given I often work with long context tasks and long prompts.
-
-By the way, is my understanding correct that repacking no longer necessary, or is there still some benefit to repack CPU-only tensors as R4?
-
----
-
-Unfortunately, the issue is still there (I have applied #439 and #442):
-
-```txt
-CUDA error: an illegal memory access was encountered
-  current device: 0, in function ggml_backend_cuda_synchronize at /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu:3085
-  cudaStreamSynchronize(cuda_ctx->stream())
-========================== CUDA trace: 5239365 previous calls
-     5239364: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239363: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1755
-     5239362: function ggml_cuda_op_mul_mat_cublas, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1388
-     5239361: function ggml_cuda_op_mul_mat_cublas, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1387
-     5239360: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239359: function ggml_cuda_set_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 129
-     5239358: function ggml_cuda_set_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 129
-     5239357: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1755
-     5239356: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239355: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239354: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239353: function ggml_cuda_set_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 129
-     5239352: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1632
-     5239351: function ggml_cuda_set_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 129
-     5239350: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1755
-     5239349: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239348: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239347: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1745
-     5239346: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1735
-     5239345: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1755
-     5239344: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239343: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239342: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1745
-     5239341: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1735
-     5239340: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1755
-     5239339: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239338: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239337: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1745
-     5239336: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1735
-     5239335: function ggml_cuda_op_mul_mat, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 1755
-     5239334: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239333: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-     5239332: function ggml_cuda_get_device, file /home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu, line 140
-/home/lissanro/pkgs/ik_llama.cpp/ggml/src/ggml-cuda.cu:122: CUDA error
-```
-
-As far as I can tell, probability of it happening is about the same as before. What I noticed though, it seems to never happen on the first try, usually when I try to regenerate a message, or maybe on the next message. It is also hard to reproduce - using exactly the same input prompt, sometimes I can regenerate messages all I want, sometimes it crashes on the second try.
-
-For some reason, if I let it generate without thinking first, then try to force thinking by specifying "<think>" as the start of a reply, and then regenerate a message, it is very likely to crash ("<think>" by itself does not cause the crash, if AI's reply starts with it, and I then regenerate, then it does not crash usually regardless if the next message with or without thinking). Not sure yet if this is truly affects probability of the crash or just few coincidences, but I thought I mention this - I tried few times with different prompts and seems like generating first message without thinking, then with thinking, is the fastest way to trigger the bug.
-
-Another observation, does not seem to depend on context length. Both short (less than 1K) and long (40K+) context seem to have about the same probability of the crash.
-
----
-
-👤 **ikawrakow** commented the **2025-05-21** at **13:48:35**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **13:48:35**
 
 > By the way, is my understanding correct that repacking no longer necessary, or is there still some benefit to repack CPU-only tensors as R4?
 
@@ -1211,13 +984,13 @@ It depends where the matrix multiplications for PP are done (TG is always done w
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **15:15:52**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **15:15:52**
 
 I have added a trace to synchronize calls in the ggml-backend to #442 if someone wants to try.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-21** at **15:58:44**:<br>
+👤 **ciprianveg** commented on **2025-05-21** at **15:58:44**
 
 Hi @ikawrakow, here it is:
 
@@ -1262,7 +1035,7 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-👤 **maxious** commented the **2025-05-21** at **15:59:52**:<br>
+👤 **maxious** commented on **2025-05-21** at **15:59:52**
 
 same here
 ```
@@ -1310,7 +1083,7 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **17:04:08**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **17:04:08**
 
 In both of these data is copied from one device to another. Then the back-end attempts to synchronize before copying the next tensor, and that's where it crashes.
 
@@ -1320,19 +1093,13 @@ I could try printf debugging (will flood your terminals with printouts), but it 
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-21** at **18:17:31**:<br>
-
-do these suggestions make sense or are hallucinations: https://chat.qwen.ai/s/b35fc22c-a36c-4b50-a296-6058ba15f313?fev=0.0.95
-
----
-
-👤 **ikawrakow** commented the **2025-05-22** at **06:45:01**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **06:45:01**
 
 If you are not tired of testing, there are new changes on #442
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **07:06:53**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **07:06:53**
 
 Hi @ikawrakow, this is the log:
 ggml_backend_cuda_synchronize: curent device is 3, context device is 0
@@ -1412,7 +1179,7 @@ Could not attach to process.  If your uid matches the uid of the target
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **07:15:50**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **07:15:50**
 
 Thanks!
 
@@ -1420,7 +1187,7 @@ What if you build with `-DGGML_CUDA_NO_PEER_COPY=1` ?
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **07:31:23**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **07:31:23**
 
 i built it like this:
 cmake -B build -DGGML_CUDA=ON -DGGML_RPC=OFF -DGGML_BLAS=OFF  -DGGML_SCHED_MAX_COPIES=1 -DGGML_CUDA_NO_PEER_COPY=1
@@ -1437,7 +1204,7 @@ llm_load_tensors:      CUDA3 buffer size = 11628.83 MiB
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **07:36:22**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **07:36:22**
 
 OK, then discard `DGGML_CUDA_NO_PEER_COPY=1`. There was another peer to peer copy without a check, so pushed a new commit.
 
@@ -1445,7 +1212,7 @@ The thing I don't understand is how this can work in `llama.cpp` when I don't se
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **07:44:58**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **07:44:58**
 
 i build without: -DGGML_CUDA_NO_PEER_COPY=1 and i still get the loading seg fault(should i delete all build dir to start from 0?):
 llm_load_tensors: offloaded 95/95 layers to GPU
@@ -1459,7 +1226,7 @@ llm_load_tensors:      CUDA3 buffer size = 12339.69 MiB
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **08:13:56**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **08:13:56**
 
 Are you using `ccache`? My experience with `ccache` is that it does get confused and does not always rebuild correctly.
 
@@ -1467,13 +1234,13 @@ If you don't have anything of value in the build folder, yes, just delete it and
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **08:14:40**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **08:14:40**
 
 Oh, and pull another time.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **08:53:00**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **08:53:00**
 
 @ikawrakow Done:
 INFO [            update_slots] kv cache rm [p0, end) | tid="134731138850816" timestamp=1747903765 id_slot=0 id_task=0 p0=0
@@ -1662,7 +1429,7 @@ ggml_backend_cuda_synchronize: reverting device to 3
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **09:41:44**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **09:41:44**
 
 So, there is no peer-to-peer access for your devices?
 
@@ -1670,7 +1437,7 @@ OK, so then let's try to follow the other Qwen3 suggestion: use `cuda-memcheck y
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **11:30:31**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **11:30:31**
 
 it is a lot of output from compute-sanitizer:
 
@@ -3129,19 +2896,19 @@ The program is not being run.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **12:31:43**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **12:31:43**
 
 Thank you for this. You are using UD-Q4_K_XL ?
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **12:33:49**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **12:33:49**
 
 Yes. Same thing happens also with UD-Q3_K_XL, in ik_llama only. Do you want me to test with another 235b model? A non UD one?
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **13:44:32**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **13:44:32**
 
 So, the only hypothesis I can make is that somehow the tensor metadata for one of the tensors is incorrect (else we cannot get the out of bounds access reported by the sanitizer). That's why I asked for the model. In UD-XL the `ffn_down` experts are quantized with more bits than `ffn_up` and `ffn_gate` in the first few layers. If we somehow are using the metadata (quantization type, etc.) for such a tensor in later layers, than we can get the out-of-bounds access.
 
@@ -3149,7 +2916,7 @@ To confirm, I have pushed another change that checks for an error in  `ggml_cuda
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **14:06:23**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **14:06:23**
 
 @ikawrakow, logs:
 
@@ -3210,25 +2977,25 @@ The program is not being run.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **14:11:23**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **14:11:23**
 
 This is a new. What is different to the previous times?
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **14:22:44**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **14:22:44**
 
 Just git pull and rebuilt..
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **14:24:29**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **14:24:29**
 
 You left out `-fmoe`
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **14:45:09**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **14:45:09**
 
 @ikawrakow, you are right:
 
@@ -3255,13 +3022,13 @@ The program is not being run.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **15:04:05**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **15:04:05**
 
 Are you tired of testing yet? I have pushed another change.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **15:27:06**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **15:27:06**
 
 Btw, with the regex you are using for the tensor overrides, the small `ffn` tensors (`ffn_gate_inp` and `ffn_norm`) remain on the CPU. This results in more graph splits. Testing with Qwen3-30B-A3B with a single RTX-4080, I get
 
@@ -3272,7 +3039,7 @@ PP is the same.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **15:32:27**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **15:32:27**
 
 I will rebuild, change the regex and retest, in about an hour, i am out a bit..
 
@@ -3304,39 +3071,7 @@ On Thu, 22 May 2025, 18:27 Kawrakow, ***@***.***> wrote:
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **15:32:27**:<br>
-
-I will change the regex and retest, in about an hour, i am out a bit..
-
-On Thu, 22 May 2025, 18:27 Kawrakow, ***@***.***> wrote:
-
-> *ikawrakow* left a comment (ikawrakow/ik_llama.cpp#425)
-> <https://github.com/ikawrakow/ik_llama.cpp/issues/425#issuecomment-2901663601>
->
-> Btw, with the regex you are using for the tensor overrides, the small ffn
-> tensors (ffn_gate_inp and ffn_norm) remain on the CPU. This results in
-> more graph splits. Testing with Qwen3-30B-A3B with a single RTX-4080, I get
->
->    - TG = 70.4 t/s using -ot "blk\.[3-4][0-9].ffn_.*_exps=CPU". There are
->    38 graph splits
->    - TG = 66.7 t/s using `-ot "blk.[3-4][0-9].ffn.*=CPU". There are 74
->    graph splits.
->
-> PP is the same.
->
-> —
-> Reply to this email directly, view it on GitHub
-> <https://github.com/ikawrakow/ik_llama.cpp/issues/425#issuecomment-2901663601>,
-> or unsubscribe
-> <https://github.com/notifications/unsubscribe-auth/AJTBYK4GGWBORL2H6XHYIA327XUGBAVCNFSM6AAAAAB5GG6KRWVHI2DSMVQWIX3LMV43OSLTON2WKQ3PNVWWK3TUHMZDSMBRGY3DGNRQGE>
-> .
-> You are receiving this because you were mentioned.Message ID:
-> ***@***.***>
->
-
----
-
-👤 **ciprianveg** commented the **2025-05-22** at **17:43:10**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **17:43:10**
 
 Hi @ikawrakow, here it is:
 ggml_backend_cuda_buffer_cpy_tensor: attempt to copy from device 0 to device 2 without access enabled
@@ -3388,13 +3123,13 @@ The program is not being run.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-22** at **18:09:34**:<br>
+👤 **ciprianveg** commented on **2025-05-22** at **18:09:34**
 
 and also thanks for the regex tip, i got a 6% increase in gen speed.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-23** at **05:06:33**:<br>
+👤 **ikawrakow** commented on **2025-05-23** at **05:06:33**
 
 Hopefully the last change fixes it...
 
@@ -3402,13 +3137,13 @@ There really was a bug showing up when 2 or 3 tokens are processed.
 
 ---
 
-👤 **ciprianveg** commented the **2025-05-23** at **08:17:10**:<br>
+👤 **ciprianveg** commented on **2025-05-23** at **08:17:10**
 
 I won't be able to test it till tomorrow evening..
 
 ---
 
-👤 **Lissanro** commented the **2025-05-23** at **08:19:53**:<br>
+👤 **Lissanro** commented on **2025-05-23** at **08:19:53**
 
 I rebuilt from the latest git, and it crashed when regenarating reply by getting triggered the same way as before, so unfortunately seem to be no change on my end. However, for some strange reason applying #442 "fixes" the bug. Below I provide detailed debug info.
 
@@ -3440,7 +3175,7 @@ Also, I wonder if it is supposed to attempt to copy from device to device withou
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-23** at **08:23:31**:<br>
+👤 **ikawrakow** commented on **2025-05-23** at **08:23:31**
 
 The bug is fixed on #442, but only as of this morning European time.
 
@@ -3448,7 +3183,7 @@ It is not fixed on the main branch. I wanted to first have confirmation that the
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-23** at **08:47:09**:<br>
+👤 **ikawrakow** commented on **2025-05-23** at **08:47:09**
 
 > Also, I wonder if it is supposed to attempt to copy from device to device without access enabled? Maybe fixing this warning could lead to an actual fix?
 
@@ -3458,7 +3193,7 @@ The bug was in the matrix-vector multiplication kernel. It only shows up when th
 
 ---
 
-👤 **Lissanro** commented the **2025-05-23** at **08:56:21**:<br>
+👤 **Lissanro** commented on **2025-05-23** at **08:56:21**
 
 > The bug is fixed on https://github.com/ikawrakow/ik_llama.cpp/pull/442, but only as of this morning European time.
 

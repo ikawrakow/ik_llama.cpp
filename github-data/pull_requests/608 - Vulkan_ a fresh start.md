@@ -1,10 +1,13 @@
-### 🔀 [#608](https://github.com/ikawrakow/ik_llama.cpp/pull/608) - Vulkan: a fresh start
+### [Pull Request #608](https://github.com/ikawrakow/ik_llama.cpp/pull/608) - Vulkan: a fresh start
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/vulkan_again` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-14 |
 | **Updated** | 2025-07-15 |
+| **Merged** | 2025-07-15 |
 
 ---
 
@@ -21,19 +24,54 @@ It does seem to work for me, but I would appreciate more comprehensive testing f
 
 Two, I think, interesting observations:
 * The Vulkan flash attention implementation absolutely does not work without setting the precision of the op to `fp32`. There is a difference between mainline and `ik_llama.cpp` in that regard. Mainline now just sets the precision to `fp32`, while in `ik_llama.cpp` this is only done for a select set of models. This may have been the actual reason for observing NaNs and gibberish. As I'm not ready to throw in the towel as mainline did at some point, I have changed the attention implementation to set the precision to `fp32` if it is one of the models known to require it, or if the Vulkan backend is enabled. This will have the negative effect of also affecting CUDA, if someone decided to build with CUDA and Vulkan enabled, so probably it would be better  to move this into the Vulkan backend itself (but this is left for a future PR as needed).
-* In the previous Vulkan port, I had observed very little difference between `mla = 1` and `mla = 3` (see #584). With this PR I do see, as expected, a significantly higher PP performance with `mla = 3` (e.g., for a context of 16k tokens on an RTX-4080 with coopmat2 enabled, 1470 t/s with `mla = 3` vs 1086 t/s with `mla = 1`.
+* In the previous Vulkan port, I had observed very little difference between `mla = 1` and `mla = 3` (see [#584](https://github.com/ikawrakow/ik_llama.cpp/issues/584)). With this PR I do see, as expected, a significantly higher PP performance with `mla = 3` (e.g., for a context of 16k tokens on an RTX-4080 with coopmat2 enabled, 1470 t/s with `mla = 3` vs 1086 t/s with `mla = 1`.
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** commented the **2025-07-14** at **14:53:24**:<br>
+👤 **ubergarm** commented on **2025-07-14** at **13:34:55**
+
+Thanks again for fussing with the vulkan stuff, so some good news:
+
+## NVIDIA 3090TI
+* `KHR_coopmat` - still working perplexity on `Qwen3-14B-Q4_0.gguf` is `Final estimate: PPL = 9.1529 +/- 0.07222`
+* `NV_coopmat2` - Its working now with flash attention! Tested multi-turn chat and perplexity of `Qwen3-14B-Q4_0.gguf` comes out clean with `Final estimate: PPL = 9.1502 +/- 0.07219`
+```
+ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 Ti (NVIDIA) | uma: 0 | fp16: 1 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: KHR_coopmat
+
+ggml_vulkan: 0 = NVIDIA GeForce RTX 3090 Ti (NVIDIA) | uma: 0 | fp16: 1 | warp size: 32 | shared memory: 49152 | int dot: 1 | matrix cores: NV_coopmat2
+```
+
+## AMD 7900 XTX
+* `KHR_coopmat` - Working now with flash attention! Tested a multi-turn chat and perplexity of `Qwen3-14B-Q4_0.gguf` comes out clean with `Final estimate: PPL = 9.2161 +/- 0.07294`
+```
+ggml_vulkan: 0 = Radeon RX 7900 XTX (AMD open-source driver) | uma: 0 | fp16: 1 | warp size: 64 | shared memory: 32768 | int dot: 1 | matrix cores: KHR_coopmat
+```
+
+---
+
+👤 **ikawrakow** commented on **2025-07-14** at **13:56:54**
+
+Thanks for testing.
+
+With `KHR_coopmat` and a MoE model (DeepSeek-V2-Lite), I'm hitting an assert when using `u-batch > 512`. It happens with this PR and also in mainline.
+
+---
+
+👤 **ikawrakow** commented on **2025-07-14** at **14:53:24**
 
 Last commit fixes the assert.
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-14** at **15:06:51**:<br>
+👤 **firecoperana** commented on **2025-07-14** at **15:02:46**
+
+This PR fixed the issues I have with Vulkan flash attention. Thanks!
+
+---
+
+👤 **ikawrakow** commented on **2025-07-14** at **15:06:51**
 
 Wow, I think this is interesting.
 
@@ -53,7 +91,7 @@ This is quite a difference in performance, considering that I did nothing other 
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-14** at **16:47:30**:<br>
+👤 **ikawrakow** commented on **2025-07-14** at **16:47:30**
 
 @jeffbolznv 
 
@@ -61,7 +99,7 @@ You may want to take a look at [this commit](https://github.com/ikawrakow/ik_lla
 
 ---
 
-👤 **jeffbolznv** commented the **2025-07-14** at **21:45:06**:<br>
+👤 **jeffbolznv** commented on **2025-07-14** at **21:45:06**
 
 Thanks, I made a different fix upstream (see https://github.com/ggml-org/llama.cpp/pull/14683).
 
@@ -69,7 +107,7 @@ I noticed FA is failing for the scalar/coopmat1 paths with this model, but worki
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-15** at **05:05:11**:<br>
+👤 **ikawrakow** commented on **2025-07-15** at **05:05:11**
 
 > I noticed FA is failing for the scalar/coopmat1 paths with this model, but working for coopmat2. Did you happen to have a fix for that?
 
@@ -77,12 +115,14 @@ Failing in what sense? I haven't tested scalar, but coopmat1 and coopmt2 seem to
 
 ---
 
-👤 **jeffbolznv** commented the **2025-07-15** at **05:07:34**:<br>
+👤 **jeffbolznv** commented on **2025-07-15** at **05:07:34**
 
 I got nonsense output running llama-cli with deepseek and FA enabled. But the backend tests all pass.
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-15** at **05:20:56**:<br>
+👤 **ikawrakow** commented on **2025-07-15** at **05:20:56**
 
-I cannot say that I like the responses with coopmat1, but at least it is not gibberish. The above PPL test shows a 0.06 diff between coopmat1 and coopmat2, which is too large to be just numerical roundoff. So, I guess, something is not quite right. I did notice that the Vulkan FA does not work at all with `fp16` precision (one gets NaNs), while using `fp16` arithmetic for self-attention on CUDA is perfectly fine for this model.
+I cannot say that I like the responses with coopmat1, but at least it is not gibberish. The above PPL test shows a 0.06 diff between coopmat1 and coopmat2, which is too large to be just numerical roundoff. So, I guess, something is not quite right. I did notice that the Vulkan FA does not work at all with `fp16` precision (one gets NaNs), while using `fp16` arithmetic for self-attention on CUDA is perfectly fine for this model. 
+
+Oh, to answer the question: no, I don't't have a fix.

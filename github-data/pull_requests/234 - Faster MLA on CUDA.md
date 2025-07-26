@@ -1,10 +1,13 @@
-### 🔀 [#234](https://github.com/ikawrakow/ik_llama.cpp/pull/234) - Faster MLA on CUDA
+### [Pull Request #234](https://github.com/ikawrakow/ik_llama.cpp/pull/234) - Faster MLA on CUDA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_mla2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-26 |
 | **Updated** | 2025-02-27 |
+| **Merged** | 2025-02-27 |
 
 ---
 
@@ -29,9 +32,9 @@ These two changes result in a significant speedup of the MLA attention computati
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **davidsyoung** commented the **2025-02-27** at **16:17:26**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **16:17:26**
 
 @ikawrakow Seeing a significant speed increase from this, with also transposed KV cache. From 12t/s to 17.25t/s, and seeing less of a drop off on speed as well at longer PP tokens. Full CUDA 15x3090 Q2_K MLA.
 

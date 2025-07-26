@@ -1,7 +1,8 @@
-### 🗣️ [#25](https://github.com/ikawrakow/ik_llama.cpp/discussions/25) - CPU prompt processing speed for large contexts
+### [Discussion #25](https://github.com/ikawrakow/ik_llama.cpp/discussions/25) - CPU prompt processing speed for large contexts
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-08-22 |
 | **Updated** | 2025-01-15 |
 
@@ -89,7 +90,7 @@ Based on this, here are some angles of attack for improving the CPU performance 
 
 #### 🗣️ Discussion
 
-👤 **jart** replied the **2024-08-22** at **15:26:07**:<br>
+👤 **jart** commented on **2024-08-22** at **15:26:07**
 
 > ~5% spent on thread synchronization
 
@@ -154,7 +155,7 @@ Is this all something that'd interest you? I can easily send a PR adding it to y
 
 ---
 
-👤 **ikawrakow** replied the **2024-08-22** at **16:16:08**:<br>
+👤 **ikawrakow** commented on **2024-08-22** at **16:16:08**
 
 Hey @jart, thanks for the comments!
 
@@ -170,30 +171,35 @@ Ha, you had already done that! I didn't check `llamafile` and discovered this on
 
 I don't care about MSVC, so sure. There is the MIT vs Apache-2.0 issue, but we can sort that out.
 
-> 👤 **jart** replied the **2024-08-22** at **18:02:15**:<br>
+> 👤 **jart** replied on **2024-08-22** at **18:02:15**
+> 
 > Apple doesn't have OpenMP. So that's where my thread synchronization changes have the most impact. Right now in llama.cpp if I build it on my Apple M2 and run with `-ngl 0` for CPU mode it gets 134 tok/sec tops. But llamafile with `-ngl 0` on MacOS M2 generates text at anywhere from 150 tok/sec to 210 tok/sec depending on how much Netflix is interfering and how much I win the XNU scheduler lottery (I imagine things are consistently 200+ if Asahi Linux is used instead of XNU). On the other hand, if I use Metal GPU then it consistently generates text at 200 tok/sec.
 > 
 > Yes, that's correct. I'm claiming that the changes you and I both made on llamafile have made M2 Ultra CPU go faster than its GPU sometimes when generating text with TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf. However if I use a larger model like Mistral 7b where the matmuls start to dominate a lot more than the sync barriers, then I can only generate 42 tok/sec and GPU does 72 tok/sec. So this is all a bit orthogonal to the goal here of huge context windows. I just wanted you to know that we did something most people would likely assume is not possible. I certainly wouldn't have, because when I started focusing on this in January I set out with the goal of making CPU at at least only 10x slower than GPU.
+
+> 👤 **jart** replied on **2024-08-22** at **18:13:48**
 > 
-> 👤 **jart** replied the **2024-08-22** at **18:13:48**:<br>
 > As for MIT vs. Apache 2.0 there's a lot of leeway from Mozilla to make my work available to other local AI projects under the MIT license if that's what you're using here. I'll roll up a pull request for you sometime in the next few days, that'll work smoothly on POSIX platforms.
+
+> 👤 **ikawrakow** replied on **2024-08-22** at **19:08:09**
 > 
-> 👤 **ikawrakow** replied the **2024-08-22** at **19:08:09**:<br>
 > > Apple doesn't have OpenMP
 > 
 > I thought the currently recommended approach in `llama.cpp` is to `brew install libomp`, which then by default enables OpenMP? That's what I tried anyway after observing a horrible performance with the `ggml_barrier` implementation on my M2-Max laptop, but that didn't help much either, so I did end up putting in the inline assembly that fixed performance for me.
 > 
 > But yes, for small models such as TinyLlama  thread synchronization becomes really important, so I should try your barrier version.
+
+> 👤 **jart** replied on **2024-08-22** at **22:12:59**
 > 
-> 👤 **jart** replied the **2024-08-22** at **22:12:59**:<br>
 > I don't even know why OpenMP is there. It's a GPL-licensed library. We might as well be using Torch if we're going to link that. Goes against the very spirit of the project which is figuring these things out for ourselves.
+
+> 👤 **jart** replied on **2024-08-22** at **22:16:45**
 > 
-> 👤 **jart** replied the **2024-08-22** at **22:16:45**:<br>
 > Also if by libomp you mean LLVM libomp, sadly it's kind of an newer alternative and it's got none of the alpha of GNU's OpenMP runtime. Based on my own evaluation, LLVM libomp is about as fast as llama.cpp's old synchronization code, when it's applied for GGML speedups.
 
 ---
 
-👤 **ikawrakow** replied the **2024-08-27** at **06:31:49**:<br>
+👤 **ikawrakow** commented on **2024-08-27** at **06:31:49**
 
 I did try a few things on [this branch](https://github.com/ikawrakow/ik_llama.cpp/tree/ik/kq_fused_softmax), but nothing is really working. The branch is just exploratory, absolutely not production ready, and `AVX512`-only. Given the unsatisfactory outcome, it will not get merged.
 * I can get the CPU flash attention to run faster than the original (quite a bit faster for very large prompts), but it is still slower than no flash attention
@@ -203,7 +209,7 @@ On the bright side, PR #27 merges "soft-capping" with soft-max. For large prompt
 
 ---
 
-👤 **ikawrakow** replied the **2024-08-30** at **15:25:30**:<br>
+👤 **ikawrakow** commented on **2024-08-30** at **15:25:30**
 
 OK, I have progress on [this branch](https://github.com/ikawrakow/ik_llama.cpp/tree/ik/kq_fused_softmax). Extremely hacky and `AVX512`-only (or, more precisely, Zen4-only), totally not production ready. But I'm finally able to outperform no flash attention on my Ryzen-7950X CPU - by about 20% for context of 16k, 23% for 32k, with LLaMA-3.1-8B.
 
@@ -215,7 +221,7 @@ My guess is that there is still a bottleneck at 32k tokens. Based on the FA to n
 
 ---
 
-👤 **ikawrakow** replied the **2024-08-30** at **15:37:24**:<br>
+👤 **ikawrakow** commented on **2024-08-30** at **15:37:24**
 
 And here is how the raltive CPU vs GPU performance graph changes with the new CPU flash attention implementation. The FA curve is basically flat now beyond 1000 tokens, except at 32k where I suspect a bottleneck that I have not found. 
 
@@ -224,7 +230,7 @@ And here is how the raltive CPU vs GPU performance graph changes with the new CP
 
 ---
 
-👤 **ikawrakow** replied the **2025-01-15** at **17:50:21**:<br>
+👤 **ikawrakow** commented on **2025-01-15** at **17:50:21**
 
 There has been progress since I last wrote here, with PR #172 being the latest contribution to improving CPU prompt processing speed. The following graph is for LLaMA-3.1-8B-Instruct quantized to `IQ4_XS` (which seems a fairly popular quantization type). Tested on a Ryzen-7950X CPU. The mandatory current mainline `llama.cpp` results are for `build: 1d850433 (4488)`. The results for `ik_llama.cpp` are obtained using run-time-repacking to the corresponding 4-row interleaved variant.
 

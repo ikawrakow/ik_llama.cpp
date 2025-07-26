@@ -1,4 +1,4 @@
-### 🐛 [#575](https://github.com/ikawrakow/ik_llama.cpp/issues/575) - Bug: llama-server crash with sampling order
+### [Issue #575](https://github.com/ikawrakow/ik_llama.cpp/issues/575) - Bug: llama-server crash with sampling order
 
 | **Author** | `mcm007` |
 | :--- | :--- |
@@ -12,7 +12,7 @@
 
 ### What happened?
 
-The OpenAi endpoint crashes when samplers order is specified with `--samplers "min_p;temperature"` or `--sampling-seq "mt"` after [Commit 3f111ad](https://github.com/ikawrakow/ik_llama.cpp/commit/3f111ad7bbb2d4f721332f9b2b344e48b3bbf9aa) ([add dry sampler #513 ](https://github.com/ikawrakow/ik_llama.cpp/pull/513)).
+The OpenAi endpoint crashes when samplers order is specified with `--samplers "min_p;temperature"` or `--sampling-seq "mt"` after [Commit 3f111ad](https://github.com/ikawrakow/ik_llama.cpp/commit/3f111ad7bbb2d4f721332f9b2b344e48b3bbf9aa) ([add dry sampler [#513](https://github.com/ikawrakow/ik_llama.cpp/issues/513) ](https://github.com/ikawrakow/ik_llama.cpp/pull/513)).
 
 Behavior observed with [aider](https://aider.chat/) but can be reproduced with curl:
 ```
@@ -114,15 +114,15 @@ VERB [            update_slots] prompt tokenized | tid="139998054885568" timesta
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2025-07-03** at **09:24:06**:<br>
+👤 **ikawrakow** commented on **2025-07-03** at **09:24:06**
 
 Is this one example of many where it crashes, or is this the only sampler combination for which it crashes?
 
 ---
 
-👤 **mcm007** commented the **2025-07-03** at **09:59:07**:<br>
+👤 **mcm007** commented on **2025-07-03** at **09:59:07**
 
 After some tests, it seems that crashes when `dry` is not specified:
 
@@ -144,13 +144,13 @@ Working:
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-03** at **12:45:33**:<br>
+👤 **ikawrakow** commented on **2025-07-03** at **12:45:33**
 
 Thanks for the bug report. #578 should fix it.
 
 ---
 
-👤 **mcm007** commented the **2025-07-03** at **20:17:21**:<br>
+👤 **mcm007** commented on **2025-07-03** at **20:17:21**
 
 Sorry, it has the same behavior/crash 🙄 
 
@@ -163,13 +163,13 @@ Vulkan and all the other improvements are really appreciated.
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-05** at **13:12:19**:<br>
+👤 **ikawrakow** commented on **2025-07-05** at **13:12:19**
 
 This is strange. I tested `llama-cli` with `--sampling-seq  mt`, and it works fine after this PR.
 
 ---
 
-👤 **mcm007** commented the **2025-07-05** at **18:17:15**:<br>
+👤 **mcm007** commented on **2025-07-05** at **18:17:15**
 
 Indeed, just tested, `llama-cli` is working after this PR.
 
@@ -195,12 +195,12 @@ curl -k ik_llamacpp:8080/v1/chat/completions -H "Content-Type: application/json"
 
 ---
 
-👤 **firecoperana** commented the **2025-07-06** at **00:54:04**:<br>
+👤 **firecoperana** commented on **2025-07-06** at **00:54:04**
 
 https://github.com/ikawrakow/ik_llama.cpp/pull/588 should fix the server crash
 
 ---
 
-👤 **mcm007** commented the **2025-07-06** at **06:30:29**:<br>
+👤 **mcm007** commented on **2025-07-06** at **06:30:29**
 
 It works OK, thank you both!

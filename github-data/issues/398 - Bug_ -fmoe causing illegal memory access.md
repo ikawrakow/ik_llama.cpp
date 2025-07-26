@@ -1,4 +1,4 @@
-### 🐛 [#398](https://github.com/ikawrakow/ik_llama.cpp/issues/398) - Bug: -fmoe causing illegal memory access
+### [Issue #398](https://github.com/ikawrakow/ik_llama.cpp/issues/398) - Bug: -fmoe causing illegal memory access
 
 | **Author** | `pt13762104` |
 | :--- | :--- |
@@ -192,22 +192,22 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2025-05-08** at **11:11:23**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **11:11:23**
 
 Can you add the command line you used? Thanks.
 
 ---
 
-👤 **pt13762104** commented the **2025-05-08** at **14:15:50**:<br>
+👤 **pt13762104** commented on **2025-05-08** at **14:15:50**
 
 `ik_llama.cpp/build/bin/llama-server -m /root/Qwen3-30B-A3B-UD-Q4_K_XL.gguf -c 32768 -fmoe -fa -ngl 99`
 It starts to do this in 2-3 prompts. Maybe it's related to the fact that the T4 doesn't have BF16 capability?
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-08** at **14:42:29**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **14:42:29**
 
 It is more likely due to a bug that shows up in a multi-GPU setup that I cannot debug because I only have a single GPU.
 
@@ -225,7 +225,7 @@ to put the first 30 layers on the first GPU and everything else on the CPU.
 
 ---
 
-👤 **pt13762104** commented the **2025-05-09** at **01:35:39**:<br>
+👤 **pt13762104** commented on **2025-05-09** at **01:35:39**
 
 I can't even try this:
 ```
@@ -872,31 +872,25 @@ munmap_chunk(): invalid pointer # could be free() or it just disappears
 
 ---
 
-👤 **pt13762104** commented the **2025-05-09** at **01:36:06**:<br>
+👤 **pt13762104** commented on **2025-05-09** at **01:36:06**
 
 Removing `.*=CUDA0` fixed that
 
 ---
 
-👤 **pt13762104** commented the **2025-05-09** at **01:36:06**:<br>
-
-Let me try IQ4_K model instead.
-
----
-
-👤 **pt13762104** commented the **2025-05-09** at **01:59:34**:<br>
+👤 **pt13762104** commented on **2025-05-09** at **01:59:34**
 
 @ikawrakow I haven't found issues while using -fmoe on 1 GPU. It seems like a multi-GPU issue, given that the error always occur on device 1. The IQ4_K model doesn't seem to run into this bug.
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-09** at **11:52:43**:<br>
+👤 **Ph0rk0z** commented on **2025-05-09** at **11:52:43**
 
 I'm not sure how it is done here but afaik, real cudaMemcpyAsync is not supported on SM75.
 
 ---
 
-👤 **schynce** commented the **2025-05-12** at **18:47:03**:<br>
+👤 **schynce** commented on **2025-05-12** at **18:47:03**
 
 Hey @ikawrakow and @pt13762104,
 
@@ -967,13 +961,13 @@ I would be happy to provide logs or test specific configurations to help debug t
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-13** at **11:51:23**:<br>
+👤 **Ph0rk0z** commented on **2025-05-13** at **11:51:23**
 
 Oh snap.. that's the FA error?! Try without flash attention and see if it still crashes.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-13** at **12:33:36**:<br>
+👤 **ikawrakow** commented on **2025-05-13** at **12:33:36**
 
 > Only the mix-IQ3_K seems to be working without crashing (and it is a ik_llama.cpp specific). The crash happens regardless of -fmoe. I can run the mix-IQ3_K quant with -fmoe without problems, like this:
 
@@ -983,7 +977,7 @@ The problem is that I cannot trigger the bug on my single-GPU system. I need to 
 
 ---
 
-👤 **schynce** commented the **2025-05-13** at **22:33:11**:<br>
+👤 **schynce** commented on **2025-05-13** at **22:33:11**
 
 > Oh snap.. that's the FA error?! Try without flash attention and see if it still crashes.
 
@@ -1004,7 +998,7 @@ Long prompts seemed to reliably crash it before with flash attention. So, I ran 
 
 ---
 
-👤 **Panchovix** commented the **2025-05-14** at **16:32:23**:<br>
+👤 **Panchovix** commented on **2025-05-14** at **16:32:23**
 
 Just chiming in, I get a CUDA illegal memory access when using -fmoe on DeepSeekV3 0324
 
@@ -1111,221 +1105,7 @@ Not using -fmoe makes it work without issues.
 
 ---
 
-👤 **Panchovix** commented the **2025-05-14** at **16:32:23**:<br>
-
-Just chiming in, I get a CUDA illegal memory access when using -fmoe on DeepSeekV3 0324
-
-```
-llama_new_context_with_model: freq_scale = 0.025
-llama_kv_cache_init:      CUDA0 KV buffer size =   468.00 MiB
-llama_kv_cache_init:      CUDA1 KV buffer size =   360.00 MiB
-llama_kv_cache_init:      CUDA2 KV buffer size =   360.00 MiB
-llama_kv_cache_init:      CUDA3 KV buffer size =   360.00 MiB
-llama_kv_cache_init:      CUDA4 KV buffer size =   648.00 MiB
-llama_new_context_with_model: KV self size  = 2196.00 MiB, c^KV (f16): 2196.00 MiB, kv^T: not used
-llama_new_context_with_model:  CUDA_Host  output buffer size =     0.99 MiB
-llama_new_context_with_model: pipeline parallelism enabled (n_copies=1)
-llama_new_context_with_model:      CUDA0 compute buffer size =  3520.01 MiB
-llama_new_context_with_model:      CUDA1 compute buffer size =  1540.01 MiB
-llama_new_context_with_model:      CUDA2 compute buffer size =  1540.01 MiB
-llama_new_context_with_model:      CUDA3 compute buffer size =  1540.01 MiB
-llama_new_context_with_model:      CUDA4 compute buffer size =  1540.02 MiB
-llama_new_context_with_model:  CUDA_Host compute buffer size =   312.02 MiB
-llama_new_context_with_model: graph nodes  = 3304
-llama_new_context_with_model: graph splits = 393
-INFO [                    init] initializing slots | tid="140562497785856" timestamp=1747239254 n_slots=1
-INFO [                    init] new slot | tid="140562497785856" timestamp=1747239254 id_slot=0 n_ctx_slot=32768
-INFO [                    main] model loaded | tid="140562497785856" timestamp=1747239254
-INFO [                    main] chat template | tid="140562497785856" timestamp=1747239254 chat_example="You are a helpful assistant\n\n<｜User｜>Hello<｜Assistant｜>Hi there<｜end▁of▁sentence｜><｜User｜>How are you?<｜Assistant｜>" built_in=true
-INFO [                    main] HTTP server listening | tid="140562497785856" timestamp=1747239254 n_threads_http="15" port="8080" hostname="127.0.0.1"
-INFO [            update_slots] all slots are idle | tid="140562497785856" timestamp=1747239254
-INFO [   launch_slot_with_task] slot is processing task | tid="140562497785856" timestamp=1747239313 id_slot=0 id_task=0
-INFO [            update_slots] kv cache rm [p0, end) | tid="140562497785856" timestamp=1747239313 id_slot=0 id_task=0 p0=0
-CUDA error: an illegal memory access was encountered
-  current device: 0, in function ggml_cuda_op_mul_mat at /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/ggml/src/ggml-cuda.cu:1743
-  cudaGetLastError()
-/run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/ggml/src/ggml-cuda.cu:110: CUDA error
-[New LWP 25355]
-[New LWP 25354]
-[New LWP 25353]
-[New LWP 25352]
-[New LWP 25351]
-[New LWP 25350]
-[New LWP 25349]
-[New LWP 25348]
-[New LWP 25347]
-[New LWP 25346]
-[New LWP 25345]
-[New LWP 25344]
-[New LWP 25343]
-[New LWP 25342]
-[New LWP 25341]
-[New LWP 25340]
-[New LWP 24655]
-[New LWP 24654]
-[New LWP 24653]
-[New LWP 24652]
-[New LWP 24651]
-[New LWP 24650]
-[New LWP 24649]
-[New LWP 23954]
-[New LWP 23953]
-[New LWP 23952]
-[New LWP 23951]
-[New LWP 23950]
-[New LWP 23949]
-[New LWP 23948]
-[New LWP 23947]
-[New LWP 23942]
-[New LWP 23941]
-[New LWP 23940]
-
-This GDB supports auto-downloading debuginfo from the following URLs:
-  <https://debuginfod.fedoraproject.org/>
-Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
-Debuginfod has been disabled.
-To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
-Function(s) ^std::(move|forward|as_const|(__)?addressof) will be skipped when stepping.
-Function(s) ^std::(shared|unique)_ptr<.*>::(get|operator) will be skipped when stepping.
-Function(s) ^std::(basic_string|vector|array|deque|(forward_)?list|(unordered_|flat_)?(multi)?(map|set)|span)<.*>::(c?r?(begin|end)|front|back|data|size|empty) will be skipped when stepping.
-Function(s) ^std::(basic_string|vector|array|deque|span)<.*>::operator.] will be skipped when stepping.
-[Thread debugging using libthread_db enabled]
-Using host libthread_db library "/lib64/libthread_db.so.1".
-0x00007fd73d0876c2 in __syscall_cancel_arch () from /lib64/libc.so.6
-#0  0x00007fd73d0876c2 in __syscall_cancel_arch () from /lib64/libc.so.6
-#1  0x00007fd73d07b9da in __internal_syscall_cancel () from /lib64/libc.so.6
-#2  0x00007fd73d07ba24 in __syscall_cancel () from /lib64/libc.so.6
-#3  0x00007fd73d0eb5af in wait4 () from /lib64/libc.so.6
-#4  0x00007fd741c58908 in ggml_abort () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-#5  0x00007fd741dded43 in ggml_cuda_error(char const*, char const*, char const*, int, char const*) () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-#6  0x00007fd741decb09 in ggml_cuda_op_mul_mat(ggml_backend_cuda_context&, ggml_tensor const*, ggml_tensor const*, ggml_tensor*, void (*)(ggml_backend_cuda_context&, ggml_tensor const*, ggml_tensor const*, ggml_tensor*, char const*, float const*, char const*, float*, long, long, long, long, CUstream_st*), void (*)(float const*, void*, long, long, long, long, ggml_type, CUstream_st*)) [clone .constprop.1] () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-#7  0x00007fd741df42dd in ggml_backend_cuda_graph_compute(ggml_backend*, ggml_cgraph*) () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-#8  0x00007fd741caf9b3 in ggml_backend_sched_graph_compute_async () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-#9  0x00007fd79656af1a in llama_decode () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/src/libllama.so
-#10 0x000000000049a2d4 in server_context::update_slots() ()
-#11 0x000000000046cafc in server_queue::start_loop() ()
-#12 0x0000000000416977 in main ()
-[Inferior 1 (process 23939) detached]
-```
-
-Ran it with
-
-```
-./llama-server -m '/models_llm/DeepSeek-V3-0324-UD-Q3_K_XL-00001-of-00007.gguf' -c 32768 --no-mmap -ngl 999 -ot "blk.(0|1|2|3|4|5|6).ffn.=CUDA0" -ot "blk.(7|8|9|10).ffn.=CUDA1" -ot "blk.(11|12|13|14).ffn.=CUDA2" -ot "blk.(15|16|17).ffn.=CUDA3"  -ot "blk.(18|19|20|21|22|23|24|25).ffn.=CUDA4" -ot "ffn.*=CPU" -fa -mg 0 -ub 2048 -mla 1
-```
-
-Not using -fmoe makes it work without issues.
-
----
-
-👤 **p4s2wd** commented the **2025-05-15** at **00:13:20**:<br>
-
-> 顺便说一下，我在 DeepSeekV3 0324 上使用 -fmoe 时遇到了 CUDA 非法内存访问
-> 
-> ```
-> llama_new_context_with_model: freq_scale = 0.025
-> llama_kv_cache_init:      CUDA0 KV buffer size =   468.00 MiB
-> llama_kv_cache_init:      CUDA1 KV buffer size =   360.00 MiB
-> llama_kv_cache_init:      CUDA2 KV buffer size =   360.00 MiB
-> llama_kv_cache_init:      CUDA3 KV buffer size =   360.00 MiB
-> llama_kv_cache_init:      CUDA4 KV buffer size =   648.00 MiB
-> llama_new_context_with_model: KV self size  = 2196.00 MiB, c^KV (f16): 2196.00 MiB, kv^T: not used
-> llama_new_context_with_model:  CUDA_Host  output buffer size =     0.99 MiB
-> llama_new_context_with_model: pipeline parallelism enabled (n_copies=1)
-> llama_new_context_with_model:      CUDA0 compute buffer size =  3520.01 MiB
-> llama_new_context_with_model:      CUDA1 compute buffer size =  1540.01 MiB
-> llama_new_context_with_model:      CUDA2 compute buffer size =  1540.01 MiB
-> llama_new_context_with_model:      CUDA3 compute buffer size =  1540.01 MiB
-> llama_new_context_with_model:      CUDA4 compute buffer size =  1540.02 MiB
-> llama_new_context_with_model:  CUDA_Host compute buffer size =   312.02 MiB
-> llama_new_context_with_model: graph nodes  = 3304
-> llama_new_context_with_model: graph splits = 393
-> INFO [                    init] initializing slots | tid="140562497785856" timestamp=1747239254 n_slots=1
-> INFO [                    init] new slot | tid="140562497785856" timestamp=1747239254 id_slot=0 n_ctx_slot=32768
-> INFO [                    main] model loaded | tid="140562497785856" timestamp=1747239254
-> INFO [                    main] chat template | tid="140562497785856" timestamp=1747239254 chat_example="You are a helpful assistant\n\n<｜User｜>Hello<｜Assistant｜>Hi there<｜end▁of▁sentence｜><｜User｜>How are you?<｜Assistant｜>" built_in=true
-> INFO [                    main] HTTP server listening | tid="140562497785856" timestamp=1747239254 n_threads_http="15" port="8080" hostname="127.0.0.1"
-> INFO [            update_slots] all slots are idle | tid="140562497785856" timestamp=1747239254
-> INFO [   launch_slot_with_task] slot is processing task | tid="140562497785856" timestamp=1747239313 id_slot=0 id_task=0
-> INFO [            update_slots] kv cache rm [p0, end) | tid="140562497785856" timestamp=1747239313 id_slot=0 id_task=0 p0=0
-> CUDA error: an illegal memory access was encountered
->   current device: 0, in function ggml_cuda_op_mul_mat at /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/ggml/src/ggml-cuda.cu:1743
->   cudaGetLastError()
-> /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/ggml/src/ggml-cuda.cu:110: CUDA error
-> [New LWP 25355]
-> [New LWP 25354]
-> [New LWP 25353]
-> [New LWP 25352]
-> [New LWP 25351]
-> [New LWP 25350]
-> [New LWP 25349]
-> [New LWP 25348]
-> [New LWP 25347]
-> [New LWP 25346]
-> [New LWP 25345]
-> [New LWP 25344]
-> [New LWP 25343]
-> [New LWP 25342]
-> [New LWP 25341]
-> [New LWP 25340]
-> [New LWP 24655]
-> [New LWP 24654]
-> [New LWP 24653]
-> [New LWP 24652]
-> [New LWP 24651]
-> [New LWP 24650]
-> [New LWP 24649]
-> [New LWP 23954]
-> [New LWP 23953]
-> [New LWP 23952]
-> [New LWP 23951]
-> [New LWP 23950]
-> [New LWP 23949]
-> [New LWP 23948]
-> [New LWP 23947]
-> [New LWP 23942]
-> [New LWP 23941]
-> [New LWP 23940]
-> 
-> This GDB supports auto-downloading debuginfo from the following URLs:
->   <https://debuginfod.fedoraproject.org/>
-> Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
-> Debuginfod has been disabled.
-> To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
-> Function(s) ^std::(move|forward|as_const|(__)?addressof) will be skipped when stepping.
-> Function(s) ^std::(shared|unique)_ptr<.*>::(get|operator) will be skipped when stepping.
-> Function(s) ^std::(basic_string|vector|array|deque|(forward_)?list|(unordered_|flat_)?(multi)?(map|set)|span)<.*>::(c?r?(begin|end)|front|back|data|size|empty) will be skipped when stepping.
-> Function(s) ^std::(basic_string|vector|array|deque|span)<.*>::operator.] will be skipped when stepping.
-> [Thread debugging using libthread_db enabled]
-> Using host libthread_db library "/lib64/libthread_db.so.1".
-> 0x00007fd73d0876c2 in __syscall_cancel_arch () from /lib64/libc.so.6
-> #0  0x00007fd73d0876c2 in __syscall_cancel_arch () from /lib64/libc.so.6
-> #1  0x00007fd73d07b9da in __internal_syscall_cancel () from /lib64/libc.so.6
-> #2  0x00007fd73d07ba24 in __syscall_cancel () from /lib64/libc.so.6
-> #3  0x00007fd73d0eb5af in wait4 () from /lib64/libc.so.6
-> #4  0x00007fd741c58908 in ggml_abort () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-> #5  0x00007fd741dded43 in ggml_cuda_error(char const*, char const*, char const*, int, char const*) () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-> #6  0x00007fd741decb09 in ggml_cuda_op_mul_mat(ggml_backend_cuda_context&, ggml_tensor const*, ggml_tensor const*, ggml_tensor*, void (*)(ggml_backend_cuda_context&, ggml_tensor const*, ggml_tensor const*, ggml_tensor*, char const*, float const*, char const*, float*, long, long, long, long, CUstream_st*), void (*)(float const*, void*, long, long, long, long, ggml_type, CUstream_st*)) [clone .constprop.1] () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-> #7  0x00007fd741df42dd in ggml_backend_cuda_graph_compute(ggml_backend*, ggml_cgraph*) () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-> #8  0x00007fd741caf9b3 in ggml_backend_sched_graph_compute_async () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/ggml/src/libggml.so
-> #9  0x00007fd79656af1a in llama_decode () from /run/media/pancho/4C4643C74643B10E/ChatIAs/ik_llama.cpp/lenux/src/libllama.so
-> #10 0x000000000049a2d4 in server_context::update_slots() ()
-> #11 0x000000000046cafc in server_queue::start_loop() ()
-> #12 0x0000000000416977 in main ()
-> [Inferior 1 (process 23939) detached]
-> ```
-> 
-> 运行它
-> 
-> ```
-> ./llama-server -m '/models_llm/DeepSeek-V3-0324-UD-Q3_K_XL-00001-of-00007.gguf' -c 32768 --no-mmap -ngl 999 -ot "blk.(0|1|2|3|4|5|6).ffn.=CUDA0" -ot "blk.(7|8|9|10).ffn.=CUDA1" -ot "blk.(11|12|13|14).ffn.=CUDA2" -ot "blk.(15|16|17).ffn.=CUDA3"  -ot "blk.(18|19|20|21|22|23|24|25).ffn.=CUDA4" -ot "ffn.*=CPU" -fa -mg 0 -ub 2048 -mla 1 -fmoe
-> ```
-> 
-> 不使用 -fm
-
----
-
-👤 **p4s2wd** commented the **2025-05-15** at **00:21:27**:<br>
+👤 **p4s2wd** commented on **2025-05-15** at **00:21:27**
 
 > Just chiming in, I get a CUDA illegal memory access when using -fmoe on DeepSeekV3 0324
 > 
@@ -1434,7 +1214,7 @@ As you're using GPU+CPU, please try to replace "-mla 1" with "-mla 2".
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-15** at **04:35:23**:<br>
+👤 **ikawrakow** commented on **2025-05-15** at **04:35:23**
 
 > As you're using GPU+CPU, please try to replace "-mla 1" with "-mla 2".
 
@@ -1444,7 +1224,7 @@ Concerning the error, it is not triggered in a function related to `-fmoe`, so I
 
 ---
 
-👤 **Panchovix** commented the **2025-05-15** at **22:22:06**:<br>
+👤 **Panchovix** commented on **2025-05-15** at **22:22:06**
 
 Okay tested again, after updating and rebooting Fedora and now -fmoe works fine with MLA 1 + FA on CUDA+CPU (I use it like to save vram on compute buffers)
 
@@ -1452,7 +1232,7 @@ Not sure exactly what would have causes the issue.
 
 ---
 
-👤 **schynce** commented the **2025-05-15** at **22:32:20**:<br>
+👤 **schynce** commented on **2025-05-15** at **22:32:20**
 
 > Okay tested again, after updating and rebooting Fedora and now -fmoe works fine with MLA 1 + FA on CUDA+CPU (I use it like to save vram on compute buffers)
 > 
@@ -1462,19 +1242,13 @@ Are you sure that it is actually fixed? I am asking because I had some commands 
 
 ---
 
-👤 **Panchovix** commented the **2025-05-15** at **22:45:52**:<br>
+👤 **Panchovix** commented on **2025-05-15** at **22:45:52**
 
 @schynce you're correct, tried a few more and it got the illegal memory access again.
 
 ---
 
-👤 **Panchovix** commented the **2025-05-15** at **22:45:52**:<br>
-
-@schynce you're correct, tried a few more it got the illegal memory access.
-
----
-
-👤 **divine-taco** commented the **2025-05-19** at **23:10:44**:<br>
+👤 **divine-taco** commented on **2025-05-19** at **23:10:44**
 
 Another data point. I'm not entirely sure `-fmoe` is the problem here. This is running multi gpu (3090) with cpu offload.
 
@@ -1497,26 +1271,7 @@ Suspect https://github.com/ikawrakow/ik_llama.cpp/issues/425 may be the same iss
 
 ---
 
-👤 **divine-taco** commented the **2025-05-19** at **23:10:44**:<br>
-
-Another data point. I'm not entirely sure `-fmoe` is the problem here. This is running multi gpu (3090) with cpu offload.
-
-I can also report that it is rare for the crash to occur immediately. It's usually after a handful of turns.
-
-Note this seems this a recently introduced bug:
-`-fmoe -mla 2` does not crash on 6c23618ca5d680bd00f06a143dc4a1b386c827e3
-
-It stopped working somewhen after this.
-`-fmoe -mla 2` is broken for 2ec2229f2e9847d4e96bd7f163201810c8f8299a
-
-`-mla 2` without fmoe is also broken for 2ec2229f2e9847d4e96bd7f163201810c8f8299a
-
-If I get some time this week I'll try to isolate when the bug was introduced.
-Probably worth someone else trying `6c23618ca5d680bd00f06a143dc4a1b386c827e3` to confirm this is the same issue everyone seems to be running into with multi gpu.
-
----
-
-👤 **ikawrakow** commented the **2025-05-20** at **04:34:00**:<br>
+👤 **ikawrakow** commented on **2025-05-20** at **04:34:00**
 
 @divine-taco It would be useful to share your command line when reporting a problem.
 
@@ -1524,7 +1279,7 @@ The most significant change between  https://github.com/ikawrakow/ik_llama.cpp/c
 
 ---
 
-👤 **divine-taco** commented the **2025-05-20** at **05:56:42**:<br>
+👤 **divine-taco** commented on **2025-05-20** at **05:56:42**
 
 ~~@ikawrakow `-op 29,0` seems to fix the issues running with the latest commit - 2ec2229f2e9847d4e96bd7f163201810c8f8299a~~
 
@@ -1559,49 +1314,19 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-👤 **divine-taco** commented the **2025-05-20** at **05:56:42**:<br>
-
-@ikawrakow `-op 29,0` seems to fix the issues running with the latest commit - 2ec2229f2e9847d4e96bd7f163201810c8f8299a
-
-Full command:
-
-```
-llama-server \
-  --parallel 1 \
-  -ctk f16 -ctv f16 \
-  -ts 17,17,17,17,17,17,17,17,17 \
-  --model /home/mx01/DeepSeek-V3-0324-GGUF-Q8_0 --host 0.0.0.0 --port 8080 \
-  --ctx-size 44000 \
-  -fmoe -rtr -mla 3 -fa \
-  -b 2048 -ub 2048 -amb 512 \
-  -op 29,0 \
-  --no-mmap \
-  --threads 64 --threads-batch 64 \
-  -ngl 99 \
-  -ot exps=CPU
-```
-
----
-
-👤 **schynce** commented the **2025-05-20** at **13:44:34**:<br>
+👤 **schynce** commented on **2025-05-20** at **13:44:34**
 
 For me, the best way to trigger the bug quickly is to dump in a 30K token prompt. It seems to crash during the prompt processing or before generating a single token.
 
 ---
 
-👤 **schynce** commented the **2025-05-20** at **13:44:34**:<br>
-
-For me, the best way to trigger the bug quickly is to dump in a 30K token prompt. It seems to crash during the prompt processing.
-
----
-
-👤 **ikawrakow** commented the **2025-05-20** at **14:23:18**:<br>
+👤 **ikawrakow** commented on **2025-05-20** at **14:23:18**
 
 Does PR #438 help?
 
 ---
 
-👤 **schynce** commented the **2025-05-20** at **15:58:47**:<br>
+👤 **schynce** commented on **2025-05-20** at **15:58:47**
 
 > Does PR [#438](https://github.com/ikawrakow/ik_llama.cpp/pull/438) help?
 
@@ -1633,7 +1358,7 @@ Aborted (core dumped)
 
 ---
 
-👤 **divine-taco** commented the **2025-05-20** at **21:36:55**:<br>
+👤 **divine-taco** commented on **2025-05-20** at **21:36:55**
 
 ~~PR #438 - 82871cc2a3366dfdeff758f04fdfcf5ae5859829 - looks to fix the issue for me. Tried 30 turn completions at long context and saw no issues.~~
 
@@ -1659,29 +1384,7 @@ Update: Failed with illegal memory access again on PR #438 with deepseek 0324 af
 
 ---
 
-👤 **divine-taco** commented the **2025-05-20** at **21:36:55**:<br>
-
-PR #438 - 82871cc2a3366dfdeff758f04fdfcf5ae5859829 - looks to fix the issue for me. Tried 30 turn completions at long context and saw no issues.
-
-Command used:
-```
-llama-server \
-  --parallel 1 \
-  -ctk f16 -ctv f16 \
-  -ts 17,17,17,17,17,17,17,17,17 \
-  --model /home/mx01/DeepSeek-V3-0324-GGUF-Q8_0 --host 0.0.0.0 --port 8080 \
-  --ctx-size 44000 \
-  -fmoe -rtr -mla 3 -fa \
-  -b 2048 -ub 2048 -amb 512 \
-  --no-mmap \
-  --threads 64 --threads-batch 64 \
-  -ngl 99 \
-  -ot exps=CPU
-```
-
----
-
-👤 **schynce** commented the **2025-05-20** at **21:49:54**:<br>
+👤 **schynce** commented on **2025-05-20** at **21:49:54**
 
 @divine-taco 
 
@@ -1693,13 +1396,13 @@ However, I notice that there have been some updates in the first split file sinc
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **06:02:41**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **06:02:41**
 
 Please use branch in PR #442 and post the CUDA call trace that will be printed when the application crashes.
 
 ---
 
-👤 **schynce** commented the **2025-05-21** at **12:11:08**:<br>
+👤 **schynce** commented on **2025-05-21** at **12:11:08**
 
 > Please use branch in PR [#442](https://github.com/ikawrakow/ik_llama.cpp/pull/442) and post the CUDA call trace that will be printed when the application crashes.
 
@@ -1789,7 +1492,7 @@ The program is not being run.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **12:37:17**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **12:37:17**
 
 Thank you!
 
@@ -1797,7 +1500,7 @@ So, it crashes in a matrix multiplication. I have pushed another commit on the b
 
 ---
 
-👤 **schynce** commented the **2025-05-21** at **13:29:25**:<br>
+👤 **schynce** commented on **2025-05-21** at **13:29:25**
 
 > Thank you!
 > 
@@ -1848,13 +1551,13 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **13:55:41**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **13:55:41**
 
 I was confused. If there was something wrong with the matrix multiplications, it would have aborted there. The computations succeed, but then something goes wrong in the back-end. I have now added 2 additional asserts in the back-end at the place where the back-trace was when we did the debugging session.
 
 ---
 
-👤 **schynce** commented the **2025-05-21** at **14:10:05**:<br>
+👤 **schynce** commented on **2025-05-21** at **14:10:05**
 
 > I was confused. If there was something wrong with the matrix multiplications, it would have aborted there. The computations succeed, but then something goes wrong in the back-end. I have now added 2 additional asserts in the back-end at the place where the back-trace was when we did the debugging session.
 
@@ -1903,19 +1606,19 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **14:27:12**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **14:27:12**
 
 Thanks! I'll keep digging.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **15:26:00**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **15:26:00**
 
 I have now added a trace to the back-end, so when the crash occurs it will print from where `ggml_backend_cuda_synchronize` was called. Can you try another time? Thanks!
 
 ---
 
-👤 **schynce** commented the **2025-05-21** at **16:31:48**:<br>
+👤 **schynce** commented on **2025-05-21** at **16:31:48**
 
 > I have now added a trace to the back-end, so when the crash occurs it will print from where `ggml_backend_cuda_synchronize` was called. Can you try another time? Thanks!
 
@@ -1962,13 +1665,13 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **16:43:24**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **16:43:24**
 
 @schynce You are running with `--no-kv-offload`, right? Your error is different. What happens if you don't use `--no-kv-offload`?
 
 ---
 
-👤 **schynce** commented the **2025-05-21** at **16:55:42**:<br>
+👤 **schynce** commented on **2025-05-21** at **16:55:42**
 
 > [@schynce](https://github.com/schynce) You are running with `--no-kv-offload`, right? Your error is different. What happens if you don't use `--no-kv-offload`?
 
@@ -2046,13 +1749,13 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-22** at **06:44:46**:<br>
+👤 **ikawrakow** commented on **2025-05-22** at **06:44:46**
 
 If you are not tired of testing, there are new changes on #442
 
 ---
 
-👤 **schynce** commented the **2025-05-22** at **07:43:25**:<br>
+👤 **schynce** commented on **2025-05-22** at **07:43:25**
 
 > If you are not tired of testing, there are new changes on [#442](https://github.com/ikawrakow/ik_llama.cpp/pull/442)
 

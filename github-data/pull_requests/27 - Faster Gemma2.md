@@ -1,10 +1,13 @@
-### 🔀 [#27](https://github.com/ikawrakow/ik_llama.cpp/pull/27) - Faster Gemma2
+### [Pull Request #27](https://github.com/ikawrakow/ik_llama.cpp/pull/27) - Faster Gemma2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fused_softcap_softmax` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-27 |
 | **Updated** | 2024-08-27 |
+| **Merged** | 2024-08-27 |
 
 ---
 

@@ -1,10 +1,13 @@
-### 🐛 [#402](https://github.com/ikawrakow/ik_llama.cpp/pull/402) - Fix missing rope_freqs with convert_hf_to_gguf
+### [Pull Request #402](https://github.com/ikawrakow/ik_llama.cpp/pull/402) - Fix missing rope_freqs with convert_hf_to_gguf
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/rope_freq_fix` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-09 |
 | **Updated** | 2025-05-09 |
+| **Merged** | 2025-05-09 |
 
 ---
 
@@ -16,10 +19,4 @@ The issue was that the convert script used generate_extra_tensors for those tens
 
 I tested with [Llama-3_1-Nemotron-51B-Instruct](https://huggingface.co/nvidia/Llama-3_1-Nemotron-51B-Instruct) and it now generates the rope_freqs.weight which was missing previously.
 
-Look at #377 for more information.
-
----
-
-#### 💬 Conversation
-
-👤 **ikawrakow** submitted a review the **2025-05-09** at **14:16:12**: ✅ `APPROVED`
+Look at [#377](https://github.com/ikawrakow/ik_llama.cpp/issues/377) for more information.

@@ -1,10 +1,13 @@
-### 🔀 [#62](https://github.com/ikawrakow/ik_llama.cpp/pull/62) - Use fp32 for K*Q in Metal FA implementation
+### [Pull Request #62](https://github.com/ikawrakow/ik_llama.cpp/pull/62) - Use fp32 for K*Q in Metal FA implementation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_metal_fa` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-25 |
 | **Updated** | 2024-09-25 |
+| **Merged** | 2024-09-25 |
 
 ---
 

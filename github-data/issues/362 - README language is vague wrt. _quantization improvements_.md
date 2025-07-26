@@ -1,4 +1,4 @@
-### 📝 [#362](https://github.com/ikawrakow/ik_llama.cpp/issues/362) - README language is vague wrt. \"quantization improvements\"
+### [Issue #362](https://github.com/ikawrakow/ik_llama.cpp/issues/362) - README language is vague wrt. "quantization improvements"
 
 | **Author** | `usrlocalben` |
 | :--- | :--- |
@@ -33,15 +33,15 @@ https://github.com/ikawrakow/ik_llama.cpp/commit/98d1626469879d35faba9cb7e9d0b1d
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **saood06** commented the **2025-04-30** at **23:21:14**:<br>
+👤 **saood06** commented on **2025-04-30** at **23:21:14**
 
 As the README mentions you can often find detailed information in PRs. https://github.com/ikawrakow/ik_llama.cpp/pull/295 and  https://github.com/ikawrakow/ik_llama.cpp/pull/302 are the related PRs
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-01** at **16:41:52**:<br>
+👤 **ikawrakow** commented on **2025-05-01** at **16:41:52**
 
 Would you like to have links to the specific PR's in the News section? I did try this along with a short description initially, but then it becomes kind of too long for a News section.
 
@@ -72,6 +72,6 @@ Here is where the user needs to understand what the improvement was so they can 
 
 ---
 
-👤 **usrlocalben** commented the **2025-05-13** at **13:16:29**:<br>
+👤 **usrlocalben** commented on **2025-05-13** at **13:16:29**
 
 Thanks for the commentary and also the README updates w/PR links on the line-items. I now resolve the language this way: To Quantize is a verb/action and therefore strongly refers to _computing_ the quant, i.e. llama-quantize. Closing

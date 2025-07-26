@@ -1,10 +1,13 @@
-### 🔀 [#307](https://github.com/ikawrakow/ik_llama.cpp/pull/307) - Metal: much faster MoE prompt processing
+### [Pull Request #307](https://github.com/ikawrakow/ik_llama.cpp/pull/307) - Metal: much faster MoE prompt processing
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/metal_moe` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-02 |
 | **Updated** | 2025-04-03 |
+| **Merged** | 2025-04-03 |
 
 ---
 

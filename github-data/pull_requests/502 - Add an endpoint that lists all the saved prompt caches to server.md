@@ -1,10 +1,13 @@
-### 🔀 [#502](https://github.com/ikawrakow/ik_llama.cpp/pull/502) - Add an endpoint that lists all the saved prompt caches to server
+### [Pull Request #502](https://github.com/ikawrakow/ik_llama.cpp/pull/502) - Add an endpoint that lists all the saved prompt caches to server
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/list_prompt_cache` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-06 |
 | **Updated** | 2025-06-11 |
+| **Merged** | 2025-06-07 |
 
 ---
 
@@ -16,13 +19,9 @@ This should be enough to be used by any front end. The only thing that may poten
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-06-07** at **05:18:57**: ✅ `APPROVED`
-
----
-
-👤 **saood06** commented the **2025-06-11** at **06:50:30**:<br>
+👤 **saood06** commented on **2025-06-11** at **06:50:30**
 
 >The only thing that may potentially be useful to be added is giving the prompt in an array based on how the prompt is tokenized.
 
@@ -33,3 +32,5 @@ I'm alleviating both of these by putting info about the model and numbering my s
 The timestamp can be included trivially, but the model information as far as I can tell will be a breaking change to the session save format (there is some metadata included that prevents you from loading incompatible saves, but for the reasons listed above I don't think it is the best choice to output and use those, and they really aren't very human friendly).
 
 I really don't want to make a breaking change (not just because it would break old saves [unless converted] but it would also break support with mainline, unless they also chooses to adopt it).
+
+Edit: forgot to mention an endpoint allowing you to delete saved prompts might be worth adding.

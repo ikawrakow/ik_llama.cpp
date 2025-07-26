@@ -1,10 +1,13 @@
-### 🔀 [#482](https://github.com/ikawrakow/ik_llama.cpp/pull/482) - Trellis quants: faster CPU prompt processing
+### [Pull Request #482](https://github.com/ikawrakow/ik_llama.cpp/pull/482) - Trellis quants: faster CPU prompt processing
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/dequant_gemm` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-01 |
 | **Updated** | 2025-06-01 |
+| **Merged** | 2025-06-01 |
 
 ---
 

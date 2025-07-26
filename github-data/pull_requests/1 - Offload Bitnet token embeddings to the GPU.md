@@ -1,10 +1,14 @@
-### 🔀 [#1](https://github.com/ikawrakow/ik_llama.cpp/pull/1) - Offload Bitnet token embeddings to the GPU
+### [Pull Request #1](https://github.com/ikawrakow/ik_llama.cpp/pull/1) - Offload Bitnet token embeddings to the GPU
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/bitnet_token_embedding_gpu` |
+| **Target Branch** | `main` |
 | **Created** | 2024-07-26 |
 | **Updated** | 2024-07-26 |
+| **Merged** | 2024-07-26 |
+| **Assignees** | `ikawrakow` |
 
 ---
 

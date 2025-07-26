@@ -1,10 +1,13 @@
-### 🐛 [#68](https://github.com/ikawrakow/ik_llama.cpp/pull/68) - It is time to fix replace_all
+### [Pull Request #68](https://github.com/ikawrakow/ik_llama.cpp/pull/68) - It is time to fix replace_all
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_replace_all` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-28 |
 | **Updated** | 2024-09-28 |
+| **Merged** | 2024-09-28 |
 
 ---
 

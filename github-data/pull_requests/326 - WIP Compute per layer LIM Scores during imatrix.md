@@ -1,8 +1,10 @@
-### 🔀 [#326](https://github.com/ikawrakow/ik_llama.cpp/pull/326) - WIP Compute per layer LIM Scores during imatrix
+### [Pull Request #326](https://github.com/ikawrakow/ik_llama.cpp/pull/326) - WIP Compute per layer LIM Scores during imatrix
 
 | **Author** | `ubergarm` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `ug/compute-layer-input-mod-score` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-13 |
 | **Updated** | 2025-04-16 |
 
@@ -1048,9 +1050,9 @@ Layer	LIM Score
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** commented the **2025-04-13** at **06:30:24**:<br>
+👤 **ikawrakow** commented on **2025-04-13** at **06:30:24**
 
 Do I understand the results in the quoted PR correctly? The `ffn_down` tensors are the least important? This would be really funny, because everybody knows that quantization errors in `ffn_down` have the highest impact on observed quantization quality. 
 
@@ -1058,11 +1060,7 @@ I didn't go to read the blog post, but why would cosine similarity between the i
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-04-13** at **07:05:04**: 💬 `COMMENTED`
-
----
-
-👤 **ubergarm** commented the **2025-04-13** at **15:58:29**:<br>
+👤 **ubergarm** commented on **2025-04-13** at **15:58:29**
 
 > Do I understand the results in the quoted PR correctly? The `ffn_down` tensors are the least important? This would be really funny, because everybody knows that quantization errors in `ffn_down` have the highest impact on observed quantization quality.
 
@@ -1086,7 +1084,7 @@ Really appreciate your time, thanks!
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-13** at **16:29:52**:<br>
+👤 **ikawrakow** commented on **2025-04-13** at **16:29:52**
 
 > The paper that suggests using cosine similarity says:
 >
@@ -1096,7 +1094,7 @@ Sure. But the activations did not change due to that tensor only, they changed d
 
 ---
 
-👤 **compilade** commented the **2025-04-13** at **17:58:43**:<br>
+👤 **compilade** commented on **2025-04-13** at **17:58:43**
 
 I agree with @ikawrakow, comparing across layers for a particular tensor seems like it would have non-intuitive results which might not necessarily be linked to relative importance of the tensors.
 
@@ -1104,12 +1102,12 @@ I think what is calculated here is the cosine similarity across the *inputs* of 
 
 > llama-imatrix technically has access to both the input and output activations of a layer, but only uses its input.
 
-@ubergarm What I meant by this was to calculate LIM scores with the input and output ***within*** each linear operations (i.e. what `llama-imatrix` already considers). The output would be from `t->data` while the input would still be from `src1->data`.
+@ubergarm What I meant by this was to calculate LIM scores with the input and output ***within*** each linear operations (i.e. what `llama-imatrix` already considers). The output would be from `t->data` while the input would still be from `src1->data`. (note that the section with `if (ask)` for the callback needs to require the output data in this case, but I think this is already done by default?)
 Each layer should be independent in this approach. I don't know what they used (in the paper) to combine the results across multiple tokens, though. Likely the average, but I'm not sure.
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-14** at **07:26:42**:<br>
+👤 **ikawrakow** commented on **2025-04-14** at **07:26:42**
 
 @compilade 
 
@@ -1119,7 +1117,7 @@ I have used this to derive corrections for a quantized model (have not published
 
 ---
 
-👤 **compilade** commented the **2025-04-15** at **22:13:03**:<br>
+👤 **compilade** commented on **2025-04-15** at **22:13:03**
 
 > Can you be more specific how you want to calculate the impact of a linear operation from the input activations and the result of the linear operation?
 
@@ -1129,7 +1127,7 @@ I was thinking of directly calculating a dot product between the input and outpu
 
 ---
 
-👤 **ubergarm** commented the **2025-04-16** at **15:06:47**:<br>
+👤 **ubergarm** commented on **2025-04-16** at **15:06:47**
 
 Closing this in favor of implementation in PR#328.
 
@@ -1145,7 +1143,7 @@ Using PR#328 `llama-imatrix --layer-similarity [-lsim]` to decide which layers t
 * `FIRST-N` Final estimate: PPL = 3.3193 +/- 0.01830
 * `COSSIM` Final estimate: PPL = 3.3151 +/- 0.0182
 
-While it is within the noise, there may be room for further improvement applying the scores to attention layer quantization as well which I didn't do for this experiment.
+While it is within the noise, there may be room for further improvement applying the scores to attention tensors quantization as well which I didn't do for this experiment. In retrospect, I probably should have used the layer importance scores from `sorted ffn importances`given those were the layers I was targeting. Move fast break things lol.
 
 ## Procedure
 

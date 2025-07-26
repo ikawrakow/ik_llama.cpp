@@ -1,4 +1,4 @@
-### 🐛 [#29](https://github.com/ikawrakow/ik_llama.cpp/issues/29) - Bug: some ifdefs missing in ggml/src/iqk/iqk_quantize.cpp
+### [Issue #29](https://github.com/ikawrakow/ik_llama.cpp/issues/29) - Bug: some ifdefs missing in ggml/src/iqk/iqk_quantize.cpp
 
 | **Author** | `whoreson` |
 | :--- | :--- |
@@ -34,9 +34,9 @@ Other? (Please let us know in description)
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2024-08-31** at **05:56:47**:<br>
+👤 **ikawrakow** commented on **2024-08-31** at **05:56:47**
 
 Thanks for the bug report.
 
@@ -46,6 +46,6 @@ It should be fixed via #31
 
 ---
 
-👤 **ikawrakow** commented the **2024-09-01** at **09:24:57**:<br>
+👤 **ikawrakow** commented on **2024-09-01** at **09:24:57**
 
 I think I can close this now.

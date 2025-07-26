@@ -1,10 +1,13 @@
-### 🔀 [#241](https://github.com/ikawrakow/ik_llama.cpp/pull/241) - DeepSeek CUDA Flash Attention 
+### [Pull Request #241](https://github.com/ikawrakow/ik_llama.cpp/pull/241) - DeepSeek CUDA Flash Attention 
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_fattn_Dk_Dv` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-04 |
 | **Updated** | 2025-03-06 |
+| **Merged** | 2025-03-05 |
 
 ---
 
@@ -50,9 +53,9 @@ To limit the already excessive CUDA build time, I have only allowed K- and V-cac
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** commented the **2025-03-04** at **09:51:25**:<br>
+👤 **ikawrakow** commented on **2025-03-04** at **09:51:25**
 
 I'm by no means a CUDA programming expert, so I thought it is interesting to see if a CUDA beginner can compete with `llama.cpp` CUDA performance where there is an actual CUDA expert making continuous improvements. Here is a comparison between this PR and mainline `llama.cpp`  (latest build as of this writing, `build: 1a24c462 (4820)`). Mainline `llama-bench` does not have the `-gp` option to measure TG performance for a given KV cache size, so to simulate the presence of some not negligible KV cache, I use `tg1024` for TG performance. 
 | model                |       test |     t/s (llama.cpp)  |  t/s (ik_llama)  |  Speedup  |
@@ -71,19 +74,19 @@ Why are the `ik_llama.cpp` values different from the above tables? For the PR te
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-04** at **19:08:54**:<br>
+👤 **davidsyoung** commented on **2025-03-04** at **19:08:54**
 
 Cooking! Serious good work. I don't believe there's any package that has FA implemented like this yet.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-06** at **15:02:29**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **15:02:29**
 
 This PR from mainline llama.cpp may help with implementing MLA FA https://github.com/ggml-org/llama.cpp/pull/12227
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-06** at **15:24:03**:<br>
+👤 **ikawrakow** commented on **2025-03-06** at **15:24:03**
 
 > This PR from mainline llama.cpp may help with implementing MLA FA https://github.com/ggml-org/llama.cpp/pull/12227
 
@@ -91,7 +94,7 @@ Ha, this is exactly what I wanted to avoid and have avoided in the CPU implement
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-06** at **15:31:11**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **15:31:11**
 
 > > This PR from mainline llama.cpp may help with implementing MLA FA [ggml-org/llama.cpp#12227](https://github.com/ggml-org/llama.cpp/pull/12227)
 > 
@@ -101,23 +104,23 @@ That makes sense. I did see your current implementation is different than the ap
 
 ---
 
-👤 **jukofyork** commented the **2025-03-06** at **15:59:38**:<br>
+👤 **jukofyork** commented on **2025-03-06** at **15:59:38**
 
-I'd hold off and see what @JohannesGaessler says, as the CUDA version either don't like the "Multi-Query Attention" (MQA) (ie: 1 K/V for 128 Q) and/or the 576 head dimension, as FA is using huge amounts of compute compared to non-FA at the same context...
+I'd hold off and see what @JohannesGaessler says, as the CUDA version either doesn't like the "Multi-Query Attention" (MQA) (ie: 1 K/V for 128 Q) and/or the 576 head dimension, as FA is using huge amounts of compute compared to non-FA at the same context...
 
-The non-FA half of the PR might be useful for `ik_llama.cpp`'s `-mla` option though, as I've got rid of all the batched-matrix-multiplies and turned it into just a huge 2D x 2D matrix multiply instead.
+The non-FA half of the PR might be useful for `ik_llama.cpp`'s `-mla` option though, as I've got rid of all the permuted batched-matrix-multiplies and turned the KV calculation into just a huge 2D x 2D matrix multiply instead.
 
 ---
 
-👤 **jukofyork** commented the **2025-03-06** at **16:01:34**:<br>
+👤 **jukofyork** commented on **2025-03-06** at **16:01:34**
 
 > There aren't any performance numbers in the PR description. I wouldn't be surprised that this is because performance is lower than just MLA.
 
-It's running absolutely horrible at long contexts for CUDA - way way worse than these extra 64 values!
+It's running absolutely horrible at long contexts for CUDA - way way worse than these extra 64 values would cause.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-06** at **16:13:32**:<br>
+👤 **ikawrakow** commented on **2025-03-06** at **16:13:32**
 
 > The non-FA half of the PR might be useful for ik_llama.cpp's -mla option though, as I've got rid of all the batched-matrix-multiplies and turned it into just a huge 2D x 2D matrix multiply instead.
 
@@ -125,13 +128,13 @@ I kept those on purpose. This allows to batch-process `V*softmax(K*Q)` when the 
 
 ---
 
-👤 **JohannesGaessler** commented the **2025-03-06** at **16:19:24**:<br>
+👤 **JohannesGaessler** commented on **2025-03-06** at **16:19:24**
 
 For the split buffers specifically my long-term goal is to move the parallelization logic to the ggml graph level. I intend to do this when optimizing training performance (so probably at some point in the next 12 months). After that the code should become more simpler and easier to work with.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-06** at **16:33:48**:<br>
+👤 **ikawrakow** commented on **2025-03-06** at **16:33:48**
 
 > so probably at some point in the next 12 months
 
@@ -139,15 +142,15 @@ But people want to run DeepSeek now and not in 12 months :smile:
 
 ---
 
-👤 **jukofyork** commented the **2025-03-06** at **17:09:53**:<br>
+👤 **jukofyork** commented on **2025-03-06** at **17:09:53**
 
 > This is enabled via `-amb` value, whene the value is the maximum size for K*Q we want to tolerate in MiB.
 
-This looks like a good alternative to reducing memory use if ultimately a head size of 576 isn't feasible. I've currently just been dropping `ubtach-size` as I increase the context, but your `-amb` option would let me keep the larger batch size for everything else.
+This looks like a good alternative to reducing memory use if ultimately a head size of 576 isn't feasible. I've currently just been dropping `ubatch-size` as I increase the context, but your `-amb` option would let me keep the larger batch size for everything else.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-06** at **17:48:30**:<br>
+👤 **ikawrakow** commented on **2025-03-06** at **17:48:30**
 
 > I've currently just been dropping ubatch-size as I increase the context...
 
@@ -155,7 +158,7 @@ This leads to horrible performance for MoE models, especially MoE models such as
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-06** at **18:04:26**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **18:04:26**
 
 > > This is enabled via `-amb` value, whene the value is the maximum size for K*Q we want to tolerate in MiB.
 > 
@@ -173,7 +176,7 @@ Can see some generation stats here https://github.com/ikawrakow/ik_llama.cpp/pul
 
 ---
 
-👤 **jukofyork** commented the **2025-03-06** at **18:12:54**:<br>
+👤 **jukofyork** commented on **2025-03-06** at **18:12:54**
 
 > > I've currently just been dropping ubatch-size as I increase the context...
 > 
@@ -187,4 +190,19 @@ I still like your method better though and agree it is vastly preferable to drop
 
 ---
 
-One other thing I've noticed with large contexts and `deepseek-r1` is the use of YaRN and the need for the K-cache to stores pre-RoPEed values, means that as you raise the context length too much; the model starts to get dumber and dumber. For story writing the optimal context length I've found is somewhere between 16k and 32k (4k is pretty bad too, even though that is the pre-YaRN training context).
+One other thing I've noticed with large contexts and `deepseek-r1` is the use of YaRN and the need for the K-cache to store "pre-RoPEed" values, means that as you raise the context length too much; the model starts to get dumber and dumber. For story writing the optimal context length I've found is somewhere between 16k and 32k (4k is pretty bad too, even though that is the pre-YaRN training context).
+
+---
+
+👤 **jukofyork** commented on **2025-03-06** at **18:16:58**
+
+> > > This is enabled via `-amb` value, whene the value is the maximum size for K*Q we want to tolerate in MiB.
+> > 
+> > 
+> > This looks like a good alternative to reducing memory use if ultimately a head size of 576 isn't feasible. I've currently just been dropping `ubatch-size` as I increase the context, but your `-amb` option would let me keep the larger batch size for everything else.
+> 
+> For what it’s worth, this works _incredibly well_!
+> 
+> Can see some generation stats here #237
+
+Yeah, I can see this being really useful and a good alternative to using FA if you are low on VRAM.

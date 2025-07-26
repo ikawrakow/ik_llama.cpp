@@ -1,4 +1,4 @@
-### 🐛 [#436](https://github.com/ikawrakow/ik_llama.cpp/issues/436) - Bug: Saving the prompt cache causes Segfault
+### [Issue #436](https://github.com/ikawrakow/ik_llama.cpp/issues/436) - Bug: Saving the prompt cache causes Segfault
 
 | **Author** | `saood06` |
 | :--- | :--- |
@@ -36,9 +36,9 @@ Segmentation fault (core dumped)
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **saood06** commented the **2025-05-28** at **06:30:58**:<br>
+👤 **saood06** commented on **2025-05-28** at **06:30:58**
 
 I finally got some time to look into this more and I think the cause of issue seems to be the fact that the function [here](https://github.com/ikawrakow/ik_llama.cpp/blob/ccd6d9cdf6851f7042c48d682daf47bc0e2eca27/src/llama.cpp#L21453) references kv_self.k_l and kv_self.v_l and since I was using Deepseek with FlashMLA-3 where kv_l see [here](https://github.com/ikawrakow/ik_llama.cpp/blob/ccd6d9cdf6851f7042c48d682daf47bc0e2eca27/src/llama.cpp#L2995) is used instead (and kvt_l would have also been used if I was using a different implementation of MLA).
 
@@ -46,7 +46,7 @@ I finally got some time to look into this more and I think the cause of issue se
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-28** at **08:08:32**:<br>
+👤 **ikawrakow** commented on **2025-05-28** at **08:08:32**
 
 Yes, this part has not been updated at all. There are two issues:
 * Using `kv_l` and possibly `kvt_l` instead of `k_l` and `v_l`. I guess, it would be best to just get rid of `kv_l` and `kvt_l` (they came from the initial implementation) and just use `k_l` and `v_l` instead. This would be relatively easy to change.
@@ -54,7 +54,7 @@ Yes, this part has not been updated at all. There are two issues:
 
 ---
 
-👤 **saood06** commented the **2025-05-28** at **08:56:12**:<br>
+👤 **saood06** commented on **2025-05-28** at **08:56:12**
 
 >Using `kv_l` and possibly `kvt_l` instead of `k_l` and `v_l`. I guess, it would be best to just get rid of `kv_l` and `kvt_l` (they came from the initial implementation) and just use `k_l` and `v_l` instead. This would be relatively easy to change.
 
@@ -66,13 +66,13 @@ That is your decision to make. Alternatively couldn't we just put a warning when
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-28** at **09:17:16**:<br>
+👤 **ikawrakow** commented on **2025-05-28** at **09:17:16**
 
 OK, let's start with the required changes without worrying about `Q8_KV`. Do you want to do it?
 
 ---
 
-👤 **saood06** commented the **2025-05-28** at **09:25:04**:<br>
+👤 **saood06** commented on **2025-05-28** at **09:25:04**
 
 >Do you want to do it?
 
@@ -80,7 +80,7 @@ I don't mind giving it an attempt, but I'm heading off for now and won't be avai
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-28** at **09:30:40**:<br>
+👤 **ikawrakow** commented on **2025-05-28** at **09:30:40**
 
 > but I'm heading off for now and won't be available till tomorrow at the earliest.
 
@@ -90,13 +90,13 @@ I'm experimenting with some stuff right now, but if I find a moment before tomor
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-28** at **11:21:25**:<br>
+👤 **ikawrakow** commented on **2025-05-28** at **11:21:25**
 
 See #469
 
 ---
 
-👤 **saood06** commented the **2025-06-02** at **01:23:45**:<br>
+👤 **saood06** commented on **2025-06-02** at **01:23:45**
 
 Although it was tested and works, there may still be some issues with it, since I just crashed with this when attempting to save (and it didn't even write the prompt to the file before it crashed)
 
@@ -141,17 +141,7 @@ Edit: Happens consistently now (might be larger prompts?) and might as well shar
 
 ---
 
-👤 **saood06** commented the **2025-06-02** at **01:23:45**:<br>
-
-Although it was tested and works, there may still be some issues with it, since I just crashed with this.
-
-`/ik_llama.cpp/ggml/src/ggml-backend.c:251: GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds") failed`
-
-I have the coredump and will debug it later.
-
----
-
-👤 **saood06** commented the **2025-06-03** at **12:52:48**:<br>
+👤 **saood06** commented on **2025-06-03** at **12:52:48**
 
 I poked around the coredump a bit, and for the ggml_backend_tensor_get call I saw the offset is 0, with size of 175865856. I manually calculated ggml_nbytes to be 92307456, which is close to half the size.
 
@@ -163,13 +153,13 @@ Would confirming that it breaks past a token size be useful? Or is there somethi
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-03** at **13:37:33**:<br>
+👤 **ikawrakow** commented on **2025-06-03** at **13:37:33**
 
 There is a confusion with the size of the tensor, and one needs to carefully go through the code to sort it out. As I wrote earlier, I have changed the K cache to be `k_had_size x n_head x n_tokens`, while the code is written from the point of view that the K cache is `k_head_size * n_head x n_tokens`. Somewhere things go wrong because of that. If you don't see it, and I don't see it, I can revert the shape change (it is isolated to a very few places).
 
 ---
 
-👤 **saood06** commented the **2025-06-03** at **14:15:24**:<br>
+👤 **saood06** commented on **2025-06-03** at **14:15:24**
 
 > There is a confusion with the size of the tensor, and one needs to carefully go through the code to sort it out. As I wrote earlier, I have changed the K cache to be `k_had_size x n_head x n_tokens`, while the code is written from the point of view that the K cache is `k_head_size * n_head x n_tokens`. Somewhere things go wrong because of that. If you don't see it, and I don't see it, I can revert the shape change (it is isolated to a very few places).
 
@@ -179,7 +169,7 @@ I will gladly test whatever change you think will fix this (whether that be if y
 
 ---
 
-👤 **saood06** commented the **2025-06-06** at **06:49:31**:<br>
+👤 **saood06** commented on **2025-06-06** at **06:49:31**
 
 @ikawrakow 
 
@@ -220,7 +210,7 @@ I do think the changes needed will be isolated to `write_kv_cache_data` / `read_
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-06** at **07:10:08**:<br>
+👤 **ikawrakow** commented on **2025-06-06** at **07:10:08**
 
 We have `n_embd_k_gqa = n_embd_head_k * n_head_kv`, so a 1D tensor of size `n_embd_k_gqa * kv_size` is the same as a 1D tensor of size `n_embd_head_k *  n_head_kv * kv_size`, which can be viewed as a 2D tensor of size `n_embd_head_k x n_head_kv*kv_size`.
 
@@ -230,7 +220,7 @@ Does this answer the question?
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-06** at **07:26:35**:<br>
+👤 **ikawrakow** commented on **2025-06-06** at **07:26:35**
 
 So, the presence of `hparams.n_embd_k_s()` (needed for Mamba) makes it more complicated. But my K-cache change to 2D does not work with Mamba anyway (does `ik_llama.cpp` work for Mamba at all? I wouldn't think so).
 
@@ -238,7 +228,7 @@ So, we can simply disregard Mamba. One needs to change `n_embd_k_gqa` in case it
 
 ---
 
-👤 **saood06** commented the **2025-06-06** at **07:29:43**:<br>
+👤 **saood06** commented on **2025-06-06** at **07:29:43**
 
 > We have `n_embd_k_gqa = n_embd_head_k * n_head_kv`, so a 1D tensor of size `n_embd_k_gqa * kv_size` is the same as a 1D tensor of size `n_embd_head_k * n_head_kv * kv_size`, which can be viewed as a 2D tensor of size `n_embd_head_k x n_head_kv*kv_size`.
 
@@ -254,13 +244,13 @@ I think so. That does line up with the ~43x factor that the size was off by. (Fo
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-06** at **07:35:42**:<br>
+👤 **ikawrakow** commented on **2025-06-06** at **07:35:42**
 
 So, this is done just using the `llama_hparams` struct. Which does not know if MLA is being used because the MLA flag is in the `llama_cparams` struct. I have run into this stupid issue a number of times, but never took the time to sort this out. The cache writing needs to know if MLA was used to calculate it so it can use and record the correct cache size.
 
 ---
 
-👤 **saood06** commented the **2025-06-06** at **07:47:29**:<br>
+👤 **saood06** commented on **2025-06-06** at **07:47:29**
 
 > So, this is done just using the `llama_hparams` struct. Which does not know if MLA is being used because the MLA flag is in the `llama_cparams` struct. I have run into this stupid issue a number of times, but never took the time to sort this out. The cache writing needs to know if MLA was used to calculate it so it can use and record the correct cache size.
 
@@ -268,15 +258,7 @@ You have access to the ctx object (which contains `cparams` which is a `llama_cp
 
 ---
 
-👤 **saood06** commented the **2025-06-06** at **07:47:29**:<br>
-
-> So, this is done just using the `llama_hparams` struct. Which does not know if MLA is being used because the MLA flag is in the `llama_cparams` struct. I have run into this stupid issue a number of times, but never took the time to sort this out. The cache writing needs to know if MLA was used to calculate it so it can use and record the correct cache size.
-
-You have access to the ctx object (which contains llama_cparams) so I don't see why that is an issue.
-
----
-
-👤 **ikawrakow** commented the **2025-06-06** at **07:52:34**:<br>
+👤 **ikawrakow** commented on **2025-06-06** at **07:52:34**
 
 > You have access to the ctx object (which contains llama_cparams) so I don't see why that is an issue.
 
@@ -284,7 +266,7 @@ You don't have access to `llama_cparams` when loading the mode for instance. If 
 
 ---
 
-👤 **saood06** commented the **2025-06-06** at **08:04:43**:<br>
+👤 **saood06** commented on **2025-06-06** at **08:04:43**
 
 >You don't have access to `llama_cparams` when loading the mode for instance. If you have access to the context when writing the cache, you can do it that way. Otherwise, [#490](https://github.com/ikawrakow/ik_llama.cpp/issues/490) has a quick hack to add the MLA flag to `llama_hparams`. If it set, the `n_embd_k_gqa()` will now return the correct size needed when writing the cache.
 
@@ -292,7 +274,7 @@ I'm testing a fix without #490. If it works I'll make the PR. I don't think #490
 
 ---
 
-👤 **saood06** commented the **2025-06-06** at **08:50:01**:<br>
+👤 **saood06** commented on **2025-06-06** at **08:50:01**
 
 Just in case anyone reads through this later #496 is the PR with the hack that was not used, and not #490.
 

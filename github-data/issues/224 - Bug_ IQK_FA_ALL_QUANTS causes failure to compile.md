@@ -1,4 +1,4 @@
-### 🐛 [#224](https://github.com/ikawrakow/ik_llama.cpp/issues/224) - Bug: IQK_FA_ALL_QUANTS causes failure to compile
+### [Issue #224](https://github.com/ikawrakow/ik_llama.cpp/issues/224) - Bug: IQK_FA_ALL_QUANTS causes failure to compile
 
 | **Author** | `saood06` |
 | :--- | :--- |

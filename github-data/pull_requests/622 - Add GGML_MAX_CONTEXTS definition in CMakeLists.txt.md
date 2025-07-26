@@ -1,10 +1,13 @@
-### 🔀 [#622](https://github.com/ikawrakow/ik_llama.cpp/pull/622) - Add GGML_MAX_CONTEXTS definition in CMakeLists.txt
+### [Pull Request #622](https://github.com/ikawrakow/ik_llama.cpp/pull/622) - Add GGML_MAX_CONTEXTS definition in CMakeLists.txt
 
 | **Author** | `Thireus` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `patch-3` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-17 |
 | **Updated** | 2025-07-17 |
+| **Merged** | 2025-07-17 |
 
 ---
 
@@ -21,6 +24,8 @@ This is part of this request: https://github.com/ikawrakow/ik_llama.cpp/pull/611
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-07-17** at **05:26:53**: ✅ `APPROVED`
+👤 **Thireus** commented on **2025-07-17** at **01:33:30**
+
+Tested and ready to merge.

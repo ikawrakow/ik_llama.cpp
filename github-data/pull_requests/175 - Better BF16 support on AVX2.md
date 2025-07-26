@@ -1,10 +1,13 @@
-### 🔀 [#175](https://github.com/ikawrakow/ik_llama.cpp/pull/175) - Better BF16 support on AVX2
+### [Pull Request #175](https://github.com/ikawrakow/ik_llama.cpp/pull/175) - Better BF16 support on AVX2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/avx2_bf16` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-22 |
 | **Updated** | 2025-01-22 |
+| **Merged** | 2025-01-22 |
 
 ---
 

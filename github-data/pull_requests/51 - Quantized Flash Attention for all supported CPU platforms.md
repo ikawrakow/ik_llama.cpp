@@ -1,10 +1,13 @@
-### 🔀 [#51](https://github.com/ikawrakow/ik_llama.cpp/pull/51) - Quantized Flash Attention for all supported CPU platforms
+### [Pull Request #51](https://github.com/ikawrakow/ik_llama.cpp/pull/51) - Quantized Flash Attention for all supported CPU platforms
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/neon_flash_attention_3` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-12 |
 | **Updated** | 2024-09-12 |
+| **Merged** | 2024-09-12 |
 
 ---
 

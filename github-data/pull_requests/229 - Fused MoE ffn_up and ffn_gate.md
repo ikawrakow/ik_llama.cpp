@@ -1,10 +1,13 @@
-### 🔀 [#229](https://github.com/ikawrakow/ik_llama.cpp/pull/229) - Fused MoE ffn_up and ffn_gate
+### [Pull Request #229](https://github.com/ikawrakow/ik_llama.cpp/pull/229) - Fused MoE ffn_up and ffn_gate
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fused_up_gate_unary` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-23 |
 | **Updated** | 2025-02-23 |
+| **Merged** | 2025-02-23 |
 
 ---
 

@@ -1,10 +1,13 @@
-### 🐛 [#336](https://github.com/ikawrakow/ik_llama.cpp/pull/336) - Fix termux/android build
+### [Pull Request #336](https://github.com/ikawrakow/ik_llama.cpp/pull/336) - Fix termux/android build
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/termux_fix` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-20 |
 | **Updated** | 2025-04-30 |
+| **Merged** | 2025-04-21 |
 
 ---
 
@@ -16,13 +19,13 @@ Sorry this is a mess, but this does get it to build now on my android device whe
 
 I did catch the additional issue of the changed iqk_flash_attn_noalibi definition in the case where your building this repo and IQK_IMPLEMENT is not defined because my device doesn't support dotprod.
 
-Fixes #159
+Fixes [#159](https://github.com/ikawrakow/ik_llama.cpp/issues/159)
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** commented the **2025-04-20** at **08:59:26**:<br>
+👤 **ikawrakow** commented on **2025-04-20** at **08:59:26**
 
 Thank you for this.
 
@@ -32,11 +35,11 @@ I guess we need an `IQK_API` macro similar to `GGML_API`. Or one can just reuse 
 
 ---
 
-👤 **saood06** commented the **2025-04-20** at **09:20:04**:<br>
+👤 **saood06** commented on **2025-04-20** at **09:20:04**
 
 > Thank you for this.
 
-It would be interesting to benchmark it, but I can't since my phone doesn't support IQK. My main motivation was thinking about doing a release (but I haven't done many non-native builds, and don't have access to a mac).
+It would be interesting to benchmark it, but I can't since my phone doesn't support IQK. My main motivation was thinking about doing a release (I can build on Windows, Linux, and now Android but I haven't done many non-native builds, and don't have access to a mac).
  
 > So, the issue on Android was that no visibility was specified for the iqk functions, Android apparently uses hidden visibility by default, so the linker does not find the iqk functions.
 
@@ -52,66 +55,13 @@ That should work.
 
 ---
 
-👤 **saood06** commented the **2025-04-21** at **03:39:42**:<br>
+👤 **saood06** commented on **2025-04-21** at **03:39:42**
 
 Cleaned it up using an `IQK_API` macro.
 
 ---
 
-👤 **ikawrakow** commented during a code review the **2025-04-21** at **06:11:32** on `ggml/src/iqk/iqk_config.h`:<br>
-
-To have this also work for a static built, it should be
-```c++
-#ifdef GGML_SHARED
-#    if defined(_WIN32) && !defined(__MINGW32__)
-#        ifdef GGML_BUILD
-#            define IQK_API __declspec(dllexport)
-#        else
-#            define IQK_API __declspec(dllimport)
-#        endif
-#    else
-#        define IQK_API __attribute__ ((visibility ("default")))
-#    endif
-#else
-#    define IQK_API
-#endif
-```
-
----
-
-👤 **ikawrakow** commented during a code review the **2025-04-21** at **06:15:05** on `ggml/src/iqk/iqk_flash_attn.cpp`:<br>
-
-Do we really need to repeat `extern "C" IQK_API` here?
-
----
-
-👤 **ikawrakow** submitted a review the **2025-04-21** at **06:27:52**: ✅ `APPROVED`<br>
-
-I wonder if something else apart from the dot product is needed to have the iqk functions work on your phone. I see that I have consistently used  `ggml_vdotq_s32`, whiere `ggml` provided an implementation when `__ARM_FEATURE_DOTPROD` is not available.  The one known missing ingredient without `__ARM_FEATURE_DOTPROD ` is `vdotq_laneq_s32`. But is there something else missing? If  `vdotq_laneq_s32` was the only missing thing, one could add an implementation, and then one would be able to use `iqk` stuff on generic `__aarch64__`. I don't have an Android phone myself, so was never compelled to try.
-
----
-
-👤 **saood06** submitted a review the **2025-04-21** at **07:11:44**: 💬 `COMMENTED`
-
----
-
-👤 **saood06** commented during a code review the **2025-04-21** at **07:11:44** on `ggml/src/iqk/iqk_config.h`:<br>
-
-Changed.
-
----
-
-👤 **saood06** submitted a review the **2025-04-21** at **07:12:00**: 💬 `COMMENTED`
-
----
-
-👤 **saood06** commented during a code review the **2025-04-21** at **07:12:00** on `ggml/src/iqk/iqk_flash_attn.cpp`:<br>
-
-Changed
-
----
-
-👤 **saood06** commented the **2025-04-21** at **07:13:59**:<br>
+👤 **saood06** commented on **2025-04-21** at **07:13:59**
 
 >I don't have an Android phone myself, so was never compelled to try.
 
@@ -121,13 +71,13 @@ I made the two suggested changes, and it compiles.
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-21** at **07:19:58**:<br>
+👤 **ikawrakow** commented on **2025-04-21** at **07:19:58**
 
 So now we need to find someone with a modern phone willing to test. I would be really curious to compare the performance to Vulkan. The GPUs on many of the phones are quite underpowered, and the `llama.cpp` Vulkan implementation is not particularly performant (although it seems to have been improving lately), so now that it builds on Android, running `ik_llama.cpp` on the CPU is possibly a viable alternative to Vulkan.
 
 ---
 
-👤 **saood06** commented the **2025-04-21** at **07:38:30**:<br>
+👤 **saood06** commented on **2025-04-21** at **07:38:30**
 
 > So now we need to find someone with a modern phone willing to test.
 
@@ -141,7 +91,7 @@ Do you have a model/quant in mind you would want ran across the 3 backends?
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-21** at **08:45:24**:<br>
+👤 **ikawrakow** commented on **2025-04-21** at **08:45:24**
 
 > Do you have a model/quant in mind you would want ran across the 3 backends?
 
@@ -149,7 +99,42 @@ Including Android? Then something small like LLaMA-3B using `IQ4_XS` or `IQ4_KS`
 
 ---
 
-👤 **saood06** commented the **2025-04-30** at **07:37:58**:<br>
+👤 **saood06** commented on **2025-04-24** at **13:47:00**
+
+I had a little bit of time with a Galaxy S22 (1×3.00 GHz Cortex-X2 & 3×2.40 GHz Cortex-A710 & 4×1.70 GHz Cortex-A510).
+
+`~/ik_llama.cpp/build1 $ bin/llama-sweep-bench -m ~/ggml-model-iq2_bn_r4.gguf  -t 4`
+
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    6.081 |    84.20 |    3.537 |    36.18 |
+|   512 |    128 |    512 |    8.509 |    60.17 |    4.594 |    27.86 |
+|   512 |    128 |   1024 |   12.571 |    40.73 |    5.461 |    23.44 |
+|   512 |    128 |   1536 |   16.879 |    30.33 |    6.582 |    19.45 |
+|   512 |    128 |   2048 |   20.344 |    25.17 |    7.640 |    16.75 |
+|   512 |    128 |   2560 |   29.417 |    17.40 |   10.138 |    12.63 |
+|   512 |    128 |   3072 |   34.477 |    14.85 |   11.348 |    11.28 |
+|   512 |    128 |   3584 |   38.911 |    13.16 |   12.595 |    10.16 |
+
+Flash attention did worse:
+`~/ik_llama.cpp/build1 $ bin/llama-sweep-bench -m ~/ggml-model-iq2_bn_r4.gguf -fa -t 4`
+
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    9.496 |    53.92 |    3.954 |    32.38 |
+|   512 |    128 |    512 |   19.082 |    26.83 |    7.029 |    18.21 |
+|   512 |    128 |   1024 |   27.123 |    18.88 |   10.393 |    12.32 |
+|   512 |    128 |   1536 |   32.178 |    15.91 |   14.209 |     9.01 |
+|   512 |    128 |   2048 |   40.818 |    12.54 |   16.617 |     7.70 |
+|   512 |    128 |   2560 |   48.743 |    10.50 |   20.061 |     6.38 |
+|   512 |    128 |   3072 |   55.976 |     9.15 |   25.354 |     5.05 |
+|   512 |    128 |   3584 |   76.750 |     6.67 |   27.247 |     4.70 |
+
+I'll be able to test more with it again later.
+
+---
+
+👤 **saood06** commented on **2025-04-30** at **07:37:58**
 
 I was able to test a bit more and turns out the results I got above are meaningless as the model returns gibberish. I have to build with arch flags manually set (and armv9 caused illegal instructions even though this device supports it, but `armv8.2-a+dotprod+fp16` worked). The new build was tested working with the test prompt in cli returning coherent results (and the much longer compile time showed it was actually compiling iqk_mul_mat.cpp), but performance numbers were wildly inconsistent between runs (even using taskset to try and force it to only be on the performant cores helped a bit but still was very inconsistent).
 
@@ -170,13 +155,13 @@ Best result I was able to get was with 4 threads and FA off but I haven't manage
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-30** at **08:28:12**:<br>
+👤 **ikawrakow** commented on **2025-04-30** at **08:28:12**
 
 Do you know how `BitNet.cpp` does on this device?
 
 ---
 
-👤 **saood06** commented the **2025-04-30** at **08:47:23**:<br>
+👤 **saood06** commented on **2025-04-30** at **08:47:23**
 
 > Do you know how `BitNet.cpp` does on this device?
 
@@ -186,7 +171,7 @@ I wanted to provide the flash attention numbers as well, but I'm not sure if I j
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-30** at **09:06:45**:<br>
+👤 **ikawrakow** commented on **2025-04-30** at **09:06:45**
 
 So, my Arm optimizations are totally based on the M2 chip. Your results and what was reported in #345 may indicate that they may not really be optimal for lower end Arm processors. For instance, I often use more vector registers than available. On the M2-Max this register spillage is better (faster) than not using all vector registers. But the lower end chips may not handle this very well (common wisdom is that one should avoid register spillage). Or perhaps the compiler is not producing optimum code. Have you tried `clang` (which is what I use for the M2)?
 
@@ -196,7 +181,7 @@ I haven't done any experiments on that sort of CPU for a long time. But I think 
 
 ---
 
-👤 **saood06** commented the **2025-04-30** at **09:31:06**:<br>
+👤 **saood06** commented on **2025-04-30** at **09:31:06**
 
 >For instance, I often use more vector registers than available. On the M2-Max this register spillage is better (faster) than not using all vector registers. But the lower end chips may not handle this very well (common wisdom is that one should avoid register spillage).
 

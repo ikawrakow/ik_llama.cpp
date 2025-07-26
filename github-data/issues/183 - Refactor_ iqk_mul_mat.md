@@ -1,10 +1,11 @@
-### 📝 [#183](https://github.com/ikawrakow/ik_llama.cpp/issues/183) - Refactor: iqk_mul_mat
+### [Issue #183](https://github.com/ikawrakow/ik_llama.cpp/issues/183) - Refactor: iqk_mul_mat
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-01-30 |
 | **Updated** | 2025-05-22 |
+| **Labels** | `Refactoring` |
 
 ---
 

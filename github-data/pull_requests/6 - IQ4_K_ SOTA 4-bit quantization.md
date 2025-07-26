@@ -1,10 +1,13 @@
-### 🔀 [#6](https://github.com/ikawrakow/ik_llama.cpp/pull/6) - IQ4_K: SOTA 4-bit quantization
+### [Pull Request #6](https://github.com/ikawrakow/ik_llama.cpp/pull/6) - IQ4_K: SOTA 4-bit quantization
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq4_k` |
+| **Target Branch** | `main` |
 | **Created** | 2024-07-28 |
 | **Updated** | 2024-07-28 |
+| **Merged** | 2024-07-28 |
 
 ---
 

@@ -1,10 +1,10 @@
-### 📝 [#476](https://github.com/ikawrakow/ik_llama.cpp/issues/476) - Research: performance divergence
+### [Issue #476](https://github.com/ikawrakow/ik_llama.cpp/issues/476) - Research: performance divergence
 
 | **Author** | `VinnyG9` |
 | :--- | :--- |
-| **State** | ✅ **Open** |
+| **State** | ❌ **Closed** |
 | **Created** | 2025-05-30 |
-| **Updated** | 2025-06-14 |
+| **Updated** | 2025-07-23 |
 
 ---
 
@@ -42,15 +42,15 @@ _No response_
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2025-05-31** at **05:22:24**:<br>
+👤 **ikawrakow** commented on **2025-05-31** at **05:22:24**
 
 Please be specific in your issue. Provide quantization type used, system information, full command line to start the server and, ideally, last good/first bad commit where you observe the performance change. See #474 for an example.
 
 ---
 
-👤 **VinnyG9** commented the **2025-05-31** at **10:18:09**:<br>
+👤 **VinnyG9** commented on **2025-05-31** at **10:18:09**
 
 I've been testing ik_llama.cpp for about a month mostly benchmarks can't report any regression
  running bare build time flags(NATIVE=1, CUDA=1, CUDA_ARCH) and runtime flags(rtr, fa, fmoe, numa)
@@ -61,7 +61,7 @@ no matter the model i try, dense, MoE etc i get less than 50% performance than t
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-31** at **14:28:49**:<br>
+👤 **ikawrakow** commented on **2025-05-31** at **14:28:49**
 
 So, the issue is that the performance you observe when running `llama-server` is 2X lower than the performance you observe when running one of the benchmark tools?
 
@@ -71,7 +71,7 @@ Generic statement will lead nowhere (other than the issue getting closed)
 
 ---
 
-👤 **VinnyG9** commented the **2025-06-01** at **03:16:25**:<br>
+👤 **VinnyG9** commented on **2025-06-01** at **03:16:25**
 
 > So, the issue is that the performance you observe when running `llama-server` is 2X lower than the performance you observe when running one of the benchmark tools?
 
@@ -84,7 +84,7 @@ both, literally a bit less than half PP/TG. think it could be a numa issue? i tr
 
 ---
 
-👤 **saood06** commented the **2025-06-01** at **03:26:18**:<br>
+👤 **saood06** commented on **2025-06-01** at **03:26:18**
 
 > both, literally a bit less than half PP/TG. think it could be a numa issue? i tried with stock bios settings but got worse results albeit closer bench/serve numbers
 
@@ -94,7 +94,7 @@ I brought `llama-sweep-bench` over to this repo and use it regularly because in 
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-06-01** at **13:24:16**:<br>
+👤 **Ph0rk0z** commented on **2025-06-01** at **13:24:16**
 
 Its funny because I often get slightly better speeds on server than the sweep bench. Nowhere near half so something is wrong.
 
@@ -108,7 +108,7 @@ So playing with 4096 batches showed me something. In server, prompt speed on sma
 
 ---
 
-👤 **VinnyG9** commented the **2025-06-02** at **16:34:43**:<br>
+👤 **VinnyG9** commented on **2025-06-02** at **16:34:43**
 
 > > both, literally a bit less than half PP/TG. think it could be a numa issue? i tried with stock bios settings but got worse results albeit closer bench/serve numbers
 > 
@@ -194,7 +194,7 @@ WARNING: /proc/sys/kernel/numa_balancing is enabled, this has been observed to i
 
 ---
 
-👤 **VinnyG9** commented the **2025-06-02** at **16:55:21**:<br>
+👤 **VinnyG9** commented on **2025-06-02** at **16:55:21**
 
 and running on GPU
 
@@ -234,7 +234,7 @@ main: llama_decode() failed
 
 ---
 
-👤 **saood06** commented the **2025-06-03** at **00:42:25**:<br>
+👤 **saood06** commented on **2025-06-03** at **00:42:25**
 
 Is there any reason why you use 31 threads? I would say try using 32 threads and see if that helps your performance (but I don't think that is the reason for the gap in performance between server and sweep).
 
@@ -242,7 +242,7 @@ See this comment about why that might be a bad choice: https://github.com/ikawra
 
 ---
 
-👤 **VinnyG9** commented the **2025-06-03** at **01:37:17**:<br>
+👤 **VinnyG9** commented on **2025-06-03** at **01:37:17**
 
 > Is there any reason why you use 31 threads? I would say try using 32 threads and see if that helps your performance (but I don't think that is the reason for the gap in performance between server and sweep).
 > 
@@ -255,7 +255,7 @@ is it normal that during generation the model pauses on every comma? i find it f
 
 ---
 
-👤 **nux** commented the **2025-06-03** at **02:28:40**:<br>
+👤 **nux** commented on **2025-06-03** at **02:28:40**
 
 Not sure if relevant here - the topic name seems so. Was looking into some performance issues and found this thread.
 
@@ -301,7 +301,7 @@ Thanks
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-03** at **05:06:02**:<br>
+👤 **ikawrakow** commented on **2025-06-03** at **05:06:02**
 
 @Fuckingnameless 
 
@@ -311,7 +311,7 @@ Having said all this, I still find a factor of 2 difference in CPU performance s
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-03** at **05:20:03**:<br>
+👤 **ikawrakow** commented on **2025-06-03** at **05:20:03**
 
 @nux 
 
@@ -321,7 +321,7 @@ I have no explanation for the 2X lower TG performance. Try using `-mla 3`, which
 
 ---
 
-👤 **nux** commented the **2025-06-03** at **12:56:00**:<br>
+👤 **nux** commented on **2025-06-03** at **12:56:00**
 
 I will put together a script to go through commits and benchmark to figure out exactly when this started. I'm noticing right now is that while llama-bench is running, the GPU utilization drops to 38-39% for about 10 seconds and going back up to 99%. While  llama-bench is running I see this pattern repeating with gpu usage %
 
@@ -329,7 +329,7 @@ I have been using mla 3 - but ran the benchmark above in mla 2 for comparison pu
 
 ---
 
-👤 **nux** commented the **2025-06-03** at **14:00:55**:<br>
+👤 **nux** commented on **2025-06-03** at **14:00:55**
 
 Commit 0976467 is when the performance went down for me. Was running for i in `cut -d " " -f1 commits.txt `;do git checkout $i;./cmd-build.sh ;./start-bench.sh >> results.txt;done
 
@@ -361,13 +361,13 @@ build: 24c010b3 (3713)
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-03** at **14:10:23**:<br>
+👤 **ikawrakow** commented on **2025-06-03** at **14:10:23**
 
 @nux Maybe it is better you open a new issue with your findings. You can also add the tensors being used in your model when you do so. This issue is about a discrepancy between performance observed with `llama-bench`/`llama-sweep-bench` and performance observed with `llama-server`.
 
 ---
 
-👤 **VinnyG9** commented the **2025-06-10** at **00:38:42**:<br>
+👤 **VinnyG9** commented on **2025-06-10** at **00:38:42**
 
 > @Fuckingnameless
 > 
@@ -384,7 +384,7 @@ i make sure the runtime flags are equal between runs, should i be building with:
 
 ---
 
-👤 **cg10036** commented the **2025-06-14** at **15:58:34**:<br>
+👤 **cg10036** commented on **2025-06-14** at **15:58:34**
 
 Hi, I'm leaving a comment because I seem to be experiencing a similar issue.
 Quantization Type: IQ4_XS

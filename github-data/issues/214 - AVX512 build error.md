@@ -1,4 +1,4 @@
-### 📝 [#214](https://github.com/ikawrakow/ik_llama.cpp/issues/214) - AVX512 build error
+### [Issue #214](https://github.com/ikawrakow/ik_llama.cpp/issues/214) - AVX512 build error
 
 | **Author** | `pt13762104` |
 | :--- | :--- |
@@ -61,62 +61,50 @@ I have tried multiple copies of GCC 14, they produce the same result. The AVX2 b
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2025-02-21** at **07:09:29**:<br>
+👤 **ikawrakow** commented on **2025-02-21** at **07:09:29**
 
 Does #215 fix it?
 
 ---
 
-👤 **pt13762104** commented the **2025-02-21** at **07:41:00**:<br>
+👤 **pt13762104** commented on **2025-02-21** at **07:41:00**
 
 I'll try, thanks
 
 ---
 
-👤 **pt13762104** commented the **2025-02-21** at **07:41:00**:<br>
-
-I'll try
-
----
-
-👤 **pt13762104** commented the **2025-02-21** at **07:51:50**:<br>
-
-It doesn't...
-
----
-
-👤 **ikawrakow** commented the **2025-02-21** at **07:53:16**:<br>
+👤 **ikawrakow** commented on **2025-02-21** at **07:53:16**
 
 What is the new compilation error?
 
 ---
 
-👤 **pt13762104** commented the **2025-02-21** at **07:59:04**:<br>
+👤 **pt13762104** commented on **2025-02-21** at **07:59:04**
 
 Seems like that fixed it, my bad
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-21** at **10:35:38**:<br>
+👤 **ikawrakow** commented on **2025-02-21** at **10:35:38**
 
 @pt13762104 I think #216 really fixes it. Can you try? Thanks.
 
 ---
 
-👤 **pt13762104** commented the **2025-02-21** at **11:05:47**:<br>
+👤 **pt13762104** commented on **2025-02-21** at **11:05:47**
 
 I'll try to run a model to see if it's working
 
 ---
 
-👤 **pt13762104** commented the **2025-02-21** at **13:31:25**:<br>
+👤 **pt13762104** commented on **2025-02-21** at **13:31:25**
 
 It seemed to work fine, the models run, it compiles nicely...
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-21** at **13:33:09**:<br>
+👤 **ikawrakow** commented on **2025-02-21** at **13:33:09**
 
 OK, thanks! I'll merge #216

@@ -1,10 +1,13 @@
-### 🔀 [#589](https://github.com/ikawrakow/ik_llama.cpp/pull/589) - CUDA: small PP performance improvement for MoE models
+### [Pull Request #589](https://github.com/ikawrakow/ik_llama.cpp/pull/589) - CUDA: small PP performance improvement for MoE models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_quantized_fmoe` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-06 |
 | **Updated** | 2025-07-07 |
+| **Merged** | 2025-07-07 |
 
 ---
 

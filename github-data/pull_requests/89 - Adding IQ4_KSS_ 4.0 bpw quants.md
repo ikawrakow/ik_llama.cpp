@@ -1,10 +1,13 @@
-### 🔀 [#89](https://github.com/ikawrakow/ik_llama.cpp/pull/89) - Adding IQ4_KSS: 4.0 bpw quants
+### [Pull Request #89](https://github.com/ikawrakow/ik_llama.cpp/pull/89) - Adding IQ4_KSS: 4.0 bpw quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq4_kss` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-16 |
 | **Updated** | 2024-10-17 |
+| **Merged** | 2024-10-16 |
 
 ---
 
@@ -36,17 +39,27 @@ In all following graph the token embedding and output tensors are quantized, and
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **Nexesenex** commented the **2024-10-16** at **20:38:07**:<br>
+👤 **Nexesenex** commented on **2024-10-16** at **20:38:07**
 
 Hey IK,
 
 Congratulations and thank you. Now, I'm gonna try to make all of this work, because I ideally don't want to ever touch 3 bits quants ever again (except for attn_q.weight :P). I'll report my progresses. :D
 
+Ok, I compiled it in debug thanks to @saood06 yesterday, and finally with Cuda today. Now I can work with this! I tested PPL512 on Sheared Llama 2.7b quickly, normal ftypes (pure, but Q6_K output and with imatrix).
+
+FP16 = 7.3507
+IQ4_K : 7.4172
+IQ4_XS : 7.4444
+IQ4_KS : 7.4322
+IQ4_KSS : 7.4820 (!!!)
+IQ3_S : 7.6666
+IQ3_K : 7.6446 +/- 0.04566
+
 ---
 
-👤 **Nexesenex** commented the **2024-10-16** at **23:20:20**:<br>
+👤 **Nexesenex** commented on **2024-10-16** at **23:20:20**
 
 The new IQ4_KSS quant is really SOTA imo, and thank you very much. You're rocking the place, as usual.
 
@@ -58,14 +71,10 @@ Also, I observed how Exllama v2 quantizes. Turboderp's tool calculates something
 
 With an IQ3_KM and an IQ3_KSS, you might be able to drop down a bit (attn_q wise, and ffn_gate wise) the bpw of the quant strategies revolving in the 3 to 4.5 bpw bracket. Ofc, the logic applies on the whole scope, but that's a work I'm only able to suggest, not to do myself lol.
 
-Then, if you were willing to code an automatic quantization system akin to Exllama v2, but maybe more rigorous on the skeleton "ftype" strategy employed (due to the knowledge gained in all the experimentation with FTYPES) and an automatic upscale or downscale (compared to the skeleton 'ftype" strategy) of the quant of a given tensor accordingly to its "error rate", then the process of strategization of the quants would be greatly helped, and the FTYPES also could be SOTA, on the top of your SOTA GGML_TYPES.
+Then, if you were willing to code an automatic quantization system akin to Exllama v2, but maybe more rigorous on the skeleton "ftype" strategy employed (due to the knowledge gained in all the experimentation with FTYPES) and an automatic upscale or downscale (compared to the skeleton 'ftype" strategy) of the GGML type quant of a given tensor accordingly to its "error rate", then the process of strategization of the quants would be greatly helped, and the FTYPES also could be SOTA, on the top of your SOTA GGML_TYPES.
 
 On my side, I ponder seriously about trying to rebase my KoboldCPP fork on your LlamaCPP clone, to offer the benefit of your quants to myself and others in daily use.
 
----
-
-👤 **Nexesenex** commented the **2024-10-17** at **03:30:26**:<br>
-
-I tested your IQ6_K quant on Nemo 12b on ST/llama-server, and it indeed feels very like a Q8_0.
+More practically, I tested your IQ6_K quant on Nemo 12b on ST/llama-server, and it indeed feels very like a Q8_0.
 Your quants are amazing.
 This night, I'm gonna quant a IQ4_KSS modified ftype for Mistral 123b. I can't wait ! :D

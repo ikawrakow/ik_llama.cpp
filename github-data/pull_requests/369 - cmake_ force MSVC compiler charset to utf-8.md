@@ -1,10 +1,13 @@
-### 🔀 [#369](https://github.com/ikawrakow/ik_llama.cpp/pull/369) - cmake: force MSVC compiler charset to utf-8
+### [Pull Request #369](https://github.com/ikawrakow/ik_llama.cpp/pull/369) - cmake: force MSVC compiler charset to utf-8
 
 | **Author** | `Gaolingx` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `main` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-03 |
 | **Updated** | 2025-05-03 |
+| **Merged** | 2025-05-03 |
 
 ---
 
@@ -22,21 +25,9 @@ This commit is to prevent `tests\test-grammar-integration.cpp(483,13): error C20
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-05-03** at **12:26:22**: ✅ `APPROVED`<br>
-
-LGTM, but I cannot test. It would be useful if at least one other person tested before we merge.
-
----
-
-👤 **ikawrakow** submitted a review the **2025-05-03** at **12:26:22**: ✅ `APPROVED`<br>
-
-LGTM, but I cannot test.
-
----
-
-👤 **Gaolingx** commented the **2025-05-03** at **12:54:45**:<br>
+👤 **Gaolingx** commented on **2025-05-03** at **12:54:45**
 
 > LGTM, but I cannot test. It would be useful if at least one other person tested before we merge.
 

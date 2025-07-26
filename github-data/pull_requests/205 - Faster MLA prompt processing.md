@@ -1,10 +1,13 @@
-### 🔀 [#205](https://github.com/ikawrakow/ik_llama.cpp/pull/205) - Faster MLA prompt processing
+### [Pull Request #205](https://github.com/ikawrakow/ik_llama.cpp/pull/205) - Faster MLA prompt processing
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/mla_fixes` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-12 |
 | **Updated** | 2025-02-13 |
+| **Merged** | 2025-02-13 |
 
 ---
 
@@ -12,7 +15,7 @@
 
 This PR speeds up prompt processing (PP) when MLA is enabled. It is still slower than no-MLA, so I'm making this a draft for now to try some more. Still it would be great if somebody else tested to confirm that a) I did not introduce bugs and b) It is indeed faster on their systems.
 
-The PR also adds the changes suggested by @saood06 in the review of #188 
+The PR also adds the changes suggested by @saood06 in the review of [#188](https://github.com/ikawrakow/ik_llama.cpp/issues/188) 
 
 Speedup is achieved by concatenating the no- and rotational position encoding parts of `K` and `Q` (this also eliminates the `k_r` cache), which allows us to combine the former `kq_nope` and `kq_pe` matrix multiplications into a single matrix multiplication. This also eliminates the fairly expensive addition of  `kq_nope` and `kq_pe`. 
 
@@ -44,23 +47,9 @@ Not sure if the ~9% improvement at 16k tokens is real. It may be just due to les
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **saood06** submitted a review the **2025-02-12** at **20:10:21**: 💬 `COMMENTED`
-
----
-
-👤 **ikawrakow** submitted a review the **2025-02-13** at **08:57:48**: 💬 `COMMENTED`
-
----
-
-👤 **ikawrakow** commented during a code review the **2025-02-13** at **08:57:48** on `src/llama.cpp`:<br>
-
-Thanks. Added a hopefully visible warning.
-
----
-
-👤 **ikawrakow** commented the **2025-02-13** at **09:04:18**:<br>
+👤 **ikawrakow** commented on **2025-02-13** at **09:04:18**
 
 The PR also adds a compile time option to disable the transposed KV cache when using MLA (simple look for `MLA_USE_TRANSPOSED_CACHE` and set it to 0). This cuts KV cache size in nearly half at the expense of a lower TG performance with long contexts. PP performance stays about the same. Here is a comparison between MLA with and without transposed cache
 

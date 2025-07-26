@@ -1,10 +1,11 @@
-### ✨ [#551](https://github.com/ikawrakow/ik_llama.cpp/issues/551) - Feature Request: Support for Falcon Edge series
+### [Issue #551](https://github.com/ikawrakow/ik_llama.cpp/issues/551) - Feature Request: Support for Falcon Edge series
 
 | **Author** | `harborwater` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
 | **Created** | 2025-06-24 |
 | **Updated** | 2025-06-26 |
+| **Labels** | `enhancement` |
 
 ---
 
@@ -34,15 +35,15 @@ _No response_
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2025-06-24** at **12:22:12**:<br>
+👤 **ikawrakow** commented on **2025-06-24** at **12:22:12**
 
 Is it supported in mainline `llama.cpp`?
 
 ---
 
-👤 **saood06** commented the **2025-06-24** at **16:48:14**:<br>
+👤 **saood06** commented on **2025-06-24** at **16:48:14**
 
 > Is it supported in mainline `llama.cpp`?
 
@@ -59,7 +60,7 @@ I read the blogpost, and I agree. They trained on less tokens (1.5 T vs 4T) but 
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-24** at **17:05:32**:<br>
+👤 **ikawrakow** commented on **2025-06-24** at **17:05:32**
 
 In that case it should (almost) work:
 ```
@@ -75,7 +76,7 @@ So, I guess, it is a matter of adding this `falcon-e` pre-tokenizer? Or are ther
 
 ---
 
-👤 **saood06** commented the **2025-06-24** at **17:12:59**:<br>
+👤 **saood06** commented on **2025-06-24** at **17:12:59**
 
 > So, I guess, it is a matter of adding this `falcon-e` pre-tokenizer? 
 
@@ -89,7 +90,7 @@ None that require change it seems. Their blogpost says:
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-24** at **17:13:41**:<br>
+👤 **ikawrakow** commented on **2025-06-24** at **17:13:41**
 
 Well, pretending that `falcon_e` is the same as `falcon3`, it appears to work:
 ```
@@ -119,7 +120,7 @@ perplexity: 0.81 seconds per pass - ETA 9.58 minutes
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-24** at **17:16:23**:<br>
+👤 **ikawrakow** commented on **2025-06-24** at **17:16:23**
 
 This is the diff that makes it work:
 ```
@@ -141,6 +142,6 @@ index a70d2582..de91e687 100644
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-25** at **07:21:17**:<br>
+👤 **ikawrakow** commented on **2025-06-25** at **07:21:17**
 
 See #555 and let me know of it works.

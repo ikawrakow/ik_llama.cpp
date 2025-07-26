@@ -1,10 +1,13 @@
-### 🔀 [#24](https://github.com/ikawrakow/ik_llama.cpp/pull/24) - softcap: minor improvement
+### [Pull Request #24](https://github.com/ikawrakow/ik_llama.cpp/pull/24) - softcap: minor improvement
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/softcap_minor` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-21 |
 | **Updated** | 2024-08-21 |
+| **Merged** | 2024-08-21 |
 
 ---
 

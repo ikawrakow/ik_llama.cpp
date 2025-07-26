@@ -1,4 +1,4 @@
-### 🐛 [#281](https://github.com/ikawrakow/ik_llama.cpp/issues/281) - Bug: Strange dips in TG performance
+### [Issue #281](https://github.com/ikawrakow/ik_llama.cpp/issues/281) - Bug: Strange dips in TG performance
 
 | **Author** | `saood06` |
 | :--- | :--- |
@@ -34,9 +34,9 @@ Linux
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **saood06** commented the **2025-03-23** at **13:11:13**:<br>
+👤 **saood06** commented on **2025-03-23** at **13:11:13**
 
 Closing via #282 
 

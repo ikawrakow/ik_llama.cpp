@@ -1,4 +1,4 @@
-### 🐛 [#499](https://github.com/ikawrakow/ik_llama.cpp/issues/499) - Bug: cache quantization crash with IQK_FORCE_BF16
+### [Issue #499](https://github.com/ikawrakow/ik_llama.cpp/issues/499) - Bug: cache quantization crash with IQK_FORCE_BF16
 
 | **Author** | `randoentity` |
 | :--- | :--- |
@@ -91,14 +91,14 @@ gml_tensor const*, ggml_tensor const*, ggml_tensor*, char const*, float const*, 
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **Thireus** commented the **2025-06-06** at **15:04:29**:<br>
+👤 **Thireus** commented on **2025-06-06** at **15:04:29**
 
 I can confirm the same issue occurs on q4_0 as well.
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-06** at **16:32:03**:<br>
+👤 **ikawrakow** commented on **2025-06-06** at **16:32:03**
 
 Does #501 fix it?

@@ -1,10 +1,13 @@
-### 🐛 [#571](https://github.com/ikawrakow/ik_llama.cpp/pull/571) - Fix CMakeLists
+### [Pull Request #571](https://github.com/ikawrakow/ik_llama.cpp/pull/571) - Fix CMakeLists
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_vulkan_required` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-02 |
 | **Updated** | 2025-07-02 |
+| **Merged** | 2025-07-02 |
 
 ---
 

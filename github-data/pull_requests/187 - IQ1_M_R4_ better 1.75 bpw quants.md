@@ -1,16 +1,19 @@
-### 🔀 [#187](https://github.com/ikawrakow/ik_llama.cpp/pull/187) - IQ1_M_R4: better 1.75 bpw quants
+### [Pull Request #187](https://github.com/ikawrakow/ik_llama.cpp/pull/187) - IQ1_M_R4: better 1.75 bpw quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1_m_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-06 |
 | **Updated** | 2025-02-06 |
+| **Merged** | 2025-02-06 |
 
 ---
 
 #### Description
 
-Following in the foot steps of #185, this PR adds `IQ1_M_R4`, a 4-row interleaved version of `IQ1_M`. 
+Following in the foot steps of [#185](https://github.com/ikawrakow/ik_llama.cpp/issues/185), this PR adds `IQ1_M_R4`, a 4-row interleaved version of `IQ1_M`. 
 
 * I have removed the `f16` super-block scale (replaced with a `f16` per row scale) and have changed the 3-bit `IQ1_M` block scales with 4 bit. Hence, we end up using the same 1.75 bpw as `IQ1_M`.
 * The above change allows to implement `IQ1_M_R4` with a block size of 32. I wanted to have this because DeepSeek-Lite, the model I'm testing with, has a lot of tensors with row sizes not divisible by 256, so a significant fraction of tensors gets quantized to `IQ4_NL` when using `IQ1_M`

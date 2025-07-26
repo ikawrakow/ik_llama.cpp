@@ -1,10 +1,13 @@
-### 🔀 [#135](https://github.com/ikawrakow/ik_llama.cpp/pull/135) - Better ARM_NEON implementation for R4 quants
+### [Pull Request #135](https://github.com/ikawrakow/ik_llama.cpp/pull/135) - Better ARM_NEON implementation for R4 quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/arm_better_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-11 |
 | **Updated** | 2024-12-11 |
+| **Merged** | 2024-12-11 |
 
 ---
 

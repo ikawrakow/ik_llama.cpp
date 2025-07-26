@@ -1,10 +1,13 @@
-### 🔀 [#370](https://github.com/ikawrakow/ik_llama.cpp/pull/370) - CUDA: faster FA TG for GQA models 
+### [Pull Request #370](https://github.com/ikawrakow/ik_llama.cpp/pull/370) - CUDA: faster FA TG for GQA models 
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fattn_mma` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-03 |
 | **Updated** | 2025-05-04 |
+| **Merged** | 2025-05-04 |
 
 ---
 
@@ -31,9 +34,9 @@ My GPU is `ADA_LOVELACE`, so the MMA kernel does not get invoked for TG. But bas
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **ubergarm** commented the **2025-05-03** at **20:24:02**:<br>
+👤 **ubergarm** commented on **2025-05-03** at **20:24:02**
 
 Wow, I'll let the benchmarks speak for themselves.
 
@@ -692,7 +695,7 @@ main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 ---
 
-👤 **ubergarm** commented the **2025-05-03** at **21:39:11**:<br>
+👤 **ubergarm** commented on **2025-05-03** at **21:39:11**
 
 I suppose I must let this benchmark speak for itself as well.
 
@@ -702,12 +705,680 @@ I suppose I must let this benchmark speak for itself as well.
 
 ![qwen3-30b-sweep-pr370](https://github.com/user-attachments/assets/240bcdbb-a2ec-40c7-a401-90a21466853e)
 
+<details>
+
+<summary>👈Logs</summary>
+
+## `llama.cpp/master@36667c8e` + `ug/port-sweep-bench@d541533a`
+```
+cmake -B build -DGGML_CUDA=ON -DGGML_RPC=OFF -DGGML_BLAS=OFF
+cmake --build build --config Release -j $(nproc)
+
+CUDA_VISIBLE_DEVICE=0 \
+./build/bin/llama-sweep-bench \
+    --model /mnt/astrodata/llm/models/bartowski/Qwen_Qwen3-30B-A3B-GGUF/Qwen_Qwen3-30B-A3B-Q4_K_M.gguf \
+    -fa \
+    -ctk f16 -ctv f16 \
+    -c 32768 \
+    -ngl 99 \
+    --threads 1
+
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 3090 Ti, compute capability 8.6, VMM: yes
+build: 5274 (d541533a) with cc (GCC) 14.2.1 20250128 for x86_64-pc-linux-gnu
+llama_model_load_from_file_impl: using device CUDA0 (NVIDIA GeForce RTX 3090 Ti) - 23266 MiB free
+llama_model_loader: loaded meta data with 41 key-value pairs and 579 tensors from /mnt/astrodata/llm/models/bartowski/Qwen_Qwen3-30B-A3B-GGUF/Qwen_Qwen3-30B-A3B-Q4_K_M.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = qwen3moe
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Qwen3 30B A3B
+llama_model_loader: - kv   3:                           general.basename str              = Qwen3
+llama_model_loader: - kv   4:                         general.size_label str              = 30B-A3B
+llama_model_loader: - kv   5:                            general.license str              = apache-2.0
+llama_model_loader: - kv   6:                       general.license.link str              = https://huggingface.co/Qwen/Qwen3-30B...
+llama_model_loader: - kv   7:                   general.base_model.count u32              = 1
+llama_model_loader: - kv   8:                  general.base_model.0.name str              = Qwen3 30B A3B Base
+llama_model_loader: - kv   9:          general.base_model.0.organization str              = Qwen
+llama_model_loader: - kv  10:              general.base_model.0.repo_url str              = https://huggingface.co/Qwen/Qwen3-30B...
+llama_model_loader: - kv  11:                               general.tags arr[str,1]       = ["text-generation"]
+llama_model_loader: - kv  12:                       qwen3moe.block_count u32              = 48
+llama_model_loader: - kv  13:                    qwen3moe.context_length u32              = 32768
+llama_model_loader: - kv  14:                  qwen3moe.embedding_length u32              = 2048
+llama_model_loader: - kv  15:               qwen3moe.feed_forward_length u32              = 6144
+llama_model_loader: - kv  16:              qwen3moe.attention.head_count u32              = 32
+llama_model_loader: - kv  17:           qwen3moe.attention.head_count_kv u32              = 4
+llama_model_loader: - kv  18:                    qwen3moe.rope.freq_base f32              = 1000000.000000
+llama_model_loader: - kv  19:  qwen3moe.attention.layer_norm_rms_epsilon f32              = 0.000001
+llama_model_loader: - kv  20:                 qwen3moe.expert_used_count u32              = 8
+llama_model_loader: - kv  21:              qwen3moe.attention.key_length u32              = 128
+llama_model_loader: - kv  22:            qwen3moe.attention.value_length u32              = 128
+llama_model_loader: - kv  23:                      qwen3moe.expert_count u32              = 128
+llama_model_loader: - kv  24:        qwen3moe.expert_feed_forward_length u32              = 768
+llama_model_loader: - kv  25:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  26:                         tokenizer.ggml.pre str              = qwen2
+llama_model_loader: - kv  27:                      tokenizer.ggml.tokens arr[str,151936]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  28:                  tokenizer.ggml.token_type arr[i32,151936]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  29:                      tokenizer.ggml.merges arr[str,151387]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+llama_model_loader: - kv  30:                tokenizer.ggml.eos_token_id u32              = 151645
+llama_model_loader: - kv  31:            tokenizer.ggml.padding_token_id u32              = 151643
+llama_model_loader: - kv  32:                tokenizer.ggml.bos_token_id u32              = 151643
+llama_model_loader: - kv  33:               tokenizer.ggml.add_bos_token bool             = false
+llama_model_loader: - kv  34:                    tokenizer.chat_template str              = {%- if tools %}\n    {{- '<|im_start|>...
+llama_model_loader: - kv  35:               general.quantization_version u32              = 2
+llama_model_loader: - kv  36:                          general.file_type u32              = 15
+llama_model_loader: - kv  37:                      quantize.imatrix.file str              = /models_out/Qwen3-30B-A3B-GGUF/Qwen_Q...
+llama_model_loader: - kv  38:                   quantize.imatrix.dataset str              = /training_data/calibration_datav3.txt
+llama_model_loader: - kv  39:             quantize.imatrix.entries_count i32              = 384
+llama_model_loader: - kv  40:              quantize.imatrix.chunks_count i32              = 209
+llama_model_loader: - type  f32:  241 tensors
+llama_model_loader: - type q8_0:   48 tensors
+llama_model_loader: - type q4_K:  193 tensors
+llama_model_loader: - type q5_K:   48 tensors
+llama_model_loader: - type q6_K:   49 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_K - Medium
+print_info: file size   = 17.35 GiB (4.88 BPW)
+load: special tokens cache size = 26
+load: token to piece cache size = 0.9311 MB
+print_info: arch             = qwen3moe
+print_info: vocab_only       = 0
+print_info: n_ctx_train      = 32768
+print_info: n_embd           = 2048
+print_info: n_layer          = 48
+print_info: n_head           = 32
+print_info: n_head_kv        = 4
+print_info: n_rot            = 128
+print_info: n_swa            = 0
+print_info: n_swa_pattern    = 1
+print_info: n_embd_head_k    = 128
+print_info: n_embd_head_v    = 128
+print_info: n_gqa            = 8
+print_info: n_embd_k_gqa     = 512
+print_info: n_embd_v_gqa     = 512
+print_info: f_norm_eps       = 0.0e+00
+print_info: f_norm_rms_eps   = 1.0e-06
+print_info: f_clamp_kqv      = 0.0e+00
+print_info: f_max_alibi_bias = 0.0e+00
+print_info: f_logit_scale    = 0.0e+00
+print_info: f_attn_scale     = 0.0e+00
+print_info: n_ff             = 6144
+print_info: n_expert         = 128
+print_info: n_expert_used    = 8
+print_info: causal attn      = 1
+print_info: pooling type     = 0
+print_info: rope type        = 2
+print_info: rope scaling     = linear
+print_info: freq_base_train  = 1000000.0
+print_info: freq_scale_train = 1
+print_info: n_ctx_orig_yarn  = 32768
+print_info: rope_finetuned   = unknown
+print_info: ssm_d_conv       = 0
+print_info: ssm_d_inner      = 0
+print_info: ssm_d_state      = 0
+print_info: ssm_dt_rank      = 0
+print_info: ssm_dt_b_c_rms   = 0
+print_info: model type       = 30B.A3B
+print_info: model params     = 30.53 B
+print_info: general.name     = Qwen3 30B A3B
+print_info: n_ff_exp         = 768
+print_info: vocab type       = BPE
+print_info: n_vocab          = 151936
+print_info: n_merges         = 151387
+print_info: BOS token        = 151643 '<|endoftext|>'
+print_info: EOS token        = 151645 '<|im_end|>'
+print_info: EOT token        = 151645 '<|im_end|>'
+print_info: PAD token        = 151643 '<|endoftext|>'
+print_info: LF token         = 198 'Ċ'
+print_info: FIM PRE token    = 151659 '<|fim_prefix|>'
+print_info: FIM SUF token    = 151661 '<|fim_suffix|>'
+print_info: FIM MID token    = 151660 '<|fim_middle|>'
+print_info: FIM PAD token    = 151662 '<|fim_pad|>'
+print_info: FIM REP token    = 151663 '<|repo_name|>'
+print_info: FIM SEP token    = 151664 '<|file_sep|>'
+print_info: EOG token        = 151643 '<|endoftext|>'
+print_info: EOG token        = 151645 '<|im_end|>'
+print_info: EOG token        = 151662 '<|fim_pad|>'
+print_info: EOG token        = 151663 '<|repo_name|>'
+print_info: EOG token        = 151664 '<|file_sep|>'
+print_info: max token length = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true)
+load_tensors: offloading 48 repeating layers to GPU
+load_tensors: offloading output layer to GPU
+load_tensors: offloaded 49/49 layers to GPU
+load_tensors:        CUDA0 model buffer size = 17596.43 MiB
+load_tensors:   CPU_Mapped model buffer size =   166.92 MiB
+....................................................................................................
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 1
+llama_context: n_ctx         = 32768
+llama_context: n_ctx_per_seq = 32768
+llama_context: n_batch       = 2048
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = 1
+llama_context: freq_base     = 1000000.0
+llama_context: freq_scale    = 1
+llama_context:  CUDA_Host  output buffer size =     0.58 MiB
+llama_kv_cache_unified: kv_size = 32768, type_k = 'f16', type_v = 'f16', n_layer = 48, can_shift = 1, padding = 256
+llama_kv_cache_unified:      CUDA0 KV buffer size =  3072.00 MiB
+llama_kv_cache_unified: KV self size  = 3072.00 MiB, K (f16): 1536.00 MiB, V (f16): 1536.00 MiB
+llama_context:      CUDA0 compute buffer size =   300.75 MiB
+llama_context:  CUDA_Host compute buffer size =    68.01 MiB
+llama_context: graph nodes  = 2935
+llama_context: graph splits = 2
+
+main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_layers = 99, n_threads = 1, n_threads_batch = 1
+```
+
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    0.220 |  2330.76 |    0.912 |   140.28 |
+|   512 |    128 |    512 |    0.187 |  2740.62 |    0.937 |   136.60 |
+|   512 |    128 |   1024 |    0.191 |  2687.03 |    0.936 |   136.82 |
+|   512 |    128 |   1536 |    0.193 |  2659.55 |    0.943 |   135.80 |
+|   512 |    128 |   2048 |    0.198 |  2589.49 |    0.956 |   133.82 |
+|   512 |    128 |   2560 |    0.198 |  2579.72 |    0.959 |   133.42 |
+|   512 |    128 |   3072 |    0.203 |  2526.46 |    0.966 |   132.51 |
+|   512 |    128 |   3584 |    0.206 |  2485.20 |    0.977 |   130.96 |
+|   512 |    128 |   4096 |    0.211 |  2431.89 |    0.986 |   129.88 |
+|   512 |    128 |   4608 |    0.214 |  2397.05 |    0.997 |   128.44 |
+|   512 |    128 |   5120 |    0.215 |  2383.06 |    1.008 |   127.04 |
+|   512 |    128 |   5632 |    0.217 |  2356.61 |    1.020 |   125.50 |
+|   512 |    128 |   6144 |    0.221 |  2316.21 |    1.031 |   124.16 |
+|   512 |    128 |   6656 |    0.223 |  2294.66 |    1.044 |   122.59 |
+|   512 |    128 |   7168 |    0.227 |  2255.38 |    1.054 |   121.48 |
+|   512 |    128 |   7680 |    0.229 |  2232.53 |    1.065 |   120.15 |
+|   512 |    128 |   8192 |    0.233 |  2192.89 |    1.076 |   118.99 |
+|   512 |    128 |   8704 |    0.236 |  2169.88 |    1.088 |   117.61 |
+|   512 |    128 |   9216 |    0.239 |  2141.79 |    1.101 |   116.25 |
+|   512 |    128 |   9728 |    0.242 |  2112.17 |    1.110 |   115.33 |
+|   512 |    128 |  10240 |    0.246 |  2083.21 |    1.122 |   114.10 |
+|   512 |    128 |  10752 |    0.248 |  2060.86 |    1.165 |   109.85 |
+|   512 |    128 |  11264 |    0.251 |  2042.36 |    1.183 |   108.22 |
+|   512 |    128 |  11776 |    0.254 |  2011.97 |    1.173 |   109.12 |
+|   512 |    128 |  12288 |    0.257 |  1988.57 |    1.176 |   108.87 |
+|   512 |    128 |  12800 |    0.261 |  1960.90 |    1.191 |   107.46 |
+|   512 |    128 |  13312 |    0.265 |  1931.58 |    1.190 |   107.53 |
+|   512 |    128 |  13824 |    0.267 |  1914.62 |    1.197 |   106.97 |
+|   512 |    128 |  14336 |    0.270 |  1894.12 |    1.204 |   106.34 |
+|   512 |    128 |  14848 |    0.273 |  1876.37 |    1.211 |   105.67 |
+|   512 |    128 |  15360 |    0.276 |  1852.41 |    1.216 |   105.26 |
+|   512 |    128 |  15872 |    0.278 |  1838.45 |    1.223 |   104.68 |
+|   512 |    128 |  16384 |    0.282 |  1817.50 |    1.230 |   104.07 |
+|   512 |    128 |  16896 |    0.285 |  1793.62 |    1.236 |   103.54 |
+|   512 |    128 |  17408 |    0.290 |  1767.23 |    1.244 |   102.90 |
+|   512 |    128 |  17920 |    0.292 |  1753.08 |    1.250 |   102.43 |
+|   512 |    128 |  18432 |    0.296 |  1728.78 |    1.258 |   101.72 |
+|   512 |    128 |  18944 |    0.298 |  1716.57 |    1.265 |   101.22 |
+|   512 |    128 |  19456 |    0.302 |  1695.52 |    1.270 |   100.76 |
+|   512 |    128 |  19968 |    0.304 |  1682.70 |    1.280 |    99.99 |
+|   512 |    128 |  20480 |    0.306 |  1670.67 |    1.286 |    99.55 |
+|   512 |    128 |  20992 |    0.310 |  1654.28 |    1.293 |    99.03 |
+|   512 |    128 |  21504 |    0.314 |  1632.49 |    1.332 |    96.06 |
+|   512 |    128 |  22016 |    0.316 |  1621.03 |    1.348 |    94.95 |
+|   512 |    128 |  22528 |    0.321 |  1592.75 |    1.342 |    95.35 |
+|   512 |    128 |  23040 |    0.324 |  1578.64 |    1.354 |    94.57 |
+|   512 |    128 |  23552 |    0.327 |  1563.81 |    1.361 |    94.04 |
+|   512 |    128 |  24064 |    0.330 |  1550.20 |    1.365 |    93.77 |
+|   512 |    128 |  24576 |    0.334 |  1535.10 |    1.369 |    93.49 |
+|   512 |    128 |  25088 |    0.337 |  1520.24 |    1.376 |    93.05 |
+|   512 |    128 |  25600 |    0.339 |  1508.72 |    1.380 |    92.74 |
+|   512 |    128 |  26112 |    0.342 |  1497.33 |    1.388 |    92.23 |
+|   512 |    128 |  26624 |    0.345 |  1482.00 |    1.396 |    91.68 |
+|   512 |    128 |  27136 |    0.349 |  1468.23 |    1.403 |    91.26 |
+|   512 |    128 |  27648 |    0.353 |  1452.44 |    1.408 |    90.93 |
+|   512 |    128 |  28160 |    0.355 |  1441.72 |    1.413 |    90.62 |
+|   512 |    128 |  28672 |    0.359 |  1427.98 |    1.423 |    89.94 |
+|   512 |    128 |  29184 |    0.361 |  1418.24 |    1.431 |    89.47 |
+|   512 |    128 |  29696 |    0.365 |  1403.28 |    1.435 |    89.17 |
+|   512 |    128 |  30208 |    0.367 |  1396.56 |    1.443 |    88.68 |
+|   512 |    128 |  30720 |    0.370 |  1383.91 |    1.452 |    88.13 |
+|   512 |    128 |  31232 |    0.374 |  1369.59 |    1.458 |    87.81 |
+|   512 |    128 |  31744 |    0.376 |  1361.13 |    1.465 |    87.38 |
+|   512 |    128 |  32256 |    0.380 |  1348.53 |    1.508 |    84.87 |
+
+## `ik_llama.cpp/main@ab7f694b`
+```
+cmake -B build -DGGML_CUDA=ON -DGGML_RPC=OFF -DGGML_BLAS=OFF
+cmake --build build --config Release -j $(nproc)
+
+CUDA_VISIBLE_DEVICE=0 \
+./build/bin/llama-sweep-bench \
+    --model /mnt/astrodata/llm/models/bartowski/Qwen_Qwen3-30B-A3B-GGUF/Qwen_Qwen3-30B-A3B-Q4_K_M.gguf \
+    -fmoe \
+    -fa \
+    -ctk f16 -ctv f16 \
+    -c 32768 \
+    -ngl 99 \
+    --threads 1
+
+llama_model_loader: loaded meta data with 41 key-value pairs and 579 tensors from /mnt/astrodata/llm/models/bartowski/Qwen_Qwen3-30B-A3B-GGUF/Qwen_Qwen3-30B-A3B-Q4_K_M.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = qwen3moe
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Qwen3 30B A3B
+llama_model_loader: - kv   3:                           general.basename str              = Qwen3
+llama_model_loader: - kv   4:                         general.size_label str              = 30B-A3B
+llama_model_loader: - kv   5:                            general.license str              = apache-2.0
+llama_model_loader: - kv   6:                       general.license.link str              = https://huggingface.co/Qwen/Qwen3-30B...
+llama_model_loader: - kv   7:                   general.base_model.count u32              = 1
+llama_model_loader: - kv   8:                  general.base_model.0.name str              = Qwen3 30B A3B Base
+llama_model_loader: - kv   9:          general.base_model.0.organization str              = Qwen
+llama_model_loader: - kv  10:              general.base_model.0.repo_url str              = https://huggingface.co/Qwen/Qwen3-30B...
+llama_model_loader: - kv  11:                               general.tags arr[str,1]       = ["text-generation"]
+llama_model_loader: - kv  12:                       qwen3moe.block_count u32              = 48
+llama_model_loader: - kv  13:                    qwen3moe.context_length u32              = 32768
+llama_model_loader: - kv  14:                  qwen3moe.embedding_length u32              = 2048
+llama_model_loader: - kv  15:               qwen3moe.feed_forward_length u32              = 6144
+llama_model_loader: - kv  16:              qwen3moe.attention.head_count u32              = 32
+llama_model_loader: - kv  17:           qwen3moe.attention.head_count_kv u32              = 4
+llama_model_loader: - kv  18:                    qwen3moe.rope.freq_base f32              = 1000000.000000
+llama_model_loader: - kv  19:  qwen3moe.attention.layer_norm_rms_epsilon f32              = 0.000001
+llama_model_loader: - kv  20:                 qwen3moe.expert_used_count u32              = 8
+llama_model_loader: - kv  21:              qwen3moe.attention.key_length u32              = 128
+llama_model_loader: - kv  22:            qwen3moe.attention.value_length u32              = 128
+llama_model_loader: - kv  23:                      qwen3moe.expert_count u32              = 128
+llama_model_loader: - kv  24:        qwen3moe.expert_feed_forward_length u32              = 768
+llama_model_loader: - kv  25:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  26:                         tokenizer.ggml.pre str              = qwen2
+llama_model_loader: - kv  27:                      tokenizer.ggml.tokens arr[str,151936]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  28:                  tokenizer.ggml.token_type arr[i32,151936]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  29:                      tokenizer.ggml.merges arr[str,151387]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+llama_model_loader: - kv  30:                tokenizer.ggml.eos_token_id u32              = 151645
+llama_model_loader: - kv  31:            tokenizer.ggml.padding_token_id u32              = 151643
+llama_model_loader: - kv  32:                tokenizer.ggml.bos_token_id u32              = 151643
+llama_model_loader: - kv  33:               tokenizer.ggml.add_bos_token bool             = false
+llama_model_loader: - kv  34:                    tokenizer.chat_template str              = {%- if tools %}\n    {{- '<|im_start|>...
+llama_model_loader: - kv  35:               general.quantization_version u32              = 2
+llama_model_loader: - kv  36:                          general.file_type u32              = 15
+llama_model_loader: - kv  37:                      quantize.imatrix.file str              = /models_out/Qwen3-30B-A3B-GGUF/Qwen_Q...
+llama_model_loader: - kv  38:                   quantize.imatrix.dataset str              = /training_data/calibration_datav3.txt
+llama_model_loader: - kv  39:             quantize.imatrix.entries_count i32              = 384
+llama_model_loader: - kv  40:              quantize.imatrix.chunks_count i32              = 209
+llama_model_loader: - type  f32:  241 tensors
+llama_model_loader: - type q8_0:   48 tensors
+llama_model_loader: - type q4_K:  193 tensors
+llama_model_loader: - type q5_K:   48 tensors
+llama_model_loader: - type q6_K:   49 tensors
+llm_load_vocab: special tokens cache size = 26
+llm_load_vocab: token to piece cache size = 0.9311 MB
+llm_load_print_meta: format           = GGUF V3 (latest)
+llm_load_print_meta: arch             = qwen3moe
+llm_load_print_meta: vocab type       = BPE
+llm_load_print_meta: n_vocab          = 151936
+llm_load_print_meta: n_merges         = 151387
+llm_load_print_meta: vocab_only       = 0
+llm_load_print_meta: n_ctx_train      = 32768
+llm_load_print_meta: n_embd           = 2048
+llm_load_print_meta: n_layer          = 48
+llm_load_print_meta: n_head           = 32
+llm_load_print_meta: n_head_kv        = 4
+llm_load_print_meta: n_rot            = 128
+llm_load_print_meta: n_swa            = 0
+llm_load_print_meta: n_swa_pattern    = 1
+llm_load_print_meta: n_embd_head_k    = 128
+llm_load_print_meta: n_embd_head_v    = 128
+llm_load_print_meta: n_gqa            = 8
+llm_load_print_meta: n_embd_k_gqa     = 512
+llm_load_print_meta: n_embd_v_gqa     = 512
+llm_load_print_meta: f_norm_eps       = 0.0e+00
+llm_load_print_meta: f_norm_rms_eps   = 1.0e-06
+llm_load_print_meta: f_clamp_kqv      = 0.0e+00
+llm_load_print_meta: f_max_alibi_bias = 0.0e+00
+llm_load_print_meta: f_logit_scale    = 0.0e+00
+llm_load_print_meta: n_ff             = 6144
+llm_load_print_meta: n_expert         = 128
+llm_load_print_meta: n_expert_used    = 8
+llm_load_print_meta: causal attn      = 1
+llm_load_print_meta: pooling type     = 0
+llm_load_print_meta: rope type        = 2
+llm_load_print_meta: rope scaling     = linear
+llm_load_print_meta: freq_base_train  = 1000000.0
+llm_load_print_meta: freq_scale_train = 1
+llm_load_print_meta: n_ctx_orig_yarn  = 32768
+llm_load_print_meta: rope_finetuned   = unknown
+llm_load_print_meta: ssm_d_conv       = 0
+llm_load_print_meta: ssm_d_inner      = 0
+llm_load_print_meta: ssm_d_state      = 0
+llm_load_print_meta: ssm_dt_rank      = 0
+llm_load_print_meta: model type       = ?B
+llm_load_print_meta: model ftype      = Q4_K - Medium
+llm_load_print_meta: model params     = 30.532 B
+llm_load_print_meta: model size       = 17.347 GiB (4.880 BPW)
+llm_load_print_meta: repeating layers = 16.946 GiB (4.867 BPW, 29.910 B parameters)
+llm_load_print_meta: general.name     = Qwen3 30B A3B
+llm_load_print_meta: BOS token        = 151643 '<|endoftext|>'
+llm_load_print_meta: EOS token        = 151645 '<|im_end|>'
+llm_load_print_meta: PAD token        = 151643 '<|endoftext|>'
+llm_load_print_meta: LF token         = 148848 'ÄĬ'
+llm_load_print_meta: EOT token        = 151645 '<|im_end|>'
+llm_load_print_meta: max token length = 256
+llm_load_print_meta: n_ff_exp         = 768
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 3090 Ti, compute capability 8.6, VMM: yes
+llm_load_tensors: ggml ctx size =    0.51 MiB
+llm_load_tensors: offloading 48 repeating layers to GPU
+llm_load_tensors: offloading non-repeating layers to GPU
+llm_load_tensors: offloaded 49/49 layers to GPU
+llm_load_tensors:        CPU buffer size =   166.92 MiB
+llm_load_tensors:      CUDA0 buffer size = 17596.43 MiB
+...................................................................................................
+llama_new_context_with_model: n_ctx      = 32768
+llama_new_context_with_model: n_batch    = 2048
+llama_new_context_with_model: n_ubatch   = 512
+llama_new_context_with_model: flash_attn = 1
+llama_new_context_with_model: mla_attn   = 0
+llama_new_context_with_model: attn_max_b = 0
+llama_new_context_with_model: fused_moe  = 1
+llama_new_context_with_model: ser        = -1, 0
+llama_new_context_with_model: freq_base  = 1000000.0
+llama_new_context_with_model: freq_scale = 1
+llama_kv_cache_init:      CUDA0 KV buffer size =  3072.00 MiB
+llama_new_context_with_model: KV self size  = 3072.00 MiB, K (f16): 1536.00 MiB, V (f16): 1536.00 MiB
+llama_new_context_with_model:  CUDA_Host  output buffer size =     0.58 MiB
+llama_new_context_with_model:      CUDA0 compute buffer size =   304.75 MiB
+llama_new_context_with_model:  CUDA_Host compute buffer size =    68.01 MiB
+llama_new_context_with_model: graph nodes  = 1878
+llama_new_context_with_model: graph splits = 2
+
+main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_layers = 99, n_threads = 1, n_threads_batch = 1
+```
+
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    0.255 |  2009.10 |    0.918 |   139.50 |
+|   512 |    128 |    512 |    0.243 |  2106.91 |    0.936 |   136.69 |
+|   512 |    128 |   1024 |    0.250 |  2050.52 |    0.977 |   131.04 |
+|   512 |    128 |   1536 |    0.253 |  2022.75 |    1.003 |   127.60 |
+|   512 |    128 |   2048 |    0.265 |  1931.90 |    1.035 |   123.65 |
+|   512 |    128 |   2560 |    0.262 |  1954.45 |    1.058 |   121.03 |
+|   512 |    128 |   3072 |    0.269 |  1903.29 |    1.090 |   117.45 |
+|   512 |    128 |   3584 |    0.272 |  1881.21 |    1.117 |   114.59 |
+|   512 |    128 |   4096 |    0.278 |  1840.59 |    1.143 |   112.02 |
+|   512 |    128 |   4608 |    0.282 |  1816.74 |    1.173 |   109.16 |
+|   512 |    128 |   5120 |    0.289 |  1770.11 |    1.194 |   107.20 |
+|   512 |    128 |   5632 |    0.291 |  1762.16 |    1.235 |   103.62 |
+|   512 |    128 |   6144 |    0.297 |  1722.54 |    1.256 |   101.91 |
+|   512 |    128 |   6656 |    0.302 |  1697.57 |    1.287 |    99.48 |
+|   512 |    128 |   7168 |    0.310 |  1652.41 |    1.313 |    97.52 |
+|   512 |    128 |   7680 |    0.313 |  1635.64 |    1.345 |    95.17 |
+|   512 |    128 |   8192 |    0.320 |  1599.62 |    1.366 |    93.69 |
+|   512 |    128 |   8704 |    0.321 |  1594.68 |    1.400 |    91.44 |
+|   512 |    128 |   9216 |    0.328 |  1562.18 |    1.419 |    90.21 |
+|   512 |    128 |   9728 |    0.333 |  1536.75 |    1.453 |    88.12 |
+|   512 |    128 |  10240 |    0.335 |  1528.06 |    1.475 |    86.79 |
+|   512 |    128 |  10752 |    0.346 |  1481.90 |    1.507 |    84.93 |
+|   512 |    128 |  11264 |    0.347 |  1476.88 |    1.537 |    83.30 |
+|   512 |    128 |  11776 |    0.353 |  1452.17 |    1.562 |    81.96 |
+|   512 |    128 |  12288 |    0.356 |  1436.80 |    1.589 |    80.54 |
+|   512 |    128 |  12800 |    0.363 |  1412.23 |    1.616 |    79.22 |
+|   512 |    128 |  13312 |    0.367 |  1396.25 |    1.645 |    77.83 |
+|   512 |    128 |  13824 |    0.371 |  1379.64 |    1.667 |    76.79 |
+|   512 |    128 |  14336 |    0.375 |  1364.63 |    1.699 |    75.36 |
+|   512 |    128 |  14848 |    0.383 |  1337.10 |    1.720 |    74.40 |
+|   512 |    128 |  15360 |    0.386 |  1325.34 |    1.755 |    72.92 |
+|   512 |    128 |  15872 |    0.394 |  1298.46 |    1.783 |    71.78 |
+|   512 |    128 |  16384 |    0.400 |  1281.11 |    1.812 |    70.63 |
+|   512 |    128 |  16896 |    0.404 |  1267.98 |    1.841 |    69.53 |
+|   512 |    128 |  17408 |    0.410 |  1248.98 |    1.866 |    68.58 |
+|   512 |    128 |  17920 |    0.415 |  1234.86 |    1.894 |    67.57 |
+|   512 |    128 |  18432 |    0.423 |  1209.68 |    1.921 |    66.65 |
+|   512 |    128 |  18944 |    0.424 |  1208.65 |    1.954 |    65.52 |
+|   512 |    128 |  19456 |    0.433 |  1183.41 |    1.979 |    64.69 |
+|   512 |    128 |  19968 |    0.436 |  1175.61 |    2.006 |    63.80 |
+|   512 |    128 |  20480 |    0.437 |  1170.34 |    2.034 |    62.93 |
+|   512 |    128 |  20992 |    0.443 |  1156.61 |    2.064 |    62.02 |
+|   512 |    128 |  21504 |    0.455 |  1124.73 |    2.090 |    61.24 |
+|   512 |    128 |  22016 |    0.457 |  1119.31 |    2.127 |    60.18 |
+|   512 |    128 |  22528 |    0.466 |  1099.39 |    2.161 |    59.23 |
+|   512 |    128 |  23040 |    0.468 |  1092.87 |    2.185 |    58.59 |
+|   512 |    128 |  23552 |    0.472 |  1084.20 |    2.217 |    57.73 |
+|   512 |    128 |  24064 |    0.479 |  1068.27 |    2.247 |    56.96 |
+|   512 |    128 |  24576 |    0.485 |  1054.75 |    2.279 |    56.16 |
+|   512 |    128 |  25088 |    0.489 |  1047.65 |    2.303 |    55.58 |
+|   512 |    128 |  25600 |    0.492 |  1040.04 |    2.336 |    54.80 |
+|   512 |    128 |  26112 |    0.497 |  1030.94 |    2.364 |    54.15 |
+|   512 |    128 |  26624 |    0.504 |  1015.28 |    2.392 |    53.51 |
+|   512 |    128 |  27136 |    0.511 |  1001.21 |    2.423 |    52.83 |
+|   512 |    128 |  27648 |    0.515 |   993.63 |    2.450 |    52.25 |
+|   512 |    128 |  28160 |    0.520 |   984.55 |    2.478 |    51.65 |
+|   512 |    128 |  28672 |    0.528 |   968.98 |    2.509 |    51.01 |
+|   512 |    128 |  29184 |    0.532 |   962.30 |    2.539 |    50.40 |
+|   512 |    128 |  29696 |    0.536 |   955.10 |    2.566 |    49.89 |
+|   512 |    128 |  30208 |    0.538 |   952.18 |    2.596 |    49.31 |
+|   512 |    128 |  30720 |    0.546 |   938.43 |    2.628 |    48.70 |
+|   512 |    128 |  31232 |    0.549 |   932.50 |    2.655 |    48.22 |
+|   512 |    128 |  31744 |    0.556 |   920.87 |    2.687 |    47.64 |
+|   512 |    128 |  32256 |    0.562 |   911.52 |    2.712 |    47.19 |
+
+## `ik_llama.cpp/ik/fattn_mma@056f0818` PR370
+```
+cmake -B build -DGGML_CUDA=ON -DGGML_RPC=OFF -DGGML_BLAS=OFF
+cmake --build build --config Release -j $(nproc)
+
+CUDA_VISIBLE_DEVICE=0 \
+./build/bin/llama-sweep-bench \
+    --model /mnt/astrodata/llm/models/bartowski/Qwen_Qwen3-30B-A3B-GGUF/Qwen_Qwen3-30B-A3B-Q4_K_M.gguf \
+    -fmoe \
+    -fa \
+    -ctk f16 -ctv f16 \
+    -c 32768 \
+    -ngl 99 \
+    --threads 1
+
+llama_model_loader: loaded meta data with 41 key-value pairs and 579 tensors from /mnt/astrodata/llm/models/bartowski/Qwen_Qwen3-30B-A3B-GGUF/Qwen_Qwen3-30B-A3B-Q4_K_M.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = qwen3moe
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Qwen3 30B A3B
+llama_model_loader: - kv   3:                           general.basename str              = Qwen3
+llama_model_loader: - kv   4:                         general.size_label str              = 30B-A3B
+llama_model_loader: - kv   5:                            general.license str              = apache-2.0
+llama_model_loader: - kv   6:                       general.license.link str              = https://huggingface.co/Qwen/Qwen3-30B...
+llama_model_loader: - kv   7:                   general.base_model.count u32              = 1
+llama_model_loader: - kv   8:                  general.base_model.0.name str              = Qwen3 30B A3B Base
+llama_model_loader: - kv   9:          general.base_model.0.organization str              = Qwen
+llama_model_loader: - kv  10:              general.base_model.0.repo_url str              = https://huggingface.co/Qwen/Qwen3-30B...
+llama_model_loader: - kv  11:                               general.tags arr[str,1]       = ["text-generation"]
+llama_model_loader: - kv  12:                       qwen3moe.block_count u32              = 48
+llama_model_loader: - kv  13:                    qwen3moe.context_length u32              = 32768
+llama_model_loader: - kv  14:                  qwen3moe.embedding_length u32              = 2048
+llama_model_loader: - kv  15:               qwen3moe.feed_forward_length u32              = 6144
+llama_model_loader: - kv  16:              qwen3moe.attention.head_count u32              = 32
+llama_model_loader: - kv  17:           qwen3moe.attention.head_count_kv u32              = 4
+llama_model_loader: - kv  18:                    qwen3moe.rope.freq_base f32              = 1000000.000000
+llama_model_loader: - kv  19:  qwen3moe.attention.layer_norm_rms_epsilon f32              = 0.000001
+llama_model_loader: - kv  20:                 qwen3moe.expert_used_count u32              = 8
+llama_model_loader: - kv  21:              qwen3moe.attention.key_length u32              = 128
+llama_model_loader: - kv  22:            qwen3moe.attention.value_length u32              = 128
+llama_model_loader: - kv  23:                      qwen3moe.expert_count u32              = 128
+llama_model_loader: - kv  24:        qwen3moe.expert_feed_forward_length u32              = 768
+llama_model_loader: - kv  25:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  26:                         tokenizer.ggml.pre str              = qwen2
+llama_model_loader: - kv  27:                      tokenizer.ggml.tokens arr[str,151936]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  28:                  tokenizer.ggml.token_type arr[i32,151936]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  29:                      tokenizer.ggml.merges arr[str,151387]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+llama_model_loader: - kv  30:                tokenizer.ggml.eos_token_id u32              = 151645
+llama_model_loader: - kv  31:            tokenizer.ggml.padding_token_id u32              = 151643
+llama_model_loader: - kv  32:                tokenizer.ggml.bos_token_id u32              = 151643
+llama_model_loader: - kv  33:               tokenizer.ggml.add_bos_token bool             = false
+llama_model_loader: - kv  34:                    tokenizer.chat_template str              = {%- if tools %}\n    {{- '<|im_start|>...
+llama_model_loader: - kv  35:               general.quantization_version u32              = 2
+llama_model_loader: - kv  36:                          general.file_type u32              = 15
+llama_model_loader: - kv  37:                      quantize.imatrix.file str              = /models_out/Qwen3-30B-A3B-GGUF/Qwen_Q...
+llama_model_loader: - kv  38:                   quantize.imatrix.dataset str              = /training_data/calibration_datav3.txt
+llama_model_loader: - kv  39:             quantize.imatrix.entries_count i32              = 384
+llama_model_loader: - kv  40:              quantize.imatrix.chunks_count i32              = 209
+llama_model_loader: - type  f32:  241 tensors
+llama_model_loader: - type q8_0:   48 tensors
+llama_model_loader: - type q4_K:  193 tensors
+llama_model_loader: - type q5_K:   48 tensors
+llama_model_loader: - type q6_K:   49 tensors
+llm_load_vocab: special tokens cache size = 26
+llm_load_vocab: token to piece cache size = 0.9311 MB
+llm_load_print_meta: format           = GGUF V3 (latest)
+llm_load_print_meta: arch             = qwen3moe
+llm_load_print_meta: vocab type       = BPE
+llm_load_print_meta: n_vocab          = 151936
+llm_load_print_meta: n_merges         = 151387
+llm_load_print_meta: vocab_only       = 0
+llm_load_print_meta: n_ctx_train      = 32768
+llm_load_print_meta: n_embd           = 2048
+llm_load_print_meta: n_layer          = 48
+llm_load_print_meta: n_head           = 32
+llm_load_print_meta: n_head_kv        = 4
+llm_load_print_meta: n_rot            = 128
+llm_load_print_meta: n_swa            = 0
+llm_load_print_meta: n_swa_pattern    = 1
+llm_load_print_meta: n_embd_head_k    = 128
+llm_load_print_meta: n_embd_head_v    = 128
+llm_load_print_meta: n_gqa            = 8
+llm_load_print_meta: n_embd_k_gqa     = 512
+llm_load_print_meta: n_embd_v_gqa     = 512
+llm_load_print_meta: f_norm_eps       = 0.0e+00
+llm_load_print_meta: f_norm_rms_eps   = 1.0e-06
+llm_load_print_meta: f_clamp_kqv      = 0.0e+00
+llm_load_print_meta: f_max_alibi_bias = 0.0e+00
+llm_load_print_meta: f_logit_scale    = 0.0e+00
+llm_load_print_meta: n_ff             = 6144
+llm_load_print_meta: n_expert         = 128
+llm_load_print_meta: n_expert_used    = 8
+llm_load_print_meta: causal attn      = 1
+llm_load_print_meta: pooling type     = 0
+llm_load_print_meta: rope type        = 2
+llm_load_print_meta: rope scaling     = linear
+llm_load_print_meta: freq_base_train  = 1000000.0
+llm_load_print_meta: freq_scale_train = 1
+llm_load_print_meta: n_ctx_orig_yarn  = 32768
+llm_load_print_meta: rope_finetuned   = unknown
+llm_load_print_meta: ssm_d_conv       = 0
+llm_load_print_meta: ssm_d_inner      = 0
+llm_load_print_meta: ssm_d_state      = 0
+llm_load_print_meta: ssm_dt_rank      = 0
+llm_load_print_meta: model type       = ?B
+llm_load_print_meta: model ftype      = Q4_K - Medium
+llm_load_print_meta: model params     = 30.532 B
+llm_load_print_meta: model size       = 17.347 GiB (4.880 BPW)
+llm_load_print_meta: repeating layers = 16.946 GiB (4.867 BPW, 29.910 B parameters)
+llm_load_print_meta: general.name     = Qwen3 30B A3B
+llm_load_print_meta: BOS token        = 151643 '<|endoftext|>'
+llm_load_print_meta: EOS token        = 151645 '<|im_end|>'
+llm_load_print_meta: PAD token        = 151643 '<|endoftext|>'
+llm_load_print_meta: LF token         = 148848 'ÄĬ'
+llm_load_print_meta: EOT token        = 151645 '<|im_end|>'
+llm_load_print_meta: max token length = 256
+llm_load_print_meta: n_ff_exp         = 768
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 3090 Ti, compute capability 8.6, VMM: yes
+llm_load_tensors: ggml ctx size =    0.51 MiB
+llm_load_tensors: offloading 48 repeating layers to GPU
+llm_load_tensors: offloading non-repeating layers to GPU
+llm_load_tensors: offloaded 49/49 layers to GPU
+llm_load_tensors:        CPU buffer size =   166.92 MiB
+llm_load_tensors:      CUDA0 buffer size = 17596.43 MiB
+...................................................................................................
+llama_new_context_with_model: n_ctx      = 32768
+llama_new_context_with_model: n_batch    = 2048
+llama_new_context_with_model: n_ubatch   = 512
+llama_new_context_with_model: flash_attn = 1
+llama_new_context_with_model: mla_attn   = 0
+llama_new_context_with_model: attn_max_b = 0
+llama_new_context_with_model: fused_moe  = 1
+llama_new_context_with_model: ser        = -1, 0
+llama_new_context_with_model: freq_base  = 1000000.0
+llama_new_context_with_model: freq_scale = 1
+llama_kv_cache_init:      CUDA0 KV buffer size =  3072.00 MiB
+llama_new_context_with_model: KV self size  = 3072.00 MiB, K (f16): 1536.00 MiB, V (f16): 1536.00 MiB
+llama_new_context_with_model:  CUDA_Host  output buffer size =     0.58 MiB
+llama_new_context_with_model:      CUDA0 compute buffer size =   304.75 MiB
+llama_new_context_with_model:  CUDA_Host compute buffer size =    68.01 MiB
+llama_new_context_with_model: graph nodes  = 1878
+llama_new_context_with_model: graph splits = 2
+
+main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_layers = 99, n_threads = 1, n_threads_batch = 1
+```
+
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    0.256 |  2001.93 |    0.940 |   136.11 |
+|   512 |    128 |    512 |    0.240 |  2134.60 |    0.981 |   130.46 |
+|   512 |    128 |   1024 |    0.245 |  2091.45 |    0.981 |   130.42 |
+|   512 |    128 |   1536 |    0.245 |  2087.85 |    0.986 |   129.78 |
+|   512 |    128 |   2048 |    0.257 |  1993.14 |    0.996 |   128.54 |
+|   512 |    128 |   2560 |    0.250 |  2050.10 |    0.995 |   128.67 |
+|   512 |    128 |   3072 |    0.257 |  1995.91 |    1.008 |   127.03 |
+|   512 |    128 |   3584 |    0.258 |  1987.22 |    1.022 |   125.30 |
+|   512 |    128 |   4096 |    0.263 |  1946.15 |    1.036 |   123.54 |
+|   512 |    128 |   4608 |    0.264 |  1938.42 |    1.042 |   122.86 |
+|   512 |    128 |   5120 |    0.267 |  1918.49 |    1.052 |   121.73 |
+|   512 |    128 |   5632 |    0.268 |  1909.64 |    1.066 |   120.04 |
+|   512 |    128 |   6144 |    0.271 |  1890.12 |    1.080 |   118.56 |
+|   512 |    128 |   6656 |    0.274 |  1868.32 |    1.092 |   117.20 |
+|   512 |    128 |   7168 |    0.281 |  1821.31 |    1.102 |   116.14 |
+|   512 |    128 |   7680 |    0.281 |  1825.09 |    1.109 |   115.41 |
+|   512 |    128 |   8192 |    0.287 |  1784.82 |    1.125 |   113.77 |
+|   512 |    128 |   8704 |    0.286 |  1792.48 |    1.135 |   112.81 |
+|   512 |    128 |   9216 |    0.290 |  1766.45 |    1.152 |   111.08 |
+|   512 |    128 |   9728 |    0.293 |  1746.46 |    1.161 |   110.27 |
+|   512 |    128 |  10240 |    0.294 |  1743.47 |    1.169 |   109.52 |
+|   512 |    128 |  10752 |    0.302 |  1694.24 |    1.218 |   105.08 |
+|   512 |    128 |  11264 |    0.301 |  1701.12 |    1.233 |   103.78 |
+|   512 |    128 |  11776 |    0.305 |  1676.91 |    1.221 |   104.84 |
+|   512 |    128 |  12288 |    0.309 |  1659.19 |    1.226 |   104.39 |
+|   512 |    128 |  12800 |    0.313 |  1638.23 |    1.238 |   103.35 |
+|   512 |    128 |  13312 |    0.314 |  1628.03 |    1.234 |   103.75 |
+|   512 |    128 |  13824 |    0.317 |  1615.65 |    1.242 |   103.03 |
+|   512 |    128 |  14336 |    0.319 |  1603.49 |    1.247 |   102.68 |
+|   512 |    128 |  14848 |    0.325 |  1574.84 |    1.253 |   102.16 |
+|   512 |    128 |  15360 |    0.327 |  1564.81 |    1.259 |   101.68 |
+|   512 |    128 |  15872 |    0.331 |  1547.61 |    1.266 |   101.13 |
+|   512 |    128 |  16384 |    0.333 |  1538.40 |    1.273 |   100.58 |
+|   512 |    128 |  16896 |    0.336 |  1522.28 |    1.279 |   100.10 |
+|   512 |    128 |  17408 |    0.341 |  1503.25 |    1.287 |    99.49 |
+|   512 |    128 |  17920 |    0.344 |  1489.38 |    1.292 |    99.06 |
+|   512 |    128 |  18432 |    0.349 |  1466.62 |    1.301 |    98.38 |
+|   512 |    128 |  18944 |    0.349 |  1468.88 |    1.310 |    97.73 |
+|   512 |    128 |  19456 |    0.355 |  1442.42 |    1.316 |    97.24 |
+|   512 |    128 |  19968 |    0.356 |  1438.99 |    1.328 |    96.41 |
+|   512 |    128 |  20480 |    0.356 |  1439.73 |    1.332 |    96.08 |
+|   512 |    128 |  20992 |    0.360 |  1423.74 |    1.340 |    95.51 |
+|   512 |    128 |  21504 |    0.366 |  1397.32 |    1.380 |    92.78 |
+|   512 |    128 |  22016 |    0.367 |  1396.55 |    1.391 |    92.02 |
+|   512 |    128 |  22528 |    0.373 |  1373.81 |    1.386 |    92.37 |
+|   512 |    128 |  23040 |    0.374 |  1370.53 |    1.388 |    92.25 |
+|   512 |    128 |  23552 |    0.377 |  1359.11 |    1.396 |    91.66 |
+|   512 |    128 |  24064 |    0.379 |  1350.00 |    1.395 |    91.78 |
+|   512 |    128 |  24576 |    0.383 |  1336.05 |    1.398 |    91.57 |
+|   512 |    128 |  25088 |    0.385 |  1328.42 |    1.402 |    91.32 |
+|   512 |    128 |  25600 |    0.388 |  1318.46 |    1.405 |    91.13 |
+|   512 |    128 |  26112 |    0.391 |  1309.57 |    1.416 |    90.41 |
+|   512 |    128 |  26624 |    0.394 |  1299.16 |    1.421 |    90.07 |
+|   512 |    128 |  27136 |    0.399 |  1282.71 |    1.433 |    89.31 |
+|   512 |    128 |  27648 |    0.401 |  1277.67 |    1.438 |    88.99 |
+|   512 |    128 |  28160 |    0.407 |  1259.25 |    1.453 |    88.12 |
+|   512 |    128 |  28672 |    0.413 |  1240.48 |    1.456 |    87.92 |
+|   512 |    128 |  29184 |    0.415 |  1234.24 |    1.464 |    87.41 |
+|   512 |    128 |  29696 |    0.416 |  1231.64 |    1.469 |    87.11 |
+|   512 |    128 |  30208 |    0.417 |  1228.70 |    1.477 |    86.63 |
+|   512 |    128 |  30720 |    0.421 |  1215.75 |    1.487 |    86.08 |
+|   512 |    128 |  31232 |    0.424 |  1206.39 |    1.498 |    85.47 |
+|   512 |    128 |  31744 |    0.426 |  1201.22 |    1.501 |    85.26 |
+|   512 |    128 |  32256 |    0.431 |  1189.21 |    1.544 |    82.92 |
+
+</details>
+
 I had not yet run Qwen3-30B-A3B fully offloaded on my local 3090TI 24GB VRAM rig on mainline before, so this is data I have not seen. I have a couple more benchmarks to repeat including my `mix-IQ3_K` quants as well as the hybrid CPU+GPU setup too on the remote thread ripper RTX A6000 to confirm given this PR is largely about TG performance.
 
 A couple observations about this test case:
 
 - I used `-fmoe` with both ik cases as it seems to improve performance over removing it still.
-- I noticed the power draw on my GPU was higher for mainline than this PR.
+- I noticed the power draw on my GPU was higher for mainline than this PR. Power limit is uncapped at full 450 Watts.
 
 #### Mainline btop
 ![mainline-btop-gpu](https://github.com/user-attachments/assets/0d42ded5-c083-4ca2-b0a5-da62f3b4eddf)
@@ -717,17 +1388,17 @@ A couple observations about this test case:
 
 ---
 
-👤 **ubergarm** commented the **2025-05-03** at **22:05:33**:<br>
+👤 **ubergarm** commented on **2025-05-03** at **22:05:33**
 
 ## [ubergarm/Qwen3-30B-A3B-mix-IQ4_K](https://huggingface.co/ubergarm/Qwen3-30B-A3B-GGUF)
 
 ![qwen3-mix-iq4_k-sweep-pr370](https://github.com/user-attachments/assets/1d0b20cf-024f-4d4a-a4fb-4bcfc3115a66)
 
-This is comparing a mix of mostly IQ5_K/IQ4_K layers between ik@main baseline and this ik@PR370 showing improved performance of *both* PP and TG for full GPU offload case.
+This is comparing a mix of mostly IQ5_K/IQ4_K layers between ik@main baseline and this ik@PR370 showing improved performance of *both* PP and TG for full GPU offload case. Sorry colors are not consistent with previous graphs.
 
 <details>
 
-<summary></summary>
+<summary>👈 Logs</summary>
 
 ## `ik_llama.cpp/main@ab7f694b`
 ```
@@ -1165,9 +1836,11 @@ main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 ---
 
-👤 **AesSedai** commented the **2025-05-03** at **22:57:58**:<br>
+👤 **AesSedai** commented on **2025-05-03** at **22:57:58**
 
 I've run the tests for 235B-A22B Q6 as well to compare. I used the Unsloth Q6 quant for both ik_llama.cpp and llama.cpp, the only arg difference in the calls is for ik_llama.cpp's support of `-fmoe -rtr`. Same offload the the rest otherwise.
+
+(also stole the graphing python code from @ubergarm, thanks again!)
 
 <details>
 <summary>ik_llama.cpp ik/fattn_mma</summary>
@@ -2698,11 +3371,13 @@ main: n_kv_max = 16384, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 ---
 
-👤 **ubergarm** commented the **2025-05-03** at **23:17:07**:<br>
+👤 **ubergarm** commented on **2025-05-03** at **23:17:07**
 
-@AesSedai *very nice*! Cool to see you are getting some uplift in PP as well and more linear fall-off for TG. I'm running that quant's little brother on my local rig in hybrid CPU+GPU inference in this test for comparison, but no mainline comparison as its the `-mix-IQ3_K`. 
+@AesSedai *very nice*! Cool to see you are getting some uplift in PP as well as slower fall-off for TG. I'm running that quant's little brother on my local rig in hybrid CPU+GPU inference in this test for comparison, but no mainline comparison as its the `-mix-IQ3_K`. 
 
 Hope to finally get three runs of the hybrid CPU+GPU of the full Q8_0 across both forks before the night it out! If i have any juice left in me I might revisit earlier runs to add in `-ctk q8_0 -ctv q8_0` to see if any uplift for fully offloaded quantized kv-cache.
+
+Sorry again the colors are not similar across all our graphs, but we're doing good! haha...
 
 ## [ubergarm/Qwen3-235B-A22B-mix-IQ3_K](https://huggingface.co/ubergarm/Qwen3-235B-A22B-GGUF)
 
@@ -3202,7 +3877,7 @@ main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 ---
 
-👤 **ubergarm** commented the **2025-05-04** at **01:36:41**:<br>
+👤 **ubergarm** commented on **2025-05-04** at **01:36:41**
 
 ## ubergarm/Qwen3-235B-A22B-Q8_0
 
@@ -3889,7 +4564,7 @@ main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 ---
 
-👤 **ubergarm** commented the **2025-05-04** at **04:41:15**:<br>
+👤 **ubergarm** commented on **2025-05-04** at **04:41:15**
 
 Finally, I also tested this PR to ensure the models were still actually working in addition to being faster. I used this PR + my [ubergarm/Qwen3-30B-A3B-mix-IQ4_K](https://huggingface.co/ubergarm/Qwen3-30B-A3B-GGUF) to vibe code up the imatrix-statistics visualization scripts to parse and and plot data the stats: https://gist.github.com/ubergarm/2aa9327f7b98a9b16fef62b4941c7e76
 
@@ -3897,7 +4572,7 @@ So anecdotally the model still seems to work fine fwiw. Cheers and g'night!
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **06:17:33**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **06:17:33**
 
 Thank you for these results and for testing!
 
@@ -3907,7 +4582,7 @@ In any case, this PR looks like a winner, so merging.
 
 ---
 
-👤 **ubergarm** commented the **2025-05-04** at **17:08:14**:<br>
+👤 **ubergarm** commented on **2025-05-04** at **17:08:14**
 
 Amazing work y'all! I did a little post to let folks know its time to `git pull` and rebuild to take advantage of all the improvements!
 

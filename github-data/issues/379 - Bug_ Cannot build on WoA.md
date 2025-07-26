@@ -1,4 +1,4 @@
-### 🐛 [#379](https://github.com/ikawrakow/ik_llama.cpp/issues/379) - Bug: Cannot build on WoA
+### [Issue #379](https://github.com/ikawrakow/ik_llama.cpp/issues/379) - Bug: Cannot build on WoA
 
 | **Author** | `jdluzen` |
 | :--- | :--- |
@@ -54,9 +54,9 @@ Windows
 
 ---
 
-#### 💬 Conversation
+#### 📌 Conversation
 
-👤 **ikawrakow** commented the **2025-05-05** at **05:08:38**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **05:08:38**
 
 The `ik_llama.cpp` build is less automated than mainline. I think you are the first to try building on Windows for ARM. You may need to manually specify the compiler options to make it work like this
 ```

@@ -1,7 +1,8 @@
-### 🗣️ [#100](https://github.com/ikawrakow/ik_llama.cpp/discussions/100) - New argument / env variable for GGML_SCHED_MAX_COPIES?
+### [Discussion #100](https://github.com/ikawrakow/ik_llama.cpp/discussions/100) - New argument / env variable for GGML_SCHED_MAX_COPIES?
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-10-21 |
 | **Updated** | 2024-10-21 |
 
@@ -15,12 +16,12 @@
 
 #### 🗣️ Discussion
 
-👤 **ikawrakow** replied the **2024-10-21** at **08:29:25**:<br>
+👤 **ikawrakow** commented on **2024-10-21** at **08:29:25**
 
 I haven't looked into this at all. What is it good for?
 
 ---
 
-👤 **Nexesenex** replied the **2024-10-21** at **09:36:22**:<br>
+👤 **Nexesenex** commented on **2024-10-21** at **09:36:22**
 
 It's supposed to go faster inference on multi-GPU I guess. Mainline sets it at 4, I set it at 1, because I didn't notice much improvement back in the days, but I noticed more vram consumption and gpu load.

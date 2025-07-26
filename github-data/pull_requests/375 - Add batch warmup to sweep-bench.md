@@ -1,16 +1,19 @@
-### 🔀 [#375](https://github.com/ikawrakow/ik_llama.cpp/pull/375) - Add batch warmup to sweep-bench
+### [Pull Request #375](https://github.com/ikawrakow/ik_llama.cpp/pull/375) - Add batch warmup to sweep-bench
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/sweep_bench_warmup` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-04 |
 | **Updated** | 2025-05-12 |
+| **Merged** | 2025-05-12 |
 
 ---
 
 #### Description
 
-When using `sweep-bench` on CUDA, often the PP performance for `N_KV = 0` (i.e., first PP run) is lower than the measured PP performance for `N_KV > 0`. My guess is that this is due to having to find and load from the cache of pre-compiled kernels the required once, which may take time that is not negligible compared to the time it takes the compute the batch. For an example, see the graph in PR #374.
+When using `sweep-bench` on CUDA, often the PP performance for `N_KV = 0` (i.e., first PP run) is lower than the measured PP performance for `N_KV > 0`. My guess is that this is due to having to find and load from the cache of pre-compiled kernels the required once, which may take time that is not negligible compared to the time it takes the compute the batch. For an example, see the graph in PR [#374](https://github.com/ikawrakow/ik_llama.cpp/issues/374).
 
 To prevent this misleading result, this PR adds the ability to also use a warm-up run with `n_ubatch` tokens.  The option is off by default as computing a batch on the CPU for a large model can take a significant amount of time (but the measured performance is not affected by having done a batch warmup run). To turn it on, use
 ```
@@ -19,15 +22,15 @@ To prevent this misleading result, this PR adds the ability to also use a warm-u
 
 ---
 
-#### 💬 Conversation
+#### 🔀 Conversation
 
-👤 **saood06** commented the **2025-05-04** at **08:51:18**:<br>
+👤 **saood06** commented on **2025-05-04** at **08:51:18**
 
-Wouldn't it make sense to make this a global warmup option across bench and common (see this commit for when I affected all off them https://github.com/ikawrakow/ik_llama.cpp/commit/370274317b41b426893ff9a8f06030715d1c8a5f )? The only other thing is if you want the warmup MoE optimization of loading in all experts, then we would need to make the way that happens more robust as it is hacky and looks at it being exactly one token and that being the bos.
+Wouldn't it make sense to make this a global warmup option across bench and common (see this commit for when I affected all off them https://github.com/ikawrakow/ik_llama.cpp/commit/370274317b41b426893ff9a8f06030715d1c8a5f )? The only other thing is if you want the warmup MoE optimization of loading in all experts, then we would need to make the way that happens more robust as it is hacky and looks at it being exactly one token and that being the bos (as that would never happen normally), but a full batch is a normal occurence.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **09:24:18**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **09:24:18**
 
 > Wouldn't it make sense to make this a global warmup option across bench and common
 
@@ -35,7 +38,7 @@ It would. The command line option is added to `common`, so the parameter is theo
 
 ---
 
-👤 **saood06** commented the **2025-05-04** at **09:39:56**:<br>
+👤 **saood06** commented on **2025-05-04** at **09:39:56**
 
 > > Wouldn't it make sense to make this a global warmup option across bench and common
 > 
@@ -53,7 +56,7 @@ Yes I agree.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **12:22:35**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **12:22:35**
 
 > Yes but the implementation is done in sweep-bench.cpp not to common.cpp, you just added the command line option there, not the implementation (see the warmup implementation in common.cpp here:
 
@@ -65,7 +68,7 @@ Yes, because I'm not sure what this unified warmup is going to be. If it ends up
 
 ---
 
-👤 **saood06** commented the **2025-05-04** at **12:39:59**:<br>
+👤 **saood06** commented on **2025-05-04** at **12:39:59**
 
 > Yes, because I'm not sure what this unified warmup is going to be. If it ends up being the same or similar enough, one can reuse it in `sweep-bench`. But for now it is best if we don't touch the `common` warmup, thus affecting all examples.
 
@@ -79,7 +82,7 @@ Yes, I often output the json because you can see all the results (and I am famil
 
 ---
 
-👤 **ubergarm** commented the **2025-05-07** at **21:44:58**:<br>
+👤 **ubergarm** commented on **2025-05-07** at **21:44:58**
 
 ## tl;dr;
 :+1: 

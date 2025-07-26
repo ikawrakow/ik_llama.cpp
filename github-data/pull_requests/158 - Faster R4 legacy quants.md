@@ -1,10 +1,13 @@
-### 🔀 [#158](https://github.com/ikawrakow/ik_llama.cpp/pull/158) - Faster R4 legacy quants
+### [Pull Request #158](https://github.com/ikawrakow/ik_llama.cpp/pull/158) - Faster R4 legacy quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/qx_0_r4_avx2` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-22 |
 | **Updated** | 2024-12-22 |
+| **Merged** | 2024-12-22 |
 
 ---
 
