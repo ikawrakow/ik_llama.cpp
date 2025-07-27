@@ -77,9 +77,12 @@ functions.get_weather:0<|tool_call_argument_begin|>
 
 ### DeepSeek R1 Native Format
 
-**Detection Pattern:** `<｜tool▁calls▁begin｜>...<｜tool▁calls▁end｜>`
+**Detection Pattern:** Multiple formats supported with automatic fallback
 
-**Structure:**
+**⚠️ Critical Implementation Note:** DeepSeek R1 models generate different formats depending on context. The parser handles all variants automatically.
+
+#### Format 1: Full Native Format (Primary)
+**Pattern:** `<｜tool▁calls▁begin｜>...<｜tool▁calls▁end｜>`
 ```
 <｜tool▁calls▁begin｜>
 <｜tool▁call▁begin｜>
@@ -91,7 +94,61 @@ function<｜tool▁sep｜>{function_name}
 <｜tool▁calls▁end｜>
 ```
 
-**Example:**
+#### Format 2: Simplified Format (Fallback)
+**Pattern:** `function<{function_name}>`
+```
+function<get_weather>
+```json
+{"location": "Tokyo"}
+```
+```
+
+#### Format 3: Tools Array Format (New - July 2025)
+**Pattern:** `function\n```json\n{"tools": [...]}`
+```
+function
+```json
+{
+  "tools": [
+    {
+      "name": "get_weather",
+      "arguments": {
+        "location": "Tokyo"
+      }
+    },
+    {
+      "name": "Read",
+      "arguments": {
+        "file_path": "/path/to/file.java"
+      }
+    }
+  ]
+}
+```
+```
+
+#### Format 4: XML Wrapped Format (New - July 2025)
+**Pattern:** `<tool_call>function</think>{function_name}\n```json\n{...}\n```</tool_call>`
+```
+<tool_call>
+function</think>Read
+```json
+{
+  "file_path": "/path/to/example.txt"
+}
+```
+</tool_call>
+```
+
+**Notes:**
+- XML wrapper contains function name after `function</think>`
+- Single function call per XML block
+- JSON arguments within ```json``` code blocks
+- Handles reasoning text before function name
+
+**Examples:**
+
+Format 1 (Full):
 ```
 <｜tool▁calls▁begin｜>
 <｜tool▁call▁begin｜>
@@ -103,11 +160,57 @@ function<｜tool▁sep｜>get_weather
 <｜tool▁calls▁end｜>
 ```
 
-**Notes:**
-- Native DeepSeek R1 format ported from original llama.cpp
-- Supports reasoning with `<think>...</think>` tags (automatically extracted)
-- Multiple function calls supported with separate call blocks
-- JSON arguments are contained within markdown code blocks
+Format 2 (Simplified):
+```
+function<Read>
+```json
+{"file_path": "/path/to/file.txt"}
+```
+```
+
+Format 3 (Tools Array):
+```
+function
+```json
+{
+  "tools": [
+    {
+      "name": "Read",
+      "arguments": {
+        "file_path": "/path/to/example/SystemProcessor.java"
+      }
+    },
+    {
+      "name": "Edit", 
+      "arguments": {
+        "file_path": "/path/to/file.java",
+        "old_string": "old code",
+        "new_string": "new code"
+      }
+    }
+  ]
+}
+```
+```
+
+Format 4 (XML Wrapped):
+```
+<tool_call>
+function</think>CompleteTask
+```json
+{
+  "status": "completed"
+}
+```
+</tool_call>
+```
+
+**Implementation Notes:**
+- **Reasoning Support**: All formats support `<think>...</think>` reasoning tags (automatically extracted)
+- **Multiple Tool Calls**: Format 1 & 2 use separate blocks, Format 3 uses array structure, Format 4 uses single XML block
+- **Automatic Detection**: Parser tries formats in order: Format 3 → Format 4 → Format 1 → Format 2
+- **Original llama.cpp Base**: Implementation follows original llama.cpp patterns exactly
+- **Status**: All formats ✅ Working (July 2025 update)
 
 ## OpenAI-Compatible Output
 
@@ -196,14 +299,87 @@ To enable function calling, include the `tools` parameter in your request:
 
 ## Testing
 
-Test files are provided to verify function calling:
-- `test-function-calls.cpp` - Unit tests for the native Kimi-K2 format
-  - Tests native token format parsing
-  - Tests multiple function calls
-  - Tests error handling and malformed input
+Comprehensive test suite for all supported formats:
+
+### Unit Tests
+- **File**: `tests/test-function-calls.cpp`
+- **Coverage**: All supported model formats (Kimi-K2, Qwen3, DeepSeek R1)
+- **Test Types**:
+  - Native format parsing for each model type
+  - Multiple function calls
+  - Error handling and malformed input
+  - Streaming and non-streaming responses
+  - Content extraction and cleaning
+  - OpenAI-compatible output generation
+
+### DeepSeek R1 Specific Tests
+- **Format 1 Tests**: Full native format with separators ✅
+- **Format 2 Tests**: Simplified format without separators ✅ 
+- **Format 3 Tests**: Tools array format ✅ (Fixed July 2025)
+- **Format 4 Tests**: XML wrapped format ✅ (Added July 2025)
+- **Integration Tests**: Server-to-parser call chain verification
+- **Regression Tests**: Ensure existing formats continue working
+
+### Running Tests
+```bash
+# Build tests
+cd build && make test-function-calls -j$(nproc)
+
+# Run all function call tests
+./bin/test-function-calls
+
+# Run DeepSeek R1 specific tests
+./bin/test-function-calls | grep -E "(DeepSeek|tool_calls_count)"
+
+# Check Format 3 specific issues
+./bin/test-function-calls | grep -A5 -B5 "Real failing format"
+```
+
+### Test Status
+- **Kimi-K2**: ✅ All tests passing
+- **Qwen3 XML**: ✅ All tests passing  
+- **DeepSeek R1 Format 1 & 2**: ✅ All tests passing
+- **DeepSeek R1 Format 3**: ✅ All tests passing (Fixed July 2025)
+- **DeepSeek R1 Format 4**: ✅ All tests passing (Added July 2025)
 
 ## File Structure
 
-- `function_calls.hpp` - Parser implementation for native Kimi-K2 format
-- `utils.hpp` - Integration with server (includes function_calls.hpp)
-- `server.cpp` - Response formatting and content filtering
+### Server Integration
+- **`examples/server/server.cpp`** - Main server entry point, calls `parse_chat_message_incremental()`
+- **`examples/server/function_calls.hpp`** - Server-side parser creation and integration
+- **`examples/server/utils.hpp`** - Server utilities (includes function_calls.hpp)
+
+### Core Parsing Engine  
+- **`common/chat-parser.cpp`** - Main parser routing, delegates to model-specific parsers
+- **`common/chat-parser.h`** - Parser interface and JSON parsing infrastructure
+- **`common/chat.cpp`** - Model-specific parsing implementations:
+  - `common_chat_parse_kimi_k2()` - Kimi-K2 native format
+  - `common_chat_parse_qwen3()` - Qwen3 XML format  
+  - `common_chat_parse_deepseek_r1()` - DeepSeek R1 multiple formats
+  - `parse_deepseek_r1_tools_array()` - Format 3 tools array parser
+  - `parse_deepseek_r1_xml_wrapped()` - Format 4 XML wrapper parser
+- **`common/chat.h`** - Function declarations and model detection
+
+### Testing
+- **`tests/test-function-calls.cpp`** - Comprehensive unit tests for all formats
+- **`tests/get-model.cpp`** - Test utilities for model loading
+
+### Integration Flow
+```
+server.cpp:2832
+  ↓ parse_chat_message_incremental(generated_text, false, modelname)
+function_calls.hpp:94-95  
+  ↓ common_chat_msg_parser.parse()
+chat-parser.cpp:140
+  ↓ model detection → specific parser
+chat.cpp
+  ↓ common_chat_parse_deepseek_r1() / kimi_k2() / qwen3()
+  ↓ Format detection → regex matching → JSON parsing → tool_calls array
+```
+
+### Key Implementation Files
+- **DeepSeek R1 Format 3**: `common/chat.cpp:291-332` (`parse_deepseek_r1_tools_array`)
+- **DeepSeek R1 Format 4**: `common/chat.cpp:335-374` (`parse_deepseek_r1_xml_wrapped`)
+- **Exception handling**: `common/chat.cpp:222-289` (Format 3 → 4 → 1 → 2 fallback chain)
+- **Model detection**: `common/chat.cpp` (`is_deepseek_r1_model`, `is_qwen3_model`, etc.)
+- **Comprehensive tests**: `tests/test-function-calls.cpp` (All formats with TDD coverage)
