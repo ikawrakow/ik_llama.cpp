@@ -3581,16 +3581,16 @@ static bool llama_kv_cache_init(
             //LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
             if (cparams.flash_attn) {
                 ggml_tensor * kv = ggml_new_tensor_2d(ctx, cache.type_k, kv_lora_rank + n_embd_head_qk_rope, kv_size);
-                ggml_format_name(kv, "%s.cache_k_l%d", model.name.c_str(), i);
+                ggml_format_name(kv, "cache_k_l%d", i);
                 cache.k_l.push_back(kv);
             } else {
                 auto kv_type = cparams.mla_attn == 1 ? cache.type_k : cache.type_v;
                 ggml_tensor * kv = ggml_new_tensor_2d(ctx, kv_type, kv_lora_rank + n_embd_head_qk_rope, kv_size);
-                ggml_format_name(kv, "%s.cache_k_l%d", model.name.c_str(), i);
+                ggml_format_name(kv, "cache_k_l%d", i);
                 cache.k_l.push_back(kv);
                 if (cparams.mla_attn == 1) {
                     ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_v, kv_lora_rank*kv_size);
-                    ggml_format_name(kvt, "%s.cache_v_l%d", model.name.c_str(), i);
+                    ggml_format_name(kvt, "cache_v_l%d", i);
                     cache.v_l.push_back(kvt);
                 }
             }
@@ -3599,8 +3599,8 @@ static bool llama_kv_cache_init(
         else {
             k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
             v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
-            ggml_format_name(k, "%s.cache_k_l%d", model.name.c_str(), i);
-            ggml_format_name(v, "%s.cache_v_l%d", model.name.c_str(), i);
+            ggml_format_name(k, "cache_k_l%d", i);
+            ggml_format_name(v, "cache_v_l%d", i);
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
         }
@@ -7471,7 +7471,7 @@ static bool llm_load_tensors(
 
                     // output
                     model.output_norm = create_tensor(ctx_output,       tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-                    model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                    model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED); 
 
                     // if output is NULL, init from the input tok embed
                     if (model.output == NULL) {
@@ -7480,7 +7480,7 @@ static bool llm_load_tensors(
 
                     for (int i = 0; i < n_layer; ++i) {
 			ggml_context * ctx_layer = ctx_for_layer(i);
-                        ggml_context * ctx_split = ctx_for_layer_split(i);
+                        ggml_context * ctx_split = ctx_for_layer_split(i);			
 
                         auto & layer = model.layers[i];
                         const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(i);
@@ -7492,7 +7492,7 @@ static bool llm_load_tensors(
 
                         if (n_head_kv == 0 && n_head > 0) {
                             // linear attention for DeciLMCausalModel
-                            layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+                            layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});                       
 			    layer.wo = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
                         }
                         else if (n_head_kv > 0) {
@@ -7505,8 +7505,8 @@ static bool llm_load_tensors(
                         }
 
                         // optional bias tensors
-
-
+			
+			
                         layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd},     llama_model_loader::TENSOR_NOT_REQUIRED);
                         layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
                         layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_embd_gqa}, llama_model_loader::TENSOR_NOT_REQUIRED);
