@@ -1,14 +1,17 @@
-### 🔀 [#112](https://github.com/ikawrakow/ik_llama.cpp/pull/112) - Faster MoE inference
+## 🔀 [Pull Request #112](https://github.com/ikawrakow/ik_llama.cpp/pull/112) - Faster MoE inference
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/multi_add` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-31 |
 | **Updated** | 2025-06-23 |
+| **Merged** | 2024-10-31 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR
 * Adds a new op `GGML_MULTI_ADD` used to sum up the contributions of the selected experts. It results in, e.g., a 7% improvement of token generation speed for Granite-1B-MoE on CUDA (RTX-4080).
@@ -16,9 +19,9 @@ This PR
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **Nexesenex** commented the **2025-06-23** at **12:59:59**:<br>
+👤 **Nexesenex** commented on **2025-06-23** at **12:59:59**
 
 Hey IK.
 
@@ -35,11 +38,17 @@ Hey IK.
 
 What of the case if expert_used >= 3?
 
-For example, on Mistral 8x22b, there's a perplexity benefit to use 3 experts instead of 2 (-2% PPL 512).
+For example, on Mixtral 8x22b, there's a perplexity benefit to use 3 experts instead of 2 (-2% PPL 512).
 
 ---
 
-👤 **Nexesenex** commented the **2025-06-23** at **13:08:58**:<br>
+👤 **ikawrakow** commented on **2025-06-23** at **13:05:43**
+
+Well, if it is not 1 or 2, then we handle it via `multi_add`, which handles adding together any number of contributions.
+
+---
+
+👤 **Nexesenex** commented on **2025-06-23** at **13:08:58**
 
 Oh silly me, I just read too fast the code, I understand now.
 Sorry!

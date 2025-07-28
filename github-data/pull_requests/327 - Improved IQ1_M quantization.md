@@ -1,14 +1,17 @@
-### 🔀 [#327](https://github.com/ikawrakow/ik_llama.cpp/pull/327) - Improved IQ1_M quantization
+## 🔀 [Pull Request #327](https://github.com/ikawrakow/ik_llama.cpp/pull/327) - Improved IQ1_M quantization
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/improve_iq1m` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-13 |
 | **Updated** | 2025-04-13 |
+| **Merged** | 2025-04-13 |
 
 ---
 
-#### Description
+## 📄 Description
 
 I was experimenting with LlaMA-4-Scout quantization and was bothered by the extremely long quantization time of `IQ1_M`, so looked into speeding things up.
 

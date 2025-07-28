@@ -1,4 +1,4 @@
-### 📝 [#380](https://github.com/ikawrakow/ik_llama.cpp/issues/380) - Drop at the start of generation
+## 📌 [Issue #380](https://github.com/ikawrakow/ik_llama.cpp/issues/380) - Drop at the start of generation
 
 | **Author** | `intulint` |
 | :--- | :--- |
@@ -8,7 +8,7 @@
 
 ---
 
-#### Description
+## 📄 Description
 
 After the generation starts, the server crashes. This only happens on the Qwen3-30B-A3B, and I checked different quant. Regular dense models work, including other dense qwen3. 
 What could be the problem? I liked the acceleration in dense models, I thought moe would fly. 
@@ -23,15 +23,15 @@ cmake --build ./build --config Release -j 16
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-05** at **05:12:28**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **05:12:28**
 
 Can you post the output of the above commands (including the `cmake` commands)? Thanks.
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **10:10:19**:<br>
+👤 **intulint** commented on **2025-05-05** at **10:10:19**
 
 Sure, but it turned out to be a lot of text. I also noticed that it takes a long time to assemble in a single thread of unicode.cpp
   unicode-data.cpp. I don't know if this is normal or not.
@@ -1575,7 +1575,7 @@ PS C:\neuro\ik_llama.cpp\build\bin\Release>
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **10:14:49**:<br>
+👤 **intulint** commented on **2025-05-05** at **10:14:49**
 
 Even the benchmark crashes during generation. I don't know what the problem is, but it seems to be related to what happens during generation.
 
@@ -1703,7 +1703,7 @@ PS C:\neuro\ik_llama.cpp\build\bin\Release>
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **10:22:33**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **10:22:33**
 
 Can you try running with `-t 8`?
 
@@ -1711,15 +1711,7 @@ If that works, try also adding `-fa -rtr -fmoe`.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **10:22:33**:<br>
-
-Can you try running with `-t 8`?
-
-If that works, try also adding `-fa -rtr`.
-
----
-
-👤 **intulint** commented the **2025-05-05** at **10:42:45**:<br>
+👤 **intulint** commented on **2025-05-05** at **10:42:45**
 
 8 cores make no difference.
 -fa -rtr -fmoe Finally it works, but I noticed that every time before writing a comma the generation stops for half a second. The first time I see this. 
@@ -2289,7 +2281,7 @@ srv  log_server_r: request: POST /v1/chat/completions 127.0.0.1 200
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **11:00:59**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **11:00:59**
 
 So, with `-rtr -fa -fmoe` it works, but TG is slow (slower than `llama.cpp`). How much slower?
 What about prompt processing, or when you have a few thousand tokens in the KV cache?
@@ -2299,13 +2291,13 @@ Without these flags it does not work. If you try `-rtr -fmoe` and `-fa -fmoe` se
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **11:05:55**:<br>
+👤 **intulint** commented on **2025-05-05** at **11:05:55**
 
 The speeds are in my message above, it is of course long, but I tried to give all the information
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **11:15:26**:<br>
+👤 **intulint** commented on **2025-05-05** at **11:15:26**
 
 -fa -fmoe  - works, but also pauses before displaying commas. The speed is also low
 
@@ -2316,7 +2308,7 @@ INFO [           print_timings] generation eval time =   40935.66 ms /   426 run
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **11:15:51**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **11:15:51**
 
 Ah, OK. I see
 * `ik_llama.cpp`: PP = 76.3 t/s (512 tokens), TG = 11.4 t/s (647 tokens)
@@ -2326,7 +2318,7 @@ Correct? I think it would be more fair to compare for the same (or at least simi
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **11:35:12**:<br>
+👤 **intulint** commented on **2025-05-05** at **11:35:12**
 
 llama.cpp ~ 1000 - 500
 prompt eval time =   35744.63 ms /  1053 tokens (   33.95 ms per token,    29.46 tokens per second)
@@ -2339,7 +2331,7 @@ INFO [           print_timings] generation eval time =   40472.90 ms /   422 run
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **11:41:03**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **11:41:03**
 
 OK, thanks. I'll look into the failure without flash attention.
 
@@ -2349,13 +2341,13 @@ Sorry for asking, but in what language is your conversation? I'm asking because 
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **11:43:33**:<br>
+👤 **intulint** commented on **2025-05-05** at **11:43:33**
 
 This is a good question, I somehow didn't pay attention to what language the pauses in generation are in. Usually Russian, but also English. I'll check now. We need generation in English, right? Or is it important that the entire context is in one language?
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **11:46:02**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **11:46:02**
 
 > Or is it important that the entire context is in one language?
 
@@ -2363,25 +2355,25 @@ I don't know. Just looking for clues what could be slowing it down.
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **11:54:19**:<br>
+👤 **intulint** commented on **2025-05-05** at **11:54:19**
 
 I launched it only in English and looked more closely, a pause in generation appears after or before the comma is displayed. It lasts a noticeable fraction of a second, and generation continues. Usually in such places - "Okay, the", "So, if", "than B, the"
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **11:56:28**:<br>
+👤 **intulint** commented on **2025-05-05** at **11:56:28**
 
 To avoid confusion, I checked in 2 frontends. I noticed pauses only on commas.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **11:57:24**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **11:57:24**
 
 Interesting. I don't observe such effects on my Linux box. Are the sampling parameters exactly the same?
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **12:01:40**:<br>
+👤 **intulint** commented on **2025-05-05** at **12:01:40**
 
 In the native front the servers are standard as far as I understand. I only changed the max tokens when measuring the speed. It didn't affect the pauses.
 
@@ -2391,13 +2383,13 @@ In the native front the servers are standard as far as I understand. I only chan
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **12:16:22**:<br>
+👤 **intulint** commented on **2025-05-05** at **12:16:22**
 
 Maybe it's a compiler version? I don't know much, but as I understand it, a fresh one was used during assembly. I remember there were messages during assembly about changing the format of variables and that data loss could occur.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **12:17:11**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **12:17:11**
 
 For reference, here is what I get on my vanilla AVX2 Linux box using 8 threads with the commands
 ```
@@ -2427,19 +2419,19 @@ Not sure how to debug. I don't have access to a Windows box.
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **12:23:26**:<br>
+👤 **intulint** commented on **2025-05-05** at **12:23:26**
 
 Got it. I'll try to figure out how and by how much to downgrade the compiler, maybe that will help. If not, I don't know what to do next, I'll run it with llama.cpp.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **12:31:36**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **12:31:36**
 
 You can try building with `GCC or clang`. I cannot give you instructions how one does that as it is a long time since I last did that, so I have forgotten. But IIRC, the GCC build was running ~40% faster than the MSVC build. It wasn't an LLM, but it did involve algorithms with heavy number crunching. It must have been around 2017-2018, so don't know if MSVC has improved since then.
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **12:33:50**:<br>
+👤 **intulint** commented on **2025-05-05** at **12:33:50**
 
 >Is the llama.cpp build done with MSVC or with GCC/clang?
 
@@ -2460,33 +2452,13 @@ PS C:\neuro\ik_llama.cpp\build\bin\Release> .\llama-sweep-bench.exe -m F:\llm\Qw
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **12:33:50**:<br>
-
->Is the llama.cpp build done with MSVC or with GCC/clang?
-I have written a script that downloads the latest official releases; I have never compiled such large projects myself before.
-
-By the way, yes, we found the parameters under which it starts.
-PS C:\neuro\ik_llama.cpp\build\bin\Release> .\llama-sweep-bench.exe -m F:\llm\Qwen3-30B-A3B-Q5_K_M.gguf -c 4096 -t 8 -fa -fmoe
-|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
-|-------|--------|--------|----------|----------|----------|----------|
-|   512 |    128 |      0 |    9.384 |    54.56 |    8.596 |    14.89 |
-|   512 |    128 |    512 |   10.704 |    47.83 |    8.700 |    14.71 |
-|   512 |    128 |   1024 |   10.833 |    47.26 |    8.572 |    14.93 |
-|   512 |    128 |   1536 |   11.697 |    43.77 |    8.849 |    14.47 |
-|   512 |    128 |   2048 |   12.257 |    41.77 |    9.372 |    13.66 |
-|   512 |    128 |   2560 |   13.290 |    38.53 |    9.859 |    12.98 |
-|   512 |    128 |   3072 |   14.514 |    35.28 |   11.724 |    10.92 |
-|   512 |    128 |   3584 |   14.406 |    35.54 |   10.795 |    11.86 |
-
----
-
-👤 **intulint** commented the **2025-05-05** at **12:35:11**:<br>
+👤 **intulint** commented on **2025-05-05** at **12:35:11**
 
 Got it, I'll try it in the evening if I figure it out.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **12:46:18**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **12:46:18**
 
 You didn't say what your CPU was, so here another reference point from me on a more recent CPU (Ryzen-7950X). Again using 8 threads to be comparable to yours, same command as above:
 
@@ -2531,13 +2503,13 @@ In comparison, mainline `llama.cpp` on the same computer (just pulled and rebuil
 
 ---
 
-👤 **intulint** commented the **2025-05-05** at **12:59:45**:<br>
+👤 **intulint** commented on **2025-05-05** at **12:59:45**
 
 Ah, indeed. This is an assembly on an old server processor 1660v4 with 4 memory channels, 32 GB in total. The speeds during generation are quite good, since the memory gives somewhere around 55 GB/s. Of course, this is not comparable with modern processors.
 
 ---
 
-👤 **saood06** commented the **2025-05-05** at **22:30:50**:<br>
+👤 **saood06** commented on **2025-05-05** at **22:30:50**
 
 > You can try building with `GCC or clang`. I cannot give you instructions how one does that as it is a long time since I last did that, so I have forgotten. 
 
@@ -2545,7 +2517,7 @@ The easiest way I found to use non MSVC to compile this on Windows was with http
 
 ---
 
-👤 **alex1284B** commented the **2025-05-14** at **16:37:33**:<br>
+👤 **alex1284B** commented on **2025-05-14** at **16:37:33**
 
 I think I have a similar problem, Qwen3 does not produce valid output after two lines of tokens, I tried different quantz IQ_K Q6, the same problems.  But Qwen2.5 is fine. Base llama.cpp works fine  also. Linux, only CPU.
 I'm not sure but the line of samplers is different than base llama.cpp
@@ -2717,7 +2689,7 @@ llama_print_timings:       total time =   61937,29 ms /  1527  tokens`
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-14** at **16:57:33**:<br>
+👤 **ikawrakow** commented on **2025-05-14** at **16:57:33**
 
 @alex1284B 
 
@@ -2725,12 +2697,12 @@ I tried your prompt and I see that it does not work. But of you add `-fa -fmoe`,
 
 ---
 
-👤 **alex1284B** commented the **2025-05-14** at **17:23:47**:<br>
+👤 **alex1284B** commented on **2025-05-14** at **17:23:47**
 
 Thank you, I probably missed these options for starting. My bad.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-25** at **07:10:25**:<br>
+👤 **ikawrakow** commented on **2025-05-25** at **07:10:25**
 
-Closed via #420
+Closed via [#420](https://github.com/ikawrakow/ik_llama.cpp/issues/420)

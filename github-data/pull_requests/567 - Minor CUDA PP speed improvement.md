@@ -1,14 +1,17 @@
-### 🔀 [#567](https://github.com/ikawrakow/ik_llama.cpp/pull/567) - Minor CUDA PP speed improvement
+## 🔀 [Pull Request #567](https://github.com/ikawrakow/ik_llama.cpp/pull/567) - Minor CUDA PP speed improvement
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/improve_mmq` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-01 |
 | **Updated** | 2025-07-02 |
+| **Merged** | 2025-07-02 |
 
 ---
 
-#### Description
+## 📄 Description
 
 I was actually trying to improve MMQ performance for quants with a block-size of 16, but ended up with a small improvement of the MMQ kernel for blocks of 32. Just 1-2% kind of improvement, so nothing earth shattering.
 
@@ -19,9 +22,9 @@ Here a `sweep-bench` graph for LlaMA-3.1-8B on RTX-4080 for `Q4_0` and `IQ4_KS`.
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **Nexesenex** commented the **2025-07-02** at **03:05:58**:<br>
+👤 **Nexesenex** commented on **2025-07-02** at **03:05:58**
 
 No problem on my side on Miqu Q5_K_M (full offload w/MMQ on 3 GPUs) and Wizard 8x22b IQ3_S mix (same test) after adapting this PR to Croco.cpp (mainline's fork).
 Perfs are similar, with maybe a 0.5-1% bonus (still in the margin of variation of my bench results, but not downward, upward).
@@ -32,7 +35,7 @@ such as iq4_xs and iq4_nl?
 
 ---
 
-👤 **ikawrakow** commented the **2025-07-02** at **07:11:23**:<br>
+👤 **ikawrakow** commented on **2025-07-02** at **07:11:23**
 
 > Can the iq4_ks versant of that PR be valid on the other quants' MMQ kernels
 

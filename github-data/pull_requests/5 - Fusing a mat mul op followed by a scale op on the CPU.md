@@ -1,14 +1,16 @@
-### 🔀 [#5](https://github.com/ikawrakow/ik_llama.cpp/pull/5) - Fusing a mat mul op followed by a scale op on the CPU
+## 🔀 [Pull Request #5](https://github.com/ikawrakow/ik_llama.cpp/pull/5) - Fusing a mat mul op followed by a scale op on the CPU
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `ik/fuse_mul_mat_scale` |
+| **Target Branch** | `main` |
 | **Created** | 2024-07-27 |
 | **Updated** | 2025-02-08 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This is useful for Bitnet here we have almost all matrix multiplications be followed by scale operations.
 As a result, we get a ~2% boost in Bitnet PP performance.
@@ -19,8 +21,8 @@ Given that Bitnet is just a niche thing for now, I'll just leave it on a draft P
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-02-08** at **14:27:07**:<br>
+👤 **ikawrakow** commented on **2025-02-08** at **14:27:07**
 
 I don't think I'll ever merge this.

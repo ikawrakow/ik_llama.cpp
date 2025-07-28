@@ -1,14 +1,17 @@
-### 🐛 [#325](https://github.com/ikawrakow/ik_llama.cpp/pull/325) - Fix KLD precision
+## 🔀 [Pull Request #325](https://github.com/ikawrakow/ik_llama.cpp/pull/325) - Fix KLD precision
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_kld` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-12 |
 | **Updated** | 2025-04-13 |
+| **Merged** | 2025-04-12 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Some people insist that perplexity tells us nothing, and that [Kullback-Leibler Divergence](https://en.wikipedia.org/wiki/Kullback–Leibler_divergence) (KLD), along with the other statistics computed by `llama-perplexity` with the `--kl-divergence` option, are the one and only one true measure of quantization accuracy. Computing KLD requires 1st running the `llama-perplexity` tool with `--kl-divergence-base` to compute the logits of the base model, which are then used to compute KLD and other token probability statistics in a subsequent run with a quantized (or otherwise approximate) model. The base model logits file is quite large as it stores the log-probabilities for each evaluated token for all tokens in the vocabulary. Hence, when I added KLD capabilities to `llama.cpp` with [this](https://github.com/ggml-org/llama.cpp/pull/5076) and [this](https://github.com/ggml-org/llama.cpp/pull/5081) PRs, I used 16-bit precision to store the logits of the base model, setting the minimum logit to `std::max(min_logit, max_logit - 16). That was adequate for the models available at the time. 
 
@@ -18,9 +21,9 @@ A lot of talk for this one-liner PR, which fixes the problem.
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ubergarm** commented the **2025-04-13** at **15:20:53**:<br>
+👤 **ubergarm** commented on **2025-04-13** at **15:20:53**
 
 > I was concerned that other statistics will be influenced as well, but it looks like it is only PPL that becomes wrong.
 
@@ -35,12 +38,12 @@ Thanks!
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-13** at **15:35:00**:<br>
+👤 **ikawrakow** commented on **2025-04-13** at **15:35:00**
 
 The PR does not affect `imatrix`. It affects `llama-perplexity` when run with `--kl-divergence-base X --kl-divergence`. This computes KL-Divergence and various other token probability statistics between the current model and the token probabilities for the base model stored in `X` and computed in a previous run of `llama-perplexity`.
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-13** at **15:38:16**:<br>
+👤 **ikawrakow** commented on **2025-04-13** at **15:38:16**
 
 Also, I don't know how it affects other models. But for LLaMA-4-Scout I observed a nearly 1% difference without this PR.

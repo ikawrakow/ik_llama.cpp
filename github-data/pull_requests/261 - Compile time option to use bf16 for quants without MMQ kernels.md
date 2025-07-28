@@ -1,14 +1,17 @@
-### 🔀 [#261](https://github.com/ikawrakow/ik_llama.cpp/pull/261) - Compile time option to use bf16 for quants without MMQ kernels
+## 🔀 [Pull Request #261](https://github.com/ikawrakow/ik_llama.cpp/pull/261) - Compile time option to use bf16 for quants without MMQ kernels
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/use_bf16_when_no_mmq` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-17 |
 | **Updated** | 2025-03-18 |
+| **Merged** | 2025-03-18 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The `IQ2_KS, IQ2_K, ..., IQ6_K` quantization types do not have MMQ kernels, so matrix multiplications for model weights quantized with these types are done via dequantization to `fp16` and `cublasGemmEx` GEMM using `fp16` precision. For the DeepSeek series of MoE models this leads to NaNs.
 
@@ -24,15 +27,15 @@ I have tested with DeepSeek-Lite quantized with `IQ4_KSS` and `IQ4_K`. In both c
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **davidsyoung** commented the **2025-03-17** at **23:38:28**:<br>
+👤 **davidsyoung** commented on **2025-03-17** at **23:38:28**
 
 Awesome! Will re-quant over night and test tomorrow!
 
 ---
 
-👤 **saood06** commented the **2025-03-17** at **23:43:23**:<br>
+👤 **saood06** commented on **2025-03-17** at **23:43:23**
 
 > Awesome! Will re-quant over night and test tomorrow!
 
@@ -40,6 +43,6 @@ In case you still have the old quants, you can just use those with the new code 
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-17** at **23:45:25**:<br>
+👤 **davidsyoung** commented on **2025-03-17** at **23:45:25**
 
 Unfortunately I don’t! My cache drive is limited so I tend to delete pretty soon.

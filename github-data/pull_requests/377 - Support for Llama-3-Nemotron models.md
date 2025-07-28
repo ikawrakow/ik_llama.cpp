@@ -1,14 +1,17 @@
-### 🔀 [#377](https://github.com/ikawrakow/ik_llama.cpp/pull/377) - Support for Llama-3-Nemotron models
+## 🔀 [Pull Request #377](https://github.com/ikawrakow/ik_llama.cpp/pull/377) - Support for Llama-3-Nemotron models
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/deci_support` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-04 |
 | **Updated** | 2025-05-09 |
+| **Merged** | 2025-05-09 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Port of https://github.com/ggml-org/llama.cpp/pull/10669
 
@@ -16,9 +19,9 @@ It compiles, have not tested yet. Testers welcome, but will try to test myself l
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **saood06** commented the **2025-05-04** at **12:31:11**:<br>
+👤 **saood06** commented on **2025-05-04** at **12:31:11**
 
 I downloaded the source model and was able to convert it with `convert_hf_to_gguf.py` but I hit an error when attempting to quantize it.
 
@@ -26,19 +29,21 @@ I downloaded the source model and was able to convert it with `convert_hf_to_ggu
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **12:38:47**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **12:38:47**
 
 Well, you see what `n_attention_wv` is and add another rule for accepting it. This is because of the layers that don't have the usual attention mechanism, I guess.
 
 ---
 
-👤 **saood06** commented the **2025-05-04** at **13:02:38**:<br>
+👤 **saood06** commented on **2025-05-04** at **13:02:38**
 
 It's quantizing now.
 
+Edit: I guessed on the value for the big one based on the difference in number of layers between them.
+
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **13:10:46**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **13:10:46**
 
 Apart from the 253B version that is beyond my reach, this will add support for this model: https://huggingface.co/nvidia/Llama-3_1-Nemotron-51B-Instruct ?
 
@@ -46,7 +51,7 @@ What about https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1 which s
 
 ---
 
-👤 **saood06** commented the **2025-05-04** at **13:14:52**:<br>
+👤 **saood06** commented on **2025-05-04** at **13:14:52**
 
 > Apart from the 253B version that is beyond my reach
 
@@ -62,7 +67,7 @@ That one should work (maybe the convert python might not?) but you may need to a
 
 ---
 
-👤 **saood06** commented the **2025-05-04** at **13:18:16**:<br>
+👤 **saood06** commented on **2025-05-04** at **13:18:16**
 
 It is coherent in the cli.
 
@@ -70,11 +75,29 @@ Will sweep-bench it later.
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-05-04** at **14:02:57**: 💬 `COMMENTED`
+👤 **ikawrakow** started a conversation on `src/llama.cpp` on **2025-05-04** at **13:23:29**
+
+I guess this is copy-pasted from `build_llama()`, which also builds the graph for the Granite models. But do we expect Nemotron to have something to do with Granite? If not, it is better to remove it.
+
+> 👤 **saood06** replied on **2025-05-04** at **14:19:07**
+> 
+> Sorry I didn't notice these. They are in the original PR as well (which I cherry-picked as it was from when they hadn't diverged too much), I'll take them out. Right now I'm working on the larger model as that can't be cherry-picked
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **14:05:15**:<br>
+👤 **ikawrakow** started a conversation on `src/llama.cpp` on **2025-05-04** at **13:23:50**
+
+Same comment as above
+
+---
+
+👤 **ikawrakow** started a conversation on `src/llama.cpp` on **2025-05-04** at **13:24:25**
+
+Does it apply to Nemotron?
+
+---
+
+👤 **ikawrakow** commented on **2025-05-04** at **14:05:15**
 
 I get this error when I try to run the [49B model](https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1) (after adjusting the `n_attention_vw` check):
 ```
@@ -83,23 +106,13 @@ llama_model_load: error loading model: error loading model vocabulary: cannot fi
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **14:16:43**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **14:16:43**
 
 Works if I convert with mainline, so something is missing in the conversion script.
 
 ---
 
-👤 **saood06** submitted a review the **2025-05-04** at **14:19:07**: 💬 `COMMENTED`
-
----
-
-👤 **saood06** commented during a code review the **2025-05-04** at **14:19:07** on `src/llama.cpp`:<br>
-
-Sorry I didn't notice these. They are in the original PR as well (which I cherry-picked as it was from when they hadn't diverged too much), I'll take them out. Right now I'm working on the larger model as that can't be cherry-picked
-
----
-
-👤 **saood06** commented the **2025-05-04** at **14:19:52**:<br>
+👤 **saood06** commented on **2025-05-04** at **14:19:52**
 
 > Works if I convert with mainline, so something is missing in the conversion script.
 
@@ -107,15 +120,15 @@ Thanks for testing that, I'll look into the script.
 
 ---
 
-👤 **saood06** commented the **2025-05-04** at **15:23:42**:<br>
+👤 **saood06** commented on **2025-05-04** at **15:23:42**
 
 @Lissanro
 
-Can you try Llama-3_1-Nemotron-Ultra-253B now, the n_attention_vw check may be broken but everything else I think should be fine.
+Can you try Llama-3_1-Nemotron-Ultra-253B now?
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **15:29:05**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **15:29:05**
 
 > the n_attention_vw check may be broken but everything else I think should be fine.
 
@@ -123,7 +136,7 @@ Oh, I forgot to comment on that one. I solved it for the 49B model by simply acc
 
 ---
 
-👤 **saood06** commented the **2025-05-04** at **15:41:08**:<br>
+👤 **saood06** commented on **2025-05-04** at **15:41:08**
 
 @ikawrakow 
 
@@ -131,13 +144,13 @@ Can you test the conversion again? This is good to review again, I'm done pushin
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **15:48:16**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **15:48:16**
 
 I'm running something on the computer where I downloaded the model. I'll test in a bit when the run finishes.
 
 ---
 
-👤 **saood06** commented the **2025-05-04** at **15:52:22**:<br>
+👤 **saood06** commented on **2025-05-04** at **15:52:22**
 
 >I'll test in a bit when the run finishes.
 
@@ -145,7 +158,34 @@ Take your time, I'm heading off for now anyways.
 
 ---
 
-👤 **Panchovix** commented the **2025-05-04** at **19:39:28**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **16:46:39**
+
+When I run the mainline conversion script, I see this:
+``` 
+INFO:hf-to-gguf:Set meta model
+INFO:hf-to-gguf:Set model parameters
+INFO:hf-to-gguf:Set model quantization version
+INFO:hf-to-gguf:Set model tokenizer
+INFO:gguf.vocab:Adding 280147 merge(s).
+INFO:gguf.vocab:Setting special token type bos to 128000
+INFO:gguf.vocab:Setting special token type eos to 128009
+```
+But when I run the conversion script in the PR, I see this:
+```
+INFO:hf-to-gguf:Set meta model
+INFO:hf-to-gguf:Set model parameters
+INFO:hf-to-gguf:Set model tokenizer
+WARNING:gguf.vocab:Adding merges requested but no merges found, output may be non-functional.
+INFO:gguf.vocab:Setting special token type bos to 128000
+INFO:gguf.vocab:Setting special token type eos to 128009
+```
+So, something is not quite right with the merges.
+
+But I'm actually OK with the conversion script not working. We already have other models that require mainline for conversion to GGUF.
+
+---
+
+👤 **Panchovix** commented on **2025-05-04** at **19:39:28**
 
 Thanks for the work! I'm trying L3 Nemotron 253B Q3_K_XL from unsloth (https://huggingface.co/unsloth/Llama-3_1-Nemotron-Ultra-253B-v1-GGUF/tree/main/UD-Q3_K_XL), here how is the log looks
 
@@ -312,7 +352,7 @@ Not sure if there's a flag that could improve things for dense models. Also not 
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **06:58:29**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **06:58:29**
 
 With the commit that I just pushed `convert_hf_to_gguf.py` now converts the [Nemotron-Super-49B](https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1) model correctly.
 
@@ -320,20 +360,27 @@ But then I see a difference in PPL.
 
 I didn't run the `bf16` model directly (comes dangerously close to the total RAM I have), but using `Q8_0` quantization. I arrive at a lower PPL using the HF->GGUF conversion script in this PR compared to using mainline conversion:
 * `PPL = 7.0801` using mainline HF->GGUF
-* `PPL = `7.0347`  using this PR HF->GGUF
+* `PPL = 7.0347`  using this PR HF->GGUF
 
-Quantization is done in exactly the same way, I'm running with exact same parameters on the same hardware, so something else is different in the converted `bf16` models (and just simple `diff` tells me that the files differ).
+Quantization is done in exactly the same way, I'm running with exact same parameters on the same hardware, so something else is different in the converted `bf16` models (and just simple `diff` tells me that the files differ). 
+
+OK, doing `diff` on the logs, I see this difference:
+```
+llama_model_loader: - type  f32:  131 tensors   (mainline)
+vs
+llama_model_loader: - type  f32:  130 tensors   (this PR)
+```
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-05-05** at **13:14:51**: ✅ `APPROVED`<br>
+👤 **ikawrakow** approved this pull request ✅ on **2025-05-05** at **13:14:51**
 
 From my perspective this is ready to merge.
 Just waiting for @Lissanro to confirm that it is working for them.
 
 ---
 
-👤 **Lissanro** commented the **2025-05-05** at **15:18:43**:<br>
+👤 **Lissanro** commented on **2025-05-05** at **15:18:43**
 
 I tried at first using this command:
 
@@ -367,7 +414,7 @@ CUDA_VISIBLE_DEVICES="" ~/pkgs/ik_llama.cpp/build/bin/llama-server \
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-05** at **15:23:43**:<br>
+👤 **ikawrakow** commented on **2025-05-05** at **15:23:43**
 
 Can you try
 ```
@@ -380,11 +427,11 @@ Thanks.
 
 ---
 
-👤 **saood06** commented the **2025-05-05** at **22:20:08**:<br>
+👤 **saood06** commented on **2025-05-05** at **22:20:08**
 
 > With the commit that I just pushed `convert_hf_to_gguf.py` now converts the [Nemotron-Super-49B](https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1) model correctly.
 
-Nice, I see you grabbed the only changes to the vocab.py file that we were behind: https://github.com/ggml-org/llama.cpp/commit/8ba38584b2bf744814e1131f6f6aec97df5a57e1 and https://github.com/ggml-org/llama.cpp/commit/a686171ea71ed8cb8a324850d146cb65a001e141. I think you might have been able to cherry-pick those commits directly. 
+Nice, I see you grabbed the only changes to vocab.py that we were behind: https://github.com/ggml-org/llama.cpp/commit/8ba38584b2bf744814e1131f6f6aec97df5a57e1 and https://github.com/ggml-org/llama.cpp/commit/a686171ea71ed8cb8a324850d146cb65a001e141. I think you might have been able to cherry-pick those commits directly. 
 > 
 > But then I see a difference in PPL.
 > 
@@ -409,7 +456,7 @@ Interesting, do you mind checking with gguf-hash or some other tool if that one 
 
 ---
 
-👤 **Lissanro** commented the **2025-05-05** at **22:48:49**:<br>
+👤 **Lissanro** commented on **2025-05-05** at **22:48:49**
 
 > Can you try
 > ~/pkgs/ik_llama.cpp/build/bin/llama-server \
@@ -428,13 +475,31 @@ CUDA error: an illegal memory access was encountered
 
 ---
 
-👤 **Panchovix** commented the **2025-05-06** at **15:26:40**:<br>
+👤 **ikawrakow** commented on **2025-05-06** at **15:14:00**
+
+@Lissanro 
+
+I'm noticing that there is an issue for MoE models when the partial GPU offload is not done via tensor overrides (as in the command above). I'll try to figure out what is wrong, but in the meantime can you try this:
+```
+~/pkgs/ik_llama.cpp/build/bin/llama-server
+--model /mnt/secondary/neuro/Llama-3_1-Nemotron-Ultra-253B-v1-GGUF-UD-Q4_K_XL-131072seq/Llama-3_1-Nemotron-Ultra-253B-v1-UD-Q4_K_XL-00001-of-00004.gguf
+--ctx-size 81920 --n-gpu-layers 100 --tensor-split 25,25,25,25
+-fa -ctk q8_0 -ctv q8_0 --threads 64 --host 0.0.0.0 --port 5000 -fmoe
+-ot "blk\.3[2-9]\.ffn=CPU,blk\.[4-9][0-9]\.ffn=CPU"
+```
+This is similar to what you tried, but it will load all attention on the GPUs along with the first 32 layers of the experts, the remaining experts will be on the CPU. Not sure about the context, you may need to reduce it somewhat.
+
+Thanks!
+
+---
+
+👤 **Panchovix** commented on **2025-05-06** at **15:26:40**
 
 Correct me if I'm wrong but isn't nemotron 253B a dense model? So no experts and such
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-06** at **15:35:26**:<br>
+👤 **ikawrakow** commented on **2025-05-06** at **15:35:26**
 
 > Correct me if I'm wrong but isn't nemotron 253B a dense model? So no experts and such
 
@@ -442,7 +507,19 @@ Oops, I'm getting confused. Doing too many things at a time. Not sure then why p
 
 ---
 
-👤 **saood06** commented the **2025-05-07** at **01:47:18**:<br>
+👤 **ikawrakow** commented on **2025-05-06** at **15:50:42**
+
+> Interesting, do you mind checking with gguf-hash or some other tool if that one changed tensor is the only difference? I am curious to know why this PR does one tensor less of f32 than mainline.
+
+I used `gguf-dump.py`, and the missing tensor is `rope_freqs`.
+
+Hashes are identical.
+
+The other difference is that ours is `general.file_type = 24`, while theirs is `general.file_type = 32`. I don't know what that means.
+
+---
+
+👤 **saood06** commented on **2025-05-07** at **01:47:18**
 
 > I used `gguf-dump.py`, and the missing tensor is `rope_freqs`.
 
@@ -456,19 +533,19 @@ This one I understand, they both map to MOSTLY_BF16 ([ik_llama.cpp source](https
 
 ---
 
-👤 **Lissanro** commented the **2025-05-07** at **20:37:15**:<br>
+👤 **Lissanro** commented on **2025-05-07** at **20:37:15**
 
 If there is still something I need to test, please let me know (my understanding the last command was given under assumption it was MoE, but since it is a dense model, I assume I need some other command to test or maybe I already provided all debug info that is possible from my side). In any case, thank you very much for looking into this.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-09** at **07:09:55**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **07:09:55**
 
 I think I'll merge this one despite the missing `rope_freqs` tensors. We can try to sort out later why is it missing if people find performance degradation with long context.
 
 ---
 
-👤 **saood06** commented the **2025-05-09** at **07:54:55**:<br>
+👤 **saood06** commented on **2025-05-09** at **07:54:55**
 
 > I think I'll merge this one despite the missing `rope_freqs` tensors. We can try to sort out later why is it missing if people find performance degradation with long context.
 

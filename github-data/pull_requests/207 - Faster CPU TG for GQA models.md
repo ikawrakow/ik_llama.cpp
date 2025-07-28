@@ -1,14 +1,17 @@
-### 🔀 [#207](https://github.com/ikawrakow/ik_llama.cpp/pull/207) - Faster CPU TG for GQA models
+## 🔀 [Pull Request #207](https://github.com/ikawrakow/ik_llama.cpp/pull/207) - Faster CPU TG for GQA models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/gemm_4d` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-15 |
 | **Updated** | 2025-02-15 |
+| **Merged** | 2025-02-15 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR
 * Absorbs the `iqk` matrix multiplication logic in `ggml` into a new `iqk` function `iqk_mul_mat_4d`. The change to `ggml` to incorporate the `iqk`-added functionality is now much less intusive

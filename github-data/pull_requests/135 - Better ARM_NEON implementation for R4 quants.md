@@ -1,14 +1,17 @@
-### 🔀 [#135](https://github.com/ikawrakow/ik_llama.cpp/pull/135) - Better ARM_NEON implementation for R4 quants
+## 🔀 [Pull Request #135](https://github.com/ikawrakow/ik_llama.cpp/pull/135) - Better ARM_NEON implementation for R4 quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/arm_better_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-11 |
 | **Updated** | 2024-12-11 |
+| **Merged** | 2024-12-11 |
 
 ---
 
-#### Description
+## 📄 Description
 
 We get improved performance for `IQ4_XS_R4`, `Q4_K_R4`, `Q5_K_R4`, `Q6_K_R4`. The trick was to accumulate super-blocks in `int32_t`, thus avoiding expensive `int -> float` conversions.
 

@@ -1,13 +1,14 @@
-### 🗣️ [#166](https://github.com/ikawrakow/ik_llama.cpp/discussions/166) - Learning more LLM quantization
+## 🗣️ [Discussion #166](https://github.com/ikawrakow/ik_llama.cpp/discussions/166) - Learning more LLM quantization
 
 | **Author** | `robinnarsinghranabhat` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-01-05 |
 | **Updated** | 2025-03-13 |
 
 ---
 
-#### Description
+## 📄 Description
 
 For beginners like me to ML, I wanted to learn what research papers guided the quantization implement in llama.
 
@@ -15,9 +16,9 @@ It might sound silly but we have separate tricks for quantization during trainin
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **ikawrakow** replied the **2025-01-05** at **10:37:28**:<br>
+👤 **ikawrakow** commented on **2025-01-05** at **10:37:28**
 
 > For beginners like me to ML, I wanted to learn what research papers guided the quantization implement in llama.
 
@@ -29,7 +30,7 @@ I developed all quantization types in `llama.cpp` apart from the legacy quants `
 
 ---
 
-👤 **robinnarsinghranabhat** replied the **2025-01-10** at **21:38:11**:<br>
+👤 **robinnarsinghranabhat** commented on **2025-01-10** at **21:38:11**
 
 Thank you for this humble response ! 
 
@@ -45,5 +46,6 @@ I want to be a programmar like you.
 
 Sorry .. lots of questions all over the place :(
 
-> 👤 **arnfaldur** replied the **2025-03-13** at **02:10:31**:<br>
+> 👤 **arnfaldur** replied on **2025-03-13** at **02:10:31**
+> 
 > Trying to understand this codebase isn't attacking the wall where it's lowest. You're probably best off finding some beginner/intermediate C++ courses online. I imagine that there are plenty available for free. You don't strictly need to understand all these fundamentals to understand what this project is doing, but you sound like you're in the *don't know what you don't know* phase and a general Computer Science course would likely get you the farthest at this point.

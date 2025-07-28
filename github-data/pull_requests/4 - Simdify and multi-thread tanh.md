@@ -1,14 +1,17 @@
-### 🔀 [#4](https://github.com/ikawrakow/ik_llama.cpp/pull/4) - Simdify and multi-thread tanh
+## 🔀 [Pull Request #4](https://github.com/ikawrakow/ik_llama.cpp/pull/4) - Simdify and multi-thread tanh
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/tanh` |
+| **Target Branch** | `main` |
 | **Created** | 2024-07-27 |
 | **Updated** | 2024-07-27 |
+| **Merged** | 2024-07-27 |
 
 ---
 
-#### Description
+## 📄 Description
 
 It seemed Gemma-2 performance is lower than expected for its size. Looking at the architecture, I noticed that `tanh` is used in each layer, and then at the end for soft-caping the final output. `ggml` had `tanh` set to be computed with a single thread. Combined with `tanh(x)` being a pretty expensive operation, this resulted in a significant fraction of the time being spent in the `tanh` operation.
 

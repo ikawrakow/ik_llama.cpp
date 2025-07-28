@@ -1,14 +1,17 @@
-### 🔀 [#46](https://github.com/ikawrakow/ik_llama.cpp/pull/46) - IQ1_TN Metal implementation
+## 🔀 [Pull Request #46](https://github.com/ikawrakow/ik_llama.cpp/pull/46) - IQ1_TN Metal implementation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1_tn_metal` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-10 |
 | **Updated** | 2024-09-10 |
+| **Merged** | 2024-09-10 |
 
 ---
 
-#### Description
+## 📄 Description
 
 `IQ1_BN` stores a scale at the beginning of each row, followed by `IQ1_BN` packing of the ternary quants. The existing Metal implementation does not allow for that sort of thing, so some changes were necessary (apart from adding the necessary additions in `ggml-metal.m`): 
 * We modify the `kernel_mul_mm` and `kernel_mul_mm_id_impl` templates to have a dequantizer type as a template parameter (instead of a dequantization function)

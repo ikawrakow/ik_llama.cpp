@@ -1,16 +1,19 @@
-### 🔀 [#471](https://github.com/ikawrakow/ik_llama.cpp/pull/471) - NEON implementation for trellis quants
+## 🔀 [Pull Request #471](https://github.com/ikawrakow/ik_llama.cpp/pull/471) - NEON implementation for trellis quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/trellis_neon` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-29 |
 | **Updated** | 2025-05-29 |
+| **Merged** | 2025-05-29 |
 
 ---
 
-#### Description
+## 📄 Description
 
-Alternative to #460 
+Alternative to [#460](https://github.com/ikawrakow/ik_llama.cpp/issues/460) 
 
 One wouldn't really want to use this on a NEON CPU as it is much too slow. But for the sake of completeness, here it is.
 
@@ -46,6 +49,6 @@ Sweep bench results for LLaMA-3.1-8B-Instruct **with BLAS** on M2-Max CPU (PP pe
 |   512 |    128 |   1536 |    5.069 |   101.01 |   22.843 |     5.60 |
 |   512 |    128 |   2048 |    5.295 |    96.70 |   22.816 |     5.61 |
 
-This is nevertheless quite a bit faster than #460, so I'll go with this PR.
+This is nevertheless quite a bit faster than [#460](https://github.com/ikawrakow/ik_llama.cpp/issues/460), so I'll go with this PR.
 
 **Of note:** I couldn't make `IQ4_KT` work with `fp16` arithmetic for some reason. Not sure if there really is `fp16` range overflow, or if I just have a bug in the `fp16` implementation that I simply cannot see.

@@ -1,23 +1,26 @@
-### 🔀 [#14](https://github.com/ikawrakow/ik_llama.cpp/pull/14) - Adding IQ6_K
+## 🔀 [Pull Request #14](https://github.com/ikawrakow/ik_llama.cpp/pull/14) - Adding IQ6_K
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq6_k` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-09 |
 | **Updated** | 2024-08-09 |
+| **Merged** | 2024-08-09 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR
 
-* Adds `IQ6_K` - see #8 for motivation
+* Adds `IQ6_K` - see [#8](https://github.com/ikawrakow/ik_llama.cpp/issues/8) for motivation
 * Fixes the Zen4 implementation of `IQ3_K`, `IQ4_K` and `IQ5_K`
 
 ### New IQ6_K
 
-The graph below is a copy of the graph in #8 with the quantization error of the new `IQ6_K` non-linear quantization type added (cyan circle near 6.6 bpw).  We observe a significant improvement compared to `Q6_K` (0.4% vs 0.65%). LLaMA-3.1-8B quantization error is better too (0.15% vs 0.26%), so I think this is a worthwhile addition.
+The graph below is a copy of the graph in [#8](https://github.com/ikawrakow/ik_llama.cpp/issues/8) with the quantization error of the new `IQ6_K` non-linear quantization type added (cyan circle near 6.6 bpw).  We observe a significant improvement compared to `Q6_K` (0.4% vs 0.65%). LLaMA-3.1-8B quantization error is better too (0.15% vs 0.26%), so I think this is a worthwhile addition.
 
 ![l31_70B](https://github.com/user-attachments/assets/e8b4447c-cbf3-4bb8-9185-793f06510e3f)
 

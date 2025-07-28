@@ -1,14 +1,16 @@
-### 🔀 [#117](https://github.com/ikawrakow/ik_llama.cpp/pull/117) - Some minor quant strategies tweaks
+## 🔀 [Pull Request #117](https://github.com/ikawrakow/ik_llama.cpp/pull/117) - Some minor quant strategies tweaks
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
 | **State** | ✅ **Open** |
+| **Source Branch** | `quants_strategies_tweaks` |
+| **Target Branch** | `main` |
 | **Created** | 2024-11-22 |
 | **Updated** | 2024-11-23 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Here's what I'd suggest for starters :
 
@@ -46,17 +48,17 @@ Further ideas for a subsequent PR :
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2024-11-22** at **15:30:05**:<br>
+👤 **ikawrakow** commented on **2024-11-22** at **15:30:05**
 
 Can you provide some data to support these changes?
 
 ---
 
-👤 **Nexesenex** commented the **2024-11-22** at **16:53:59**:<br>
+👤 **Nexesenex** commented on **2024-11-22** at **16:53:59**
 
-Not really, IK, i'd have to remake all tests I did during the previous months. I never knew how to log properly LlamaCPP data, so I accumulated knowledge and edits along the way and just restitute you the simplest part of it. I submit that to you in a "trust me bro" fashion because I suppose that you know what I know and then some, and just have more interesting things to do with your skillset than to mess hamster-style with quant strategies like I did since early 2024.
+Not really, IK, i'd have to remake all tests I did during the previous months. I never knew how to log properly (aka. in an automated fashion) LlamaCPP data, so I accumulated knowledge and edits along the way and just restitute you the simplest part of it. I submit that to you in a "trust me bro" fashion because I suppose that you know what I know and then some, and just have more interesting things to do with your skillset than to mess hamster-style with quant strategies like I did since early 2024.
 
 Broadly, there's a few principles that I discovered through your work :
 
@@ -69,11 +71,11 @@ Broadly, there's a few principles that I discovered through your work :
 - ffn_down : basetype +1 as much as possible, especially the first and last eighth of layers, model archs sensitivity are differing vastly for the intermediate layers. Going +1 or +1.5bpw for 1/8 of the layers, instead of +0.5bpw for 3/8 (2 first eights, one last eight or the opposite) of the layers is overkill, especially if the attention tensors are not calibrated for that on the affected layers. 
 - ffn_gate and up are more tricky, but nevertheless the first / last layers bump applies too, especially since L3 models which are more "dense" than their predecessors.
 - embedding and output, the bigger the base weight is, the more you can quantize it, nothing new. High vocab and monolithic embed/output answer to this.
-MOES : 2 experts allow already a bump on the attn tensors, including q and output.
+- MOES : 2 experts allow already a bump on the attn tensors, including q and output.
 4 experts should really be treated like 8 experts models, there's no reason at all to discriminate them because they operate the very same (2 experts active), I noticed that on those Pivot/Solar 4 experts model.
 
-So, without any disrespect, pick what you like, I'm sure that some of it makes sense to you, and ditch what's "too much" for your taste.
+So, without any disrespect, pick what you like, I'm sure that some of it makes sense to you (I often replicate your own quant strategies patterns, for after all, they are based on similar observations.. that you sometimes didn't systematize), and ditch what's "too much" for your taste.
 
 And if you'd like me to go on with the quant strategies, please tell me, I'd be glad to help on something that I actually can grasp and have experience upon.
 
-Here's for you to eventually get a look on some experiments I made so you can check how far I went : 07ad6c6f321ea3643cff5d38766ce8f13a785bfcmaster_loot_2/
+Here's for you to eventually get a look on some experiments I made so you can check how far I went : [07ad6c6f321ea3643cff5d38766ce8f13a785bfcmaster_loot_2/](https://github.com/Nexesenex/ik_llama.cpp.fks/commit/07ad6c6f321ea3643cff5d38766ce8f13a785bfc)

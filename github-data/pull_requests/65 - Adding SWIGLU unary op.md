@@ -1,14 +1,17 @@
-### 🔀 [#65](https://github.com/ikawrakow/ik_llama.cpp/pull/65) - Adding SWIGLU unary op
+## 🔀 [Pull Request #65](https://github.com/ikawrakow/ik_llama.cpp/pull/65) - Adding SWIGLU unary op
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/swiglu` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-28 |
 | **Updated** | 2024-09-28 |
+| **Merged** | 2024-09-28 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Phi-3(.5) (and also ChatGLM) uses a "SWIGLU" operation in its FFN. There is nothing special about "SWIGLU", it is just that the `ffn_up` tensor is actually a combination of the usual `ffn_up` and `ffn_gate` tensors, where in each row the first half contains the `ffn_up` weights and the second half has the `ffn_gate` weights. So that, to implement
 ```
@@ -51,9 +54,9 @@ This results in an additional 2-3% speedup of PP-512(Phi-3.5-mini) when running 
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2024-09-28** at **10:07:59**:<br>
+👤 **ikawrakow** commented on **2024-09-28** at **10:07:59**
 
 OK, Phi-3.5 has a 128k context, so let's run a benchmark with a longer context, say, 8k tokens. Here is what I get after this PR on a Ryzen-7950X CPU for Phi-3.5-mini:
 

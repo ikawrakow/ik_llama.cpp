@@ -1,14 +1,17 @@
-### 🔀 [#232](https://github.com/ikawrakow/ik_llama.cpp/pull/232) - Give the user the option to override where model weights are stored
+## 🔀 [Pull Request #232](https://github.com/ikawrakow/ik_llama.cpp/pull/232) - Give the user the option to override where model weights are stored
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/buffer_type_overrides` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-24 |
 | **Updated** | 2025-02-27 |
+| **Merged** | 2025-02-25 |
 
 ---
 
-#### Description
+## 📄 Description
 
 It seems this PR amounts to most of the "secret sauce" of KTransformers. 
 
@@ -35,43 +38,92 @@ Would love to hear from someone having a GPU with enough VRAM to fit all DeepSee
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-02-25** at **06:34:34**:<br>
+👤 **ikawrakow** commented on **2025-02-25** at **06:34:34**
 
 Here some results using `IQ4_NL`
 
 | model                 | threads | mla | rtr | fmoe |          test |              t/s |
 | --------------------- | ------: | --: | --: | ---: | ------------: | ---------------: |
-| deepseek2 16B IQ4_NL  |       8 |   1 |   1 |    1 |    tg64@pp128 |     53.08 ± 0.03 |
-| deepseek2 16B IQ4_NL  |       8 |   1 |   1 |    1 |    tg64@pp256 |     52.87 ± 0.07 |
-| deepseek2 16B IQ4_NL  |       8 |   1 |   1 |    1 |    tg64@pp512 |     52.53 ± 0.04 |
-| deepseek2 16B IQ4_NL  |       8 |   1 |   1 |    1 |   tg64@pp1024 |     51.48 ± 0.10 |
-| deepseek2 16B IQ4_NL  |       8 |   1 |   1 |    1 |   tg64@pp2048 |     50.40 ± 0.04 |
-| deepseek2 16B IQ4_NL  |       8 |   1 |   1 |    1 |   tg64@pp4096 |     48.39 ± 0.13 |
-| deepseek2 16B IQ4_NL  |       8 |   1 |   1 |    1 |   tg64@pp8192 |     44.00 ± 0.02 |
+| deepseek2 16B IQ4_NL  |       8 |   0 |   1 |    1 |    tg64@pp128 |     53.08 ± 0.03 |
+| deepseek2 16B IQ4_NL  |       8 |   0 |   1 |    1 |    tg64@pp256 |     52.87 ± 0.07 |
+| deepseek2 16B IQ4_NL  |       8 |   0 |   1 |    1 |    tg64@pp512 |     52.53 ± 0.04 |
+| deepseek2 16B IQ4_NL  |       8 |   0 |   1 |    1 |   tg64@pp1024 |     51.48 ± 0.10 |
+| deepseek2 16B IQ4_NL  |       8 |   0 |   1 |    1 |   tg64@pp2048 |     50.40 ± 0.04 |
+| deepseek2 16B IQ4_NL  |       8 |   0 |   1 |    1 |   tg64@pp4096 |     48.39 ± 0.13 |
+| deepseek2 16B IQ4_NL  |       8 |   0 |   1 |    1 |   tg64@pp8192 |     44.00 ± 0.02 |
 
 | model                 | mla | rtr | fmoe |          test |              t/s | 
 | --------------------- | --: | --: | ---: | ------------: | ---------------: | 
-| deepseek2 16B IQ4_NL  |   1 |   1 |    1 |         pp512 |   1172.35 ± 2.91 |   
-| deepseek2 16B IQ4_NL  |   1 |   1 |    1 |        pp1024 |   1167.57 ± 1.75 |   
-| deepseek2 16B IQ4_NL  |   1 |   1 |    1 |        pp2048 |   1148.17 ± 1.45 |   
-| deepseek2 16B IQ4_NL  |   1 |   1 |    1 |        pp4096 |   1125.10 ± 1.52 |   
-| deepseek2 16B IQ4_NL  |   1 |   1 |    1 |        pp8192 |   1067.71 ± 5.17 |
-| deepseek2 16B IQ4_NL  |   1 |   1 |    1 |       pp16384 |    974.12 ± 0.85 | 
+| deepseek2 16B IQ4_NL  |   0 |   1 |    1 |         pp512 |   1172.35 ± 2.91 |   
+| deepseek2 16B IQ4_NL  |   0 |   1 |    1 |        pp1024 |   1167.57 ± 1.75 |   
+| deepseek2 16B IQ4_NL  |   0 |   1 |    1 |        pp2048 |   1148.17 ± 1.45 |   
+| deepseek2 16B IQ4_NL  |   0 |   1 |    1 |        pp4096 |   1125.10 ± 1.52 |   
+| deepseek2 16B IQ4_NL  |   0 |   1 |    1 |        pp8192 |   1067.71 ± 5.17 |
+| deepseek2 16B IQ4_NL  |   0 |   1 |    1 |       pp16384 |    974.12 ± 0.85 | 
 
-So, with attention running on the GPU, MLA is competitive with standard also for PP. Given the reduced KV cache size with MLA, it becomes the best option for this setup (CPU computes experts matrix multiplications, GPU computes everything else). 
+~So, with attention running on the GPU, MLA is competitive with standard also for PP. Given the reduced KV cache size with MLA, it becomes the best option for this setup (CPU computes experts matrix multiplications, GPU computes everything else).~
 
 Dumping some timing info for TG, in a run with 5 tg128 evaluations I get
 * 55.5 t/s, so (640 tokens)/(55.5 tokens/second) = 11.53 seconds total evaluation time
 * 8.42 seconds for computing the MoE experts matrix multiplications on the CPU
 * 1.23 seconds for computing everything else on the GPU
 * Hence, 11.53 - 8.42 - 1.23 = 1.88 seconds are spent in the `ggml` back-end on synchronization and copying data between CPU and GPU. This is ~16% of total evaluation time (!!!), and I think this is very far from optimal, so there is much room for improvement there. If this cost can be optimized out, we will be getting in the range of 65 t/s
-* The experts in DeepSeek-Lite are `2048 x 1408`. We have `ffn_up, ffn_gate` and `ffn_down`, 6 active experts, and 25 experts layers. So, this is `2048 x 1408 x 3 x 6 x 25 = 1.298B` weights involved in the CPU calculation. Model is quantized with `IQ4_NL`, so 4.5 bits per weight, so `1298 x 4.5 / 8 = 730 MB` of data needs to be fetched from RAM per evaluated token. 640 tokens evaluated in 8.42 seconds is 0.01316 seconds per token. Hence, the memory bandwidth utilized during CPU computation is `730 MB / 0.01316 seconds = 55.5 GB/s`. The system (Ryzen-7950X) has 64 GB/s theoretical memory bandwidth, but 60 GB/s is the best one gets in practice for TG (with dense models). I.e., for this 6 active, 64 total experts MoE model we are at 90%+ of memory bandwidth utilization
+* The experts in DeepSeek-Lite are `2048 x 1408`. We have `ffn_up, ffn_gate` and `ffn_down`, 6 active experts, and 25 experts layers. So, this is `2048 x 1408 x 3 x 6 x 25 = 1.298B` weights involved in the CPU calculation. Model is quantized with `IQ4_NL`, so 4.5 bits per weight, so `1298 x 4.5 / 8 = 730 MB` of data needs to be fetched from RAM per evaluated token. 640 tokens evaluated in 8.42 seconds is 0.01316 seconds per token. Hence, the memory bandwidth utilized during CPU computation is `730 MB / 0.01316 seconds = 55.5 GB/s`. The system (Ryzen-7950X) has 64 GB/s theoretical memory bandwidth, but 60 GB/s is the best one gets in practice for TG (with dense models). I.e., for this 6 active, 64 total experts MoE model we are at 90%+ of memory bandwidth utilization  
+
+Here is the op timing breakdown for 5 x tg128 runs
+
+### CPU
+
+```
+Total: 8.42517e+06 us
+============ Sorted list of ops:
+ 0     MOE_FUSED_UP_GATE  5.63926e+06  0.669335
+ 1            MUL_MAT_ID  2.7838e+06  0.330414
+ 2              GET_ROWS  2110  0.00025044
+============ Matrix multiplications: 2.7838e+06 us
+ffn_moe_down        :  2.7838e+06  1
+```
+
+### GPU
+
+```
+Total: 1.22889e+06 us
+============ Sorted list of ops:
+ 0               MUL_MAT  686021  0.558245
+ 1                   ADD  69763  0.0567692
+ 2        FUSED_RMS_NORM  69321  0.0564095
+ 3                  ROPE  48932  0.0398181
+ 4                CONCAT  47852  0.0389392
+ 5              SOFT_MAX  47009  0.0382533
+ 6                  CONT  45936  0.0373801
+ 7                   CPY  45223  0.0367999
+ 8              GET_ROWS  29002  0.0236002
+ 9                REPEAT  24736  0.0201288
+10                   MUL  24100  0.0196112
+11       FUSED_MUL_UNARY  23011  0.018725
+12                 SCALE  22803  0.0185558
+13               ARGSORT  22628  0.0184134
+14             MULTI_ADD  22552  0.0183515
+============ Matrix multiplications: 686021 us
+ffn_gate            :  53041  0.0773169
+ffn_moe_logits      :  111885  0.163093
+ffn_out             :  1797  0.00261945
+ffn_shexp           :  44496  0.064861
+ffn_up              :  49090  0.0715576
+kq                  :  135925  0.198135
+kqv                 :  83346  0.121492
+kqv_out             :  48899  0.0712792
+kv                  :  45771  0.0667195
+kv_rope_compresseed :  48608  0.070855
+q                   :  61027  0.0889579
+result_output       :  2136  0.00311361
+```
 
 ---
 
-👤 **saood06** commented the **2025-02-25** at **06:48:52**:<br>
+👤 **saood06** commented on **2025-02-25** at **06:48:52**
 
 >Hence, 11.53 - 8.42 - 1.23 = 1.88 seconds are spent in the ggml back-end on synchronization and copying data between CPU and GPU. This is ~16% of total evaluation time (!!!), and I think this is very far from optimal, so there is much room for improvement there. If this cost can be optimized out, we will be getting in the range of 65 t/s
 
@@ -83,7 +135,7 @@ Also how do you generate these op timing breakdowns?
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-25** at **07:53:14**:<br>
+👤 **ikawrakow** commented on **2025-02-25** at **07:53:14**
 
 > Is the cost call overhead or throughput?
 
@@ -95,7 +147,7 @@ I set `IK_PRINT_TIMING` to 1 in `ggml.c` or `ggml-cuda.cu` and rebuild. Then I r
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-25** at **10:17:13**:<br>
+👤 **ikawrakow** commented on **2025-02-25** at **10:17:13**
 
 > Is the cost call overhead or throughput?
 
@@ -108,7 +160,7 @@ For PP copying data back-and-fort is more significant. I tested with a context o
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-26** at **06:55:34**:<br>
+👤 **ikawrakow** commented on **2025-02-26** at **06:55:34**
 
 ### Update:
 
@@ -128,8 +180,8 @@ So, ~20% slower than standard attention. CUDA does not like MLA. I need to inves
 
 ---
 
-👤 **orca-zhang** commented the **2025-02-27** at **17:03:36**:<br>
+👤 **orca-zhang** commented on **2025-02-27** at **17:03:36**
 
-I have observed the same phenomenon as you. After a single inference is completed, there is a lot of D2H copy work. Currently, I also use multiple parallel processing to "bypass" the solution you mentioned. I am not sure if we don't need to cache the results, can we directly abandon this part of the work? I would like to hear your opinion.
+I have observed the same phenomenon as you. After a single inference is completed, there is a lot of D2H copy work. At present, I also use multiple processing parallelism to "bypass" this problem, just like the solution you mentioned. I am not sure if we don't need to cache the results, can we directly abandon this part of the work? I would like to hear your opinion.
 
 PS: I am actually a rookie who has only been exposed to the llama.cpp source code for a week.

@@ -1,14 +1,17 @@
-### 🔀 [#246](https://github.com/ikawrakow/ik_llama.cpp/pull/246) - Faster FlashMLA prompt processing
+## 🔀 [Pull Request #246](https://github.com/ikawrakow/ik_llama.cpp/pull/246) - Faster FlashMLA prompt processing
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/flash_mla_2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-08 |
 | **Updated** | 2025-03-08 |
+| **Merged** | 2025-03-08 |
 
 ---
 
-#### Description
+## 📄 Description
 
 MLA as used in the DeepSeek models is great for token generation (TG), but prompt processing (PP) speed is much lower compared to standard attention even with FA enabled.
 
@@ -65,9 +68,9 @@ So, how can we improve? We can rearrange the computation back to standard attent
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **davidsyoung** commented the **2025-03-08** at **14:58:12**:<br>
+👤 **davidsyoung** commented on **2025-03-08** at **14:58:12**
 
 Getting a linking error on `iqk_flash_attn_noalibi`:
 
@@ -79,13 +82,13 @@ Getting a linking error on `iqk_flash_attn_noalibi`:
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-08** at **15:07:14**:<br>
+👤 **ikawrakow** commented on **2025-03-08** at **15:07:14**
 
 Are you using `cmake` to build? The object file for the new file that I added (`iqk_flash_attn.cpp`) is missing from the link command. It should be automatically added with `cmake`.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-08** at **15:20:58**:<br>
+👤 **davidsyoung** commented on **2025-03-08** at **15:20:58**
 
 > Are you using `cmake` to build? The object file for the new file that I added (`iqk_flash_attn.cpp`) is missing from the link command. It should be automatically added with `cmake`.
 

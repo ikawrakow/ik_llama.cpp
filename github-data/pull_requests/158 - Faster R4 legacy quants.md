@@ -1,14 +1,17 @@
-### 🔀 [#158](https://github.com/ikawrakow/ik_llama.cpp/pull/158) - Faster R4 legacy quants
+## 🔀 [Pull Request #158](https://github.com/ikawrakow/ik_llama.cpp/pull/158) - Faster R4 legacy quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/qx_0_r4_avx2` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-22 |
 | **Updated** | 2024-12-22 |
+| **Merged** | 2024-12-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 It seems converting `fp16` to `fp32` is extremely slow on the Ryzen-5975WX CPU (or `ggml`'s `GGML_FP16_TO_FP32` is inadequate), so it is better to convert the `fp16` `Q8_1_x4` block scales using `AVX2` intrinsics, store the result, and then use the converted `fp32` scales when performing the dot product. This PR does that on `AVX2` for `Q4_0_R4, Q5_0_R4, Q6_0_R4` and `Q8_0_R4`.  There was no benefit on the Ryzen-7950X (`Zen4`), so not implemented there.
 

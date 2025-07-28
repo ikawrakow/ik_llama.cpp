@@ -1,14 +1,17 @@
-### 🔀 [#494](https://github.com/ikawrakow/ik_llama.cpp/pull/494) - IQ1_M_R4 CUDA implementation
+## 🔀 [Pull Request #494](https://github.com/ikawrakow/ik_llama.cpp/pull/494) - IQ1_M_R4 CUDA implementation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_iq1_m_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-05 |
 | **Updated** | 2025-06-05 |
+| **Merged** | 2025-06-05 |
 
 ---
 
-#### Description
+## 📄 Description
 
 To help the quest for the world's smallest DeepSeek model, this PR adds CUDA implementation for `IQ1_M_R4`.
 
@@ -46,9 +49,9 @@ Here sweep bench for LlaMA-3-8B on RTX-4080
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ubergarm** commented the **2025-06-05** at **15:26:27**:<br>
+👤 **ubergarm** commented on **2025-06-05** at **15:26:27**
 
 Amazing, you've done it! The pieces of the puzzle are in place. Congrats, ik, on the world's smallest working DeepSeek-R1-0528 quant! :tada: 
 
@@ -140,3 +143,11 @@ llama_new_context_with_model: graph splits = 111
 |  4096 |   1024 |  12288 |   17.442 |   234.84 |   78.654 |    13.02 |
 
 </details>
+
+---
+
+👤 **ubergarm** commented on **2025-06-05** at **16:12:10**
+
+`4.8805 +/- 0.02876` perplexity, not great, not terrible.
+
+Importantly, it runs clean with no nans!!! Ship it! :ship: :chipmunk: :rocket:

@@ -1,14 +1,17 @@
-### 🔀 [#79](https://github.com/ikawrakow/ik_llama.cpp/pull/79) - Do not quantize activations if not necessary
+## 🔀 [Pull Request #79](https://github.com/ikawrakow/ik_llama.cpp/pull/79) - Do not quantize activations if not necessary
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/skip_unnecessary_quantize` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-04 |
 | **Updated** | 2024-10-04 |
+| **Merged** | 2024-10-04 |
 
 ---
 
-#### Description
+## 📄 Description
 
 It has always bugged me that `ggml` unnecessarily repeats the "quantization" of activations when the corresponding matrix multiplication cannot be done directly. E.g., `Q`, `K` and `V` all multiply the input to the self-attention layer. Similarly, `ffn_up` and `ffn_gate` multiply the same activations for parallel FFNs. "Quantization" is in quotes, because it applies to `fp16` and `bf16` tensors when the matrix multiplication function used does not work directly with `fp32` activations. There are typically 7 tensors per layer in a transformer model, so basically 3 out of 7 "quantizations" are unnecessary.
 

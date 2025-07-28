@@ -1,13 +1,14 @@
-### 🗣️ [#25](https://github.com/ikawrakow/ik_llama.cpp/discussions/25) - CPU prompt processing speed for large contexts
+## 🗣️ [Discussion #25](https://github.com/ikawrakow/ik_llama.cpp/discussions/25) - CPU prompt processing speed for large contexts
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-08-22 |
 | **Updated** | 2025-01-15 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Back in the day when open source / open weight LLMs had a very limited context window, one of the most desired features among LLM enthusiasts was a larger context window. People came up with all sorts of modifications to the RoPE operation, used (LoRA) fine tuning, etc.,  to increase the context window beyond the maximum context used during model training. Today we have open source / open weight models that can handle much longer contexts. E.g., LLaMA-3.1 goes up to 128k tokens, which is probably more than what one can handle with consumer grade hardware for "Inference at the Edge" (and I find it kind of funny to see the many issues opened in the `llama.cpp` repository because users did not limit the maximum context length when running `llama.cpp`, and correspondingly the model would not load because the KV-cache required for 128k tokens does not fit into their <= 24 GB VRAM).
 
@@ -87,9 +88,9 @@ Based on this, here are some angles of attack for improving the CPU performance 
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **jart** replied the **2024-08-22** at **15:26:07**:<br>
+👤 **jart** commented on **2024-08-22** at **15:26:07**
 
 > ~5% spent on thread synchronization
 
@@ -154,7 +155,7 @@ Is this all something that'd interest you? I can easily send a PR adding it to y
 
 ---
 
-👤 **ikawrakow** replied the **2024-08-22** at **16:16:08**:<br>
+👤 **ikawrakow** commented on **2024-08-22** at **16:16:08**
 
 Hey @jart, thanks for the comments!
 
@@ -170,40 +171,45 @@ Ha, you had already done that! I didn't check `llamafile` and discovered this on
 
 I don't care about MSVC, so sure. There is the MIT vs Apache-2.0 issue, but we can sort that out.
 
-> 👤 **jart** replied the **2024-08-22** at **18:02:15**:<br>
+> 👤 **jart** replied on **2024-08-22** at **18:02:15**
+> 
 > Apple doesn't have OpenMP. So that's where my thread synchronization changes have the most impact. Right now in llama.cpp if I build it on my Apple M2 and run with `-ngl 0` for CPU mode it gets 134 tok/sec tops. But llamafile with `-ngl 0` on MacOS M2 generates text at anywhere from 150 tok/sec to 210 tok/sec depending on how much Netflix is interfering and how much I win the XNU scheduler lottery (I imagine things are consistently 200+ if Asahi Linux is used instead of XNU). On the other hand, if I use Metal GPU then it consistently generates text at 200 tok/sec.
 > 
 > Yes, that's correct. I'm claiming that the changes you and I both made on llamafile have made M2 Ultra CPU go faster than its GPU sometimes when generating text with TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf. However if I use a larger model like Mistral 7b where the matmuls start to dominate a lot more than the sync barriers, then I can only generate 42 tok/sec and GPU does 72 tok/sec. So this is all a bit orthogonal to the goal here of huge context windows. I just wanted you to know that we did something most people would likely assume is not possible. I certainly wouldn't have, because when I started focusing on this in January I set out with the goal of making CPU at at least only 10x slower than GPU.
+
+> 👤 **jart** replied on **2024-08-22** at **18:13:48**
 > 
-> 👤 **jart** replied the **2024-08-22** at **18:13:48**:<br>
 > As for MIT vs. Apache 2.0 there's a lot of leeway from Mozilla to make my work available to other local AI projects under the MIT license if that's what you're using here. I'll roll up a pull request for you sometime in the next few days, that'll work smoothly on POSIX platforms.
+
+> 👤 **ikawrakow** replied on **2024-08-22** at **19:08:09**
 > 
-> 👤 **ikawrakow** replied the **2024-08-22** at **19:08:09**:<br>
 > > Apple doesn't have OpenMP
 > 
 > I thought the currently recommended approach in `llama.cpp` is to `brew install libomp`, which then by default enables OpenMP? That's what I tried anyway after observing a horrible performance with the `ggml_barrier` implementation on my M2-Max laptop, but that didn't help much either, so I did end up putting in the inline assembly that fixed performance for me.
 > 
 > But yes, for small models such as TinyLlama  thread synchronization becomes really important, so I should try your barrier version.
+
+> 👤 **jart** replied on **2024-08-22** at **22:12:59**
 > 
-> 👤 **jart** replied the **2024-08-22** at **22:12:59**:<br>
 > I don't even know why OpenMP is there. It's a GPL-licensed library. We might as well be using Torch if we're going to link that. Goes against the very spirit of the project which is figuring these things out for ourselves.
+
+> 👤 **jart** replied on **2024-08-22** at **22:16:45**
 > 
-> 👤 **jart** replied the **2024-08-22** at **22:16:45**:<br>
 > Also if by libomp you mean LLVM libomp, sadly it's kind of an newer alternative and it's got none of the alpha of GNU's OpenMP runtime. Based on my own evaluation, LLVM libomp is about as fast as llama.cpp's old synchronization code, when it's applied for GGML speedups.
 
 ---
 
-👤 **ikawrakow** replied the **2024-08-27** at **06:31:49**:<br>
+👤 **ikawrakow** commented on **2024-08-27** at **06:31:49**
 
 I did try a few things on [this branch](https://github.com/ikawrakow/ik_llama.cpp/tree/ik/kq_fused_softmax), but nothing is really working. The branch is just exploratory, absolutely not production ready, and `AVX512`-only. Given the unsatisfactory outcome, it will not get merged.
 * I can get the CPU flash attention to run faster than the original (quite a bit faster for very large prompts), but it is still slower than no flash attention
 * I can get a ~3% speedup for large prompts by optimizing for no-alibi and causal attention mask. But given the marginal improvement, increased complexity, and reduced generality, it does not seem worth adding.
 
-On the bright side, PR #27 merges "soft-capping" with soft-max. For large prompts, this leads to a significant performance boost for Gemma-2 models. At 32k tokens and Gemma-2-2b, the performance gap between GPU with flash attention and the Ryzen-7950X CPU is now "only" a factor of 45 (instead of the 53X in the above graph).
+On the bright side, PR [#27](https://github.com/ikawrakow/ik_llama.cpp/issues/27) merges "soft-capping" with soft-max. For large prompts, this leads to a significant performance boost for Gemma-2 models. At 32k tokens and Gemma-2-2b, the performance gap between GPU with flash attention and the Ryzen-7950X CPU is now "only" a factor of 45 (instead of the 53X in the above graph).
 
 ---
 
-👤 **ikawrakow** replied the **2024-08-30** at **15:25:30**:<br>
+👤 **ikawrakow** commented on **2024-08-30** at **15:25:30**
 
 OK, I have progress on [this branch](https://github.com/ikawrakow/ik_llama.cpp/tree/ik/kq_fused_softmax). Extremely hacky and `AVX512`-only (or, more precisely, Zen4-only), totally not production ready. But I'm finally able to outperform no flash attention on my Ryzen-7950X CPU - by about 20% for context of 16k, 23% for 32k, with LLaMA-3.1-8B.
 
@@ -215,7 +221,7 @@ My guess is that there is still a bottleneck at 32k tokens. Based on the FA to n
 
 ---
 
-👤 **ikawrakow** replied the **2024-08-30** at **15:37:24**:<br>
+👤 **ikawrakow** commented on **2024-08-30** at **15:37:24**
 
 And here is how the raltive CPU vs GPU performance graph changes with the new CPU flash attention implementation. The FA curve is basically flat now beyond 1000 tokens, except at 32k where I suspect a bottleneck that I have not found. 
 
@@ -224,16 +230,16 @@ And here is how the raltive CPU vs GPU performance graph changes with the new CP
 
 ---
 
-👤 **ikawrakow** replied the **2025-01-15** at **17:50:21**:<br>
+👤 **ikawrakow** commented on **2025-01-15** at **17:50:21**
 
-There has been progress since I last wrote here, with PR #172 being the latest contribution to improving CPU prompt processing speed. The following graph is for LLaMA-3.1-8B-Instruct quantized to `IQ4_XS` (which seems a fairly popular quantization type). Tested on a Ryzen-7950X CPU. The mandatory current mainline `llama.cpp` results are for `build: 1d850433 (4488)`. The results for `ik_llama.cpp` are obtained using run-time-repacking to the corresponding 4-row interleaved variant.
+There has been progress since I last wrote here, with PR [#172](https://github.com/ikawrakow/ik_llama.cpp/issues/172) being the latest contribution to improving CPU prompt processing speed. The following graph is for LLaMA-3.1-8B-Instruct quantized to `IQ4_XS` (which seems a fairly popular quantization type). Tested on a Ryzen-7950X CPU. The mandatory current mainline `llama.cpp` results are for `build: 1d850433 (4488)`. The results for `ik_llama.cpp` are obtained using run-time-repacking to the corresponding 4-row interleaved variant.
 
 ![pp512_vs_ctx](https://github.com/user-attachments/assets/81a09390-b0da-4d5c-9815-300b4b86705c)
 
 * In mainline `llama.cpp` FA continues to be underwhelming, being handsomely outperformed by not using FA
 * `ik_llama.cpp` now finally exceeds 100 t/s for a prompt of 32k tokens. I get 122 t/s (`BF16` KV-cache) and 113 t/s (`Q8_0` KV-cache). The best I could do with mainline is 37 t/s (`Q8_0` K-cache, no FA).
 * I'm quite pleased that `Q8_0` KV-cache is now almost on par with `BF16`
-* `ik_llama.cpp` is almost 4 times faster than mainline at 256 tokens, and still 3.3 times faster at 32k tokens. For such large contexts the computation time is heavily dominated by the `K*Q` and `V*softmax(K*Q)` matrix multiplications, with these matrices by far exceeding L3 cache size, and hence the operation becoming memory bound. In fact, part of the improvement in PR #172 is due to reducing the number of memory loads from the `V`-cache in the FA computation.
+* `ik_llama.cpp` is almost 4 times faster than mainline at 256 tokens, and still 3.3 times faster at 32k tokens. For such large contexts the computation time is heavily dominated by the `K*Q` and `V*softmax(K*Q)` matrix multiplications, with these matrices by far exceeding L3 cache size, and hence the operation becoming memory bound. In fact, part of the improvement in PR [#172](https://github.com/ikawrakow/ik_llama.cpp/issues/172) is due to reducing the number of memory loads from the `V`-cache in the FA computation.
 * If processing very long context is a significant use case, utilizing `Q8_K_R8` brings additional gains. We get 373 t/s for 512 tokens, 312 t/s at 4k, 268 t/s at 8k, 203 t/s at 16k, and 136 t/s at 32k tokens.
 
 It is also interesting to look at the performance relative to a GPU. I'm using an RTX-4080 GPU with the same model and FA enabled. Compared to earlier plots in this thread, I have changed the plot to show the ratio of GPU to CPU prompt processing speed and have restricted the prompt length to $\ge 100$ tokens to reduce the range of the y-axis.  The Ryzen-7950X now saturates at about 27.5X lower performance compared to the RTX-4080, which is not bad at all.

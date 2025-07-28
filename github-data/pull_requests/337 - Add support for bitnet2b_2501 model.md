@@ -1,14 +1,17 @@
-### 🔀 [#337](https://github.com/ikawrakow/ik_llama.cpp/pull/337) - Add support for bitnet2b_2501 model
+## 🔀 [Pull Request #337](https://github.com/ikawrakow/ik_llama.cpp/pull/337) - Add support for bitnet2b_2501 model
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/bitnet2b_2501` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-21 |
 | **Updated** | 2025-04-22 |
+| **Merged** | 2025-04-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Very direct port of https://github.com/microsoft/BitNet/pull/167 more specifically this commit, https://github.com/Eddie-Wang1120/llama.cpp/commit/a8ac7072ae02ffd68b4b661db0ebd2689fb82b7f 
 
@@ -18,9 +21,9 @@ I have not ran the model yet.
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-04-21** at **16:08:46**:<br>
+👤 **ikawrakow** commented on **2025-04-21** at **16:08:46**
 
 I fetched the model from https://huggingface.co/microsoft/bitnet-b1.58-2B-4T
 
@@ -32,7 +35,7 @@ ERROR:hf-to-gguf:Model BitNetForCausalLM is not supported
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-21** at **16:18:33**:<br>
+👤 **ikawrakow** commented on **2025-04-21** at **16:18:33**
 
 And after noticing that it is now "BitNetForCausalLM" instead of "BitnetForCausalLM" and fixing it, I get
 ```
@@ -62,13 +65,9 @@ ValueError: Can not map tensor 'model.layers.0.mlp.down_proj.weight_scale'
 
 ---
 
-👤 **saood06** commented the **2025-04-22** at **02:33:41**:<br>
+👤 **saood06** commented on **2025-04-22** at **02:33:41**
 
-I can reproduce the issue with the safetensors conversion, 
-
-
-
-but using the method outlined in #169 I was able to get it running.
+I can reproduce the issue with the safetensors conversion, but using the method outlined in [#169](https://github.com/ikawrakow/ik_llama.cpp/issues/169) I was able to get it running.
 
 ```
 ./bin/llama-quantize --allow-requantize /mnt/sda/bitnet/gguf/ggml-model-i2_s.gguf /mnt/sda/bitnet/gguf/ggml-model-iq2_bn.gguf iq2_bn
@@ -76,6 +75,8 @@ but using the method outlined in #169 I was able to get it running.
 
 <details>
   <summary>Full log inside</summary>
+
+
 ```
 main: build = 3641 (35691804)
 main: built with gcc (Clear Linux OS for Intel Architecture) 14.2.1 20241210 releases/gcc-14.2.0-551-g21a09f0507 for x86_64-generic-linux
@@ -454,7 +455,7 @@ main: quantize time =  7087.18 ms
 main:    total time =  7087.18 ms
 ```
 
-I even ran the same prompt ran on the other bitnet's.
+I even ran it with the same prompt that you ran on the other bitnet's.
 
 ```
 ./bin/llama-cli -m /mnt/sda/bitnet/gguf/ggml-model-iq2_bn.gguf -s 12345 -p "Write an essay about ecosystem" -t 8 --numa  distribute -n 900
@@ -625,6 +626,10 @@ In conclusion, ecosystem services play a crucial role in sustaining human life a
 ##Answers:
 
 1. Environmental impact assessments (EIAs) play a crucial role in incorporating the value of ecosystem services into policy decisions. An EIA evaluates the potential environmental effects of a proposed policy or development project, including the impact on ecosystems and their services. By considering the value of ecosystem services, policymakers can
+```
+</details>
+
+```
 llama_print_timings:        load time =     295.32 ms
 llama_print_timings:      sample time =      82.35 ms /   900 runs   (    0.09 ms per token, 10929.49 tokens per second)
 llama_print_timings: prompt eval time =     185.71 ms /     6 tokens (   30.95 ms per token,    32.31 tokens per second)
@@ -661,9 +666,64 @@ KeyError: 'U8'
 
 For now maybe we can just have GGUF support only, relying on elsewhere to do conversion from safetensors just like Gemma3?
 
+Edit: Peak speed for me is at 24 threads, would be curious to see it on your machines since you have a lot of comparitive numbers.
+
+```
+llama_print_timings:        load time =     301.94 ms
+llama_print_timings:      sample time =      11.75 ms /   128 runs   (    0.09 ms per token, 10895.47 tokens per second)
+llama_print_timings: prompt eval time =     121.43 ms /     6 tokens (   20.24 ms per token,    49.41 tokens per second)
+llama_print_timings:        eval time =    3495.94 ms /   127 runs   (   27.53 ms per token,    36.33 tokens per second)
+llama_print_timings:       total time =    3683.50 ms /   133 tokens
+```
+
+Edit 2: Pushed the python fix for the new name even if that file still doesn't work. I don't see a point of pushing the standalone file since I still can't get that to work either. If they are going to have a standalone file, we may as well tell people to grab a GGUF (I could even upload one for this model it's small enough).
+
+Edit 3: Even higher speeds with the R4 variant.
+
+```
+llama_print_timings:        load time =     299.55 ms
+llama_print_timings:      sample time =      11.89 ms /   128 runs   (    0.09 ms per token, 10760.82 tokens per second)
+llama_print_timings: prompt eval time =      98.51 ms /     6 tokens (   16.42 ms per token,    60.91 tokens per second)
+llama_print_timings:        eval time =    3330.97 ms /   127 runs   (   26.23 ms per token,    38.13 tokens per second)
+llama_print_timings:       total time =    3498.51 ms /   133 tokens
+```
+
+Edit 4: Using bench to see some numbers of both, where now 48 seems better again, showing best result for both R4 and normal variants.
+
+`./bin/llama-bench -m /mnt/sda/bitnet/gguf/ggml-model-iq2_bn_r4.gguf -r 3 -t 48 --numa distribute`
+
+| model                          |       size |     params | backend    | threads |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | ------------: | ---------------: |
+| bitnet-25 2B IQ2_BN_R4 - 2.00 bpw Bitnet | 934.16 MiB |     2.74 B | CPU        |      48 |         pp512 |   305.60 ± 17.19 |
+| bitnet-25 2B IQ2_BN_R4 - 2.00 bpw Bitnet | 934.16 MiB |     2.74 B | CPU        |      48 |         tg128 |     37.04 ± 0.58 |
+
+`./bin/llama-bench -m /mnt/sda/bitnet/gguf/ggml-model-iq2_bn.gguf -r 3 -t 48 --numa distribute`
+
+| model                          |       size |     params | backend    | threads |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | ------------: | ---------------: |
+| bitnet-25 2B IQ2_BN - 2.00 bpw Bitnet | 934.16 MiB |     2.74 B | CPU        |      48 |         pp512 |   290.60 ± 11.27 |
+| bitnet-25 2B IQ2_BN - 2.00 bpw Bitnet | 934.16 MiB |     2.74 B | CPU        |      48 |         tg128 |     36.79 ± 0.52 |
+
+Very informal testing, no dropping of cache, or other precautions taken.
+
+Edit 5: It is available on huggingface [here](https://huggingface.co/tdh111/bitnet-b1.58-2B-4T-GGUF).
+
+Edit 6: Another informal benchmark, this time sweep bench.
+
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    1.263 |   405.31 |    3.747 |    34.16 |
+|   512 |    128 |    512 |    1.373 |   373.02 |    3.764 |    34.01 |
+|   512 |    128 |   1024 |    1.503 |   340.58 |    3.890 |    32.91 |
+|   512 |    128 |   1536 |    1.647 |   310.83 |    4.042 |    31.67 |
+|   512 |    128 |   2048 |    1.774 |   288.67 |    4.170 |    30.69 |
+|   512 |    128 |   2560 |    2.027 |   252.53 |    4.369 |    29.30 |
+|   512 |    128 |   3072 |    2.149 |   238.29 |    4.557 |    28.09 |
+|   512 |    128 |   3584 |    2.474 |   206.93 |    4.805 |    26.64 |
+
 ---
 
-👤 **ikawrakow** commented the **2025-04-22** at **05:48:56**:<br>
+👤 **ikawrakow** commented on **2025-04-22** at **05:48:56**
 
 Yes, I got it running by converting the `i2_s` model as well. But what about the missing pre-tokenizer?
 ```
@@ -711,7 +771,7 @@ Is `llama3` OK, or are we crippling the model by using the `llama3` pre-tokenize
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-22** at **06:07:30**:<br>
+👤 **ikawrakow** commented on **2025-04-22** at **06:07:30**
 
 Here `sweep-bench` performance on my Ryzen-7950X using `-ctk q8_0 -fa -rtr -t 16`
 
@@ -728,7 +788,7 @@ Here `sweep-bench` performance on my Ryzen-7950X using `-ctk q8_0 -fa -rtr -t 16
 
 ---
 
-👤 **saood06** commented the **2025-04-22** at **06:15:43**:<br>
+👤 **saood06** commented on **2025-04-22** at **06:15:43**
 
 > Yes, I got it running by converting the `i2_s` model as well. But what about the missing pre-tokenizer?
 >
@@ -738,7 +798,7 @@ It does seem to have an issue using EOS tokens and stopping generation, so there
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-22** at **06:30:00**:<br>
+👤 **ikawrakow** commented on **2025-04-22** at **06:30:00**
 
 Here the results of the official Microsoft BitNet implementation (build a8ac7072, just pulled)
 
@@ -751,13 +811,23 @@ BitNet is a `llama.cpp` fork that does nothing else but adding BitNet support, w
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-04-22** at **06:31:48**: ✅ `APPROVED`<br>
+👤 **ikawrakow** approved this pull request ✅ on **2025-04-22** at **06:31:48**
 
 I think we can merge like this. It is fine to just use `I2_S` GGUFs. We can sort out the pre-tokenizer issue later.
 
 ---
 
-👤 **saood06** commented the **2025-04-22** at **07:08:26**:<br>
+👤 **saood06** commented on **2025-04-22** at **06:54:14**
+
+> I think we can merge like this. It is fine to just use `I2_S` GGUFs. We can sort out the pre-tokenizer issue later.
+
+Okay. I'll make an issue. I tested the model more, it is coherent, and can even do multi turn conversation, it just doesn't ever use an EOS token and so it never stops it's own generation it will just continue until I stopped it, and I still don't really understand it's chat template:
+
+`{% for message in messages %}{% if loop.first %}{{ bos_token }}{% endif %}{% if message['role'] == 'user' %}{{ 'Human: ' + message['content'] + '\n\nBITNETAssistant: ' + eos_token }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token }}{% endif %}{% endfor %}`
+
+---
+
+👤 **saood06** commented on **2025-04-22** at **07:08:26**
 
 > Here `sweep-bench` performance on my Ryzen-7950X using `-ctk q8_0 -fa -rtr -t 16`
 
@@ -765,7 +835,7 @@ I couldn't get flash attention running, it would always just exit with `Floating
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-22** at **07:16:33**:<br>
+👤 **ikawrakow** commented on **2025-04-22** at **07:16:33**
 
 > I couldn't get flash attention running, it would always just exit with Floating point exception (core dumped).
 
@@ -773,7 +843,7 @@ Something is missing in the logic for your number of threads. The model has a st
 
 ---
 
-👤 **saood06** commented the **2025-04-22** at **07:26:59**:<br>
+👤 **saood06** commented on **2025-04-22** at **07:26:59**
 
 > > I couldn't get flash attention running, it would always just exit with Floating point exception (core dumped).
 > 

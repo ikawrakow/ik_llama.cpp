@@ -1,14 +1,17 @@
-### 🔀 [#143](https://github.com/ikawrakow/ik_llama.cpp/pull/143) - Slightly faster IQ4_XS_R4 on AVX2
+## 🔀 [Pull Request #143](https://github.com/ikawrakow/ik_llama.cpp/pull/143) - Slightly faster IQ4_XS_R4 on AVX2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq4_xs_r4_avx2` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-16 |
 | **Updated** | 2024-12-16 |
+| **Merged** | 2024-12-16 |
 
 ---
 
-#### Description
+## 📄 Description
 
 PPL-512(LLaMA-3.1-8B) on Ryzen-5975WX goes to 262.2 t/s up from 248.2 t/s.
 

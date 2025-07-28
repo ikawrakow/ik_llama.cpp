@@ -1,13 +1,14 @@
-### 🗣️ [#63](https://github.com/ikawrakow/ik_llama.cpp/discussions/63) - LLaMA-3.2 quantization evaluation
+## 🗣️ [Discussion #63](https://github.com/ikawrakow/ik_llama.cpp/discussions/63) - LLaMA-3.2 quantization evaluation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-09-26 |
 | **Updated** | 2024-09-26 |
 
 ---
 
-#### Description
+## 📄 Description
 
 LLaMA-3.2 is out. `llama.cpp` does not yet support the vision models, so this post focuses on the 1B ad 3B text models that could be very handy for local usage on low-end devices. The models are small enough even with full precision (`bf16`) but I think it is still interesting to look at quantization as token generation is significantly faster with quantized models.
 
@@ -60,7 +61,7 @@ Perplexity (`PPL` in what follows) is not the best measure to compare *different
 ```
 quantization error = PPL(Q)/PPL(bf16) - 1
 ```
-where `PPL(Q)` is the perplexity of quantization `Q` and `PPL(bf16)` is the perplexity of the full model (the 3.2 models are released as `bf16`, so I use `bf16` throughout as `bf16` support has been added here in PR #39, #40, #41, #56). 
+where `PPL(Q)` is the perplexity of quantization `Q` and `PPL(bf16)` is the perplexity of the full model (the 3.2 models are released as `bf16`, so I use `bf16` throughout as `bf16` support has been added here in PR [#39](https://github.com/ikawrakow/ik_llama.cpp/issues/39), [#40](https://github.com/ikawrakow/ik_llama.cpp/issues/40), [#41](https://github.com/ikawrakow/ik_llama.cpp/issues/41), [#56](https://github.com/ikawrakow/ik_llama.cpp/issues/56)). 
 
 The following graph shows quantization error of LLaMA-3.2-3B as a function of bits-per-weight (bpw) for (almost) all quantization types supported here. Note that this is the effective bpw that includes the `token_embedding.weight` tensor, which is quantized with more bits (typically `Q6_K`), and this has a significant impact on the overall bpw balance as this tensor represents a significant fraction of the overall model size. The y-axis is logarithmic, so differences can be quite large even if data points look relatively close. The cyan circles are for the new quants `IQ2_K, IQ3_K, IQ4_K, IQ5_K` and `IQ6_K` that are not available in mainline `llama.cpp`. The black symbols are for i-quants, the red for k-quants, and the blue symbols are legacy quants (`Q4_0, Q4_1, Q5_0`, Q5_1`). 
 
@@ -106,9 +107,9 @@ All quantizations above `IQ3_K` (3.6 bpw) are (nearly) indistinguishable from th
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **ikawrakow** replied the **2024-09-26** at **16:11:00**:<br>
+👤 **ikawrakow** commented on **2024-09-26** at **16:11:00**
 
 Here some performance numbers for the 1B model on a Ryzen-7950X CPU
 
@@ -147,7 +148,7 @@ Here some performance numbers for the 1B model on a Ryzen-7950X CPU
 
 ---
 
-👤 **ikawrakow** replied the **2024-09-26** at **16:18:44**:<br>
+👤 **ikawrakow** commented on **2024-09-26** at **16:18:44**
 
 Here some performance numbers for the 3B model on a Ryzen-7950X CPU
 

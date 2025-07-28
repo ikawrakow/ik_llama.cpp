@@ -1,14 +1,17 @@
-### 🔀 [#19](https://github.com/ikawrakow/ik_llama.cpp/pull/19) - Skip barriers of noops
+## 🔀 [Pull Request #19](https://github.com/ikawrakow/ik_llama.cpp/pull/19) - Skip barriers of noops
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/skip_noop_barriers` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-14 |
 | **Updated** | 2024-08-14 |
+| **Merged** | 2024-08-14 |
 
 ---
 
-#### Description
+## 📄 Description
 
 `GGML_OP_RESHAPE, GGML_OP_VIEW, GGML_OP_PERMUTE, GGML_OP_TRANSPOSE`, along with `GGML_OP_NONE`, are all noops in `ggml`. I.e., nothing happens. But `ggml` still has a thread barrier after them, which wastes time. The waste is not too bad for large models where computations are long compared to the time taken for thread synchronization. But for small models skipping those unnecessary waits makes a noticeable difference.
 

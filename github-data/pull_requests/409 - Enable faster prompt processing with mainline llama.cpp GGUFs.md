@@ -1,19 +1,22 @@
-### 🔀 [#409](https://github.com/ikawrakow/ik_llama.cpp/pull/409) - Enable faster prompt processing with mainline llama.cpp GGUFs
+## 🔀 [Pull Request #409](https://github.com/ikawrakow/ik_llama.cpp/pull/409) - Enable faster prompt processing with mainline llama.cpp GGUFs
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/enable_mla3_in_crippled_ggufs` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-11 |
 | **Updated** | 2025-05-12 |
+| **Merged** | 2025-05-12 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Mainline llama.cpp [PR 12901](https://github.com/ggml-org/llama.cpp/pull/12801), which added MLA support for DeepSeek models 2.5 months after MLA was available here, broke backwards compatibility. As a result,
-the new DeepSeek GGUFs that started appearing on HF became compatible with `ik_llama.cpp`, so I added support for the incompatible GGUFs in #394. But using such crippled DeepSeek GGUF results in a much lower prompt processing performance. This is because the `attn_wkv_b` tensor is missing, so one cannot use `mla = 3`.
+the new DeepSeek GGUFs that started appearing on HF became compatible with `ik_llama.cpp`, so I added support for the incompatible GGUFs in [#394](https://github.com/ikawrakow/ik_llama.cpp/issues/394). But using such crippled DeepSeek GGUF results in a much lower prompt processing performance. This is because the `attn_wkv_b` tensor is missing, so one cannot use `mla = 3`.
 
-This PR removes this limitation. When `-mla 0 or 2 or 3` is specified on the command line, missing `attn_wkv_b` tensors are created on-the-fly while loading the model. This is basically the reverse of #259, where the `attn_wk_b` and `attn_wv_b`tensors necessary for MLA were computed from the `attn_wkv_b` tensors in the original DeepSeek GGUFs.
+This PR removes this limitation. When `-mla 0 or 2 or 3` is specified on the command line, missing `attn_wkv_b` tensors are created on-the-fly while loading the model. This is basically the reverse of [#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259), where the `attn_wk_b` and `attn_wv_b`tensors necessary for MLA were computed from the `attn_wkv_b` tensors in the original DeepSeek GGUFs.
 
 To show why this is useful, the following graph compares PP performance between the main branch and this PR. The `sweep-bench` command is
 ```
@@ -25,9 +28,9 @@ The model is a mainline `llama.cpp` DeepSeek-Lite GGUF with the `attn_wkv_b` ten
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **Panchovix** commented the **2025-05-11** at **19:03:47**:<br>
+👤 **Panchovix** commented on **2025-05-11** at **19:03:47**
 
 Testing this PR (on top of https://github.com/ikawrakow/ik_llama.cpp/pull/405 and https://github.com/ikawrakow/ik_llama.cpp/pull/408 PRs), here's a complete log when loading DeepSeek V3 0324 Q2_K_XL. Notably, I had to reduce 1 layer on CUDA 2 (compared to https://github.com/ikawrakow/ik_llama.cpp/pull/405#issuecomment-2869126831), as now CUDA 2 was getting OOM. I noticed the compute buffers are ~3.3GB each instead of 2GB and 400MB respectively for each despite using the -fa flag with -mla 3.
 
@@ -771,4 +774,14 @@ INFO [           print_timings]           total time =   82713.10 ms | tid="1405
 
 
 
-Testing with -mla 2, compute buffers are 3.4GB as well vs -mla 1 with -fa. Here it got a small perf improvement (109 t/s PP vs 106 t/s PP).
+Testing with -mla 2, compute buffers are 3.4GB as well vs -mla 3 with -fa. Here it got a small perf improvement (109 t/s PP vs 106 t/s PP).
+
+EDIT: I noticed that with this PR we have to specify -mla 1 to make compute buffers smaller, as it doesn't automatically changes it from 0 to 1.
+
+---
+
+👤 **ikawrakow** commented on **2025-05-12** at **04:41:08**
+
+The compute buffers become larger because one needs extra buffers for the transformed cache. If you are running out of VRAM, you can reduce the compute buffer size using e.g. `-amb 512`. This may result in a small performance degradation (but often doesn't). 
+
+The extra ~1 GiB in model size is for the newly created `attn_wkv_b` tensors.

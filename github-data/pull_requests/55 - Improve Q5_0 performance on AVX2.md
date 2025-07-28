@@ -1,14 +1,17 @@
-### 🔀 [#55](https://github.com/ikawrakow/ik_llama.cpp/pull/55) - Improve Q5_0 performance on AVX2
+## 🔀 [Pull Request #55](https://github.com/ikawrakow/ik_llama.cpp/pull/55) - Improve Q5_0 performance on AVX2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/avx2_q5_0` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-14 |
 | **Updated** | 2024-09-14 |
+| **Merged** | 2024-09-14 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The main purpose of the [previous PR](https://github.com/ikawrakow/ik_llama.cpp/pull/54) was to try to improve `K*Q` matrix multiplications for flash attention with `Q8_0` quantized k-cache. Sadly, the performance improvement that we got for `Q8_0` did not translate into better FA performance. It is a rainy Saturday, so need something to brighten my day. The last PR is very easily applied to `Q5_0`, so here we are.
 

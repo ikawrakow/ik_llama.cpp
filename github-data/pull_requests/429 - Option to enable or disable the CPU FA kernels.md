@@ -1,14 +1,17 @@
-### 🔀 [#429](https://github.com/ikawrakow/ik_llama.cpp/pull/429) - Option to enable or disable the CPU FA kernels
+## 🔀 [Pull Request #429](https://github.com/ikawrakow/ik_llama.cpp/pull/429) - Option to enable or disable the CPU FA kernels
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/option_cpu_fa` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-17 |
 | **Updated** | 2025-05-17 |
+| **Merged** | 2025-05-17 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The compilation of `iqk_mul_mat.cpp` takes extremely long - currently 2m22s on my Ryzen-7950X CPU, with some users reporting times in the range of 30 minutes on an Antroid phone using Termux . This is to a large extent due to the Flash Attention (FA) kernels. Hence, this PR adds a `cmake` option to enable or disable the CPU FA kernels. It is set on by default, and can be changed using
 ```

@@ -1,16 +1,19 @@
-### 🐛 [#171](https://github.com/ikawrakow/ik_llama.cpp/pull/171) - Fix lower FA performance for even batch sizes
+## 🔀 [Pull Request #171](https://github.com/ikawrakow/ik_llama.cpp/pull/171) - Fix lower FA performance for even batch sizes
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_fattn_odd_even` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-12 |
 | **Updated** | 2025-01-12 |
+| **Merged** | 2025-01-12 |
 
 ---
 
-#### Description
+## 📄 Description
 
-This PR fixes the lower performance for even batch sizes reported in #164. The graph shows a t/s comparison between the main branch and this PR using
+This PR fixes the lower performance for even batch sizes reported in [#164](https://github.com/ikawrakow/ik_llama.cpp/issues/164). The graph shows a t/s comparison between the main branch and this PR using
 ```
 ./bin/llama-batched-bench -m some_model.gguf -pps -t 16 -npp 256 -ntg 128 -npl 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16 -c 4096 -rtr -fa 
 ```

@@ -1,13 +1,14 @@
-### 🗣️ [#354](https://github.com/ikawrakow/ik_llama.cpp/discussions/354) - Not all MLAs are born equal
+## 🗣️ [Discussion #354](https://github.com/ikawrakow/ik_llama.cpp/discussions/354) - Not all MLAs are born equal
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-04-29 |
-| **Updated** | 2025-05-13 |
+| **Updated** | 2025-07-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 ## Intro
 
@@ -246,25 +247,27 @@ The next graph shows PP performance as a function of `N_KV`. Here the performanc
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **JohannesGaessler** replied the **2025-04-29** at **07:29:26**:<br>
+👤 **JohannesGaessler** commented on **2025-04-29** at **07:29:26**
 
 Since you are tagging me: I did look at the more general implementation for mapping MoE to regular matrix multiplications in the PR where I commented but I did not look at any MoE-specific CUDA code for matrix vector multiplication, nor was I aware that this repository had such an optimization. It's just the natural way of writing a fused kernel.
 
-> 👤 **ikawrakow** replied the **2025-04-29** at **14:39:31**:<br>
+> 👤 **ikawrakow** replied on **2025-04-29** at **14:39:31**
+> 
 > >  It's just the natural way of writing a fused kernel.
 > 
 > Sure, a kernel that did not get written for a very long time, despite the well known fact that `llama.cpp` CUDA performance for MoE models is really bad. Which indicates that the understanding how badly the fused kernel was needed was missing. It is not very often that one has a PR that [improves performance up to 4X](https://github.com/ggml-org/llama.cpp/pull/13014#issuecomment-2816637977).
 > 
 > But if it is so as you say, then sorry.
+
+> 👤 **JohannesGaessler** replied on **2025-04-29** at **15:33:40**
 > 
-> 👤 **JohannesGaessler** replied the **2025-04-29** at **15:33:40**:<br>
 > Apology accepted. My top priority was and still is good performance for dense GEMM/GEMV because that is the most fundamental operation. MoE optimizations have now simply reached the front of the priority queue.
 
 ---
 
-👤 **cmoncure** replied the **2025-05-06** at **15:50:00**:<br>
+👤 **cmoncure** commented on **2025-05-06** at **15:50:00**
 
 I read this and the warning on the README.md about incompatible GGUFs is quite unfortunate. I don't mind spending the time to create my own quants for this fork in the pursuit of maximum performance. I am a total noob to creating quants, however.
 
@@ -274,7 +277,8 @@ Do you plan to support the incompatible mainline GGUF files? Can I assume that G
 
 Thank you for creating this work and making it available. You are a true wizard.
 
-> 👤 **ikawrakow** replied the **2025-05-06** at **16:16:34**:<br>
+> 👤 **ikawrakow** replied on **2025-05-06** at **16:16:34**
+> 
 > > Can I assume that GGUFs created before mid-April or so will be compatible? (Downloading these larger models represents a considerable cost.)
 > 
 > I think so. But to make sure, if you are downloading from HF, you can check the content of the GGUF. To be compatible, it needs to have tensors ` blk.X.attn_kv_b.weight` (where `X` is the layer index, so 0,1,...). If it does, it will work with this fork. If instead it has separate tensors `blk.X.attn_k_b.weight` and `blk.X.attn_v_b.weight`, it is most likely not compatible. 
@@ -282,8 +286,9 @@ Thank you for creating this work and making it available. You are a true wizard.
 > > Do you plan to support the incompatible mainline GGUF files? 
 > 
 > No, not really. There are implications beyond compatibility. The change impacts quantization of the attention tensors, and I think there are now some reports from users about reduced model quality after the change was made and the quantized models compatible with that change started coming out.
+
+> 👤 **saood06** replied on **2025-05-06** at **20:24:09**
 > 
-> 👤 **saood06** replied the **2025-05-06** at **20:24:09**:<br>
 > > I think so. But to make sure, if you are downloading from HF, you can check the content of the GGUF. To be compatible, it needs to have tensors ` blk.X.attn_kv_b.weight` (where `X` is the layer index, so 0,1,...). If it does, it will work with this fork. If instead it has separate tensors `blk.X.attn_k_b.weight` and `blk.X.attn_v_b.weight`, it is most likely not compatible.
 > 
 > Just to be more clear after looking at one converted with the compatible version of MLA that works [here](https://huggingface.co/ubergarm/DeepSeek-V3-0324-GGUF/tree/main/DeepSeek-V3-0324-IQ2_K_R4?show_file_info=DeepSeek-V3-0324-IQ2_K_R4%2FDeepSeek-V3-0324-IQ2_K_R4-00001-of-00005.gguf) , it has `attn_k_b.weight`, `attn_v_b.weight` and `attn_kv_b.weight`.
@@ -294,33 +299,38 @@ Thank you for creating this work and making it available. You are a true wizard.
 > 
 > So in conclusion if the model has all three `attn_k_b.weight`, `attn_v_b.weight` and `attn_kv_b.weight` or just `attn_kv_b.weight` it will work here, but if it has `attn_k_b.weight` and `attn_v_b.weight` but no `attn_kv_b.weight` it will not work here.
 > 
-> Edit: The above is outdated, see #394 and #409
+> Edit: The above is outdated, see [#394](https://github.com/ikawrakow/ik_llama.cpp/issues/394) and [#409](https://github.com/ikawrakow/ik_llama.cpp/issues/409)
+
+> 👤 **ubergarm** replied on **2025-05-12** at **15:39:39**
 > 
-> 👤 **ubergarm** replied the **2025-05-12** at **15:39:39**:<br>
 > Sorry for late reply @cmoncure , I have a rough outline of the process of going from fp8 to GGUF for ik's fork [buried in a fold in my quickstart guide](https://github.com/ikawrakow/ik_llama.cpp/discussions/258) under the "Custom Quants" section.
 > 
 > Its a bit dated already, but the basic procedures are described there. I'd suggest making your own imatrix and take [this new PR411 into consideration ](https://github.com/ikawrakow/ik_llama.cpp/pull/411) for that step as well.
+
+> 👤 **saood06** replied on **2025-05-13** at **00:23:49**
 > 
-> 👤 **saood06** replied the **2025-05-13** at **00:23:49**:<br>
 > > Sorry for late reply @cmoncure , I have a rough outline of the process of going from fp8 to GGUF for ik's fork [buried in a fold in my quickstart guide](https://github.com/ikawrakow/ik_llama.cpp/discussions/258) under the "Custom Quants" section.
 > > 
 > > Its a bit dated already, but the basic procedures are described there. I'd suggest making your own imatrix and take [this new PR411 into consideration ](https://github.com/ikawrakow/ik_llama.cpp/pull/411) for that step as well.
 > 
 > The dequant method in your guide (that I had recommended) may need more precise instructions to work now. For more info see [this](https://github.com/ikawrakow/ik_llama.cpp/issues/383#issuecomment-2865306085) and the following comments.
+
+> 👤 **ubergarm** replied on **2025-05-13** at **20:13:04**
 > 
-> 👤 **ubergarm** replied the **2025-05-13** at **20:13:04**:<br>
 > Thanks @saood06 , I managed to `git apply saood06.patch` copy/pasting your comment and that fixes up building `triton-cpu`. I tested with `uv venv ./venv --python 3.12 --python-preference=only-managed` for my venv and updated a couple lines of the quick start guide.
 > 
 > Hopefully enough bread crumbs our future selves can figure it out.
+
+> 👤 **saood06** replied on **2025-05-13** at **21:09:54**
 > 
-> 👤 **saood06** replied the **2025-05-13** at **21:09:54**:<br>
 > > Thanks @saood06 , I managed to `git apply saood06.patch` copy/pasting your comment and that fixes up building `triton-cpu`. 
 > 
 > Mind telling me the exact version/commit hash of `triton-cpu` you built?
 > 
 > I noticed mine is 3.2.0 and they seem to be on 3.3.0 (and thus I hoped the bug would be fixed upstream)
+
+> 👤 **ubergarm** replied on **2025-05-13** at **21:21:58**
 > 
-> 👤 **ubergarm** replied the **2025-05-13** at **21:21:58**:<br>
 > > > Thanks @saood06 , I managed to `git apply saood06.patch` copy/pasting your comment and that fixes up building `triton-cpu`.
 > > 
 > > Mind telling me the exact version/commit hash of `triton-cpu` you built?
@@ -330,18 +340,21 @@ Thank you for creating this work and making it available. You are a true wizard.
 > I added your patch to `main@0625715c` `Artlesbol` `[MathToVecLib] Add support for setting bit-widths for AVX512...` `Apr 26 12:24:21 2025 +0800`
 > 
 > I originally tried to use the same git sha I used the first time, but it doesn't exist anymore, so I guess they force pushed main or something somewhere along the way between now and March 13, 2025 maybe?
+
+> 👤 **saood06** replied on **2025-05-13** at **21:45:22**
 > 
-> 👤 **saood06** replied the **2025-05-13** at **21:45:22**:<br>
 > > I originally tried to use the same git sha I used the first time, but it doesn't exist anymore, so I guess they force pushed main or something somewhere along the way between now and March 13, 2025 maybe?
 > 
 > I noticed similar things when trying to look into the history of the repo. Whatever they are doing it makes tracing down the source of changes in their repo very tedious and annoying.
 > 
 > Thanks for confirming the issue still exists in their latest commit, I don't currently plan on creating a better fix for them so I made an issue https://github.com/triton-lang/triton-cpu/issues/237 and hopefully they fix it.
+
+> 👤 **saood06** replied on **2025-05-13** at **22:33:34**
 > 
-> 👤 **saood06** replied the **2025-05-13** at **22:33:34**:<br>
 > @ubergarm if you still have the build errors that my patch solves do you mind sharing them in the issue I made. I don't have them, and they are requesting them in the issue I opened.
+
+> 👤 **ubergarm** replied on **2025-05-13** at **23:10:18**
 > 
-> 👤 **ubergarm** replied the **2025-05-13** at **23:10:18**:<br>
 > > @ubergarm if you still have the build errors that my patch solves do you mind sharing them in the issue I made. I don't have them, and they are requesting them in the issue I opened.
 > 
 > Its a goofy browser ssh client for this specific rig, i tried to scroll my tmux back but its gone... 

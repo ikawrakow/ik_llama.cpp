@@ -1,14 +1,17 @@
-### 🔀 [#219](https://github.com/ikawrakow/ik_llama.cpp/pull/219) - Fuse MoE up and gate matrix multiplications
+## 🔀 [Pull Request #219](https://github.com/ikawrakow/ik_llama.cpp/pull/219) - Fuse MoE up and gate matrix multiplications
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fuse_moe_up_gate` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-22 |
 | **Updated** | 2025-02-22 |
+| **Merged** | 2025-02-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 No new op, instead the fusing is done during graph compute in the CPU back end (same could be also done for the other back ends).
  

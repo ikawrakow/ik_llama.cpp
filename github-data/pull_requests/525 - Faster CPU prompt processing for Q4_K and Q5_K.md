@@ -1,18 +1,21 @@
-### 🔀 [#525](https://github.com/ikawrakow/ik_llama.cpp/pull/525) - Faster CPU prompt processing for Q4_K and Q5_K
+## 🔀 [Pull Request #525](https://github.com/ikawrakow/ik_llama.cpp/pull/525) - Faster CPU prompt processing for Q4_K and Q5_K
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/q4_k_gemm` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-12 |
 | **Updated** | 2025-06-13 |
+| **Merged** | 2025-06-13 |
 
 ---
 
-#### Description
+## 📄 Description
 
 These two quantization types are quite popular, so I thought it makes sense to improve their performance. The repacked variants `Q4_K_R4` and `Q5_K_R4`  do not have a CUDA implementation, so repacking is not useful in a hybrid CPU/GPU setup where it may be better to offload tensors stored in RAM to the GPU when processing large batched.
 
-The PR uses the same trick as #515, #516, #517, #518. When processing batches `>= 32` tokens, `Q4_K` or `Q5_K` quantized tensors are repacked on-the-fly to `Q8_1_R8`. 
+The PR uses the same trick as [#515](https://github.com/ikawrakow/ik_llama.cpp/issues/515), [#516](https://github.com/ikawrakow/ik_llama.cpp/issues/516), [#517](https://github.com/ikawrakow/ik_llama.cpp/issues/517), [#518](https://github.com/ikawrakow/ik_llama.cpp/issues/518). When processing batches `>= 32` tokens, `Q4_K` or `Q5_K` quantized tensors are repacked on-the-fly to `Q8_1_R8`. 
 
 Here some sweep-bench results for LLaMA-3.1-8B-Instruct on a Ryzen-7950X CPU
 
@@ -76,4 +79,4 @@ Here some sweep-bench results for LLaMA-3.1-8B-Instruct on a Ryzen-7950X CPU
 |   512 |    128 |   1536 |    2.350 |   217.91 |   11.888 |    10.77 |
 |   512 |    128 |   2048 |    2.133 |   240.00 |   11.998 |    10.67 |
 
-Here performance gains are not as large as in #514, #515, #516, #518 as k-quants are much faster than sub-4 bpw i-quants. Nevertheless, we see a nearly 50% PP performance improvement compared to the non-interleaved variants, and 5-10% improvement compared to the `_R4` variants.
+Here performance gains are not as large as in [#514](https://github.com/ikawrakow/ik_llama.cpp/issues/514), [#515](https://github.com/ikawrakow/ik_llama.cpp/issues/515), [#516](https://github.com/ikawrakow/ik_llama.cpp/issues/516), [#518](https://github.com/ikawrakow/ik_llama.cpp/issues/518) as k-quants are much faster than sub-4 bpw i-quants. Nevertheless, we see a nearly 50% PP performance improvement compared to the non-interleaved variants, and 5-10% improvement compared to the `_R4` variants.

@@ -1,13 +1,14 @@
-### 🗣️ [#384](https://github.com/ikawrakow/ik_llama.cpp/discussions/384) - ik_llama.cpp issues on an old workstation
+## 🗣️ [Discussion #384](https://github.com/ikawrakow/ik_llama.cpp/discussions/384) - ik_llama.cpp issues on an old workstation
 
 | **Author** | `matt23654` |
 | :--- | :--- |
+| **State** | ✅ **Answered** |
 | **Created** | 2025-05-06 |
 | **Updated** | 2025-05-06 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Hi! So I have managed to get ubergarm's 235B quant to work on a 6 year old workstation with 2*2080TI's, 64GB RAM and a pretty fast (new) SSD. 
 
@@ -50,9 +51,9 @@ Am I just doing something wrong or is there some genuine bug here?
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **ikawrakow** replied the **2025-05-06** at **11:31:27**:<br>
+👤 **ikawrakow** commented on **2025-05-06** at **11:31:27**
 
 Split mode "row" does not work for MoE models (and I'm not sure if it works for dense models as I don't have access to a multi-GPU system, so have not tested since forking). I'm pretty sure split mode "row" does not work for MoE models in mainline `llama.cpp` either.
 
@@ -70,7 +71,8 @@ Note that the tensor overrides are processed in the order they were defined on t
 
 If the GPUs are different, then it may be better to just manually define with `-ot` which tensors go where.
 
-> 👤 **matt23654** replied the **2025-05-06** at **13:54:09**:<br>
+> 👤 **matt23654** replied on **2025-05-06** at **13:54:09**
+> 
 > Hi @ikawrakow !
 > 
 > No matter what I do ``-sm layer`` just doesnt seem to work with 2 devices. A variation of your first command segfaults:
@@ -100,8 +102,9 @@ If the GPUs are different, then it may be better to just manually define with `-
 > ```
 > 
 > I don't know why it wants to allocate such a huge amount of memory. It doesn't do that with one device or with ``-sm row`` (as mentioned row doesn't work if I try to put any MoE expert tensors on the GPUs).
+
+> 👤 **ubergarm** replied on **2025-05-06** at **13:57:01**
 > 
-> 👤 **ubergarm** replied the **2025-05-06** at **13:57:01**:<br>
 > @matt23654 
 > 
 > First I'm  not sure where this came from but a lot of folks keep using `-ot "^blk\.[3-9]\.ffn_.*_exps\.=CPU"` which misses some other ffn layers without the `exps` as the naming convention on Qwen3 is a bit different than DeepSeek for example.
@@ -112,21 +115,25 @@ If the GPUs are different, then it may be better to just manually define with `-
 > Look here for more discussions and examples: https://huggingface.co/ubergarm/Qwen3-235B-A22B-GGUF/discussions/1#681642d4a383b2fb9aa3bd8c
 > 
 > Keep us posted how you get along, as some others have reported success with multi-gpu once they get the arguments just right for their specific systems!
+
+> 👤 **matt23654** replied on **2025-05-06** at **15:19:56**
 > 
-> 👤 **matt23654** replied the **2025-05-06** at **15:19:56**:<br>
 > Thanks @ubergarm ! For some reason ``-DGGML_SCHED_MAX_COPIES=1`` works and it no longer tries allocating 170GB of VRAM. I'm getting ~15 tok/s PP and ~6 tok/s generation. Not too bad really for a very old computer offloading from SSD! Specs: i9-9940X, 64GB quad channel ram, 2*2080Ti. I also offloaded all the ffn tensors as suggested.
 > 
 > I'm guessing that I can't really expect to get a lot of PP speed with SSD offloading and an old CPU (i9-9940X)?
+
+> 👤 **ikawrakow** replied on **2025-05-06** at **16:32:43**
 > 
-> 👤 **ikawrakow** replied the **2025-05-06** at **16:32:43**:<br>
 > @matt23654 I'm curious what happens if you add `-rtr` to your command line. Model loading will take longer, but possibly this will improve your PP performance (PP being only 2.5 times faster than TG does not sound right).
+
+> 👤 **matt23654** replied on **2025-05-06** at **19:59:06**
 > 
-> 👤 **matt23654** replied the **2025-05-06** at **19:59:06**:<br>
 > @ikawrakow So there definitely looks to be something a bit wierd going on, maybe because of the SSD, but ``-rtr`` didn't really change PP speed. I've also tried compiling with OpenBLAS, but that somehow seems to have made it slower (yay!).
 > 
 > The CPU is less active during PP than during regular inference, so I can only assume that somehow the SSD is bottlenecking it. The SSD bandwidth on its own should only be about 0.5tok/s peak, I think the reason generation is so fast is that Qwen isn't choosing experts uniformly and so the kernel caching is making it far closer to the quad-channel ram speed instead. That's my theory, anyway.
+
+> 👤 **ubergarm** replied on **2025-05-06** at **20:44:40**
 > 
-> 👤 **ubergarm** replied the **2025-05-06** at **20:44:40**:<br>
 > You might be able to get some more out of it, not sure your what your final command was, but give this a try:
 > ```
 > # do *not* use BLAS and set -DGGML_SCHED_MAX_COPIES=1

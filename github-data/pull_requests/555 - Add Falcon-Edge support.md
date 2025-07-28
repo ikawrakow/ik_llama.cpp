@@ -1,16 +1,19 @@
-### 🔀 [#555](https://github.com/ikawrakow/ik_llama.cpp/pull/555) - Add Falcon-Edge support
+## 🔀 [Pull Request #555](https://github.com/ikawrakow/ik_llama.cpp/pull/555) - Add Falcon-Edge support
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/falcon_edge` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-25 |
 | **Updated** | 2025-06-26 |
+| **Merged** | 2025-06-26 |
 
 ---
 
-#### Description
+## 📄 Description
 
-Closes #551 
+Closes [#551](https://github.com/ikawrakow/ik_llama.cpp/issues/551) 
 
 How to use:
 

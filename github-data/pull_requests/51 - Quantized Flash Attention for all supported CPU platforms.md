@@ -1,14 +1,17 @@
-### 🔀 [#51](https://github.com/ikawrakow/ik_llama.cpp/pull/51) - Quantized Flash Attention for all supported CPU platforms
+## 🔀 [Pull Request #51](https://github.com/ikawrakow/ik_llama.cpp/pull/51) - Quantized Flash Attention for all supported CPU platforms
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/neon_flash_attention_3` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-12 |
 | **Updated** | 2024-09-12 |
+| **Merged** | 2024-09-12 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR adds two features:
 * All supported CPU platforms (`Zen4, AVX2, ARM_NEON`) now have implementations for quantized kv-cache. `Q4_0, Q4_1`, and `Q8_0` can be used

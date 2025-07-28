@@ -1,14 +1,17 @@
-### 🐛 [#390](https://github.com/ikawrakow/ik_llama.cpp/pull/390) - Fix build for Xeon Gold 6226R
+## 🔀 [Pull Request #390](https://github.com/ikawrakow/ik_llama.cpp/pull/390) - Fix build for Xeon Gold 6226R
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_xeon_6226R` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-07 |
 | **Updated** | 2025-05-08 |
+| **Merged** | 2025-05-07 |
 
 ---
 
-#### Description
+## 📄 Description
 
 I got access to a Xeon Gold 6226R system. The PR fixes the compilation errors due to this CPU supporting all `AVX512` extensions necessary to define `HAVE_FANCY_SIMD`, but does not support SIMD `popcnt`.
 
@@ -33,15 +36,15 @@ I guess, the lower performance for the first entry in the table is due to the sy
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **Ph0rk0z** commented the **2025-05-07** at **13:39:54**:<br>
+👤 **Ph0rk0z** commented on **2025-05-07** at **13:39:54**
 
 I have generation prior to this chip. If you set bios to have 1 numa per CPU, the best results are from --numa distribute. Messing with numactl and interleave gives worse results across the board regardless of what the warning when you run says.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-07** at **13:45:05**:<br>
+👤 **ikawrakow** commented on **2025-05-07** at **13:45:05**
 
 > I have generation prior to this chip. If you set bios to have 1 numa per CPU, the best results are from --numa distribute. Messing with numactl and interleave gives worse results across the board regardless of what the warning when you run says.
 
@@ -51,13 +54,13 @@ Unfortunately I don't have physical access to the box (it belongs to somebody el
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-07** at **14:43:33**:<br>
+👤 **Ph0rk0z** commented on **2025-05-07** at **14:43:33**
 
 Run with numa distribute and see if your benchie goes up. I might buy 8260 es since they're cheap. Does the extra AVX512-VNNI really help much?
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-07** at **15:15:42**:<br>
+👤 **ikawrakow** commented on **2025-05-07** at **15:15:42**
 
 > Does the extra AVX512-VNNI really help much?
 
@@ -67,13 +70,13 @@ But it does make a difference for prompt processing. I get about the same PP spe
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-07** at **15:55:30**:<br>
+👤 **Ph0rk0z** commented on **2025-05-07** at **15:55:30**
 
 Thanks. I already have AVX-512 but I guess my prompt processing will see a slight boost and of course I can upgrade my memory. With 6 channel 2400mt/s I only get 180GB which is a 30% haircut per proc from theoretical.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-07** at **16:12:52**:<br>
+👤 **ikawrakow** commented on **2025-05-07** at **16:12:52**
 
 > Thanks. I already have AVX-512 but
 
@@ -81,7 +84,7 @@ I haven't done a fine-gained implementation depending on `AVX512` extensions ava
 
 ---
 
-👤 **gereoffy** commented the **2025-05-07** at **16:41:26**:<br>
+👤 **gereoffy** commented on **2025-05-07** at **16:41:26**
 
 > > I have generation prior to this chip. If you set bios to have 1 numa per CPU, the best results are from --numa distribute. Messing with numactl and interleave gives worse results across the board regardless of what the warning when you run says.
 > 
@@ -93,7 +96,30 @@ hi! that box is mine, i can give you DRAC access so it's almost the phisical acc
 
 ---
 
-👤 **gereoffy** commented the **2025-05-07** at **17:16:49**:<br>
+👤 **ikawrakow** commented on **2025-05-07** at **17:00:26**
+
+> hi! that box is mine, i can give you DRAC access so it's almost the phisical access except that you cannot kick the box :) anyway thanks for fixing compile!
+
+Oh, hi, nice to meet you virtually! And thanks for letting me use your box, it has been very helpful. Hope I didn't annoy you too much by running a lot of benchmarks.
+
+DRAC will give me access to the BIOS? But I'm not sure I want to do with it as none of the nodes has enough RAM to fit the DeepSeek models, so I need to use both CPUs. But perhaps someone more experienced with these things can give me more detailed suggestions. Here is what I see with `numactl --hardware`:
+```
+available: 2 nodes (0-1)
+node 0 cpus: 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38 40 42 44 46 48 50 52 54 56 58 60 62
+node 0 size: 385565 MB
+node 0 free: 93568 MB
+node 1 cpus: 1 3 5 7 9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 43 45 47 49 51 53 55 57 59 61 63
+node 1 size: 193521 MB
+node 1 free: 25592 MB
+node distances:
+node   0   1 
+  0:  10  21 
+  1:  21  10 
+```
+
+---
+
+👤 **gereoffy** commented on **2025-05-07** at **17:16:49**
 
 > Oh, hi, nice to meet you virtually! And thanks for letting me use your box, it has been very helpful. Hope I didn't annoy you too much by running a lot of benchmarks.
 no problem at all! this is a test/dev system...
@@ -109,22 +135,8 @@ is it possible to run model somehow splitted, and running each part of the model
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-07** at **18:37:04**:<br>
+👤 **Ph0rk0z** commented on **2025-05-07** at **18:37:04**
 
 Pass --numa distribute, it splits the memory between both CPU evenly. I think all numa stuff here and main is the same. You can also put it on one node only.. ie the one you launch from. 
 
 When I did tests I didn't have llama-sweep-bench so maybe worth trying again? I simply used both gemma/llama 3 70b  and checked generation speed.
-
----
-
-👤 **Gaolingx** commented the **2025-05-07** at **18:41:35**:<br>
-
-thank you for fixing it. when I run llama-server with `-fa` and `-rtr` parameter, the speed is a little faster than only use `-fa`, the prefill and decode are increased, That is a good beginning!
-
-`-c 8192 -t 16 -fa`:
-INFO [           print_timings] prompt eval time     =    6958.30 ms /    36 tokens (  193.29 ms per token,     5.17 tokens per second) | tid="52596" timestamp=1746491529 id_slot=0 id_task=31856 t_prompt_processing=6958.3 n_prompt_tokens_processed=36 t_token=193.28611111111113 n_tokens_second=5.173677478694509
-INFO [           print_timings] generation eval time =  617799.88 ms /  1700 runs   (  363.41 ms per token,     2.75 tokens per second) | tid="52596" timestamp=1746491529 id_slot=0 id_task=31856 t_token_generation=617799.884 n_decoded=1700 t_token=363.4116964705882 n_tokens_second=2.7517000958193774
-
-`-c 8192 -t 16 -fa -rtr`:
-INFO [           print_timings] prompt eval time     =   11499.35 ms /   148 tokens (   77.70 ms per token,    12.87 tokens per second) | tid="66164" timestamp=1746643229 id_slot=0 id_task=859 t_prompt_processing=11499.349 n_prompt_tokens_processed=148 t_token=77.69830405405405 n_tokens_second=12.8702937879353
-INFO [           print_timings] generation eval time =  755894.69 ms /  2074 runs   (  364.46 ms per token,     2.74 tokens per second) | tid="66164" timestamp=1746643229 id_slot=0 id_task=859 t_token_generation=755894.69 n_decoded=2074 t_token=364.4622420443587 n_tokens_second=2.7437684474275117
