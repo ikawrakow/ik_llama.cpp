@@ -1,14 +1,17 @@
-### 🐛 [#170](https://github.com/ikawrakow/ik_llama.cpp/pull/170) - MoE fix for R4 quants
+## 🔀 [Pull Request #170](https://github.com/ikawrakow/ik_llama.cpp/pull/170) - MoE fix for R4 quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_mul_mat_16` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-12 |
 | **Updated** | 2025-01-12 |
+| **Merged** | 2025-01-12 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR adds two fixes:
 * Make sure number of tensor rows being processed by one thread is a multiple of the number of interleaved rows when using `R4` quants also in `iqk_mul_mat_mow`

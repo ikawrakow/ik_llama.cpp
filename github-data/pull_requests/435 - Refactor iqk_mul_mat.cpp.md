@@ -1,14 +1,17 @@
-### 🔀 [#435](https://github.com/ikawrakow/ik_llama.cpp/pull/435) - Refactor iqk_mul_mat.cpp
+## 🔀 [Pull Request #435](https://github.com/ikawrakow/ik_llama.cpp/pull/435) - Refactor iqk_mul_mat.cpp
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/refactor_iqk` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-20 |
 | **Updated** | 2025-05-23 |
+| **Merged** | 2025-05-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 I have been putting all matrix multiplication (GEMM) and flash attention (FA) kernels into `iqk_mul_mat.cpp`. With time it became a giant source file (~18 kLOC) containing heavily templated C++ code. The result: extremely long compilations times (over 2 minutes on a high end CPU, with some users reporting 30 minutes on an Android phone).
 
@@ -33,13 +36,13 @@ The GEMM files compile in 5-6 seconds each, so the FA instantiations dominate th
 
 It is a massive change. Testing of all types (50+ when row-interleaved quants are included) on `AVX2, Zen4` and `ARM_NEON` took quite some time. I hope to have covered all possible combinations, but still would appreciate additional testing from people using `ik_llama.cpp` for CPU-only inference.
 
-Closes #183
+Closes [#183](https://github.com/ikawrakow/ik_llama.cpp/issues/183)
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **saood06** commented the **2025-05-20** at **07:20:58**:<br>
+👤 **saood06** commented on **2025-05-20** at **07:20:58**
 
 >I hope to have covered all possible combinations, but still would appreciate additional testing from people using ik_llama.cpp for CPU-only inference.
 
@@ -49,7 +52,40 @@ Tested with my standard `cmake .. -DGGML_RPC=ON -DGGML_IQK_FA_ALL_QUANTS=1; cmak
 
 ---
 
-👤 **saood06** commented the **2025-05-20** at **07:51:53**:<br>
+👤 **ikawrakow** commented on **2025-05-20** at **07:30:51**
+
+> It used more threads but still nowhere near saturating my available ones for a large amount of the time. 
+
+It cannot saturate your 48 cores. It needs to build `libggml.so` first, and this is what it takes to do that:
+```
+[  2%] Building C object ggml/src/CMakeFiles/ggml.dir/ggml.c.o
+[  3%] Building C object ggml/src/CMakeFiles/ggml.dir/ggml-alloc.c.o
+[  4%] Building C object ggml/src/CMakeFiles/ggml.dir/ggml-quants.c.o
+[  4%] Building C object ggml/src/CMakeFiles/ggml.dir/ggml-backend.c.o
+[  5%] Building CXX object ggml/src/CMakeFiles/ggml.dir/llamafile/sgemm.cpp.o
+[  5%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_mul_mat.cpp.o
+[  6%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_flash_attn.cpp.o
+[  6%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/fa/iqk_fa_576_512.cpp.o
+[  7%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/fa/iqk_fa_192_128.cpp.o
+[  8%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/fa/iqk_fa_128_128.cpp.o
+[  8%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/fa/iqk_fa_256_256.cpp.o
+[  8%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/fa/iqk_fa_96_96.cpp.o
+[  9%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/fa/iqk_fa_64_64.cpp.o
+[  9%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_gemm_floats.cpp.o
+[ 10%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_gemm_kquants.cpp.o
+[ 10%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_gemm_iquants.cpp.o
+[ 12%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_gemm_iqk_quants.cpp.o
+[ 12%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_gemm_1bit.cpp.o
+[ 12%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_gemm_legacy_quants.cpp.o
+[ 13%] Building CXX object ggml/src/CMakeFiles/ggml.dir/iqk/iqk_quantize.cpp.o
+```
+With all quants enabled for FA the above takes 36 seconds on my `AVX2` box.
+
+Compiling `llama.cpp` is another piece that takes quite some time, so it should get refactored as well.
+
+---
+
+👤 **saood06** commented on **2025-05-20** at **07:51:53**
 
 >It cannot saturate your 48 cores. It needs to build libggml.so first, and this is what it takes to do that:
 
@@ -63,7 +99,7 @@ Thank you for this, it is a very welcome speed improvement.
 
 ---
 
-👤 **cmoncure** commented the **2025-05-22** at **18:23:28**:<br>
+👤 **cmoncure** commented on **2025-05-22** at **18:23:28**
 
 This commit results in a significant performance regression for me, established by git bisect.
 
@@ -74,11 +110,11 @@ commit b94cd3b632a78dfb46b18d52b84be66bcf26166a (HEAD)
 Author: Kawrakow <iwankawrakow@gmail.com>
 Date:   Thu May 22 10:05:51 2025 +0300
 
-    Refactor iqk_mul_mat.cpp (#435)
+    Refactor iqk_mul_mat.cpp ([#435](https://github.com/ikawrakow/ik_llama.cpp/issues/435))
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-23** at **05:09:34**:<br>
+👤 **ikawrakow** commented on **2025-05-23** at **05:09:34**
 
 > This commit results in a significant performance regression for me, established by git bisect.
 

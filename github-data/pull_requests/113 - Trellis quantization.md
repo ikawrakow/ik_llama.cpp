@@ -1,14 +1,16 @@
-### 🔀 [#113](https://github.com/ikawrakow/ik_llama.cpp/pull/113) - Trellis quantization
+## 🔀 [Pull Request #113](https://github.com/ikawrakow/ik_llama.cpp/pull/113) - Trellis quantization
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `ik/try_trellis` |
+| **Target Branch** | `main` |
 | **Created** | 2024-11-15 |
 | **Updated** | 2025-06-01 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The latest quantization hype is `QTIP` - [paper](https://arxiv.org/pdf/2406.11235), [repository](https://github.com/Cornell-RelaxML/qtip). They use a Trellis approach and report impressive results, so I decided to look into this more closely.
 
@@ -61,9 +63,9 @@ In comparison, I get 194 t/s for `IQ2_KT` (with flash attention enabled, which I
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **saood06** commented the **2025-04-07** at **03:27:46**:<br>
+👤 **saood06** commented on **2025-04-07** at **03:27:46**
 
 Turboderp was also inspired by QTIP when redoing quantization for their new inference engine found [here](https://github.com/turboderp-org/exllamav3).
 
@@ -73,7 +75,7 @@ I'm interested and will look into it (maybe when the inference engine matures a 
 
 ---
 
-👤 **compilade** commented the **2025-04-07** at **12:17:42**:<br>
+👤 **compilade** commented on **2025-04-07** at **12:17:42**
 
 > There is graphs and more details showing performance of their quants [here](https://github.com/turboderp-org/exllamav3/blob/master/doc/exl3.md).
 
@@ -85,7 +87,7 @@ Still looks very promising, though!
 
 ---
 
-👤 **saood06** commented the **2025-04-07** at **12:43:17**:<br>
+👤 **saood06** commented on **2025-04-07** at **12:43:17**
 
 > > There is graphs and more details showing performance of their quants [here](https://github.com/turboderp-org/exllamav3/blob/master/doc/exl3.md).
 > 
@@ -105,7 +107,13 @@ Yes.
 
 ---
 
-👤 **saood06** commented the **2025-04-07** at **13:25:24**:<br>
+👤 **ikawrakow** commented on **2025-04-07** at **12:45:16**
+
+I don't like these plots too much. The y-axis needs to be logarithmic, and it needs to be difference to unquantized, not absolute values (else we are chasing differences between possibly different ways of computing perplexity). Also, they massively overemphasize the low bpw range. If you plot on a log scale, you get a more realistic picture. Either way, yes, trellis quantization can bring a 0.1-0.2 bpw reduction in quantized size for the same model quality. But is there any indication of performance? I could get my implementation here to be reasonably performant on CUDA, but expect the CPU implementation to be a disaster performance wise.
+
+---
+
+👤 **saood06** commented on **2025-04-07** at **13:25:24**
 
 > I don't like these plots too much. The y-axis needs to be logarithmic, and it needs to be difference to unquantized, not absolute values (else we are chasing differences between possibly different ways of computing perplexity). Also, they massively overemphasize the low bpw range. If you plot on a log scale, you get a more realistic picture. 
 
@@ -133,7 +141,15 @@ That is unfortunate.
 
 ---
 
-👤 **saood06** commented the **2025-04-08** at **07:21:43**:<br>
+👤 **ikawrakow** commented on **2025-04-07** at **13:40:35**
+
+> People did say it did offered better KV cache due to the Hadamard transform added [here](https://github.com/turboderp-org/exllamav2/commit/324404ebe4e3c4dd0447ffc1290c312de1df02be) than llama.cpp even if the model quantization was not as good
+
+This is interesting. I have tried Hadamard transforms for model weight quantization because of the claims in the QuIP papers, but I never saw any improvement from it. I haven't tried for KV cache quantization, though.
+
+---
+
+👤 **saood06** commented on **2025-04-08** at **07:21:43**
 
 Also I forgot to mention it but I did mention your PR to the QTIP authors shortly after you made this draft PR. They said "It seems like they didn't bother making the weights Gaussian first (the IP part of QTIP) before quantizing with a Gaussian codebook (3INST)."
 
@@ -141,7 +157,7 @@ You say in the PR "This generates values that are (nearly) normally distributed.
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-08** at **07:38:55**:<br>
+👤 **ikawrakow** commented on **2025-04-08** at **07:38:55**
 
 It depends on what the QTIP authors mean by "they didn't bother making the weights Gaussian first". If they mean that I did not apply a Hadamard transform first, I did try that (QuIP/QuIP#/QTIP they all insist on applying Hadamard transforms to model weights before quantization), but it did not improve the result in any way. The thing about Hadamard transforms and imatrix is that they do not mix well - one needs a special imatrix for that. But I have also tried this, without much success. If they mean that I have missed something in the 3INST implementation, and hence the generated sequence is not normally distributed, and it would be better otherwise, I cannot confirm that either. I did a lot of Monte Carlo stuff in the past, so I know a thing or two about random number sequences. I tried an implementation that produces a perfect Gaussian distribution (and quite a bit more efficiently than theirs), but that made results worse.
 
@@ -151,7 +167,7 @@ But do the QTIP authors believe theirs is much better than what I have done? My 
 
 ---
 
-👤 **saood06** commented the **2025-04-08** at **08:02:15**:<br>
+👤 **saood06** commented on **2025-04-08** at **08:02:15**
 
 > I was planning to try a sequence that generates quantized values, so CPU inference will be more efficient. But than I started doing other stuff, so that never materialized.
 
@@ -165,7 +181,7 @@ I don't know, the one line I quoted ("It seems ...") is the only thing they said
 
 ---
 
-👤 **louiehelm** commented the **2025-04-17** at **20:00:44**:<br>
+👤 **louiehelm** commented on **2025-04-17** at **20:00:44**
 
 The Hadamard Bros and other people fixated on rotations aren't doing it primarily to improve LLM weight quantization. It's for eliminating downstream outliers in run-time activations + KV-cache so they can successfully quantize those more aggressively down to 4-bits without scrambling model fidelity.
 
@@ -175,7 +191,7 @@ There's another way to resolve this besides submitting to the Hadamard cult. [Pr
 
 ---
 
-👤 **saood06** commented the **2025-04-18** at **23:11:20**:<br>
+👤 **saood06** commented on **2025-04-18** at **23:11:20**
 
 > There's another way to resolve this besides submitting to the Hadamard cult.
 
@@ -183,7 +199,7 @@ The author of ExllamaV3 reported that they will attempt other ideas as well and 
 
 ---
 
-👤 **saood06** commented the **2025-04-19** at **11:07:35**:<br>
+👤 **saood06** commented on **2025-04-19** at **11:07:35**
 
 > [PrefixQuant](https://arxiv.org/abs/2410.05265)
 
@@ -201,21 +217,21 @@ This still sounds useful they reported this took 13 minutes on Llama-3-70B with 
 
 ---
 
-👤 **louiehelm** commented the **2025-04-22** at **22:37:09**:<br>
+👤 **louiehelm** commented on **2025-04-22** at **22:37:09**
 
 It's fascinating how well your quants track optimal limits from rate-distortion theory.
 
-Optimal R(D) = 2^(-2*bitrate)
+Optimal D(R) = 2^(-2*bitrate)
 
 ![ik_graph_with_optimal2](https://github.com/user-attachments/assets/fac395df-f864-41b8-a131-044c44dc1022)
 
 Some of your new quants actually dip down to only ~1.25 bits of overhead.
 
-That's really good considering "optimal" = infinite codebook (which prob hurt t/s)
+That's really good considering "optimal" = infinite codebook (which prob hurts t/s)
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-23** at **07:01:57**:<br>
+👤 **ikawrakow** commented on **2025-04-23** at **07:01:57**
 
 Where does the equation for the optimal R(D) come from?
 
@@ -223,7 +239,30 @@ LLaMA-3 requires about ~1 bpw more to achieve the same quantization error compar
 
 ---
 
-👤 **saood06** commented the **2025-04-24** at **00:23:38**:<br>
+👤 **louiehelm** commented on **2025-04-23** at **20:03:59**
+
+Worst-case model weights can be approximated as maximally unpredictable Gaussian data -- essentially what LLMs might become in the limit once they're trained hard enough to reach 100% entropy levels (a full 8.0 bits per byte)
+
+Shannon's rate-distortion function:
+  R(D) = ½ log₂(σ² / D)
+Normalize weights with σ² = 1
+  R(D) = ½ log₂(1 / D)
+Solving for D as function of rate gives:
+  D(R) = 2^(‑2R).
+
+This is a foundational result from information theory. I applied it in this context because you really are making a code to preserve information as well as possible in lower bitrates. This concept is usually deployed to analyze lossy image or audio compression or to design superior analog channel protocols for multiplexing light better in fiber optic cables. But it applies equally in this setting too and it makes sense in retrospect that this limit would bound the maximum efficiency of any LLM quantization algorithms too.
+
+The reason this is so interesting is because usually we use information theory to discuss way more boring distortion proxies like MSE (mean squared error). For an LLM the MSE = (original value - value in quant)^2/(# of parameters). Have you ever investigated what this is for your quants? In any case, I just think it's beautiful seeing LLMs manifest such a clean offset from the optimal-distortion bound on such an abstract ability as being able to faithfully recite Wikipedia.
+
+Also, if I rebasis my prior graph to use the optimal distortion bound as the x-axis and scale the y-axis to represent bits, even other quantization methods seem to pretty cleanly establish relatively consistent gaps off the distortion lower bound, with only minor deviations. [Note: There's likely bit-width overhead from non-weight params in EXL3 that I can't account for so this chart may be ~5% more favorable than reality.]
+
+![image](https://github.com/user-attachments/assets/dae5bce8-0129-4344-89b0-30f3ae2e7c0f)
+
+And Yes, your coding overhead for Llama-2 was remarkably small and very close to the limit. I grabbed Llama 3 70b and Llama 2 70b to check and entropy in the actual files. It only went up from 6.1 bits per byte --> 6.27 bits per byte. Obviously L3 has more complexity packed into its weights, but in information theoretic terms, there doesn't appear to be a full +1.1 bits per parameter. Maybe that accounts for 30% of the gap? Other 70% may be from Meta engineers just using the full dynamic range of their weights better in L3 vs L2. This undoubtably made training easier for them by making it more stable, but could have had the downstream effect of making the weights harder to quantize for your algorithm, which may have been tuned to expect numeric distributions more similar to L2 weights. Does your new Trellis quant also have a +1.1bit gap between L2 70b and L3 70b?
+
+---
+
+👤 **saood06** commented on **2025-04-24** at **00:23:38**
 
 >essentially what LLMs might become in the limit once they're trained hard enough to reach 100% entropy levels (a full 8.0 bits per byte)
 
@@ -231,7 +270,7 @@ Only some recent models are trained at FP8 (such as Deepseek V3/R1), they tend t
 
 ---
 
-👤 **saood06** commented the **2025-04-24** at **07:15:28**:<br>
+👤 **saood06** commented on **2025-04-24** at **07:15:28**
 
 Exllama-V3 added cache quantization, 
 
@@ -247,7 +286,7 @@ They also explain their reasoning in an issue copied below:
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-24** at **07:29:50**:<br>
+👤 **ikawrakow** commented on **2025-04-24** at **07:29:50**
 
 > Does your new Trellis quant also have a +1.1bit gap between L2 70b and L3 70b?
 
@@ -255,8 +294,23 @@ I have not tried it for 70B models. It is too slow for the amount of patience I 
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-24** at **08:18:08**:<br>
+👤 **ikawrakow** commented on **2025-04-24** at **08:18:08**
 
 > Worst-case model weights can be approximated as maximally unpredictable Gaussian data -- essentially what LLMs might become in the limit once they're trained hard enough to reach 100% entropy levels
 
 I'm not sure I can follow. On my book, LLMs only work because there are patterns encoded in the model weights, i.e., the model weights of an LLM are pretty much the opposite of a memoryless signal as required for these equations to hold. We also know that the model weights are definitely not Gaussian, and the so called "outliers" (i.e., weights that do not fall within the expectation of a normal distribution) are more important than the others. Also, the rate distortion equation tells us something about the difference between the signal (model weights) and its approximate representation (quantized model weights), but it tells us nothing about how this will affect observations (predicted token probabilities), which are the result of a complex set of linear and non-linear operations on the signal.
+
+---
+
+👤 **saood06** commented on **2025-04-28** at **07:56:02**
+
+>The Hadamard Bros and other people fixated on rotations aren't doing it primarily to improve LLM weight quantization. It's for eliminating downstream outliers in run-time activations + KV-cache so they can successfully quantize those more aggressively down to 4-bits without scrambling model fidelity.
+
+
+The latest paper by the bitnet people is literally that: https://arxiv.org/abs/2504.18415
+
+---
+
+👤 **ikawrakow** commented on **2025-06-01** at **12:27:24**
+
+This is superseded by PRs [#441](https://github.com/ikawrakow/ik_llama.cpp/issues/441), [#453](https://github.com/ikawrakow/ik_llama.cpp/issues/453), [#471](https://github.com/ikawrakow/ik_llama.cpp/issues/471), [#475](https://github.com/ikawrakow/ik_llama.cpp/issues/475), [#482](https://github.com/ikawrakow/ik_llama.cpp/issues/482)

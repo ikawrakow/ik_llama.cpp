@@ -1,14 +1,17 @@
-### 🔀 [#56](https://github.com/ikawrakow/ik_llama.cpp/pull/56) - BF16 support on Metal
+## 🔀 [Pull Request #56](https://github.com/ikawrakow/ik_llama.cpp/pull/56) - BF16 support on Metal
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/metal_bf16` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-16 |
 | **Updated** | 2024-09-17 |
+| **Merged** | 2024-09-17 |
 
 ---
 
-#### Description
+## 📄 Description
 
 It is slightly slower than `fp16`, but definitely a massive improvement compared to not having `bf16` support at al. ~Didn't put any effort into optimizing the matrix x vector kernel, so it is likely one can improve `bf16` TG performance~. 
 
