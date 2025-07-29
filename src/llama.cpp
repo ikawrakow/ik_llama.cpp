@@ -16287,10 +16287,10 @@ struct llm_build_context {
                 cb(moe_out, "ffn_moe_out", il);
     
                 struct ggml_tensor * shexp_out = llm_build_ffn(ctx0, lctx, cur,
-                                            model.layers[il].ffn_up_shexp,
-                                            /*gate*/nullptr,
-                                            model.layers[il].ffn_gate_shexp,
-                                            model.layers[il].ffn_down_shexp,
+                                            model.layers[il].ffn_up_shexp, NULL, NULL,
+                                            model.layers[il].ffn_gate_shexp, NULL, NULL,
+                                            model.layers[il].ffn_down_shexp, NULL, NULL,
+                                            nullptr,
                                             LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
                 cb(shexp_out, "ffn_shexp_out", il);
     
