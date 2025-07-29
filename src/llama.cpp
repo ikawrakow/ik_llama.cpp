@@ -16306,6 +16306,8 @@ struct llm_build_context {
             // prepare next layer input
             inpL = cur;
         }
+
+        cur = inpL;
     
         // final norm
         cur = llm_build_norm(ctx0, inpL, hparams,
@@ -16317,8 +16319,7 @@ struct llm_build_context {
         // lm head
         cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
         cb(cur, "result_output", -1);
-        res->t_logits = cur;
-    
+
         ggml_build_forward_expand(gf, cur);
         return gf;
     }
