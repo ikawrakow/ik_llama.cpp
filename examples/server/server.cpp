@@ -3674,7 +3674,14 @@ int main(int argc, char ** argv) {
         }
 
         res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
-        json data = oaicompat_completion_params_parse(ctx_server.model, json::parse(req.body), params.chat_template);
+        
+        json data;
+        try {
+            data = oaicompat_completion_params_parse(ctx_server.model, json::parse(req.body), params.chat_template);
+        } catch (const std::exception & e) {
+            res_error(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
 
         const int id_task = ctx_server.queue_tasks.get_new_id();
 

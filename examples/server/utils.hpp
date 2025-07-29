@@ -137,7 +137,10 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
         std::string role = json_value(curr_msg, "role", std::string(""));
 
         std::string content;
-        if (curr_msg.contains("content")) {
+        bool has_content = curr_msg.contains("content");
+        bool has_tool_calls = curr_msg.contains("tool_calls");
+        
+        if (has_content) {
             if (curr_msg["content"].is_string()) {
                 content = curr_msg["content"].get<std::string>();
             } else if (curr_msg["content"].is_array()) {
@@ -146,12 +149,30 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
                         content += "\n" + part["text"].get<std::string>();
                     }
                 }
-            } else {
-                throw std::runtime_error("Invalid 'content' type (ref: https://github.com/ggerganov/llama.cpp/issues/8367)");
+            } else if (!curr_msg["content"].is_null()) {
+                throw std::runtime_error("Invalid 'content' type: expected string or array, got " + curr_msg["content"].dump() + " (ref: https://github.com/ggerganov/llama.cpp/issues/8367)");
             }
-        } else {
-            throw std::runtime_error("Missing 'content' (ref: https://github.com/ggerganov/llama.cpp/issues/8367)");
+            // If content is null, leave content as empty string
+        } else if (!has_tool_calls) {
+            // Only throw error if BOTH content and tool_calls are missing (following OpenAI API spec)
+            // This should return 400 Bad Request, not 500 Server Error
+            throw std::runtime_error("Expected 'content' or 'tool_calls' (ref: https://github.com/ggerganov/llama.cpp/issues/8367 & https://github.com/ggerganov/llama.cpp/issues/12279)");
         }
+        // If no content but has tool_calls, content remains empty string (valid per OpenAI spec)
+        
+        // Preprocess content to handle edge cases that could cause server hangs
+        if (!content.empty()) {
+            // Trim whitespace
+            content.erase(0, content.find_first_not_of(" \t\n\r"));
+            content.erase(content.find_last_not_of(" \t\n\r") + 1);
+        }
+        
+        // Handle empty/whitespace-only content that could cause generation issues
+        if (content.empty() && !has_tool_calls) {
+            // Empty content without tool_calls should return proper error instead of slow generation
+            throw std::runtime_error("Content cannot be empty without tool_calls");
+        }
+        
         // Inject tools into the first system message, or create one if none exists
         // Only applies to Kimi-K2 models (checked by kimi_k2_should_inject_tools)
         if (kimi_k2_should_inject_tools(tools, model_name) && !tools_injected) {
