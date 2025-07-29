@@ -18002,7 +18002,7 @@ static struct ggml_cgraph * llama_build_graph(
             } break;
         case LLM_ARCH_GLM4_MOE:
             {
-                result = llm.build_glm4_moe();
+                llm = llm.build_glm4_moe();
             } break;
         case LLM_ARCH_BITNET:
             {
