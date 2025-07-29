@@ -2656,6 +2656,8 @@ enum e_model {
     MODEL_70B,
     MODEL_142B,
     MODEL_236B,
+    MODEL_106B_A12B,
+    MODEL_355B_A32B,
     MODEL_314B,
     MODEL_405B,
     MODEL_671B,
