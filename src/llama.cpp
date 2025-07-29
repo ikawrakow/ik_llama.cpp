@@ -9034,7 +9034,10 @@ static bool llm_load_tensors(
                     }
 
                     for (int i = 0; i < n_layer; ++i) {
-                        auto & layer = layers[i];
+                        ggml_context * ctx_layer = ctx_for_layer(i);
+                        ggml_context * ctx_split = ctx_for_layer_split(i);
+
+                        auto & layer = model.layers[i];
 
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
 
