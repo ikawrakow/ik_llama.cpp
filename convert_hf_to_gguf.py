@@ -4028,8 +4028,8 @@ class Glm4MoeModel(TextModel):
         elif name.startswith("model.language_model."):
             name = name.replace("language_model.", "")  # for multimodal variants
 
-        # Handle main token embedding
-        if name == "model.embed_tokens.weight":
+        # Handle main token embedding (but not layer-specific NextN embeddings)
+        if name == "model.embed_tokens.weight" and ".layers." not in name:
             return [(self.map_tensor_name("token_embd.weight"), data_torch)]
 
         # Handle routed experts
