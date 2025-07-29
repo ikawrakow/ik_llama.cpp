@@ -16265,10 +16265,11 @@ struct llm_build_context {
             if (static_cast<uint32_t>(il) < hparams.n_layer_dense_lead) {
                 // dense FFN
                 cur = llm_build_ffn(ctx0, lctx, cur,
-                                    model.layers[il].ffn_up,   /*gate*/ nullptr,
-                                    model.layers[il].ffn_gate, /*unused*/ nullptr,
-                                    model.layers[il].ffn_down,
-                                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+                        model.layers[il].ffn_up,   NULL, NULL,
+                        model.layers[il].ffn_gate, NULL, NULL,
+                        model.layers[il].ffn_down, NULL, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
                 cb(cur, "ffn_out", il);
             } else {
                 // MoE FFN
