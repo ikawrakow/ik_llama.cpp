@@ -16314,7 +16314,6 @@ struct llm_build_context {
                              model.output_norm, NULL,
                              LLM_NORM_RMS, cb, -1);
         cb(cur, "result_norm", -1);
-        res->t_embd = cur;
     
         // lm head
         cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
