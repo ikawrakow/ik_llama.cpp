@@ -2214,6 +2214,40 @@ void test_xml_tool_call_parsing() {
     std::cout << "   ✅ XML tool call parsing works correctly!" << std::endl;
 }
 
+// Test whitespace preservation in qwen3 content extraction
+void test_qwen3_whitespace_preservation() {
+    std::cout << "\n🧹 Testing Qwen3 Whitespace Preservation Fix:" << std::endl;
+    
+    // Test case with PEP 8 style: 2 empty lines between functions
+    const std::string pep8_content = R"(def celsius_to_fahrenheit(celsius):
+    return celsius * 9/5 + 32
+
+
+def fahrenheit_to_celsius(fahrenheit):
+    return (fahrenheit - 32) * 5/9)";
+
+    std::cout << "🎯 Testing PEP 8 compliance (2 empty lines between functions)..." << std::endl;
+    std::cout << "Original content has: 2 empty lines between functions" << std::endl;
+    
+    // Test the qwen3 content extraction directly
+    std::string result = qwen3::extract_content_during_parsing(pep8_content, false);
+    
+    // Check if the double newlines are preserved (should have \n\n\n for 2 empty lines)
+    bool has_double_empty_lines = result.find("\n\n\n") != std::string::npos;
+    
+    std::cout << "Result content: '" << result << "'" << std::endl;
+    std::cout << "Has 2 empty lines preserved: " << (has_double_empty_lines ? "YES" : "NO") << std::endl;
+    
+    test_assert(has_double_empty_lines, "Qwen3: PEP 8 double empty lines preserved");
+    
+    // Additional test: ensure no excessive trimming
+    test_assert(!result.empty(), "Qwen3: Content not empty after processing");
+    test_assert(result.find("celsius_to_fahrenheit") != std::string::npos, "Qwen3: Function content preserved");
+    test_assert(result.find("fahrenheit_to_celsius") != std::string::npos, "Qwen3: Second function preserved");
+    
+    std::cout << "   ✅ Qwen3 whitespace preservation working correctly!" << std::endl;
+}
+
 // Test the streaming tool calls fix implementation
 void test_streaming_tool_calls_fix() {
     std::cout << "\n=== Streaming Tool Calls Fix Validation ===" << std::endl;
@@ -2774,6 +2808,7 @@ int main() {
         test_content_cleaning();
         test_contamination_reproduction(); // Added this test
         test_mixed_formats();
+        test_qwen3_whitespace_preservation(); // Test whitespace fix
         
         std::cout << "\n🌍 Unicode & International Tests:" << std::endl;
         test_unicode_support();
