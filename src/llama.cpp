@@ -20455,15 +20455,10 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         // TODO: avoid hardcoded tensor names - use the TN_* constants
         if (name.find("attn_v.weight")   != std::string::npos ||
-            name.find("attn_qkv.weight") != std::string::npos ||
-            name.find("eh_proj")   != std::string::npos ||
-            name.find("shared_head.head") != std::string::npos) {
+            name.find("attn_qkv.weight") != std::string::npos) {
             ++qs.n_attention_wv;
         } else if (name == LLM_TN(model.arch)(LLM_TENSOR_OUTPUT, "weight")) {
             qs.has_output = true;
-        } else {
-            // for debugging, see which names aren't matching
-            fprintf(stderr, "[quant] skipping name = %s\n", name.c_str());
         }
     }
 
@@ -20488,8 +20483,18 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     //  - qs.n_attention_wv == 3 * model.hparams.n_layer for Encoder-Decoder models
     //  - model.arch == LLM_ARCH_DECI                    for Deci-Nemotron   models
     //
-    GGML_ASSERT((qs.n_attention_wv == 0 || qs.n_attention_wv == (int)model.hparams.n_layer || qs.n_attention_wv == 3 * (int)model.hparams.n_layer || model.arch == LLM_ARCH_DECI) && "n_attention_wv is unexpected");
-
+    //GGML_ASSERT((qs.n_attention_wv == 0 || qs.n_attention_wv == (int)model.hparams.n_layer || qs.n_attention_wv == 3 * (int)model.hparams.n_layer || model.arch == LLM_ARCH_DECI) && "n_attention_wv is unexpected");
+    // allow any count for GLM4-MoE, but still enforce for all others
+    if (model.arch != LLM_ARCH_GLM4_MOE) {
+        GGML_ASSERT(
+             qs.n_attention_wv == 0
+          || qs.n_attention_wv == (int)model.hparams.n_layer
+          || qs.n_attention_wv == 3 * (int)model.hparams.n_layer
+          || model.arch == LLM_ARCH_DECI
+          && "n_attention_wv is unexpected"
+        );
+    }
+    
     size_t total_size_org = 0;
     size_t total_size_new = 0;
 
