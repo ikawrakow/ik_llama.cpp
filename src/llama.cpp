@@ -16173,7 +16173,7 @@ struct llm_build_context {
         struct ggml_tensor * inp_pos = build_inp_pos();
     
         // attention KV cache input
-        auto * inp_attn = build_attn_inp_kv_unified();
+        //auto * inp_attn = build_attn_inp_kv_unified();
     
         // output token IDs (for last layer cropping)
         struct ggml_tensor * inp_out_ids = build_inp_out_ids();
