@@ -284,6 +284,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_DEEPSEEK2,       "deepseek2"    },
     { LLM_ARCH_CHATGLM,         "chatglm"      },
     { LLM_ARCH_GLM4,            "glm4"         },
+    { LLM_ARCH_GLM4_MOE,        "glm4moe"      },
     { LLM_ARCH_BITNET,          "bitnet"       },
     { LLM_ARCH_BITNET_25,       "bitnet-25"    },
     { LLM_ARCH_BITNET_B158,     "bitnet-b1.58" },
@@ -1405,6 +1406,39 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
             { LLM_TENSOR_ATTN_POST_NORM,  "blk.%d.post_attention_norm" },
             { LLM_TENSOR_FFN_POST_NORM,   "blk.%d.post_ffw_norm" },
+        },
+    },
+    {
+        LLM_ARCH_GLM4_MOE,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,         "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,        "output_norm" },
+            { LLM_TENSOR_OUTPUT,             "output" },
+            { LLM_TENSOR_ATTN_NORM,          "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,             "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,             "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,             "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,           "blk.%d.attn_output" },
+            { LLM_TENSOR_ATTN_Q_NORM,        "blk.%d.attn_q_norm" },
+            { LLM_TENSOR_ATTN_K_NORM,        "blk.%d.attn_k_norm" },
+            { LLM_TENSOR_FFN_NORM,           "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,           "blk.%d.ffn_gate" },        // dense layers
+            { LLM_TENSOR_FFN_DOWN,           "blk.%d.ffn_down" },        // dense layers
+            { LLM_TENSOR_FFN_UP,             "blk.%d.ffn_up" },          // dense layers
+            { LLM_TENSOR_FFN_GATE_INP,       "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_EXPS,      "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,      "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,        "blk.%d.ffn_up_exps" },
+            { LLM_TENSOR_FFN_GATE_SHEXP,     "blk.%d.ffn_gate_shexp" },
+            { LLM_TENSOR_FFN_DOWN_SHEXP,     "blk.%d.ffn_down_shexp" },
+            { LLM_TENSOR_FFN_UP_SHEXP,       "blk.%d.ffn_up_shexp" },
+            // NextN/MTP tensors - preserved but unused
+            { LLM_TENSOR_NEXTN_EH_PROJ,      "blk.%d.eh_proj" },
+            { LLM_TENSOR_NEXTN_EMBED_TOKENS, "blk.%d.embed_tokens" },
+            { LLM_TENSOR_NEXTN_ENORM,        "blk.%d.enorm" },
+            { LLM_TENSOR_NEXTN_HNORM,        "blk.%d.hnorm" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "blk.%d.shared_head.head" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.%d.shared_head.norm" },
         },
     },
     {
