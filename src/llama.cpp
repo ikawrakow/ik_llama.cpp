@@ -16281,7 +16281,7 @@ struct llm_build_context {
                                             hparams.n_expert, hparams.n_expert_used,
                                             LLM_FFN_SILU, /*parallel=*/true,
                                             /*use_group=*/false, 0.0,
-                                            LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID,
+                                            LLM_EXPERT_GATING_FUNC_SIGMOID,
                                             cb, il);
                 cb(moe_out, "ffn_moe_out", il);
     
