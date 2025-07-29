@@ -16300,7 +16300,7 @@ struct llm_build_context {
     
             // residual and context vector
             cur = ggml_add(ctx0, cur, ffn_inp);
-            cur = llm_build_cvec(ctx0, cur, il);
+            cur = lctx.cvec.apply_to(ctx0, cur, il);
             cb(cur, "l_out", il);
     
             // prepare next layer input
