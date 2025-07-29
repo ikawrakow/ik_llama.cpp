@@ -113,13 +113,6 @@ private:
     void parse_deepseek_r1_format();
     void parse_generic_format();
     
-    // DeepSeek R1 specific tool call parsing
-    void parse_deepseek_r1_tool_calls(
-        const common_regex & tool_calls_begin,
-        const common_regex & function_regex,
-        const common_regex & close_regex,
-        const common_regex & tool_calls_end);
-    
     
     // JSON parsing utilities (enhanced streaming support)
     struct json_parse_result {
