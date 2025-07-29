@@ -3952,6 +3952,12 @@ class Dots1Model(Qwen2MoeModel):
 class Glm4MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GLM4_MOE
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # GLM4_MOE has num_hidden_layers + 1 actual layers (including NextN layer)
+        self.block_count = self.hparams["num_hidden_layers"] + 1
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+    
     def set_vocab(self):
         from transformers import AutoTokenizer
 
