@@ -6094,9 +6094,6 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_GLM4_MOE:
             {
-                // bump n_layer to account for the extra NextN block
-                hparams.n_layer += 1;
-                
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp, false);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
