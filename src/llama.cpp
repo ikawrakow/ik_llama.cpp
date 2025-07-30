@@ -9032,6 +9032,40 @@ static bool llm_load_tensors(
                     if (model.output == NULL) {
                         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
                     }
+                    
+                    // --- NextN / MTP tensors (preserved but unused), on the final layer ---
+                    {
+                        const int final_layer = n_layer - 1;
+                        // EH_PROJ: [2*embd, embd]
+                        create_tensor(ctx_for_layer(final_layer),
+                                      tn(LLM_TENSOR_NEXTN_EH_PROJ, final_layer),
+                                      { 2*n_embd, n_embd },
+                                      llama_model_loader::TENSOR_NOT_REQUIRED);
+                        // EMBED_TOKENS: [embd, vocab]
+                        create_tensor(ctx_for_layer(final_layer),
+                                      tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, final_layer),
+                                      { n_embd, n_vocab },
+                                      llama_model_loader::TENSOR_NOT_REQUIRED);
+                        // ENORM, HNORM: [embd]
+                        create_tensor(ctx_for_layer(final_layer),
+                                      tn(LLM_TENSOR_NEXTN_ENORM, final_layer),
+                                      { n_embd },
+                                      llama_model_loader::TENSOR_NOT_REQUIRED);
+                        create_tensor(ctx_for_layer(final_layer),
+                                      tn(LLM_TENSOR_NEXTN_HNORM, final_layer),
+                                      { n_embd },
+                                      llama_model_loader::TENSOR_NOT_REQUIRED);
+                        // SHARED_HEAD_HEAD: [embd, vocab]
+                        create_tensor(ctx_for_layer(final_layer),
+                                      tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, final_layer),
+                                      { n_embd, n_vocab },
+                                      llama_model_loader::TENSOR_NOT_REQUIRED);
+                        // SHARED_HEAD_NORM: [embd]
+                        create_tensor(ctx_for_layer(final_layer),
+                                      tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, final_layer),
+                                      { n_embd },
+                                      llama_model_loader::TENSOR_NOT_REQUIRED);
+                    }
 
                     for (int i = 0; i < n_layer; ++i) {
                         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -9068,6 +9102,10 @@ static bool llm_load_tensors(
                             // MoE layers
                             layer.ffn_gate_inp =
                                 create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
+                            // gate bias
+                            layer.ffn_exp_probs_b =
+                                create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "bias", i), { n_expert },
+                                              llama_model_loader::TENSOR_NOT_REQUIRED);
 
                             if (n_expert == 0) {
                                 GGML_ASSERT(hparams.n_expert > 0 && "n_expert must be > 0 for GLM4_MOE MoE layers");
