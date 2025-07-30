@@ -6465,7 +6465,7 @@ static void llm_load_vocab(
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_PORO;
                 vocab.tokenizer_clean_spaces = false;
             } else if (
-                tokenizer_pre == "glm4" ||
+                tokenizer_pre == "glm4" || tokenizer_pre == "glm4moe" ||
                 tokenizer_pre == "chatglm-bpe") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_CHATGLM4;
                 vocab.special_bos_id  = -1;
@@ -10403,7 +10403,7 @@ static struct ggml_tensor * llm_build_kqv(
         // For DeepSeek-2, it is perfectly fine with fp16 for PP, but I get gibberish when uding fp16 for TG.
         // Not sure if it is really a matter of insufficient precision, or I have made a mistake in the fattn-vec-f16 kernel.
         if (use_f32_precision || model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX ||
-            (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8) || model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4) {
+            (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8) || model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 || model.arch == LLM_ARCH_GLM4_MOE) {
             ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
         }
         //ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
@@ -10428,7 +10428,7 @@ static struct ggml_tensor * llm_build_kqv(
             //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
 
             if (use_f32_precision || model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2 ||
-                model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4) {
+                model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 || model.arch == LLM_ARCH_GLM4_MOE) {
                 // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
                 // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
                 ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
