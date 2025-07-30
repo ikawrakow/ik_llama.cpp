@@ -341,10 +341,13 @@ struct server_slot {
             if (!new_msg.empty()) {
                 // Ensure tool call IDs are set consistently across streaming chunks
                 new_msg.ensure_tool_call_ids_set(tool_call_ids, generate_tool_call_id);
+                for (const auto & tc : new_msg.tool_calls) {
+                }
                 current_msg = new_msg;
                 
                 // Compute diffs for streaming
                 diffs = ik_chat_msg_diff::compute_diffs(previous, current_msg);
+            } else {
             }
         } catch (const std::exception& e) {
             // If parsing fails, don't update current_msg and return empty diffs
@@ -1675,7 +1678,7 @@ struct server_context {
         queue_results.send(std::move(res));
     }
 
-    void send_final_response(const server_slot & slot) {
+    void send_final_response(server_slot & slot) {
         server_task_result res;
         res.id       = slot.id_task;
         res.id_multi = slot.id_multi;
@@ -1699,6 +1702,25 @@ struct server_context {
             {"tokens_cached",       slot.n_past},
             {"timings",             slot.get_formated_timings()}
         };
+
+        // Following original llama.cpp pattern: call update_chat_msg before final response
+        // This ensures tool calls are parsed and stored with proper IDs
+        std::vector<ik_chat_msg_diff> final_diffs;
+        slot.update_chat_msg(final_diffs);
+        
+        // Include parsed tool calls with proper IDs to prevent re-parsing bug
+        if (!slot.current_msg.tool_calls.empty()) {
+            json tool_calls_json = json::array();
+            for (const auto & tc : slot.current_msg.tool_calls) {
+                tool_calls_json.push_back({
+                    {"name", tc.name},
+                    {"arguments", tc.arguments},
+                    {"id", tc.id}
+                });
+            }
+            res.data["tool_calls"] = tool_calls_json;
+        } else {
+        }
 
         if (slot.sparams.n_probs > 0) {
             std::vector<completion_token_output> probs;
@@ -2728,15 +2750,31 @@ static json format_final_response_oaicompat(const json& request, json result, co
     int num_prompt_tokens = json_value(result, "tokens_evaluated", 0);
     std::string content = json_value(result, "content", std::string(""));
 
-    // Parse tool calls using model-specific format detection
-    std::string model_name = json_value(request, "model", std::string(""));
-    
-    // Use the same parsing logic as streaming path for consistency
-    ik_chat_msg parsed_msg = parse_chat_message_incremental(content, false, model_name);
+    // Use parsed message with IDs if available (following original llama.cpp pattern)
+    ik_chat_msg msg;
+    if (result.contains("tool_calls")) {
+        // Use the already-parsed tool calls with proper IDs to prevent double parsing bug
+        json provided_tool_calls = result["tool_calls"];
+        for (const auto & tc : provided_tool_calls) {
+            ik_chat_tool_call tool_call;
+            tool_call.name = tc["name"];
+            tool_call.arguments = tc["arguments"];
+            tool_call.id = tc["id"];
+            msg.tool_calls.push_back(tool_call);
+        }
+        // Extract content from the raw text (removing tool call formatting)
+        msg.content = parse_chat_message_incremental(content, false, json_value(request, "model", std::string(""))).content;
+    } else {
+        // Fallback: Parse from content if no pre-parsed tool calls available (backward compatibility)
+        std::string model_name = json_value(request, "model", std::string(""));
+        msg = parse_chat_message_incremental(content, false, model_name);
+        for (const auto & tc : msg.tool_calls) {
+        }
+    }
     
     // Convert to JSON format for compatibility
     json tool_calls = json::array();
-    for (const auto & tc : parsed_msg.tool_calls) {
+    for (const auto & tc : msg.tool_calls) {
         tool_calls.push_back({
             {"type", "function"},
             {"function", {
@@ -2751,7 +2789,7 @@ static json format_final_response_oaicompat(const json& request, json result, co
     
     // Use cleaned content from parser (following original llama.cpp pattern)
     if (has_tool_calls) {
-        content = parsed_msg.content; // Parser already cleaned the content
+        content = msg.content; // Parser already cleaned the content
     }
 
     std::string finish_reason = "length";
