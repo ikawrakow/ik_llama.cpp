@@ -16277,7 +16277,7 @@ struct llm_build_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
     
-                // build attention KV
+                // build attention KV (no unified cache)
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                                    model.layers[il].wo, model.layers[il].bo,
                                    Kcur, Vcur, Qcur, /*mask*/ nullptr,
@@ -16312,17 +16312,18 @@ struct llm_build_context {
                 cb(cur, "ffn_out", il);
             } else {
                 // MoE FFN
-                struct ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, cur,
-                                            model.layers[il].ffn_gate_inp,
-                                            model.layers[il].ffn_up_exps,
-                                            model.layers[il].ffn_gate_exps,
-                                            model.layers[il].ffn_down_exps,
-                                            /*shared_expert=*/nullptr,
-                                            hparams.n_expert, hparams.n_expert_used,
-                                            LLM_FFN_SILU, /*parallel=*/true,
-                                            /*use_group=*/false, 0.0,
-                                            LLM_EXPERT_GATING_FUNC_SIGMOID,
-                                            cb, il);
+                ggml_tensor * moe_out =
+                    llm_build_moe_ffn(ctx0, lctx, cur,
+                            model.layers[il].ffn_gate_inp,
+                            model.layers[il].ffn_up_exps,
+                            model.layers[il].ffn_gate_exps,
+                            model.layers[il].ffn_down_exps,
+                            model.layers[il].ffn_exp_probs_b,
+                            n_expert, n_expert_used,
+                            LLM_FFN_SILU, hparams.expert_weights_norm,
+                            true, hparams.expert_weights_scale,
+                            (enum llm_expert_gating_func_type) hparams.expert_gating_func,
+                            cb, il);
                 cb(moe_out, "ffn_moe_out", il);
     
                 struct ggml_tensor * shexp_out = llm_build_ffn(ctx0, lctx, cur,
