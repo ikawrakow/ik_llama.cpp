@@ -16317,10 +16317,10 @@ struct llm_build_context {
                                             model.layers[il].ffn_up_exps,
                                             model.layers[il].ffn_gate_exps,
                                             model.layers[il].ffn_down_exps,
-                                            /*shared_expert=*/nullptr,
+                                            model.layers[il].ffn_exp_probs_b,
                                             n_expert, n_expert_used,
                                             LLM_FFN_SILU, /*parallel=*/true,
-                                            /*use_group=*/false, 0.0,
+                                            /*use_group=*/false, hparams.norm_topk_prob ? 1.0f : 0.0f,
                                             (enum llm_expert_gating_func_type) hparams.expert_gating_func,
                                             cb, il);
                 cb(moe_out, "ffn_moe_out", il);
