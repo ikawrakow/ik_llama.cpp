@@ -9060,6 +9060,7 @@ static bool llm_load_tensors(
                         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
 
                         // Check if this layer uses MoE or dense FFN based on n_layer_dense_lead
+                        // GLM 4.5 uses hybrid architecture: layer 0 is dense, layers 1+ are MoE
                         const bool use_moe =
                             (hparams.n_expert > 0) && (static_cast<uint32_t>(i) >= hparams.n_layer_dense_lead);
 
