@@ -6465,7 +6465,7 @@ static void llm_load_vocab(
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_PORO;
                 vocab.tokenizer_clean_spaces = false;
             } else if (
-                tokenizer_pre == "glm4" || tokenizer_pre == "glm4moe" ||
+                tokenizer_pre == "glm4" ||
                 tokenizer_pre == "chatglm-bpe") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_CHATGLM4;
                 vocab.special_bos_id  = -1;
@@ -10488,7 +10488,7 @@ static struct ggml_tensor * llm_build_kqv(
                 auto q_i = ggml_view_3d(ctx, q, q->ne[0], q->ne[1], this_ne12, q->nb[1], q->nb[2], q->nb[2]*i12);
                 auto kq_i = ggml_mul_mat(ctx, k_i, q_i);
                 if (model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2 ||
-                    model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4) {
+                    model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 || model.arch == LLM_ARCH_GLM4_MOE) {
                     ggml_mul_mat_set_prec(kq_i, GGML_PREC_F32);
                 }
                 if (model.arch == LLM_ARCH_GROK) {
