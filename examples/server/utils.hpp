@@ -176,20 +176,52 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
         // Inject tools into the first system message, or create one if none exists
         // Only applies to Kimi-K2 models (checked by kimi_k2_should_inject_tools)
         if (kimi_k2_should_inject_tools(tools, model_name) && !tools_injected) {
+            std::string tool_names = "";
+            for (size_t j = 0; j < tools.size(); ++j) {
+                if (tools[j].contains("function") && tools[j]["function"].contains("name")) {
+                    if (j > 0) tool_names += ", ";
+                    tool_names += tools[j]["function"]["name"].get<std::string>();
+                }
+            }
+            std::cout << "DEBUG [format_chat]: INJECTING Kimi-K2 tools into system message (" << tools.size() << " tools: " << tool_names << ")" << std::endl;
             if (role == "system") {
                 // Add tools to existing system message
                 content = kimi_k2_inject_tools_to_system(content, tools);
                 tools_injected = true;
             } else if (i == 0) {
-                // Create system message with tools if no system message exists
+                // First message is not system, insert new system message at the beginning
+                // Following original llama.cpp add_system pattern
                 std::string tools_prompt = kimi_k2_create_system_with_tools(tools);
-                chat.push_back({"system", tools_prompt});
+                chat.insert(chat.begin(), {"system", tools_prompt});
                 tools_injected = true;
             }
         }
         
+        // Debug: Log tool injection check for both Kimi-K2 and Qwen3
+        if (i == 0) {  // Only log once
+            std::cout << "DEBUG [format_chat]: checking Kimi-K2 tool injection" << std::endl;
+            std::cout << "   tools.size() = " << tools.size() << std::endl;
+            std::cout << "   model_name = " << model_name << std::endl;
+            std::cout << "   is_kimi_k2_model() = " << (is_kimi_k2_model(model_name) ? "true" : "false") << std::endl;
+            std::cout << "   kimi_k2_should_inject_tools() = " << (kimi_k2_should_inject_tools(tools, model_name) ? "true" : "false") << std::endl;
+            
+            std::cout << "DEBUG [format_chat]: checking Qwen3 tool injection" << std::endl;
+            std::cout << "   tools.size() = " << tools.size() << std::endl;
+            std::cout << "   model_name = " << model_name << std::endl;
+            std::cout << "   is_qwen3_model() = " << (is_qwen3_model(model_name) ? "true" : "false") << std::endl;
+            std::cout << "   qwen3_should_inject_tools() = " << (qwen3_should_inject_tools(tools, model_name) ? "true" : "false") << std::endl;
+        }
+        
         // Inject tools for Qwen3 models (XML Hermes format)
         if (qwen3_should_inject_tools(tools, model_name) && !tools_injected) {
+            std::string tool_names = "";
+            for (size_t j = 0; j < tools.size(); ++j) {
+                if (tools[j].contains("function") && tools[j]["function"].contains("name")) {
+                    if (j > 0) tool_names += ", ";
+                    tool_names += tools[j]["function"]["name"].get<std::string>();
+                }
+            }
+            std::cout << "DEBUG [format_chat]: INJECTING Qwen3 tools into system message (" << tools.size() << " tools: " << tool_names << ")" << std::endl;
             if (role == "system") {
                 // Add tools to existing system message
                 content = qwen3_inject_tools_to_system(content, tools);
@@ -454,6 +486,13 @@ static json oaicompat_completion_params_parse(
     // Extract tools from the request body
     json tools = json_value(body, "tools", json::array());
     
+    // Debug: Always log tool extraction status for debugging
+    if (!tools.empty()) {
+        std::cout << "DEBUG [oaicompat_completion_params_parse]: tools detected: valid JSON of size " << tools.size() << std::endl;
+    } else {
+        std::cout << "DEBUG [oaicompat_completion_params_parse]: NO tools in request body" << std::endl;
+    }
+    
     // Debug: Log system prompt when tools are detected
     if (!tools.empty() && server_verbose) {
         LOG_VERBOSE("Tool calls detected in request", {
@@ -493,7 +532,14 @@ static json oaicompat_completion_params_parse(
     std::string model_name = json_value(body, "model", std::string(DEFAULT_OAICOMPAT_MODEL));
 
     // Apply chat template to the list of messages with tools
-    llama_params["prompt"] = format_chat(model, chat_template, body.at("messages"), tools, model_name);
+    std::string formatted_prompt = format_chat(model, chat_template, body.at("messages"), tools, model_name);
+    llama_params["prompt"] = formatted_prompt;
+    
+    // Debug: Log the actual formatted prompt being sent to the model
+    std::cout << "DEBUG [oaicompat_completion_params_parse]: formatted prompt being sent to model:" << std::endl;
+    std::cout << "=== PROMPT START ===" << std::endl;
+    std::cout << formatted_prompt << std::endl;
+    std::cout << "=== PROMPT END ===" << std::endl;
 
     // Handle "stop" field
     if (body.contains("stop") && body.at("stop").is_string()) {
