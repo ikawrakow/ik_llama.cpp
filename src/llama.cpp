@@ -1439,6 +1439,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_GATE_SHEXP,     "blk.%d.ffn_gate_shexp" },
             { LLM_TENSOR_FFN_DOWN_SHEXP,     "blk.%d.ffn_down_shexp" },
             { LLM_TENSOR_FFN_UP_SHEXP,       "blk.%d.ffn_up_shexp" },
+            { LLM_TENSOR_FFN_EXP_PROBS_B,    "blk.%d.exp_probs_b" },
             // NextN/MTP tensors - preserved but unused (in final layer, dynamic layer number)
             { LLM_TENSOR_NEXTN_EH_PROJ,      "blk.%d.eh_proj" },
             { LLM_TENSOR_NEXTN_EMBED_TOKENS, "blk.%d.embed_tokens" },
@@ -9035,9 +9036,9 @@ static bool llm_load_tensors(
                         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
                     }
                     
-                    // --- NextN / MTP tensors (preserved but unused), on the final layer ---
+                    // NextN/MTP tensors (preserved but unused) - only in final layer (46 for Air, 92 for GLM-4.5)
                     {
-                        const int final_layer = n_layer - 1;
+                        const int final_layer = n_layer - 1; // NextN tensors are in the last layer only
                         // EH_PROJ: [2*embd, embd]
                         create_tensor(ctx_for_layer(final_layer),
                                       tn(LLM_TENSOR_NEXTN_EH_PROJ, final_layer),
@@ -9081,9 +9082,9 @@ static bool llm_load_tensors(
                         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
                         layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i), { n_embd, n_embd_k_gqa }, 0);
                         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_v_gqa }, 0);
-                        layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q, "bias", i), { n_embd_head_k * n_head }, llama_model_loader::TENSOR_NOT_REQUIRED);
-                        layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K, "bias", i), { n_embd_k_gqa }, llama_model_loader::TENSOR_NOT_REQUIRED);
-                        layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V, "bias", i), { n_embd_v_gqa }, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q, "bias", i), { n_embd_head_k * n_head }, 0);
+                        layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K, "bias", i), { n_embd_k_gqa }, 0);
+                        layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V, "bias", i), { n_embd_v_gqa }, 0);
 
                         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
@@ -9106,8 +9107,8 @@ static bool llm_load_tensors(
                                 create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
                             // gate bias
                             layer.ffn_exp_probs_b =
-                                create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "bias", i), { n_expert },
-                                              llama_model_loader::TENSOR_NOT_REQUIRED);
+                                create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, i), { n_expert },
+                                              0);
 
                             if (n_expert == 0) {
                                 GGML_ASSERT(hparams.n_expert > 0 && "n_expert must be > 0 for GLM4_MOE MoE layers");
