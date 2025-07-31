@@ -16215,6 +16215,8 @@ struct llm_build_context {
     
         // attention KV cache input
         //auto * inp_attn = build_attn_inp_kv_unified();
+
+        struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
     
         // output token IDs (for last layer cropping)
         struct ggml_tensor * inp_out_ids = build_inp_out_ids();
@@ -16254,7 +16256,7 @@ struct llm_build_context {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
     
-                // optional Q/K norm (GLM-4.5 variant)
+                // Apply Q/K norm if available (GLM-4.5 355B variant)
                 if (model.layers[il].attn_q_norm) {
                     Qcur = llm_build_norm(ctx0, Qcur, hparams,
                                          model.layers[il].attn_q_norm, NULL,
@@ -16282,7 +16284,7 @@ struct llm_build_context {
                 // build attention KV (no unified cache)
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                                    model.layers[il].wo, model.layers[il].bo,
-                                   Kcur, Vcur, Qcur, /*mask*/ nullptr,
+                                   Kcur, Vcur, Qcur, KQ_mask,
                                    n_tokens, kv_head, n_kv,
                                    1.0f/sqrtf(float(n_embd_head)), cb, il);
             }
