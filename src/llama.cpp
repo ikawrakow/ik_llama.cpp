@@ -16286,7 +16286,9 @@ struct llm_build_context {
             }
     
             // crop output on last layer
-            if (il == n_layer - 1 && inp_out_ids) {
+            if (il == n_layer - 1) {
+                // skip computing output for unused tokens
+                ggml_tensor * inp_out_ids = build_inp_out_ids();
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
@@ -16301,7 +16303,7 @@ struct llm_build_context {
                                  LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
     
-            if (static_cast<uint32_t>(il) < hparams.n_layer_dense_lead) {
+            if ((uint32_t) il < hparams.n_layer_dense_lead) {
                 // dense FFN
                 cur = llm_build_ffn(ctx0, lctx, cur,
                         model.layers[il].ffn_up,   NULL, NULL,
@@ -16319,22 +16321,24 @@ struct llm_build_context {
                                             model.layers[il].ffn_down_exps,
                                             model.layers[il].ffn_exp_probs_b,
                                             n_expert, n_expert_used,
-                                            LLM_FFN_SILU, /*parallel=*/true,
-                                            /*use_group=*/false, /*renormalize=*/1.0f,                // always normalize top‐k
+                                            LLM_FFN_SILU, hparams.expert_weights_norm,
+                                            true, hparams.expert_weights_scale,
                                             (enum llm_expert_gating_func_type) hparams.expert_gating_func,
                                             cb, il);
                 cb(moe_out, "ffn_moe_out", il);
-    
-                struct ggml_tensor * shexp_out = llm_build_ffn(ctx0, lctx, cur,
-                                            model.layers[il].ffn_up_shexp, NULL, NULL,
-                                            model.layers[il].ffn_gate_shexp, NULL, NULL,
-                                            model.layers[il].ffn_down_shexp, NULL, NULL,
-                                            nullptr,
-                                            LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-                cb(shexp_out, "ffn_shexp_out", il);
-    
-                cur = ggml_add(ctx0, moe_out, shexp_out);
-                cb(cur, "ffn_out", il);
+
+                {
+                    struct ggml_tensor * shexp_out = llm_build_ffn(ctx0, lctx, cur,
+                                                model.layers[il].ffn_up_shexp, NULL, NULL,
+                                                model.layers[il].ffn_gate_shexp, NULL, NULL,
+                                                model.layers[il].ffn_down_shexp, NULL, NULL,
+                                                NULL,
+                                                LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+                    cb(shexp_out, "ffn_shexp_out", il);
+        
+                    cur = ggml_add(ctx0, moe_out, shexp_out);
+                    cb(cur, "ffn_out", il);
+                }
             }
     
             // residual and context vector
@@ -16349,7 +16353,7 @@ struct llm_build_context {
         cur = inpL;
     
         // final norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
+        cur = llm_build_norm(ctx0, cur, hparams,
                              model.output_norm, NULL,
                              LLM_NORM_RMS, cb, -1);
         cb(cur, "result_norm", -1);
