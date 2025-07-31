@@ -49,6 +49,21 @@ functions.get_weather:0<|tool_call_argument_begin|>
 
 Let me help you.)";
 
+// Test data for <function=Name:id{...} format (the format that was failing)
+const std::string function_call_format_single = R"(I'll perform a comprehensive code review of the current git changes between HEAD and main branch. Let me start by examining the git status and the actual changes.
+
+<function=Bash:0{"command": "git log --oneline -n 10", "description": "Check recent commits to understand the scope of changes"}
+
+Let me analyze the changes.)";
+
+const std::string function_call_format_multiple = R"(I'll help you with multiple tasks.
+
+<function=Bash:0{"command": "git status", "description": "Check git status"}
+<function=Bash:1{"command": "git diff main...HEAD", "description": "Show all changes between HEAD and main branch"}
+<function=Read:2{"file_path": "/path/to/file.txt", "offset": 100}
+
+Here are the results.)";
+
 const std::string no_function_calls = R"(I can help you with that. The weather in Tokyo is usually quite pleasant this time of year.)";
 
 // Test data for simple function call format
@@ -748,6 +763,63 @@ void test_unicode_support() {
         test_assert(message.find("こんにちは") != std::string::npos, "Unicode: Japanese characters preserved");
         test_assert(message.find("🌍") != std::string::npos, "Unicode: Emoji preserved");
     }
+}
+
+// Test <function=Name:id{...} format parsing
+void test_function_call_format() {
+    std::cout << "Testing <function=Name:id{...} format parsing..." << std::endl;
+    
+    // Test single function call
+    json result_single = parse_kimi_k2_tool_calls(function_call_format_single);
+    test_assert(result_single.size() == 1, "Function format: Single call parsed");
+    test_assert(result_single[0]["function"]["name"] == "Bash", "Function format: Function name correct");
+    
+    // Verify arguments are parsed as JSON
+    std::string args = result_single[0]["function"]["arguments"];
+    json parsed_args = json::parse(args);
+    test_assert(parsed_args["command"] == "git log --oneline -n 10", "Function format: Arguments parsed correctly");
+    test_assert(parsed_args["description"] == "Check recent commits to understand the scope of changes", "Function format: Description preserved");
+    
+    // Test multiple function calls
+    json result_multiple = parse_kimi_k2_tool_calls(function_call_format_multiple);
+    test_assert(result_multiple.size() == 3, "Function format: Multiple calls parsed");
+    
+    // Verify first call
+    test_assert(result_multiple[0]["function"]["name"] == "Bash", "Function format: First call name correct");
+    std::string args0_str = result_multiple[0]["function"]["arguments"];
+    json args0 = json::parse(args0_str);
+    test_assert(args0["command"] == "git status", "Function format: First call args correct");
+    
+    // Verify second call  
+    test_assert(result_multiple[1]["function"]["name"] == "Bash", "Function format: Second call name correct");
+    std::string args1_str = result_multiple[1]["function"]["arguments"];
+    json args1 = json::parse(args1_str);
+    test_assert(args1["command"] == "git diff main...HEAD", "Function format: Second call args correct");
+    
+    // Verify third call
+    test_assert(result_multiple[2]["function"]["name"] == "Read", "Function format: Third call name correct");
+    std::string args2_str = result_multiple[2]["function"]["arguments"];
+    json args2 = json::parse(args2_str);
+    test_assert(args2["file_path"] == "/path/to/file.txt", "Function format: Third call file_path correct");
+    test_assert(args2["offset"] == 100, "Function format: Third call offset correct");
+    test_assert(args2.contains("offset"), "Function format: Third call contains offset");
+    
+    // Test content extraction (should remove function calls)
+    ik_chat_msg msg_single = parse_chat_message_incremental(function_call_format_single, false);
+    test_assert(msg_single.tool_calls.size() == 1, "Function format: Single call in message");
+    test_assert(!msg_single.content.empty(), "Function format: Content extracted");
+    test_assert(msg_single.content.find("<function=") == std::string::npos, "Function format: Function calls removed from content");
+    
+    ik_chat_msg msg_multiple = parse_chat_message_incremental(function_call_format_multiple, false);
+    test_assert(msg_multiple.tool_calls.size() == 3, "Function format: Multiple calls in message");
+    test_assert(!msg_multiple.content.empty(), "Function format: Content extracted from multiple");
+    test_assert(msg_multiple.content.find("<function=") == std::string::npos, "Function format: All function calls removed from content");
+    
+    // Test ID generation (should be empty for server-side generation)
+    test_assert(result_single[0]["id"].get<std::string>().empty(), "Function format: ID empty for server generation");
+    test_assert(result_multiple[0]["id"].get<std::string>().empty(), "Function format: First ID empty for server generation");
+    test_assert(result_multiple[1]["id"].get<std::string>().empty(), "Function format: Second ID empty for server generation");
+    test_assert(result_multiple[2]["id"].get<std::string>().empty(), "Function format: Third ID empty for server generation");
 }
 
 // Test validation and robustness
@@ -3162,6 +3234,102 @@ I've created the file for you.)";
     std::cout << "   🎯 This test verifies the server-level fix for double parsing bug" << std::endl;
 }
 
+// Test streaming vs non-streaming parsing bug for mixed content
+void test_streaming_vs_nonstreaming_mixed_content_bug() {
+    std::cout << "\n🐛 Testing Streaming vs Non-Streaming Mixed Content Bug:" << std::endl;
+    
+    // This reproduces the pattern from production logs: regular text followed by tool call
+    const std::string mixed_content = R"(Let me analyze the code structure to understand the implementation:functions.Task:1{"description": "Analyze code structure and implementation patterns", "subagent_type": "general-purpose", "prompt": "Search the codebase to understand implementation details. Look for:\n1. Class definitions and structure\n2. How values are determined and set\n3. Documentation and comments\n4. Usage examples and patterns\n5. Potential implementation issues"})";
+    
+    std::cout << "   Testing mixed content: regular text + tool call" << std::endl;
+    std::cout << "   Content length: " << mixed_content.length() << " characters" << std::endl;
+    
+    // Test 1: Direct Kimi-K2 parser (should work for both streaming and non-streaming)
+    std::cout << "   Direct Kimi-K2 parser test:" << std::endl;
+    json direct_result = parse_kimi_k2_tool_calls(mixed_content);
+    
+    std::cout << "     Direct parser found " << direct_result.size() << " tool calls" << std::endl;
+    test_assert(direct_result.is_array(), "Mixed content: Direct parser returns array");
+    test_assert(direct_result.size() == 1, "Mixed content: Direct parser finds 1 tool call");
+    
+    if (direct_result.size() > 0) {
+        test_assert(direct_result[0]["function"]["name"] == "Task", "Mixed content: Correct function name");
+        test_assert(direct_result[0]["type"] == "function", "Mixed content: Correct type");
+        std::cout << "     ✅ Direct parser correctly found Task tool call" << std::endl;
+    }
+    
+    // Test 2: Streaming parsing (is_partial=true) - should detect tool call properly
+    std::cout << "   Streaming parsing test (is_partial=true):" << std::endl;
+    ik_chat_msg streaming_msg = parse_chat_message_incremental(mixed_content, true);  // is_partial=true
+    
+    std::cout << "     Streaming parser found " << streaming_msg.tool_calls.size() << " tool calls" << std::endl;
+    test_assert(!streaming_msg.tool_calls.empty(), "Mixed content: Streaming parser detects tool calls");
+    test_assert(streaming_msg.tool_calls.size() == 1, "Mixed content: Streaming parser finds 1 tool call");
+    
+    if (!streaming_msg.tool_calls.empty()) {
+        test_assert(streaming_msg.tool_calls[0].name == "Task", "Mixed content: Streaming parser correct function name");
+        std::cout << "     ✅ Streaming parser (is_partial=true) correctly found tool call" << std::endl;
+    }
+    
+    // Test 3: Non-streaming parsing (is_partial=false) - THIS IS THE BUG
+    std::cout << "   Non-streaming parsing test (is_partial=false):" << std::endl;
+    ik_chat_msg nonstreaming_msg = parse_chat_message_incremental(mixed_content, false);  // is_partial=false
+    
+    std::cout << "     Non-streaming parser found " << nonstreaming_msg.tool_calls.size() << " tool calls" << std::endl;
+    
+    // THIS IS THE FAILING ASSERTION - demonstrates the bug
+    if (nonstreaming_msg.tool_calls.empty()) {
+        std::cout << "     ❌ BUG DETECTED: Non-streaming parser missed tool call!" << std::endl;
+        std::cout << "     This reproduces the exact issue from production logs" << std::endl;
+        
+        // Show what content was extracted
+        std::cout << "     Extracted content: '" << nonstreaming_msg.content << "'" << std::endl;
+        
+        // This test SHOULD pass but currently fails due to the bug
+        test_assert(false, "KNOWN BUG: Non-streaming parser should detect tool calls in mixed content");
+    } else {
+        test_assert(nonstreaming_msg.tool_calls.size() == 1, "Mixed content: Non-streaming parser finds 1 tool call");
+        test_assert(nonstreaming_msg.tool_calls[0].name == "Task", "Mixed content: Non-streaming parser correct function name");
+        std::cout << "     ✅ Non-streaming parser correctly found tool call" << std::endl;
+    }
+    
+    // Test 4: Compare content extraction between streaming and non-streaming
+    std::cout << "   Content extraction comparison:" << std::endl;
+    std::cout << "     Streaming content: '" << streaming_msg.content.substr(0, 50) << "...'" << std::endl;
+    std::cout << "     Non-streaming content: '" << nonstreaming_msg.content.substr(0, 50) << "...'" << std::endl;
+    
+    // Both should extract the same content (text before tool call)
+    std::string expected_content = "Let me analyze the code structure to understand the implementation:";
+    test_assert(streaming_msg.content.find(expected_content) == 0, "Mixed content: Streaming extracts correct content prefix");
+    test_assert(nonstreaming_msg.content.find(expected_content) == 0, "Mixed content: Non-streaming extracts correct content prefix");
+    
+    std::cout << "   🎯 This test reproduces the streaming vs non-streaming parsing bug" << std::endl;
+    
+    // Test 5: Server-specific scenario - test stopping conditions affect parsing
+    std::cout << "   Server stopping condition simulation:" << std::endl;
+    
+    // Simulate server logic: is_partial = !stopped_eos && !stopped_word && !stopped_limit
+    bool stopped_eos = true;  // This is what happens in the failing case
+    bool stopped_word = false;
+    bool stopped_limit = false;
+    bool is_partial_server = !stopped_eos && !stopped_word && !stopped_limit;  // This will be FALSE
+    
+    std::cout << "     Simulated server conditions: stopped_eos=" << stopped_eos 
+              << ", is_partial=" << is_partial_server << std::endl;
+    
+    ik_chat_msg server_simulation = parse_chat_message_incremental(mixed_content, is_partial_server);
+    std::cout << "     Server simulation found " << server_simulation.tool_calls.size() << " tool calls" << std::endl;
+    
+    if (server_simulation.tool_calls.empty()) {
+        std::cout << "     ❌ SERVER BUG REPRODUCED: When stopped_eos=true, is_partial=false causes tool call loss!" << std::endl;
+        std::cout << "     This matches the production logs exactly" << std::endl;
+    } else {
+        std::cout << "     ✅ Server simulation correctly found tool calls" << std::endl;
+    }
+    
+    std::cout << "   🎯 This test now reproduces the exact server-side bug mechanism" << std::endl;
+}
+
 int main() {
     std::cout << "🧪 Running Comprehensive Kimi-K2 Function Calling Tests" << std::endl;
     std::cout << "========================================================" << std::endl;
@@ -3178,12 +3346,14 @@ int main() {
         std::cout << "\n🔧 Simple Format Tests:" << std::endl;
         test_simple_function_calls();
         test_simple_multiple_calls();
+        test_function_call_format();
         
         std::cout << "\n🌊 Streaming Tests:" << std::endl;
         test_streaming_incremental();
         test_streaming_diffs();
         test_streaming_chunks();
         test_streaming_vs_nonstreaming_consistency();
+        test_streaming_vs_nonstreaming_mixed_content_bug();
         
         std::cout << "\n🛡️ Error Handling Tests:" << std::endl;
         test_error_handling();
