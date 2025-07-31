@@ -1439,7 +1439,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_GATE_SHEXP,     "blk.%d.ffn_gate_shexp" },
             { LLM_TENSOR_FFN_DOWN_SHEXP,     "blk.%d.ffn_down_shexp" },
             { LLM_TENSOR_FFN_UP_SHEXP,       "blk.%d.ffn_up_shexp" },
-            // NextN/MTP tensors - preserved but unused
+            // NextN/MTP tensors - preserved but unused (in final layer, dynamic layer number)
             { LLM_TENSOR_NEXTN_EH_PROJ,      "blk.%d.eh_proj" },
             { LLM_TENSOR_NEXTN_EMBED_TOKENS, "blk.%d.embed_tokens" },
             { LLM_TENSOR_NEXTN_ENORM,        "blk.%d.enorm" },
