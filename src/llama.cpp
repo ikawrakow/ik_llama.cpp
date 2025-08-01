@@ -16254,7 +16254,7 @@ struct llm_build_context {
                 // reshape for multi-head
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                // Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
     
                 // Apply Q/K norm if available (GLM-4.5 355B variant)
                 if (model.layers[il].attn_q_norm) {
