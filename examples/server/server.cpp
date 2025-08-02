@@ -333,10 +333,38 @@ struct server_slot {
     const ik_chat_msg & update_chat_msg(std::vector<ik_chat_msg_diff> & diffs) {
         ik_chat_msg previous = current_msg;
         
+        // Parse generated text incrementally (is_partial = true during generation) 
+        bool is_partial = !stopped_eos && !stopped_word && !stopped_limit;
+        
+        // Key debug info: show content being parsed when tool calls expected or parsing fails
+        bool should_log_content = generated_text.find("functions.") != std::string::npos || 
+                                generated_text.find("<anythingllm:function_calls>") != std::string::npos ||
+                                generated_text.find("<tool_call>") != std::string::npos;
+        
+        // For final parsing (partial=0), always log content preview to understand Task 163 type scenarios
+        bool is_final_parse = is_partial == false;
+        
         try {
-            // Parse generated text incrementally (is_partial = true during generation)
-            bool is_partial = !stopped_eos && !stopped_word && !stopped_limit;
+            
+            // Log content for tool call patterns OR final parsing to understand all scenarios
+            if (should_log_content || is_final_parse) {
+                std::string content_preview = generated_text.length() > 550 ? 
+                    generated_text.substr(0, 550) + "..." : generated_text;
+                if (is_final_parse && !should_log_content) {
+                    // Concise logging for final parse of normal text
+                } else {
+                }
+            }
+            
             ik_chat_msg new_msg = parse_chat_message_incremental(generated_text, is_partial, oaicompat_model);
+            
+            // Log result with context
+            if (should_log_content || new_msg.tool_calls.size() > 0 || is_final_parse) {
+                if (is_final_parse && !should_log_content && new_msg.tool_calls.size() == 0) {
+                    // Concise final result for normal text
+                } else {
+                }
+            }
             
             if (!new_msg.empty()) {
                 // Ensure tool call IDs are set consistently across streaming chunks
@@ -351,6 +379,14 @@ struct server_slot {
             diffs.clear();
         }
         
+        // Final state logged only if relevant
+        if (current_msg.tool_calls.size() > 0 || should_log_content || is_final_parse) {
+            if (is_final_parse && current_msg.tool_calls.size() == 0 && !should_log_content) {
+                // Minimal logging for normal text final state
+            } else {
+                // Full debug logging for tool calls or when explicitly requested
+            }
+        }
         return current_msg;
     }
 
@@ -1645,6 +1681,23 @@ struct server_context {
             }
         }
         res.data["oaicompat_msg_diffs"] = diffs_json;
+        
+        // Store parsed chat message for format_partial_response_oaicompat (following original llama.cpp pattern)
+        // This prevents duplicate parsing in the streaming logic
+        res.data["oaicompat_msg"] = {
+            {"content", slot.current_msg.content},
+            {"tool_calls", json::array()}
+        };
+        for (const auto & tool_call : slot.current_msg.tool_calls) {
+            res.data["oaicompat_msg"]["tool_calls"].push_back({
+                {"id", tool_call.id},
+                {"type", "function"},
+                {"function", {
+                    {"name", tool_call.name},
+                    {"arguments", tool_call.arguments}
+                }}
+            });
+        }
 
         if (slot.sparams.n_probs > 0) {
             const std::vector<llama_token> to_send_toks = llama_tokenize(ctx, tkn.text_to_send, false);
@@ -1675,12 +1728,21 @@ struct server_context {
         queue_results.send(std::move(res));
     }
 
-    void send_final_response(const server_slot & slot) {
+    void send_final_response(server_slot & slot) {
         server_task_result res;
         res.id       = slot.id_task;
         res.id_multi = slot.id_multi;
         res.error    = false;
         res.stop     = true;
+        // Determine finish_reason following original llama.cpp pattern
+        std::string finish_reason;
+        if (slot.stopped_limit) {
+            finish_reason = "length";
+        } else if (slot.stopped_word || slot.stopped_eos) {
+            // Following original llama.cpp pattern: finish_reason based on tool_calls
+            finish_reason = slot.current_msg.tool_calls.empty() ? "stop" : "tool_calls";
+        }
+        
         res.data     = json {
             {"content",             !slot.params.stream ? slot.generated_text : ""},
             {"generated_text",      slot.generated_text},  // Always include full text for finish_reason logic
@@ -1697,8 +1759,46 @@ struct server_context {
             {"stopped_limit",       slot.stopped_limit},
             {"stopping_word",       slot.stopping_word},
             {"tokens_cached",       slot.n_past},
-            {"timings",             slot.get_formated_timings()}
+            {"timings",             slot.get_formated_timings()},
+            {"finish_reason",       finish_reason}  // Add finish_reason for consistency
         };
+
+        // Following original llama.cpp pattern: call update_chat_msg before final response
+        // This ensures tool calls are parsed and stored with proper IDs
+        std::vector<ik_chat_msg_diff> final_diffs;
+        slot.update_chat_msg(final_diffs);
+        
+        // Include parsed tool calls with proper IDs to prevent re-parsing bug
+        if (!slot.current_msg.tool_calls.empty()) {
+                      << " tool_calls, first_id='" << slot.current_msg.tool_calls[0].id << "'" << std::endl;
+            json tool_calls_json = json::array();
+            for (const auto & tc : slot.current_msg.tool_calls) {
+                tool_calls_json.push_back({
+                    {"name", tc.name},
+                    {"arguments", tc.arguments},
+                    {"id", tc.id}
+                });
+            }
+            res.data["tool_calls"] = tool_calls_json;
+        } else {
+        }
+        
+        // Store parsed chat message for format_partial_response_oaicompat (following original llama.cpp pattern)
+        // This prevents duplicate parsing in the streaming logic
+        res.data["oaicompat_msg"] = {
+            {"content", slot.current_msg.content},
+            {"tool_calls", json::array()}
+        };
+        for (const auto & tool_call : slot.current_msg.tool_calls) {
+            res.data["oaicompat_msg"]["tool_calls"].push_back({
+                {"id", tool_call.id},
+                {"type", "function"},
+                {"function", {
+                    {"name", tool_call.name},
+                    {"arguments", tool_call.arguments}
+                }}
+            });
+        }
 
         if (slot.sparams.n_probs > 0) {
             std::vector<completion_token_output> probs;
@@ -2728,15 +2828,31 @@ static json format_final_response_oaicompat(const json& request, json result, co
     int num_prompt_tokens = json_value(result, "tokens_evaluated", 0);
     std::string content = json_value(result, "content", std::string(""));
 
-    // Parse tool calls using model-specific format detection
-    std::string model_name = json_value(request, "model", std::string(""));
-    
-    // Use the same parsing logic as streaming path for consistency
-    ik_chat_msg parsed_msg = parse_chat_message_incremental(content, false, model_name);
+    // Use parsed message with IDs if available (following original llama.cpp pattern)
+    ik_chat_msg msg;
+    if (result.contains("tool_calls")) {
+        // Use the already-parsed tool calls with proper IDs to prevent double parsing bug
+        json provided_tool_calls = result["tool_calls"];
+        for (const auto & tc : provided_tool_calls) {
+            ik_chat_tool_call tool_call;
+            tool_call.name = tc["name"];
+            tool_call.arguments = tc["arguments"];
+            tool_call.id = tc["id"];
+            msg.tool_calls.push_back(tool_call);
+        }
+        // Extract content from the raw text (removing tool call formatting)
+        msg.content = parse_chat_message_incremental(content, false, json_value(request, "model", std::string(""))).content;
+    } else {
+        // Fallback: Parse from content if no pre-parsed tool calls available (backward compatibility)
+        std::string model_name = json_value(request, "model", std::string(""));
+        msg = parse_chat_message_incremental(content, false, model_name);
+        if (msg.tool_calls.size() > 0) {
+        }
+    }
     
     // Convert to JSON format for compatibility
     json tool_calls = json::array();
-    for (const auto & tc : parsed_msg.tool_calls) {
+    for (const auto & tc : msg.tool_calls) {
         tool_calls.push_back({
             {"type", "function"},
             {"function", {
@@ -2751,7 +2867,7 @@ static json format_final_response_oaicompat(const json& request, json result, co
     
     // Use cleaned content from parser (following original llama.cpp pattern)
     if (has_tool_calls) {
-        content = parsed_msg.content; // Parser already cleaned the content
+        content = msg.content; // Parser already cleaned the content
     }
 
     std::string finish_reason = "length";
@@ -2827,18 +2943,23 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
         finish_reason = "length";
     } else if (stopped_word || stopped_eos) {
         // Following original llama.cpp pattern: finish_reason = oaicompat_msg.tool_calls.empty() ? "stop" : "tool_calls"
-        // Use generated_text (complete content) for finish_reason logic, not content (empty in streaming)
-        std::string generated_text = json_value(result, "generated_text", std::string(""));
-        ik_chat_msg final_msg = parse_chat_message_incremental(generated_text, false, modelname);
+        // Use pre-stored oaicompat_msg from task result (parsed once in send_partial_response/send_final_response)
+        size_t tool_calls_count = 0;
         
-        // Debug logging
+        if (result.contains("oaicompat_msg") && result["oaicompat_msg"].contains("tool_calls")) {
+            tool_calls_count = result["oaicompat_msg"]["tool_calls"].size();
+        }
+        
+        // Debug logging (now shows pre-parsed result, no duplicate parsing)
+        std::string generated_text = json_value(result, "generated_text", std::string(""));
         LOG_INFO("DEBUG: Streaming finish_reason check", {
             {"generated_text", generated_text},
             {"model_name", modelname}, 
-            {"tool_calls_count", final_msg.tool_calls.size()}
+            {"tool_calls_count", tool_calls_count}
         });
         
-        finish_reason = final_msg.tool_calls.empty() ? "stop" : "tool_calls";
+        
+        finish_reason = tool_calls_count == 0 ? "stop" : "tool_calls";
     }
 
     std::time_t t = std::time(0);
@@ -2862,9 +2983,18 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
                 diff.tool_call_index = diff_json["tool_call_index"];
                 if (diff_json.contains("tool_call_delta")) {
                     const auto & tc_delta = diff_json["tool_call_delta"];
-                    diff.tool_call_delta.id = tc_delta.value("id", "");
-                    diff.tool_call_delta.name = tc_delta.value("name", "");
-                    diff.tool_call_delta.arguments = tc_delta.value("arguments", "");
+                    
+                    // Safe JSON string extraction to handle null values
+                    auto safe_json_string = [](const json & j, const std::string & key, const std::string & default_val) -> std::string {
+                        if (j.contains(key) && !j[key].is_null() && j[key].is_string()) {
+                            return j[key];
+                        }
+                        return default_val;
+                    };
+                    
+                    diff.tool_call_delta.id = safe_json_string(tc_delta, "id", "");
+                    diff.tool_call_delta.name = safe_json_string(tc_delta, "name", "");
+                    diff.tool_call_delta.arguments = safe_json_string(tc_delta, "arguments", "");
                 }
             } else {
                 diff.tool_call_index = std::string::npos;
@@ -3674,7 +3804,14 @@ int main(int argc, char ** argv) {
         }
 
         res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
-        json data = oaicompat_completion_params_parse(ctx_server.model, json::parse(req.body), params.chat_template);
+        
+        json data;
+        try {
+            data = oaicompat_completion_params_parse(ctx_server.model, json::parse(req.body), params.chat_template);
+        } catch (const std::exception & e) {
+            res_error(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
 
         const int id_task = ctx_server.queue_tasks.get_new_id();
 

@@ -31,6 +31,9 @@ static constexpr const char* XML_PARAMETER_CLOSE = "</parameter>";
 // Constants for simple format patterns
 static constexpr const char* FUNCTIONS_PREFIX = "functions.";
 
+// Constants for <function=Name:id{...} format 
+static constexpr const char* FUNCTION_CALL_PREFIX = "<function=";
+
 // Helper functions to get marker lengths at compile time
 static constexpr size_t get_marker_length(const char* marker) {
     size_t len = 0;
@@ -47,6 +50,7 @@ static constexpr size_t XML_TOOL_CALL_OPEN_LEN = get_marker_length(XML_TOOL_CALL
 static constexpr size_t XML_TOOL_CALL_CLOSE_LEN = get_marker_length(XML_TOOL_CALL_CLOSE);
 static constexpr size_t XML_PARAMETER_CLOSE_LEN = get_marker_length(XML_PARAMETER_CLOSE);
 static constexpr size_t FUNCTIONS_PREFIX_LEN = get_marker_length(FUNCTIONS_PREFIX);
+static constexpr size_t FUNCTION_CALL_PREFIX_LEN = get_marker_length(FUNCTION_CALL_PREFIX);
 
 // Helper function to trim whitespace and quotes
 static std::string trim_and_unquote(const std::string& str) {
@@ -135,9 +139,12 @@ static json parse_token_function_calls(const std::string& text) {
                     continue;
                 }
                 
+                // Use empty ID to let standard ID generation mechanism create proper OpenAI format
+                std::string openai_id = "";
+                
                 // Create tool call object
                 json tool_call = {
-                    {"id", tool_id},
+                    {"id", openai_id},
                     {"type", "function"},
                     {"function", {
                         {"name", func_name},
@@ -251,9 +258,8 @@ static json parse_xml_function_calls(const std::string& text) {
                 param_pos = param_content_end + XML_PARAMETER_CLOSE_LEN;
             }
             
-            // Generate tool call ID
-            static int xml_call_counter = 0;
-            std::string tool_id = "call_xml_" + std::to_string(++xml_call_counter);
+            // Use empty ID to let standard ID generation mechanism create proper OpenAI format
+            std::string tool_id = "";
             
             // Create tool call object
             json tool_call = {
@@ -335,8 +341,92 @@ static json parse_simple_function_calls(const std::string& text) {
                     continue;
                 }
                 
-                // Generate tool call ID with actual index from the call
-                std::string tool_id = "functions." + func_name + ":" + index_str;
+                // Use empty ID to let standard ID generation mechanism create proper OpenAI format
+                std::string tool_id = "";
+                
+                // Create tool call object
+                json tool_call = {
+                    {"id", tool_id},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", func_name},
+                        {"arguments", args_json}
+                    }}
+                };
+                
+                tool_calls.push_back(tool_call);
+            }
+            
+            pos = end_pos;
+        }
+    } catch (const std::exception&) {
+        // Return empty array on any parsing error
+        return json::array();
+    }
+    
+    return tool_calls;
+}
+
+// Parse <function=FunctionName:id{json_args} format
+static json parse_function_call_format(const std::string& text) {
+    json tool_calls = json::array();
+    
+    try {
+        size_t pos = 0;
+        
+        while ((pos = text.find(FUNCTION_CALL_PREFIX, pos)) != std::string::npos) {
+            size_t func_start = pos + FUNCTION_CALL_PREFIX_LEN;
+            
+            // Find the colon that separates function name from id
+            size_t colon_pos = text.find(':', func_start);
+            if (colon_pos == std::string::npos) {
+                pos = func_start;
+                continue;
+            }
+            
+            // Extract function name
+            std::string func_name = text.substr(func_start, colon_pos - func_start);
+            
+            // Skip if function name is empty
+            if (func_name.empty()) {
+                pos = colon_pos;
+                continue;
+            }
+            
+            // Extract id and find opening brace
+            size_t id_start = colon_pos + 1;
+            size_t brace_pos = text.find('{', id_start);
+            if (brace_pos == std::string::npos) {
+                pos = colon_pos;
+                continue;
+            }
+            
+            std::string id_str = text.substr(id_start, brace_pos - id_start);
+            
+            // Find the matching closing brace
+            int brace_count = 1;
+            size_t end_pos = brace_pos + 1;
+            while (end_pos < text.length() && brace_count > 0) {
+                if (text[end_pos] == '{') brace_count++;
+                else if (text[end_pos] == '}') brace_count--;
+                end_pos++;
+            }
+            
+            if (brace_count == 0) {
+                // Extract arguments JSON
+                std::string args_json = text.substr(brace_pos, end_pos - brace_pos);
+                
+                // Validate arguments is valid JSON
+                try {
+                    auto parsed = json::parse(args_json);
+                    (void)parsed; // Suppress unused variable warning
+                } catch (const std::exception&) {
+                    pos = end_pos;
+                    continue;
+                }
+                
+                // Use empty ID to let standard ID generation mechanism create proper OpenAI format
+                std::string tool_id = "";
                 
                 // Create tool call object
                 json tool_call = {
@@ -391,20 +481,28 @@ static json parse_tool_calls(const std::string& text) {
             }
             
             json simple_calls = parse_simple_function_calls(content_for_simple);
+            json function_calls = parse_function_call_format(content_for_simple);
             
             // Combine results
             result = token_calls;
             for (const auto& call : simple_calls) {
                 result.push_back(call);
             }
+            for (const auto& call : function_calls) {
+                result.push_back(call);
+            }
         } else {
-            // No token format, try both XML and simple formats
+            // No token format, try XML, simple, and <function= formats
             json xml_calls = parse_xml_function_calls(text);
             json simple_calls = parse_simple_function_calls(text);
+            json function_calls = parse_function_call_format(text);
             
             // Combine results (XML takes precedence if both exist)
             result = xml_calls;
             for (const auto& call : simple_calls) {
+                result.push_back(call);
+            }
+            for (const auto& call : function_calls) {
                 result.push_back(call);
             }
         }
@@ -496,6 +594,48 @@ static std::string extract_content_during_parsing(const std::string& text, bool 
             }
             // Not streaming, skip partial pattern
             func_pos = brace_pos + 1;
+        }
+    }
+    
+    // Process <function= format: <function=FunctionName:id{json}
+    size_t function_pos = last_content_end;
+    while ((function_pos = text.find(FUNCTION_CALL_PREFIX, function_pos)) != std::string::npos) {
+        // Add content before this function call
+        content += text.substr(last_content_end, function_pos - last_content_end);
+        
+        // Find the opening brace for arguments
+        size_t brace_pos = text.find('{', function_pos);
+        if (brace_pos == std::string::npos) {
+            // No opening brace found
+            if (is_partial) {
+                // This might be incomplete function call - stop here
+                return string_strip(content);
+            }
+            function_pos += FUNCTION_CALL_PREFIX_LEN;
+            continue;
+        }
+        
+        // Find matching closing brace
+        int brace_count = 1;
+        size_t end_pos = brace_pos + 1;
+        while (end_pos < text.length() && brace_count > 0) {
+            if (text[end_pos] == '{') brace_count++;
+            else if (text[end_pos] == '}') brace_count--;
+            end_pos++;
+        }
+        
+        if (brace_count == 0) {
+            // Complete function call - skip it
+            function_pos = end_pos;
+            last_content_end = function_pos;
+        } else {
+            // Incomplete function call
+            if (is_partial) {
+                // During streaming, stop at incomplete function call
+                return string_strip(content);
+            }
+            // Not streaming, skip partial pattern
+            function_pos = brace_pos + 1;
         }
     }
     

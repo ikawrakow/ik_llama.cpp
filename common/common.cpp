@@ -2031,6 +2031,11 @@ void string_replace_all(std::string & s, const std::string & search, const std::
     }
 }
 
+std::string regex_escape(const std::string & s) {
+    static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
+    return std::regex_replace(s, special_chars, "\\$&");
+}
+
 void string_process_escapes(std::string & input) {
     std::size_t input_len = input.length();
     std::size_t output_idx = 0;
