@@ -4096,7 +4096,7 @@ class Glm4MoeModel(Model):
         # Handle expert gating input (routing gate)
         if ".mlp.gate.e_score_correction_bias" in name:
             new_name = name.replace("model.layers.", "blk.").replace(
-                ".mlp.gate.e_score_correction_bias", ".ffn_gate_inp.bias"
+                ".mlp.gate.e_score_correction_bias", ".ffn_gate_inp.bias" # *NOTE* this is ".exp_probs_b" in mainline PR
             )
             return [(new_name, data_torch)]
         elif ".mlp.gate.weight" in name:
@@ -4134,7 +4134,7 @@ class Glm4MoeModel(Model):
                 new_name = name
             return [(self.map_tensor_name(new_name), data_torch)]
 
-        # Handle special NextN tensors - preserve for future MTP support
+        # Handle special NextN tensors - preserve for future MTP support - See https://github.com/ggml-org/llama.cpp/pull/13236
         if (
             ".embed_tokens." in name
             or ".shared_head." in name
@@ -4143,6 +4143,7 @@ class Glm4MoeModel(Model):
             or ".hnorm." in name
         ):
             new_name = name.replace("model.layers.", "blk.").replace("model.", "").replace(".weight", "")
+            # logger.debug(f"Skipping MTP tensor: {new_name}")
             return [(new_name, data_torch)]
 
         # GLM tensor mapping - handle directly without map_tensor_name
