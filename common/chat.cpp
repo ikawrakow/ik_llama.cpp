@@ -73,7 +73,7 @@ static void common_chat_parse_content_only(common_chat_msg_parser & builder) {
 }
 
 static void common_chat_parse_generic(common_chat_msg_parser & builder) {
-    if (!builder.syntax().enable_tool_calls) {
+    if (!builder.syntax().parse_tool_calls) {
         builder.add_content(builder.consume_rest());
         return;
     }
@@ -202,7 +202,7 @@ static void parse_json_tool_calls(
 
 void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
-    if (!builder.syntax().enable_tool_calls) {
+    if (!builder.syntax().parse_tool_calls) {
         builder.add_content(builder.consume_rest());
         return;
     }
@@ -365,6 +365,73 @@ static void parse_deepseek_r1_xml_wrapped(common_chat_msg_parser & builder) {
     }
 }
 
+// Parse prefixed JSON tool call array - copied from original llama.cpp
+static void parse_prefixed_json_tool_call_array(common_chat_msg_parser & builder, const common_regex & prefix, size_t rstrip_prefix = 0) {
+    static const std::vector<std::vector<std::string>> args_paths = {{"arguments"}};
+    if (auto res = builder.try_find_regex(prefix)) {
+        builder.move_back(rstrip_prefix);
+        auto tool_calls = builder.consume_json_with_dumped_args(args_paths);
+        if (!builder.add_tool_calls(tool_calls.value) || tool_calls.is_partial) {
+            throw common_chat_msg_partial_exception("incomplete tool call array");
+        }
+    } else {
+        builder.add_content(builder.consume_rest());
+    }
+}
+
+// Parse AnythingLLM format: <anythingllm:function_calls>[...]</anythingllm:function_calls>
+void common_chat_parse_anythingllm(common_chat_msg_parser & builder) {
+    
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+    
+    static const common_regex start_tag_regex(regex_escape("<anythingllm:function_calls>"));
+    
+    if (auto res = builder.try_find_regex(start_tag_regex)) {
+        // Following Command R7b pattern: consume_json_with_dumped_args then iterate
+        auto tool_calls = builder.consume_json_with_dumped_args({{"arguments"}});
+        for (size_t i = 0; i < tool_calls.value.size(); ++i) {
+        }
+        
+        for (const auto & tool_call : tool_calls.value) {
+            std::string name = tool_call.contains("name") ? tool_call.at("name") : "";
+            std::string id = tool_call.contains("id") ? tool_call.at("id") : "";
+            std::string arguments;
+            try {
+                if (tool_call.contains("arguments")) {
+                    // Convert JSON object to string using dump()
+                    arguments = tool_call.at("arguments").dump();
+                } else {
+                    arguments = "";
+                }
+            } catch (const std::exception& e) {
+                throw;
+            }
+            if (!builder.add_tool_call(name, id, arguments) || tool_calls.is_partial) {
+                throw common_chat_msg_partial_exception("incomplete AnythingLLM tool call");
+            }
+        }
+        if (tool_calls.is_partial) {
+            throw common_chat_msg_partial_exception("incomplete AnythingLLM tool call array");
+        }
+        
+        // Try to consume closing tag (optional)
+        static const common_regex end_tag_regex(regex_escape("</anythingllm:function_calls>"));
+        auto closing_result = builder.try_consume_regex(end_tag_regex);
+        
+        // Add any remaining content if there is any
+        auto remaining = builder.consume_rest();
+        if (!remaining.empty()) {
+            builder.add_content(remaining);
+        } else {
+        }
+    } else {
+        builder.add_content(builder.consume_rest());
+    }
+}
+
 static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
     // Delegate to existing Kimi-K2 implementation for backward compatibility
     auto result = kimi_k2::parse_tool_calls(builder.input());
@@ -392,6 +459,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1:
             common_chat_parse_deepseek_r1(builder);
+            break;
+        case COMMON_CHAT_FORMAT_ANYTHINGLLM:
+            common_chat_parse_anythingllm(builder);
             break;
         case COMMON_CHAT_FORMAT_KIMI_K2:
             common_chat_parse_kimi_k2(builder);
@@ -428,6 +498,7 @@ const char* common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_CONTENT_ONLY: return "content_only";
         case COMMON_CHAT_FORMAT_GENERIC:      return "generic";
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1:  return "deepseek_r1";
+        case COMMON_CHAT_FORMAT_ANYTHINGLLM:  return "anythingllm";
         case COMMON_CHAT_FORMAT_KIMI_K2:      return "kimi_k2";
         default:                              return "unknown";
     }

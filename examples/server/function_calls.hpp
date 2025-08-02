@@ -8,6 +8,9 @@
 #include "deepseek_r1_tools.hpp"
 #include "../../common/chat.h"
 #include "../../common/chat-parser.h"
+#include "utils.hpp"
+#include <random>
+#include <string>
 #include <string>
 #include <regex>
 
@@ -71,9 +74,44 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
     try {
         json tool_calls_json;
         bool has_function_syntax = false;
+        std::string anythingllm_cleaned_content;
         
-        // Route parsing based on model type
-        if (is_qwen3_model(model_name)) {
+        // Route parsing based on content format first, then model type
+        if (content.find("<anythingllm:function_calls>") != std::string::npos) {
+            // Use common chat parser for AnythingLLM format
+            try {
+                common_chat_syntax syntax;
+                syntax.format = COMMON_CHAT_FORMAT_ANYTHINGLLM;  // Use proper format enum
+                syntax.parse_tool_calls = true;
+                
+                // Use the standard parsing API
+                common_chat_msg result = common_chat_parse(content, is_partial, syntax);
+                
+                // Convert tool calls to JSON format expected by the system
+                tool_calls_json = json::array();
+                for (const auto& tool_call : result.tool_calls) {
+                    json tc;
+                    tc["id"] = tool_call.id; // Use the original ID (may be empty for server to generate)
+                    tc["type"] = "function";
+                    tc["function"]["name"] = tool_call.name;
+                    tc["function"]["arguments"] = tool_call.arguments;
+                    tool_calls_json.push_back(tc);
+                }
+                
+                // Store the cleaned content for later use
+                std::string anythingllm_cleaned_content = result.content;
+                
+                // Check for malformed AnythingLLM syntax
+                has_function_syntax = content.find("<anythingllm:function_calls>") != std::string::npos;
+            } catch (const common_chat_msg_partial_exception&) {
+                if (is_partial) {
+                    throw std::runtime_error("partial structured content detected");
+                }
+                // If not partial, treat as regular content
+                tool_calls_json = json::array();
+                has_function_syntax = false;
+            }
+        } else if (is_qwen3_model(model_name)) {
             // Use Qwen3 XML parser
             tool_calls_json = parse_qwen3_tool_calls(content);
             
@@ -89,7 +127,7 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
             try {
                 common_chat_syntax syntax;
                 syntax.format = COMMON_CHAT_FORMAT_DEEPSEEK_R1;
-                syntax.enable_tool_calls = true;
+                syntax.parse_tool_calls = true;
                 
                 common_chat_msg_parser parser(content, is_partial, syntax);
                 parser.parse();
@@ -99,7 +137,7 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
                 tool_calls_json = json::array();
                 for (const auto& tool_call : result.tool_calls) {
                     json tc;
-                    tc["id"] = tool_call.id.empty() ? ("call_" + std::to_string(rand())) : tool_call.id;
+                    tc["id"] = tool_call.id; // Use the original ID (may be empty for server to generate)
                     tc["type"] = "function";
                     tc["function"]["name"] = tool_call.name;
                     tc["function"]["arguments"] = tool_call.arguments;
@@ -173,8 +211,11 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
                 }
             }
             
-            // Use model-specific content extraction
-            if (is_qwen3_model(model_name)) {
+            // Use format-specific content extraction
+            if (content.find("<anythingllm:function_calls>") != std::string::npos) {
+                // For AnythingLLM format, use the cleaned content from parsing
+                msg.content = anythingllm_cleaned_content;
+            } else if (is_qwen3_model(model_name)) {
                 msg.content = qwen3::extract_content_during_parsing(content, is_partial);
             } else if (is_deepseek_r1_model(model_name)) {
                 msg.content = extract_content_from_mixed_input(content, is_partial, model_name);
@@ -183,7 +224,10 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
             }
         } else {
             // No tool calls found, extract content
-            if (is_qwen3_model(model_name)) {
+            if (content.find("<anythingllm:function_calls>") != std::string::npos) {
+                // For AnythingLLM format, use the cleaned content from parsing
+                msg.content = anythingllm_cleaned_content;
+            } else if (is_qwen3_model(model_name)) {
                 msg.content = qwen3::extract_content_during_parsing(content, is_partial);
             } else if (is_deepseek_r1_model(model_name)) {
                 msg.content = extract_content_from_mixed_input(content, is_partial, model_name);
@@ -212,6 +256,5 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
 }
 
 static std::string generate_tool_call_id() {
-    static int counter = 0;
-    return "call_" + std::to_string(++counter);
+    return random_string();
 }

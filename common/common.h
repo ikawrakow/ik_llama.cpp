@@ -310,6 +310,7 @@ std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();
 
 void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
+std::string regex_escape(const std::string & s);
 
 // Additional string utilities for builder pattern compatibility
 bool string_starts_with(const std::string & str, const std::string & prefix);

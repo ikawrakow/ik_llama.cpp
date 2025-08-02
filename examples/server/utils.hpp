@@ -183,7 +183,6 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
                     tool_names += tools[j]["function"]["name"].get<std::string>();
                 }
             }
-            std::cout << "DEBUG [format_chat]: INJECTING Kimi-K2 tools into system message (" << tools.size() << " tools: " << tool_names << ")" << std::endl;
             if (role == "system") {
                 // Add tools to existing system message
                 content = kimi_k2_inject_tools_to_system(content, tools);
@@ -531,15 +530,114 @@ static json oaicompat_completion_params_parse(
     // Extract model name from the request body
     std::string model_name = json_value(body, "model", std::string(DEFAULT_OAICOMPAT_MODEL));
 
+    // Validate conversation structure according to OpenAI API specification
+    if (body.contains("messages") && body["messages"].is_array()) {
+        json messages = body["messages"];
+        bool has_system = false;
+        bool has_user = false;
+        bool has_assistant = false;
+        
+        for (const auto& msg : messages) {
+            if (msg.contains("role")) {
+                std::string role = msg["role"];
+                if (role == "system") has_system = true;
+                else if (role == "user") has_user = true;
+                else if (role == "assistant") has_assistant = true;
+            }
+        }
+        
+        // OpenAI API specification violation: system + assistant without user
+        if (has_system && has_assistant && !has_user) {
+            throw std::runtime_error("Invalid conversation structure: Missing user message. OpenAI API requires either 'user → assistant' or 'system → user → assistant' pattern, but got 'system → assistant' which causes infinite tool call loops.");
+        }
+        
+        // Additional validation: Check if conversation starts with assistant (also invalid)
+        if (!messages.empty() && messages[0].contains("role") && messages[0]["role"] == "assistant") {
+            throw std::runtime_error("Invalid conversation structure: Conversation cannot start with assistant message. Must start with system or user message.");
+        }
+    }
+
     // Apply chat template to the list of messages with tools
     std::string formatted_prompt = format_chat(model, chat_template, body.at("messages"), tools, model_name);
     llama_params["prompt"] = formatted_prompt;
     
-    // Debug: Log the actual formatted prompt being sent to the model
-    std::cout << "DEBUG [oaicompat_completion_params_parse]: formatted prompt being sent to model:" << std::endl;
-    std::cout << "=== PROMPT START ===" << std::endl;
-    std::cout << formatted_prompt << std::endl;
-    std::cout << "=== PROMPT END ===" << std::endl;
+    // Debug: Log the actual formatted prompt structure for debugging
+    std::cout << "DEBUG [formatted_prompt]: analyzing prompt structure (" << formatted_prompt.length() << " chars total)" << std::endl;
+    
+    // Show system message section (where tools should be)
+    size_t system_start = formatted_prompt.find("<|im_system|>");
+    size_t system_end = formatted_prompt.find("<|im_end|>", system_start);
+    if (system_start != std::string::npos && system_end != std::string::npos) {
+        std::string system_content = formatted_prompt.substr(system_start, system_end - system_start + 10);
+        std::cout << "=== SYSTEM MESSAGE SECTION ===" << std::endl;
+        std::cout << "Length: " << system_content.length() << " chars" << std::endl;
+        
+        // Check for tool indicators
+        bool has_available_tools = system_content.find("Available tools:") != std::string::npos;
+        bool has_tool_format = system_content.find("tool call format:") != std::string::npos;
+        bool has_tool_names = system_content.find("Task") != std::string::npos && system_content.find("Bash") != std::string::npos;
+        
+        std::cout << "Tool indicators found:" << std::endl;
+        std::cout << "  - 'Available tools:' section: " << (has_available_tools ? "YES" : "NO") << std::endl;
+        std::cout << "  - Tool call format instructions: " << (has_tool_format ? "YES" : "NO") << std::endl;
+        std::cout << "  - Tool names (Task, Bash, etc.): " << (has_tool_names ? "YES" : "NO") << std::endl;
+        
+        if (has_available_tools) {
+            size_t tools_start = system_content.find("Available tools:");
+            std::cout << "Tools section preview:" << std::endl;
+            std::cout << system_content.substr(tools_start, 500) << std::endl;
+        }
+        
+        if (!has_available_tools && !has_tool_format && !has_tool_names) {
+            std::cout << "⚠️  WARNING: No tool specifications found in system message!" << std::endl;
+            std::cout << "System message preview (first 300 chars):" << std::endl;
+            std::cout << system_content.substr(0, 300) << "..." << std::endl;
+        }
+    } else {
+        std::cout << "⚠️  ERROR: Could not find system message section in prompt!" << std::endl;
+    }
+    
+    // Show overall prompt structure
+    std::cout << "=== PROMPT STRUCTURE SUMMARY ===" << std::endl;
+    size_t user_msgs = 0, assistant_msgs = 0, system_msgs = 0;
+    size_t pos = 0;
+    
+    // Count all message types - look for the actual tokens used
+    while ((pos = formatted_prompt.find("<|im_", pos)) != std::string::npos) {
+        std::string token_area = formatted_prompt.substr(pos, 20);  // Get enough chars to see the full token
+        
+        if (token_area.find("<|im_system|>") == 0) system_msgs++;
+        else if (token_area.find("<|im_user|>") == 0) user_msgs++;
+        else if (token_area.find("<|im_assistant|>") == 0) assistant_msgs++;
+        
+        pos += 4;  // Move past "<|im"
+    }
+    
+    std::cout << "Message counts: " << system_msgs << " system, " << user_msgs << " user, " << assistant_msgs << " assistant" << std::endl;
+    
+    // Also show what tokens we actually found (first few)
+    std::cout << "First few tokens found in prompt:" << std::endl;
+    pos = 0;
+    int token_count = 0;
+    while ((pos = formatted_prompt.find("<|", pos)) != std::string::npos && token_count < 5) {
+        size_t end_pos = formatted_prompt.find("|>", pos);
+        if (end_pos != std::string::npos) {
+            std::string token = formatted_prompt.substr(pos, end_pos - pos + 2);
+            std::cout << "  Token " << token_count << ": " << token << std::endl;
+            pos = end_pos + 2;
+            token_count++;
+        } else {
+            break;
+        }
+    }
+    
+    // Show if this looks like a complete conversation
+    bool has_system = formatted_prompt.find("<|im_system|>") != std::string::npos;
+    bool has_user = formatted_prompt.find("<|im_user|>") != std::string::npos;
+    bool has_assistant = formatted_prompt.find("<|im_assistant|>") != std::string::npos;
+    std::cout << "Conversation structure: system=" << (has_system ? "YES" : "NO") 
+              << ", user=" << (has_user ? "YES" : "NO") 
+              << ", assistant=" << (has_assistant ? "YES" : "NO") << std::endl;
 
     // Handle "stop" field
     if (body.contains("stop") && body.at("stop").is_string()) {

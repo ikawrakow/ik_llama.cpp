@@ -132,13 +132,14 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_CONTENT_ONLY,
     COMMON_CHAT_FORMAT_GENERIC,
     COMMON_CHAT_FORMAT_DEEPSEEK_R1,
+    COMMON_CHAT_FORMAT_ANYTHINGLLM,
     COMMON_CHAT_FORMAT_KIMI_K2,  // Our custom format (keep last for backward compatibility)
 };
 
 struct common_chat_syntax {
     common_chat_format format = COMMON_CHAT_FORMAT_KIMI_K2;
     bool enable_thinking = false;
-    bool enable_tool_calls = true;
+    bool parse_tool_calls = true;
 };
 
 // Exception for partial parsing
@@ -164,4 +165,5 @@ class common_chat_msg_parser;
 
 // Format-specific parsing functions (accessible from chat-parser)
 void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder);
+void common_chat_parse_anythingllm(common_chat_msg_parser & builder);
 

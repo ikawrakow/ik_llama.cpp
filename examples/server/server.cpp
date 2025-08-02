@@ -369,9 +369,6 @@ struct server_slot {
             if (!new_msg.empty()) {
                 // Ensure tool call IDs are set consistently across streaming chunks
                 new_msg.ensure_tool_call_ids_set(tool_call_ids, generate_tool_call_id);
-                if (new_msg.tool_calls.size() > 0) {
-                              << (new_msg.tool_calls.empty() ? "" : new_msg.tool_calls[0].id) << "'" << std::endl;
-                }
                 current_msg = new_msg;
                 
                 // Compute diffs for streaming
@@ -379,10 +376,6 @@ struct server_slot {
             }
         } catch (const std::exception& e) {
             // If parsing fails, don't update current_msg and return empty diffs
-            if (generated_text.find("functions.") != std::string::npos) {
-                std::string content_preview = generated_text.length() > 100 ? 
-                    generated_text.substr(0, 100) + "..." : generated_text;
-            }
             diffs.clear();
         }
         
@@ -391,6 +384,7 @@ struct server_slot {
             if (is_final_parse && current_msg.tool_calls.size() == 0 && !should_log_content) {
                 // Minimal logging for normal text final state
             } else {
+                // Full debug logging for tool calls or when explicitly requested
             }
         }
         return current_msg;
@@ -2871,16 +2865,6 @@ static json format_final_response_oaicompat(const json& request, json result, co
     
     bool has_tool_calls = !tool_calls.empty();
     
-    // Log actual OpenAI tool calls array that will be sent to client (non-streaming)
-    if (has_tool_calls) {
-        std::string model_name = json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL));
-        LOG_INFO("DEBUG: OpenAI tool calls array for client (non-streaming)", {
-            {"tool_calls_count", tool_calls.size()},
-            {"tool_calls_array", tool_calls},
-            {"model_name", model_name}
-        });
-    }
-    
     // Use cleaned content from parser (following original llama.cpp pattern)
     if (has_tool_calls) {
         content = msg.content; // Parser already cleaned the content
@@ -2974,15 +2958,6 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
             {"tool_calls_count", tool_calls_count}
         });
         
-        // Log actual OpenAI tool calls array that will be sent to client
-        if (tool_calls_count > 0 && result.contains("oaicompat_msg") && result["oaicompat_msg"].contains("tool_calls")) {
-            json tool_calls_array = result["oaicompat_msg"]["tool_calls"];
-            LOG_INFO("DEBUG: OpenAI tool calls array for client", {
-                {"tool_calls_count", tool_calls_count},
-                {"tool_calls_array", tool_calls_array},
-                {"model_name", modelname}
-            });
-        }
         
         finish_reason = tool_calls_count == 0 ? "stop" : "tool_calls";
     }
