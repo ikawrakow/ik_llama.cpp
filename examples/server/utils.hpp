@@ -196,31 +196,8 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
             }
         }
         
-        // Debug: Log tool injection check for both Kimi-K2 and Qwen3
-        if (i == 0) {  // Only log once
-            std::cout << "DEBUG [format_chat]: checking Kimi-K2 tool injection" << std::endl;
-            std::cout << "   tools.size() = " << tools.size() << std::endl;
-            std::cout << "   model_name = " << model_name << std::endl;
-            std::cout << "   is_kimi_k2_model() = " << (is_kimi_k2_model(model_name) ? "true" : "false") << std::endl;
-            std::cout << "   kimi_k2_should_inject_tools() = " << (kimi_k2_should_inject_tools(tools, model_name) ? "true" : "false") << std::endl;
-            
-            std::cout << "DEBUG [format_chat]: checking Qwen3 tool injection" << std::endl;
-            std::cout << "   tools.size() = " << tools.size() << std::endl;
-            std::cout << "   model_name = " << model_name << std::endl;
-            std::cout << "   is_qwen3_model() = " << (is_qwen3_model(model_name) ? "true" : "false") << std::endl;
-            std::cout << "   qwen3_should_inject_tools() = " << (qwen3_should_inject_tools(tools, model_name) ? "true" : "false") << std::endl;
-        }
-        
         // Inject tools for Qwen3 models (XML Hermes format)
         if (qwen3_should_inject_tools(tools, model_name) && !tools_injected) {
-            std::string tool_names = "";
-            for (size_t j = 0; j < tools.size(); ++j) {
-                if (tools[j].contains("function") && tools[j]["function"].contains("name")) {
-                    if (j > 0) tool_names += ", ";
-                    tool_names += tools[j]["function"]["name"].get<std::string>();
-                }
-            }
-            std::cout << "DEBUG [format_chat]: INJECTING Qwen3 tools into system message (" << tools.size() << " tools: " << tool_names << ")" << std::endl;
             if (role == "system") {
                 // Add tools to existing system message
                 content = qwen3_inject_tools_to_system(content, tools);
