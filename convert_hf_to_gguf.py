@@ -618,6 +618,9 @@ class Model:
         if chkhsh == "b6e8e1518dc4305be2fe39c313ed643381c4da5db34a98f6a04c093f8afbe99b":
             # ref: https://huggingface.co/THUDM/glm-4-9b-chat
             res = "chatglm-bpe"
+        if chkhsh == "a1336059768a55c99a734006ffb02203cd450fed003e9a71886c88acf24fdbc2":
+            # ref: https://huggingface.co/THUDM/glm-4-9b-hf
+            res = "glm4"
         if chkhsh == "9ca2dd618e8afaf09731a7cf6e2105b373ba6a1821559f258b272fe83e6eb902":
             # ref: https://huggingface.co/zai-org/GLM-4.5-Air, https://huggingface.co/zai-org/GLM-4.5
             res = "gpt-2"
@@ -3951,8 +3954,8 @@ class Dots1Model(Qwen2MoeModel):
             return [(self.map_tensor_name(name), data_torch)]
         return super().modify_tensors(data_torch, name, bid)
 
-@ModelBase.register("Glm4MoeForCausalLM")
-class Glm4MoeModel(TextModel):
+@Model.register("Glm4MoeForCausalLM")
+class Glm4MoeModel(Model):
     model_arch = gguf.MODEL_ARCH.GLM4_MOE
 
     def __init__(self, *args, **kwargs):
