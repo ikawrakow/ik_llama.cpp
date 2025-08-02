@@ -4106,7 +4106,6 @@ class Glm4MoeModel(Model):
             return [(new_name, data_torch)]
 
         # Handle shared expert tensors
-        # What are these MTP tensors? If we preserve them do they need to be "noop" or whatever?
         if ".mlp.shared_experts." in name:
             new_name = name.replace("model.layers.", "blk.").replace(".mlp.shared_experts.", ".ffn_")
             if "gate_proj" in new_name:
@@ -4144,7 +4143,7 @@ class Glm4MoeModel(Model):
             or ".hnorm." in name
         ):
             new_name = name.replace("model.layers.", "blk.").replace("model.", "").replace(".weight", "")
-            logger.debug(f"Skipping MTP tensor: {new_name}")
+            # logger.debug(f"Skipping MTP tensor: {new_name}")
             return [(new_name, data_torch)]
 
         # GLM tensor mapping - handle directly without map_tensor_name
