@@ -220,6 +220,7 @@ class MODEL_ARCH(IntEnum):
     OPENELM      = auto()
     ARCTIC       = auto()
     DEEPSEEK2    = auto()
+    GLM4_MOE     = auto()
     CHATGLM      = auto()
     BITNET       = auto()
     BITNET_25    = auto()
@@ -262,6 +263,9 @@ class MODEL_TENSOR(IntEnum):
     FFN_GATE_EXP         = auto()
     FFN_DOWN_EXP         = auto()
     FFN_UP_EXP           = auto()
+    FFN_GATE_EXPS        = auto()  # merged experts
+    FFN_DOWN_EXPS        = auto()  # merged experts
+    FFN_UP_EXPS          = auto()  # merged experts
     FFN_GATE_SHEXP       = auto()
     FFN_DOWN_SHEXP       = auto()
     FFN_UP_SHEXP         = auto()
@@ -314,6 +318,12 @@ class MODEL_TENSOR(IntEnum):
     ENC_FFN_DOWN         = auto()
     ENC_FFN_UP           = auto()
     ENC_OUTPUT_NORM      = auto()
+    NEXTN_EH_PROJ        = auto()   # nextn tensors (glm4moe)
+    NEXTN_EMBED_TOKENS   = auto()   # nextn tensors (glm4moe)
+    NEXTN_ENORM          = auto()   # nextn tensors (glm4moe)
+    NEXTN_HNORM          = auto()   # nextn tensors (glm4moe)
+    NEXTN_SHARED_HEAD_HEAD = auto() # nextn tensors (glm4moe)
+    NEXTN_SHARED_HEAD_NORM = auto() # nextn tensors (glm4moe)
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -358,6 +368,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ARCTIC:         "arctic",
     MODEL_ARCH.DEEPSEEK2:      "deepseek2",
     MODEL_ARCH.CHATGLM:        "chatglm",
+    MODEL_ARCH.GLM4_MOE:         "glm4moe",
     MODEL_ARCH.BITNET:         "bitnet",
     MODEL_ARCH.BITNET_25:      "bitnet-25",
     MODEL_ARCH.T5:             "t5",
@@ -404,6 +415,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE_EXP:         "blk.{bid}.ffn_gate_exps",
     MODEL_TENSOR.FFN_DOWN_EXP:         "blk.{bid}.ffn_down_exps",
     MODEL_TENSOR.FFN_UP_EXP:           "blk.{bid}.ffn_up_exps",
+    MODEL_TENSOR.FFN_GATE_EXPS:        "blk.{bid}.ffn_gate_exps",  # merged experts
+    MODEL_TENSOR.FFN_DOWN_EXPS:        "blk.{bid}.ffn_down_exps",  # merged experts
+    MODEL_TENSOR.FFN_UP_EXPS:          "blk.{bid}.ffn_up_exps",    # merged experts
     MODEL_TENSOR.FFN_EXP_PROBS_B:      "blk.{bid}.exp_probs_b",
     MODEL_TENSOR.LAYER_OUT_NORM:       "blk.{bid}.layer_output_norm",
     MODEL_TENSOR.SSM_IN:               "blk.{bid}.ssm_in",
@@ -451,6 +465,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ENC_FFN_DOWN:         "enc.blk.{bid}.ffn_down",
     MODEL_TENSOR.ENC_FFN_UP:           "enc.blk.{bid}.ffn_up",
     MODEL_TENSOR.ENC_OUTPUT_NORM:      "enc.output_norm",
+    # NextN/MTP tensors (GLM4_MOE)
+    MODEL_TENSOR.NEXTN_EH_PROJ:             "blk.{bid}.eh_proj",
+    MODEL_TENSOR.NEXTN_EMBED_TOKENS:        "blk.{bid}.embed_tokens",
+    MODEL_TENSOR.NEXTN_ENORM:               "blk.{bid}.enorm",
+    MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.hnorm",
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.shared_head.head",
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.shared_head.norm",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -1069,6 +1090,36 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.GLM4_MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,          # dense layers
+        MODEL_TENSOR.FFN_DOWN,          # dense layers
+        MODEL_TENSOR.FFN_UP,            # dense layers
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXPS,
+        MODEL_TENSOR.FFN_DOWN_EXPS,
+        MODEL_TENSOR.FFN_UP_EXPS,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        # NextN/MTP tensors - preserved but unused
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
     MODEL_ARCH.BITNET: [
         MODEL_TENSOR.ATTN_Q,
