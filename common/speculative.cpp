@@ -242,10 +242,10 @@ std::vector<llama_token> llama_speculative_gen_draft(
 
         const auto * cur_p = llama_sampling_get_candidates(smpl);
 
-        for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-            LLAMA_LOG_INFO(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                    k, i, cur_p->data[k].id, cur_p->data[k].p, llama_token_to_piece(ctx, cur_p->data[k].id).c_str());
-        }
+        // for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
+        //     LLAMA_LOG_INFO(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+        //             k, i, cur_p->data[k].id, cur_p->data[k].p, llama_token_to_piece(ctx, cur_p->data[k].id).c_str());
+        // }
 
         // add drafted token for each sequence
         const llama_token id = cur_p->data[0].id;
