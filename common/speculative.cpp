@@ -164,7 +164,7 @@ std::vector<llama_token> llama_speculative_gen_draft(
         }
     }
 
-    LLAMA_LOG_INFO("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt.size());
+    // LLAMA_LOG_INFO("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt.size());
 
     std::vector<llama_token> result;
     result.reserve(params.n_draft);
@@ -221,7 +221,7 @@ std::vector<llama_token> llama_speculative_gen_draft(
 
     const llama_pos n_past = prompt.size();
 
-    LLAMA_LOG_INFO("%s: n_past = %d\n", __func__, n_past);
+    // LLAMA_LOG_INFO("%s: n_past = %d\n", __func__, n_past);
 
     llama_batch_clear(batch);
     llama_batch_add  (batch, id_last, n_past, { 0 }, true);
