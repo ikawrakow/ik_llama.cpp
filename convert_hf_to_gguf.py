@@ -618,12 +618,15 @@ class Model:
         if chkhsh == "b6e8e1518dc4305be2fe39c313ed643381c4da5db34a98f6a04c093f8afbe99b":
             # ref: https://huggingface.co/THUDM/glm-4-9b-chat
             res = "chatglm-bpe"
+        if chkhsh == "81d72c7348a9f0ebe86f23298d37debe0a5e71149e29bd283904c02262b27516":
+            # ref: https://huggingface.co/THUDM/glm-4-9b-chat
+            res = "chatglm-bpe"
         if chkhsh == "a1336059768a55c99a734006ffb02203cd450fed003e9a71886c88acf24fdbc2":
             # ref: https://huggingface.co/THUDM/glm-4-9b-hf
             res = "glm4"
         if chkhsh == "9ca2dd618e8afaf09731a7cf6e2105b373ba6a1821559f258b272fe83e6eb902":
             # ref: https://huggingface.co/zai-org/GLM-4.5-Air, https://huggingface.co/zai-org/GLM-4.5
-            res = "gpt-2"
+            res = "glm4"
         if chkhsh == "7fc505bd3104ca1083b150b17d088b59534ede9bde81f0dd2090967d7fe52cee":
             # ref: https://huggingface.co/LumiOpen/Viking-7B
             res = "viking"
@@ -3961,15 +3964,13 @@ class Glm4MoeModel(Model):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # GLM4_MOE has num_hidden_layers + 1 actual layers (including NextN layer)
-        self.block_count = self.hparams["num_hidden_layers"] + 1
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-    
+
     def set_vocab(self):
         from transformers import AutoTokenizer
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.dir_model, trust_remote_code=True
-        )
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
@@ -3977,17 +3978,18 @@ class Glm4MoeModel(Model):
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
-        # Set special tokens
-        special_vocab._set_special_token(
-            "eos", tokenizer.get_added_vocab()["<|endoftext|>"]
-        )
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
-        special_vocab._set_special_token(
-            "unk", tokenizer.get_added_vocab()["<|endoftext|>"]
-        )
-        special_vocab._set_special_token(
-            "bos", tokenizer.get_added_vocab()["<|endoftext|>"]
-        )
+        # Special tokens
+        # Note: Using <|endoftext|> (151329) for eot causes endless generation
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["[gMASK]"])  # 151331
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # 151336
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"]) # 151329
+        special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
+
+        # Patch broken chat template
+        if isinstance(special_vocab.chat_template, str) and "visible_text(m.content).endswith" in special_vocab.chat_template:
+            special_vocab.chat_template = special_vocab.chat_template.replace(
+                """{{ visible_text(m.content) }}\n{{- '/nothink' if (enable_thinking is defined and not enable_thinking and not visible_text(m.content).endswith("/nothink")) else '' -}}""",
+                """{% set content = visible_text(m.content) %}{{ content }}\n{{- '/nothink' if (enable_thinking is defined and not enable_thinking and not content.endswith("/nothink")) else '' -}}""")
 
         special_vocab.add_to_gguf(self.gguf_writer)
 
@@ -4001,10 +4003,9 @@ class Glm4MoeModel(Model):
             int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5))
         )
 
-        # MoE parameters
-        if (n_experts := self.hparams.get("n_routed_experts")) is not None:
-            self.gguf_writer.add_expert_count(n_experts)
-        # Note: expert_used_count is already set by parent class using num_experts_per_tok
+        # MoE parameters - Use only routed expert count (shared experts handled separately)
+        if (n_routed_experts := self.hparams.get("n_routed_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_routed_experts)
         if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
             self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
         if (n_shared_experts := self.hparams.get("n_shared_experts")) is not None:
@@ -4023,8 +4024,11 @@ class Glm4MoeModel(Model):
         if (norm_topk_prob := self.hparams.get("norm_topk_prob")) is not None:
             self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
 
+        # NextN/MTP prediction layers
+        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
+
     _experts: list[dict[str, Tensor]] | None = None
-    _shared_experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(
         self, data_torch: Tensor, name: str, bid: int | None
@@ -4035,20 +4039,16 @@ class Glm4MoeModel(Model):
             name = name.replace("language_model.", "")  # for multimodal variants
 
         # Handle main token embedding (but not layer-specific NextN embeddings)
-        if name == "model.embed_tokens.weight":
+        if name == "model.embed_tokens.weight" and ".layers." not in name:
             return [(self.map_tensor_name("token_embd.weight"), data_torch)]
 
         # Handle routed experts
-        if name.find("mlp.experts") != -1 and "shared_experts" not in name:
+        if name.find("mlp.experts") != -1:
             n_experts = self.hparams["n_routed_experts"]
             assert bid is not None
 
             if self._experts is None:
                 self._experts = [{} for _ in range(self.block_count)]
-
-            # Extend experts array if needed (for models where actual layers > num_hidden_layers)
-            while len(self._experts) <= bid:
-                self._experts.append({})
 
             self._experts[bid][name] = data_torch
 
@@ -4065,95 +4065,21 @@ class Glm4MoeModel(Model):
                         del self._experts[bid][ename]
 
                     data_torch = torch.stack(datas, dim=0)
-                    # Generate GGUF tensor names for merged experts
-                    if w_name == "down_proj":
-                        new_name = f"blk.{bid}.ffn_down_exps.weight"
-                    elif w_name == "gate_proj":
-                        new_name = f"blk.{bid}.ffn_gate_exps.weight"
-                    elif w_name == "up_proj":
-                        new_name = f"blk.{bid}.ffn_up_exps.weight"
-                    else:
-                        merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-                        new_name = self.map_tensor_name(merged_name)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
                     tensors.append((new_name, data_torch))
                 return tensors
             else:
                 return []
 
-        # Handle expert gating input (routing gate)
-        if ".mlp.gate.e_score_correction_bias" in name:
-            new_name = name.replace("model.layers.", "blk.").replace(
-                ".mlp.gate.e_score_correction_bias", ".ffn_gate_inp.bias" # *NOTE* this is ".exp_probs_b" in mainline PR
-            )
-            return [(new_name, data_torch)]
-        elif ".mlp.gate.weight" in name:
-            new_name = name.replace("model.layers.", "blk.").replace(
-                ".mlp.gate.weight", ".ffn_gate_inp.weight"
-            )
-            return [(new_name, data_torch)]
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
 
-        # Handle shared expert tensors
-        if ".mlp.shared_experts." in name:
-            new_name = name.replace("model.layers.", "blk.").replace(".mlp.shared_experts.", ".ffn_")
-            if "gate_proj" in new_name:
-                new_name = new_name.replace("gate_proj", "gate_shexp")
-            elif "down_proj" in new_name:
-                new_name = new_name.replace("down_proj", "down_shexp")
-            elif "up_proj" in new_name:
-                new_name = new_name.replace("up_proj", "up_shexp")
-            return [(new_name, data_torch)]
+        new_name = self.map_tensor_name(name)
 
-        # Handle regular dense FFN layers (for hybrid dense/MoE architecture)
-        if ".mlp." in name and "experts" not in name and "_shexp" not in name:
-            if "gate_proj" in name:
-                new_name = name.replace("model.layers.", "blk.").replace(
-                    ".mlp.gate_proj.weight", ".ffn_gate.weight"
-                )
-            elif "up_proj" in name:
-                new_name = name.replace("model.layers.", "blk.").replace(
-                    ".mlp.up_proj.weight", ".ffn_up.weight"
-                )
-            elif "down_proj" in name:
-                new_name = name.replace("model.layers.", "blk.").replace(
-                    ".mlp.down_proj.weight", ".ffn_down.weight"
-                )
-            else:
-                new_name = name
-            return [(self.map_tensor_name(new_name), data_torch)]
-
-        # Handle special NextN tensors - preserve for future MTP support - See https://github.com/ggml-org/llama.cpp/pull/13236
-        if (
-            ".embed_tokens." in name
-            or ".shared_head." in name
-            or ".eh_proj." in name
-            or ".enorm." in name
-            or ".hnorm." in name
-        ):
-            new_name = name.replace("model.layers.", "blk.").replace("model.", "").replace(".weight", "")
-            # logger.debug(f"Skipping MTP tensor: {new_name}")
-            return [(new_name, data_torch)]
-
-        # GLM tensor mapping - handle directly without map_tensor_name
-        if ".input_layernorm." in name:
-            new_name = name.replace("model.layers.", "blk.").replace(".input_layernorm.", ".attn_norm.")
-            return [(new_name, data_torch)]
-        elif ".post_attention_layernorm." in name:
-            new_name = name.replace("model.layers.", "blk.").replace(".post_attention_layernorm.", ".ffn_norm.")
-            return [(new_name, data_torch)]
-        elif ".self_attn." in name:
-            # Map GLM self_attn to standard attention naming
-            new_name = name.replace("model.layers.", "blk.").replace(".self_attn.", ".attn_")
-            if "q_proj" in new_name:
-                new_name = new_name.replace("q_proj", "q")
-            elif "k_proj" in new_name:
-                new_name = new_name.replace("k_proj", "k")
-            elif "v_proj" in new_name:
-                new_name = new_name.replace("v_proj", "v")
-            elif "o_proj" in new_name:
-                new_name = new_name.replace("o_proj", "output")
-            return [(new_name, data_torch)]
-
-        return super().modify_tensors(data_torch, name, bid)
+        return [(new_name, data_torch)]
 
     def prepare_tensors(self):
         super().prepare_tensors()

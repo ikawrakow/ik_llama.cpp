@@ -43,6 +43,15 @@ struct llama_vocab {
     id special_mask_id = -1;
 
     id linefeed_id       = 13;
+
+    // fim tokens
+    llama_token special_fim_pre_id = -1;
+    llama_token special_fim_suf_id = -1;
+    llama_token special_fim_mid_id = -1;
+    llama_token special_fim_pad_id = -1;
+    llama_token special_fim_rep_id = -1; // repo
+    llama_token special_fim_sep_id = -1; // file separator
+
     id special_prefix_id = -1;
     id special_suffix_id = -1;
     id special_middle_id = -1;
@@ -99,6 +108,13 @@ llama_token llama_token_pad_impl(const struct llama_vocab & vocab);
 
 int32_t llama_add_bos_token_impl(const struct llama_vocab & vocab);
 int32_t llama_add_eos_token_impl(const struct llama_vocab & vocab);
+
+llama_token llama_token_fim_pre_impl(const struct llama_vocab & vocab);
+llama_token llama_token_fim_suf_impl(const struct llama_vocab & vocab);
+llama_token llama_token_fim_mid_impl(const struct llama_vocab & vocab);
+llama_token llama_token_fim_pad_impl(const struct llama_vocab & vocab);
+llama_token llama_token_fim_rep_impl(const struct llama_vocab & vocab);
+llama_token llama_token_fim_sep_impl(const struct llama_vocab & vocab);
 
 llama_token llama_token_prefix_impl(const struct llama_vocab & vocab);
 llama_token llama_token_middle_impl(const struct llama_vocab & vocab);
