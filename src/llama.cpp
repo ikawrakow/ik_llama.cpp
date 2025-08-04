@@ -330,6 +330,7 @@ enum llm_kv {
     LLM_KV_EXPERT_WEIGHTS_SCALE,
     LLM_KV_EXPERT_WEIGHTS_NORM,
     LLM_KV_EXPERT_GATING_FUNC,
+    LLM_KV_NEXTN_PREDICT_LAYERS,
     LLM_KV_POOLING_TYPE,
     LLM_KV_LOGIT_SCALE,
     LLM_KV_DECODER_START_TOKEN_ID,
@@ -399,6 +400,12 @@ enum llm_kv {
     LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP,
     LLM_KV_TOKENIZER_HF_JSON,
     LLM_KV_TOKENIZER_RWKV,
+    LLM_KV_TOKENIZER_FIM_PRE_ID,
+    LLM_KV_TOKENIZER_FIM_SUF_ID,
+    LLM_KV_TOKENIZER_FIM_MID_ID,
+    LLM_KV_TOKENIZER_FIM_PAD_ID,
+    LLM_KV_TOKENIZER_FIM_REP_ID,
+    LLM_KV_TOKENIZER_FIM_SEP_ID,
     LLM_KV_TOKENIZER_PREFIX_ID,
     LLM_KV_TOKENIZER_SUFFIX_ID,
     LLM_KV_TOKENIZER_MIDDLE_ID,
@@ -439,6 +446,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_EXPERT_WEIGHTS_SCALE,              "%s.expert_weights_scale"              },
     { LLM_KV_EXPERT_WEIGHTS_NORM,               "%s.expert_weights_norm"               },
     { LLM_KV_EXPERT_GATING_FUNC,                "%s.expert_gating_func"                },
+    { LLM_KV_NEXTN_PREDICT_LAYERS,              "%s.nextn_predict_layers"              },
     { LLM_KV_POOLING_TYPE ,                     "%s.pooling_type"                      },
     { LLM_KV_LOGIT_SCALE,                       "%s.logit_scale"                       },
     { LLM_KV_DECODER_START_TOKEN_ID,            "%s.decoder_start_token_id"            },
@@ -504,6 +512,13 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP, "tokenizer.ggml.precompiled_charsmap"     },
     { LLM_KV_TOKENIZER_HF_JSON,              "tokenizer.huggingface.json"              },
     { LLM_KV_TOKENIZER_RWKV,                 "tokenizer.rwkv.world"                    },
+    { LLM_KV_TOKENIZER_FIM_PRE_ID,           "tokenizer.ggml.fim_pre_token_id"         },
+    { LLM_KV_TOKENIZER_FIM_SUF_ID,           "tokenizer.ggml.fim_suf_token_id"         },
+    { LLM_KV_TOKENIZER_FIM_MID_ID,           "tokenizer.ggml.fim_mid_token_id"         },
+    { LLM_KV_TOKENIZER_FIM_PAD_ID,           "tokenizer.ggml.fim_pad_token_id"         },
+    { LLM_KV_TOKENIZER_FIM_REP_ID,           "tokenizer.ggml.fim_rep_token_id"         },
+    { LLM_KV_TOKENIZER_FIM_SEP_ID,           "tokenizer.ggml.fim_sep_token_id"         },
+
     { LLM_KV_TOKENIZER_PREFIX_ID,            "tokenizer.ggml.prefix_token_id"          },
     { LLM_KV_TOKENIZER_SUFFIX_ID,            "tokenizer.ggml.suffix_token_id"          },
     { LLM_KV_TOKENIZER_MIDDLE_ID,            "tokenizer.ggml.middle_token_id"          },
@@ -1422,16 +1437,16 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_OUTPUT_NORM,        "output_norm" },
             { LLM_TENSOR_OUTPUT,             "output" },
             { LLM_TENSOR_ATTN_NORM,          "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_POST_NORM,     "blk.%d.post_attention_norm" },
             { LLM_TENSOR_ATTN_Q,             "blk.%d.attn_q" },
             { LLM_TENSOR_ATTN_K,             "blk.%d.attn_k" },
             { LLM_TENSOR_ATTN_V,             "blk.%d.attn_v" },
             { LLM_TENSOR_ATTN_OUT,           "blk.%d.attn_output" },
             { LLM_TENSOR_ATTN_Q_NORM,        "blk.%d.attn_q_norm" },
             { LLM_TENSOR_ATTN_K_NORM,        "blk.%d.attn_k_norm" },
-            { LLM_TENSOR_FFN_NORM,           "blk.%d.ffn_norm" },
-            { LLM_TENSOR_FFN_GATE,           "blk.%d.ffn_gate" },        // dense layers
-            { LLM_TENSOR_FFN_DOWN,           "blk.%d.ffn_down" },        // dense layers
-            { LLM_TENSOR_FFN_UP,             "blk.%d.ffn_up" },          // dense layers
+            { LLM_TENSOR_FFN_GATE,           "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,           "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,             "blk.%d.ffn_up" },
             { LLM_TENSOR_FFN_GATE_INP,       "blk.%d.ffn_gate_inp" },
             { LLM_TENSOR_FFN_GATE_EXPS,      "blk.%d.ffn_gate_exps" },
             { LLM_TENSOR_FFN_DOWN_EXPS,      "blk.%d.ffn_down_exps" },
@@ -1439,13 +1454,14 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_FFN_GATE_SHEXP,     "blk.%d.ffn_gate_shexp" },
             { LLM_TENSOR_FFN_DOWN_SHEXP,     "blk.%d.ffn_down_shexp" },
             { LLM_TENSOR_FFN_UP_SHEXP,       "blk.%d.ffn_up_shexp" },
+            { LLM_TENSOR_FFN_EXP_PROBS_B,    "blk.%d.exp_probs_b" },
             // NextN/MTP tensors - preserved but unused (in final layer, dynamic layer number)
-            { LLM_TENSOR_NEXTN_EH_PROJ,      "blk.%d.eh_proj" },
-            { LLM_TENSOR_NEXTN_EMBED_TOKENS, "blk.%d.embed_tokens" },
-            { LLM_TENSOR_NEXTN_ENORM,        "blk.%d.enorm" },
-            { LLM_TENSOR_NEXTN_HNORM,        "blk.%d.hnorm" },
-            { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "blk.%d.shared_head.head" },
-            { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.%d.shared_head.norm" },
+            { LLM_TENSOR_NEXTN_EH_PROJ,      "blk.%d.nextn.eh_proj" },
+            { LLM_TENSOR_NEXTN_EMBED_TOKENS, "blk.%d.nextn.embed_tokens" },
+            { LLM_TENSOR_NEXTN_ENORM,        "blk.%d.nextn.enorm" },
+            { LLM_TENSOR_NEXTN_HNORM,        "blk.%d.nextn.hnorm" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "blk.%d.nextn.shared_head_head" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.%d.nextn.shared_head_norm" },
         },
     },
     {
@@ -2654,9 +2670,9 @@ enum e_model {
     MODEL_40B,
     MODEL_65B,
     MODEL_70B,
+    MODEL_106B_A12B,
     MODEL_142B,
     MODEL_236B,
-    MODEL_106B_A12B,
     MODEL_355B_A32B,
     MODEL_314B,
     MODEL_405B,
@@ -2728,6 +2744,7 @@ struct llama_hparams {
     float    expert_weights_scale = 0.0;
     bool     expert_weights_norm = false;
     uint32_t expert_gating_func = LLM_EXPERT_GATING_FUNC_SOFTMAX;
+    uint32_t nextn_predict_layers = 0;
 
     float f_norm_eps;
     float f_norm_rms_eps;
@@ -2928,6 +2945,15 @@ struct llama_cparams {
     void * cb_eval_user_data;
 };
 
+struct llama_layer_nextn {
+    struct ggml_tensor * eh_proj          = nullptr;
+    struct ggml_tensor * embed_tokens     = nullptr;
+    struct ggml_tensor * enorm            = nullptr;
+    struct ggml_tensor * hnorm            = nullptr;
+    struct ggml_tensor * shared_head_head = nullptr;
+    struct ggml_tensor * shared_head_norm = nullptr;
+};
+
 // TODO: separate into "llama_layer_enc" and "llama_layer_dec"
 struct llama_layer {
     // normalization
@@ -3046,6 +3072,8 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_scale;
     struct ggml_tensor * ffn_up_scale;
     struct ggml_tensor * ffn_down_scale;
+
+    struct llama_layer_nextn nextn;
 
     std::unique_ptr<ggml_tensor> computed_wk_b;
     std::unique_ptr<ggml_tensor> computed_wv_b;
@@ -5333,9 +5361,9 @@ static const char * llama_model_type_name(e_model type) {
         case MODEL_40B:           return "40B";
         case MODEL_65B:           return "65B";
         case MODEL_70B:           return "70B";
+        case MODEL_106B_A12B:     return "106B.A12B";
         case MODEL_142B:          return "142B";
         case MODEL_236B:          return "236B";
-        case MODEL_106B_A12B:     return "106B.A12B";
         case MODEL_355B_A32B:     return "355B.A32B";
         case MODEL_314B:          return "314B";
         case MODEL_405B:          return "405B";
@@ -6094,14 +6122,14 @@ static void llm_load_hparams(
             } break;
         case LLM_ARCH_GLM4_MOE:
             {
-                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp, false);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
                 // MoE parameters
-                ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert,         0);
-                ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used,    0);
-                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared,  0);
-                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, 0);
+                ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert);
+                ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
 
@@ -6110,6 +6138,9 @@ static void llm_load_hparams(
                 if (hparams.expert_gating_func == 0) {
                     hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
                 }
+
+                // NextN/MTP parameters
+                ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
 
                 switch (hparams.n_layer) {
                     case 47: model.type = e_model::MODEL_106B_A12B; break; // GLM-4.5-Air (46 layers + 1 NextN layer)
@@ -6654,16 +6685,24 @@ static void llm_load_vocab(
         const std::vector<std::pair<enum llm_kv, int32_t &>> special_token_types = {
             { LLM_KV_TOKENIZER_BOS_ID,    vocab.special_bos_id    },
             { LLM_KV_TOKENIZER_EOS_ID,    vocab.special_eos_id    },
+            { LLM_KV_TOKENIZER_EOT_ID,    vocab.special_eot_id    },
+            { LLM_KV_TOKENIZER_EOM_ID,    vocab.special_eom_id    },
             { LLM_KV_TOKENIZER_UNK_ID,    vocab.special_unk_id    },
             { LLM_KV_TOKENIZER_SEP_ID,    vocab.special_sep_id    },
             { LLM_KV_TOKENIZER_PAD_ID,    vocab.special_pad_id    },
             { LLM_KV_TOKENIZER_CLS_ID,    vocab.special_cls_id    },
             { LLM_KV_TOKENIZER_MASK_ID,   vocab.special_mask_id   },
+
+            { LLM_KV_TOKENIZER_FIM_PRE_ID, vocab.special_fim_pre_id },
+            { LLM_KV_TOKENIZER_FIM_SUF_ID, vocab.special_fim_suf_id },
+            { LLM_KV_TOKENIZER_FIM_MID_ID, vocab.special_fim_mid_id },
+            { LLM_KV_TOKENIZER_FIM_PAD_ID, vocab.special_fim_pad_id },
+            { LLM_KV_TOKENIZER_FIM_REP_ID, vocab.special_fim_rep_id },
+            { LLM_KV_TOKENIZER_FIM_SEP_ID, vocab.special_fim_sep_id },
+
             { LLM_KV_TOKENIZER_PREFIX_ID, vocab.special_prefix_id },
             { LLM_KV_TOKENIZER_SUFFIX_ID, vocab.special_suffix_id },
             { LLM_KV_TOKENIZER_MIDDLE_ID, vocab.special_middle_id },
-            { LLM_KV_TOKENIZER_EOT_ID,    vocab.special_eot_id    },
-            { LLM_KV_TOKENIZER_EOM_ID,    vocab.special_eom_id    },
         };
 
         for (const auto & it : special_token_types) {
@@ -6727,6 +6766,118 @@ static void llm_load_vocab(
                 vocab.special_eom_id = t->second;
             }
         }
+
+        for (const auto & t : vocab.token_to_id) {
+            // find FIM_PRE token: "<|fim_prefix|>", "<fim-prefix>", "<PRE>", etc.
+            if (vocab.special_fim_pre_id == -1) {
+                if (false
+                        || t.first == "<|fim_prefix|>"  // Qwen
+                        || t.first == "<fim-prefix>"
+                        || t.first == "<fim_prefix>"    // Granite
+                        || t.first == "<｜fim▁begin｜>" // DeepSeek
+                        || t.first == "<PRE>"
+                        || t.first == "▁<PRE>"          // CodeLlama
+                        || t.first == "<|code_prefix|>" // GLM-4.5
+                        ) {
+                    vocab.special_fim_pre_id = t.second;
+                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
+                                __func__, t.second, t.first.c_str());
+                                vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                    }
+                }
+            }
+
+            // find FIM_SUF token: "<|fim_suffix|>", "<fim-suffix>", "<SUF>", etc.
+            if (vocab.special_fim_suf_id == -1) {
+                if (false
+                        || t.first == "<|fim_suffix|>" // Qwen
+                        || t.first == "<fim-suffix>"
+                        || t.first == "<fim_suffix>"   // Granite
+                        || t.first == "<｜fim▁hole｜>" // DeepSeek
+                        || t.first == "<SUF>"
+                        || t.first == "▁<SUF>"         // CodeLlama
+                        || t.first == "<|code_suffix|>" // GLM-4.5
+                        ) {
+                    vocab.special_fim_suf_id = t.second;
+                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
+                                __func__, t.second, t.first.c_str());
+                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                    }
+                }
+            }
+
+            // find FIM_MID token: "<|fim_middle|>", "<fim-middle>", "<MID>", etc.
+            if (vocab.special_fim_mid_id == -1) {
+                if (false
+                        || t.first == "<|fim_middle|>" // Qwen
+                        || t.first == "<fim-middle>"
+                        || t.first == "<fim_middle>"   // Granite
+                        || t.first == "<｜fim▁end｜>"  // DeepSeek
+                        || t.first == "<MID>"
+                        || t.first == "▁<MID>"         // CodeLlama
+                        || t.first == "<|code_middle|>" // GLM-4.5
+                        ) {
+                    vocab.special_fim_mid_id = t.second;
+                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
+                                __func__, t.second, t.first.c_str());
+                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                    }
+                }
+            }
+
+            // find FIM_PAD token: "<|fim_pad|>", "<fim-pad>", "<PAD>", etc.
+            if (vocab.special_fim_pad_id == -1) {
+                if (false
+                        || t.first == "<|fim_pad|>" // Qwen
+                        || t.first == "<fim-pad>"
+                        || t.first == "<fim_pad>"   // Granite
+                        || t.first == "<PAD>"
+                        ) {
+                    vocab.special_fim_pad_id = t.second;
+                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
+                                __func__, t.second, t.first.c_str());
+                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                    }
+                }
+            }
+
+            // find FIM_REP token: "<|fim_repo|>", "<fim-repo>", "<REP>", etc.
+            if (vocab.special_fim_rep_id == -1) {
+                if (false
+                        || t.first == "<|fim_repo|>"  // Qwen
+                        || t.first == "<|repo_name|>"
+                        || t.first == "<fim-repo>"
+                        || t.first == "<REPO>"
+                        || t.first == "<reponame>"    // Granite
+                        ) {
+                    vocab.special_fim_rep_id = t.second;
+                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
+                                __func__, t.second, t.first.c_str());
+                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                    }
+                }
+            }
+
+            // find FIM_SEP token: "<|file_sep|>"
+            if (vocab.special_fim_sep_id == -1) {
+                if (false
+                        || t.first == "<|file_sep|>" // Qwen
+                        ) {
+                    vocab.special_fim_sep_id = t.second;
+                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
+                                __func__, t.second, t.first.c_str());
+                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                    }
+                }
+            }
+        }
+
     }
 
     // build special tokens cache
@@ -6948,6 +7099,14 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
     if (vocab.special_mask_id   != -1) { LLAMA_LOG_INFO( "%s: MASK token       = %d '%s'\n", __func__, vocab.special_mask_id, vocab.id_to_token[vocab.special_mask_id].text.c_str() ); }
 
     if (vocab.linefeed_id       != -1) { LLAMA_LOG_INFO( "%s: LF token         = %d '%s'\n", __func__, vocab.linefeed_id,       vocab.id_to_token[vocab.linefeed_id].text.c_str() );       }
+ 
+    if (vocab.special_fim_pre_id != -1) { LLAMA_LOG_INFO( "%s: FIM PRE token    = %d '%s'\n", __func__, vocab.special_fim_pre_id, vocab.id_to_token.at(vocab.special_fim_pre_id).text.c_str() ); }
+    if (vocab.special_fim_suf_id != -1) { LLAMA_LOG_INFO( "%s: FIM SUF token    = %d '%s'\n", __func__, vocab.special_fim_suf_id, vocab.id_to_token.at(vocab.special_fim_suf_id).text.c_str() ); }
+    if (vocab.special_fim_mid_id != -1) { LLAMA_LOG_INFO( "%s: FIM MID token    = %d '%s'\n", __func__, vocab.special_fim_mid_id, vocab.id_to_token.at(vocab.special_fim_mid_id).text.c_str() ); }
+    if (vocab.special_fim_pad_id != -1) { LLAMA_LOG_INFO( "%s: FIM PAD token    = %d '%s'\n", __func__, vocab.special_fim_pad_id, vocab.id_to_token.at(vocab.special_fim_pad_id).text.c_str() ); }
+    if (vocab.special_fim_rep_id != -1) { LLAMA_LOG_INFO( "%s: FIM REP token    = %d '%s'\n", __func__, vocab.special_fim_rep_id, vocab.id_to_token.at(vocab.special_fim_rep_id).text.c_str() ); }
+    if (vocab.special_fim_sep_id != -1) { LLAMA_LOG_INFO( "%s: FIM SEP token    = %d '%s'\n", __func__, vocab.special_fim_sep_id, vocab.id_to_token.at(vocab.special_fim_sep_id).text.c_str() ); }
+
     if (vocab.special_prefix_id != -1) { LLAMA_LOG_INFO( "%s: PRE token        = %d '%s'\n", __func__, vocab.special_prefix_id, vocab.id_to_token[vocab.special_prefix_id].text.c_str() ); }
     if (vocab.special_suffix_id != -1) { LLAMA_LOG_INFO( "%s: SUF token        = %d '%s'\n", __func__, vocab.special_suffix_id, vocab.id_to_token[vocab.special_suffix_id].text.c_str() ); }
     if (vocab.special_middle_id != -1) { LLAMA_LOG_INFO( "%s: MID token        = %d '%s'\n", __func__, vocab.special_middle_id, vocab.id_to_token[vocab.special_middle_id].text.c_str() ); }
@@ -9023,6 +9182,9 @@ static bool llm_load_tensors(
                     const int64_t n_expert_used   = hparams.n_expert_used;
                     const int64_t n_expert_shared = hparams.n_expert_shared;
 
+                    GGML_ASSERT(hparams.n_expert > 0 && "n_expert must be > 0 for GLM4_MOE MoE layers");
+                    GGML_ASSERT(hparams.n_expert_used > 0 && "n_expert_used must be > 0 for GLM4_MOE MoE layers");
+
                     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
                     // output
@@ -9035,40 +9197,6 @@ static bool llm_load_tensors(
                         model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
                     }
                     
-                    // --- NextN / MTP tensors (preserved but unused), on the final layer ---
-                    {
-                        const int final_layer = n_layer - 1;
-                        // EH_PROJ: [2*embd, embd]
-                        create_tensor(ctx_for_layer(final_layer),
-                                      tn(LLM_TENSOR_NEXTN_EH_PROJ, final_layer),
-                                      { 2*n_embd, n_embd },
-                                      llama_model_loader::TENSOR_NOT_REQUIRED);
-                        // EMBED_TOKENS: [embd, vocab]
-                        create_tensor(ctx_for_layer(final_layer),
-                                      tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, final_layer),
-                                      { n_embd, n_vocab },
-                                      llama_model_loader::TENSOR_NOT_REQUIRED);
-                        // ENORM, HNORM: [embd]
-                        create_tensor(ctx_for_layer(final_layer),
-                                      tn(LLM_TENSOR_NEXTN_ENORM, final_layer),
-                                      { n_embd },
-                                      llama_model_loader::TENSOR_NOT_REQUIRED);
-                        create_tensor(ctx_for_layer(final_layer),
-                                      tn(LLM_TENSOR_NEXTN_HNORM, final_layer),
-                                      { n_embd },
-                                      llama_model_loader::TENSOR_NOT_REQUIRED);
-                        // SHARED_HEAD_HEAD: [embd, vocab]
-                        create_tensor(ctx_for_layer(final_layer),
-                                      tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, final_layer),
-                                      { n_embd, n_vocab },
-                                      llama_model_loader::TENSOR_NOT_REQUIRED);
-                        // SHARED_HEAD_NORM: [embd]
-                        create_tensor(ctx_for_layer(final_layer),
-                                      tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, final_layer),
-                                      { n_embd },
-                                      llama_model_loader::TENSOR_NOT_REQUIRED);
-                    }
-
                     for (int i = 0; i < n_layer; ++i) {
                         ggml_context * ctx_layer = ctx_for_layer(i);
                         ggml_context * ctx_split = ctx_for_layer_split(i);
@@ -9081,9 +9209,9 @@ static bool llm_load_tensors(
                         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
                         layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i), { n_embd, n_embd_k_gqa }, 0);
                         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_v_gqa }, 0);
-                        layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q, "bias", i), { n_embd_head_k * n_head }, llama_model_loader::TENSOR_NOT_REQUIRED);
-                        layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K, "bias", i), { n_embd_k_gqa }, llama_model_loader::TENSOR_NOT_REQUIRED);
-                        layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V, "bias", i), { n_embd_v_gqa }, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q, "bias", i), { n_embd_head_k * n_head }, 0);
+                        layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K, "bias", i), { n_embd_k_gqa }, 0);
+                        layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V, "bias", i), { n_embd_v_gqa }, 0);
 
                         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
@@ -9093,29 +9221,17 @@ static bool llm_load_tensors(
                         layer.attn_k_norm = create_tensor(ctx_layer, 
                             tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, llama_model_loader::TENSOR_NOT_REQUIRED);
 
-                        layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+                        layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, 0);
 
                         // Check if this layer uses MoE or dense FFN based on n_layer_dense_lead
                         // GLM 4.5 uses hybrid architecture: layer 0 is dense, layers 1+ are MoE
-                        const bool use_moe =
-                            (hparams.n_expert > 0) && (static_cast<uint32_t>(i) >= hparams.n_layer_dense_lead);
+                        const bool use_moe = (static_cast<uint32_t>(i) >= hparams.n_layer_dense_lead);
 
                         if (use_moe) {
                             // MoE layers
-                            layer.ffn_gate_inp =
-                                create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
+                            layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
                             // gate bias
-                            layer.ffn_exp_probs_b =
-                                create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "bias", i), { n_expert },
-                                              llama_model_loader::TENSOR_NOT_REQUIRED);
-
-                            if (n_expert == 0) {
-                                GGML_ASSERT(hparams.n_expert > 0 && "n_expert must be > 0 for GLM4_MOE MoE layers");
-                            }
-                            if (n_expert_used == 0) {
-                                GGML_ASSERT(hparams.n_expert_used > 0 &&
-                                            "n_expert_used must be > 0 for GLM4_MOE MoE layers");
-                            }
+                            layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, 0);
 
                             // MoE branch
                             const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
@@ -9134,8 +9250,8 @@ static bool llm_load_tensors(
                                     tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), { n_embd, n_ff_shexp }, 0);
                                 layer.ffn_down_shexp = create_tensor(ctx_split, 
                                     tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { n_ff_shexp, n_embd }, 0);
-                                layer.ffn_up_shexp =
-                                    create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), { n_embd, n_ff_shexp }, 0);
+                                layer.ffn_up_shexp = create_tensor(ctx_split, 
+                                    tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), { n_embd, n_ff_shexp }, 0);
                             }
                         } else {
                             // Dense layers (first k layers) - GLM uses separate gate/up projections
@@ -9143,6 +9259,40 @@ static bool llm_load_tensors(
                             layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
                             layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP, "weight", i), { n_embd, n_ff }, 0);
                         }
+                        // --- NextN / MTP tensors (preserved but unused), on the final layer ---
+                        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+                            const int final_layer = n_layer - 1;
+                            // EH_PROJ: [2*embd, embd]
+                            layer.nextn.eh_proj          = create_tensor(ctx_for_layer(final_layer),
+                                        tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", final_layer),
+                                        { 2*n_embd, n_embd },
+                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                            // EMBED_TOKENS: [embd, vocab]
+                            layer.nextn.embed_tokens     = create_tensor(ctx_for_layer(final_layer),
+                                        tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", final_layer),
+                                        { n_embd, n_vocab },
+                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                            // ENORM, HNORM: [embd]
+                            layer.nextn.enorm            = create_tensor(ctx_for_layer(final_layer),
+                                        tn(LLM_TENSOR_NEXTN_ENORM, "weight", final_layer),
+                                        { n_embd },
+                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                            layer.nextn.hnorm            = create_tensor(ctx_for_layer(final_layer),
+                                        tn(LLM_TENSOR_NEXTN_HNORM, "weight", final_layer),
+                                        { n_embd },
+                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                            // SHARED_HEAD_HEAD: [embd, vocab]
+                            layer.nextn.shared_head_head = create_tensor(ctx_for_layer(final_layer),
+                                        tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", final_layer),
+                                        { n_embd, n_vocab },
+                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                            // SHARED_HEAD_NORM: [embd]
+                            layer.nextn.shared_head_norm = create_tensor(ctx_for_layer(final_layer),
+                                        tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", final_layer),
+                                        { n_embd },
+                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                        }
+
                     }
                 }
                 break;
@@ -10174,6 +10324,10 @@ static struct ggml_tensor * llm_build_ffn(
 
     if (down) {
         cur = llm_build_lora_mm(lctx, ctx, down, cur);
+        if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
+            // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+            ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+        }
     }
 
     if (down_b) {
@@ -10522,6 +10676,10 @@ static struct ggml_tensor * llm_build_kqv(
 
     if (wo) {
         cur = llm_build_lora_mm(lctx, ctx, wo, cur);
+        if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
+            // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+            ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+        }
     }
 
     if (wo_b) {
@@ -16220,8 +16378,11 @@ struct llm_build_context {
     
         // output token IDs (for last layer cropping)
         struct ggml_tensor * inp_out_ids = build_inp_out_ids();
-    
-        for (int il = 0; il < n_layer; ++il) {
+
+        // Only process up to last layer (skip final NextN layer)
+        // Final layer tensors are loaded but not processed in forward pass
+        const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
+        for (int il = 0; il < n_transformer_layers; ++il) {
             struct ggml_tensor * inpSA = inpL;
     
             // Pre-attention norm
@@ -16283,14 +16444,14 @@ struct llm_build_context {
     
                 // build attention KV (no unified cache)
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                                   model.layers[il].wo, model.layers[il].bo,
+                                   model.layers[il].wo, NULL,
                                    Kcur, Vcur, Qcur, KQ_mask,
                                    n_tokens, kv_head, n_kv,
                                    1.0f/sqrtf(float(n_embd_head)), cb, il);
             }
     
             // crop output on last layer
-            if (il == n_layer - 1) {
+            if (il == n_transformer_layers - 1 && inp_out_ids) {
                 // skip computing output for unused tokens
                 ggml_tensor * inp_out_ids = build_inp_out_ids();
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
@@ -16301,11 +16462,11 @@ struct llm_build_context {
             struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
     
-            // FFN / MoE
+            // Post-attention norm
             cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                                 model.layers[il].ffn_norm, NULL,
+                                 model.layers[il].attn_post_norm, NULL,
                                  LLM_NORM_RMS, cb, il);
-            cb(cur, "ffn_norm", il);
+            cb(cur, "post_attn_norm", il);
     
             if ((uint32_t) il < hparams.n_layer_dense_lead) {
                 // dense FFN
@@ -16318,7 +16479,7 @@ struct llm_build_context {
                 cb(cur, "ffn_out", il);
             } else {
                 // MoE FFN
-                struct ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, cur,
+                struct ggml_tensor * routed_out = llm_build_moe_ffn(ctx0, lctx, cur,
                                             model.layers[il].ffn_gate_inp,
                                             model.layers[il].ffn_up_exps,
                                             model.layers[il].ffn_gate_exps,
@@ -16329,18 +16490,18 @@ struct llm_build_context {
                                             true, hparams.expert_weights_scale,
                                             (enum llm_expert_gating_func_type) hparams.expert_gating_func,
                                             cb, il);
-                cb(moe_out, "ffn_moe_out", il);
+                cb(routed_out, "routed_out", il);
 
                 {
-                    struct ggml_tensor * shexp_out = llm_build_ffn(ctx0, lctx, cur,
+                    struct ggml_tensor * shared_out = llm_build_ffn(ctx0, lctx, cur,
                                                 model.layers[il].ffn_up_shexp, NULL, NULL,
                                                 model.layers[il].ffn_gate_shexp, NULL, NULL,
                                                 model.layers[il].ffn_down_shexp, NULL, NULL,
                                                 NULL,
                                                 LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-                    cb(shexp_out, "ffn_shexp_out", il);
+                    cb(shared_out, "ffn_shexp_out", il);
         
-                    cur = ggml_add(ctx0, moe_out, shexp_out);
+                    cur = ggml_add(ctx0, routed_out, shared_out);
                     cb(cur, "ffn_out", il);
                 }
             }
@@ -23553,6 +23714,36 @@ llama_token llama_token_suffix(const struct llama_model * model) {
 
 llama_token llama_token_eot(const struct llama_model * model) {
     return llama_token_eot_impl(model->vocab);
+}
+
+// deprecated
+llama_token llama_token_fim_pre(const struct llama_model * model) {
+    return llama_token_fim_pre_impl(model->vocab);
+}
+
+// deprecated
+llama_token llama_token_fim_suf(const struct llama_model * model) {
+    return llama_token_fim_suf_impl(model->vocab);
+}
+
+// deprecated
+llama_token llama_token_fim_mid(const struct llama_model * model) {
+    return llama_token_fim_mid_impl(model->vocab);
+}
+
+// deprecated
+llama_token llama_token_fim_pad(const struct llama_model * model) {
+    return llama_token_fim_pad_impl(model->vocab);
+}
+
+// deprecated
+llama_token llama_token_fim_rep(const struct llama_model * model) {
+    return llama_token_fim_rep_impl(model->vocab);
+}
+
+// deprecated
+llama_token llama_token_fim_sep(const struct llama_model * model) {
+    return llama_token_fim_sep_impl(model->vocab);
 }
 
 //
