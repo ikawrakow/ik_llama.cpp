@@ -20713,7 +20713,7 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
     //  - model.arch == LLM_ARCH_DECI                    for Deci-Nemotron   models
     //
     GGML_ASSERT((qs.n_attention_wv == 0 || qs.n_attention_wv == (int)model.hparams.n_layer || qs.n_attention_wv == 3 * (int)model.hparams.n_layer || model.arch == LLM_ARCH_DECI) && "n_attention_wv is unexpected");
-    
+
     size_t total_size_org = 0;
     size_t total_size_new = 0;
 
