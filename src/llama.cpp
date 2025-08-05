@@ -4885,14 +4885,26 @@ struct llama_model_loader {
         return cur;
     }
 
-    static const int TENSOR_NOT_REQUIRED = 1;
-    static const int TENSOR_DUPLICATED   = 2;
+    static const int TENSOR_NOT_REQUIRED = 1 << 0;
+    static const int TENSOR_DUPLICATED   = 1 << 1;
+    static const int TENSOR_SKIP         = 1 << 2;
 
     struct ggml_tensor * create_tensor(struct ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags = 0) {
         const struct ggml_tensor * cur = check_tensor_dims(name, ne, !(flags & TENSOR_NOT_REQUIRED));
 
         if (cur == NULL) {
             return NULL;
+        }
+
+        // skip unused tensors
+        if (flags & TENSOR_SKIP) {
+            const size_t nbytes = ggml_nbytes(cur);
+            LLAMA_LOG_WARN("model has unused tensor %s (size = %zu bytes) -- ignoring\n", name.c_str(), nbytes);
+
+            size_data -= nbytes;
+            n_created++;
+
+            return nullptr;
         }
 
         return create_tensor_for(ctx, cur, flags & TENSOR_DUPLICATED);
@@ -7581,6 +7593,10 @@ static bool llm_load_tensors(
 
     LLAMA_LOG_INFO("%s: ggml ctx size = %7.2f MiB\n", __func__, model.ctxs.size()*ctx_size/1024.0/1024.0);
 
+    const auto TENSOR_DUPLICATED   = llama_model_loader::TENSOR_DUPLICATED;
+    const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
+    const auto TENSOR_SKIP         = llama_model_loader::TENSOR_SKIP;
+
     // create tensors for the weights
     {
         // note: cast to int64_t since we will use these for the tensor dimensions
@@ -9201,27 +9217,33 @@ static bool llm_load_tensors(
                         ggml_context * ctx_layer = ctx_for_layer(i);
                         ggml_context * ctx_split = ctx_for_layer_split(i);
 
+                        int flags = 0;
+                        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+                            // skip all tensors in the NextN layers
+                            flags |= TENSOR_SKIP;
+                        }
+
                         auto & layer = model.layers[i];
 
-                        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, flags);
 
                         // GLM-style attention with bias terms
-                        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
-                        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i), { n_embd, n_embd_k_gqa }, 0);
-                        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_v_gqa }, 0);
-                        layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q, "bias", i), { n_embd_head_k * n_head }, 0);
-                        layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K, "bias", i), { n_embd_k_gqa }, 0);
-                        layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V, "bias", i), { n_embd_v_gqa }, 0);
+                        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", i), { n_embd, n_embd_head_k * n_head }, flags);
+                        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i), { n_embd, n_embd_k_gqa }, flags);
+                        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_v_gqa }, flags);
+                        layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q, "bias", i), { n_embd_head_k * n_head }, flags);
+                        layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K, "bias", i), { n_embd_k_gqa }, flags);
+                        layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V, "bias", i), { n_embd_v_gqa }, flags);
 
-                        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
+                        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, flags);
 
                         // K/Q norm tensors (optional for GLM-4.5 355B variant)
                         layer.attn_q_norm = create_tensor(ctx_layer, 
-                            tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, llama_model_loader::TENSOR_NOT_REQUIRED);
+                            tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, llama_model_loader::TENSOR_NOT_REQUIRED | flags);
                         layer.attn_k_norm = create_tensor(ctx_layer, 
-                            tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, llama_model_loader::TENSOR_NOT_REQUIRED);
+                            tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, llama_model_loader::TENSOR_NOT_REQUIRED | flags);
 
-                        layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, 0);
+                        layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, flags);
 
                         // Check if this layer uses MoE or dense FFN based on n_layer_dense_lead
                         // GLM 4.5 uses hybrid architecture: layer 0 is dense, layers 1+ are MoE
@@ -9229,35 +9251,35 @@ static bool llm_load_tensors(
 
                         if (use_moe) {
                             // MoE layers
-                            layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
+                            layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, flags);
                             // gate bias
-                            layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, 0);
+                            layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, flags);
 
                             // MoE branch
                             const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
 
                             layer.ffn_gate_exps = create_tensor(ctx_split, 
-                                tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
+                                tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, flags);
                             layer.ffn_down_exps = create_tensor(ctx_split, 
-                                tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, 0);
+                                tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, flags);
                             layer.ffn_up_exps = create_tensor(ctx_split, 
-                                tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
+                                tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, flags);
 
                             // Shared expert
                             if (n_expert_shared > 0) {
                                 const int64_t n_ff_shexp = n_ff_exp * n_expert_shared;
                                 layer.ffn_gate_shexp     = create_tensor(ctx_split, 
-                                    tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), { n_embd, n_ff_shexp }, 0);
+                                    tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), { n_embd, n_ff_shexp }, flags);
                                 layer.ffn_down_shexp = create_tensor(ctx_split, 
-                                    tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { n_ff_shexp, n_embd }, 0);
+                                    tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { n_ff_shexp, n_embd }, flags);
                                 layer.ffn_up_shexp = create_tensor(ctx_split, 
-                                    tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), { n_embd, n_ff_shexp }, 0);
+                                    tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", i), { n_embd, n_ff_shexp }, flags);
                             }
                         } else {
                             // Dense layers (first k layers) - GLM uses separate gate/up projections
-                            layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
-                            layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
-                            layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP, "weight", i), { n_embd, n_ff }, 0);
+                            layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, flags);
+                            layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, flags);
+                            layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP, "weight", i), { n_embd, n_ff }, flags);
                         }
                         // --- NextN / MTP tensors (preserved but unused), on the final layer ---
                         if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
@@ -9266,33 +9288,32 @@ static bool llm_load_tensors(
                             layer.nextn.eh_proj          = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", final_layer),
                                         { 2*n_embd, n_embd },
-                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                                        flags);
                             // EMBED_TOKENS: [embd, vocab]
                             layer.nextn.embed_tokens     = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", final_layer),
                                         { n_embd, n_vocab },
-                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                                        flags);
                             // ENORM, HNORM: [embd]
                             layer.nextn.enorm            = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_ENORM, "weight", final_layer),
                                         { n_embd },
-                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                                        flags);
                             layer.nextn.hnorm            = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_HNORM, "weight", final_layer),
                                         { n_embd },
-                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                                        flags);
                             // SHARED_HEAD_HEAD: [embd, vocab]
                             layer.nextn.shared_head_head = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", final_layer),
                                         { n_embd, n_vocab },
-                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                                        flags);
                             // SHARED_HEAD_NORM: [embd]
                             layer.nextn.shared_head_norm = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", final_layer),
                                         { n_embd },
-                                        llama_model_loader::TENSOR_NOT_REQUIRED);
+                                        flags);
                         }
-
                     }
                 }
                 break;
