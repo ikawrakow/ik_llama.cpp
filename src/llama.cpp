@@ -4896,6 +4896,17 @@ struct llama_model_loader {
             return NULL;
         }
 
+        // skip unused tensors
+        if (flags & TENSOR_SKIP) {
+            const size_t nbytes = ggml_nbytes(cur);
+            LLAMA_LOG_WARN("model has unused tensor %s (size = %zu bytes) -- ignoring\n", name.c_str(), nbytes);
+
+            size_data -= nbytes;
+            n_created++;
+
+            return nullptr;
+        }
+
         return create_tensor_for(ctx, cur, flags & TENSOR_DUPLICATED);
     }
 
