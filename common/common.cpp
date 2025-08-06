@@ -26,6 +26,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <list>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -301,6 +302,7 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
 
 namespace {
 bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tensor_buft_override>& overrides) {
+    static std::list<std::string> buft_overrides;
     /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
     if (buft_list.empty()) {
         // enumerate all the devices and add their buffer types to the list
@@ -327,7 +329,8 @@ bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tens
             }
             return false;
         }
-        overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+        buft_overrides.push_back(tensor_name);
+        overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
     }
     return true;
 }
@@ -1080,6 +1083,27 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--cpu-moe" || arg == "-cmoe") {
+        static std::list<std::string> buft_overrides;
+        buft_overrides.push_back("\\.ffn_(up|down|gate)_exps");
+        params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
+        return true;
+    }
+    if (arg == "--n-cpu-moe" || arg == "-ncmoe") {
+        CHECK_ARG
+        int n_layers = std::stoi(argv[i]);
+        if (n_layers < 0) {
+            fprintf(stderr, "error: Invalid value for --n-cpu-moe: %d (must be >= 0)\n", n_layers);
+            invalid_param = true;
+            return true;
+        }
+        static std::list<std::string> buft_overrides;
+        for (int l = 0; l < n_layers; ++l) {
+            buft_overrides.push_back("blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)_exps)");
+            params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
+        }
+        return true;
+    }
     if (arg == "--no-mmap") {
         params.use_mmap = false;
         return true;
@@ -1794,6 +1818,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "       --no-mmap",              "do not memory-map model (slower load but may reduce pageouts if not using mlock)" });
     }
     options.push_back({ "*",           "       --run-time-repack",      "repack tensors if interleaved variant is available"});
+    options.push_back({ "*",           "       --cpu-moe",              "keep all MoE weights in CPU memory"});
+    options.push_back({ "*",           "       --n-cpu-moe N",          "keep MoE weights of the first N layers in CPU memory"});
     options.push_back({ "*",           "       --numa TYPE",            "attempt optimizations that help on some NUMA systems\n"
                                                                         "  - distribute: spread execution evenly over all nodes\n"
                                                                         "  - isolate: only spawn threads on CPUs on the node that execution started on\n"
