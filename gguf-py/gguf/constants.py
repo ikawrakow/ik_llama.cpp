@@ -91,6 +91,7 @@ class Keys:
         EXPERT_WEIGHTS_SCALE              = "{arch}.expert_weights_scale"
         EXPERT_WEIGHTS_NORM               = "{arch}.expert_weights_norm"
         EXPERT_GATING_FUNC                = "{arch}.expert_gating_func"
+        NEXTN_PREDICT_LAYERS              = "{arch}.nextn_predict_layers"
         POOLING_TYPE                      = "{arch}.pooling_type"
         LOGIT_SCALE                       = "{arch}.logit_scale"
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
@@ -159,6 +160,13 @@ class Keys:
         CHAT_TEMPLATE_N      = "tokenizer.chat_template.{name}"
         CHAT_TEMPLATES       = "tokenizer.chat_templates"
         # FIM/Infill special tokens constants
+        FIM_PRE_ID           = "tokenizer.ggml.fim_pre_token_id"
+        FIM_SUF_ID           = "tokenizer.ggml.fim_suf_token_id"
+        FIM_MID_ID           = "tokenizer.ggml.fim_mid_token_id"
+        FIM_PAD_ID           = "tokenizer.ggml.fim_pad_token_id"
+        FIM_REP_ID           = "tokenizer.ggml.fim_rep_token_id"
+        FIM_SEP_ID           = "tokenizer.ggml.fim_sep_token_id"
+        # FIM/Infill special tokens constants
         PREFIX_ID            = "tokenizer.ggml.prefix_token_id"
         SUFFIX_ID            = "tokenizer.ggml.suffix_token_id"
         MIDDLE_ID            = "tokenizer.ggml.middle_token_id"
@@ -220,6 +228,7 @@ class MODEL_ARCH(IntEnum):
     OPENELM      = auto()
     ARCTIC       = auto()
     DEEPSEEK2    = auto()
+    GLM4_MOE     = auto()
     CHATGLM      = auto()
     BITNET       = auto()
     BITNET_25    = auto()
@@ -314,6 +323,12 @@ class MODEL_TENSOR(IntEnum):
     ENC_FFN_DOWN         = auto()
     ENC_FFN_UP           = auto()
     ENC_OUTPUT_NORM      = auto()
+    NEXTN_EH_PROJ        = auto()   # nextn tensors (glm4moe)
+    NEXTN_EMBED_TOKENS   = auto()   # nextn tensors (glm4moe)
+    NEXTN_ENORM          = auto()   # nextn tensors (glm4moe)
+    NEXTN_HNORM          = auto()   # nextn tensors (glm4moe)
+    NEXTN_SHARED_HEAD_HEAD = auto() # nextn tensors (glm4moe)
+    NEXTN_SHARED_HEAD_NORM = auto() # nextn tensors (glm4moe)
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -358,6 +373,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ARCTIC:         "arctic",
     MODEL_ARCH.DEEPSEEK2:      "deepseek2",
     MODEL_ARCH.CHATGLM:        "chatglm",
+    MODEL_ARCH.GLM4_MOE:         "glm4moe",
     MODEL_ARCH.BITNET:         "bitnet",
     MODEL_ARCH.BITNET_25:      "bitnet-25",
     MODEL_ARCH.T5:             "t5",
@@ -451,6 +467,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ENC_FFN_DOWN:         "enc.blk.{bid}.ffn_down",
     MODEL_TENSOR.ENC_FFN_UP:           "enc.blk.{bid}.ffn_up",
     MODEL_TENSOR.ENC_OUTPUT_NORM:      "enc.output_norm",
+    # NextN/MTP
+    MODEL_TENSOR.NEXTN_EH_PROJ:             "blk.{bid}.nextn.eh_proj",
+    MODEL_TENSOR.NEXTN_EMBED_TOKENS:        "blk.{bid}.nextn.embed_tokens",
+    MODEL_TENSOR.NEXTN_ENORM:               "blk.{bid}.nextn.enorm",
+    MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
+    MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -1070,6 +1093,37 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.GLM4_MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        # NextN/MTP tensors - preserved but unused
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
     MODEL_ARCH.BITNET: [
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
@@ -1633,6 +1687,14 @@ KEY_TOKENIZER_CLS_ID     = Keys.Tokenizer.CLS_ID
 KEY_TOKENIZER_MASK_ID    = Keys.Tokenizer.MASK_ID
 KEY_TOKENIZER_HF_JSON    = Keys.Tokenizer.HF_JSON
 KEY_TOKENIZER_RWKV       = Keys.Tokenizer.RWKV
+
+KEY_TOKENIZER_FIM_PRE_ID = Keys.Tokenizer.FIM_PRE_ID
+KEY_TOKENIZER_FIM_SUF_ID = Keys.Tokenizer.FIM_SUF_ID
+KEY_TOKENIZER_FIM_MID_ID = Keys.Tokenizer.FIM_MID_ID
+KEY_TOKENIZER_FIM_PAD_ID = Keys.Tokenizer.FIM_PAD_ID
+KEY_TOKENIZER_FIM_REP_ID = Keys.Tokenizer.FIM_REP_ID
+KEY_TOKENIZER_FIM_SEP_ID = Keys.Tokenizer.FIM_SEP_ID
+
 KEY_TOKENIZER_PREFIX_ID  = Keys.Tokenizer.PREFIX_ID
 KEY_TOKENIZER_SUFFIX_ID  = Keys.Tokenizer.SUFFIX_ID
 KEY_TOKENIZER_MIDDLE_ID  = Keys.Tokenizer.MIDDLE_ID
