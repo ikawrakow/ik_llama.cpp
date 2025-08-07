@@ -915,6 +915,7 @@ struct server_context {
             params_dft.n_parallel = 1;
             params_dft.cache_type_k = params.cache_type_k_draft.empty() ? params.cache_type_k : params.cache_type_k_draft;
             params_dft.cache_type_v = params.cache_type_v_draft.empty() ? params.cache_type_v : params.cache_type_v_draft;
+            params_dft.flash_attn = params.flash_attn;
 
             llama_init_result llama_init_dft = llama_init_from_gpt_params(params_dft);
 
