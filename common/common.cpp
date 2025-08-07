@@ -711,7 +711,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             }
         }
         return true;
-    }  
+    }
     if (arg == "--cfg-negative-prompt") {
         CHECK_ARG
         sparams.cfg_negative_prompt = argv[i];
@@ -1065,7 +1065,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         size_t pos = 0;
         while ((pos = servers.find(",")) != std::string::npos) {
             std::string server = servers.substr(0, pos);
-            ggml_backend_rpc_buffer_type(server.c_str());            
+            ggml_backend_rpc_buffer_type(server.c_str());
             servers.erase(0, pos + 1);
         }
         ggml_backend_rpc_buffer_type(servers.c_str());
@@ -1997,7 +1997,7 @@ std::string string_join(const std::vector<std::string> & strs, const std::string
     if (strs.empty()) {
         return "";
     }
-    
+
     std::ostringstream oss;
     for (size_t i = 0; i < strs.size(); ++i) {
         if (i > 0) {
@@ -2521,8 +2521,7 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
 struct llama_context_params llama_context_params_from_gpt_params(const gpt_params & params) {
     auto cparams = llama_context_default_params();
 
-    // Use draft context size if specified and we have a draft model, otherwise use regular context size
-    cparams.n_ctx             = params.model_draft.empty() ? params.n_ctx : (params.n_ctx_draft > 0 ? params.n_ctx_draft : params.n_ctx);
+    cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
