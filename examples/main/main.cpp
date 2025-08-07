@@ -2,7 +2,7 @@
 
 #include "console.h"
 #include "llama.h"
-
+#include "chat-template.hpp"
 #include <cassert>
 #include <cinttypes>
 #include <cmath>
@@ -119,10 +119,10 @@ static void llama_log_callback_logTee(ggml_log_level level, const char * text, v
     LOG_TEE("%s", text);
 }
 
-static std::string chat_add_and_format(struct llama_model * model, std::vector<llama_chat_msg> & chat_msgs, std::string role, std::string content) {
+static std::string chat_add_and_format(struct llama_model * model, common_chat_templates &chat_templates, std::vector<llama_chat_msg> & chat_msgs, std::string role, std::string content) {
     llama_chat_msg new_msg{role, content};
-    auto formatted = llama_chat_format_single(
-        model, g_params->chat_template, chat_msgs, new_msg, role == "user");
+    auto formatted = llama_chat_format_single(model, 
+        *chat_templates.template_default, chat_msgs, new_msg, role == "user", g_params->use_jinja);
     chat_msgs.push_back({role, content});
     LOG("formatted: %s\n", formatted.c_str());
     return formatted;
@@ -220,6 +220,7 @@ int main(int argc, char ** argv) {
         LOG_TEE("%s: error: unable to load model\n", __func__);
         return 1;
     }
+    auto chat_templates = llama_chat_templates_from_model(model, params.chat_template);
 
     const int n_ctx_train = llama_n_ctx_train(model);
     const int n_ctx = llama_n_ctx(ctx);
@@ -229,11 +230,10 @@ int main(int argc, char ** argv) {
         LOG_TEE("%s: warning: model was trained on only %d context tokens (%d specified)\n",
                 __func__, n_ctx_train, n_ctx);
     }
-
     // print chat template example in conversation mode
     if (params.conversation) {
         if (params.enable_chat_template) {
-            LOG_TEE("%s: chat template example: %s\n", __func__, llama_chat_format_example(model, params.chat_template).c_str());
+            LOG_TEE("%s: chat template example: %s\n", __func__, llama_chat_format_example(model, *chat_templates.template_default, params.use_jinja).c_str());
         } else {
             LOG_TEE("%s: in-suffix/prefix is specified, chat template will be disabled\n", __func__);
         }
@@ -274,11 +274,29 @@ int main(int argc, char ** argv) {
     LOG("add_bos: %d\n", add_bos);
 
     std::vector<llama_token> embd_inp;
+    bool waiting_for_first_input = params.conversation && params.enable_chat_template && params.system_prompt.empty();
 
     {
-        auto prompt = (params.conversation && params.enable_chat_template && !params.prompt.empty())
-            ? chat_add_and_format(model, chat_msgs, "system", params.prompt) // format the system prompt in conversation mode
-            : params.prompt;
+        //auto prompt = (params.conversation && params.enable_chat_template && !params.prompt.empty())
+        //    ? chat_add_and_format(model, chat_templates,chat_msgs, "system", params.prompt) // format the system prompt in conversation mode
+        //    : params.prompt;
+        std::string prompt;
+
+        if (params.conversation && params.enable_chat_template) {
+            // format the system prompt in conversation mode (will use template default if empty)
+            prompt = params.system_prompt;
+
+            if (!prompt.empty()) {
+                prompt = chat_add_and_format(model, chat_templates,chat_msgs, "system", prompt);
+            }
+        }
+        else {
+            // otherwise use the prompt as is
+            prompt = params.prompt;
+        }
+
+
+
         if (params.interactive_first || !params.prompt.empty() || session_tokens.empty()) {
             LOG("tokenize the prompt\n");
             embd_inp = ::llama_tokenize(ctx, prompt, true, true);
@@ -292,7 +310,7 @@ int main(int argc, char ** argv) {
     }
 
     // Should not run without any tokens
-    if (embd_inp.empty()) {
+    if (!params.conversation && embd_inp.empty()) {
         if (add_bos) {
             embd_inp.push_back(llama_token_bos(model));
             LOG("embd_inp was considered empty and bos was added: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, embd_inp).c_str());
@@ -837,7 +855,7 @@ int main(int argc, char ** argv) {
             }
 
             // deal with end of generation tokens in interactive mode
-            if (llama_token_is_eog(model, llama_sampling_last(ctx_sampling))) {
+            if (!waiting_for_first_input && llama_token_is_eog(model, llama_sampling_last(ctx_sampling))) {
                 LOG("found an EOG token\n");
 
                 if (params.interactive) {
@@ -849,7 +867,7 @@ int main(int argc, char ** argv) {
                     }
 
                     if (params.enable_chat_template) {
-                        chat_add_and_format(model, chat_msgs, "assistant", assistant_ss.str());
+                        chat_add_and_format(model, chat_templates, chat_msgs, "assistant", assistant_ss.str());
                     }
                     is_interacting = true;
                     printf("\n");
@@ -857,12 +875,12 @@ int main(int argc, char ** argv) {
             }
 
             // if current token is not EOG, we add it to current assistant message
-            if (params.conversation) {
+            if (params.conversation && !waiting_for_first_input) {
                 auto id = llama_sampling_last(ctx_sampling);
                 assistant_ss << llama_token_to_piece(ctx, id, false);
             }
 
-            if (n_past > 0 && is_interacting) {
+            if ((n_past > 0 || waiting_for_first_input) && is_interacting) {
                 LOG("waiting for user input\n");
 
                 if (params.conversation) {
@@ -914,7 +932,7 @@ int main(int argc, char ** argv) {
 
                     bool format_chat = params.conversation && params.enable_chat_template;
                     std::string user_inp = format_chat
-                        ? chat_add_and_format(model, chat_msgs, "user", std::move(buffer))
+                        ? chat_add_and_format(model, chat_templates, chat_msgs, "user", std::move(buffer))
                         : std::move(buffer);
                     // TODO: one inconvenient of current chat template implementation is that we can't distinguish between user input and special tokens (prefix/postfix)
                     const auto line_pfx = ::llama_tokenize(ctx, params.input_prefix, false, true);
@@ -952,11 +970,12 @@ int main(int argc, char ** argv) {
                 input_echo = false; // do not echo this again
             }
 
-            if (n_past > 0) {
+            if (n_past > 0 || waiting_for_first_input) {
                 if (is_interacting) {
                     llama_sampling_reset(ctx_sampling);
                 }
                 is_interacting = false;
+                waiting_for_first_input = false;
             }
         }
 
