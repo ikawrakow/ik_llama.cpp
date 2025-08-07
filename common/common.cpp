@@ -486,6 +486,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.n_ctx = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "-cd" || arg == "--ctx-size-draft") {
+        CHECK_ARG
+        params.n_ctx_draft = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--grp-attn-n" || arg == "-gan") {
         CHECK_ARG
         params.grp_attn_n = std::stoi(argv[i]);
@@ -913,6 +918,14 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-ctv" || arg == "--cache-type-v") {
         params.cache_type_v = argv[++i];
+        return true;
+    }
+    if (arg == "-ctkd" || arg == "--cache-type-k-draft") {
+        params.cache_type_k_draft = argv[++i];
+        return true;
+    }
+    if (arg == "-ctvd" || arg == "--cache-type-v-draft") {
+        params.cache_type_v_draft = argv[++i];
         return true;
     }
     if (arg == "-mli" || arg == "--multiline-input") {
@@ -1648,6 +1661,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "path to dynamic lookup cache to use for lookup decoding (updated by generation)" });
 
     options.push_back({ "*",           "-c,    --ctx-size N",           "size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx });
+    options.push_back({ "*",           "-cd,   --ctx-size-draft N",     "size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.n_ctx_draft });
     options.push_back({ "*",           "-n,    --predict N",            "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)", params.n_predict });
     options.push_back({ "*",           "-b,    --batch-size N",         "logical maximum batch size (default: %d)", params.n_batch });
     options.push_back({ "*",           "-ub,   --ubatch-size N",        "physical maximum batch size (default: %d)", params.n_ubatch });
@@ -1758,6 +1772,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-nkvo, --no-kv-offload",        "disable KV offload" });
     options.push_back({ "*",           "-ctk,  --cache-type-k TYPE",    "KV cache data type for K (default: %s)", params.cache_type_k.c_str() });
     options.push_back({ "*",           "-ctv,  --cache-type-v TYPE",    "KV cache data type for V (default: %s)", params.cache_type_v.c_str() });
+    options.push_back({ "*",           "-ctkd, --cache-type-k-draft TYPE", "KV cache data type for K for the draft model" });
+    options.push_back({ "*",           "-ctvd, --cache-type-v-draft TYPE", "KV cache data type for V for the draft model" });
 
     options.push_back({ "perplexity" });
     options.push_back({ "perplexity",  "       --all-logits",           "return logits for all tokens in the batch (default: %s)", params.logits_all ? "true" : "false" });
@@ -2505,7 +2521,8 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
 struct llama_context_params llama_context_params_from_gpt_params(const gpt_params & params) {
     auto cparams = llama_context_default_params();
 
-    cparams.n_ctx             = params.n_ctx;
+    // Use draft context size if specified and we have a draft model, otherwise use regular context size
+    cparams.n_ctx             = params.model_draft.empty() ? params.n_ctx : (params.n_ctx_draft > 0 ? params.n_ctx_draft : params.n_ctx);
     cparams.n_seq_max         = params.n_parallel;
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;

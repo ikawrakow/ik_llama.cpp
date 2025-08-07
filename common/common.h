@@ -83,6 +83,7 @@ struct gpt_params {
     int32_t n_threads_batch_draft =    -1;
     int32_t n_predict             =    -1; // new tokens to predict
     int32_t n_ctx                 =     0; // context size
+    int32_t n_ctx_draft           =     0; // context size for draft model
     int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_ubatch              =   512; // physical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
@@ -207,6 +208,8 @@ struct gpt_params {
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
+    std::string cache_type_k_draft = ""; // KV cache data type for K for the draft model
+    std::string cache_type_v_draft = ""; // KV cache data type for V for the draft model
 
     // multimodal models (see examples/llava)
     std::string mmproj = "";        // path to multimodal projector
