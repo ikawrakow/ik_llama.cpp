@@ -989,10 +989,6 @@ struct server_context {
 
             slot.sparams = params.sparams;
 
-            slot.params.speculative.n_max = params.n_draft;
-            slot.params.speculative.n_min = params.n_draft_min;
-            slot.params.speculative.p_min = params.p_draft_min;
-
             // Initialize speculative decoding if a draft model is loaded
             if (ctx_draft) {
                 slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
@@ -1202,9 +1198,9 @@ struct server_context {
         slot.sparams.min_keep          = json_value(data, "min_keep",          default_sparams.min_keep);
 
         // speculative decoding parameters
-        slot.params.speculative.n_max = json_value(data, "speculative.n_max", default_params.speculative.n_max);
-        slot.params.speculative.n_min = json_value(data, "speculative.n_min", default_params.speculative.n_min);
-        slot.params.speculative.p_min = json_value(data, "speculative.p_min", default_params.speculative.p_min);
+        slot.params.speculative.n_max = json_value(data, "speculative.n_max", params.n_draft);
+        slot.params.speculative.n_min = json_value(data, "speculative.n_min", params.n_draft_min);
+        slot.params.speculative.p_min = json_value(data, "speculative.p_min", params.p_draft_min);
 
         // Clamp speculative parameters
         slot.params.speculative.n_min = std::min(slot.params.speculative.n_max, slot.params.speculative.n_min);
