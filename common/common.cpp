@@ -751,9 +751,19 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.n_keep = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "--draft") {
+    if (arg == "--draft" || arg == "--draft-max" || arg == "--draft-n") {
         CHECK_ARG
         params.n_draft = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "--draft-min" || arg == "--draft-n-min") {
+        CHECK_ARG
+        params.n_draft_min = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "--draft-p-min") {
+        CHECK_ARG
+        params.p_draft_min = std::stof(argv[i]);
         return true;
     }
     if (arg == "--chunks") {
@@ -1653,7 +1663,6 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "speculative", "-td,   --threads-draft N",      "number of threads to use during generation (default: same as --threads)" });
     options.push_back({ "speculative", "-tbd,  --threads-batch-draft N",
                                                                         "number of threads to use during batch and prompt processing (default: same as --threads-draft)" });
-    options.push_back({ "speculative", "       --draft N",              "number of tokens to draft for speculative decoding (default: %d)", params.n_draft });
     options.push_back({ "speculative", "-ps,   --p-split N",            "speculative decoding split probability (default: %.1f)", (double)params.p_split });
     options.push_back({ "*",           "-lcs,  --lookup-cache-static FNAME",
                                                                         "path to static lookup cache to use for lookup decoding (not updated by generation)" });
@@ -1854,6 +1863,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
     options.push_back({ "*",           "-hff,  --hf-file FILE",         "Hugging Face model file (default: unused)" });
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
+    options.push_back({ "*", "--draft-max, --draft, --draft-n N",
+                                                                        "number of tokens to draft for speculative decoding (default: %d)", params.n_draft });
+    options.push_back({ "*", "--draft-min, --draft-n-min N",   "minimum number of draft tokens to use for speculative decoding" });
+    options.push_back({ "*", "--draft-p-min P",                "minimum speculative decoding probability (greedy) (default: %.1f)", (double)params.p_draft_min });
 
     options.push_back({ "retrieval" });
     options.push_back({ "retrieval",   "       --context-file FNAME",   "file to load context from (repeat to specify multiple files)" });
