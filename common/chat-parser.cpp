@@ -208,90 +208,11 @@ void common_chat_msg_parser::parse_generic_format() {
 }
 
 void common_chat_msg_parser::parse_deepseek_r1_format() {
-    // DeepSeek R1 format supports <think> tags for reasoning content
-    try_parse_reasoning("<think>", "</think>");
-    
-    if (!syntax_.enable_tool_calls) {
-        add_content(consume_rest());
-        return;
-    }
-
-    // DeepSeek R1 tool call patterns from original llama.cpp
-    static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
-    static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
-    static const common_regex function_regex("(?:<｜tool▁call▁begin｜>)?function<｜tool▁sep｜>([^\n]+)\n```json\n");
-    static const common_regex close_regex("```[\\s\\r\\n]*<｜tool▁call▁end｜>");
-
-    parse_deepseek_r1_tool_calls(tool_calls_begin, function_regex, close_regex, tool_calls_end);
+    // Delegate to the main chat.cpp function which has the corrected implementation
+    // This follows the original llama.cpp pattern where chat-parser delegates to chat.cpp
+    common_chat_parse_deepseek_r1(*this);
 }
 
-void common_chat_msg_parser::parse_deepseek_r1_tool_calls(
-    const common_regex & tool_calls_begin,
-    const common_regex & function_regex,
-    const common_regex & close_regex,
-    const common_regex & tool_calls_end) {
-    
-    // Helper function to wrap code as JSON arguments (ported from original llama.cpp)
-    auto wrap_code_as_arguments = [this](const std::string & code) -> std::string {
-        std::string arguments;
-        if (is_partial_) {
-            arguments = (json {{"code", code + healing_marker_}}).dump();
-            auto idx = arguments.find(healing_marker_);
-            if (idx != std::string::npos) {
-                arguments.resize(idx);
-            }
-        } else {
-            arguments = (json {{"code", code}}).dump();
-        }
-        return arguments;
-    };
-
-    auto parse_tool_calls = [&]() {
-        size_t from = std::string::npos;
-        while (true) {
-            auto res = try_find_regex(function_regex, from);
-            if (res) {
-                // Extract function name from regex group 1
-                std::string name = str(res->groups[1]);
-                from = std::string::npos;
-                
-                if (name.empty()) {
-                    from = res->groups[0].begin + 1;
-                    continue;
-                }
-
-                auto maybe_raw_python = name == "python";
-                if (input_[pos_] == '{' || !maybe_raw_python) {
-                    if (auto arguments = try_consume_json_with_dumped_args({{}})) {
-                        if (!add_tool_call(name, "", arguments->value) || arguments->is_partial) {
-                            throw common_chat_msg_partial_exception("incomplete tool call");
-                        }
-                        try_consume_regex(close_regex);
-                    }
-                    continue;
-                }
-                if (maybe_raw_python) {
-                    auto arguments = wrap_code_as_arguments(consume_rest());
-                    if (!add_tool_call(name, "", arguments)) {
-                        throw common_chat_msg_partial_exception("incomplete tool call");
-                    }
-                    return;
-                }
-                throw common_chat_msg_partial_exception("incomplete tool call");
-            }
-            break;
-        }
-        try_consume_regex(tool_calls_end);
-        consume_spaces();
-        add_content(consume_rest());
-    };
-    
-    if (auto res = try_find_regex(tool_calls_begin)) {
-        parse_tool_calls();
-    } else {
-        add_content(consume_rest());
-    }
-}
 
 void common_chat_msg_parser::finish() {
     // Any final processing can go here
