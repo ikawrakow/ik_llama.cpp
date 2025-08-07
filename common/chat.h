@@ -162,3 +162,6 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
 // Forward declare parser class  
 class common_chat_msg_parser;
 
+// Format-specific parsing functions (accessible from chat-parser)
+void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder);
+
