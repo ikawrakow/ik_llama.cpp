@@ -1770,7 +1770,6 @@ struct server_context {
         
         // Include parsed tool calls with proper IDs to prevent re-parsing bug
         if (!slot.current_msg.tool_calls.empty()) {
-                      << " tool_calls, first_id='" << slot.current_msg.tool_calls[0].id << "'" << std::endl;
             json tool_calls_json = json::array();
             for (const auto & tc : slot.current_msg.tool_calls) {
                 tool_calls_json.push_back({
