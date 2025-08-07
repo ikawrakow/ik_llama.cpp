@@ -278,6 +278,9 @@ void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
             throw; // Re-throw for partial mode
         }
     }
+    
+    // Add any remaining content (critical for responses without tool calls)
+    builder.add_content(builder.consume_rest());
 }
 
 // Parse DeepSeek R1 tools array format following original llama.cpp parse_prefixed_json_tool_call_array pattern
