@@ -3237,6 +3237,7 @@ int main() {
         }
         
         // DEBUG: Test direct function call to verify parsing logic
+        std::cout << "\n🔧 DEBUG: Direct DeepSeek R1 Parser Test:" << std::endl;
         std::string debug_content = "function\n```json\n{\n  \"tools\": [\n    {\"name\": \"TestTool\", \"arguments\": {\"test\": \"value\"}}\n  ]\n}\n```";
         
         try {
