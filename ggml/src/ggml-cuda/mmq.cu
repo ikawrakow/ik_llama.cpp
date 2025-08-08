@@ -14,7 +14,7 @@ void ggml_cuda_op_mul_mat_q(
     const int64_t src1_padded_row_size, cudaStream_t stream) {
 
     const int64_t ne00 = src0->ne[0];
-    const int64_t nb01 = src0->nb[1];
+    const int64_t nb01 = ggml_row_size(src0->type, ne00);
 
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
