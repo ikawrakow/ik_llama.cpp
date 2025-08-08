@@ -1615,10 +1615,10 @@ struct server_context {
         std::vector<ik_chat_msg_diff> oaicompat_msg_diffs;
         slot.update_chat_msg(oaicompat_msg_diffs);
 
-        // Following original llama.cpp pattern: send empty content in streaming mode
-        // Clean content comes through oaicompat_msg_diffs instead of raw tokens
+        // For text completion endpoints, send actual content; for chat completion, use diffs
+        // OpenAI-compatible chat endpoints use empty content with diffs for tool calls
         res.data     = json {
-            {"content",    ""},  // Empty - clean content provided via diffs
+            {"content",    slot.oaicompat ? "" : tkn.text_to_send},  // Text completion needs actual content
             {"stop",       false},
             {"id_slot",    slot.id},
             {"multimodal", false}
@@ -2889,7 +2889,11 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
         };
         streaming_chunks.push_back(finish_chunk);
     }
-    
+    if (server_task_result_dict.count(task_result.id) > 0)
+    {
+        for (auto& chunk : streaming_chunks)
+            chunk.push_back({ "timings", server_task_result_dict[task_result.id].timings.to_json() });
+    }
     // Return streaming chunks (could be just final chunk if no diffs)
     if (!streaming_chunks.empty()) {
         return streaming_chunks;
