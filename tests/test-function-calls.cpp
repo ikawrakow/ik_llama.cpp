@@ -3202,7 +3202,6 @@ int main() {
         }
         
         // DEBUG: Test direct function call to verify parsing logic
-        std::cout << "\n🔧 DEBUG: Direct DeepSeek R1 Parser Test:" << std::endl;
         std::string debug_content = "function\n```json\n{\n  \"tools\": [\n    {\"name\": \"TestTool\", \"arguments\": {\"test\": \"value\"}}\n  ]\n}\n```";
         
         try {
@@ -3263,6 +3262,37 @@ int main() {
         std::cout << "✅ PASS: Qwen3 XML tool calls -> finish_reason='tool_calls'" << std::endl;
         
         std::cout << "🎯 All streaming finish_reason tests passed!" << std::endl;
+        
+        // TDD: Test for thinking tag termination issue
+        std::cout << std::endl;
+        std::cout << "🧠 Testing DeepSeek R1 thinking tag termination issue..." << std::endl;
+        
+        // Test case: Response wrapped entirely in think tags (reported issue)
+        std::string wrapped_response = "<think>This should be content but is wrapped in think tags</think>";
+        
+        common_chat_syntax syntax;
+        syntax.format = COMMON_CHAT_FORMAT_DEEPSEEK_R1;
+        syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        syntax.reasoning_in_content = true; // Key fix: display thinking as content
+        syntax.enable_tool_calls = false;
+        
+        try {
+            auto msg = common_chat_parse_message_incremental(wrapped_response, false, syntax);
+            std::cout << "   Content: '" << msg.content << "'" << std::endl;
+            std::cout << "   Reasoning: '" << msg.reasoning << "'" << std::endl;
+            
+            if (msg.content.find("This should be content but is wrapped in think tags") != std::string::npos) {
+                std::cout << "   ✅ PASS: Content properly preserved from think tags (with reasoning_in_content=true)" << std::endl;
+            } else if (msg.content.empty() && !msg.reasoning.empty()) {
+                std::cout << "   ❌ FAILING TEST: Entire response treated as reasoning instead of content!" << std::endl;
+                std::cout << "   Expected: Content should contain the text from within think tags" << std::endl;
+            } else {
+                std::cout << "   ⚠️  PARTIAL: Some content found but may not contain expected text" << std::endl;
+            }
+        } catch (const std::exception& e) {
+            std::cout << "   ❌ Exception in thinking tag test: " << e.what() << std::endl;
+        }
+        
     } catch (const std::exception& e) {
         std::cout << std::endl;
         std::cout << "❌ Test failed with exception: " << e.what() << std::endl;
