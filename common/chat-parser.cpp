@@ -82,28 +82,38 @@ bool common_chat_msg_parser::try_consume_literal(const std::string & literal) {
 }
 
 bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think, const std::string & end_think) {
-    auto start_pos = input_.find(start_think, pos_);
-    if (start_pos == std::string::npos) {
-        return false;
-    }
+    auto handle_reasoning = [&](const std::string & reasoning, bool closed) {
+        auto stripped_reasoning = string_strip(reasoning);
+        if (stripped_reasoning.empty()) {
+            return;
+        }
+        if (syntax_.reasoning_in_content) {
+            add_content(syntax_.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ? "<think>" : start_think);
+            add_content(stripped_reasoning);
+            if (closed) {
+                add_content(syntax_.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ? "</think>" : end_think);
+            }
+        } else {
+            add_reasoning_content(stripped_reasoning);
+        }
+    };
     
-    auto end_pos = input_.find(end_think, start_pos + start_think.size());
-    if (end_pos == std::string::npos) {
-        if (is_partial_) {
-            // Partial reasoning content
-            auto reasoning = input_.substr(start_pos + start_think.size());
-            add_reasoning_content(string_strip(reasoning));
-            pos_ = input_.size();
+    if (syntax_.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
+        if (syntax_.thinking_forced_open || try_consume_literal(start_think)) {
+            if (auto res = try_find_literal(end_think)) {
+                handle_reasoning(res->prelude, /* closed */ true);
+                consume_spaces();
+                return true;
+            }
+            auto rest = consume_rest();
+            if (!rest.empty()) {
+                handle_reasoning(rest, /* closed */ !is_partial());
+            }
+            // Allow unclosed thinking tags for now (following original llama.cpp)
             return true;
         }
-        return false;
     }
-    
-    // Extract reasoning content
-    auto reasoning = input_.substr(start_pos + start_think.size(), end_pos - start_pos - start_think.size());
-    add_reasoning_content(string_strip(reasoning));
-    pos_ = end_pos + end_think.size();
-    return true;
+    return false;
 }
 
 std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser::try_find_literal_legacy(const std::string & literal) {
