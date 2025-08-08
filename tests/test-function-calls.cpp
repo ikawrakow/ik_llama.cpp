@@ -3277,13 +3277,13 @@ int main() {
         syntax.enable_tool_calls = false;
         
         try {
-            auto msg = common_chat_parse_message_incremental(wrapped_response, false, syntax);
+            auto msg = common_chat_parse(wrapped_response, false, syntax);
             std::cout << "   Content: '" << msg.content << "'" << std::endl;
-            std::cout << "   Reasoning: '" << msg.reasoning << "'" << std::endl;
+            std::cout << "   Reasoning: '" << msg.reasoning_content << "'" << std::endl;
             
             if (msg.content.find("This should be content but is wrapped in think tags") != std::string::npos) {
                 std::cout << "   ✅ PASS: Content properly preserved from think tags (with reasoning_in_content=true)" << std::endl;
-            } else if (msg.content.empty() && !msg.reasoning.empty()) {
+            } else if (msg.content.empty() && !msg.reasoning_content.empty()) {
                 std::cout << "   ❌ FAILING TEST: Entire response treated as reasoning instead of content!" << std::endl;
                 std::cout << "   Expected: Content should contain the text from within think tags" << std::endl;
             } else {
