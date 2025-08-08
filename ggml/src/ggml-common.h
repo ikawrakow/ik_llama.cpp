@@ -158,6 +158,9 @@ typedef sycl::half2 ggml_half2;
 #define QI1_BN (QK_IQ1BN / (4*QR1_BN))
 #define QR1_BN 8
 
+#define QI_MXFP4 (QK_MXFP4 / (4 * QR_MXFP4))
+#define QR_MXFP4 2
+
 #endif // GGML_COMMON_DECL_CUDA || GGML_COMMON_DECL_HIP
 
 #define QK4_0 32
@@ -173,6 +176,15 @@ typedef struct {
     uint8_t qs[QK4_1 / 2]; // nibbles / quants
 } block_q4_1;
 static_assert(sizeof(block_q4_1) == 2 * sizeof(ggml_half) + QK4_1 / 2, "wrong q4_1 block size/padding");
+
+// This is unfortunate (block is 17 bytes, so not even a 2-byte alignment)
+// But to be able to use MXFP4-quantized models from mainline, we do the same.
+#define QK_MXFP4 32
+typedef struct {
+    uint8_t e; // E8M0
+    uint8_t qs[QK_MXFP4/2];
+} block_mxfp4;
+static_assert(sizeof(block_mxfp4) == sizeof(uint8_t) + QK_MXFP4/2, "wrong mxfp4 block size/padding");
 
 #define QK5_0 32
 typedef struct {
@@ -2209,6 +2221,12 @@ GGML_TABLE_BEGIN(int8_t, iq6nl_values, 128)
      -50,  -46,  -43,  -39,  -36,  -33,  -30,  -27,  -24,  -21,  -18,  -15,  -12,  -10,   -7,   -4,
       -1,    1,    4,    7,   10,   13,   15,   18,   21,   24,   28,   31,   34,   37,   41,   45,
       48,   52,   56,   60,   64,   69,   73,   78,   83,   88,   93,   99,  104,  110,  116,  122,
+GGML_TABLE_END()
+
+// e2m1 values (doubled)
+// ref: https://www.opencompute.org/documents/ocp-microscaling-formats-mx-v1-0-spec-final-pdf
+GGML_TABLE_BEGIN(int8_t, kvalues_mxfp4, 16)
+    0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
 GGML_TABLE_END()
 
 #endif // GGML_COMMON_IMPL
