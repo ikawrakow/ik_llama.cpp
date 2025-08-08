@@ -695,29 +695,37 @@ if (GGML_VULKAN)
         set(VULKAN_SHADER_GEN_CMAKE_ARGS "")
 
         # Test all shader extensions
-        test_shader_extension_support(
-            "GL_KHR_cooperative_matrix"
-            "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat_support.comp"
-            "GGML_VULKAN_COOPMAT_GLSLC_SUPPORT"
-        )
+        if (NOT GGML_VULKAN_NO_COOPMAT)
+            test_shader_extension_support(
+                "GL_KHR_cooperative_matrix"
+                "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat_support.comp"
+                "GGML_VULKAN_COOPMAT_GLSLC_SUPPORT"
+            )
+        endif()
 
-        test_shader_extension_support(
-            "GL_NV_cooperative_matrix2"
-            "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat2_support.comp"
-            "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
-        )
+        if (NOT GGML_VULKAN_NO_COOPMAT2)
+            test_shader_extension_support(
+                "GL_NV_cooperative_matrix2"
+                "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat2_support.comp"
+                "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
+            )
+        endif()
 
-        test_shader_extension_support(
-            "GL_EXT_integer_dot_product"
-            "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_integer_dot_support.comp"
-            "GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT"
-        )
+        if (NOT GGML_VULKAN_NO_INT_DOT)
+            test_shader_extension_support(
+                "GL_EXT_integer_dot_product"
+                "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_integer_dot_support.comp"
+                "GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT"
+            )
+        endif()
 
-        test_shader_extension_support(
-            "GL_EXT_bfloat16"
-            "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_bfloat16_support.comp"
-            "GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT"
-        )
+        if (NOT GGML_VULKAN_NO_BF16)
+            test_shader_extension_support(
+                "GL_EXT_bfloat16"
+                "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_bfloat16_support.comp"
+                "GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT"
+            )
+        endif()
 
         # end vulkan test
         list(APPEND GGML_CDEF_PUBLIC GGML_USE_VULKAN)

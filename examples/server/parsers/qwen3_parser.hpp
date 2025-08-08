@@ -1,6 +1,7 @@
 #pragma once
 
 #include "json.hpp"
+#include "../../common/common.h"
 #include <string>
 #include <regex>
 
@@ -102,12 +103,8 @@ static std::string extract_content_during_parsing(const std::string& text, bool 
             }
         }
         
-        // Clean up extra whitespace
-        content = std::regex_replace(content, std::regex(R"(\n\s*\n)"), "\n");
-        
-        // Trim leading/trailing whitespace
-        content.erase(0, content.find_first_not_of(" \t\n\r"));
-        content.erase(content.find_last_not_of(" \t\n\r") + 1);
+        // Only trim leading/trailing whitespace, preserve internal formatting
+        content = string_strip(content);
         
     } catch (const std::exception&) {
         // Return original text on regex errors
