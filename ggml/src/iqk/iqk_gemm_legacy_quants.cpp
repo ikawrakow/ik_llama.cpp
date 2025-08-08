@@ -2988,6 +2988,16 @@ struct DeqIQ4NL {
     static inline int8x16_t load_values() { return vld1q_s8(iq4k_values); }
 };
 
+struct DeqMXFP4 {
+    const int8x16_t mt  = load_values();
+    const uint8x16_t ml = vdupq_n_s8(0xf);
+    inline int8x16x2_t dequant(const block_mxfp4& x) const {
+        auto bits = vld1q_u8(x.qs);
+        return { vqtbl1q_s8(mt, vandq_u8(bits, ml)), vqtbl1q_s8(mt, vshrq_n_u8(bits, 4)) };
+    }
+    static inline int8x16_t load_values() { return vld1q_s8(kvalues_mxfp4); }
+};
+
 struct DeqQ50 {
 
     inline int8x16x2_t dequant(const block_q5_0& x) const {
@@ -3064,7 +3074,11 @@ void iqk_convert_qX_q80_r8(int n, const void * vx, size_t bx, void * vy, int nrc
 
         for (int i = 0; i < nb; ++i) {
             for (int k = 0; k < 8; ++k) {
-                y[i].d[k] = x8[k][i].d;
+                if constexpr (std::is_same_v<Dequantizer, DeqMXFP4>) {
+                    y[i].d[k] = GGML_FP32_TO_FP16(GGML_E8M0_TO_FP32_HALF(x8[k][i].e));
+                } else {
+                    y[i].d[k] = x8[k][i].d;
+                }
                 vst1q_s8_x2((int8_t *)block, deq.dequant(x8[k][i]));
                 auto qs = (uint32_t *)y[i].qs;
                 for (int l = 0; l < 4; ++l) {
@@ -3122,6 +3136,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q5_1  : iqk_convert_qX_1_q8_1_r8<block_q5_1, DeqQ51>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r8<block_q6_0, DeqQ60>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, DeqIQ4NL>(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_MXFP4 : iqk_convert_qX_q80_r8<block_mxfp4, DeqMXFP4>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0  : iqk_convert_qX_q80_r8<block_q8_0, DeqQ80>(n, vx, bx, vy, nrc_x); break;
         default: return false;
     }
