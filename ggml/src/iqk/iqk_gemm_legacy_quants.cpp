@@ -105,6 +105,21 @@ struct ScaleHelperQ_0 {
     template <typename Q> inline float prepare1(float d, const Q * y) const { return d*prepare1(y); }
 };
 
+struct ScaleHelperQ_0_MXFP4 {
+    float scales[4];
+    template <typename Q>
+    inline __m128 prepare4(const Q * y) {
+        for (int j = 0; j < 4; ++j) scales[j] = GGML_E8M0_TO_FP32_HALF(y[j].e);
+        return _mm_loadu_ps(scales);
+    }
+    template <typename Q>
+    inline __m128 prepare4(__m128 other_scales, const Q * y) {
+        return _mm_mul_ps(other_scales, prepare4<Q>(y));
+    }
+    template <typename Q> inline float prepare1(const Q * y) const { return GGML_E8M0_TO_FP32_HALF(y->e); }
+    template <typename Q> inline float prepare1(float d, const Q * y) const { return d*prepare1(y); }
+};
+
 template <int min_value>
 struct ScaleHelperQ_0_1 {
     ggml_half scales8[4];
@@ -582,11 +597,7 @@ static inline __m256i load_mxfp4_values_256() {
 
 struct MXFP4_Dequantizer {
     Dequantizer4bit b4;
-#ifdef HAVE_FANCY_SIMD
     const __m256i values = load_unsigned_mxfp4_values_256();
-#else
-    const __m256i values = load_mxfp4_values_256();
-#endif
     inline __m256i dequant(const block_mxfp4 * x) const {
         return _mm256_shuffle_epi8(values, b4.dequant(x->qs));
     }
@@ -712,20 +723,20 @@ struct Q4_0_1_Unpacker final : public Q_Unpacker<block_q4_0, ScaleHelperQ_0_1<8>
     using Sum4T = Sum4q4<block_q8_2, block_q8_2_x4>;
     inline static int block_size() { return QK4_0; }
 };
+struct MXFP4_Unpacker final : public Q_Unpacker<block_mxfp4, ScaleHelperQ_0_1_MXFP4<12>, MXFP4_Dequantizer> {
+    MXFP4_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ82;
+    inline static int block_size() { return QK4_NL; }
+};
 #ifdef HAVE_FANCY_SIMD
 struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0_1<128>, IQ4_NL_Dequantizer> {
     IQ4_NL_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4TypeQ82;
     inline static int block_size() { return QK4_NL; }
 };
-struct IQ4_MXFP4_Unpacker final : public Q_Unpacker<block_mxfp4, ScaleHelperQ_0_1_MXFP4<12>, MXFP4_Dequantizer> {
-    IQ4_MXFP4_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
-    using Sum4T = Sum4TypeQ82;
-    inline static int block_size() { return QK4_NL; }
-};
 #else
-struct IQ4_MXFP4_Unpacker final : public Q_Unpacker<block_mxfp4, ScaleHelperQ_0, MXFP4_Dequantizer> {
-    IQ4_MXFP4_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0, IQ4_NL0_Dequantizer> {
+    IQ4_NL_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4TypeQ80;
     inline static int block_size() { return QK4_NL; }
 };
@@ -1867,7 +1878,7 @@ template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX
     else if constexpr (std::is_same_v<Dequantizer, Q4_1_Unpacker> || std::is_same_v<Dequantizer, Q5_1_Unpacker>) {
         IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_1_q8_2_T, Dequantizer, funcs)
     }
-    else if constexpr (std::is_same_v<Dequantizer, IQ4_NL_Unpacker> || std::is_same_v<Dequantizer, IQ4_MXFP4_Unpacker>) {
+    else if constexpr (std::is_same_v<Dequantizer, IQ4_NL_Unpacker>) {
 #ifdef HAVE_FANCY_SIMD
         IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_1_q8_2_T, Dequantizer, funcs)
 #else
@@ -1875,7 +1886,8 @@ template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX
 #endif
     }
     else if constexpr (std::is_same_v<Dequantizer, Q8_0_1_Unpacker> || std::is_same_v<Dequantizer, Q4_0_1_Unpacker> ||
-                       std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, Q6_0_1_Unpacker>) {
+                       std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, Q6_0_1_Unpacker> ||
+                       std::is_same_v<Dequantizer, MXFP4_Unpacker>) {
         IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_1_q8_2_T, Dequantizer, funcs)
     }
 }
@@ -1936,10 +1948,10 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
 #endif
             break;
         case GGML_TYPE_MXFP4:
-            set_functions<IQ4_MXFP4_Unpacker>(kernels);
-#ifndef HAVE_FANCY_SIMD
-            expected_typeB = GGML_TYPE_Q8_0_X4;
-#endif
+            set_functions<MXFP4_Unpacker>(kernels);
+//#ifndef HAVE_FANCY_SIMD
+//            expected_typeB = GGML_TYPE_Q8_0_X4;
+//#endif
             break;
         case GGML_TYPE_Q4_0_R8:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q4_0_r8_q8_2, kernels)
