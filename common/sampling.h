@@ -101,6 +101,8 @@ struct llama_sampling_context {
 
     size_t n_valid; // Number of correct top tokens with correct probabilities.
 
+    llama_token_data_array cur_p; // current candidates
+
     std::mt19937 rng;
 };
 
@@ -176,3 +178,11 @@ void llama_sampling_accept(
         struct llama_context * ctx_main,
         llama_token id,
         bool apply_grammar);
+
+// returns at least 1 token, up to draft.size()
+// access the internal list of current candidate tokens
+llama_token_data_array * llama_sampling_get_candidates(struct llama_sampling_context * ctx_sampling);
+
+std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<llama_token> & draft);
+
+std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft);
