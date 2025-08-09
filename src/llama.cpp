@@ -123,15 +123,31 @@
 //
 
 // trim whitespace from the beginning and end of a string
+//static std::string trim(const std::string & str) {
+// Fails for Chinese character
+//    size_t start = 0;
+//    size_t end = str.size();
+//    while (start < end && isspace(str[start])) {
+//        start += 1;
+//    }
+//    while (end > start && isspace(str[end - 1])) {
+//        end -= 1;
+//    }
+//    return str.substr(start, end - start);
+//}
+
+static bool is_utf8_whitespace(uint8_t c) {
+    // Basic ASCII whitespace
+    if (c <= 0x7F) return isspace(c);
+    // Else: Not whitespace (or you'd need a full Unicode table)
+    return false;
+}
+
 static std::string trim(const std::string & str) {
     size_t start = 0;
     size_t end = str.size();
-    while (start < end && isspace(str[start])) {
-        start += 1;
-    }
-    while (end > start && isspace(str[end - 1])) {
-        end -= 1;
-    }
+    while (start < end && is_utf8_whitespace(str[start])) start++;
+    while (end > start && is_utf8_whitespace(str[end - 1])) end--;
     return str.substr(start, end - start);
 }
 
@@ -400,6 +416,8 @@ enum llm_kv {
     LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP,
     LLM_KV_TOKENIZER_HF_JSON,
     LLM_KV_TOKENIZER_RWKV,
+    LLM_KV_TOKENIZER_CHAT_TEMPLATE,
+    LLM_KV_TOKENIZER_CHAT_TEMPLATE_N,
     LLM_KV_TOKENIZER_FIM_PRE_ID,
     LLM_KV_TOKENIZER_FIM_SUF_ID,
     LLM_KV_TOKENIZER_FIM_MID_ID,
@@ -512,6 +530,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP, "tokenizer.ggml.precompiled_charsmap"     },
     { LLM_KV_TOKENIZER_HF_JSON,              "tokenizer.huggingface.json"              },
     { LLM_KV_TOKENIZER_RWKV,                 "tokenizer.rwkv.world"                    },
+    { LLM_KV_TOKENIZER_CHAT_TEMPLATE,        "tokenizer.chat_template"                 },
+    { LLM_KV_TOKENIZER_CHAT_TEMPLATE_N,      "tokenizer.chat_template.%s"              },
     { LLM_KV_TOKENIZER_FIM_PRE_ID,           "tokenizer.ggml.fim_pre_token_id"         },
     { LLM_KV_TOKENIZER_FIM_SUF_ID,           "tokenizer.ggml.fim_suf_token_id"         },
     { LLM_KV_TOKENIZER_FIM_MID_ID,           "tokenizer.ggml.fim_mid_token_id"         },
@@ -530,13 +550,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 };
 
 struct LLM_KV {
-    LLM_KV(llm_arch arch) : arch(arch) {}
+    LLM_KV(llm_arch arch, const char* suffix = nullptr);
 
     llm_arch arch;
-
-    std::string operator()(llm_kv kv) const {
-        return ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
-    }
+    const char* suffix;
+    std::string operator()(llm_kv kv) const;
 };
 
 enum llm_tensor {
@@ -633,6 +651,13 @@ enum llm_tensor {
     LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
     LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
 };
+
+LLM_KV::LLM_KV(llm_arch arch, const char* suffix) : arch(arch), suffix(suffix) {}
+
+std::string LLM_KV::operator()(llm_kv kv) const {
+    return suffix ? ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch), suffix)
+        : ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
+}
 
 static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NAMES = {
     {
@@ -21964,6 +21989,10 @@ void llama_free(struct llama_context * ctx) {
     delete ctx;
 }
 
+const struct llama_vocab* llama_model_get_vocab(const struct llama_model* model) {
+    return &model->vocab;
+}
+
 const struct llama_model * llama_get_model(const struct llama_context * ctx) {
     return &ctx->model;
 }
@@ -22150,6 +22179,24 @@ uint64_t llama_model_size(const struct llama_model * model) {
         size += ggml_nbytes(it.second);
     }
     return size;
+}
+
+const char* llama_model_chat_template(const struct llama_model* model, const char* name) {
+    const auto key = name ? LLM_KV(model->arch, name)(LLM_KV_TOKENIZER_CHAT_TEMPLATE)
+        : LLM_KV(model->arch)(LLM_KV_TOKENIZER_CHAT_TEMPLATE);
+    const auto& it = model->gguf_kv.find(key);
+    if (it == model->gguf_kv.end()) {
+        // one-off fix for very popular models (so we are not flooded with issues)
+        // do not extend this list unless absolutely necessary
+        // Mistral-Small-2503 does not have built-in chat template
+        llama_vocab_pre_type pre_type = model->vocab.type_pre;
+        if (!name && pre_type == LLAMA_VOCAB_PRE_TYPE_TEKKEN && model->layers.size() == 40) {
+            return "mistral-v7-tekken";
+        }
+
+        return nullptr;
+    }
+    return it->second.c_str();
 }
 
 uint64_t llama_model_n_params(const struct llama_model * model) {
