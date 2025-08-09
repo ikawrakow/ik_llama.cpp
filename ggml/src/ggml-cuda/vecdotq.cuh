@@ -17,6 +17,15 @@ static __device__ __forceinline__ int get_int_b2(const void * x, const int & i32
     return x32;
 }
 
+static __device__ __forceinline__ int get_int_b1(const void * x, const int & i32) {
+    const uint8_t * x8 = (const uint8_t *)x;
+
+    int x32  = x8[4*i32 + 0] | (x8[4*i32 + 1] << 8);
+    x32     |= (x8[4*i32 + 2] | (x8[4*i32 + 3] << 8)) << 16;
+
+    return x32;
+}
+
 static __device__ __forceinline__ int get_int_b4(const void * x, const int & i32) {
     return ((const int *) x)[i32]; // assume at least 4 byte alignment
 }
@@ -1165,6 +1174,32 @@ static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
 
     const float d = __half2float(bq4->d) * __low2float(bq8_1->ds);
     return d * sumi;
+}
+
+#define VDR_MXFP4_Q8_1_MMVQ 2
+#define VDR_MXFP4_Q8_1_MMQ  4
+
+static __device__ __forceinline__ float vec_dot_mxfp4_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_mxfp4 * bq4 = (const block_mxfp4 *) vbq + kbx;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    int2 sumi = {0, 0};
+#pragma unroll
+    for (int l = 0; l < VDR_Q4_0_Q8_1_MMVQ; ++l) {
+        const int aux_q4 = get_int_b1(bq4->qs, iqs + l);
+        const int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
+
+        sumi.x = ggml_cuda_dp4a(v.x, q8[l + 0], sumi.x);
+        sumi.y = ggml_cuda_dp4a(v.y, q8[l + 4], sumi.y);
+    }
+
+    union { float f; uint32_t u; } helper;
+    helper.u = bq4->e ? uint32_t(bq4->e) << 23u : 0x00400000;
+
+    return 0.5f * helper.f * __low2float(bq8_1->ds) * (sumi.x + sumi.y);
 }
 
 #define VDR_IQ4_XS_Q8_1_MMVQ 4

@@ -89,6 +89,8 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
             try {
                 common_chat_syntax syntax;
                 syntax.format = COMMON_CHAT_FORMAT_DEEPSEEK_R1;
+                syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+                syntax.reasoning_in_content = true; // Fix for thinking tag termination issue
                 syntax.enable_tool_calls = true;
                 
                 common_chat_msg_parser parser(content, is_partial, syntax);

@@ -135,8 +135,18 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_KIMI_K2,  // Our custom format (keep last for backward compatibility)
 };
 
+enum common_reasoning_format {
+    COMMON_REASONING_FORMAT_NONE,
+    COMMON_REASONING_FORMAT_DEEPSEEK,
+    COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY,
+};
+
 struct common_chat_syntax {
     common_chat_format format = COMMON_CHAT_FORMAT_KIMI_K2;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
+    bool reasoning_in_content = false;
+    bool thinking_forced_open = false;
     bool enable_thinking = false;
     bool enable_tool_calls = true;
 };

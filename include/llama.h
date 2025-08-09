@@ -186,6 +186,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q4_0_4_4      = 33, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q4_0_4_8      = 34, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q4_0_8_8      = 35, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_MXFP4         = 38, // except 1d tensors, 38 to be compatible with mainline
         //
         LLAMA_FTYPE_MOSTLY_Q6_0          = 135, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_IQ1_BN        = 136, // except 1d tensors
@@ -553,8 +554,9 @@ extern "C" {
     LLAMA_API bool llama_supports_mlock      (void);
     LLAMA_API bool llama_supports_gpu_offload(void);
 
-    LLAMA_API const struct llama_model * llama_get_model(const struct llama_context * ctx);
 
+
+    LLAMA_API const struct llama_model * llama_get_model(const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_ctx      (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_batch    (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_ubatch   (const struct llama_context * ctx);
@@ -565,6 +567,8 @@ extern "C" {
     LLAMA_API enum llama_vocab_type   llama_vocab_type  (const struct llama_model * model);
     LLAMA_API enum llama_rope_type    llama_rope_type   (const struct llama_model * model);
 
+    LLAMA_API const struct llama_vocab* llama_model_get_vocab(const struct llama_model* model);
+    LLAMA_API const char* llama_model_chat_template(const struct llama_model* model, const char* name);
     LLAMA_API int32_t llama_n_vocab    (const struct llama_model * model);
     LLAMA_API const struct llama_vocab* llama_get_model_vocab(const struct llama_model* model);
     LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model);
