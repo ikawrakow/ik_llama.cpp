@@ -2122,7 +2122,6 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     const int kbxd = threadIdx.x % blocks_per_tile_x_row;
 
     union { float f; uint32_t u; } helper;
-    constexpr uint32_t uval[2] = { 0x00200000, 0x00400000 };
 
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * QI4_NL) {
@@ -2133,12 +2132,12 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
         }
 
         const block_mxfp4 * bxi = (const block_mxfp4 *)(x + i*stride) + kbx0 + kbxd;
-        helper.u = bxi->e >= 2 ? uint32_t(bxi->e - 1) << 23u : uval[bxi->e];
+        helper.u = bxi->e ? uint32_t(bxi->e) << 23u : 0x00400000;
 
 #ifdef INT8_MMA_AVAILABLE
-        x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kbxd] = helper.f;
+        x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + kbxd] = 0.5f * helper.f;
 #else
-        x_df[i*(WARP_SIZE/4) + i/4   + kbxd] = helper.f;
+        x_df[i*(WARP_SIZE/4) + i/4   + kbxd] = 0.5f * helper.f;
 #endif // INT8_MMA_AVAILABLE
     }
 }
