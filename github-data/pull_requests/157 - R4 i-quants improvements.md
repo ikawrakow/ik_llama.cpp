@@ -1,14 +1,17 @@
-### 🔀 [#157](https://github.com/ikawrakow/ik_llama.cpp/pull/157) - R4 i-quants improvements
+## 🔀 [Pull Request #157](https://github.com/ikawrakow/ik_llama.cpp/pull/157) - R4 i-quants improvements
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/r4_nrcy_16` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-22 |
 | **Updated** | 2024-12-22 |
+| **Merged** | 2024-12-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Unpacking k- and i-quants is computationally expensive. Because of this, it is useful to re-use the unpacked quants for multiplication with as many columns in the right matrix as possible. At the same time one also needs to restrict the number of columns being used to some maximum number so that accumulated results can remain in vector registers, so in `iqk_mul_mat` up to 8 columns are used. But  unpacking `IQ2_XXS`, `IQ2_XS`, `IQ2_S`, `IQ3_XXS` is computationally so expensive that is cheaper to load/unload accumulated results to/from vector registers so that unpacked quants can be reused more than 8 times.
 

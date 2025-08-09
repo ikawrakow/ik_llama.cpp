@@ -1,14 +1,17 @@
-### 🔀 [#125](https://github.com/ikawrakow/ik_llama.cpp/pull/125) - R4 improvements on ARM_NEON
+## 🔀 [Pull Request #125](https://github.com/ikawrakow/ik_llama.cpp/pull/125) - R4 improvements on ARM_NEON
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/r4_neon` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-08 |
 | **Updated** | 2024-12-08 |
+| **Merged** | 2024-12-08 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR accomplishes two things:
 * Reduces bloat by using a template for the `ARM_NEON` matrix multiplication implementation of interleaved rows quants `Q4_0_R4, Q5_0_R4, Q6_0_R4, IQ4_NL_X4, IQ4_XS_R4, Q8_0_R4` (and I should do the same for `AVX2/Zen4`)

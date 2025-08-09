@@ -1,16 +1,19 @@
-### 🔀 [#274](https://github.com/ikawrakow/ik_llama.cpp/pull/274) - Specify tensor name regex for tensors to be repacked
+## 🔀 [Pull Request #274](https://github.com/ikawrakow/ik_llama.cpp/pull/274) - Specify tensor name regex for tensors to be repacked
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/offline_repack_patterns` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-21 |
 | **Updated** | 2025-03-21 |
+| **Merged** | 2025-03-21 |
 
 ---
 
-#### Description
+## 📄 Description
 
-This PR follows in the footsteps of #272 and adds the ability to specify one or more regular expressions to use for matching tensor names to be repacked. This is useful for hybrid GPU/CPU inference where one will want to repack only the tensors that stay on the CPU.
+This PR follows in the footsteps of [#272](https://github.com/ikawrakow/ik_llama.cpp/issues/272) and adds the ability to specify one or more regular expressions to use for matching tensor names to be repacked. This is useful for hybrid GPU/CPU inference where one will want to repack only the tensors that stay on the CPU.
 
 Usage
 ```

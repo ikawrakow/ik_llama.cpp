@@ -1,14 +1,17 @@
-### 🔀 [#37](https://github.com/ikawrakow/ik_llama.cpp/pull/37) - Performance improvements for legacy quants on ARM_NEON
+## 🔀 [Pull Request #37](https://github.com/ikawrakow/ik_llama.cpp/pull/37) - Performance improvements for legacy quants on ARM_NEON
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/neon_improve_legacy_quants` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-03 |
 | **Updated** | 2024-09-04 |
+| **Merged** | 2024-09-04 |
 
 ---
 
-#### Description
+## 📄 Description
 
 If we process 2 rows in the left matrix at a time we get in the range of 20% performance boost for PP-512 (except for `Q8_0`, where performance was already higher than the other quants). The table summarizes the results or LLaMA-3.1-8B on an M2-Max CPU. As I like keeping track of how we perform relative to mainline `llama.cpp`, the table includes results for the current `llama.cpp` build (`69a480a (3660)`). tinyBLAS is enabled in `llama.cpp`, so the 33% (`Q4_0`) or 16.6% (`Q8_0`) improvement is compared to tinyBLAS, which does not provide implementation for `Q4_1`, `Q5_0` and `Q5_1` (and correspondingly the performance gap is much larger).
 

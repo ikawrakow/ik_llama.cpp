@@ -1,14 +1,17 @@
-### 🔀 [#27](https://github.com/ikawrakow/ik_llama.cpp/pull/27) - Faster Gemma2
+## 🔀 [Pull Request #27](https://github.com/ikawrakow/ik_llama.cpp/pull/27) - Faster Gemma2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fused_softcap_softmax` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-27 |
 | **Updated** | 2024-08-27 |
+| **Merged** | 2024-08-27 |
 
 ---
 
-#### Description
+## 📄 Description
 
 In a [previous PR](https://github.com/ikawrakow/ik_llama.cpp/pull/9) I has fused `scale - tanh - scale` used for "soft-capping" activations into a `GGML_OP_SOFTCAP` operation. This PR further fuses `GGML_OP_SOFTCAP` with `GGML_OP_SOFT_MAX` into a new `GGML_OP_SOFT_CAP_MAX` operation. This is useful for, e.g., self-attention in the Gemma-2 series of models, and leads to a significant performance increase.
 

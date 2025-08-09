@@ -1,14 +1,17 @@
-### 🔀 [#544](https://github.com/ikawrakow/ik_llama.cpp/pull/544) - New integer trellis on ARM_NEON 
+## 🔀 [Pull Request #544](https://github.com/ikawrakow/ik_llama.cpp/pull/544) - New integer trellis on ARM_NEON 
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/neon_iq3_kt` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-20 |
 | **Updated** | 2025-06-20 |
+| **Merged** | 2025-06-20 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR adapts the ARM_NEON trellis implementation to the new integer trellis.
 
@@ -32,4 +35,4 @@ Still very low TG performance:
 
 Don't ask Apple Silicon to do too much work with a piece of data fetched from memory.
 
-Nevertheless, compared to PR #471 we observe ~13% speedup for `IQ2_KT`, ~30% speedup for `IQ3_KT`, and nearly 70% speedup for `Q4_KT`.
+Nevertheless, compared to PR [#471](https://github.com/ikawrakow/ik_llama.cpp/issues/471) we observe ~13% speedup for `IQ2_KT`, ~30% speedup for `IQ3_KT`, and nearly 70% speedup for `Q4_KT`.
