@@ -18159,14 +18159,20 @@ struct llm_build_context {
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
-        struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
+        struct ggml_tensor * KQ_mask     = build_inp_KQ_mask();
+        struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa();
         //const int64_t n_embd_head = hparams.n_embd_head_v;
         const float kq_scale = 1.0f / sqrtf(float(n_rot)); //float(n_embd_head));
 
         //auto * inp_attn = build_attn_inp_kv_unified_iswa();
 
+        const int sliding_window_pattern = 2;
+
         for (int il = 0; il < n_layer; ++il) {
+            const bool is_sliding = il % sliding_window_pattern < (sliding_window_pattern - 1);
             ggml_tensor * inpSA = inpL;
+
+            struct ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
 
             // norm
             cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
@@ -18174,7 +18180,6 @@ struct llm_build_context {
 
             // self-attention
             {
-                // compute Q and K and RoPE them
                 ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
                 cb(Qcur, "Qcur", il);
                 if (model.layers[il].bq) {
@@ -18196,31 +18201,18 @@ struct llm_build_context {
                     cb(Vcur, "Vcur", il);
                 }
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_rot, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_rot, n_head_kv, n_tokens);
-                //Vcur = ggml_reshape_3d(ctx0, Vcur, n_rot, n_head_kv, n_tokens);
-
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
-
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow
-                        );
-
+                Qcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Qcur, n_rot, n_head, n_tokens), inp_pos, nullptr,
+                                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
+                                    beta_fast, beta_slow);
                 cb(Qcur, "Qcur", il);
+
+                Kcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Kcur, n_rot, n_head_kv, n_tokens), inp_pos, nullptr,
+                                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
+                                    attn_factor, beta_fast, beta_slow);
                 cb(Kcur, "Kcur", il);
-                //cb(Vcur, "Vcur", il);
 
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, model.layers[il].bo,
-                        Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il, model.layers[il].attn_sinks);
-                //cur = build_attn_with_sinks(inp_attn,
-                //        model.layers[il].wo, model.layers[il].bo,
-                //        Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].attn_sinks, 1.0f/sqrtf(float(n_rot)), il);
+                        Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, kq_scale, cb, il, model.layers[il].attn_sinks);
 
                 cb(cur, "attn_out", il);
             }
@@ -18266,13 +18258,10 @@ struct llm_build_context {
 
         cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, nullptr, LLM_NORM_RMS, cb, -1);
         cb(cur, "result_norm", -1);
-        //res->t_embd = cur;
 
-        // lm_head
         cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
 
         cb(cur, "result_output", -1);
-        //res->t_logits = cur;
 
         ggml_build_forward_expand(gf, cur);
 
