@@ -37,6 +37,7 @@
 #include "ggml-cuda/unary.cuh"
 #include "ggml-cuda/upscale.cuh"
 #include "ggml-cuda/conv-transpose-1d.cuh"
+#include "ggml-cuda/add-id.cuh"
 
 #include <algorithm>
 #include <array>
@@ -2851,6 +2852,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_ADD:
             ggml_cuda_op_add(ctx, dst);
             break;
+        case GGML_OP_ADD_ID:
+            ggml_cuda_op_add_id(ctx, dst);
+            break;
         case GGML_OP_MULTI_ADD:
             ggml_cuda_op_multi_add(ctx, dst);
             break;
@@ -2876,6 +2880,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     break;
                 case GGML_UNARY_OP_SWIGLU:
                     ggml_cuda_op_swiglu(ctx, dst);
+                    break;
+                case GGML_UNARY_OP_SWIGLU_OAI:
+                    ggml_cuda_op_swiglu_oai(ctx, dst);
                     break;
                 case GGML_UNARY_OP_GELU_QUICK:
                     ggml_cuda_op_gelu_quick(ctx, dst);
@@ -3440,6 +3447,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 case GGML_UNARY_OP_GELU:
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_SWIGLU:
+                case GGML_UNARY_OP_SWIGLU_OAI:
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_SIGMOID:
                 case GGML_UNARY_OP_HARDSIGMOID:
@@ -3629,6 +3637,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
         case GGML_OP_ADD:
+        case GGML_OP_ADD_ID:
         case GGML_OP_MULTI_ADD:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
