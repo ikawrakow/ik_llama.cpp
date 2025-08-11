@@ -3604,7 +3604,7 @@ int main(int argc, char ** argv) {
         res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         auto body = json::parse(req.body);
         const auto& chat_template = body.contains("tools") && ctx_server.chat_templates.template_tool_use ? *ctx_server.chat_templates.template_tool_use : *ctx_server.chat_templates.template_default;
-        json data = oaicompat_completion_params_parse(ctx_server.model, body, chat_template, ctx_server.params.use_jinja);
+        json data = oaicompat_completion_params_parse(json::parse(req.body));
 
         const int id_task = ctx_server.queue_tasks.get_new_id();
 
@@ -3707,7 +3707,7 @@ int main(int argc, char ** argv) {
 
         auto body = json::parse(req.body);
         const auto& chat_template = body.contains("tools") && ctx_server.chat_templates.template_tool_use ? *ctx_server.chat_templates.template_tool_use : *ctx_server.chat_templates.template_default;
-        json data = oaicompat_completion_params_parse(ctx_server.model,body, chat_template, params.use_jinja);
+        json data = oaicompat_chat_completion_params_parse(ctx_server.model,body, chat_template, params.use_jinja);
 
 
         const int id_task = ctx_server.queue_tasks.get_new_id();
