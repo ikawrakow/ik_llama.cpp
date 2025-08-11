@@ -1953,15 +1953,16 @@ function Sessions({ sessionStorage, disabled }) {
 	};
 
 	const exportAll = async () => {
-		alert("Warning: This can take a lot of time and space. Leave the page now if you do not want to proceed.")
-		const db = await sessionStorage.openDatabase();
-		const sessionKeys = Object.keys(sessionStorage.sessions);
-		for (const sessionKey of sessionKeys) {
-			const processedSession = await sessionStorage.loadFromDatabase(db, sessionKey);
-			for (const [key, value] of Object.entries(processedSession)) {
-				processedSession[key] = JSON.stringify(value);
+		if (confirm("Warning: This can take a lot of time and space. Be patient if you proceed.")) {
+			const db = await sessionStorage.openDatabase();
+			const sessionKeys = Object.keys(sessionStorage.sessions);
+			for (const sessionKey of sessionKeys) {
+				const processedSession = await sessionStorage.loadFromDatabase(db, sessionKey);
+				for (const [key, value] of Object.entries(processedSession)) {
+					processedSession[key] = JSON.stringify(value);
+				}
+				exportText(`${processedSession.name}.json`, JSON.stringify(processedSession));
 			}
-			exportText(`${processedSession.name}.json`, JSON.stringify(processedSession));
 		}
 	};
 
@@ -2096,7 +2097,7 @@ function Sessions({ sessionStorage, disabled }) {
 					</li>
 				`)}
 			</ul>
-			<div className="vbox">
+			<div className="vbox" style="${{ 'grid-template-rows':'0fr 0fr 0fr 0fr 0fr' }}">
 				<button disabled=${disabled} onClick=${startCreateSession}>Create</button>
 				<button disabled=${disabled} onClick=${importSession}>Import</button>
 				<button disabled=${disabled} onClick=${exportSession}>Export</button>
@@ -2423,6 +2424,66 @@ const SVG_Moveable = ({...props}) => {
 		<path d="M 5.5 11 L 7 9 L 6 9 L 6 6 L 9 6 L 9 7 L 11 5.5 L 9 4 L 9 5 L 6 5 L 6 2 L 7 2 L 5.5 0 L 4 2 L 5 2 L 5 5 L 2 5 L 2 4 L 0 5.5 L 2 7 L 2 6 L 5 6 L 5 9 L 4 9 Z"/>
 	</${SVG}>
 `};
+
+const SVG_SortIndicator = ({ sortOrder, ...props }) => {
+  return html`
+    <${SVG}
+      ...${props}
+      width="8"
+      height="8"
+      viewBox="0 0 8 8"
+      style=${{ 'margin-left': '2px' }}>
+      ${sortOrder === 'asc'
+        ? html`<path d="M0 4 L4 0 L8 4 Z"/>`
+        : html`<path d="M0 0 L4 4 L8 0 Z"/>`}
+    </${SVG}>
+`};
+
+const SVG_SortName = ({...props}) => {
+  return html`
+    <${SVG}
+      ...${props}
+      width="16"
+      height="16"
+      viewBox="0 0 16 16">
+      <path d="M2 12L5 4h2l3 8H8.2L7.5 10H4.5L3.8 12H2zM4.7 8h2.1L5.8 5.5 4.7 8z"/>
+      <path d="M9 4h5v1H10.4l3.6 6H9v-1h3.6L9 5V4z"/>
+    </${SVG}>
+`};
+
+const SVG_SortTokens = ({...props}) => {
+  return html`
+    <${SVG}
+      ...${props}
+      width="16"
+      height="16"
+      viewBox="0 0 16 16">
+      <path d="M3 5h2v2H3zm4 0h2v2H7zm4 0h2v2h-2zM3 9h2v2H3zm4 0h2v2H7z"/>
+    </${SVG}>
+`};
+
+const SVG_SortSize = ({...props}) => {
+  return html`
+    <${SVG}
+      ...${props}
+      width="16"
+      height="16"
+      viewBox="0 0 16 16">
+      <path d="M2 2h12v3H2zm0 5h10v3H2zm0 5h8v3H2z"/>
+    </${SVG}>
+`};
+
+const SVG_SortDate = ({...props}) => {
+  return html`
+    <${SVG}
+      ...${props}
+      width="16"
+      height="16"
+      viewBox="0 0 16 16">
+      <path d="M13 2h-1V1h-2v1H6V1H4v1H3c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h10c.55 0 1-.45 1-1V3c0-.55-.45-1-1-1zM13 13H3V5h10v8z"/>
+    </${SVG}>
+`};
+
 
 function Modal({ isOpen, onClose, title, description, children, ...props }) {
 	if (!isOpen) {
@@ -3725,6 +3786,423 @@ function InstructModal({ isOpen, closeModal, predict, cancel, modalState, templa
     `;
 }
 
+function SavedPromptsModal({ isOpen, closeModal, cancel }) {
+    const [savedPrompts, setSavedPrompts] = useState([]);
+    const [simplePrompts, setSimplePrompts] = useState([]);
+    const [selectedPrompt, setSelectedPrompt] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [saveName, setSaveName] = useState('');
+    const [loadSlot, setLoadSlot] = useState('');
+    const [activeTab, setActiveTab] = useState('saved'); // 'saved' or 'simple'
+    const [sortBy, setSortBy] = useState('name'); // 'name', 'tokens', 'size', 'date'
+    const [sortOrder, setSortOrder] = useState('asc'); // 'asc' or 'desc'
+    const [listWidth, setListWidth] = useState(300);
+    const [modalHeight, setModalHeight] = useState(500);
+    const [renameNewName, setRenameNewName] = useState('');
+    const [renameOldName, setRenameOldName] = useState('');
+
+    // Fetch data on modal open
+    useEffect(() => {
+        if (isOpen) {
+            fetchSavedPrompts();
+	    fetchSimplePrompts();
+        }
+    }, [isOpen]);
+
+    const fetchSavedPrompts = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch('/list');
+            const data = await res.json();
+            setSavedPrompts(data);
+        } catch (error) {
+            console.error('Failed to fetch saved prompts:', error);
+        }
+        setLoading(false);
+    };
+
+    const fetchSimplePrompts = async () => {
+        try {
+            const res = await fetch('/slots/list');
+            const data = await res.json();
+            setSimplePrompts(data);
+        } catch (error) {
+            console.error('Failed to fetch simple prompts:', error);
+        }
+    };
+
+    const handleSort = (type) => {
+        if (sortBy === type) {
+            setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortBy(type);
+            setSortOrder('asc');
+        }
+    };
+
+    const sortedPrompts = [...savedPrompts].sort((a, b) => {
+        let compareValue = 0;
+        switch (sortBy) {
+            case 'name':
+                compareValue = a.filename.localeCompare(b.filename);
+                break;
+            case 'tokens':
+                compareValue = a.token_count - b.token_count;
+                break;
+            case 'size':
+                compareValue = a.filesize - b.filesize;
+                break;
+            case 'date':
+                compareValue = (new Date(a.mtime))- (new Date(b.mtime));
+                break;
+        }
+        return sortOrder === 'asc' ? compareValue : -compareValue;
+    });
+
+    const handleSavePrompt = async (slot_id) => {
+        if (!saveName.trim()) {
+            alert('Please enter a name for the saved prompt');
+            return;
+        }
+        
+        try {
+            await fetch('/slots/' + slot_id + '?action=save', {
+                method: 'POST',
+                body: JSON.stringify({
+                    filename: `${saveName}.bin`,
+                })
+            });
+            setSaveName('');
+            fetchSavedPrompts();
+        } catch (error) {
+            console.error('Failed to save prompt:', error);
+        }
+    };
+
+    const handleLoadPrompt = async (filename) => {
+        if (loadSlot === '') {
+            alert('Please select a slot to restore to');
+            return;
+        }
+        if (confirm(`Load "${filename}" into slot "${loadSlot}"? This will overwrite what is currently there.`)) {
+            try {
+                await fetch('/slots/' + loadSlot + '?action=restore', {
+                    method: 'POST',
+                    body: JSON.stringify({ filename })
+                });
+	    fetchSimplePrompts();
+            } catch (error) {
+                console.error('Failed to load prompt:', error);
+            }
+        }
+    };
+
+    const handleDeletePrompt = async (filename) => {
+        if (confirm(`Delete "${filename}"? This cannot be undone.`)) {
+            try {
+                await fetch('/delete_prompt', {
+                    method: 'POST',
+                    body: JSON.stringify({ filename })
+                });
+                setSelectedPrompt(null);
+                fetchSavedPrompts();
+            } catch (error) {
+                console.error('Failed to delete prompt:', error);
+            }
+        }
+    };
+
+    const handleRenamePrompt = async (old_filename, new_filename) => {
+            try {
+                await fetch('/rename_prompt', {
+                    method: 'POST',
+                    body: JSON.stringify({ old_filename, new_filename })
+                });
+                fetchSavedPrompts();
+            } catch (error) {
+                console.error('Failed to rename prompt:', error);
+            }
+    };
+
+    const startRenamePrompt = (old_filename) => {
+        setRenameNewName(old_filename);
+        setRenameOldName(old_filename);
+    };
+
+    function handleKeyDown(old_filename, key) {
+                if (event.key === 'Enter') {
+                         if (renameOldName !== undefined)
+                                handleRenamePrompt(old_filename, renameNewName);
+                } else if (event.key === 'Escape') {
+                        if (renameOldName !== undefined)
+                                setRenameOldName(undefined);
+                }
+    }
+
+    const SortButton = ({ type, icon }) => html`
+        <button
+            className="sort-button ${sortBy === type ? 'active' : ''}"
+            onClick=${() => handleSort(type)}
+            title="Sort by ${type}"
+	    style=${{'padding': '4px', 'border': 'none', 'background': 'transparent', 'cursor': 'pointer', 'opacity': sortBy === type ? '1' : '0.5'}}>
+            ${icon}
+            ${sortBy === type && html`<${SVG_SortIndicator} sortOrder=${sortOrder} />`}
+        </button>
+    `;
+
+
+    const formatFileSize = (bytes) => {
+        const units = ['B', 'KB', 'MB', 'GB'];
+        let size = bytes;
+        let unitIndex = 0;
+        while (size >= 1024 && unitIndex < units.length - 1) {
+            size /= 1024;
+            unitIndex++;
+        }
+        return `${size.toFixed(1)} ${units[unitIndex]}`;
+    };
+
+return html`
+    <${Modal} 
+        isOpen=${isOpen} 
+        onClose=${closeModal}
+        title="Saved Prompts"
+        description="Manage your saved prompts and slots."
+        style=${{ 
+            'height': `${modalHeight}px`, 
+            'resize': 'vertical', 
+            'overflow': 'auto', 
+            'minHeight': '200px', 
+            'maxHeight': '90vh'
+        }}>
+        
+        <div 
+            className="saved-prompts-container" 
+            style=${{
+                'display': 'flex',
+                'gap': 0,
+                'height': '100%',
+                'position': 'relative'
+            }}>
+            
+            <!-- Left Panel: List -->
+            <div 
+                className="prompts-list" 
+                style=${{
+                    'flex': `0 0 ${listWidth}px`,
+                    'overflowY': 'auto',
+                    'borderRight': '1px solid rgba(128,128,128,0.3)',
+                    'paddingRight': '19px'
+                }}>
+                
+                <!-- Tab Selector -->
+                <div 
+                    className="hbox" 
+                    style=${{
+                        'gap': '4px',
+                        'marginBottom': '8px'
+                    }}>
+                    <button
+                        className="${activeTab === 'saved' ? 'selected' : ''}"
+                        onClick=${() => setActiveTab('saved')}
+                        style=${{ 'flex': 1 }}>
+                        Load Prompts
+                    </button>
+                    <button
+                        className="${activeTab === 'simple' ? 'selected' : ''}"
+                        onClick=${() => setActiveTab('simple')}
+                        style=${{ 'flex': 1 }}>
+                        Save Slots
+                    </button>
+                </div>
+
+                ${activeTab === 'saved' ? html`
+                    <!-- Sort Controls -->
+                    <div 
+                        className="hbox" 
+                        style=${{
+                            'gap': '2px',
+                            'marginBottom': '8px',
+                            'justifyContent': 'space-between'
+                        }}>
+			    <${SortButton} type="name" icon=${html`<${SVG_SortName}/>`}/>
+                            <${SortButton} type="tokens" icon=${html`<${SVG_SortTokens}/>`}/>
+                            <${SortButton} type="size" icon=${html`<${SVG_SortSize}/>`}/>
+                            <${SortButton} type="date" icon=${html`<${SVG_SortDate}/>`}/>
+                    </div>
+
+                   <!-- Saved Prompts List -->
+                    ${loading ? html`
+                        <div style=${{
+                            'textAlign': 'center',
+                            'padding': '20px'
+                        }}>
+                            Loading...
+                        </div>
+                    ` : html`
+                        <ul className="Prompts" style=${{
+                            'margin': 0,
+                            'padding': 0
+                        }}>
+                            ${sortedPrompts.map(prompt => html`
+                                <li key=${prompt.filename}>
+                                    <a className="Session ${selectedPrompt?.filename === prompt.filename ? 'selected' : ''}"
+                                        onClick=${() => setSelectedPrompt(prompt)}>
+					${renameOldName == prompt.filename ? html`
+                                                                <input
+                                                                        type="text"
+                                                                        value=${renameNewName}
+                                                                        onChange=${(e) => setRenameNewName(e.target.value)}
+                                                                        onKeyDown=${(e) => handleKeyDown(prompt.filename,  e.key)}
+                                                                        onClick=${(e) => e.stopPropagation()}
+                                                                        autoFocus
+                                                                />
+                                                                <div className="flex-separator"></div>
+                                                                <button onClick=${(e) => (handleRenamePrompt(prompt.filename, renameNewName), e.stopPropagation())}><${SVG_Confirm}/></button>
+                                                                <button onClick=${(e) => (setRenameOldName(undefined), e.stopPropagation())}><${SVG_Cancel}/></button>
+                                                        ` : html`
+                                       <div style=${{'display': 'flex', 'flex-direction': 'column', 'flex': 1}}>
+                                           <span style=${{'font-weight': 'bold'}}>${prompt.filename.replace('.bin', '')}</span>
+                                           <span style=${{'font-size': '0.85em', 'opacity': '0.7'}}>
+                                                ${prompt.token_count.toLocaleString()} tokens • ${formatFileSize(prompt.filesize)} • ${new Date(prompt.mtime).toLocaleString()}
+                                            </span>
+                                        </div>
+                                        <div className="flex-separator"></div>
+                                        <button
+                                            onClick=${(e) => {
+                                                e.stopPropagation();
+                                                startRenamePrompt(prompt.filename);
+                                            }}
+                                            title="Load this prompt">
+                                           <${SVG_Rename}/>
+                                        </button>
+                                        <button
+                                            onClick=${(e) => {
+                                                e.stopPropagation();
+                                                handleDeletePrompt(prompt.filename);
+                                            }}
+                                            title="Delete this prompt">
+                                            <${SVG_Trash}/>
+					</button>`}
+				    </a>
+                                </li>
+                            `)}
+                        </ul>
+		   `}` : html`
+                        <!-- Simple Prompts List -->
+			<ul className="Prompts" style=${{'margin': 0, 'padding': 0}}>
+                            ${simplePrompts.map(prompt => html`
+                                <li key=${prompt.slot_id}>
+                                    <a className="Session ${selectedPrompt?.slot_id === prompt.slot_id ? 'selected' : ''}"
+                                        onClick=${() => setSelectedPrompt(prompt)}>
+					<div style=${{'display': 'flex', 'flex-direction': 'column', 'flex': 1}}>
+					    <span style=${{'font-weight': 'bold'}}>Slot #${prompt.slot_id}</span>
+					    <span style=${{'font-size': '0.85em', 'opacity': '0.7'}}>
+                                                ${prompt.token_count.toLocaleString()} tokens
+                                            </span>
+					</div>
+                                    </a>
+                                </li>
+                            `)}
+                        </ul>
+                    `}
+                </div>
+                
+                <!-- Resize Handle -->
+                <div 
+                    'style'=${{
+                    'width': '5px',
+                    'cursor': 'col-resize',
+	            'background': 'transparent',
+                    'postion': 'relative'
+                    }}
+                    onMouseDown=${(e) => {
+                        const startX = e.clientX;
+                        const startWidth = listWidth;
+                        
+                        const handleMouseMove = (e) => {
+                            const newWidth = Math.max(200, Math.min(600, startWidth + e.clientX - startX));
+                            setListWidth(newWidth);
+                        };
+                        
+                        const handleMouseUp = () => {
+                            document.removeEventListener('mousemove', handleMouseMove);
+                            document.removeEventListener('mouseup', handleMouseUp);
+                        };
+                        
+                        document.addEventListener('mousemove', handleMouseMove);
+                        document.addEventListener('mouseup', handleMouseUp);
+                    }}>
+                    <div style=${{
+                    'position': 'absolute',
+                    'left': '1px',
+                    'top': 0,
+                    'bottom': 0,
+                    'width': '3px',
+                    'background': 'rgba(128,128,128,0.2)'
+                    }}></div>
+                </div>
+
+                <!-- Right Panel: Preview -->
+		<div className="prompt-preview" style=${{'flex': 1, 'display': 'flex', 'flex-direction': 'column', 'overflow': 'hidden', 'height': '100vh'}}>
+                    ${selectedPrompt ? html`
+			<div style=${{'margin-bottom': '8px', 'padding-bottom': '8px', 'border-bottom': '1px solid rgba(128,128,128,0.3)'}}>
+			    <h3 style=${{'margin': '0 0 4px 0'}}>${Object.hasOwn(selectedPrompt, 'slot_id') ? `Slot #${selectedPrompt.slot_id}` : selectedPrompt.filename.replace('.bin', '')}</h3>
+                            ${Object.hasOwn(selectedPrompt, 'slot_id') && html`
+                            <div style=${{'display': 'flex', 'gap': '16px', 'font-size': '0.9em', 'opacity': '0.8'}}>
+                                <span>${selectedPrompt.token_count.toLocaleString()} tokens</span>
+                            <div className="flex-separator"></div>
+			    <${InputBox}
+                                'label'=""
+                                'type'="text"
+                                'placeholder'="Name for saved prompt"
+                                'readOnly'=${!!cancel}
+                                'value'=${saveName}
+                                'onValueChange'=${setSaveName}
+                                style=${{ 'flex': 1, 'width': '10vw'}}/>
+			    <button
+                                    onClick=${() => handleSavePrompt(selectedPrompt.slot_id)}
+                                    style=${{'font-size': '0.9em'}}>
+                                    Save Prompt
+                                </button>
+                            </div>
+                            `} 
+			    ${Object.hasOwn(selectedPrompt, 'filename') && html`
+			    <div style=${{'display': 'flex', 'gap': '16px', 'font-size': '0.9em', 'opacity': '0.8'}}>
+                                <span>${selectedPrompt.token_count.toLocaleString()} tokens</span>
+                                <span>${formatFileSize(selectedPrompt.filesize)}</span>
+                                <span>${new Date(selectedPrompt.mtime).toLocaleString()}</span>
+                                <div className="flex-separator"></div>
+	                        <${SelectBox}
+                                    label="Slot"
+                                    value=${loadSlot}
+                                    onValueChange=${setLoadSlot}
+                                    options=${[{ name: '', value: '' }, ...simplePrompts.map(prompt => ({ name: prompt.slot_id,  value: prompt.slot_id}))]}/>
+                                <button
+                                    onClick=${() => handleLoadPrompt(selectedPrompt.filename)}
+				    style=${{'padding': '2px 8px', 'font-size': '0.9em'}}>
+                                    Load This Prompt
+                                </button>
+                            </div>
+                            `}
+                        </div>
+                        <textarea
+                            readOnly
+                            value=${selectedPrompt.prompt || selectedPrompt}
+                            className="expanded-text-area-settings"
+			    style=${{'flex': 1, 'resize': 'none', 'font-family': 'monospace', 'font-size': '0.9em'}}/>
+                    ` : html`
+			<div style=${{'display': 'flex', 'align-items': 'center', 'justify-content': 'center', 'height': '100%', 'opacity': '0.5'}}>
+                            Select a saved prompt to preview
+                        </div>
+                    `}
+                </div>
+            </div>
+        </${Modal}>
+    `;
+}
+
+
 function Widget({ isOpen, onClose, title, id, children, ...props }) {
 	if (!isOpen) {
 		return null;
@@ -4952,6 +5430,13 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 	const [promptPreviewReroll, setPromptPreviewReroll] = useState(0);
 	const [showPromptPreview, setShowPromptPreview] = useSessionState('promptPreview', defaultPresets.promptPreview);
 	const [promptPreviewTokens, setPromptPreviewTokens] = useSessionState('promptPreviewTokens', defaultPresets.promptPreviewTokens);
+	const [zstdTable, setZstdTable] = useState('');
+	const [zstdColumn, setZstdColumn] = useState('');
+	const [zstdLevel, setZstdLevel] = useState(3);
+	const [zstdRatio, setZstdRatio] = useState(0.1);
+	const [showCustomMaintenance, setShowCustomMaintenance] = useState(false);
+	const [maintenanceDuration, setMaintenanceDuration] = useState('');
+	const [maintenanceDbLoad, setMaintenanceDbLoad] = useState(0.5);
 
 	function replacePlaceholders(string,placeholders) {
 		// give placeholders as json object
@@ -6865,6 +7350,118 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 				</button>
 
 			</${CollapsibleGroup}>
+			<${CollapsibleGroup} label="Database Tools" expanded>
+    <div className="hbox">
+        <button
+            disabled=${!!cancel}
+            onClick=${async () => {
+                if (confirm("Optimize database storage? This may temporarily impact performance.")) {
+                    await fetch('/vacuum', { method: 'GET' });
+                }
+            }}>
+            VACUUM
+        </button>
+        <button
+            disabled=${!!cancel}
+            onClick=${async () => {
+                const res = await fetch('/zstd_get_configs');
+                const data = await res.json();
+                if (data.ok) {
+                    console.log(data.configs);
+                }
+		else {
+		    console.log(data.message);
+		}
+            }}>
+            Show Configs
+        </button>
+    </div>
+    
+    <div className="hbox">
+        <${InputSlider} label="Compression Level" type="number" step="1" min="1" max="22"
+            readOnly=${!!cancel} value=${zstdLevel} onValueChange=${setZstdLevel}/>
+        <${InputSlider} label="Samples Ratio" type="number" step="0.05" max="1"
+            readOnly=${!!cancel} value=${zstdRatio} onValueChange=${setZstdRatio}/>
+        <button
+            disabled=${!!cancel}
+            onClick=${async () => {
+                await fetch('/zstd_enable_transparent', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        table: 'sessions',
+                        column: 'data',
+                        compression_level: zstdLevel,
+                        train_dict_samples_ratio: zstdRatio
+                    })
+                });
+            }}>
+            Enable
+        </button>
+    </div>
+    
+    <div className="horz-separator"></div>
+    
+    <div className="hbox">
+        <button
+            disabled=${!!cancel}
+            onClick=${async () => {
+                await fetch('/zstd_incremental_maintenance', {
+                    method: 'POST',
+                    body: JSON.stringify({ duration: null, db_load: 1.0 })
+                });
+            }}>
+            Full Maintenance
+        </button>
+        <button
+            disabled=${!!cancel}
+            onClick=${async () => {
+                await fetch('/zstd_incremental_maintenance', {
+                    method: 'POST',
+                    body: JSON.stringify({ duration: 0, db_load: 1.0 })
+                });
+            }}>
+            Single Item
+        </button>
+        <button
+            disabled=${!!cancel}
+            onClick=${() => setShowCustomMaintenance(!showCustomMaintenance)}>
+            Custom
+        </button>
+    </div>
+    
+    ${showCustomMaintenance && html`
+        <div className="hbox">
+            <${InputBox} label="Duration (sec)" type="number"
+                readOnly=${!!cancel}
+                value=${maintenanceDuration}
+                onValueChange=${setMaintenanceDuration}
+                placeholder="Optional"/>
+            <${InputSlider} label="DB Load" type="number" step="0.1" max="1"
+                readOnly=${!!cancel} value=${maintenanceDbLoad} onValueChange=${setMaintenanceDbLoad}/>
+            <button
+                disabled=${!!cancel}
+                onClick=${async () => {
+                    await fetch('/zstd_incremental_maintenance', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            duration: maintenanceDuration ? parseFloat(maintenanceDuration) : null,
+                            db_load: maintenanceDbLoad
+                        })
+                    });
+                }}>
+                Run
+            </button>
+        </div>
+    `}
+</${CollapsibleGroup}>
+
+      <${CollapsibleGroup} label="Slot and KV Save Mgmt">
+        <button disabled=${!!cancel} onClick=${() => toggleModal("saved_prompts")}>
+
+          Manage Slots and Saved Prompt
+        </button>
+  </${CollapsibleGroup}>
+
 			${!!tokens && html`
 				<${InputBox} label="Tokens" value="${tokens}${tokensPerSec ? ` (${tokensPerSec.toFixed(2)} T/s)` : ``}" readOnly/>`}
 			<div className="buttons">
@@ -7065,6 +7662,11 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 			stoppingStringsError=${stoppingStringsError}
 			drySequenceBreakersError=${drySequenceBreakersError}
 			bannedTokensError=${bannedTokensError}/>
+
+		<${SavedPromptsModal}
+			isOpen=${modalState.saved_prompts}
+			closeModal=${() => toggleModal("saved_prompts")}
+			cancel=${cancel}/>
 
 		<${EditorContextMenu}
 			isOpen=${contextMenuState.visible}

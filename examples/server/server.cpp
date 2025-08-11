@@ -3345,7 +3345,8 @@ int main(int argc, char ** argv) {
             { "system_prompt",               ctx_server.system_prompt.c_str() },
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params.n_parallel },
-            { "chat_template",               curr_tmpl.c_str() }
+            { "chat_template",               curr_tmpl.c_str() },
+            { "n_ctx",                       ctx_server.n_ctx }
         };
 
         res.set_content(data.dump(), "application/json; charset=utf-8");
@@ -3760,9 +3761,28 @@ int main(int argc, char ** argv) {
                 std::vector<llama_token> tokens(n_token_count);
                 file.read(reinterpret_cast<char*>(tokens.data()), tokens.size() * sizeof(llama_token));
 
+                //C++17 is not modern enough to have a nice and portable way to get the mtime of a file
+                //so the following seems to be needed
+                auto ftime = fs::last_write_time(entry.path());
+                auto system_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                    ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now()
+                );
+                std::time_t c_time = std::chrono::system_clock::to_time_t(system_time);
+                std::tm tm_struct;
+                #if defined(_WIN32)
+                localtime_s(&tm_struct, &c_time);
+                #else
+                localtime_r(&c_time, &tm_struct);
+                #endif
+                std::ostringstream oss;
+                oss << std::put_time(&tm_struct, "%Y-%m-%d %H:%M:%S");
+                auto str_time = oss.str();
+
+
                 response.push_back({
                     {"filename", entry.path().filename().string()},
                     {"filesize", entry.file_size()},
+                    {"mtime", str_time},
                     {"token_count", n_token_count},
                     {"prompt", tokens_to_str(ctx_server.ctx, tokens.cbegin(), tokens.cend())}
                 });
@@ -3774,13 +3794,137 @@ int main(int argc, char ** argv) {
         res.set_content(response.dump(), "application/json; charset=utf-8");
     };
 
+    const auto list_slot_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
+        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        json response = json::array();
+        for (server_slot & slot : ctx_server.slots) {
+            response.push_back({
+                {"slot_id", slot.id},
+                {"token_count", slot.cache_tokens.size()},
+                {"prompt", tokens_to_str(ctx_server.ctx, slot.cache_tokens.cbegin(), slot.cache_tokens.cend())}
+            });
+        }
+        res.set_content(response.dump(), "application/json; charset=utf-8");
+    };
+
+
+    const auto delete_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
+        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        json response;
+        namespace fs = std::filesystem;
+
+        try {
+            const json body = json::parse(req.body);
+            const std::string filename_str = body.at("filename");
+
+            // prevent directory traversal attacks
+            if (filename_str.find("..") != std::string::npos || filename_str.find('/') != std::string::npos || filename_str.find('\\') != std::string::npos) {
+                res.status = 400;
+                response = {{"error", "Invalid filename format."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            const fs::path file_to_delete = fs::path(params.slot_save_path) / fs::path(filename_str);
+
+            if (!fs::exists(file_to_delete) || !fs::is_regular_file(file_to_delete)) {
+                res.status = 404;
+                response = {{"error", "File not found."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            if (fs::remove(file_to_delete)) {
+                response = {
+                    {"status", "deleted"},
+                    {"filename", filename_str}
+                };
+            } else {
+                res.status = 500;
+                response = {{"error", "Failed to delete the file."}};
+            }
+        } catch (const json::parse_error& e) {
+            res.status = 400;
+            response = {{"error", "Invalid JSON request body."}};
+        } catch (const json::out_of_range& e) {
+            res.status = 400;
+            response = {{"error", "Missing 'filename' key in request body."}};
+        } catch (const std::exception& e) {
+            res.status = 500;
+            response = {{"error", e.what()}};
+        }
+        res.set_content(response.dump(), "application/json; charset=utf-8");
+    };
+
+    const auto rename_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
+        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        json response;
+        namespace fs = std::filesystem;
+
+        try {
+            const json body = json::parse(req.body);
+            const std::string old_filename_str = body.at("old_filename");
+            const std::string new_filename_str = body.at("new_filename");
+
+            if (old_filename_str.find("..") != std::string::npos || old_filename_str.find_first_of("/\\") != std::string::npos ||
+                new_filename_str.find("..") != std::string::npos || new_filename_str.find_first_of("/\\") != std::string::npos) {
+                res.status = 400;
+                response = {{"error", "Invalid filename format."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            const fs::path old_path = fs::path(params.slot_save_path) / old_filename_str;
+            const fs::path new_path = fs::path(params.slot_save_path) / new_filename_str;
+
+            if (!fs::exists(old_path) || !fs::is_regular_file(old_path)) {
+                res.status = 404;
+                response = {{"error", "Source file not found."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            if (fs::exists(new_path)) {
+                res.status = 409;
+                response = {{"error", "Destination filename already exists."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            std::error_code ec;
+            fs::rename(old_path, new_path, ec);
+
+            if (ec) {
+                res.status = 500;
+                response = {{"error", "Failed to rename file: " + ec.message()}};
+            } else {
+                response = {
+                    {"status", "renamed"},
+                    {"old_filename", old_filename_str},
+                    {"new_filename", new_filename_str}
+                };
+            }
+
+        } catch (const json::parse_error& e) {
+            res.status = 400;
+            response = {{"error", "Invalid JSON request body."}};
+        } catch (const json::out_of_range& e) {
+            res.status = 400;
+            response = {{"error", "Missing 'old_filename' or 'new_filename' in request body."}};
+        } catch (const std::exception& e) {
+            res.status = 500;
+            response = {{"error", e.what()}};
+        }
+
+        res.set_content(response.dump(), "application/json; charset=utf-8");
+    };
+
     auto handle_static_file = [](unsigned char * content, size_t len, const char * mime_type) {
         return [content, len, mime_type](const httplib::Request &, httplib::Response & res) {
             res.set_content(reinterpret_cast<const char*>(content), len, mime_type);
             return false;
         };
     };
-
 
     const auto handle_version = [&params, sqlite_extension_loaded](const httplib::Request&, httplib::Response& res) {
         res.set_content(
@@ -3967,10 +4111,14 @@ int main(int argc, char ** argv) {
     svr->Post("/lora-adapters",       handle_lora_adapters_apply);
     // Save & load slots
     svr->Get ("/slots",               handle_slots);
+    svr->Get ("/slots/list",          list_slot_prompts);
     if (!params.slot_save_path.empty()) {
         // these endpoints rely on slot_save_path existing
         svr->Post("/slots/:id_slot",  handle_slots_action);
         svr->Get ("/list",            list_saved_prompts);
+        svr->Post("/delete_prompt",   delete_saved_prompt);
+        svr->Post("/rename_prompt",   rename_saved_prompt);
+
     }
     svr->Get ("/version", handle_version);
     if (!params.sql_save_file.empty()) {
