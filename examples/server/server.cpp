@@ -4053,6 +4053,12 @@ int main(int argc, char ** argv) {
         res.set_content(json{"ok", true}.dump(), "application/json");
     });
 
+    const auto handle_zstd_config_update = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        std::string patch_json = "{\"compression_level\": " + std::to_string(body["compression_level"].get<int>()) + ", \"train_dict_samples_ratio\": " + std::to_string(body["train_dict_samples_ratio"].get<int>()) + "}";
+        db.db << "update _zstd_configs set config = json_patch(config, '" + patch_json + "')";
+        res.set_content(json{{"ok", true}}.dump(), "application/json");
+    });
+
     //
     // Router
     //
@@ -4130,12 +4136,13 @@ int main(int argc, char ** argv) {
         svr->Post("/sessions", handle_sessions);
         svr->Get ("/sessions", handle_sessions);
         svr->Post("/delete", handle_delete);
-	//VACUUM is there for the extension but does not require the extension
-	svr->Get ("/vacuum", handle_vacuum);
+        //VACUUM is there for the extension but does not require the extension
+        svr->Get ("/vacuum", handle_vacuum);
         if (sqlite_extension_loaded) {
             svr->Get ("/zstd_get_configs", handle_zstd_get_configs);
             svr->Post("/zstd_incremental_maintenance", handle_zstd_maintenance);
             svr->Post("/zstd_enable_transparent", handle_zstd_enable);
+            svr->Post("/zstd_update_transparent", handle_zstd_config_update);
 	}
     }
 

@@ -4073,7 +4073,7 @@ return html`
                                                 e.stopPropagation();
                                                 startRenamePrompt(prompt.filename);
                                             }}
-                                            title="Load this prompt">
+                                            title="Rename this prompt">
                                            <${SVG_Rename}/>
                                         </button>
                                         <button
@@ -4202,6 +4202,108 @@ return html`
     `;
 }
 
+function CompressionInfoModal({
+  isOpen,
+  closeModal,
+  compressionData,
+  cancel
+}) {
+  const entries = Object.entries(compressionData || {}).map(([id, raw]) => {
+    let cfg = raw;
+    if (typeof raw === 'string') {
+      try { cfg = JSON.parse(raw); } catch (_) {}
+    }
+    return { id, raw, cfg: cfg && typeof cfg === 'object' ? cfg : null };
+  });
+
+  const first = entries[0]?.cfg || {};
+  const levelNum = Number(first?.compression_level);
+  const levelDisplay = Number.isFinite(levelNum) ? String(levelNum) : 'not set';
+  const ratioNum = Number(first?.train_dict_samples_ratio);
+  const ratioDisplay = Number.isFinite(ratioNum) ? String(ratioNum) : 'not set';
+
+  return html`
+    <${Modal}
+      isOpen=${isOpen}
+      onClose=${() => closeModal("compression")}
+      title="Current compression settings"
+      style=${{ 'max-width': '30em' }}
+    >
+      <div class="vbox" style=${{ gap: '1rem' }}>
+        ${entries.length === 0 && html`<div>No compression data available.</div>`}
+
+        ${entries.length > 1  && html`
+          <div style=${{ color: '#b33', fontWeight: 600 }}>
+            Custom/Unusual configuration detected
+          </div>
+          <table border="1" frame="void" rules="all" style=${{ width: '100%' }}>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Compression Level</th>
+                <th>Training Sample Ratio</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${entries.map(({ id, cfg }) => {
+                const lv = Number(cfg?.compression_level);
+                const lvDisplay = Number.isFinite(lv) ? String(lv) : 'not set';
+                const r = Number(cfg?.train_dict_samples_ratio);
+                const rDisplay = Number.isFinite(r) ?  String(r) : 'not set';
+                return html`
+                  <tr>
+                    <td>${id}</td>
+                    <td>${lvDisplay}</td>
+                    <td>${rDisplay}</td>
+                  </tr>
+                `;
+              })}
+            </tbody>
+          </table>
+        `}
+
+        ${(entries.length == 1) && html`
+          <table border="1" frame="void" rules="all" style=${{ width: '100%' }}>
+            <thead>
+              <tr>
+                <th>Setting</th>
+                <th>Value</th>
+                <th>Notes / Docs</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th>Compression Level</th>
+                <td>${levelDisplay}</td>
+                <td>
+                                        <small>Level 1-3: Realtime, less compression<br/>
+                                        Level 4-11: Balanced speed/size<br/>
+                                        Level 22: Maximum compression, archival quality, very slow</small>
+                  <br/>
+                </td>
+              </tr>
+              <tr>
+                <th>Training Sample Ratio</th>
+                <td>${ratioDisplay}</td>
+                <td>
+                  Set according to the size of the database, if set too high it will error on maintenance, but if set too low it may weaken compression.
+                  <br/>
+                  <a href="https://github.com/facebook/zstd/issues/3111#issuecomment-1098318000" target="_blank" rel="noopener">Technical Explanation</a>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        `}
+
+        ${!cancel && html`
+          <div class="hbox" style=${{ justifyContent: 'flex-end' }}>
+            <button class="button-secondary" onClick=${() => closeModal("compression")}>Close</button>
+          </div>
+        `}
+      </div>
+    </${Modal}>
+  `;
+}
 
 function Widget({ isOpen, onClose, title, id, children, ...props }) {
 	if (!isOpen) {
@@ -5432,11 +5534,26 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 	const [promptPreviewTokens, setPromptPreviewTokens] = useSessionState('promptPreviewTokens', defaultPresets.promptPreviewTokens);
 	const [zstdTable, setZstdTable] = useState('');
 	const [zstdColumn, setZstdColumn] = useState('');
-	const [zstdLevel, setZstdLevel] = useState(3);
-	const [zstdRatio, setZstdRatio] = useState(0.1);
+	const [zstdLevel, setZstdLevel] = useState(22);
+	const [zstdRatio, setZstdRatio] = useState(100);
 	const [showCustomMaintenance, setShowCustomMaintenance] = useState(false);
 	const [maintenanceDuration, setMaintenanceDuration] = useState('');
 	const [maintenanceDbLoad, setMaintenanceDbLoad] = useState(0.5);
+	const [configData, setConfigData] = useState('');
+
+	useEffect(() => {
+	const fetchData = async () => {
+        try {
+	        const res = await fetch('/zstd_get_configs');
+                const data = await res.json();
+                if (data.ok) {
+                    console.log(data.configs);
+                    setConfigData(data.configs);
+                }
+      } catch (err) {}   
+    };
+    fetchData();
+  }, []);
 
 	function replacePlaceholders(string,placeholders) {
 		// give placeholders as json object
@@ -7368,9 +7485,12 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
                 const data = await res.json();
                 if (data.ok) {
                     console.log(data.configs);
+		    setConfigData(data.configs);
+		    toggleModal("compression")
                 }
 		else {
 		    console.log(data.message);
+		    toggleModal("compression")
 		}
             }}>
             Show Configs
@@ -7380,8 +7500,9 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
     <div className="hbox">
         <${InputSlider} label="Compression Level" type="number" step="1" min="1" max="22"
             readOnly=${!!cancel} value=${zstdLevel} onValueChange=${setZstdLevel}/>
-        <${InputSlider} label="Samples Ratio" type="number" step="0.05" max="1"
+        <${InputSlider} label="Samples Ratio" type="number" step="1" min-"1" max="100"
             readOnly=${!!cancel} value=${zstdRatio} onValueChange=${setZstdRatio}/>
+        ${!configData ? html`
         <button
             disabled=${!!cancel}
             onClick=${async () => {
@@ -7394,9 +7515,23 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
                         train_dict_samples_ratio: zstdRatio
                     })
                 });
+		setConfigData(true);
             }}>
-            Enable
-        </button>
+	    Enable
+        </button>` : html`
+	<button
+            disabled=${!!cancel}
+            onClick=${async () => {
+                await fetch('/zstd_update_transparent', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        compression_level: zstdLevel,
+                        train_dict_samples_ratio: zstdRatio
+                    })
+                });
+            }}>
+	    Update
+	</button>`}
     </div>
     
     <div className="horz-separator"></div>
@@ -7667,6 +7802,12 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 			isOpen=${modalState.saved_prompts}
 			closeModal=${() => toggleModal("saved_prompts")}
 			cancel=${cancel}/>
+
+		<${CompressionInfoModal}
+                        isOpen=${modalState.compression}
+                        closeModal=${() => closeModal("compression")}
+                        compressionData=${configData}
+                        cancel=${cancel}/>
 
 		<${EditorContextMenu}
 			isOpen=${contextMenuState.visible}
