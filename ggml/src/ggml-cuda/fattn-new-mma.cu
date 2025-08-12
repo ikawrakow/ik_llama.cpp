@@ -976,20 +976,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         __syncthreads();
     }
 
-    // Finally, sum up partial KQ rowsums.
-    // The partial sums are spread across 8/4 threads each, does not need full reduce.
-    {
-        constexpr int offset_first = ntiles == 1 ? 16 : 2;
-        constexpr int offset_last  = ntiles == 1 ?  4 : 1;
-#pragma unroll
-        for (int col = 0; col < cols_per_thread; ++col) {
-#pragma unroll
-            for (int offset = offset_first; offset >= offset_last; offset >>= 1) {
-                KQ_rowsum[col] += __shfl_xor_sync(0xFFFFFFFF, KQ_rowsum[col], offset, WARP_SIZE);
-            }
-        }
-    }
-
     // If attention sinks are used, potentially re-scale if KQ_max is small.
     // Also add the sink as a value to KQ_rowsum, this is done after synchonization of KQ_rowsum
     //     so it's being done unconditionally for every thread.
@@ -1032,6 +1018,20 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
                         VKQ_C_16[i*ntiles/2 + col/2].x[l0 + col % 2] *= KQ_max_scale_h2;
                     }
                 }
+            }
+        }
+    }
+
+    // Finally, sum up partial KQ rowsums.
+    // The partial sums are spread across 8/4 threads each, does not need full reduce.
+    {
+        constexpr int offset_first = ntiles == 1 ? 16 : 2;
+        constexpr int offset_last  = ntiles == 1 ?  4 : 1;
+#pragma unroll
+        for (int col = 0; col < cols_per_thread; ++col) {
+#pragma unroll
+            for (int offset = offset_first; offset >= offset_last; offset >>= 1) {
+                KQ_rowsum[col] += __shfl_xor_sync(0xFFFFFFFF, KQ_rowsum[col], offset, WARP_SIZE);
             }
         }
     }
