@@ -1000,6 +1000,31 @@ constexpr float k_swiglu_oai_alpha = 1.702f;
 constexpr float k_swiglu_oai_limit = 7.f;
 
 void MulMat::swiglu_oai(int n, const float * x, float * y) {
+//    int i = 0;
+//#if defined __AVX512F__ && defined __AVX512DQ__
+//    {
+//        auto max = _mm512_set1_ps(k_swiglu_oai_limit);
+//        auto alpha = _mm512_set1_ps(-k_swiglu_oai_alpha);
+//        for (; i + 15 < n; i += 16) {
+//            auto xc = v_clamp_max(_mm512_loadu_ps(x + i), max);
+//            _mm512_storeu_ps(y + i, v_silu_oai(xc, alpha));
+//        }
+//    }
+//#endif
+//#if defined __AVX2__ && defined __FMA__
+//    if (i + 7 < n) {
+//        auto max = _mm256_set1_ps(k_swiglu_oai_limit);
+//        auto alpha = _mm256_set1_ps(-k_swiglu_oai_alpha);
+//        for (; i + 7 < n; i += 8) {
+//            auto xc = v_clamp_max(_mm256_loadu_ps(x + i), max);
+//            _mm256_storeu_ps(y + i, v_silu_oai(xc, alpha));
+//        }
+//    }
+//#endif
+//    for (; i < n; ++i) {
+//        auto xi = std::min(x[i], k_swiglu_oai_limit);
+//        y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
+//    }
     for (int i = 0; i < n; ++i) {
         auto xi = std::min(x[i], k_swiglu_oai_limit);
         y[i] = xi / (1.0f + expf(-xi * k_swiglu_oai_alpha));
