@@ -32,6 +32,7 @@ IQK_API bool iqk_mul_mat_moe(long Nx, long Ny, long ne00, int ne11,
 IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int unary_op,
         int typeA, const void * Aup, const void * Agate, long strideA,
         int typeB, const void * B, long strideB,
+        const char * up_b, const char * gate_b,
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
 
 IQK_API int iqk_dequant_type(int type, int Ny);

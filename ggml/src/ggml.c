@@ -15485,6 +15485,8 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     const struct ggml_tensor * src1 = dst->src[2];
     const struct ggml_tensor * ids = dst->src[3];
+    const struct ggml_tensor * up_b   = dst->src[4];
+    const struct ggml_tensor * gate_b = dst->src[5];
     const struct ggml_tensor * src0_1 = dst->src[0];
     const struct ggml_tensor * src0_2 = dst->src[1];
     const struct ggml_tensor * src0 = src0_1; // so GGML_TENSOR_BINARY_OP_LOCALS works
@@ -15508,6 +15510,9 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
     GGML_ASSERT(ne13 == 1);
+
+    const size_t nb41 = up_b ? up_b->nb[1] : 0;
+    const size_t nb51 = up_b ? gate_b->nb[1] : 0;
 
     // row groups
     const int n_ids = ids->ne[0]; // n_expert_used
@@ -15596,6 +15601,8 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
         const char * src0_1_cur = (const char *) src0_1->data + cur_a*nb02;
         const char * src0_2_cur = (const char *) src0_2->data + cur_a*nb02;
+        const char * up_b_cur   = up_b   ? (const char *)up_b->data + cur_a*nb41 : NULL;
+        const char * gate_b_cur = gate_b ? (const char *)gate_b->data + cur_a*nb51 : NULL;
 
         const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
@@ -15606,6 +15613,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         if (!iqk_moe_fused_up_gate(nr0, nr1, ne00, ne11, dst->op_params[0],
                             type, src0_1_cur, src0_2_cur, nb01,
                             vec_dot_type, (const char *)wdata, row_size,
+                            up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
                             matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
 
