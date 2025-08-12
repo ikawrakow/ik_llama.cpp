@@ -1,14 +1,17 @@
-### 🔀 [#270](https://github.com/ikawrakow/ik_llama.cpp/pull/270) - Honor mmap setting when using tensor overrides
+## 🔀 [Pull Request #270](https://github.com/ikawrakow/ik_llama.cpp/pull/270) - Honor mmap setting when using tensor overrides
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/tensor_override_honor_mmap` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-19 |
 | **Updated** | 2025-03-19 |
+| **Merged** | 2025-03-19 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The reason why `mmap` was disabled when using tensor overrides is this:
 * When the command line argument is parsed (and the override buffer is set to `CPU`), we get  the buffer type returned by `ggml_backend_cpu_buffer_type()`
@@ -22,9 +25,9 @@ Note, however, that `-rtr` still disables `mmap` because otherwise the model wou
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ubergarm** commented the **2025-03-19** at **19:52:45**:<br>
+👤 **ubergarm** commented on **2025-03-19** at **19:52:45**
 
 Wow sweet! I just got back home and saw this, pull'd and rebuilt and got my custom quant running locally on the 9950X + 96GB DDR5-6400 RAM + 3090TI 24GB! Got about 3 tok/sec generation on a quick initial test.
 

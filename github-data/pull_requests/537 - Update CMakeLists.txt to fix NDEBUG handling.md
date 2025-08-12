@@ -1,14 +1,17 @@
-### 🐛 [#537](https://github.com/ikawrakow/ik_llama.cpp/pull/537) - Update CMakeLists.txt to fix NDEBUG handling
+## 🔀 [Pull Request #537](https://github.com/ikawrakow/ik_llama.cpp/pull/537) - Update CMakeLists.txt to fix NDEBUG handling
 
 | **Author** | `iSevenDays` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `patch-1` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-18 |
 | **Updated** | 2025-06-19 |
+| **Merged** | 2025-06-19 |
 
 ---
 
-#### Description
+## 📄 Description
 
 - [x] I have read the [contributing guidelines](https://github.com/ggerganov/llama.cpp/blob/master/CONTRIBUTING.md)
 - Self-reported review complexity:
@@ -33,14 +36,14 @@ after my change to CMakeLists.txt
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** submitted a review the **2025-06-19** at **07:18:05**: ✅ `APPROVED`<br>
+👤 **ikawrakow** approved this pull request ✅ on **2025-06-19** at **07:18:05**
 
 So, in the latest tool chains someone decided that the `NDEBUG` is not set when making a release build? Contrary to the established practice of the last 30 years?
 
 ---
 
-👤 **iSevenDays** commented the **2025-06-19** at **07:32:42**:<br>
+👤 **iSevenDays** commented on **2025-06-19** at **07:32:42**
 
 Yes, thanks for merging the fix quickly :)

@@ -1,14 +1,16 @@
-### 🔀 [#315](https://github.com/ikawrakow/ik_llama.cpp/pull/315) - Try not repacking q8_0 for FA computations
+## 🔀 [Pull Request #315](https://github.com/ikawrakow/ik_llama.cpp/pull/315) - Try not repacking q8_0 for FA computations
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
 | **State** | ❌ **Closed** |
+| **Source Branch** | `ik/try_fa_no_q80_repack` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-06 |
 | **Updated** | 2025-05-04 |
 
 ---
 
-#### Description
+## 📄 Description
 
 On the master branch if the K-cache is `Q8_0` it is repacked to `Q8_0_R8` before performing the Flash Attention computation. This is only done for PP (number of tokens in the batch $\ge$ 8), and tends to improve PP performance when the K-cache size is not too large. But for large K-cache, performance may suffer due to the additional allocation of a fairly significant amount of memory.
 
@@ -25,9 +27,9 @@ Another interesting observation is that there is no difference between offline a
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ubergarm** commented the **2025-04-06** at **15:43:02**:<br>
+👤 **ubergarm** commented on **2025-04-06** at **15:43:02**
 
 Picking up the conversation from [296](https://github.com/ikawrakow/ik_llama.cpp/issues/296#issuecomment-2781293572), I've run a comparison with the only variable being this PR (no repacking q8_0 for kcache).
 
@@ -353,7 +355,7 @@ main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-06** at **16:30:25**:<br>
+👤 **ikawrakow** commented on **2025-04-06** at **16:30:25**
 
 Thank you for this.
 
@@ -363,7 +365,7 @@ It is hard to make progress without me being able to experiment on the actual bi
 
 ---
 
-👤 **ubergarm** commented the **2025-04-06** at **17:53:17**:<br>
+👤 **ubergarm** commented on **2025-04-06** at **17:53:17**
 
 > Thank you for this.
 > 
@@ -376,6 +378,8 @@ Yeah, I ran a couple more tests against `main@ec84855c` (not this PR) reducing t
 
 #### tg
 ![performance_comparison_tg-03](https://github.com/user-attachments/assets/7d63ebd0-a4a3-4d87-9603-e1ad3d20cb80)
+
+*EDIT*: I also tried 64 threads for tg which seems about the same before 8k, then after 8k it is very slightly faster on average than the others, albeit with no peaks present. Then it is the within noise of the others at exactly 32k.
  
 > If you are renting, where did you rent it?
 
@@ -396,6 +400,6 @@ Thanks!
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-04** at **06:18:51**:<br>
+👤 **ikawrakow** commented on **2025-05-04** at **06:18:51**
 
 Doesn't look like it is useful, closing.

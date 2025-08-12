@@ -1,14 +1,17 @@
-### 🔀 [#449](https://github.com/ikawrakow/ik_llama.cpp/pull/449) - Legacy quants conversion schemes in convert_hf_to_gguf.py
+## 🔀 [Pull Request #449](https://github.com/ikawrakow/ik_llama.cpp/pull/449) - Legacy quants conversion schemes in convert_hf_to_gguf.py
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `legacy_quant_conv` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-23 |
 | **Updated** | 2025-05-24 |
+| **Merged** | 2025-05-24 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This, notably in order to make smaller conversions to generate an iMatrix file.
 
@@ -31,9 +34,15 @@ Also, 2 forgotten mentions of FTYPE IQ3_KL are added in llama.cpp file, and one 
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **Nexesenex** commented the **2025-05-23** at **14:38:10**:<br>
+👤 **ikawrakow** commented on **2025-05-23** at **13:50:48**
+
+Why do we need the change in `convert_hf_to_gguf.py` ?
+
+---
+
+👤 **Nexesenex** commented on **2025-05-23** at **14:38:10**
 
 Well, when I test a new finetune or merge of a big model I can't run in 16 or even 8 bits, I like to make a simple q5_0 or even q4_0 conversion to test it in chat in full offload or quasi-full offload on my 64GB VRAM.
 
@@ -45,7 +54,7 @@ I think some other folks could use that too, especially the ability to convert a
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-23** at **15:23:12**:<br>
+👤 **ikawrakow** commented on **2025-05-23** at **15:23:12**
 
 Did you test that the conversion is working? I'm in the middle of something and don't feel like downloading a few models from HF to test.
 
@@ -53,7 +62,7 @@ The described new model testing procedure saves 1 conversion to `bf16` (or `Q8_0
 
 ---
 
-👤 **Nexesenex** commented the **2025-05-23** at **16:42:03**:<br>
+👤 **Nexesenex** commented on **2025-05-23** at **16:42:03**
 
 > Did you test that the conversion is working? I'm in the middle of something and don't feel like downloading a few models from HF to test.
 
@@ -74,4 +83,13 @@ When I'll come home tonight, I'll make some tests beyond the Llama 3 70b I've be
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-05-24** at **06:09:15**: ✅ `APPROVED`
+👤 **Nexesenex** commented on **2025-05-23** at **18:26:21**
+
+Just checked the 4 conversions types on Llama 3 1B, and they are all coherent, giving me an average recipe of French fries when asked.
+Qwen 1.5B works also.
+
+The feature seem to work with the IK Llama gguf conversion script as it is for the models it can convert normally, without the need to update it with the subsequent mainline PRs.
+
+---
+
+👤 **ikawrakow** approved this pull request ✅ on **2025-05-24** at **06:09:15**

@@ -1,14 +1,17 @@
-### 🔀 [#126](https://github.com/ikawrakow/ik_llama.cpp/pull/126) - Rename iq4_nl_x4 to iq4_nl_r4
+## 🔀 [Pull Request #126](https://github.com/ikawrakow/ik_llama.cpp/pull/126) - Rename iq4_nl_x4 to iq4_nl_r4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/rename_iq4_nl_x4` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-08 |
 | **Updated** | 2024-12-08 |
+| **Merged** | 2024-12-08 |
 
 ---
 
-#### Description
+## 📄 Description
 
 To be consistent with the other quants interleaving 4 rows.
 
