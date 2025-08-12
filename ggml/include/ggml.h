@@ -1396,6 +1396,16 @@ extern "C" {
             struct ggml_tensor  * ids,
             enum ggml_unary_op    op);
 
+    GGML_API struct ggml_tensor * ggml_moe_up_gate_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a_up,
+            struct ggml_tensor  * a_gate,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * a_up_b,
+            struct ggml_tensor  * a_gate_b,
+            enum ggml_unary_op    op);
+
     // A: m columns, n rows,
     // B: p columns, n rows,
     // result is m columns, p rows

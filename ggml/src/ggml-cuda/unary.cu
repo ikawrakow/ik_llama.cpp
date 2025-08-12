@@ -546,3 +546,7 @@ void ggml_cuda_op_swiglu_oai(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
             src0_o / sizeof(float), src1_o / sizeof(float), alpha, limit, stream);
 }
 
+void ggml_swiglu_oai_cuda_f32(const float * x, const float * g, float * dst, const int64_t k, const int64_t n,
+        const int64_t o0, const int64_t o1, const float alpha, const float limit, cudaStream_t stream) {
+    swiglu_oai_cuda(x, g, dst, k, n, o0, o1, alpha, limit, stream);
+}

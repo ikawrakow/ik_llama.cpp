@@ -56,3 +56,17 @@ void ggml_cuda_op_add_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         nb21
     );
 }
+
+void ggml_cuda_add_id(const float * src0, const float * src1, const int32_t * src2, float * dst,
+        int64_t ne00, int64_t ne01, int64_t ne02,
+        int64_t ne0, int64_t ne1, size_t nb01, size_t nb02, size_t nb11, size_t nb21, cudaStream_t stream) {
+    int threads = std::min((int)ne00, 768); // cols
+    dim3 blocks(ne01, ne02); // n_experts_used, n_tokens
+    add_id_kernel<<<blocks, threads, 0, stream>>>(
+        src0, src1, src2, dst,
+        ne0, ne1,
+        nb01, nb02,
+        nb11,
+        nb21
+    );
+}

@@ -10512,7 +10512,7 @@ static ggml_tensor * llm_build_moe_ffn(
                       float   w_scale,
 llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb,
-                        int   il) {
+                        int   il, struct ggml_cgraph * graph = nullptr) {
     int64_t n_embd = cur->ne[0];
     int64_t n_tokens = cur->ne[1];
     bool weight_before_ffn = lctx.model.arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -10606,22 +10606,37 @@ llm_expert_gating_func_type   gating_op,
     // For now we don't modify the fused up/gate op to include biases.
     // Hence, if we have biases, we cannot use fmoe.
     //
-    bool can_use_fmoe = !up_exps_b && !gate_exps_b && (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU);
+    //bool can_use_fmoe = !up_exps_b && !gate_exps_b && (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU);
+    bool can_use_fmoe = type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU || type_op == LLM_FFN_SWIGLU_OAI_MOE;
 
     ggml_tensor * par;
     if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type) {
-        par = ggml_moe_up_gate(ctx, up_exps, gate_exps, cur, selected_experts, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+        if (up_exps_b || gate_exps_b) {
+            par = ggml_moe_up_gate_ext(ctx, up_exps, gate_exps, cur, selected_experts, up_exps_b, gate_exps_b,
+                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
+                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
+        } else {
+            GGML_ASSERT(type_op != LLM_FFN_SWIGLU_OAI_MOE);
+            par = ggml_moe_up_gate(ctx, up_exps, gate_exps, cur, selected_experts,
+                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+        }
     } else {
         ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
+
+        ggml_tensor * gate = llm_build_lora_mm_id(lctx, ctx, gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+        cb(gate, "ffn_moe_gate", il);
+
+        if (graph) {
+            // So we can potentially fuse the up and gate mul_mat_id
+            ggml_build_forward_expand(graph, up);
+            ggml_build_forward_expand(graph, gate);
+        }
 
         if (up_exps_b) {
             up = ggml_add_id(ctx, up, up_exps_b, selected_experts);
             cb(up, "ffn_moe_up_biased", il);
         }
-
-        ggml_tensor * gate = llm_build_lora_mm_id(lctx, ctx, gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
-        cb(gate, "ffn_moe_gate", il);
 
         if (gate_exps_b) {
             gate = ggml_add_id(ctx, gate, gate_exps_b, selected_experts);
@@ -10683,7 +10698,7 @@ static ggml_tensor * llm_build_moe_ffn(
                       float   w_scale,
 llm_expert_gating_func_type   gating_op,
          const llm_build_cb & cb,
-                        int   il) {
+                        int   il, struct ggml_cgraph * graph = nullptr) {
     return llm_build_moe_ffn(ctx, lctx, cur,
             gate_inp,   nullptr,
             up_exps,    nullptr,
@@ -10692,7 +10707,7 @@ llm_expert_gating_func_type   gating_op,
             exp_probs_b,
             n_expert, n_expert_used,
             type_op, norm_w, scale_w, w_scale,
-            gating_op, cb, il);
+            gating_op, cb, il, graph);
 }
 
 static struct ggml_tensor * llm_build_kqv(
@@ -18242,7 +18257,7 @@ struct llm_build_context {
                     LLM_FFN_SWIGLU_OAI_MOE, false,
                     false, 0.0,
                     LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT,
-                    cb, il);
+                    cb, il, gf);
             cb(cur, "ffn_moe_out", il);
 
             cur = ggml_add(ctx0, cur, ffn_inp);

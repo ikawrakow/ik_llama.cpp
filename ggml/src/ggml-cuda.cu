@@ -2221,6 +2221,24 @@ static __global__ void k_copy_dst_from_contiguous(char * __restrict__ dst_origin
     }
 }
 
+//static __global__ void k_quick_add(uint32_t n, uint32_t n_per_row, const float * src1, const float * src2, float * dst) {
+//
+//    for (uint32_t j = threadIdx.x; j < n; j += blockDim.x) {
+//        dst[j] = src1[j] + src2[j % n_per_row];
+//    }
+//}
+
+static __global__ void k_quick_add(uint32_t n_per_row, const float * src1, const float * src2, float * dst) {
+
+    uint32_t row = blockIdx.x;
+    const float * src1_row = src1 + row*n_per_row;
+    float * dst_row = dst + row*n_per_row;
+
+    for (uint32_t j = threadIdx.x; j < n_per_row; j += blockDim.x) {
+        dst_row[j] = src1_row[j] + src2[j];
+    }
+}
+
 static inline bool prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n_as, int64_t n_ids,
         const ggml_tensor * ids, std::vector<int>& moe_counts, std::vector<int>& cum_moe_counts,
         ggml_cuda_pool_alloc<mmid_row_mapping>& dev_row_mapping) {
@@ -2271,7 +2289,7 @@ static inline bool prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n
     return is_ser;
 }
 
-static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * next) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
@@ -2320,7 +2338,25 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                 0, src0->ne[1], 1, src1_padded_col_size, stream);
             CUDA_CHECK(cudaGetLastError());
 
-            return;
+            if (next && next->op == GGML_OP_MUL_MAT_ID && next->src[0]->type == src0->type && src1 == next->src[1] &&
+                ggml_are_same_shape(src0, next->src[0]) &&
+                ggml_backend_buffer_is_cuda(next->src[0]->buffer) &&
+                ggml_backend_buffer_is_cuda(next->buffer) &&
+                !ggml_backend_buffer_is_cuda_split(next->src[0]->buffer)) {
+                ggml_backend_cuda_buffer_context * next_src0_ctx = (ggml_backend_cuda_buffer_context *) next->src[0]->buffer->context;
+                ggml_backend_cuda_buffer_context * next_dst_ctx  = (ggml_backend_cuda_buffer_context *) next->buffer->context;
+                if (next_src0_ctx->device == device_id &&
+                    next_dst_ctx->device  == device_id) {
+                    local_dst.data = next->data;
+                    ggml_cuda_op_mul_mat_vec_q_id(ctx, next->src[0], &local_src1, ids, &local_dst,
+                        (const char *)next->src[0]->data, nullptr, src1_quantized.get(), (float *)next->data,
+                        0, src0->ne[1], 1, src1_padded_col_size, stream);
+                    CUDA_CHECK(cudaGetLastError());
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 
@@ -2443,6 +2479,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             }
         }
     }
+    return false;
 }
 
 static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * next) {
@@ -2471,6 +2508,8 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             src0_2_ctx->device == device_id &&
             src1_ctx->device   == device_id &&
             dst_ctx->device    == device_id) {
+            //printf("%s(%s, %s): %ld x %ld x %ld, %ld x %ld x %ld, %ld x %ld x %ld\n", __func__, src0_1->name, src0_2->name,
+            //        src0->ne[0], src0->ne[1], src0->ne[2], src1->ne[0], src1->ne[1], src1->ne[2], ids->ne[0], ids->ne[1], ids->ne[2]);
             // Fast TG path
             const int64_t n_ids = ids->ne[0];
             auto stream = ctx.stream(device_id, 0);
@@ -2506,11 +2545,25 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 0, src0_1->ne[1], 1, src1_padded_col_size, stream);
             CUDA_CHECK(cudaGetLastError());
 
+            if (dst->src[4]) {
+                ggml_cuda_add_id((const float *)local_dst.data, (const float *)dst->src[4]->data,
+                        (const int32_t *)ids->data, (float *)local_dst.data,
+                        local_dst.ne[0], local_dst.ne[2], local_dst.ne[1], local_dst.ne[0], local_dst.ne[2],
+                        local_dst.nb[1], local_dst.nb[2], dst->src[4]->nb[1], ids->nb[2], stream);
+            }
+
             local_dst.data = dst_gate_contiguous.get();
             ggml_cuda_op_mul_mat_vec_q_id(ctx, src0_2, &local_src1, ids, &local_dst,
                 (const char *)src0_2->data, (const float *)src1->data, src1_quantized.get(), (float *)dst_gate_contiguous.get(),
                 0, src0_2->ne[1], 1, src1_padded_col_size, stream);
             CUDA_CHECK(cudaGetLastError());
+
+            if (dst->src[5]) {
+                ggml_cuda_add_id((const float *)local_dst.data, (const float *)dst->src[5]->data,
+                        (const int32_t *)ids->data, (float *)local_dst.data,
+                        local_dst.ne[0], local_dst.ne[2], local_dst.ne[1], local_dst.ne[0], local_dst.ne[2],
+                        local_dst.nb[1], local_dst.nb[2], dst->src[5]->nb[1], ids->nb[2], stream);
+            }
 
             if (next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
                 ggml_backend_buffer_is_cuda(next->src[0]->buffer) &&
@@ -2519,8 +2572,15 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 ggml_backend_buffer_is_cuda(next->buffer) &&
                 ((ggml_backend_cuda_buffer_context *)next->buffer->context)->device == device_id) {
 
-                ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], dst->ne[0]*n_ids,
-                        (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(), (float *)dst_gate_contiguous.get());
+                auto unary_op = (ggml_unary_op)dst->op_params[0];
+                if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
+                    ggml_swiglu_oai_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
+                            (float *)dst_gate_contiguous.get(), dst->ne[0]*n_ids, dst->ne[0], dst->ne[0], dst->ne[0], 1.702f, 7.0f, stream);
+                } else {
+                    ggml_fused_mul_unary(ctx, unary_op, dst->ne[0]*n_ids,
+                            (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
+                            (float *)dst_gate_contiguous.get());
+                }
                 CUDA_CHECK(cudaGetLastError());
 
                 const int64_t dst_padded_col_size = GGML_PAD(dst->ne[0], MATRIX_ROW_PADDING);
@@ -2556,8 +2616,14 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 return true;
             } else {
                 CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
-                ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
-                        (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(), (float *)dst->data);
+                auto unary_op = (ggml_unary_op)dst->op_params[0];
+                if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
+                    ggml_swiglu_oai_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
+                            (float *)dst->data, dst->ne[0]*n_ids, dst->ne[0], dst->ne[0], dst->ne[0], 1.702f, 7.0f, stream);
+                } else {
+                    ggml_fused_mul_unary(ctx, unary_op, ggml_nelements(dst),
+                            (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(), (float *)dst->data);
+                }
                 CUDA_CHECK(cudaGetLastError());
                 return false;
             }
@@ -2625,7 +2691,7 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         final_src.nb[3] = final_src.nb[2];
     }
 
-    if (ne12 == 1) {
+    if (false && ne12 == 1) {
         ggml_cuda_pool_alloc<char> dst_up_contiguous(ctx.pool(), sizeof(float)*dst_row.ne[0]);
         ggml_cuda_pool_alloc<char> dst_gate_contiguous(ctx.pool(), sizeof(float)*dst_row.ne[0]);
         if (fuse_down) {
@@ -2762,6 +2828,14 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             }
             CUDA_CHECK(cudaGetLastError());
 
+            if (dst->src[4]) {
+                dim3 block_dims(std::min(uint32_t(dst_row.ne[0]), 768u));
+                dim3 grid_dims(num_src1_rows);
+                k_quick_add<<<grid_dims, block_dims, 0, stream>>>(dst_row.ne[0], (const float *)dst_row.data,
+                        (const float *)((const char *)dst->src[4]->data + i02*dst->src[4]->nb[1]), (float *)dst_row.data);
+                CUDA_CHECK(cudaGetLastError());
+            }
+
             dst_row.data  = dst_gate_contiguous.get();
             if (use_quantized_src1) {
                 ggml_cuda_op_mul_mat_q(ctx, &src0_2_row, &src1_row, &dst_row, (const char *)src0_2_row.data, nullptr, src1_quantized.get(), (float *)dst_row.data,
@@ -2771,8 +2845,24 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             }
             CUDA_CHECK(cudaGetLastError());
 
-            ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
-                        (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(), (float *)dst_gate_contiguous.get());
+            if (dst->src[5]) {
+                dim3 block_dims(std::min(uint32_t(dst_row.ne[0]), 768u));
+                dim3 grid_dims(num_src1_rows);
+                k_quick_add<<<grid_dims, block_dims, 0, stream>>>(dst_row.ne[0], (const float *)dst_row.data,
+                        (const float *)((const char *)dst->src[5]->data + i02*dst->src[5]->nb[1]), (float *)dst_row.data);
+                CUDA_CHECK(cudaGetLastError());
+            }
+
+            auto unary_op = (ggml_unary_op)dst->op_params[0];
+            if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
+                ggml_swiglu_oai_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
+                            (float *)dst_gate_contiguous.get(), ggml_nelements(&dst_row), dst_row.ne[0],  dst_row.ne[0],  dst_row.ne[0],
+                            1.702f, 7.0f, stream);
+            } else {
+                ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
+                        (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
+                        (float *)dst_gate_contiguous.get());
+            }
             CUDA_CHECK(cudaGetLastError());
 
             if (fuse_down) {
@@ -2945,7 +3035,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             }
             break;
         case GGML_OP_MUL_MAT_ID:
-            ggml_cuda_mul_mat_id(ctx, dst);
+            skip_next = ggml_cuda_mul_mat_id(ctx, dst, next);
             break;
         case GGML_OP_MOE_FUSED_UP_GATE:
             skip_next = ggml_cuda_up_gate_unary(ctx, dst, next);
