@@ -781,10 +781,10 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
         mmaps_used.reserve(files.size());
         for (const auto & file : files) {
             std::unique_ptr<llama_mmap> mapping(new llama_mmap(file.get(), prefetch ? -1 : 0, ggml_is_numa(), use_thp));
-            mmaps_used.emplace_back(mapping->size, 0);
+            mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
-                mlock_mmap->init(mapping->addr);
+                mlock_mmap->init(mapping->addr());
                 mlock_mmaps->emplace_back(std::move(mlock_mmap));
             }
             mappings.emplace_back(std::move(mapping));
@@ -801,9 +801,9 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
     GGML_ASSERT(!mappings.empty());
     const auto & mapping = mappings.at(idx);
 
-    *first = mapping->size;
+    *first = mapping->size();
     *last  = 0;
-    *addr = mapping->addr;
+    *addr = mapping->addr();
     for (ggml_tensor * tensor = ggml_get_first_tensor(ctx); tensor; tensor = ggml_get_next_tensor(ctx, tensor)) {
         try {
             const auto * weight = get_weight(ggml_get_name(tensor));
@@ -828,9 +828,9 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     if (use_mmap) {
         const auto & mapping = mappings.at(w.idx);
         if (cur->data == nullptr) {
-            cur->data = (uint8_t *)mapping->addr + w.offs;
+            cur->data = (uint8_t *)mapping->addr() + w.offs;
         } else {
-            memcpy(cur->data, (uint8_t *)mapping->addr + w.offs, ggml_nbytes(cur));
+            memcpy(cur->data, (uint8_t *)mapping->addr() + w.offs, ggml_nbytes(cur));
         }
     } else {
         GGML_ASSERT(cur->data != nullptr);
@@ -916,7 +916,7 @@ bool llama_model_loader::load_all_data(
             if (bufs_mmap.count(weight->idx)) {
                 buf_mmap = bufs_mmap.at(weight->idx);
             }
-            uint8_t * data = (uint8_t *) mapping->addr + weight->offs;
+            uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
 
             if (check_tensors) {
                 validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {
@@ -1021,7 +1021,7 @@ bool llama_model_loader::load_all_data(
                 auto & mapping = mappings.at(idx);
                 mapping->unmap_fragment(0, mmap_used.first);
                 if (mmap_used.second != 0) {
-                    mapping->unmap_fragment(mmap_used.second, mapping->size);
+                    mapping->unmap_fragment(mmap_used.second, mapping->size());
                 }
             }
         }
