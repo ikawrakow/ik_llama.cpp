@@ -1,7 +1,6 @@
 #include "llama-vocab.h"
 
 #include "ggml.h"
-//#include "gguf.h"
 #include "llama-impl.h"
 #include "llama-model-loader.h"
 
@@ -1659,7 +1658,7 @@ private:
 };
 
 void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
-    struct gguf_context * ctx = ml.meta; //.get();
+    gguf_context * ctx = ml.meta;
 
     // determine vocab type
     {
