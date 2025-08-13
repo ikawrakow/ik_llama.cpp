@@ -1705,7 +1705,7 @@ static std::string llama_token_to_piece(const struct llama_model * model, llama_
     return piece;
 }
 
-static ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer) {
+ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer) {
     ggml_backend_buffer_type_t buft = nullptr;
 
 #if defined(GGML_USE_CUDA)

@@ -493,7 +493,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
             (V_h2 + k_VKQ_0*stride_V, tile_V, nbatch_V2, stride_V);
     } else {
         constexpr bool use_cp_async = nstages == 1;
-        if constexpr (ncols2 > 1 || mask_h2) {
+        if (ncols2 > 1 || mask_h2) {
             flash_attn_ext_f16_load_mask<ncols1, nwarps, c::nbatch_fa, use_cp_async>(mask_h2 + k_VKQ_0/2, tile_mask, stride_mask);
         }
     }

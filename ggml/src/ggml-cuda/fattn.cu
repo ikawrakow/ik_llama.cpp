@@ -524,7 +524,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     // Hence, we use it only for DeepSeek with MLA enabled, where head sizes are 576, 512,
     // so no other implementation works.
     //
-    if (new_mma_available(cc) && (Q->ne[0] == 576 || (Q->ne[0] == 64) && Q->ne[1] >= 128)) {
+    if (new_mma_available(cc) && Q->ne[0] == 576) {
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
         return;
     }

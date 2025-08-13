@@ -2,6 +2,19 @@
 #include "llama-impl.h"
 #include "llama-mmap.h"
 #include "ggml.h"
+//#include "ggml-backend.h"
+
+#ifdef GGML_USE_CUDA
+#  include "ggml-cuda.h"
+#elif defined(GGML_USE_VULKAN)
+#  include "ggml-vulkan.h"
+#elif defined(GGML_USE_SYCL)
+#  include "ggml-sycl.h"
+#elif defined(GGML_USE_KOMPUTE)
+#   include "ggml-kompute.h"
+#elif defined(GGML_USE_CANN)
+#   include "ggml-cann.h"
+#endif
 
 #include <set>
 #include <map>
