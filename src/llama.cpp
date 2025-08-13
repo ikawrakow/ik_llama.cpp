@@ -19002,9 +19002,8 @@ static int llama_decode_internal(
 
         // non-causal masks do not use the KV cache
         if (hparams.causal_attn) {
-	    int32_t ret = llama_kv_cache_update(&lctx);
-            if (ret != 0)
-            {
+            int32_t ret = llama_kv_cache_update(&lctx);
+            if (ret != 0) {
                 return ret;
             }
 
