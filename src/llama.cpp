@@ -19652,7 +19652,6 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
             LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
         }
     }
-
     return 0;
 }
 
