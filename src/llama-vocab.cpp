@@ -2333,7 +2333,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else {
                 // token is control, but not marked as EOG -> print a debug log
                 if (id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL && special_eog_ids.count(t.second) == 0) {
-                    LLAMA_LOG_WARN("%s: control token: %6d '%s' is not marked as EOG\n",
+                    LLAMA_LOG_DEBUG("%s: control token: %6d '%s' is not marked as EOG\n",
                             __func__, t.second, t.first.c_str());
                 }
             }
@@ -2568,7 +2568,7 @@ llama_token_attr llama_vocab::impl::token_get_attr(llama_token id) const {
 }
 
 void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
-    LLAMA_LOG_INFO("%s: initializing tokenizer for type %d\n", __func__, type);
+    LLAMA_LOG_DEBUG("%s: initializing tokenizer for type %d\n", __func__, type);
 
     switch (type) {
         case LLAMA_VOCAB_TYPE_SPM:

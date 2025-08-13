@@ -18739,7 +18739,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                 dst->ne[2], dst->ne[1], dst->nb[1],
                 k->type, v->type,
                 Dk, Dv, neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1],
-                q->data, k->data, v->data, mask->data, sinks->data,
+                q->data, k->data, v->data, mask->data, sinks ? sinks->data : NULL,
                 scale, softcap, (float *)dst->data,
                 params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, ith, nth)) return;
 
