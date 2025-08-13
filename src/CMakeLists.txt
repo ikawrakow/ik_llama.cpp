@@ -17,6 +17,8 @@ add_library(llama
             llama-vocab.cpp
             llama-grammar.cpp
             llama-sampling.cpp
+            llama-mmap.cpp
+            llama-model-loader.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp
