@@ -734,7 +734,7 @@ llama_token llama_sample_token_impl(struct llama_sampling * smpl, llama_token_da
 // Ported from Koboldcpp, original PR: https://github.com/LostRuins/koboldcpp/pull/982 (Original author: pi6am)
 static void get_overlapping_token_sequences(const llama_vocab& vocab, const std::string& str, std::unordered_multimap<llama_token, std::vector<llama_token>>& token_sequences, int max_tail_len = -1) {
     for (llama_token token_id = 0; token_id < (llama_token)vocab.n_tokens(); token_id++) {
-        std::string word = llama_detokenize(vocab, { token_id }, true);
+        auto word = vocab.detokenize( { token_id }, true);
         if (word.find(str) != std::string::npos) {
             token_sequences.emplace(token_id, std::vector<llama_token>());
         }
@@ -751,7 +751,8 @@ static void get_overlapping_token_sequences(const llama_vocab& vocab, const std:
                     }
                 }
                 if (match) {
-                    std::vector<llama_token> tokenization = llama_tokenize_internal(vocab, str.substr(i), false, false);
+                    auto tokenization = vocab.tokenize(str.substr(i), false, false);
+                    //std::vector<llama_token> tokenization = llama_tokenize_internal(vocab, str.substr(i), false, false);
                     if (max_tail_len >= 0 && tokenization.size() > (size_t)max_tail_len) {
                         tokenization.resize(max_tail_len);
                     }

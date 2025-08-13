@@ -4307,702 +4307,6 @@ static void llm_load_hparams(
     hparams.rope_type = llama_rope_type(&model);
 }
 
-static void llm_load_vocab(
-        llama_model_loader & ml,
-        llama_model & model) {
-    auto & vocab = model.vocab;
-
-    struct gguf_context * ctx = ml.meta;
-
-    const auto kv = LLM_KV(model.arch);
-
-    // determine vocab type
-    {
-        std::string tokenizer_model;
-        std::string tokenizer_pre;
-
-        ml.get_key(LLM_KV_TOKENIZER_MODEL, tokenizer_model);
-        ml.get_key(LLM_KV_TOKENIZER_PRE,   tokenizer_pre, false);
-
-        if (tokenizer_model == "no_vocab") {
-            vocab.type = LLAMA_VOCAB_TYPE_NONE;
-
-            // default special tokens
-            vocab.special_bos_id  = -1;
-            vocab.special_eos_id  = -1;
-            vocab.special_unk_id  = -1;
-            vocab.special_sep_id  = -1;
-            vocab.special_pad_id  = -1;
-            vocab.special_cls_id  = -1;
-            vocab.special_mask_id = -1;
-            vocab.linefeed_id     = -1;
-
-            return;
-        } else if (tokenizer_model == "llama") {
-            vocab.type = LLAMA_VOCAB_TYPE_SPM;
-
-            // default special tokens
-            vocab.special_bos_id  = 1;
-            vocab.special_eos_id  = 2;
-            vocab.special_unk_id  = 0;
-            vocab.special_sep_id  = -1;
-            vocab.special_pad_id  = -1;
-            vocab.special_cls_id  = -1;
-            vocab.special_mask_id = -1;
-        } else if (tokenizer_model == "bert") {
-            vocab.type = LLAMA_VOCAB_TYPE_WPM;
-
-            // default special tokens
-            vocab.special_bos_id  = -1;
-            vocab.special_eos_id  = -1;
-            vocab.special_unk_id  = 100;
-            vocab.special_sep_id  = 102;
-            vocab.special_pad_id  = 0;
-            vocab.special_cls_id  = 101;
-            vocab.special_mask_id = 103;
-        } else if (tokenizer_model == "gpt2") {
-            vocab.type = LLAMA_VOCAB_TYPE_BPE;
-
-            // read bpe merges and populate bpe ranks
-            const int merges_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_MERGES).c_str());
-            if (merges_keyidx == -1) {
-                throw std::runtime_error("cannot find tokenizer merges in model file\n");
-            }
-
-            const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
-            for (int i = 0; i < n_merges; i++) {
-                const std::string word = gguf_get_arr_str(ctx, merges_keyidx, i);
-                GGML_ASSERT(unicode_cpts_from_utf8(word).size() > 0);
-
-                std::string first;
-                std::string second;
-
-                const size_t pos = word.find(' ', 1);
-
-                if (pos != std::string::npos) {
-                    first  = word.substr(0, pos);
-                    second = word.substr(pos + 1);
-                }
-
-                vocab.bpe_ranks.emplace(std::make_pair(first, second), i);
-            }
-
-            // default special tokens
-            if(model.arch == LLM_ARCH_DOTS1) {
-                vocab.special_bos_id = -1;
-            }
-            else {
-                vocab.special_bos_id  = 11;
-            }
-            vocab.special_eos_id  = 11;
-            vocab.special_unk_id  = -1;
-            vocab.special_sep_id  = -1;
-            vocab.special_pad_id  = -1;
-            vocab.special_cls_id  = -1;
-            vocab.special_mask_id = -1;
-        } else if (tokenizer_model == "t5") {
-            vocab.type = LLAMA_VOCAB_TYPE_UGM;
-
-            // default special tokens
-            vocab.special_bos_id  = -1;
-            vocab.special_eos_id  = 1;
-            vocab.special_unk_id  = 2;
-            vocab.special_sep_id  = -1;
-            vocab.special_pad_id  = 0;
-            vocab.special_cls_id  = -1;
-            vocab.special_mask_id = -1;
-
-            const int precompiled_charsmap_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str());
-            if (precompiled_charsmap_keyidx != -1) {
-                size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
-                const char * precompiled_charsmap = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
-                vocab.precompiled_charsmap.assign(precompiled_charsmap, precompiled_charsmap + n_precompiled_charsmap);
-#ifdef IS_BIG_ENDIAN
-                // correct endiannes of data in precompiled_charsmap binary blob
-                uint32_t * xcda_blob_size = (uint32_t *) &vocab.precompiled_charsmap[0];
-                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
-                assert(*xcda_blob_size + sizeof(uint32_t) < n_precompiled_charsmap);
-                size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
-                uint32_t * xcda_array = (uint32_t *) &vocab.precompiled_charsmap[sizeof(uint32_t)];
-                for (size_t i = 0; i < xcda_array_size; ++i) {
-                    xcda_array[i] = __builtin_bswap32(xcda_array[i]);
-                }
-#endif
-            }
-        } else {
-            throw std::runtime_error(format("unknown tokenizer: '%s'", tokenizer_model.c_str()));
-        }
-
-        // for now, only BPE models have pre-tokenizers
-        if (vocab.type == LLAMA_VOCAB_TYPE_BPE) {
-            vocab.tokenizer_add_space_prefix = false;
-            vocab.tokenizer_clean_spaces = true;
-            if (tokenizer_pre.empty()) {
-                //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                // OK - I don't feel like recreati8ng the LLaMA-v3 models. Considering that, at least for now,
-                // LLaMA-v3 is the only model wehere we end up here, let's just force the pre-tokanizer to be
-                // llama3.
-                tokenizer_pre = "llama3";
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_LLAMA3;
-                LLAMA_LOG_WARN("%s: missing pre-tokenizer type, using: 'llama3'\n", __func__);
-                LLAMA_LOG_WARN("%s:                                             \n", __func__);
-                LLAMA_LOG_WARN("%s: ************************************        \n", __func__);
-                LLAMA_LOG_WARN("%s: GENERATION QUALITY MAY BE DEGRADED!         \n", __func__);
-                LLAMA_LOG_WARN("%s: CONSIDER REGENERATING THE MODEL             \n", __func__);
-                LLAMA_LOG_WARN("%s: ************************************        \n", __func__);
-                LLAMA_LOG_WARN("%s:                                             \n", __func__);
-                //vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
-                //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-            } else if (tokenizer_pre == "default") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
-            } else if (
-                    tokenizer_pre == "llama3"   ||
-                    tokenizer_pre == "llama-v3" ||
-                    tokenizer_pre == "llama-bpe") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_LLAMA3;
-                vocab.tokenizer_ignore_merges = true;
-                vocab.tokenizer_add_bos = true;
-            } else if (
-                    tokenizer_pre == "deepseek-llm") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEEPSEEK_LLM;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                    tokenizer_pre == "deepseek-coder") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEEPSEEK_CODER;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                    tokenizer_pre == "deepseek-v3") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                    tokenizer_pre == "falcon") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_FALCON;
-            } else if (tokenizer_pre == "falcon3") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_FALCON_3;
-            } else if (tokenizer_pre == "falcon_e") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_FALCON_E;
-            } else if (
-                    tokenizer_pre == "mpt") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_MPT;
-            } else if (
-                    tokenizer_pre == "starcoder") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_STARCODER;
-            } else if (
-                    tokenizer_pre == "gpt-2"   ||
-                    tokenizer_pre == "phi-2"   ||
-                    tokenizer_pre == "jina-es" ||
-                    tokenizer_pre == "jina-de" ||
-                    tokenizer_pre == "jina-v2-es" ||
-                    tokenizer_pre == "jina-v2-de" ||
-                    tokenizer_pre == "jina-v2-code") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_GPT2;
-            } else if (
-                    tokenizer_pre == "refact") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_REFACT;
-            } else if (
-                tokenizer_pre == "command-r") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_COMMAND_R;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "qwen2" || tokenizer_pre == "deepseek-r1-qwen") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_QWEN2;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "stablelm2") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_STABLELM2;
-            } else if (
-                tokenizer_pre == "olmo") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_OLMO;
-            } else if (
-                tokenizer_pre == "dbrx") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DBRX;
-            } else if (
-                tokenizer_pre == "smaug-bpe") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_SMAUG;
-            } else if (
-                tokenizer_pre == "poro-chat") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_PORO;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "glm4" ||
-                tokenizer_pre == "chatglm-bpe") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_CHATGLM4;
-                vocab.special_bos_id  = -1;
-            } else if (
-                tokenizer_pre == "viking") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_VIKING;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "jais") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_JAIS;
-            } else if (
-                tokenizer_pre == "tekken") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_TEKKEN;
-                vocab.tokenizer_clean_spaces = false;
-                vocab.tokenizer_ignore_merges = true;
-                vocab.tokenizer_add_bos = true;
-            } else if (
-                tokenizer_pre == "smollm") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_SMOLLM;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "codeshell") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_CODESHELL;
-            } else if (
-                tokenizer_pre == "gpt-4o" ||
-                tokenizer_pre == "llama4") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_GPT4O;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "superbpe") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_SUPERBPE;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "trillion") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_TRILLION;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "bailingmoe") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_BAILINGMOE;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "seed-coder") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_SEED_CODER;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "hunyuan") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_HUNYUAN;
-                vocab.tokenizer_clean_spaces = false;
-            } else if (
-                tokenizer_pre == "kimi-k2") {
-                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_KIMI_K2;
-                vocab.tokenizer_clean_spaces = false;
-            } else {
-                throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
-            }
-        } else if (vocab.type == LLAMA_VOCAB_TYPE_SPM) {
-            vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
-            vocab.tokenizer_add_space_prefix = true;
-            vocab.tokenizer_clean_spaces = false;
-            vocab.tokenizer_add_bos = true;
-            vocab.tokenizer_add_eos = false;
-        } else if (vocab.type == LLAMA_VOCAB_TYPE_WPM) {
-            vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
-            vocab.tokenizer_add_space_prefix = false;
-            vocab.tokenizer_clean_spaces = true;
-            vocab.tokenizer_add_bos = true;
-            vocab.tokenizer_add_eos = false;
-        } else if (vocab.type == LLAMA_VOCAB_TYPE_UGM) {
-            vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
-            vocab.tokenizer_add_bos = false;
-            vocab.tokenizer_add_eos = true;
-        } else {
-            vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
-        }
-
-        ml.get_key(LLM_KV_TOKENIZER_ADD_PREFIX,      vocab.tokenizer_add_space_prefix,         false);
-        ml.get_key(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS, vocab.tokenizer_remove_extra_whitespaces, false);
-    }
-
-    const int token_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_LIST).c_str());
-    if (token_idx == -1) {
-        throw std::runtime_error("cannot find tokenizer vocab in model file\n");
-    }
-
-    const float * scores = nullptr;
-    const int score_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SCORES).c_str());
-    if (score_idx != -1) {
-        scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
-    }
-
-    const int * toktypes = nullptr;
-    const int toktype_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_TOKEN_TYPE).c_str());
-    if (toktype_idx != -1) {
-        toktypes = (const int * ) gguf_get_arr_data(ctx, toktype_idx);
-    }
-
-    const uint32_t n_vocab = gguf_get_arr_n(ctx, token_idx);
-
-    vocab.id_to_token.resize(n_vocab);
-
-    for (uint32_t i = 0; i < n_vocab; i++) {
-        std::string word = gguf_get_arr_str(ctx, token_idx, i);
-        GGML_ASSERT(unicode_cpts_from_utf8(word).size() > 0);
-
-        vocab.token_to_id[word] = i;
-        vocab.max_token_len = std::max(vocab.max_token_len, (int) word.size());
-
-        auto & token_data = vocab.id_to_token[i];
-        token_data.text  = std::move(word);
-        token_data.score = scores ? scores[i] : 0.0f;
-        token_data.attr  = LLAMA_TOKEN_ATTR_NORMAL;
-
-        if (toktypes) {  //TODO: remove, required until per token attributes are available from GGUF file
-            switch(toktypes[i]) {
-                case LLAMA_TOKEN_TYPE_UNKNOWN:      token_data.attr = LLAMA_TOKEN_ATTR_UNKNOWN;      break;
-                case LLAMA_TOKEN_TYPE_UNUSED:       token_data.attr = LLAMA_TOKEN_ATTR_UNUSED;       break;
-                case LLAMA_TOKEN_TYPE_NORMAL:       token_data.attr = LLAMA_TOKEN_ATTR_NORMAL;       break;
-                case LLAMA_TOKEN_TYPE_CONTROL:      token_data.attr = LLAMA_TOKEN_ATTR_CONTROL;      break;
-                case LLAMA_TOKEN_TYPE_USER_DEFINED: token_data.attr = LLAMA_TOKEN_ATTR_USER_DEFINED; break;
-                case LLAMA_TOKEN_TYPE_BYTE:         token_data.attr = LLAMA_TOKEN_ATTR_BYTE;         break;
-                case LLAMA_TOKEN_TYPE_UNDEFINED:    token_data.attr = LLAMA_TOKEN_ATTR_UNDEFINED;    break;
-                default:                            token_data.attr = LLAMA_TOKEN_ATTR_UNDEFINED;    break;
-            }
-        }
-    }
-    GGML_ASSERT(vocab.id_to_token.size() == vocab.token_to_id.size());
-
-    // determine the newline token: LLaMA "<0x0A>" == 10 == '\n', Falcon 193 == '\n'
-    if (vocab.type == LLAMA_VOCAB_TYPE_SPM) {
-        // For Fill-In-the-Middle (FIM)/infill models which where converted
-        // prior to support of FIM special tokens in GGUF, the following
-        // will allow those models to continue to work. The general names
-        // of the known models are currently CodeLlama (LLM_ARCH_LLAMA) and
-        // CodeGemma (LLM_ARCH_GEMMA). This can potentially be removed once
-        // new versions of these models have been published.
-        std::string gen_name;
-        ml.get_key(LLM_KV_GENERAL_NAME, gen_name, false);
-
-        std::transform(gen_name.begin(), gen_name.end(), gen_name.begin(),
-            [](unsigned char c){ return std::tolower(c); });
-
-        if (gen_name.find("code") != std::string::npos) {
-            if (model.arch == LLM_ARCH_LLAMA
-              && 32010 < vocab.id_to_token.size()
-              && vocab.id_to_token[32007].text.find("<PRE>") != std::string::npos
-              && vocab.id_to_token[32008].text.find("<SUF>") != std::string::npos
-              && vocab.id_to_token[32009].text.find("<MID>") != std::string::npos
-              && vocab.id_to_token[32010].text.find("<EOT>") != std::string::npos) {
-                vocab.special_prefix_id = 32007;
-                vocab.special_suffix_id = 32008;
-                vocab.special_middle_id = 32009;
-                vocab.special_eot_id    = 32010;
-            } else if (model.arch == LLM_ARCH_GEMMA
-              && 107 < vocab.id_to_token.size()
-              && vocab.id_to_token[67].text == "<|fim_prefix|>"
-              && vocab.id_to_token[69].text == "<|fim_suffix|>"
-              && vocab.id_to_token[68].text == "<|fim_middle|>"
-              && vocab.id_to_token[107].text == "<end_of_turn>") {
-                vocab.special_prefix_id = 67;
-                vocab.special_suffix_id = 69;
-                vocab.special_middle_id = 68;
-                // TODO: this is not EOT, it is "file separator" token, needs fix
-                //       https://huggingface.co/google/codegemma-7b-it/blob/9b1d9231388358c04d90bd003458f5070d97db44/tokenizer_config.json#L565-L572
-                //vocab.special_eot_id    = 70;
-                vocab.special_eot_id    = 107;
-            }
-        }
-        try {
-            vocab.linefeed_id = llama_byte_to_token_impl(vocab, '\n');
-        } catch (const std::exception & e) {
-            LLAMA_LOG_WARN("%s: SPM vocabulary, but newline token not found: %s! Using special_pad_id instead.", __func__, e.what());
-            vocab.linefeed_id = vocab.special_pad_id;
-        }
-    } else if (vocab.type == LLAMA_VOCAB_TYPE_WPM) {
-        vocab.linefeed_id = vocab.special_pad_id;
-    } else {
-        const std::vector<int> ids = llama_tokenize_internal(vocab, "\xC4\x8A", false); // U+010A
-        GGML_ASSERT(!ids.empty() && "model vocab missing newline token");
-        vocab.linefeed_id = ids[0];
-    }
-
-    // special tokens
-    {
-        const std::vector<std::pair<enum llm_kv, int32_t &>> special_token_types = {
-            { LLM_KV_TOKENIZER_BOS_ID,    vocab.special_bos_id    },
-            { LLM_KV_TOKENIZER_EOS_ID,    vocab.special_eos_id    },
-            { LLM_KV_TOKENIZER_EOT_ID,    vocab.special_eot_id    },
-            { LLM_KV_TOKENIZER_EOM_ID,    vocab.special_eom_id    },
-            { LLM_KV_TOKENIZER_UNK_ID,    vocab.special_unk_id    },
-            { LLM_KV_TOKENIZER_SEP_ID,    vocab.special_sep_id    },
-            { LLM_KV_TOKENIZER_PAD_ID,    vocab.special_pad_id    },
-            { LLM_KV_TOKENIZER_CLS_ID,    vocab.special_cls_id    },
-            { LLM_KV_TOKENIZER_MASK_ID,   vocab.special_mask_id   },
-
-            { LLM_KV_TOKENIZER_FIM_PRE_ID, vocab.special_fim_pre_id },
-            { LLM_KV_TOKENIZER_FIM_SUF_ID, vocab.special_fim_suf_id },
-            { LLM_KV_TOKENIZER_FIM_MID_ID, vocab.special_fim_mid_id },
-            { LLM_KV_TOKENIZER_FIM_PAD_ID, vocab.special_fim_pad_id },
-            { LLM_KV_TOKENIZER_FIM_REP_ID, vocab.special_fim_rep_id },
-            { LLM_KV_TOKENIZER_FIM_SEP_ID, vocab.special_fim_sep_id },
-
-            { LLM_KV_TOKENIZER_PREFIX_ID, vocab.special_prefix_id },
-            { LLM_KV_TOKENIZER_SUFFIX_ID, vocab.special_suffix_id },
-            { LLM_KV_TOKENIZER_MIDDLE_ID, vocab.special_middle_id },
-        };
-
-        for (const auto & it : special_token_types) {
-            const std::string & key = kv(std::get<0>(it));
-            int32_t & id = std::get<1>(it);
-
-            uint32_t new_id;
-            if (!ml.get_key(std::get<0>(it), new_id, false)) {
-                continue;
-            }
-            if (new_id >= vocab.id_to_token.size()) {
-                LLAMA_LOG_WARN("%s: bad special token: '%s' = %ud, using default id %d\n",
-                    __func__, key.c_str(), new_id, id);
-            } else {
-                id = new_id;
-            }
-        }
-
-        // Handle add_bos_token and add_eos_token
-        {
-            bool temp = true;
-
-            if (ml.get_key(LLM_KV_TOKENIZER_ADD_BOS, temp, false)) {
-                vocab.tokenizer_add_bos = temp;
-            }
-            if (ml.get_key(LLM_KV_TOKENIZER_ADD_EOS, temp, false)) {
-                vocab.tokenizer_add_eos = temp;
-            }
-        }
-
-        // find EOT token: "<|eot_id|>", "<|im_end|>", "<end_of_turn>", etc.
-        //
-        // TODO: convert scripts should provide this token through the KV metadata LLAMA_KV_TOKENIZER_EOT_ID
-        //       for now, we apply this workaround to find the EOT token based on its text
-        if (vocab.special_eot_id == -1) {
-            for (const auto & t : vocab.token_to_id) {
-                if (
-                        // TODO: gemma "<end_of_turn>" is exported as a normal token, so the following check does not work
-                        //       need to fix convert script
-                        //vocab.id_to_token[t.second].type == LLAMA_TOKEN_TYPE_CONTROL &&
-                        (t.first == "<|eot_id|>" ||
-                         t.first == "<|im_end|>" ||
-                         t.first == "<|end|>" ||
-                         t.first == "<end_of_turn>" ||
-                         t.first == "<|endoftext|>"
-                        )
-                   ) {
-                    vocab.special_eot_id = t.second;
-                    break;
-                }
-            }
-        }
-
-        // @ngxson : quick hack for gpt-oss, always render these tokens
-        for (const auto & t : vocab.token_to_id) {
-            if (t.first == "<|channel|>" || t.first == "<|message|>" || t.first == "<|start|>") {
-                vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
-            }
-        }
-
-        // find EOM token: "<|eom_id|>"
-        //
-        // TODO: convert scripts should provide this token through the KV metadata LLAMA_KV_TOKENIZER_EOM_ID
-        //       for now, we apply this workaround to find the EOM token based on its text
-        if (vocab.special_eom_id == -1) {
-            const auto & t = vocab.token_to_id.find("<|eom_id|>");
-            if (t != vocab.token_to_id.end()) {
-                vocab.special_eom_id = t->second;
-            }
-        }
-
-        for (const auto & t : vocab.token_to_id) {
-            // find FIM_PRE token: "<|fim_prefix|>", "<fim-prefix>", "<PRE>", etc.
-            if (vocab.special_fim_pre_id == -1) {
-                if (false
-                        || t.first == "<|fim_prefix|>"  // Qwen
-                        || t.first == "<fim-prefix>"
-                        || t.first == "<fim_prefix>"    // Granite
-                        || t.first == "<｜fim▁begin｜>" // DeepSeek
-                        || t.first == "<PRE>"
-                        || t.first == "▁<PRE>"          // CodeLlama
-                        || t.first == "<|code_prefix|>" // GLM-4.5
-                        ) {
-                    vocab.special_fim_pre_id = t.second;
-                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
-                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
-                                __func__, t.second, t.first.c_str());
-                                vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
-                    }
-                }
-            }
-
-            // find FIM_SUF token: "<|fim_suffix|>", "<fim-suffix>", "<SUF>", etc.
-            if (vocab.special_fim_suf_id == -1) {
-                if (false
-                        || t.first == "<|fim_suffix|>" // Qwen
-                        || t.first == "<fim-suffix>"
-                        || t.first == "<fim_suffix>"   // Granite
-                        || t.first == "<｜fim▁hole｜>" // DeepSeek
-                        || t.first == "<SUF>"
-                        || t.first == "▁<SUF>"         // CodeLlama
-                        || t.first == "<|code_suffix|>" // GLM-4.5
-                        ) {
-                    vocab.special_fim_suf_id = t.second;
-                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
-                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
-                                __func__, t.second, t.first.c_str());
-                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
-                    }
-                }
-            }
-
-            // find FIM_MID token: "<|fim_middle|>", "<fim-middle>", "<MID>", etc.
-            // TODO OAI_MOE: o200k_harmony
-            if (vocab.special_fim_mid_id == -1) {
-                if (false
-                        || t.first == "<|fim_middle|>" // Qwen
-                        || t.first == "<fim-middle>"
-                        || t.first == "<fim_middle>"   // Granite
-                        || t.first == "<｜fim▁end｜>"  // DeepSeek
-                        || t.first == "<MID>"
-                        || t.first == "▁<MID>"         // CodeLlama
-                        || t.first == "<|code_middle|>" // GLM-4.5
-                        ) {
-                    vocab.special_fim_mid_id = t.second;
-                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
-                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
-                                __func__, t.second, t.first.c_str());
-                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
-                    }
-                }
-            }
-
-
-            // find FIM_PAD token: "<|fim_pad|>", "<fim-pad>", "<PAD>", etc.
-            if (vocab.special_fim_pad_id == -1) {
-                if (false
-                        || t.first == "<|fim_pad|>" // Qwen
-                        || t.first == "<fim-pad>"
-                        || t.first == "<fim_pad>"   // Granite
-                        || t.first == "<PAD>"
-                        ) {
-                    vocab.special_fim_pad_id = t.second;
-                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
-                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
-                                __func__, t.second, t.first.c_str());
-                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
-                    }
-                }
-            }
-
-            // find FIM_REP token: "<|fim_repo|>", "<fim-repo>", "<REP>", etc.
-            if (vocab.special_fim_rep_id == -1) {
-                if (false
-                        || t.first == "<|fim_repo|>"  // Qwen
-                        || t.first == "<|repo_name|>"
-                        || t.first == "<fim-repo>"
-                        || t.first == "<REPO>"
-                        || t.first == "<reponame>"    // Granite
-                        ) {
-                    vocab.special_fim_rep_id = t.second;
-                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
-                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
-                                __func__, t.second, t.first.c_str());
-                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
-                    }
-                }
-            }
-
-            // find FIM_SEP token: "<|file_sep|>"
-            if (vocab.special_fim_sep_id == -1) {
-                if (false
-                        || t.first == "<|file_sep|>" // Qwen
-                        ) {
-                    vocab.special_fim_sep_id = t.second;
-                    if ((vocab.id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
-                        LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
-                                __func__, t.second, t.first.c_str());
-                        vocab.id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
-                    }
-                }
-            }
-        }
-
-    }
-
-    // build special tokens cache
-    {
-        for (llama_vocab::id id = 0; id < (llama_vocab::id)n_vocab; ++id) {
-            if (vocab.id_to_token[id].attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED | LLAMA_TOKEN_ATTR_UNKNOWN)) {
-                vocab.cache_special_tokens.push_back(id);
-            }
-        }
-
-        std::sort(vocab.cache_special_tokens.begin(), vocab.cache_special_tokens.end(),
-            [&] (const llama_vocab::id a, const llama_vocab::id b) {
-                return vocab.id_to_token[a].text.size() > vocab.id_to_token[b].text.size();
-            }
-        );
-
-        LLAMA_LOG_INFO("%s: special tokens cache size = %u\n", __func__, (uint32_t)vocab.cache_special_tokens.size());
-    }
-
-    // build token to piece cache
-    {
-        size_t size_cache = 0;
-
-        std::vector<llama_vocab::token> cache_token_to_piece(n_vocab);
-
-        for (uint32_t id = 0; id < n_vocab; ++id) {
-            cache_token_to_piece[id] = llama_token_to_piece(&model, id, true);
-
-            size_cache += cache_token_to_piece[id].size();
-        }
-
-        std::swap(vocab.cache_token_to_piece, cache_token_to_piece);
-
-        LLAMA_LOG_INFO("%s: token to piece cache size = %.4f MB\n", __func__, size_cache / 1024.0 / 1024.0);
-    }
-
-    // Handle per token attributes
-    //NOTE: Each model customizes per token attributes.
-    //NOTE: Per token attributes are missing from the GGUF file.
-    //TODO: Extract attributes from GGUF file.
-    {
-        auto _contains_any = [] (const std::string &str, const std::vector<std::string> &substrs) -> bool {
-            for (auto substr : substrs) {
-                if (str.find(substr) < std::string::npos) {
-                    return true;
-                }
-            }
-            return false;
-        };
-
-        auto _set_tokenid_attr = [&] (const llama_vocab::id id, llama_token_attr attr, bool value) {
-            uint32_t current = vocab.id_to_token.at(id).attr;
-            current = value ? (current | attr) : (current & ~attr);
-            vocab.id_to_token[id].attr = (llama_token_attr) current;
-        };
-
-        auto _set_token_attr = [&] (const std::string & token, llama_token_attr attr, bool value) {
-            _set_tokenid_attr(vocab.token_to_id.at(token), attr, value);
-        };
-
-        std::string model_name;
-        std::string tokenizer_pre;
-
-        ml.get_key(LLM_KV_GENERAL_NAME, model_name, false);
-        ml.get_key(LLM_KV_TOKENIZER_PRE, tokenizer_pre, false);
-
-        // model name to lowercase
-        std::transform(model_name.begin(), model_name.end(), model_name.begin(),
-            [] (const std::string::value_type x) {
-                return std::tolower(x);
-            }
-        );
-
-        // set attributes by model/tokenizer name
-        if (_contains_any(tokenizer_pre, {"jina-v2-de", "jina-v2-es", "jina-v2-code"})) {
-            _set_token_attr("<mask>", LLAMA_TOKEN_ATTR_LSTRIP, true);
-        } else if (_contains_any(model_name, {"phi-3", "phi3"})) {
-            for (auto id : vocab.cache_special_tokens) {
-                _set_tokenid_attr(id, LLAMA_TOKEN_ATTR_RSTRIP, true);
-            }
-            for (auto token : {"</s>"}) {
-                _set_token_attr(token, LLAMA_TOKEN_ATTR_RSTRIP, true);
-            }
-            for (auto token : {"<unk>", "<s>", "<|endoftext|>"}) {
-                _set_token_attr(token, LLAMA_TOKEN_ATTR_RSTRIP, false);
-            }
-        }
-    }
-}
-
 static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
     const auto & hparams = model.hparams;
     const auto & vocab   = model.vocab;
@@ -5041,10 +4345,6 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
     // hparams
     LLAMA_LOG_INFO("%s: format           = %s\n",     __func__, llama_file_version_name(ml.fver));
     LLAMA_LOG_INFO("%s: arch             = %s\n",     __func__, LLM_ARCH_NAMES.at(model.arch));
-    LLAMA_LOG_INFO("%s: vocab type       = %s\n",     __func__, llama_model_vocab_type_name(vocab.type));
-    LLAMA_LOG_INFO("%s: n_vocab          = %u\n",     __func__, hparams.n_vocab);
-    LLAMA_LOG_INFO("%s: n_merges         = %u\n",     __func__, (int) vocab.bpe_ranks.size());
-    LLAMA_LOG_INFO("%s: vocab_only       = %d\n",     __func__, hparams.vocab_only);
 
     if (!hparams.vocab_only) {
         LLAMA_LOG_INFO("%s: n_ctx_train      = %u\n",     __func__, hparams.n_ctx_train);
@@ -5124,31 +4424,6 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
     // general kv
     LLAMA_LOG_INFO("%s: general.name     = %s\n",    __func__, model.name.c_str());
 
-    // special tokens
-    if (vocab.special_bos_id    != -1) { LLAMA_LOG_INFO( "%s: BOS token        = %d '%s'\n", __func__, vocab.special_bos_id,  vocab.id_to_token[vocab.special_bos_id].text.c_str() );  }
-    if (vocab.special_eos_id    != -1) { LLAMA_LOG_INFO( "%s: EOS token        = %d '%s'\n", __func__, vocab.special_eos_id,  vocab.id_to_token[vocab.special_eos_id].text.c_str() );  }
-    if (vocab.special_unk_id    != -1) { LLAMA_LOG_INFO( "%s: UNK token        = %d '%s'\n", __func__, vocab.special_unk_id,  vocab.id_to_token[vocab.special_unk_id].text.c_str() );  }
-    if (vocab.special_sep_id    != -1) { LLAMA_LOG_INFO( "%s: SEP token        = %d '%s'\n", __func__, vocab.special_sep_id,  vocab.id_to_token[vocab.special_sep_id].text.c_str() );  }
-    if (vocab.special_pad_id    != -1) { LLAMA_LOG_INFO( "%s: PAD token        = %d '%s'\n", __func__, vocab.special_pad_id,  vocab.id_to_token[vocab.special_pad_id].text.c_str() );  }
-    if (vocab.special_cls_id    != -1) { LLAMA_LOG_INFO( "%s: CLS token        = %d '%s'\n", __func__, vocab.special_cls_id,  vocab.id_to_token[vocab.special_cls_id].text.c_str() );  }
-    if (vocab.special_mask_id   != -1) { LLAMA_LOG_INFO( "%s: MASK token       = %d '%s'\n", __func__, vocab.special_mask_id, vocab.id_to_token[vocab.special_mask_id].text.c_str() ); }
-
-    if (vocab.linefeed_id       != -1) { LLAMA_LOG_INFO( "%s: LF token         = %d '%s'\n", __func__, vocab.linefeed_id,       vocab.id_to_token[vocab.linefeed_id].text.c_str() );       }
- 
-    if (vocab.special_fim_pre_id != -1) { LLAMA_LOG_INFO( "%s: FIM PRE token    = %d '%s'\n", __func__, vocab.special_fim_pre_id, vocab.id_to_token.at(vocab.special_fim_pre_id).text.c_str() ); }
-    if (vocab.special_fim_suf_id != -1) { LLAMA_LOG_INFO( "%s: FIM SUF token    = %d '%s'\n", __func__, vocab.special_fim_suf_id, vocab.id_to_token.at(vocab.special_fim_suf_id).text.c_str() ); }
-    if (vocab.special_fim_mid_id != -1) { LLAMA_LOG_INFO( "%s: FIM MID token    = %d '%s'\n", __func__, vocab.special_fim_mid_id, vocab.id_to_token.at(vocab.special_fim_mid_id).text.c_str() ); }
-    if (vocab.special_fim_pad_id != -1) { LLAMA_LOG_INFO( "%s: FIM PAD token    = %d '%s'\n", __func__, vocab.special_fim_pad_id, vocab.id_to_token.at(vocab.special_fim_pad_id).text.c_str() ); }
-    if (vocab.special_fim_rep_id != -1) { LLAMA_LOG_INFO( "%s: FIM REP token    = %d '%s'\n", __func__, vocab.special_fim_rep_id, vocab.id_to_token.at(vocab.special_fim_rep_id).text.c_str() ); }
-    if (vocab.special_fim_sep_id != -1) { LLAMA_LOG_INFO( "%s: FIM SEP token    = %d '%s'\n", __func__, vocab.special_fim_sep_id, vocab.id_to_token.at(vocab.special_fim_sep_id).text.c_str() ); }
-
-    if (vocab.special_prefix_id != -1) { LLAMA_LOG_INFO( "%s: PRE token        = %d '%s'\n", __func__, vocab.special_prefix_id, vocab.id_to_token[vocab.special_prefix_id].text.c_str() ); }
-    if (vocab.special_suffix_id != -1) { LLAMA_LOG_INFO( "%s: SUF token        = %d '%s'\n", __func__, vocab.special_suffix_id, vocab.id_to_token[vocab.special_suffix_id].text.c_str() ); }
-    if (vocab.special_middle_id != -1) { LLAMA_LOG_INFO( "%s: MID token        = %d '%s'\n", __func__, vocab.special_middle_id, vocab.id_to_token[vocab.special_middle_id].text.c_str() ); }
-    if (vocab.special_eot_id    != -1) { LLAMA_LOG_INFO( "%s: EOT token        = %d '%s'\n", __func__, vocab.special_eot_id,    vocab.id_to_token[vocab.special_eot_id].text.c_str() );    }
-
-    LLAMA_LOG_INFO("%s: max token length = %d\n", __func__, vocab.max_token_len);
-
     if (model.arch == LLM_ARCH_DEEPSEEK2) {
         LLAMA_LOG_INFO("%s: n_layer_dense_lead   = %d\n",     __func__, hparams.n_layer_dense_lead);
         LLAMA_LOG_INFO("%s: n_lora_q             = %d\n",     __func__, hparams.n_lora_q);
@@ -5175,6 +4450,8 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
         LLAMA_LOG_INFO("%s: f_residual_scale  = %f\n", __func__, hparams.f_residual_scale);
         LLAMA_LOG_INFO("%s: f_attention_scale = %f\n", __func__, hparams.f_attention_scale);
     }
+
+    vocab.print_info();
 
 }
 
@@ -8049,15 +7326,15 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
         }
         try {
-            llm_load_vocab(ml, model);
+            model.vocab.load(ml, LLM_KV(model.arch));
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model vocabulary: " + std::string(e.what()));
         }
 
         llm_load_print_meta(ml, model);
 
-        if (model.vocab.type != LLAMA_VOCAB_TYPE_NONE &&
-            model.hparams.n_vocab != model.vocab.id_to_token.size()) {
+        if (model.vocab.get_type() != LLAMA_VOCAB_TYPE_NONE &&
+            model.hparams.n_vocab != model.vocab.n_tokens()) {
             throw std::runtime_error("vocab size mismatch");
         }
 
@@ -16318,9 +15595,9 @@ static struct ggml_cgraph * llama_build_graph(
 
     struct ggml_cgraph * result = NULL;
 
-    const llama_vocab * vocab = llama_get_vocab(&lctx);
-    llama_token bos = llama_token_bos_impl(*vocab);
-    llama_token eos = llama_token_eos_impl(*vocab);
+    const llama_vocab * vocab = &lctx.model.vocab; //llama_get_vocab(&lctx);
+    llama_token bos = vocab->token_bos();
+    llama_token eos = vocab->token_eos();
     bool is_warming_up = lctx.n_eval == 0 && (batch.n_tokens == 1 && (batch.token[0] == ((bos != -1) ? bos : eos)));
     struct llm_build_context llm(lctx, batch, cb, worst_case, is_warming_up);
 
@@ -20254,7 +19531,7 @@ uint32_t llama_n_seq_max(const struct llama_context * ctx) {
 }
 
 enum llama_vocab_type llama_vocab_type(const struct llama_model * model) {
-    return model->vocab.type;
+    return model->vocab.get_type();
 }
 
 const struct llama_vocab* llama_get_model_vocab(const struct llama_model* model) {
@@ -20426,7 +19703,7 @@ const char* llama_model_chat_template(const struct llama_model* model, const cha
         // one-off fix for very popular models (so we are not flooded with issues)
         // do not extend this list unless absolutely necessary
         // Mistral-Small-2503 does not have built-in chat template
-        llama_vocab_pre_type pre_type = model->vocab.type_pre;
+        llama_vocab_pre_type pre_type = model->vocab.get_pre_type();
         if (!name && pre_type == LLAMA_VOCAB_PRE_TYPE_TEKKEN && model->layers.size() == 40) {
             return "mistral-v7-tekken";
         }
@@ -21947,101 +21224,102 @@ float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id
 //
 
 const char * llama_token_get_text(const struct llama_model * model, llama_token token) {
-    return llama_token_get_text_impl(model->vocab, token);
+    return model->vocab.token_get_text(token);
 }
 
 float llama_token_get_score(const struct llama_model * model, llama_token token) {
-    return llama_token_get_score_impl(model->vocab, token);
+    return model->vocab.token_get_score(token);
 }
 
 enum llama_token_attr llama_token_get_attr(const struct llama_model * model, llama_token token) {
-    return llama_token_get_attr_impl(model->vocab, token);
+    return model->vocab.token_get_attr(token);
 }
 
 bool llama_token_is_eog(const struct llama_model * model, llama_token token) {
-    return llama_token_is_eog_impl(model->vocab, token);
+    return model->vocab.is_eog(token);
 }
 
 bool llama_token_is_control(const struct llama_model * model, llama_token token) {
-    return llama_token_is_control_impl(model->vocab, token);
+    return model->vocab.is_control(token);
 }
 
 llama_token llama_token_bos(const struct llama_model * model) {
-    return llama_token_bos_impl(model->vocab);
+    return model->vocab.token_bos();
 }
 
 llama_token llama_token_eos(const struct llama_model * model) {
-    return llama_token_eos_impl(model->vocab);
+    return model->vocab.token_eos();
 }
 
-llama_token llama_token_cls(const struct llama_model * model) {
-    return llama_token_cls_impl(model->vocab);
-}
+// What is cls?
+//llama_token llama_token_cls(const struct llama_model * model) {
+//    return llama_token_cls_impl(model->vocab);
+//}
 
 llama_token llama_token_sep(const struct llama_model * model) {
-    return llama_token_sep_impl(model->vocab);
+    return model->vocab.token_sep();
 }
 
 llama_token llama_token_nl (const struct llama_model * model) {
-    return llama_token_nl_impl(model->vocab);
+    return model->vocab.token_nl();
 }
 
 llama_token llama_token_pad(const struct llama_model * model) {
-    return llama_token_pad_impl(model->vocab);
+    return model->vocab.token_pad();
 }
 
 int32_t llama_add_bos_token(const struct llama_model * model) {
-    return llama_add_bos_token_impl(model->vocab);
+    return model->vocab.get_add_bos();
 }
 
 int32_t llama_add_eos_token(const struct llama_model * model) {
-    return llama_add_eos_token_impl(model->vocab);
+    return model->vocab.get_add_eos();
 }
 
 llama_token llama_token_prefix(const struct llama_model * model) {
-    return llama_token_prefix_impl(model->vocab);
+    return model->vocab.token_prefix();
 }
 
 llama_token llama_token_middle(const struct llama_model * model) {
-    return llama_token_middle_impl(model->vocab);
+    return model->vocab.token_middle();
 }
 
 llama_token llama_token_suffix(const struct llama_model * model) {
-    return llama_token_suffix_impl(model->vocab);
+    return model->vocab.token_suffix();
 }
 
 llama_token llama_token_eot(const struct llama_model * model) {
-    return llama_token_eot_impl(model->vocab);
+    return model->vocab.token_eot();
 }
 
 // deprecated
 llama_token llama_token_fim_pre(const struct llama_model * model) {
-    return llama_token_fim_pre_impl(model->vocab);
+    return model->vocab.token_fim_pre();
 }
 
 // deprecated
 llama_token llama_token_fim_suf(const struct llama_model * model) {
-    return llama_token_fim_suf_impl(model->vocab);
+    return model->vocab.token_fim_suf();
 }
 
 // deprecated
 llama_token llama_token_fim_mid(const struct llama_model * model) {
-    return llama_token_fim_mid_impl(model->vocab);
+    return model->vocab.token_fim_mid();
 }
 
 // deprecated
 llama_token llama_token_fim_pad(const struct llama_model * model) {
-    return llama_token_fim_pad_impl(model->vocab);
+    return model->vocab.token_fim_pad();
 }
 
 // deprecated
 llama_token llama_token_fim_rep(const struct llama_model * model) {
-    return llama_token_fim_rep_impl(model->vocab);
+    return model->vocab.token_fim_rep();
 }
 
 // deprecated
 llama_token llama_token_fim_sep(const struct llama_model * model) {
-    return llama_token_fim_sep_impl(model->vocab);
+    return model->vocab.token_fim_sep();
 }
 
 //
@@ -22056,7 +21334,7 @@ int32_t llama_tokenize(
                      int32_t   n_tokens_max,
                         bool   add_special,
                         bool   parse_special) {
-    return llama_tokenize_impl(model->vocab, text, text_len, tokens, n_tokens_max, add_special, parse_special);
+    return model->vocab.tokenize(text, text_len, tokens, n_tokens_max, add_special, parse_special);
 }
 
 int32_t llama_token_to_piece(
@@ -22066,7 +21344,7 @@ int32_t llama_token_to_piece(
                      int32_t   length,
                      int32_t   lstrip,
                         bool   special) {
-    return llama_token_to_piece_impl(model->vocab, token, buf, length, lstrip, special);
+    return model->vocab.token_to_piece(token, buf, length, lstrip, special);
 }
 
 int32_t llama_detokenize(
@@ -22077,7 +21355,7 @@ int32_t llama_detokenize(
                      int32_t   text_len_max,
                         bool   remove_special,
                         bool   unparse_special) {
-    return llama_detokenize_impl(model->vocab, tokens, n_tokens, text, text_len_max, remove_special, unparse_special);
+    return model->vocab.detokenize(tokens, n_tokens, text, text_len_max, remove_special, unparse_special);
 }
 
 //
