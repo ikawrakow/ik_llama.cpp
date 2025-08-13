@@ -792,7 +792,10 @@ extern "C" {
     LLAMA_API void llama_kv_cache_defrag(struct llama_context * ctx);
 
     // Apply the KV cache updates (such as K-shifts, defragmentation, etc.)
-    LLAMA_API void llama_kv_cache_update(struct llama_context * ctx);
+    // Positive return values does not mean a fatal error, but rather a warning.
+    //    0 - success
+    //    1 - Context overflow in a model where k-shift is not supported
+    LLAMA_API int32_t llama_kv_cache_update(struct llama_context * ctx);
 
     //
     // State / sessions

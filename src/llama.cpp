@@ -19002,7 +19002,10 @@ static int llama_decode_internal(
 
         // non-causal masks do not use the KV cache
         if (hparams.causal_attn) {
-            llama_kv_cache_update(&lctx);
+            int32_t ret = llama_kv_cache_update(&lctx);
+            if (ret != 0) {
+                return ret;
+            }
 
             // if we have enough unused cells before the current head ->
             //   better to start searching from the beginning of the cache, hoping to fill it
@@ -19565,13 +19568,13 @@ static void llama_kv_cache_defrag_internal(struct llama_context & lctx) {
     //LLAMA_LOG_INFO("(tmp log) KV defrag time: %.3f ms\n", (t_end - t_start)/1000.0);
 }
 
-static void llama_kv_cache_update_internal(struct llama_context & lctx) {
+static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
     bool need_reserve = false;
 
     // apply K-shift if needed
     if (lctx.model.hparams.rope_type != LLAMA_ROPE_TYPE_NONE && lctx.kv_self.has_shift) {
         if (lctx.model.arch == LLM_ARCH_DEEPSEEK2) { // not supported due to MLA
-            GGML_ABORT("Deepseek2 does not support K-shift");
+            return 1;
         }
 
         {
@@ -19649,6 +19652,7 @@ static void llama_kv_cache_update_internal(struct llama_context & lctx) {
             LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
         }
     }
+    return 0;
 }
 
 //
@@ -22500,8 +22504,8 @@ void llama_kv_cache_defrag(struct llama_context * ctx) {
     llama_kv_cache_defrag(ctx->kv_self);
 }
 
-void llama_kv_cache_update(struct llama_context * ctx) {
-    llama_kv_cache_update_internal(*ctx);
+int32_t llama_kv_cache_update(struct llama_context * ctx) {
+    return llama_kv_cache_update_internal(*ctx);
 }
 
 // deprecated
