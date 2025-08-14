@@ -410,7 +410,7 @@ struct llama_mmap::impl {
         }
     }
 #elif defined(_WIN32)
-    impl(struct llama_file * file, size_t prefetch, bool numa) {
+    impl(struct llama_file * file, size_t prefetch, bool numa, [[maybe_unused]] bool use_thp) {
         GGML_UNUSED(numa);
 
         size = file->size();
@@ -466,7 +466,7 @@ struct llama_mmap::impl {
         }
     }
 #else
-    impl(struct llama_file * file, size_t prefetch, bool numa) {
+    impl(struct llama_file * file, size_t prefetch, bool numa, [[maybe_unused]] bool use_thp) {
         GGML_UNUSED(file);
         GGML_UNUSED(prefetch);
         GGML_UNUSED(numa);
