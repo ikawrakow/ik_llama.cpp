@@ -38,6 +38,7 @@
 #include "ggml-cuda/upscale.cuh"
 #include "ggml-cuda/conv-transpose-1d.cuh"
 #include "ggml-cuda/add-id.cuh"
+#include "ggml-cuda/graph.cuh"
 
 #include <algorithm>
 #include <array>
@@ -446,45 +447,6 @@ std::unique_ptr<ggml_cuda_pool> ggml_backend_cuda_context::new_pool_for_device(i
 #endif // !defined(GGML_USE_HIPBLAS) && !defined(GGML_CUDA_NO_VMM) && !defined(GGML_USE_MUSA)
     return std::unique_ptr<ggml_cuda_pool>(new ggml_cuda_pool_leg(device));
 }
-
-struct ggml_graph_node_properties {
-    void * node_address;
-    ggml_op node_op;
-    int64_t ne[GGML_MAX_DIMS];
-    size_t nb[GGML_MAX_DIMS];
-    void * src_address[GGML_MAX_SRC];
-    int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
-};
-
-struct ggml_cuda_graph {
-#ifdef USE_CUDA_GRAPH
-    ~ggml_cuda_graph() {
-        if (instance != nullptr) {
-            CUDA_CHECK(cudaGraphExecDestroy(instance));
-        }
-        if (graph != nullptr) {
-            CUDA_CHECK(cudaGraphDestroy(graph));
-        }
-    }
-    cudaGraph_t graph = nullptr;
-    cudaGraphExec_t instance = nullptr;
-    size_t num_nodes = 0;
-    std::vector<cudaGraphNode_t> nodes;
-    std::vector<cudaKernelNodeParams> params;
-    bool disable_due_to_gpu_arch = false;
-    bool disable_due_to_too_many_updates = false;
-    bool disable_due_to_failed_graph_capture = false;
-    int number_consecutive_updates = 0;
-    std::vector<ggml_graph_node_properties> ggml_graph_properties;
-    bool use_cpy_indirection = false;
-    std::vector<char *> cpy_dest_ptrs;
-    char ** dest_ptrs_d;
-    int dest_ptrs_size = 0;
-    // Index to allow each cpy kernel to be aware of it's position within the graph
-    // relative to other cpy nodes.
-    int graph_cpynode_index = -1;
-#endif
-};
 
 static std::mutex ggml_cuda_lock;
 static std::condition_variable ggml_cuda_lock_cv;
@@ -3023,8 +2985,8 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_dup(ctx, dst);
             break;
         case GGML_OP_CPY:
-            ggml_cuda_cpy_wrapper(ctx, dst);
-            //ggml_cuda_cpy(ctx, dst->src[0], dst->src[1]);
+            //ggml_cuda_cpy_wrapper(ctx, dst);
+            ggml_cuda_cpy(ctx, dst->src[0], dst->src[1]);
             break;
         case GGML_OP_CONT:
             ggml_cuda_dup(ctx, dst);
@@ -3307,20 +3269,20 @@ GGML_CALL static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 }
 
 #ifdef USE_CUDA_GRAPH
-static void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_dest_ptrs,
-        const int host_dest_ptrs_size, cudaStream_t stream) {
-    if (cuda_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate GPU memory for destination pointers
-        CUDA_CHECK(cudaStreamSynchronize(stream));
-        if (cuda_graph->dest_ptrs_d != nullptr) {
-            CUDA_CHECK(cudaFree(cuda_graph->dest_ptrs_d));
-        }
-        CUDA_CHECK(cudaMalloc(&cuda_graph->dest_ptrs_d, host_dest_ptrs_size*sizeof(char *)));
-        cuda_graph->dest_ptrs_size = host_dest_ptrs_size;
-    }
-    // copy destination pointers to GPU
-    CUDA_CHECK(cudaMemcpyAsync(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice, stream));
-    cuda_graph->graph_cpynode_index = 0; // reset index
-}
+//static void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_dest_ptrs,
+//        const int host_dest_ptrs_size, cudaStream_t stream) {
+//    if (cuda_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate GPU memory for destination pointers
+//        CUDA_CHECK(cudaStreamSynchronize(stream));
+//        if (cuda_graph->dest_ptrs_d != nullptr) {
+//            CUDA_CHECK(cudaFree(cuda_graph->dest_ptrs_d));
+//        }
+//        CUDA_CHECK(cudaMalloc(&cuda_graph->dest_ptrs_d, host_dest_ptrs_size*sizeof(char *)));
+//        cuda_graph->dest_ptrs_size = host_dest_ptrs_size;
+//    }
+//    // copy destination pointers to GPU
+//    CUDA_CHECK(cudaMemcpyAsync(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice, stream));
+//    cuda_graph->graph_cpynode_index = 0; // reset index
+//}
 
 static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
     bool use_cuda_graph) {
