@@ -3354,6 +3354,22 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
             GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported node type\n", __func__);
 #endif
         }
+        if (node->op == GGML_OP_MOE_FUSED_UP_GATE) {
+            auto src0_1 = node->src[0];
+            auto src0_2 = node->src[1];
+            auto src1   = node->src[2];
+            if (src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || src1->type != GGML_TYPE_F32 ||
+                !ggml_is_quantized(src0_1->type) || !ggml_is_quantized(src0_2->type)) {
+                use_cuda_graph = false;
+            } else {
+                if (i < cgraph->n_nodes-1) {
+                    auto next = cgraph->nodes[i+1];
+                    if (next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type)) {
+                        ++i;
+                    }
+                }
+            }
+        }
 
         if (node->op == GGML_OP_ADD &&
             node->src[1] && node->src[1]->ne[1] > 1 &&
