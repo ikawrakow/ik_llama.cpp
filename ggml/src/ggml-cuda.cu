@@ -2941,29 +2941,6 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     return fuse_down;
 }
 
-static void ggml_cuda_cpy_wrapper(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
-    auto src0 = dst->src[0];
-    auto src1 = dst->src[1];
-    if (src0->type == src1->type && ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
-        CUDA_CHECK(cudaMemcpyAsync((char *)src1->data, (char *)src0->data, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, ctx.stream()));
-        return;
-    }
-#ifdef USE_CUDA_GRAPH
-    if (ctx.cuda_graph->use_cpy_indirection) {
-        GGML_ASSERT(ctx.cuda_graph->graph_cpynode_index < (int)ctx.cuda_graph->cpy_dest_ptrs.size());
-        auto dest_ptr = ctx.cuda_graph->cpy_dest_ptrs[ctx.cuda_graph->graph_cpynode_index];
-        ggml_tensor aux_src1 = *src1;
-        aux_src1.data = dest_ptr;
-        ggml_cuda_cpy(ctx, src0, &aux_src1);
-        ++ctx.cuda_graph->graph_cpynode_index;
-    } else {
-        ggml_cuda_cpy(ctx, dst->src[0], dst->src[1]);
-    }
-#else
-    ggml_cuda_cpy(ctx, dst->src[0], dst->src[1]);
-#endif
-}
-
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst, struct ggml_tensor * next, bool& skip_next) {
     // why is this here instead of mul_mat?
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_cuda_split(dst->src[0]->buffer)) {
@@ -2985,7 +2962,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_dup(ctx, dst);
             break;
         case GGML_OP_CPY:
-            //ggml_cuda_cpy_wrapper(ctx, dst);
             ggml_cuda_cpy(ctx, dst->src[0], dst->src[1]);
             break;
         case GGML_OP_CONT:
@@ -3269,20 +3245,6 @@ GGML_CALL static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 }
 
 #ifdef USE_CUDA_GRAPH
-//static void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_dest_ptrs,
-//        const int host_dest_ptrs_size, cudaStream_t stream) {
-//    if (cuda_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate GPU memory for destination pointers
-//        CUDA_CHECK(cudaStreamSynchronize(stream));
-//        if (cuda_graph->dest_ptrs_d != nullptr) {
-//            CUDA_CHECK(cudaFree(cuda_graph->dest_ptrs_d));
-//        }
-//        CUDA_CHECK(cudaMalloc(&cuda_graph->dest_ptrs_d, host_dest_ptrs_size*sizeof(char *)));
-//        cuda_graph->dest_ptrs_size = host_dest_ptrs_size;
-//    }
-//    // copy destination pointers to GPU
-//    CUDA_CHECK(cudaMemcpyAsync(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice, stream));
-//    cuda_graph->graph_cpynode_index = 0; // reset index
-//}
 
 static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
     bool use_cuda_graph) {
