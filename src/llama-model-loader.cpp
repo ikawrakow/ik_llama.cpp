@@ -21,6 +21,18 @@
 #include <array>
 #include <future>
 
+#if defined(_WIN32)
+    #define WIN32_LEAN_AND_MEAN
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+    #ifndef PATH_MAX
+        #define PATH_MAX MAX_PATH
+    #endif
+    #include <io.h>
+#endif
+
 #define LLAMA_API_INTERNAL
 
 namespace GGUFMeta {
