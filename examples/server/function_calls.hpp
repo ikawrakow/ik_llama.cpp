@@ -89,6 +89,8 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
             try {
                 common_chat_syntax syntax;
                 syntax.format = COMMON_CHAT_FORMAT_DEEPSEEK_R1;
+                syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+                syntax.reasoning_in_content = true; // Fix for thinking tag termination issue
                 syntax.enable_tool_calls = true;
                 
                 common_chat_msg_parser parser(content, is_partial, syntax);
@@ -176,6 +178,8 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
             // Use model-specific content extraction
             if (is_qwen3_model(model_name)) {
                 msg.content = qwen3::extract_content_during_parsing(content, is_partial);
+            } else if (is_deepseek_r1_model(model_name)) {
+                msg.content = extract_content_from_mixed_input(content, is_partial, model_name);
             } else {
                 msg.content = kimi_k2::extract_content_during_parsing(content, is_partial);
             }
@@ -183,6 +187,8 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
             // No tool calls found, extract content
             if (is_qwen3_model(model_name)) {
                 msg.content = qwen3::extract_content_during_parsing(content, is_partial);
+            } else if (is_deepseek_r1_model(model_name)) {
+                msg.content = extract_content_from_mixed_input(content, is_partial, model_name);
             } else {
                 msg.content = kimi_k2::extract_content_during_parsing(content, is_partial);
             }

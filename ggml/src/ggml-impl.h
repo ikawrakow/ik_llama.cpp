@@ -29,6 +29,24 @@
 
 #endif
 
+// Does not handle NaN
+static inline float ggml_e8m0_to_fp32(uint8_t x) {
+    union { float f; uint32_t u; } helper;
+    helper.u = x ? (uint32_t)x << 23u : 0x00400000;
+    return helper.f;
+}
+
+// As above, but returns ggml_e8m0_to_fp32(x)/2
+static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
+    static uint32_t val[2] = { 0x00200000, 0x00400000 };
+    union { float f; uint32_t u; } helper;
+    helper.u = x >= 2 ? (uint32_t)(x - 1) << 23u : val[x];
+    return helper.f;
+}
+
+#define GGML_E8M0_TO_FP32(x) ggml_e8m0_to_fp32(x)
+#define GGML_E8M0_TO_FP32_HALF(x) ggml_e8m0_to_fp32_half(x)
+
 /**
  * Converts brain16 to float32.
  *

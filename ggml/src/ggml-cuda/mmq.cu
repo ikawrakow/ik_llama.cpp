@@ -14,7 +14,7 @@ void ggml_cuda_op_mul_mat_q(
     const int64_t src1_padded_row_size, cudaStream_t stream) {
 
     const int64_t ne00 = src0->ne[0];
-    const int64_t nb01 = src0->nb[1];
+    const int64_t nb01 = ggml_row_size(src0->type, ne00);
 
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
@@ -93,6 +93,9 @@ void ggml_cuda_op_mul_mat_q(
             break;
         case GGML_TYPE_IQ4_NL:
             mul_mat_q_case<GGML_TYPE_IQ4_NL>(ctx, args, stream);
+            break;
+        case GGML_TYPE_MXFP4:
+            mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
             break;
         case GGML_TYPE_IQ2_KL:
             mul_mat_q_case<GGML_TYPE_IQ2_KL>(ctx, args, stream);
@@ -210,6 +213,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         case GGML_TYPE_IQ1_S_R4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_MXFP4:
         case GGML_TYPE_IQ2_KL:
         case GGML_TYPE_IQ3_KS:
         case GGML_TYPE_IQ4_KSS:

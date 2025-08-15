@@ -1,4 +1,5 @@
 #include "iqk_gemm_legacy_quants.h"
+#include <type_traits>
 
 #ifdef IQK_IMPLEMENT
 
@@ -105,6 +106,21 @@ struct ScaleHelperQ_0 {
     template <typename Q> inline float prepare1(float d, const Q * y) const { return d*prepare1(y); }
 };
 
+struct ScaleHelperQ_0_MXFP4 {
+    float scales[4];
+    template <typename Q>
+    inline __m128 prepare4(const Q * y) {
+        for (int j = 0; j < 4; ++j) scales[j] = GGML_E8M0_TO_FP32_HALF(y[j].e);
+        return _mm_loadu_ps(scales);
+    }
+    template <typename Q>
+    inline __m128 prepare4(__m128 other_scales, const Q * y) {
+        return _mm_mul_ps(other_scales, prepare4<Q>(y));
+    }
+    template <typename Q> inline float prepare1(const Q * y) const { return GGML_E8M0_TO_FP32_HALF(y->e); }
+    template <typename Q> inline float prepare1(float d, const Q * y) const { return d*prepare1(y); }
+};
+
 template <int min_value>
 struct ScaleHelperQ_0_1 {
     ggml_half scales8[4];
@@ -128,28 +144,28 @@ struct ScaleHelperQ_0_1 {
     const __m128 min = _mm_set1_ps(float(-min_value));
 };
 
-//template <int min_value>
-//struct ScaleHelperQ_0_2 {
-//    ggml_bf16_t scales8[4];
-//    template <typename Q>
-//    inline __m256 prepare4(const Q * y) {
-//        for (int j = 0; j < 4; ++j) scales8[j] = y[j].d;
-//        auto s4 = _mm_castsi128_ps(_mm_slli_epi16(_mm_cvtepu16_epi32(_mm_loadl_epi64((const __m128i *)scales8)), 16));
-//        return _mm256_set_m128(_mm_mul_ps(s4, min), s4);
-//    }
-//    template <typename Q>
-//    inline __m256 prepare4(__m256 other_scales, const Q * y) {
-//        return _mm_mul256_ps(other_scales, prepare4<Q>(y));
-//    }
-//    template <typename Q> inline std::pair<float, float> prepare1(const Q * y) const {
-//        float d = GGML_BF16_TO_FP32(y->d);
-//        return std::make_pair(d, -d*float(min_value));
-//    }
-//    std::pair<float, float> inline prepare1(const std::pair<float, float>& dm, const block_q8_1 * y) const {
-//        return std::make_pair(dm.first*GGML_FP16_TO_FP32(y->d), dm.second*GGML_FP16_TO_FP32(y->s));
-//    }
-//    const __m128 min = _mm_set1_ps(float(-min_value));
-//};
+template <int min_value>
+struct ScaleHelperQ_0_1_MXFP4 {
+    float scales[4];
+    template <typename Q>
+    inline __m256 prepare4(const Q * y) {
+        for (int j = 0; j < 4; ++j) scales[j] = GGML_E8M0_TO_FP32_HALF(y[j].e);
+        auto s4 = _mm_loadu_ps(scales);
+        return _mm256_set_m128(_mm_mul_ps(s4, min), s4);
+    }
+    template <typename Q>
+    inline __m256 prepare4(__m256 other_scales, const Q * y) {
+        return _mm_mul256_ps(other_scales, prepare4<Q>(y));
+    }
+    template <typename Q> inline std::pair<float, float> prepare1(const Q * y) const {
+        float d = GGML_E8M0_TO_FP32_HALF(y->e);
+        return std::make_pair(d, -d*float(min_value));
+    }
+    std::pair<float, float> inline prepare1(const std::pair<float, float>& dm, const block_q8_1 * y) const {
+        return std::make_pair(dm.first*GGML_FP16_TO_FP32(y->d), dm.second*GGML_FP16_TO_FP32(y->s));
+    }
+    const __m128 min = _mm_set1_ps(float(-min_value));
+};
 
 struct ScaleHelperQ8_1 {
     template <typename Q>
@@ -553,6 +569,49 @@ struct IQ4_NL0_Dequantizer {
     }
 };
 
+//=============================
+static inline __m128i load_unsigned_mxfp4_values_128() {
+    static const uint8_t kvalues_mxfp4_unsigned[16] = {12, 13, 14, 15, 16, 18, 20, 24, 12, 11, 10, 9, 8, 6, 4, 0};
+    return _mm_loadu_si128((const __m128i *)kvalues_mxfp4_unsigned);
+}
+
+static inline __m256i load_unsigned_mxfp4_values_256() {
+    auto val128 = load_unsigned_mxfp4_values_128();
+    return MM256_SET_M128I(val128, val128);
+}
+
+#ifdef HAVE_FANCY_SIMD
+static inline __m512i load_unsigned_mxfp4_values_512() {
+    auto val256 = load_unsigned_mxfp4_values_256();
+    return _mm512_inserti32x8(_mm512_castsi256_si512(val256), val256, 1);
+}
+#endif
+
+static inline __m128i load_mxfp4_values_128() {
+    return _mm_loadu_si128((const __m128i *)kvalues_mxfp4);
+}
+
+static inline __m256i load_mxfp4_values_256() {
+    auto val128 = load_mxfp4_values_128();
+    return MM256_SET_M128I(val128, val128);
+}
+
+struct MXFP4_Dequantizer {
+    Dequantizer4bit b4;
+    const __m256i values = load_unsigned_mxfp4_values_256();
+    inline __m256i dequant(const block_mxfp4 * x) const {
+        return _mm256_shuffle_epi8(values, b4.dequant(x->qs));
+    }
+};
+
+struct MXFP40_Dequantizer {
+    Dequantizer4bit b4;
+    const __m256i values = load_mxfp4_values_256();
+    inline __m256i dequant(const block_mxfp4 * x) const {
+        return _mm256_shuffle_epi8(values, b4.dequant(x->qs));
+    }
+};
+
 struct Q4_1_Dequantizer {
     Dequantizer4bit b4;
     inline __m256i dequant(const block_q4_1 * x) const {
@@ -665,6 +724,11 @@ struct Q4_0_1_Unpacker final : public Q_Unpacker<block_q4_0, ScaleHelperQ_0_1<8>
     using Sum4T = Sum4q4<block_q8_2, block_q8_2_x4>;
     inline static int block_size() { return QK4_0; }
 };
+struct MXFP4_Unpacker final : public Q_Unpacker<block_mxfp4, ScaleHelperQ_0_1_MXFP4<12>, MXFP4_Dequantizer> {
+    MXFP4_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
+    using Sum4T = Sum4TypeQ82;
+    inline static int block_size() { return QK4_NL; }
+};
 #ifdef HAVE_FANCY_SIMD
 struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0_1<128>, IQ4_NL_Dequantizer> {
     IQ4_NL_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
@@ -672,7 +736,7 @@ struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0_1<
     inline static int block_size() { return QK4_NL; }
 };
 #else
-struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0, IQ4_NL_Dequantizer> {
+struct IQ4_NL_Unpacker final : public Q_Unpacker<block_iq4_nl, ScaleHelperQ_0, IQ4_NL0_Dequantizer> {
     IQ4_NL_Unpacker(const void * vx, size_t bx) : Q_Unpacker(vx, bx) {}
     using Sum4T = Sum4TypeQ80;
     inline static int block_size() { return QK4_NL; }
@@ -1757,7 +1821,11 @@ void iqk_convert_qX_q80_r8(int n, const void * vx, size_t bx, void * vy, int nrc
 
         for (int i = 0; i < nb; ++i) {
             for (int k = 0; k < 8; ++k) {
-                y[i].d[k] = x8[k][i].d;
+                if constexpr (std::is_same_v<Dequantizer, MXFP40_Dequantizer>) {
+                    y[i].d[k] = GGML_FP32_TO_FP16(GGML_E8M0_TO_FP32_HALF(x8[k][i].e));
+                } else {
+                    y[i].d[k] = x8[k][i].d;
+                }
                 _mm256_storeu_si256((__m256i *)block, deq.dequant(x8[k] + i));
                 auto qs = (uint32_t *)y[i].qs;
                 for (int l = 0; l < 4; ++l) {
@@ -1819,7 +1887,8 @@ template <typename Dequantizer> void set_functions(std::array<mul_mat_t, IQK_MAX
 #endif
     }
     else if constexpr (std::is_same_v<Dequantizer, Q8_0_1_Unpacker> || std::is_same_v<Dequantizer, Q4_0_1_Unpacker> ||
-                       std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, Q6_0_1_Unpacker>) {
+                       std::is_same_v<Dequantizer, Q5_0_1_Unpacker> || std::is_same_v<Dequantizer, Q6_0_1_Unpacker> ||
+                       std::is_same_v<Dequantizer, MXFP4_Unpacker>) {
         IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_1_q8_2_T, Dequantizer, funcs)
     }
 }
@@ -1835,6 +1904,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r8<block_q6_0, Q6_0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, IQ4_NL0_Dequantizer>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0  : iqk_convert_q80_q80_r8(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_MXFP4 : iqk_convert_qX_q80_r8<block_mxfp4, MXFP40_Dequantizer>(n, vx, bx, vy, nrc_x); break;
         default: return false;
     }
     return true;
@@ -1877,6 +1947,12 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
 #ifndef HAVE_FANCY_SIMD
             expected_typeB = GGML_TYPE_Q8_0_X4;
 #endif
+            break;
+        case GGML_TYPE_MXFP4:
+            set_functions<MXFP4_Unpacker>(kernels);
+//#ifndef HAVE_FANCY_SIMD
+//            expected_typeB = GGML_TYPE_Q8_0_X4;
+//#endif
             break;
         case GGML_TYPE_Q4_0_R8:
             IQK_SET_MUL_MAT_FUNCTIONS(mul_mat_q4_0_r8_q8_2, kernels)
@@ -2039,7 +2115,7 @@ template <int nrc> struct Q80 {
     template <typename Dequantizer>
     inline void process_1_block(int i, Dequantizer& deq, float32x4_t * acc) const {
         deq.prepare1(i);
-        float d = GGML_FP16_TO_FP32(deq.x[i].d);
+        float d = deq.block_scale(i);
         for (int iy = 0; iy < nrc; ++iy) {
             auto q8b = vld1q_s8_x2(y[iy][i].qs);
             auto p = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), deq.bits.b[0], q8b.val[0]), deq.bits.b[1], q8b.val[1]);
@@ -2147,6 +2223,8 @@ struct DequantizerQ40 final : public BaseLegacyDequantizer<block_q4_0> {
         return vld1_f16((const float16_t *)aux);
     }
 
+    inline float block_scale(int i) const { return GGML_FP16_TO_FP32(x[i].d); }
+
     const int8x16_t m8 = vdupq_n_s8(-8);
     //ggml_half aux[4];
 };
@@ -2174,6 +2252,7 @@ struct DequantizerQ60 final : public BaseLegacyDequantizer<block_q6_0> {
         }
         return vld1_f16((const float16_t *)aux);
     }
+    inline float block_scale(int i) const { return GGML_FP16_TO_FP32(x[i].d); }
 
     const int8x16_t m32 = vdupq_n_s8(-32);
     const uint8x16_t hmask = vdupq_n_u8(0x30);
@@ -2204,6 +2283,36 @@ struct DequantizerIQ4NL final : public BaseLegacyDequantizer<block_iq4_nl> {
         static const int8_t iq4nl_values[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
         return vld1q_s8(iq4nl_values);
     }
+    inline float block_scale(int i) const { return GGML_FP16_TO_FP32(x[i].d); }
+
+    const int8x16_t values = load_values();
+};
+
+struct DequantizerMXFP4 final : public BaseLegacyDequantizer<block_mxfp4> {
+
+    DequantizerMXFP4(const void * vx, size_t bx) : BaseLegacyDequantizer(vx, bx) {}
+
+    inline void prepare1(int i, int8x16_t * q) const {
+        bits.prepare1(x[i].qs, q);
+        q[0] = vqtbl1q_s8(values, q[0]);
+        q[1] = vqtbl1q_s8(values, q[1]);
+    }
+    inline void prepare1(int i) {
+        prepare1(i, bits.b);
+    }
+
+    inline float16x4_t new_block(int i) {
+        float aux[4];
+        for (int k = 0; k < 4; ++k) {
+            aux[k] = GGML_E8M0_TO_FP32_HALF(x[4*i+k].e);
+            prepare1(4*i+k, bits.b + 2*k);
+        }
+        return vcvt_f16_f32(vld1q_f32(aux));
+    }
+    static int8x16_t load_values() {
+        return vld1q_s8(kvalues_mxfp4);
+    }
+    inline float block_scale(int i) const { return GGML_E8M0_TO_FP32_HALF(x[i].e); }
 
     const int8x16_t values = load_values();
 };
@@ -2280,6 +2389,7 @@ struct DequantizerQ50 final : public BaseLegacyDequantizer<block_q5_0> {
         }
         return vld1_f16((const float16_t *)aux);
     }
+    inline float block_scale(int i) const { return GGML_FP16_TO_FP32(x[i].d); }
 
     HighBit5Legacy hbits;
 
@@ -2305,6 +2415,7 @@ struct DequantizerQ80 final : public BaseLegacyDequantizer<block_q8_0> {
         }
         return vld1_f16((const float16_t *)aux);
     }
+    inline float block_scale(int i) const { return GGML_FP16_TO_FP32(x[i].d); }
 
 };
 
@@ -2877,6 +2988,16 @@ struct DeqIQ4NL {
     static inline int8x16_t load_values() { return vld1q_s8(iq4k_values); }
 };
 
+struct DeqMXFP4 {
+    const int8x16_t mt  = load_values();
+    const uint8x16_t ml = vdupq_n_s8(0xf);
+    inline int8x16x2_t dequant(const block_mxfp4& x) const {
+        auto bits = vld1q_u8(x.qs);
+        return { vqtbl1q_s8(mt, vandq_u8(bits, ml)), vqtbl1q_s8(mt, vshrq_n_u8(bits, 4)) };
+    }
+    static inline int8x16_t load_values() { return vld1q_s8(kvalues_mxfp4); }
+};
+
 struct DeqQ50 {
 
     inline int8x16x2_t dequant(const block_q5_0& x) const {
@@ -2953,7 +3074,11 @@ void iqk_convert_qX_q80_r8(int n, const void * vx, size_t bx, void * vy, int nrc
 
         for (int i = 0; i < nb; ++i) {
             for (int k = 0; k < 8; ++k) {
-                y[i].d[k] = x8[k][i].d;
+                if constexpr (std::is_same_v<Dequantizer, DeqMXFP4>) {
+                    y[i].d[k] = GGML_FP32_TO_FP16(GGML_E8M0_TO_FP32_HALF(x8[k][i].e));
+                } else {
+                    y[i].d[k] = x8[k][i].d;
+                }
                 vst1q_s8_x2((int8_t *)block, deq.dequant(x8[k][i]));
                 auto qs = (uint32_t *)y[i].qs;
                 for (int l = 0; l < 4; ++l) {
@@ -3011,6 +3136,7 @@ bool iqk_convert_legacy_quants_q8_r8(int type, int n, const void * vx, size_t bx
         case GGML_TYPE_Q5_1  : iqk_convert_qX_1_q8_1_r8<block_q5_1, DeqQ51>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q6_0  : iqk_convert_qX_q80_r8<block_q6_0, DeqQ60>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_IQ4_NL: iqk_convert_qX_q80_r8<block_iq4_nl, DeqIQ4NL>(n, vx, bx, vy, nrc_x); break;
+        case GGML_TYPE_MXFP4 : iqk_convert_qX_q80_r8<block_mxfp4, DeqMXFP4>(n, vx, bx, vy, nrc_x); break;
         case GGML_TYPE_Q8_0  : iqk_convert_qX_q80_r8<block_q8_0, DeqQ80>(n, vx, bx, vy, nrc_x); break;
         default: return false;
     }
@@ -3048,6 +3174,9 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
             break;
         case GGML_TYPE_IQ4_NL:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_0_q8_0, DequantizerIQ4NL, kernels);
+            break;
+        case GGML_TYPE_MXFP4:
+            IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qX_0_q8_0, DequantizerMXFP4, kernels);
             break;
         case GGML_TYPE_Q4_0_R8:
             IQK_SET_MUL_MAT_FUNCTIONS_T(mul_mat_qx_r8_q8_0, Q4_0_R8_Dequantizer, kernels);

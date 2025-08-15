@@ -7,6 +7,16 @@
 
 #include "llama.h"
 #include "common.h"
+#include "chat-template.hpp"
+
+static std::string normalize_newlines(const std::string& s) {
+#ifdef _WIN32
+    static const std::regex nl_regex("\r\n");
+    return std::regex_replace(s, nl_regex, "\n");
+#else
+    return s;
+#endif
+}
 
 int main(void) {
     llama_chat_message conversation[] = {
@@ -143,10 +153,10 @@ int main(void) {
     std::vector<llama_chat_msg> chat2;
     llama_chat_msg sys_msg{"system", "You are a helpful assistant"};
 
-    auto fmt_sys = [&](std::string tmpl) {
-        auto output = llama_chat_format_single(nullptr, tmpl, chat2, sys_msg, false);
-        printf("fmt_sys(%s) : %s\n", tmpl.c_str(), output.c_str());
-        printf("-------------------------\n");
+    auto fmt_sys = [&](std::string tmpl_str) {
+        minja::chat_template tmpl(tmpl_str, "", "");
+        auto output = llama_chat_format_single(nullptr, tmpl, chat2, sys_msg, false, /* use_jinja= */ false);
+        printf("fmt_sys(%s) : %s\n", tmpl_str.c_str(), output.c_str());
         return output;
     };
     assert(fmt_sys("chatml") == "<|im_start|>system\nYou are a helpful assistant<|im_end|>\n");
@@ -162,9 +172,10 @@ int main(void) {
     chat2.push_back({"assistant", "I am assistant"});
     llama_chat_msg new_msg{"user", "How are you"};
 
-    auto fmt_single = [&](std::string tmpl) {
-        auto output = llama_chat_format_single(nullptr, tmpl, chat2, new_msg, true);
-        printf("fmt_single(%s) : %s\n", tmpl.c_str(), output.c_str());
+    auto fmt_single = [&](std::string tmpl_str) {
+        minja::chat_template tmpl(tmpl_str, "", "");
+        auto output = llama_chat_format_single(nullptr, tmpl, chat2, new_msg, true, /* use_jinja= */ false);
+        printf("fmt_single(%s) : %s\n", tmpl_str.c_str(), output.c_str());
         printf("-------------------------\n");
         return output;
     };

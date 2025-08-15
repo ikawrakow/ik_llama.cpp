@@ -104,7 +104,103 @@ static void common_chat_parse_generic(common_chat_msg_parser & builder) {
     }
 }
 
-static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
+// Helper function from original llama.cpp
+static std::string wrap_code_as_arguments(common_chat_msg_parser & builder, const std::string & code) {
+    std::string arguments;
+    if (builder.is_partial()) {
+        arguments = (json {{"code", code + builder.healing_marker()}}).dump();
+        auto idx = arguments.find(builder.healing_marker());
+        if (idx != std::string::npos) {
+            arguments.resize(idx);
+        }
+    } else {
+        arguments = (json {{"code", code}}).dump();
+    }
+    return arguments;
+}
+
+// Forward declaration
+static void parse_deepseek_r1_tools_array(common_chat_msg_parser & builder);
+static void parse_deepseek_r1_xml_wrapped(common_chat_msg_parser & builder);
+
+// Helper function from original llama.cpp for parsing JSON tool calls
+static void parse_json_tool_calls(
+    common_chat_msg_parser & builder,
+    const std::optional<common_regex> & block_open,
+    const std::optional<common_regex> & function_regex_start_only,
+    const std::optional<common_regex> & function_regex,
+    const common_regex & close_regex,
+    const std::optional<common_regex> & block_close,
+    bool allow_raw_python = false,
+    const std::function<std::string(const common_chat_msg_parser::find_regex_result & fres)> & get_function_name = nullptr) {
+
+    auto parse_tool_calls = [&]() {
+        size_t from = std::string::npos;
+        auto first = true;
+        while (true) {
+            auto res = function_regex_start_only && first
+                ? builder.try_consume_regex(*function_regex_start_only)
+                : function_regex
+                    ? builder.try_find_regex(*function_regex, from)
+                    : std::nullopt;
+            if (res) {
+                std::string name;
+                if (get_function_name) {
+                    name = get_function_name(*res);
+                } else {
+                    if (res->groups.size() < 2) {
+                        from = res->groups[0].begin + 1;
+                        continue;
+                    }
+                    name = builder.str(res->groups[1]);
+                }
+                first = false;
+                if (name.empty()) {
+                    // get_function_name signalled us that we should skip this match and treat it as content.
+                    from = res->groups[0].begin + 1;
+                    continue;
+                }
+                from = std::string::npos;
+
+                auto maybe_raw_python = name == "python" && allow_raw_python;
+                if (builder.input()[builder.pos()] == '{' || !maybe_raw_python) {
+                    if (auto arguments = builder.try_consume_json_with_dumped_args({{}})) {
+                        if (!builder.add_tool_call(name, "", arguments->value) || arguments->is_partial) {
+                            throw common_chat_msg_partial_exception("incomplete tool call");
+                        }
+                        builder.try_consume_regex(close_regex);
+                    }
+                    continue;
+                }
+                if (maybe_raw_python) {
+                    auto arguments = wrap_code_as_arguments(builder, builder.consume_rest());
+                    if (!builder.add_tool_call(name, "", arguments)) {
+                        throw common_chat_msg_partial_exception("incomplete tool call");
+                    }
+                    return;
+                }
+                throw common_chat_msg_partial_exception("incomplete tool call");
+            }
+            break;
+        }
+        if (block_close) {
+            builder.try_consume_regex(*block_close);
+        }
+        builder.consume_spaces();
+        builder.add_content(builder.consume_rest());
+    };
+    if (block_open) {
+        if (auto res = builder.try_find_regex(*block_open)) {
+            parse_tool_calls();
+        } else {
+            builder.add_content(builder.consume_rest());
+        }
+    } else {
+        parse_tool_calls();
+    }
+}
+
+void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
     if (!builder.syntax().enable_tool_calls) {
         builder.add_content(builder.consume_rest());
@@ -113,25 +209,162 @@ static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
 
     static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
     static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
+    // Primary regex for correct format with separator
     static const common_regex function_regex("(?:<｜tool▁call▁begin｜>)?function<｜tool▁sep｜>([^\n]+)\n```json\n");
+    // Fallback regex for format without separator (some models generate this)
+    static const common_regex function_regex_no_sep("(?:<｜tool▁call▁begin｜>)?function<([^>]+)>\n```json\n");
+    // Third regex for new format: just "function" with no markers
+    static const common_regex function_regex_simple("function\n```json\n");
     static const common_regex close_regex("```[\\s\\r\\n]*<｜tool▁call▁end｜>");
+    static const common_regex close_regex_simple("```");  // For simple format without end markers
 
-    // Simplified tool calls parsing for DEEPSEEK_R1
-    if (auto res = builder.try_find_regex(tool_calls_begin)) {
-        while (auto func_res = builder.try_find_regex(function_regex)) {
-            auto function_name = builder.str(func_res->groups[1]);
-            auto args_json = builder.try_consume_json();
-            if (args_json) {
-                builder.add_tool_call(function_name, "", args_json->json.dump());
-                builder.try_consume_regex(close_regex);
-            } else {
-                throw common_chat_msg_partial_exception("incomplete tool call JSON");
-            }
+    // Check for the new tools array format first (no DeepSeek markers)
+    auto original_pos = builder.pos();
+
+    // First, try the tools array format for content like "function\n```json\n{"tools": [...]}"
+    if (builder.try_find_regex(function_regex_simple)) {
+        builder.move_to(original_pos);
+        try {
+            parse_deepseek_r1_tools_array(builder);
+            return; // Success, we're done
+        } catch (const common_chat_msg_partial_exception&) {
+            // Fall through to try standard DeepSeek patterns
         }
-        builder.try_consume_regex(tool_calls_end);
-        builder.add_content(builder.consume_rest());
+    }
+
+    // If tools array format didn't work, try XML-wrapped format
+    builder.move_to(original_pos);
+    try {
+        parse_deepseek_r1_xml_wrapped(builder);
+        return; // Success, we're done
+    } catch (const common_chat_msg_partial_exception&) {
+        // Fall through to try standard DeepSeek patterns
+    }
+
+    // If XML wrapper format didn't work, try standard DeepSeek patterns
+    builder.move_to(original_pos);
+    try {
+        parse_json_tool_calls(
+            builder,
+            /* block_open= */ tool_calls_begin,
+            /* function_regex_start_only= */ std::nullopt,
+            function_regex,
+            close_regex,
+            tool_calls_end);
+    } catch (const common_chat_msg_partial_exception&) {
+        // If primary regex fails and we're not in partial mode, try fallback regex
+        if (!builder.is_partial()) {
+            builder.move_to(original_pos);
+            try {
+                parse_json_tool_calls(
+                    builder,
+                    /* block_open= */ tool_calls_begin,
+                    /* function_regex_start_only= */ std::nullopt,
+                    function_regex_no_sep,
+                    close_regex,
+                    tool_calls_end);
+            } catch (const common_chat_msg_partial_exception&) {
+                // Try the simple format without markers as final fallback
+                builder.move_to(original_pos);
+                parse_json_tool_calls(
+                    builder,
+                    /* block_open= */ std::nullopt,
+                    /* function_regex_start_only= */ std::nullopt,
+                    function_regex_simple,
+                    close_regex_simple,
+                    std::nullopt);
+            }
+        } else {
+            throw; // Re-throw for partial mode
+        }
+    }
+
+    // Add any remaining content (critical for responses without tool calls)
+    builder.add_content(builder.consume_rest());
+}
+
+// Parse DeepSeek R1 tools array format following original llama.cpp parse_prefixed_json_tool_call_array pattern
+static void parse_deepseek_r1_tools_array(common_chat_msg_parser & builder) {
+    static const common_regex prefix("function\n```json\n");
+
+
+    if (auto res = builder.try_find_regex(prefix)) {
+        // Parse JSON and manually process tools array to convert arguments to strings
+        auto json_result = builder.try_consume_json();
+        if (!json_result) {
+            throw common_chat_msg_partial_exception("invalid JSON");
+        }
+
+
+        // DeepSeek R1 format has "tools" array, manually process each tool
+        if (json_result->json.contains("tools") && json_result->json.at("tools").is_array()) {
+
+            // Manually create tool calls array with string arguments (following original pattern)
+            json tools_with_dumped_args = json::array();
+            for (const auto& tool : json_result->json.at("tools")) {
+                if (tool.contains("name") && tool.contains("arguments")) {
+                    json formatted_tool;
+                    formatted_tool["name"] = tool.at("name");
+                    // Convert arguments object to string (this is what consume_json_with_dumped_args does)
+                    formatted_tool["arguments"] = tool.at("arguments").dump();
+                    tools_with_dumped_args.push_back(formatted_tool);
+                }
+            }
+
+
+            if (!builder.add_tool_calls(tools_with_dumped_args) || !json_result->healing_marker.marker.empty()) {
+                throw common_chat_msg_partial_exception("incomplete tool call array");
+            }
+        } else {
+            throw common_chat_msg_partial_exception("tools key not found or not array");
+        }
+
+        // Consume closing ```
+        builder.try_consume_regex(common_regex("```"));
     } else {
-        builder.add_content(builder.consume_rest());
+        throw common_chat_msg_partial_exception("function prefix not found");
+    }
+}
+
+// Parse DeepSeek R1 XML-wrapped format following original Hermes-2-Pro pattern
+static void parse_deepseek_r1_xml_wrapped(common_chat_msg_parser & builder) {
+
+    // Pattern for: <tool_call>\nfunction</think>FunctionName\n```json\n{...}\n```\n</tool_call>
+    static const common_regex xml_pattern(
+        "<tool_call>\\s*"           // Opening XML tag
+        "function</think>([^\\n]+)" // Function name after "function</think>"
+        "\\s*```json\\s*"           // JSON block start
+    );
+
+    if (auto res = builder.try_find_regex(xml_pattern)) {
+
+        // Extract function name from capture group
+        std::string function_name = builder.str(res->groups[1]);
+
+        // Parse JSON arguments
+        auto json_result = builder.try_consume_json();
+        if (!json_result) {
+            throw common_chat_msg_partial_exception("invalid JSON in XML wrapper");
+        }
+
+
+        // Create single tool call following original pattern
+        json tool_call;
+        tool_call["name"] = function_name;
+        tool_call["arguments"] = json_result->json.dump();  // Convert to string
+
+        json tool_calls_array = json::array();
+        tool_calls_array.push_back(tool_call);
+
+
+        if (!builder.add_tool_calls(tool_calls_array) || !json_result->healing_marker.marker.empty()) {
+            throw common_chat_msg_partial_exception("incomplete XML wrapped tool call");
+        }
+
+        // Consume closing ```\n</tool_call>
+        builder.try_consume_regex(common_regex("```\\s*</tool_call>"));
+    } else {
+        throw common_chat_msg_partial_exception("XML wrapper pattern not found");
     }
 }
 
@@ -151,6 +384,15 @@ static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
     builder.add_content(kimi_k2::clean_content(builder.input()));
 }
 
+static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
+    // TODO @ngxson : this won't work with --special enabled, we should fix that
+    builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|start|>assistant<|channel|>final<|message|>");
+    if (!builder.syntax().enable_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+}
+
 // Main parsing dispatch function
 static void common_chat_parse(common_chat_msg_parser & builder) {
     switch (builder.syntax().format) {
@@ -165,6 +407,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_KIMI_K2:
             common_chat_parse_kimi_k2(builder);
+            break;
+        case COMMON_CHAT_FORMAT_GPT_OSS:
+            common_chat_parse_gpt_oss(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
@@ -199,6 +444,19 @@ const char* common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_GENERIC:      return "generic";
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1:  return "deepseek_r1";
         case COMMON_CHAT_FORMAT_KIMI_K2:      return "kimi_k2";
+        case COMMON_CHAT_FORMAT_GPT_OSS:      return "GPT-OSS";
         default:                              return "unknown";
     }
 }
+
+const char * common_reasoning_format_name(common_reasoning_format format) {
+    switch (format) {
+        case COMMON_REASONING_FORMAT_NONE:     return "none";
+        case COMMON_REASONING_FORMAT_AUTO:     return "auto";
+        case COMMON_REASONING_FORMAT_DEEPSEEK: return "deepseek";
+        case COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY: return "deepseek-legacy";
+        default:
+            throw std::runtime_error("Unknown reasoning format");
+    }
+}
+
