@@ -234,7 +234,12 @@
 
 #define GGML_MAX_DIMS           4
 #define GGML_MAX_PARAMS         2048
-#define GGML_MAX_CONTEXTS       64
+#ifndef GGML_MAX_CONTEXTS
+// Maximum number of model contexts (e.g., for model shards). 
+// Increase this value using -DGGML_MAX_CONTEXTS=<value> in CMake 
+// if you need to load more than 64 model shards.
+#define GGML_MAX_CONTEXTS 64
+#endif
 #define GGML_MAX_SRC            10
 #ifndef GGML_MAX_NAME
 #define GGML_MAX_NAME           64
@@ -398,6 +403,7 @@ extern "C" {
         GGML_TYPE_Q4_0_4_4 = 31,
         GGML_TYPE_Q4_0_4_8 = 32,
         GGML_TYPE_Q4_0_8_8 = 33,
+        GGML_TYPE_MXFP4    = 39,  // so we are compatible with mainline
         //
         // So we are able to consume MS BitNet I2_S quants
         //
@@ -429,6 +435,9 @@ extern "C" {
         GGML_TYPE_IQ2_KT  = 153,
         GGML_TYPE_IQ3_KT  = 154,
         GGML_TYPE_IQ4_KT  = 155,
+        GGML_TYPE_IQ3_KS  = 156,
+        GGML_TYPE_IQ2_KL  = 157,
+        GGML_TYPE_IQ1_KT  = 158,
 
         GGML_TYPE_Q4_0_R8   = 202,
         GGML_TYPE_Q5_0_R4   = 206,
@@ -499,9 +508,10 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ4_XS  = 22, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_M   = 23, // except 1d tensors
         GGML_FTYPE_MOSTLY_BF16    = 24, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q4_0_4_4 = 25, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q4_0_4_8 = 26, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q4_0_8_8 = 27, // except 1d tensors
+        GGML_FTYPE_MOSTLY_MXFP4   = 25, // except 1d tensors, using 26 to be compatible with mainline
+        GGML_FTYPE_MOSTLY_Q4_0_4_4 = 26, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q4_0_4_8 = 27, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q4_0_8_8 = 28, // except 1d tensors
         //
         GGML_FTYPE_MOSTLY_Q6_0    = 127, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ1_BN  = 128, // except 1d tensors
@@ -521,6 +531,9 @@ extern "C" {
         GGML_FTYPE_MOSTLY_IQ2_KT  = 142, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ3_KT  = 143, // except 1d tensors
         GGML_FTYPE_MOSTLY_IQ4_KT  = 144, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ3_KS  = 145, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ2_KL  = 146, // except 1d tensors
+        GGML_FTYPE_MOSTLY_IQ1_KT  = 147, // except 1d tensors
                                          //
         GGML_FTYPE_MOSTLY_Q4_0_R8   = 202, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q8_0_R8   = 207, // except 1d tensors
@@ -628,7 +641,6 @@ extern "C" {
         GGML_OP_WIN_UNPART,
         GGML_OP_GET_REL_POS,
         GGML_OP_ADD_REL_POS,
-
         GGML_OP_UNARY,
 
         GGML_OP_MAP_UNARY,
@@ -644,7 +656,6 @@ extern "C" {
 
         GGML_OP_CROSS_ENTROPY_LOSS,
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
-
         GGML_OP_COUNT,
     };
 
@@ -881,6 +892,15 @@ extern "C" {
     GGML_API GGML_CALL bool ggml_is_contiguous_0(const struct ggml_tensor * tensor); // same as ggml_is_contiguous()
     GGML_API GGML_CALL bool ggml_is_contiguous_1(const struct ggml_tensor * tensor); // contiguous for dims >= 1
     GGML_API GGML_CALL bool ggml_is_contiguous_2(const struct ggml_tensor * tensor); // contiguous for dims >= 2
+
+    // returns whether the tensor elements are allocated as one contiguous block of memory (no gaps, but permutation ok)
+    GGML_API bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor);
+
+    // true for tensor that is stored in memory as CxWxHxN and has been permuted to WxHxCxN
+    GGML_API bool ggml_is_contiguous_channels(const struct ggml_tensor * tensor);
+
+    // true if the elements in dimension 0 are contiguous, or there is just 1 block of elements
+    GGML_API bool ggml_is_contiguous_rows(const struct ggml_tensor * tensor);
 
     GGML_API bool ggml_are_same_shape (const struct ggml_tensor * t0, const struct ggml_tensor * t1);
     GGML_API bool ggml_are_same_stride(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
@@ -1129,6 +1149,7 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_argmax(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+
 
     // if a is the same shape as b, and a is not parameter, return a
     // otherwise, return a new tensor: repeat(a) to fit in b
@@ -1956,7 +1977,7 @@ extern "C" {
             int                   min_entries,
             float                 thresh);
 
-#define GGML_KQ_MASK_PAD 32
+#define GGML_KQ_MASK_PAD 64
 
     // q:    [n_embd, n_batch,     n_head,    1]
     // k:    [n_embd, n_kv,        n_head_kv, 1]

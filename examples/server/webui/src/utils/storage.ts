@@ -2,8 +2,9 @@
 // format: { [convId]: { id: string, lastModified: number, messages: [...] } }
 
 import { CONFIG_DEFAULT } from '../Config';
-import { Conversation, Message, TimingReport } from './types';
+import { Conversation, Message, TimingReport, SettingsPreset } from './types';
 import Dexie, { Table } from 'dexie';
+import { exportDB as exportDexieDB } from 'dexie-export-import';
 
 const event = new EventTarget();
 
@@ -32,6 +33,27 @@ db.version(1).stores({
 
 // convId is a string prefixed with 'conv-'
 const StorageUtils = {
+	
+  async exportDB() {
+    return await exportDexieDB(db);
+  },
+
+  async importDB(file: File) {
+    await db.delete();
+    await db.open();
+    return await db.import(file);
+  },
+
+  /**
+   * update the name of a conversation
+   */
+  async updateConversationName(convId: string, name: string): Promise<void> {
+    await db.conversations.update(convId, {
+      name,
+      // lastModified: Date.now(), Don't update modified date
+    });
+    dispatchConversationChange(convId);
+  },
   /**
    * manage conversations
    */
@@ -203,7 +225,181 @@ const StorageUtils = {
       localStorage.setItem('theme', theme);
     }
   },
+  
+// Add to StorageUtils object
+// Add this to the StorageUtils object
+async importConversation(importedData: {
+  conv: Conversation;
+  messages: Message[];
+}): Promise<Conversation> {
+  const { conv, messages } = importedData;
+  
+  // Check for existing conversation ID
+  let newConvId = conv.id;
+  const existing = await StorageUtils.getOneConversation(newConvId);
+  if (existing) {
+    newConvId = `conv-${Date.now()}`;
+  }
+
+  // Create ID mapping for messages
+  const idMap = new Map<number, number>();
+  const baseId = Date.now();
+  messages.forEach((msg, index) => {
+    idMap.set(msg.id, baseId + index);
+  });
+
+  // Create a mutable copy of messages
+  const updatedMessages = messages.map(msg => ({ ...msg }));
+
+  // Find root message before we process IDs
+  const rootMessage = updatedMessages.find(m => m.type === 'root');
+  
+  // Ask user about system prompt update BEFORE processing IDs
+  let shouldUpdateSystemPrompt = false;
+  if (rootMessage) {
+    shouldUpdateSystemPrompt = confirm(
+      `This conversation contains a system prompt:\n\n"${rootMessage.content.slice(0, 100)}${rootMessage.content.length > 100 ? '...' : ''}"\n\nUpdate your system settings to use this prompt?`
+    );
+  }
+
+  // Now update messages with new IDs
+  updatedMessages.forEach(msg => {
+    msg.id = idMap.get(msg.id)!;
+    msg.convId = newConvId;
+    msg.parent = msg.parent === -1 ? -1 : (idMap.get(msg.parent) ?? -1);
+    msg.children = msg.children.map(childId => idMap.get(childId)!);
+  });
+
+  // Create new conversation with updated IDs
+  const conversation: Conversation = {
+    ...conv,
+    id: newConvId,
+    currNode: idMap.get(conv.currNode) || updatedMessages[0]?.id || -1
+  };
+
+  // Update system prompt ONLY if user confirmed
+  if (shouldUpdateSystemPrompt && rootMessage) {
+    const config = StorageUtils.getConfig();
+    config.systemMessage = rootMessage.content || '';
+    StorageUtils.setConfig(config);
+  }
+
+  // Insert in transaction
+  await db.transaction('rw', db.conversations, db.messages, async () => {
+    await db.conversations.add(conversation);
+    await db.messages.bulkAdd(updatedMessages);
+  });
+
+  // Store conversation ID for post-refresh navigation
+  //localStorage.setItem('postImportNavigation', newConvId);
+  
+  // Refresh the page to apply changes
+  window.location.reload();
+  
+  return conversation;
+},
+/**
+   * Open file dialog and import conversation from JSON file
+   * @returns Promise resolving to imported conversation or null
+   */
+  async importConversationFromFile(): Promise<Conversation | null> {
+    return new Promise((resolve) => {
+      // Create invisible file input
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = '.json,application/json';
+      fileInput.style.display = 'none';
+      
+      fileInput.onchange = async (e) => {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+
+        try {
+          const fileText = await file.text();
+          const jsonData = JSON.parse(fileText);
+          
+          // Validate JSON structure
+          if (!jsonData.conv || !jsonData.messages) {
+            throw new Error('Invalid conversation format');
+          }
+          
+          const conversation = await StorageUtils.importConversation(jsonData);
+          resolve(conversation);
+        } catch (error) {
+          console.error('Import failed:', error);
+          alert(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          resolve(null);
+        } finally {
+          document.body.removeChild(fileInput);
+        }
+      };
+
+      // Add to DOM and trigger click
+      document.body.appendChild(fileInput);
+      fileInput.click();
+    });
+  },
+
+  // get message
+    async getMessage(
+    convId: string,
+    messageId: Message['id']
+  ): Promise<Message | undefined> {
+    return await db.messages.where({ convId, id: messageId }).first();
+  },
+  async updateMessage(updatedMessage: Message): Promise<void> {
+    await db.transaction('rw', db.conversations, db.messages, async () => {
+      await db.messages.put(updatedMessage);
+      await db.conversations.update(updatedMessage.convId, {
+        lastModified: Date.now(),
+        currNode: updatedMessage.id,
+      });
+    });
+    dispatchConversationChange(updatedMessage.convId);
+  },
+  // manage presets
+  getPresets(): SettingsPreset[] {
+    const presetsJson = localStorage.getItem('presets');
+    if (!presetsJson) return [];
+    try {
+      return JSON.parse(presetsJson);
+    } catch (e) {
+      console.error('Failed to parse presets', e);
+      return [];
+    }
+  },
+  savePreset(name: string, config: typeof CONFIG_DEFAULT): SettingsPreset {
+    const presets = StorageUtils.getPresets();
+    const now = Date.now();
+    const preset: SettingsPreset = {
+      id: `preset-${now}`,
+      name,
+      createdAt: now,
+      config: { ...config }, // copy the config
+    };
+    presets.push(preset);
+    localStorage.setItem('presets', JSON.stringify(presets));
+    return preset;
+  },
+  updatePreset(id: string, config: typeof CONFIG_DEFAULT): void {
+    const presets = StorageUtils.getPresets();
+    const index = presets.findIndex((p) => p.id === id);
+    if (index !== -1) {
+      presets[index].config = { ...config };
+      localStorage.setItem('presets', JSON.stringify(presets));
+    }
+  },
+  deletePreset(id: string): void {
+    const presets = StorageUtils.getPresets();
+    const filtered = presets.filter((p) => p.id !== id);
+    localStorage.setItem('presets', JSON.stringify(filtered));
+  },
 };
+
+
 
 export default StorageUtils;
 

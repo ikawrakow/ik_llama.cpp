@@ -52,8 +52,17 @@ set(TARGET common)
 
 add_library(${TARGET} STATIC
     base64.hpp
+    chat-template.hpp
     common.h
     common.cpp
+    chat.h
+    chat.cpp
+    chat-parser.h
+    chat-parser.cpp
+    json-partial.h
+    json-partial.cpp
+    regex-partial.h
+    regex-partial.cpp
     sampling.h
     sampling.cpp
     console.h
@@ -64,6 +73,7 @@ add_library(${TARGET} STATIC
     json-schema-to-grammar.cpp
     train.h
     train.cpp
+    minja.hpp
     ngram-cache.h
     ngram-cache.cpp
     )

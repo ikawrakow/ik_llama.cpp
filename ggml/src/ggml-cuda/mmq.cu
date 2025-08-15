@@ -14,7 +14,7 @@ void ggml_cuda_op_mul_mat_q(
     const int64_t src1_padded_row_size, cudaStream_t stream) {
 
     const int64_t ne00 = src0->ne[0];
-    const int64_t nb01 = src0->nb[1];
+    const int64_t nb01 = ggml_row_size(src0->type, ne00);
 
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
@@ -94,6 +94,18 @@ void ggml_cuda_op_mul_mat_q(
         case GGML_TYPE_IQ4_NL:
             mul_mat_q_case<GGML_TYPE_IQ4_NL>(ctx, args, stream);
             break;
+        case GGML_TYPE_MXFP4:
+            mul_mat_q_case<GGML_TYPE_MXFP4>(ctx, args, stream);
+            break;
+        case GGML_TYPE_IQ2_KL:
+            mul_mat_q_case<GGML_TYPE_IQ2_KL>(ctx, args, stream);
+            break;
+        case GGML_TYPE_IQ3_KS:
+            mul_mat_q_case<GGML_TYPE_IQ3_KS>(ctx, args, stream);
+            break;
+        case GGML_TYPE_IQ4_KSS:
+            mul_mat_q_case<GGML_TYPE_IQ4_KSS>(ctx, args, stream);
+            break;
         case GGML_TYPE_IQ4_KS:
             mul_mat_q_case<GGML_TYPE_IQ4_KS>(ctx, args, stream);
             break;
@@ -102,6 +114,9 @@ void ggml_cuda_op_mul_mat_q(
             break;
         case GGML_TYPE_IQ4_KT:
             mul_mat_q_case<GGML_TYPE_IQ4_KT>(ctx, args, stream);
+            break;
+        case GGML_TYPE_IQ1_KT:
+            mul_mat_q_case<GGML_TYPE_IQ1_KT>(ctx, args, stream);
             break;
         case GGML_TYPE_IQ2_KT:
             mul_mat_q_case<GGML_TYPE_IQ2_KT>(ctx, args, stream);
@@ -163,46 +178,55 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
     bool mmq_supported;
 
     switch (type) {
+        case GGML_TYPE_Q2_K: mmq_supported = ne11 < 384; break;
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+            mmq_supported = ne11 < 1536;
+            break;
+        case GGML_TYPE_IQ2_K:
+        case GGML_TYPE_IQ2_K_R4:
+            mmq_supported = ne11 < 2048;
+            break;
+        case GGML_TYPE_IQ3_K:
+        case GGML_TYPE_IQ4_K:
+        case GGML_TYPE_IQ5_K:
+        case GGML_TYPE_IQ6_K:
+        case GGML_TYPE_IQ3_K_R4:
+        case GGML_TYPE_IQ4_K_R4:
+        case GGML_TYPE_IQ5_K_R4:
+            mmq_supported = ne11 < 1024;
+            break;
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q6_0:
         case GGML_TYPE_Q8_0:
-        case GGML_TYPE_Q2_K:
-        case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
-        case GGML_TYPE_Q6_K:
         case GGML_TYPE_IQ2_XXS:
-        case GGML_TYPE_IQ2_XS:
-        case GGML_TYPE_IQ2_S:
         case GGML_TYPE_IQ3_XXS:
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_S_R4:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_IQ2_KL:
+        case GGML_TYPE_IQ3_KS:
+        case GGML_TYPE_IQ4_KSS:
         case GGML_TYPE_IQ4_KS:
         case GGML_TYPE_IQ4_KS_R4:
         case GGML_TYPE_IQ5_KS:
         case GGML_TYPE_IQ5_KS_R4:
         case GGML_TYPE_IQ2_KS:
-        case GGML_TYPE_IQ2_K:
-        case GGML_TYPE_IQ3_K:
-        case GGML_TYPE_IQ4_K:
-        case GGML_TYPE_IQ5_K:
-        case GGML_TYPE_IQ6_K:
+        case GGML_TYPE_IQ1_KT:
         case GGML_TYPE_IQ2_KT:
         case GGML_TYPE_IQ3_KT:
         case GGML_TYPE_IQ4_KT:
             mmq_supported = true;
-            break;
-        case GGML_TYPE_IQ2_K_R4:
-        case GGML_TYPE_IQ3_K_R4:
-        case GGML_TYPE_IQ4_K_R4:
-        case GGML_TYPE_IQ5_K_R4:
-            mmq_supported = ne11 < 1024;
             break;
         default:
             mmq_supported = false;

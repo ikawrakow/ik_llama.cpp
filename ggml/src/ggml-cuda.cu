@@ -500,6 +500,14 @@ GGML_CALL static void ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer_t
     }
 }
 
+GGML_CALL static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+    ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
+
+    ggml_cuda_set_device(ctx->device);
+    CUDA_CHECK(cudaMemsetAsync((char *)tensor->data + offset, value, size, cudaStreamPerThread));
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+}
+
 GGML_CALL static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
@@ -551,6 +559,7 @@ static ggml_backend_buffer_i ggml_backend_cuda_buffer_interface = {
     /* .free_buffer     = */ ggml_backend_cuda_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_cuda_buffer_get_base,
     /* .init_tensor     = */ ggml_backend_cuda_buffer_init_tensor,
+    /* .memset_tensor   = */ ggml_backend_cuda_buffer_memset_tensor,	
     /* .set_tensor      = */ ggml_backend_cuda_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_cuda_buffer_get_tensor,
     /* .cpy_tensor      = */ ggml_backend_cuda_buffer_cpy_tensor,
@@ -867,6 +876,7 @@ static struct ggml_backend_buffer_i ggml_backend_cuda_split_buffer_interface = {
     /* .free_buffer     = */ ggml_backend_cuda_split_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_cuda_split_buffer_get_base,
     /* .init_tensor     = */ ggml_backend_cuda_split_buffer_init_tensor,
+    /* .memset_tensor   = */ NULL,
     /* .set_tensor      = */ ggml_backend_cuda_split_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_cuda_split_buffer_get_tensor,
     /* .cpy_tensor      = */ NULL,
@@ -1637,7 +1647,7 @@ static void ggml_cuda_op_mul_mat(
     }
 
     const int64_t src1_col_stride = split && used_devices > 1 ? MUL_MAT_SRC1_COL_STRIDE : ne11;
-    if (!(split && used_devices > 1) && quantization_done && ne11 == 1 && ne12 > 1 && ne13 == 1) {
+    if (!(split && used_devices > 1) && quantization_done && ne11 == 1 && ne12 > 1 && ne13 == 1 && ne02 == ne12 && ne02 == dst->ne[2]) {
         //printf("invoking fast path for %s x %s\n", src0->name, src1->name);
         int id = ctx.device;
         char  *  src0_dd_i =  dev[id].src0_dd;
@@ -2176,6 +2186,7 @@ struct mmid_row_mapping {
     int32_t i2;
 };
 
+template <typename data_t = float>
 static __global__ void k_copy_src_to_contiguous(const char * __restrict__ src_original, char * __restrict__ src_contiguous,
                                                   const mmid_row_mapping * __restrict__ row_mapping,
                                                   int64_t ne10, int64_t ne11, size_t nb11, size_t nb12) {
@@ -2184,8 +2195,8 @@ static __global__ void k_copy_src_to_contiguous(const char * __restrict__ src_or
     const int32_t i11 = row_mapping[i].i1 % ne11;
     const int32_t i12 = row_mapping[i].i2;
 
-    float * src_row_contiguous = (float *)(src_contiguous + i*nb11);
-    const float * src_row_original = (const float *)(src_original + i11*nb11 + i12*nb12);
+    data_t * src_row_contiguous = (data_t *)(src_contiguous + i*nb11);
+    const data_t * src_row_original = (const data_t *)(src_original + i11*nb11 + i12*nb12);
 
     for (int j = threadIdx.x; j < ne10; j += blockDim.x) {
         src_row_contiguous[j] = src_row_original[j];
@@ -2663,7 +2674,23 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             }
         }
     } else {
-        ggml_cuda_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(src1));
+        //printf("ne10 = %ld, ne11 = %ld, ne12 = %ld, nb10 = %zu nb11 = %zu nb12 = %zu\n", src1->ne[0], src1->ne[1], src1->ne[2], src1->nb[0], src1->nb[1], src1->nb[2]);
+        ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool());
+        bool use_quantized_src1 = false;
+        int64_t src1_padded_num_cols = 0, src1_padded_row_size = 0, src1_quantized_size = 0;
+        if (ggml_is_quantized(src0_1->type) && src0_1->type == src0_2->type && src1->ne[1] == 1 && src1->ne[3] == 1) {
+            if (ggml_cuda_should_use_mmq(src0_1->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
+                src1_padded_num_cols = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
+                src1_padded_row_size = src1_padded_num_cols/ggml_blck_size(GGML_TYPE_Q8_1)*ggml_type_size(GGML_TYPE_Q8_1);
+                src1_quantized_size  = src1_padded_row_size*src1->ne[2] + get_mmq_x_max_host(ggml_cuda_info().devices[ctx.device].cc)*sizeof(block_q8_1_mmq);
+                src1_quantized.alloc(src1_quantized_size);
+                use_quantized_src1 = true;
+            }
+        }
+        ggml_cuda_pool_alloc<char> src1_contiguous(ctx.pool());
+        if (!use_quantized_src1) {
+            src1_contiguous.alloc(sizeof(float)*ggml_nelements(src1));
+        }
         ggml_cuda_pool_alloc<char>  dst_up_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
         ggml_cuda_pool_alloc<char>  dst_gate_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
         ggml_cuda_pool_alloc<char> final_dst_contiguous(ctx.pool());
@@ -2694,12 +2721,19 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             if (num_src1_rows == 0) continue;
             size_t mapping_offset = cum_moe_counts[i02];
 
-            {
+            if (use_quantized_src1) {
+                quantize_mmq_q8_1_id_cuda((const float *)src1->data, src1_quantized.get(), (const char *)(dev_row_mapping.get() + mapping_offset),
+                        src1->ne[0], num_src1_rows, src1_padded_num_cols, src0_1->type, stream);
+                CUDA_CHECK(cudaGetLastError());
+                src1_row.data = src1_quantized.get();
+            }
+            else {
                 dim3 block_dims(std::min((unsigned int)ne10, 768u));
                 dim3 grid_dims(num_src1_rows);
                 k_copy_src_to_contiguous<<<grid_dims, block_dims, 0, stream>>>(
                         src1_original, src1_contiguous.get(), dev_row_mapping.get() + mapping_offset, ne10, ne11, nb11, nb12);
                 CUDA_CHECK(cudaGetLastError());
+                src1_row.data = src1_contiguous.get();
             }
 
             src0_1_row.data = src0_1_original + i02*nb02;
@@ -2709,9 +2743,9 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             GGML_ASSERT(nb1 == sizeof(float)*ne0);
 
             src1_row.ne[1] = num_src1_rows;
-            src1_row.nb[1] = nb11;
-            src1_row.nb[2] = num_src1_rows*nb11;
-            src1_row.nb[3] = num_src1_rows*nb11;
+            src1_row.nb[1] = use_quantized_src1 ? src1_padded_row_size : nb11;
+            src1_row.nb[2] = num_src1_rows*src1_row.nb[1];
+            src1_row.nb[3] = num_src1_rows*src1_row.nb[1];
 
             dst_row.ne[1] = num_src1_rows;
             dst_row.nb[1] = nb1;
@@ -2719,11 +2753,21 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
             dst_row.nb[3] = num_src1_rows*nb1;
 
             dst_row.data  =  dst_up_contiguous.get();
-            ggml_cuda_mul_mat(ctx, &src0_1_row, &src1_row, &dst_row);
+            if (use_quantized_src1) {
+                ggml_cuda_op_mul_mat_q(ctx, &src0_1_row, &src1_row, &dst_row, (const char *)src0_1_row.data, nullptr, src1_quantized.get(), (float *)dst_row.data,
+                        0, src0_1_row.ne[1], num_src1_rows, src1_padded_num_cols, stream);
+            } else {
+                ggml_cuda_mul_mat(ctx, &src0_1_row, &src1_row, &dst_row);
+            }
             CUDA_CHECK(cudaGetLastError());
 
             dst_row.data  = dst_gate_contiguous.get();
-            ggml_cuda_mul_mat(ctx, &src0_2_row, &src1_row, &dst_row);
+            if (use_quantized_src1) {
+                ggml_cuda_op_mul_mat_q(ctx, &src0_2_row, &src1_row, &dst_row, (const char *)src0_2_row.data, nullptr, src1_quantized.get(), (float *)dst_row.data,
+                        0, src0_2_row.ne[1], num_src1_rows, src1_padded_num_cols, stream);
+            } else {
+                ggml_cuda_mul_mat(ctx, &src0_2_row, &src1_row, &dst_row);
+            }
             CUDA_CHECK(cudaGetLastError());
 
             ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
@@ -3454,12 +3498,16 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                     case GGML_TYPE_IQ3_S:
                     case GGML_TYPE_IQ3_XXS:
                     case GGML_TYPE_IQ4_NL:
+                    case GGML_TYPE_MXFP4:
                     case GGML_TYPE_IQ4_XS:
+                    case GGML_TYPE_IQ2_KL:
+                    case GGML_TYPE_IQ3_KS:
                     case GGML_TYPE_IQ4_KS:
                     case GGML_TYPE_IQ4_KSS:
                     case GGML_TYPE_IQ5_KS:
                     case GGML_TYPE_IQ2_K:
                     case GGML_TYPE_IQ2_KS:
+                    case GGML_TYPE_IQ1_KT:
                     case GGML_TYPE_IQ2_KT:
                     case GGML_TYPE_IQ3_KT:
                     case GGML_TYPE_IQ4_KT:
@@ -3566,17 +3614,24 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 }
                 return false;
             } break;
+        case GGML_OP_SILU_BACK:
+            return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+            break;
+        case GGML_OP_NORM:
+        case GGML_OP_RMS_NORM:
+            return true;
+        case GGML_OP_RMS_NORM_BACK:
+            return ggml_is_contiguous(op->src[0]) && op->ne[0] % WARP_SIZE == 0;
+            break;
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
-        case GGML_OP_NORM:
         case GGML_OP_ADD:
         case GGML_OP_MULTI_ADD:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
-        case GGML_OP_RMS_NORM:
         case GGML_OP_FUSED_RMS_NORM:
         case GGML_OP_SCALE:
         case GGML_OP_SOFTCAP:

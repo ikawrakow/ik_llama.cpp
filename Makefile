@@ -774,6 +774,10 @@ ifdef GGML_VULKAN_MEMORY_DEBUG
 	MK_CPPFLAGS  += -DGGML_VULKAN_MEMORY_DEBUG
 endif
 
+ifdef GGML_VULKAN_PERF
+	MK_CPPFLAGS  += -DGGML_VULKAN_PERF
+endif
+
 ifdef GGML_VULKAN_VALIDATE
 	MK_CPPFLAGS  += -DGGML_VULKAN_VALIDATE
 endif
@@ -1082,6 +1086,7 @@ ggml/src/iqk/iqk_mul_mat.o: \
 	ggml/src/ggml-quants.h ggml/src/ggml-common.h ggml/include/ggml.h ggml/src/ggml-impl.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif # GGML_NO_IQKMULMAT
+
 
 ifndef GGML_NO_LLAMAFILE
 ggml/src/llamafile/sgemm.o: \

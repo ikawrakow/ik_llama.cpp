@@ -228,6 +228,7 @@ struct gpt_params {
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";
     std::string chat_template = "";
+    bool use_jinja = false;                                                                                 // NOLINT
     std::string system_prompt = "";
     bool enable_chat_template = true;
 
@@ -306,11 +307,17 @@ std::string gpt_params_get_system_info(const gpt_params & params);
 //
 
 std::vector<std::string> string_split(std::string input, char separator);
+std::string string_join(const std::vector<std::string> & strs, const std::string & delimiter);
 
 std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();
 
 void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
+
+// Additional string utilities for builder pattern compatibility
+bool string_starts_with(const std::string & str, const std::string & prefix);
+bool string_ends_with(const std::string_view & str, const std::string_view & suffix);
+size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop);
 
 template<class T>
 static std::vector<T> string_split(const std::string & str, char delim) {
@@ -396,6 +403,11 @@ std::string llama_token_to_piece(
                        llama_token   token,
                        bool          special = true);
 
+std::string llama_token_to_piece(
+    const struct llama_model* model,
+    llama_token   token,
+    bool          special = true);
+
 // detokenizes a vector of tokens into a string
 // should work similar to Python's `tokenizer.decode`
 // optionally renders special/control tokens
@@ -419,26 +431,45 @@ struct llama_chat_msg {
 };
 
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
-bool llama_chat_verify_template(const std::string & tmpl);
+bool llama_chat_verify_template(const struct llama_model* , const std::string& tmpl, bool use_jinja);
+
+namespace minja {
+    class chat_template;
+}
+
+typedef minja::chat_template common_chat_template;
+
+struct common_chat_templates {
+    bool has_explicit_template; // Model had builtin template or template overridde was specified.
+    std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
+    std::unique_ptr<common_chat_template> template_tool_use;
+};
+
 
 // CPP wrapper for llama_chat_apply_template
 // If the built-in template is not supported, we default to chatml
 // If the custom "tmpl" is not supported, we throw an error
-std::string llama_chat_apply_template(const struct llama_model * model,
-        const std::string & tmpl,
-        const std::vector<llama_chat_msg> & chat,
-        bool add_ass);
+std::string llama_chat_apply_template(
+    const struct llama_model* model,
+    const common_chat_template& tmpl,
+    const std::vector< llama_chat_msg>& chat,
+    bool add_ass,
+    bool use_jinja);
 
 // Format single message, while taking into account the position of that message in chat history
-std::string llama_chat_format_single(const struct llama_model * model,
-        const std::string & tmpl,
-        const std::vector<llama_chat_msg> & past_msg,
-        const llama_chat_msg & new_msg,
-        bool add_ass);
+std::string  llama_chat_format_single(const struct llama_model* model,
+    const common_chat_template& tmpl,
+    const std::vector< llama_chat_msg>& past_msg,
+    const  llama_chat_msg& new_msg,
+    bool add_ass,
+    bool use_jinja);
 
 // Returns an example of formatted chat
-std::string llama_chat_format_example(const struct llama_model * model,
-        const std::string & tmpl);
+std::string  llama_chat_format_example(const struct llama_model* model,
+    const common_chat_template& tmpl, bool use_jinja);
+
+common_chat_templates  llama_chat_templates_from_model(const struct llama_model* model, const std::string& chat_template_override);
+
 
 //
 // KV cache utils
@@ -498,3 +529,5 @@ void yaml_dump_string_multiline(FILE * stream, const char * prop_name, const cha
 void yaml_dump_non_result_info(
     FILE * stream, const gpt_params & params, const llama_context * lctx,
     const std::string & timestamp, const std::vector<int> & prompt_tokens, const char * model_desc);
+
+std::string string_format(const char* fmt, ...);

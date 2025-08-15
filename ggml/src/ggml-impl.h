@@ -29,6 +29,24 @@
 
 #endif
 
+// Does not handle NaN
+static inline float ggml_e8m0_to_fp32(uint8_t x) {
+    union { float f; uint32_t u; } helper;
+    helper.u = x ? (uint32_t)x << 23u : 0x00400000;
+    return helper.f;
+}
+
+// As above, but returns ggml_e8m0_to_fp32(x)/2
+static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
+    static uint32_t val[2] = { 0x00200000, 0x00400000 };
+    union { float f; uint32_t u; } helper;
+    helper.u = x >= 2 ? (uint32_t)(x - 1) << 23u : val[x];
+    return helper.f;
+}
+
+#define GGML_E8M0_TO_FP32(x) ggml_e8m0_to_fp32(x)
+#define GGML_E8M0_TO_FP32_HALF(x) ggml_e8m0_to_fp32_half(x)
+
 /**
  * Converts brain16 to float32.
  *
@@ -746,6 +764,16 @@ static size_t ggml_hash_find_or_insert(struct ggml_hash_set * hash_set, struct g
 
     // visited all hash table entries -> not found
     GGML_ABORT("fatal error");
+}
+
+static int32_t ggml_get_op_params_i32(const struct ggml_tensor * tensor, uint32_t i) {
+    assert(i < GGML_MAX_OP_PARAMS / sizeof(int32_t));
+    return ((const int32_t *)(tensor->op_params))[i];
+}
+
+static float ggml_get_op_params_f32(const struct ggml_tensor * tensor, uint32_t i) {
+    assert(i < GGML_MAX_OP_PARAMS / sizeof(float));
+    return ((const float *)(tensor->op_params))[i];
 }
 
 #ifdef __cplusplus

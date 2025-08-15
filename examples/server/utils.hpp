@@ -6,6 +6,11 @@
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "json.hpp"
+#include "minja.hpp"
+#include "chat-template.hpp"
+#include "kimi_k2_tools.hpp"
+#include "qwen3_tools.hpp"
+#include "deepseek_r1_tools.hpp"
 #include <string>
 #include <vector>
 #include <sstream>
@@ -24,6 +29,12 @@ enum error_type {
     ERROR_TYPE_PERMISSION,
     ERROR_TYPE_UNAVAILABLE, // custom error
     ERROR_TYPE_NOT_SUPPORTED, // custom error
+};
+
+enum tool_choice_type {
+    TOOL_CHOICE_AUTO,
+    TOOL_CHOICE_REQUIRED,
+    TOOL_CHOICE_NONE,
 };
 
 extern bool server_verbose;
@@ -116,9 +127,12 @@ static inline void server_log(const char * level, const char * function, int lin
 //
 
 // Format given chat. If tmpl is empty, we take the template from model metadata
-inline std::string format_chat(const struct llama_model * model, const std::string & tmpl, const std::vector<json> & messages) {
+inline std::string format_chat(const struct llama_model * model, common_chat_template tmpl, const std::vector<json> & messages, const json & tools = json::array(), const std::string & model_name = "") {
     std::vector<llama_chat_msg> chat;
 
+    // Inject tools into the first system message, or create one if none exists
+    bool tools_injected = false;
+    
     for (size_t i = 0; i < messages.size(); ++i) {
         const auto & curr_msg = messages[i];
 
@@ -140,11 +154,53 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
         } else {
             throw std::runtime_error("Missing 'content' (ref: https://github.com/ggerganov/llama.cpp/issues/8367)");
         }
+        // Inject tools into the first system message, or create one if none exists
+        // Only applies to Kimi-K2 models (checked by kimi_k2_should_inject_tools)
+        if (kimi_k2_should_inject_tools(tools, model_name) && !tools_injected) {
+            if (role == "system") {
+                // Add tools to existing system message
+                content = kimi_k2_inject_tools_to_system(content, tools);
+                tools_injected = true;
+            } else if (i == 0) {
+                // Create system message with tools if no system message exists
+                std::string tools_prompt = kimi_k2_create_system_with_tools(tools);
+                chat.push_back({"system", tools_prompt});
+                tools_injected = true;
+            }
+        }
+        
+        // Inject tools for Qwen3 models (XML Hermes format)
+        if (qwen3_should_inject_tools(tools, model_name) && !tools_injected) {
+            if (role == "system") {
+                // Add tools to existing system message
+                content = qwen3_inject_tools_to_system(content, tools);
+                tools_injected = true;
+            } else if (i == 0) {
+                // Create system message with tools if no system message exists
+                std::string tools_prompt = qwen3_create_system_with_tools(tools);
+                chat.push_back({"system", tools_prompt});
+                tools_injected = true;
+            }
+        }
+        
+        // Inject tools for DeepSeek R1 models
+        if (deepseek_r1_should_inject_tools(tools, model_name) && !tools_injected) {
+            if (role == "system") {
+                // Add tools to existing system message
+                content = deepseek_r1_inject_tools_to_system(content, tools);
+                tools_injected = true;
+            } else if (i == 0) {
+                // Create system message with tools if no system message exists
+                std::string tools_prompt = deepseek_r1_create_system_with_tools(tools);
+                chat.push_back({"system", tools_prompt});
+                tools_injected = true;
+            }
+        }
 
         chat.push_back({role, content});
     }
+    auto formatted_chat = llama_chat_apply_template(model, tmpl, chat, true,  /* use_jinja= */ false);
 
-    auto formatted_chat = llama_chat_apply_template(model, tmpl, chat, true);
     LOG_VERBOSE("formatted_chat", {{"text", formatted_chat.c_str()}});
     return formatted_chat;
 }
@@ -343,19 +399,100 @@ static json probs_vector_to_json(const llama_context * ctx, const std::vector<co
 }
 
 //
+// Function calling support
+//
+#include "function_calls.hpp"
+
+//
+// tool_choice utils
+//
+
+static tool_choice_type tool_choice_parse_oaicompat(const std::string & tool_choice) {
+    if (tool_choice == "auto") {
+        return TOOL_CHOICE_AUTO;
+    }
+    if (tool_choice == "none") {
+        return TOOL_CHOICE_NONE;
+    }
+    if (tool_choice == "required") {
+        return TOOL_CHOICE_REQUIRED;
+    }
+    throw std::runtime_error("Invalid tool_choice: " + tool_choice);
+}
+
+//
 // OAI utils
 //
 
-static json oaicompat_completion_params_parse(
+static json oaicompat_completion_params_parse(const json& body) {
+    json llama_params;
+
+    if (!body.contains("prompt")) {
+        throw std::runtime_error("\"prompt\" is required");
+    }
+
+    // Handle "stop" field
+    if (body.contains("stop") && body.at("stop").is_string()) {
+        llama_params["stop"] = json::array({ body.at("stop").get<std::string>() });
+    }
+    else {
+        llama_params["stop"] = json_value(body, "stop", json::array());
+    }
+
+    // Handle "n" field
+    int n_choices = json_value(body, "n", 1);
+    if (n_choices != 1) {
+        throw std::runtime_error("Only one completion choice is allowed");
+    }
+
+    // Params supported by OAI but unsupported by llama.cpp
+    static const std::vector<std::string> unsupported_params{ "best_of", "echo", "suffix" };
+    for (const auto& param : unsupported_params) {
+        if (body.contains(param)) {
+            throw std::runtime_error("Unsupported param: " + param);
+        }
+    }
+
+    // Copy remaining properties to llama_params
+    for (const auto& item : body.items()) {
+        // Exception: if "n_predict" is present, we overwrite the value specified earlier by "max_tokens"
+        if (!llama_params.contains(item.key()) || item.key() == "n_predict") {
+            llama_params[item.key()] = item.value();
+        }
+    }
+
+    return llama_params;
+}
+
+static json oaicompat_chat_completion_params_parse(
     const struct llama_model * model,
     const json & body, /* openai api json semantics */
-    const std::string & chat_template) {
+    const common_chat_template& tmpl,
+    bool use_jinja) {
     json llama_params;
 
     llama_params["__oaicompat"] = true;
+    auto tools = json_value(body, "tools", json());
+    auto has_tools = tools.is_array() && !tools.empty();
 
-    // Apply chat template to the list of messages
-    llama_params["prompt"] = format_chat(model, chat_template, body.at("messages"));
+    if (has_tools) {
+        if (use_jinja) {
+            fprintf(stdout,"tools param is not fully supported yet\n");
+    // Extract tools from the request body
+    json tools = json_value(body, "tools", json::array());
+    
+        }
+    // Debug: Log system prompt when tools are detected
+        else {
+            throw std::runtime_error("tools param requires --jinja flag");
+        }
+    }
+
+    // Extract model name from the request body
+    std::string model_name = json_value(body, "model", std::string(DEFAULT_OAICOMPAT_MODEL));
+
+    // Apply chat template to the list of messages with tools
+    llama_params["prompt"] = format_chat(model, tmpl, body.at("messages"), tools, model_name);
 
     // Handle "stop" field
     if (body.contains("stop") && body.at("stop").is_string()) {
@@ -374,6 +511,13 @@ static json oaicompat_completion_params_parse(
             throw std::runtime_error("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
         }
     }
+    // Apply chat template to the list of messages
+    if (use_jinja) {
+        llama_params["prompt"] = tmpl.apply(body.at("messages"), tools, /* add_generation_prompt= */ true);
+    }
+    else {
+        llama_params["prompt"] = format_chat(model, tmpl, body.at("messages"));
+    }
 
     // Handle "n" field
     int n_choices = json_value(body, "n", 1);
@@ -389,8 +533,16 @@ static json oaicompat_completion_params_parse(
         throw std::runtime_error("top_logprobs requires logprobs to be set to true");
     }
 
-    // Params supported by OAI but unsupported by llama.cpp
-    static const std::vector<std::string> unsupported_params { "tools", "tool_choice" };
+    // Handle tool_choice parameter
+    if (body.contains("tool_choice")) {
+        auto tool_choice_str = json_value(body, "tool_choice", std::string("auto"));
+        auto tool_choice = tool_choice_parse_oaicompat(tool_choice_str);
+        llama_params["tool_choice"] = static_cast<int>(tool_choice);
+    }
+
+    // Accept tools and tool_choice parameters for function calling support
+    // Other unsupported params still rejected
+    static const std::vector<std::string> unsupported_params {  };
     for (auto & param : unsupported_params) {
         if (body.contains(param)) {
             throw std::runtime_error("Unsupported param: " + param);
