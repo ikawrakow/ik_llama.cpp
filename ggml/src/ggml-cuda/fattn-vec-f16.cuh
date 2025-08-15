@@ -17,6 +17,7 @@ static __global__ void flash_attn_vec_ext_f16(
         const char * __restrict__ K,
         const char * __restrict__ V,
         const char * __restrict__ mask,
+        const char * __restrict__ sinks,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -71,6 +72,7 @@ static __global__ void flash_attn_vec_ext_f16(
     V += nb22*(blockIdx.y / gqa_ratio);
 
     const half * maskh = (const half   *)  mask + ne11*ic0;
+    const float * sinksf = (const float *) (sinks);
 
     const float slopef = get_alibi_slope(max_bias, blockIdx.y, n_head_log2, m0, m1);
     const half  slopeh = __float2half(slopef);
@@ -265,6 +267,39 @@ static __global__ void flash_attn_vec_ext_f16(
             for (int j = 0; j < ncols; ++j) {
                 VKQ[j] += V_k*KQ2[j*(Dk/2) + k0/2];
             }
+        }
+
+        __syncthreads();
+    }
+
+    if (sinksf) {
+        const half sink = __float2half(sinksf[blockIdx.y]);
+
+#pragma unroll
+        for (int j = 0; j < ncols; ++j) {
+            if (threadIdx.x == 0) {
+                kqmax_shared[j][threadIdx.y] = fmaxf(kqmax[j], sink);
+            }
+        }
+
+        __syncthreads();
+
+#pragma unroll
+        for (int j = 0; j < ncols; ++j) {
+            half kqmax_new_j = kqmax_shared[j][threadIdx.y];
+            kqmax_new_j = warp_reduce_max(kqmax_new_j);
+
+            const half KQ_max_scale = hexp(kqmax[j] - kqmax_new_j);
+            kqmax[j] = kqmax_new_j;
+
+            const half val = hexp(sink - kqmax[j]);
+            kqsum[j] = kqsum[j]*KQ_max_scale;
+
+            if (tid == 0) {
+                kqsum[j] += val;
+            }
+
+            VKQ[j] *= __half2half2(KQ_max_scale);
         }
 
         __syncthreads();

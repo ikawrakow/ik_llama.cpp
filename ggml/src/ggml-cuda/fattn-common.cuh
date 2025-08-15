@@ -22,6 +22,7 @@ typedef void (* fattn_kernel_t)(
         const char * __restrict__ K,
         const char * __restrict__ V,
         const char * __restrict__ mask,
+        const char * __restrict__ sinks,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -747,6 +748,7 @@ void launch_fattn(
     const ggml_tensor * V = dst->src[2];
 
     const ggml_tensor * mask = dst->src[3];
+    const ggml_tensor * sinks = dst->src[4];
 
     ggml_tensor * KQV = dst;
 
@@ -837,6 +839,7 @@ void launch_fattn(
         K_data,
         V_data,
         mask ? ((const char *) mask->data) : nullptr,
+        sinks ? ((const char *) sinks->data) : nullptr,
         (parallel_blocks) == 1 ? (float *) KQV->data : dst_tmp.ptr, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, softcap, n_head_log2,
         Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3],
@@ -1008,7 +1011,8 @@ void launch_fattn_mma(
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
-    const ggml_tensor * mask = dst->src[3];
+    const ggml_tensor * mask  = dst->src[3];
+    const ggml_tensor * sinks = dst->src[4];
 
     ggml_tensor * KQV = dst;
 
@@ -1162,6 +1166,7 @@ void launch_fattn_mma(
         K_data,
         V_data,
         mask ? ((const char *) mask->data) : nullptr,
+        sinks ? ((const char *)sinks->data) : nullptr,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3],
