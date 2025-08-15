@@ -2513,6 +2513,8 @@ struct llama_context {
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
+    struct ggml_tensor * inp_mask_bounds = nullptr; // I32 [2, n_tokens]
+    struct ggml_tensor * inp_mask_bounds_swa = nullptr; // I32 [2, n_tokens]
 };
 
 struct llama_lora_weight {
@@ -7943,7 +7945,8 @@ static struct ggml_tensor * llm_build_kqv(
                     float     kq_scale,
          const llm_build_cb & cb,
                     int       il,
-                ggml_tensor * sinks = nullptr) {
+                ggml_tensor * sinks  = nullptr,
+                ggml_tensor * bounds = nullptr) {
     const llama_model   & model   = lctx.model;
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
@@ -7990,7 +7993,8 @@ static struct ggml_tensor * llm_build_kqv(
 
         cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
-        ggml_flash_attn_ext_add_sinks(cur, sinks);
+        ggml_flash_attn_ext_add_sinks (cur, sinks);
+        ggml_flash_attn_ext_add_bounds(cur, bounds);
 
         // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
         // For DeepSeek-2, it is perfectly fine with fp16 for PP, but I get gibberish when uding fp16 for TG.
@@ -8148,7 +8152,8 @@ static struct ggml_tensor * llm_build_kv(
                     float     kq_scale,
          const llm_build_cb & cb,
                     int       il,
-                ggml_tensor * sinks = nullptr) {
+                ggml_tensor * sinks  = nullptr,
+                ggml_tensor * bounds = nullptr) {
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
 
@@ -8163,7 +8168,7 @@ static struct ggml_tensor * llm_build_kv(
     struct ggml_tensor * cur;
 
     cur  = llm_build_kqv(ctx, lctx, kv, graph, wo, wo_b,
-            q_cur, kq_mask, n_tokens, n_kv, kq_scale, cb, il, sinks);
+            q_cur, kq_mask, n_tokens, n_kv, kq_scale, cb, il, sinks, bounds);
     cb(cur, "kqv_out", il);
 
     return cur;
@@ -8298,6 +8303,8 @@ struct llm_build_context {
         lctx.inp_pos_bucket    = nullptr;
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
+        lctx.inp_mask_bounds   = nullptr;
+        lctx.inp_mask_bounds_swa = nullptr;
     }
 
     void free() {
@@ -8478,6 +8485,9 @@ struct llm_build_context {
         cb(lctx.inp_KQ_mask, "KQ_mask", -1);
         ggml_set_input(lctx.inp_KQ_mask);
 
+        lctx.inp_mask_bounds = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 2, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        ggml_set_input(lctx.inp_mask_bounds);
+
         return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask, GGML_TYPE_F16) : lctx.inp_KQ_mask;
     }
 
@@ -8489,6 +8499,9 @@ struct llm_build_context {
             : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
         ggml_set_input(lctx.inp_KQ_mask_swa);
+
+        lctx.inp_mask_bounds_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 2, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        ggml_set_input(lctx.inp_mask_bounds_swa);
 
         return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa;
     }
@@ -12257,6 +12270,7 @@ struct llm_build_context {
             const float freq_base_l        = is_sliding ? 10000.0f    : freq_base;
             const float freq_scale_l       = is_sliding ? 1.0f        : freq_scale;
             struct ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
+            auto bounds = is_sliding ? lctx.inp_mask_bounds_swa : lctx.inp_mask_bounds;
 
             // norm
             cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
@@ -12291,7 +12305,7 @@ struct llm_build_context {
                 cb(Kcur, "Kcur", il);
 
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, NULL,
-                        Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, hparams.f_attention_scale, cb, il);
+                        Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, hparams.f_attention_scale, cb, il, nullptr, bounds);
             }
 
             cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
@@ -15407,6 +15421,7 @@ struct llm_build_context {
             ggml_tensor * inpSA = inpL;
 
             struct ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
+            auto bounds = is_sliding ? lctx.inp_mask_bounds_swa : lctx.inp_mask_bounds;
 
             // norm
             cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, cb, il);
@@ -15446,7 +15461,7 @@ struct llm_build_context {
                 cb(Kcur, "Kcur", il);
 
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, model.layers[il].bo,
-                        Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, kq_scale, cb, il, model.layers[il].attn_sinks);
+                        Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, kq_scale, cb, il, model.layers[il].attn_sinks, bounds);
 
                 cb(cur, "attn_out", il);
             }
@@ -15965,15 +15980,25 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
             float * data     = nullptr;
             float * data_swa = nullptr;
+            int32_t * bounds = nullptr;
+            int32_t * bounds_swa = nullptr;
 
             if (lctx.inp_KQ_mask) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask->buffer));
                 data = (float *) lctx.inp_KQ_mask->data;
             }
+            if (lctx.inp_mask_bounds) {
+                GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_mask_bounds->buffer));
+                bounds = (int32_t *)lctx.inp_mask_bounds->data;
+            }
 
             if (lctx.inp_KQ_mask_swa) {
                 GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_KQ_mask_swa->buffer));
                 data_swa = (float *) lctx.inp_KQ_mask_swa->data;
+            }
+            if (lctx.inp_mask_bounds_swa) {
+                GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_mask_bounds_swa->buffer));
+                bounds_swa = (int32_t *)lctx.inp_mask_bounds_swa->data;
             }
 
             // For causal attention, use only the previous KV cells
@@ -16023,12 +16048,38 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                             data[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
                         }
                     }
+                    if (h == 0 && bounds) {
+                        for (int i = 0; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
+                            int min = n_kv, max = 0;
+                            for (int j = 0; j < n_kv; ++j) {
+                                if (data[i*n_kv + j] > -INFINITY) {
+                                    min = std::min(min, j);
+                                    max = std::max(max, j);
+                                }
+                            }
+                            bounds[2*i + 0] = min;
+                            bounds[2*i + 1] = max+1;
+                        }
+                    }
                 }
 
                 if (data_swa) {
                     for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
                         for (int j = 0; j < n_kv; ++j) {
                             data_swa[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
+                        }
+                    }
+                    if (h == 0 && bounds_swa) {
+                        for (int i = 0; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
+                            int min = n_kv, max = 0;
+                            for (int j = 0; j < n_kv; ++j) {
+                                if (data_swa[i*n_kv + j] > -INFINITY) {
+                                    min = std::min(min, j);
+                                    max = std::max(max, j);
+                                }
+                            }
+                            bounds_swa[2*i + 0] = min;
+                            bounds_swa[2*i + 1] = max+1;
                         }
                     }
                 }
