@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: MIT
 //
 
+// TODO: attention sinks !!!
+
 #include "common.cuh"
 #include "fattn-common.cuh"
 
@@ -22,6 +24,7 @@ static __global__ void flash_attn_ext_f16(
         const char * __restrict__ K,
         const char * __restrict__ V,
         const char * __restrict__ mask,
+        const char * __restrict__ sinks,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -93,6 +96,7 @@ static __global__ void flash_attn_ext_f16(
     const half  * V_h   = (const half  *) (V + nb22*(blockIdx.y / gqa_ratio)); // K and V have same shape
     const half  * maskh = (const half  *)  mask + (nb31/sizeof(half))* ic0;
     const half2 * mask2 = (const half2 *)  mask + (nb31/sizeof(half))*(ic0/2);
+    const float * sinks_f = sinks ? (const float *)sinks + blockIdx.y : nullptr;
 
     const int stride_Q = nb01 / sizeof(float);
     const int stride_K = nb11 / sizeof(half);

@@ -66,6 +66,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                             const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
                             const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                             const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
+                            const void  * sinks,    // mask. If not null, assumed to be fp16. nq x nk elements
                             float         scale,    // scale applied before softmax
                             float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             float       * qkv,      // v*softmax(scale*(k*q))
@@ -139,7 +140,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 auto work_this_thread = (float *)(result_buffer + ith*size_thread);
                 if (!iqk_flash_attn_impl(int_type_k, int_type_v,
                             Dk, Dv, nq_this_thread, nek1/gcd_k, nbq2, stride_k, stride_v, 0, Dv, //Dk*sizeof(uint16_t), Dv,
-                            (const float *)qth, (const void *)kth, (const void *)vth, (const void *)mth,
+                            (const float *)qth, (const void *)kth, (const void *)vth, (const void *)mth, nullptr, 0,
                             scale, softcap,
                             work_this_thread, work_this_thread + (Dv+0)*nq_this_thread, work_this_thread + (Dv+1)*nq_this_thread)) return false;
 
@@ -182,51 +183,6 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     if (neq3 == 1 && rk2 > 1 && rk2 == rv2 && neq1 == 1 && nth >= 1 && nek2*nek1 >= 32*nth) {
         auto result_size = (Dv + 16)*rk2*sizeof(float);
         int gcd = simple_gcd(nek2, nth);
-        if (false && gcd > 1) {
-            int nth_g = nth/gcd;
-            int ith_g = ith%nth_g;
-            int nek1_32 = nek1/32;
-            int nek1_pt = (nek1_32 + nth_g - 1)/nth_g;
-            int ith_mid = nth_g;
-            if (nek1_pt*nth_g > nek1_32) {
-                ith_mid = nek1_32 - nth_g*(nek1_pt - 1);
-            }
-            nek1_pt *= 32;
-            int nek1_mid = ith_mid*nek1_pt;
-            int nek1_thread = ith_g < ith_mid ? nek1_pt : nek1_pt - 32;
-            for (int ik02 = ith/nth_g; ik02 < nek2; ik02 += gcd) {
-                int ik01 = ith_g < ith_mid ? ith_g*nek1_pt : nek1_mid + (ith_g - ith_mid)*nek1_thread;
-                auto this_result = (float *)((char *)work_buffer + (ik02*nth_g + ith_g)*result_size);
-                auto this_q = (const float *)((const char *)q + ik02*rk2*nbq2);
-                auto this_k = (const char *)k + ik01*stride_k + ik02*nbk2;
-                auto this_v = (const char *)v + ik01*stride_v + ik02*nbv2;
-                auto this_m = (const char *)mask + ik01*sizeof(uint16_t); // we don't have ggml_half available here
-                if (!iqk_flash_attn_impl(int_type_k, int_type_v,
-                            Dk, Dv, rk2, nek1_thread, nbq2, stride_k, stride_v, 0, Dv,
-                            this_q, (const void *)this_k, (const void *)this_v, (const void *)this_m,
-                            scale, softcap, this_result, this_result + (Dv+0)*rk2, this_result + (Dv+1)*rk2)) return false;
-            }
-
-            barrier(barrier_data);
-
-            for (int iq2 = ith; iq2 < neq2; iq2 += nth) {
-                int ik02 = iq2/rk2;
-                int il = iq2 - ik02*rk2;
-                auto Racc = qkv + iq2*nb1/sizeof(float);
-                float M = -INFINITY, S = 0;
-                for (int ig = 0; ig < nth_g; ++ig) {
-                    int istep_k = ik02*nth_g + ig;
-                    auto this_result = (float *)((char *)work_buffer + istep_k*result_size);
-                    const float * R  = this_result + il*Dv;
-                    const float * Mj = this_result + Dv*rk2;
-                    const float * Sj = Mj + rk2;
-                    accumulate_qkv(Dv, M, S, Mj[il], Sj[il], Racc, R);
-                }
-                float norm = S > 0 ? 1/S : 1;
-                for (int i = 0; i < Dv; ++i) Racc[i] *= norm;
-            }
-            return true;
-        }
         int nth_k  = nth/gcd;
         int nek2_k = nek2/gcd;
         int nchunk = nek2_k*nek1/32;
@@ -259,7 +215,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
             auto this_m = (const char *)mask + ik01*sizeof(uint16_t); // we don't have ggml_half available here
             if (!iqk_flash_attn_impl(int_type_k, int_type_v,
                      Dk, Dv, rk2, this_nk, nbq2, stride_k, stride_v, 0, Dv,
-                     this_q, (const void *)this_k, (const void *)this_v, (const void *)this_m,
+                     this_q, (const void *)this_k, (const void *)this_v, (const void *)this_m, nullptr, 0,
                      scale, softcap, this_result, this_result + (Dv+0)*rk2, this_result + (Dv+1)*rk2)) return false;
         }
 
@@ -280,6 +236,16 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                 const float * Mj = this_result + Dv*rk2;
                 const float * Sj = Mj + rk2;
                 accumulate_qkv(Dv, M, S, Mj[il], Sj[il], Racc, R);
+            }
+            if (sinks) {
+                float s = ((const float *)sinks)[iq2];
+                if (s > M) {
+                    float m = expf(M - s);
+                    for (int i = 0; i < Dv; ++i) Racc[i] *= m;
+                    S = S*m + 1;
+                } else {
+                    S += expf(s - M);
+                }
             }
             float norm = S > 0 ? 1/S : 1;
             for (int i = 0; i < Dv; ++i) Racc[i] *= norm;
@@ -306,6 +272,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     int counter = 0;
     for (int64_t iq3 = 0; iq3 < neq3; iq3++) {
         for (int64_t iq2 = 0; iq2 < neq2; iq2++) {
+            auto sinksf = sinks ? (const float *)sinks + iq2 : nullptr;
             if (counter++ % (nth/ntg) == ith/ntg) {
                 int iq1 = (ith%ntg)*neq1g;
                 int this_neq1 = std::min(neq1g, neq1-iq1);
@@ -314,7 +281,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                         (const float *)((const char *)q + iq2*nbq2 + iq3*nbq3 + iq1*stride_q),
                         (const void  *)((const char *)k + iq2/rk2*nbk2 + iq3/rk3*nbk3),
                         (const void  *)((const char *)v + iq2/rv2*nbv2 + iq3/rv3*nbv3),
-                        (const void  *)((const char *)mask + iq1*stride_m),
+                        (const void  *)((const char *)mask + iq1*stride_m), sinksf, 1,
                         scale, softcap,
                         (float *)((char *)qkv + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1), nullptr, nullptr)) return false;
             }

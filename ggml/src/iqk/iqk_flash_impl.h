@@ -23,6 +23,8 @@ bool iqk_flash_attn_impl(int type_k,             // type of k
                          const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
                          const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                          const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
+                         const float * sinksf,   // attention sinks
+                         int           nsinks,   // number of sinks
                          float         scale,    // scale applied before softmax
                          float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                          float       * qkv,      // v*softmax(scale*(k*q))

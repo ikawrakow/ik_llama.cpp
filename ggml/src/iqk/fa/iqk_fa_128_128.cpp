@@ -19,26 +19,26 @@ IQK_FA_CASE(iqk_fa_128_128) {
         if (type_v != GGML_TYPE_BF16) return false; // we do not support mixing bf16 k-cache with other types
         if (nk%64 == 0) {
             iqk_flash_helper_T<128, 128, 64>(nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                    q, ck, cv, cm, scale, softcap, qkv, M, S);
+                    q, ck, cv, cm, scale, softcap, qkv, sinkf, M, S);
             return true;
         }
         iqk_flash_helper_T<128, 128, 32>(nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                    q, ck, cv, cm, scale, softcap, qkv, M, S);
+                    q, ck, cv, cm, scale, softcap, qkv, sinkf, M, S);
         return true;
     }
 #endif
 
     if (nk%128 == 0) {
         return iqk_flash_helper_T<128, 128, 128>(type_k, type_v, nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, ck, cv, cm, scale, softcap, qkv, M, S);
+                q, ck, cv, cm, scale, softcap, qkv, sinkf, M, S);
     }
     if (nk%64 == 0) {
         return iqk_flash_helper_T<128, 128, 64>(type_k, type_v, nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, ck, cv, cm, scale, softcap, qkv, M, S);
+                q, ck, cv, cm, scale, softcap, qkv, sinkf, M, S);
     }
 
     return iqk_flash_helper_T<128, 128, 32>(type_k, type_v, nq, nk, stride_q, stride_k, stride_v, stride_m, stride_qkv,
-                q, ck, cv, cm, scale, softcap, qkv, M, S);
+                q, ck, cv, cm, scale, softcap, qkv, sinkf, M, S);
 
 }
 

@@ -61,7 +61,7 @@ int main(int argc, char ** argv) {
 
 
     const llama_vocab * vocab = llama_get_vocab(ctx);
-    llama_token bos = llama_token_bos_impl(*vocab);
+    llama_token bos = vocab->token_bos();
     //llama_token eos = llama_token_eos_impl(*vocab);
 
     const unsigned int n_vocab  = llama_n_vocab(model);
