@@ -413,11 +413,11 @@ struct server_slot {
         timings.prompt_per_token_ms = t_prompt_processing / n_prompt_tokens_processed;
         timings.prompt_per_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
 
-          
+        double predicted_ms = (ggml_time_us() - t_start_generation) / 1e3;
         timings.predicted_n = n_decoded;
-        timings.predicted_ms = (ggml_time_us() - t_start_generation) / 1e3;
-        timings.predicted_per_token_ms = t_token_generation / n_decoded;
-        timings.predicted_per_second = 1e3 / t_token_generation * n_decoded;
+        timings.predicted_ms = predicted_ms;
+        timings.predicted_per_token_ms = predicted_ms / n_decoded;
+        timings.predicted_per_second = 1e3 / predicted_ms * n_decoded;
 
         //// Add speculative metrics
         //if (n_draft_total > 0) {
@@ -1101,7 +1101,7 @@ struct server_context {
             slot.oaicompat = false;
             slot.oaicompat_model = "";
         }
-        slot.params.timings_per_token = json_value(data, "timings_per_token", false);
+        slot.params.timings_per_token = json_value(data, "timings_per_token",  true);
         slot.params.stream             = json_value(data, "stream",            false);
         slot.params.cache_prompt       = json_value(data, "cache_prompt",      true);
         slot.params.n_predict          = json_value(data, "n_predict",         json_value(data, "max_tokens", default_params.n_predict));
@@ -1730,7 +1730,12 @@ struct server_context {
             {"stopped_limit",       slot.stopped_limit},
             {"stopping_word",       slot.stopping_word},
             {"tokens_cached",       slot.n_past},
-            {"timings",             slot.get_formated_timings()}
+            {"timings",             slot.get_formated_timings()},
+            {"usage",               json {
+                {"completion_tokens", slot.n_decoded},
+                {"prompt_tokens",     slot.n_prompt_tokens},
+                {"total_tokens",      slot.n_decoded + slot.n_prompt_tokens}
+            }}
         };
 
         if (slot.sparams.n_probs > 0) {
@@ -2911,6 +2916,10 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
     
     // Always add final chunk (like original llama.cpp)
     if (!finish_reason.empty()) {
+        // usage
+        int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
+        int num_prompt_tokens = json_value(result, "tokens_evaluated", 0);
+
         json finish_chunk = {
             {"choices", json::array({json{{"finish_reason", finish_reason},
                                         {"index", 0},
@@ -2918,10 +2927,16 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
             {"created", t},
             {"id", completion_id},
             {"model", modelname},
-            {"object", "chat.completion.chunk"}
+            {"object", "chat.completion.chunk"},
+            {"usage", json {
+                {"completion_tokens", num_tokens_predicted},
+                {"prompt_tokens",     num_prompt_tokens},
+                {"total_tokens",      num_tokens_predicted + num_prompt_tokens}
+            }}
         };
         streaming_chunks.push_back(finish_chunk);
     }
+
     if (server_task_result_dict.count(task_result.id) > 0)
     {
         for (auto& chunk : streaming_chunks)
