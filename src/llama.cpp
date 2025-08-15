@@ -8671,6 +8671,7 @@ struct llm_build_context {
             bool use_rope = model.arch == LLM_ARCH_LLAMA4 ? (il + 1) % hparams.n_no_rope_layer_step != 0 : true;
             auto this_KQ_mask = hparams.n_swa > 0 && hparams.n_swa_pattern > 0 && il % hparams.n_swa_pattern < (hparams.n_swa_pattern - 1) ?
                 KQ_mask_swa : KQ_mask;
+            auto bounds = this_KQ_mask == KQ_mask_swa ? lctx.inp_mask_bounds_swa : lctx.inp_mask_bounds;
 
             // norm
             cur = llm_build_norm(ctx0, inpL, hparams,
@@ -8735,7 +8736,7 @@ struct llm_build_context {
 
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
-                        Kcur, Vcur, Qcur, this_KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
+                        Kcur, Vcur, Qcur, this_KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il, nullptr, bounds);
             }
 
             if (il == n_layer - 1) {
@@ -11236,7 +11237,7 @@ struct llm_build_context {
 
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                         model.layers[il].wo, model.layers[il].bo,
-                        Kcur, Vcur, Qcur, KQ_mask_swa, n_tokens, kv_head, n_kv, 1.0f, cb, il);
+                        Kcur, Vcur, Qcur, KQ_mask_swa, n_tokens, kv_head, n_kv, 1.0f, cb, il, nullptr, lctx.inp_mask_bounds_swa);
             }
 
             if (il == n_layer - 1) {
@@ -12125,6 +12126,7 @@ struct llm_build_context {
         for (int il = 0; il < n_layer; ++il) {
             // (il % 2) layers use SWA
             struct ggml_tensor * KQ_mask_l = (il % 2 == 0) ? KQ_mask_swa : KQ_mask;
+            auto bounds = KQ_mask_l == KQ_mask_swa ? lctx.inp_mask_bounds_swa : lctx.inp_mask_bounds;
 
             // norm
             cur = llm_build_norm(ctx0, inpL, hparams,
@@ -12167,7 +12169,7 @@ struct llm_build_context {
 
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                         model.layers[il].wo, NULL,
-                        Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, 1.0f, cb, il);
+                        Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, 1.0f, cb, il, nullptr, bounds);
             }
 
             cur = llm_build_norm(ctx0, cur, hparams,
@@ -14317,6 +14319,7 @@ struct llm_build_context {
             // fourth layer uses global attention without positional embeddings
             const bool           is_sliding = il % sliding_window_pattern < (sliding_window_pattern - 1);
             struct ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
+            auto bounds = is_sliding ? lctx.inp_mask_bounds_swa : lctx.inp_mask_bounds;
 
             // norm
             cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM, cb, il);
@@ -14370,7 +14373,7 @@ struct llm_build_context {
                 }
 
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, model.layers[il].bo, Kcur, Vcur, Qcur,
-                                   KQ_mask_l, n_tokens, kv_head, n_kv, 1.0f / sqrtf(float(n_embd_head)), cb, il);
+                                   KQ_mask_l, n_tokens, kv_head, n_kv, 1.0f / sqrtf(float(n_embd_head)), cb, il, nullptr, bounds);
             }
 
             if (il == n_layer - 1) {
