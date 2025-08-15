@@ -43,6 +43,16 @@ inline void accumulate_qkv(int Dv, float& M, float& S, float Mj, float Sj, float
         for (int i = 0; i < Dv; ++i) Racc[i] += c*R[i];
     }
 }
+inline std::pair<int, int> mask_range(int nek1, const uint16_t * umask) {
+    int first_k = 0, last_k = nek1;
+    for (; first_k < last_k; ++first_k) {
+        if (umask[first_k] == 0) break;
+    }
+    for (; last_k > first_k; --last_k) {
+        if (umask[last_k-1] == 0) break;
+    }
+    return { first_k, last_k };
+}
 }
 
 // TODO: get the ggml_type enum here without polution
@@ -80,20 +90,15 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     int rk3 = neq3/nek3;
     int rv3 = neq3/nev3;
 
-    int first_k = 0, last_k = nek1;
+    bool range_found = false;
     if (neq3 == 1 && rk2 > 1 && neq1 == 1 && nek1 > 256) {
+        range_found = true;
         // This is a quick hack for SWA models.
         // Given that the mask is the same for all layers, ideally we should determinbe the
         // cache bounds once, and reuse for the whole graph. But even with this simple hack
         // we get non-negligible performance gains for SWA models and long context.
         auto umask = (const uint16_t *)mask;
-        for (; first_k < last_k; ++first_k) {
-            if (umask[first_k] == 0) break;
-        }
-        for (; last_k > first_k; --last_k) {
-            if (umask[last_k-1] == 0) break;
-        }
-        //printf("nek1 = %d, first = %d, last = %d\n", nek1, first, last);
+        auto [first_k, last_k] = mask_range(nek1, umask);
         if (last_k - first_k <= 3*nek1/4 && (last_k - first_k)%32 == 0) {
             //printf("Reducing from %d to %d\n", nek1, last_k - first_k);
             k = (const void *)((const char *)k + first_k*stride_k);
@@ -299,6 +304,35 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
             if (counter++ % (nth/ntg) == ith/ntg) {
                 int iq1 = (ith%ntg)*neq1g;
                 int this_neq1 = std::min(neq1g, neq1-iq1);
+                if (!range_found) {
+                    int kmin = nek1, kmax = 0;
+                    for (int i = 0; i < this_neq1; ++i) {
+                        auto [first, last] = mask_range(nek1, (const uint16_t *)((const char *)mask + (iq1 + i)*stride_m));
+                        kmin = std::min(kmin, first);
+                        kmax = std::max(kmax, last);
+                    }
+                    int nk = kmax - kmin;
+                    if (nk < nek1) {
+                        if (nk%32) {
+                            int nk32 = 32*((nk + 31)/32);
+                            int nadd = nk32 - nk;
+                            kmin = std::max(0, kmin - nadd);
+                            kmax = kmin + nk32;
+                            nk = nk32;
+                        }
+                    }
+                    if (nk < nek1) {
+                        if (!iqk_flash_attn_impl(int_type_k, int_type_v,
+                                    Dk, Dv, this_neq1, nk, stride_q, stride_k, stride_v, stride_m, ne1*nb1/sizeof(float),
+                                    (const float *)((const char *)q + iq2*nbq2 + iq3*nbq3 + iq1*stride_q),
+                                    (const void  *)((const char *)k + iq2/rk2*nbk2 + iq3/rk3*nbk3 + kmin*stride_k),
+                                    (const void  *)((const char *)v + iq2/rv2*nbv2 + iq3/rv3*nbv3 + kmin*stride_v),
+                                    (const void  *)((const char *)mask + iq1*stride_m + kmin*sizeof(uint16_t)), sinksf, 1,
+                                    scale, softcap,
+                                    (float *)((char *)qkv + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1), nullptr, nullptr)) return false;
+                        continue;
+                    }
+                }
                 if (!iqk_flash_attn_impl(int_type_k, int_type_v,
                         Dk, Dv, this_neq1, nek1, stride_q, stride_k, stride_v, stride_m, ne1*nb1/sizeof(float),
                         (const float *)((const char *)q + iq2*nbq2 + iq3*nbq3 + iq1*stride_q),
