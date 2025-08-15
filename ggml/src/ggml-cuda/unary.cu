@@ -470,3 +470,83 @@ void ggml_cuda_op_sqrt(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     sqrt_f32_cuda(src0_d, dst_d, ggml_nelements(src0), stream);
 }
+
+template <typename T>
+static __global__ void swiglu_oai_kernel(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, float alpha, float limit) {
+    const int64_t i = int64_t(blockDim.x)*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+
+    // perform base op and multiply with gate (either offset in same tensor or a separate one)
+    const int64_t j0 = (i / n) * o0 + (i % n);
+    const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+
+    float xi = x[j0];
+    float gi = g[j1];
+    xi = fminf(xi, limit);
+    gi = fmaxf(fminf(gi, limit), -limit);
+
+    float out_glu = xi / (1.0f + expf(-xi * alpha));
+    out_glu = out_glu * (1.0f + gi);
+
+    dst[i] = out_glu;
+}
+
+template <typename T>
+static void swiglu_oai_cuda(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, const float alpha, const float limit, cudaStream_t stream) {
+    const int64_t num_blocks = (k + CUDA_GELU_BLOCK_SIZE - 1) / CUDA_GELU_BLOCK_SIZE;
+    swiglu_oai_kernel<<<num_blocks, CUDA_GELU_BLOCK_SIZE, 0, stream>>>(x, g, dst, k, n, o0, o1, alpha, limit);
+}
+
+void ggml_cuda_op_swiglu_oai(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    void * src0_d = src0->data;
+    void * src1_d = src1 ? src1->data : src0->data;
+    const int64_t src0_o = src0->nb[1];
+    const int64_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
+    void * dst_d = dst->data;
+    const int64_t nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
+    cudaStream_t stream = ctx.stream();
+
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(src0->nb[0] == ggml_element_size(src0));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == dst->type);
+    GGML_ASSERT(dst->ne[0] == nc);
+    GGML_ASSERT(ggml_nrows(dst) == ggml_nrows(src0));
+
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src1->nb[0] == ggml_element_size(src1));
+        GGML_ASSERT(src1->ne[0] == nc);
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
+    //const int32_t swapped = ((const int32_t *) dst->op_params)[1];
+    const int32_t swapped = false; //ggml_get_op_params_i32(dst, 1);
+    const float * op_params = (const float *)dst->op_params;
+    const float alpha = op_params[2];
+    const float limit = op_params[3];
+
+    float * src0_p = (float *) src0_d;
+    float * src1_p = (float *) src1_d;
+
+    if (!src1) {
+        src0_p += swapped ? nc : 0;
+        src1_p += swapped ? 0 : nc;
+    }
+
+    swiglu_oai_cuda(src0_p, src1_p, (float *)dst_d, ggml_nelements(dst), nc,
+            src0_o / sizeof(float), src1_o / sizeof(float), alpha, limit, stream);
+}
+
+void ggml_swiglu_oai_cuda_f32(const float * x, const float * g, float * dst, const int64_t k, const int64_t n,
+        const int64_t o0, const int64_t o1, const float alpha, const float limit, cudaStream_t stream) {
+    swiglu_oai_cuda(x, g, dst, k, n, o0, o1, alpha, limit, stream);
+}

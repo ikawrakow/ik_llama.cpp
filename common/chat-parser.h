@@ -24,9 +24,9 @@ class common_chat_msg_parser {
         std::string prelude;
         std::vector<common_string_range> groups;
     };
-    
+
     common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
-    
+
     // Accessors
     const std::string & input() const { return input_; }
     size_t pos() const { return pos_; }
@@ -42,7 +42,7 @@ class common_chat_msg_parser {
         }
         pos_ = pos;
     }
-    
+
     void move_back(size_t n) {
         if (pos_ < n) {
             throw std::runtime_error("Can't move back that far!");
@@ -56,46 +56,46 @@ class common_chat_msg_parser {
     // Content manipulation
     void add_content(const std::string & content);
     void add_reasoning_content(const std::string & reasoning_content);
-    
+
     // Tool call manipulation
     void add_tool_call(const common_chat_tool_call & tool_call);
     bool add_tool_call(const std::string & name, const std::string & id, const std::string & arguments);
     bool add_tool_call(const json & tool_call);
     bool add_tool_calls(const json & arr);
     void clear_tools();
-    
+
     // Parsing utilities
     std::string consume_rest();
     bool try_consume_literal(const std::string & literal);
     void consume_literal(const std::string & literal);
     bool try_parse_reasoning(const std::string & start_think, const std::string & end_think);
-    
+
     // Regex-based parsing methods (new)
     std::optional<find_regex_result> try_find_regex(const common_regex & regex, size_t from = std::string::npos, bool add_prelude_to_content = true);
     find_regex_result consume_regex(const common_regex & regex);
     std::optional<find_regex_result> try_consume_regex(const common_regex & regex);
-    
+
     // Progressive parsing primitives (for Phase 4)
     std::optional<find_regex_result> try_find_literal(const std::string & literal);
     bool consume_spaces();
     void set_healing_marker(const std::string & marker);
-    
-    
+
+
     // Main parsing entry point
     void parse();
-    
+
     // Finishing
     void finish();
-    
+
     // Result extraction
     common_chat_msg result_and_reset();
-    
+
     // Advanced JSON parsing (following original llama.cpp patterns)
     struct consume_json_result {
         json value;
         bool is_partial;
     };
-    
+
     std::optional<common_json> try_consume_json();
     common_json consume_json();
     consume_json_result consume_json_with_dumped_args(
@@ -112,8 +112,8 @@ private:
     void parse_kimi_k2_format();
     void parse_deepseek_r1_format();
     void parse_generic_format();
-    
-    
+
+
     // JSON parsing utilities (enhanced streaming support)
     struct json_parse_result {
         json value;
@@ -121,11 +121,11 @@ private:
         bool is_partial;
         std::string healing_marker;
     };
-    
+
     // Partial detection utilities
     bool detect_partial_function_call(const std::string& content);
     void handle_partial_detection();
-    
+
     // Legacy find_literal for compatibility
     std::optional<find_regex_result> try_find_literal_legacy(const std::string & literal);
 };

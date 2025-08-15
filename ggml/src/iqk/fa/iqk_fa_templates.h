@@ -1141,10 +1141,25 @@ struct FlashQKV {
     }
 
     template <typename FMS>
-    inline void normalize_and_store_1row(const FMS& fms, int j, const qkv_cache_t * R, float * qkv) const {
+    inline void normalize_and_store_1row(const FMS& fms, int j, qkv_cache_t * R, float * qkv, const float * sinkf) const {
         static_assert(q_step == FMS::q_step);
-        GGML_ASSERT(fms.S[j] > 0);
-        auto norm = F16::set1(1/fms.S[j]);
+        float S = fms.S[j];
+        if (sinkf) {
+            float s = *sinkf;
+            if (s > fms.M[j]) {
+                float m = expf(fms.M[j] - s);
+                auto vm = F16::set1(m);
+                for (int i = 0; i < D/F16::block_size; ++i) {
+                    auto Ri = R + F16::block_size*i;
+                    F16::store(Ri, F16::mul(vm, F16::load(Ri)));
+                }
+                S = S*m + 1;
+            } else {
+                S += expf(s - fms.M[j]);
+            }
+        }
+        GGML_ASSERT(S > 0);
+        auto norm = F16::set1(1/S);
         //auto norm = F16::set1(fms.S[j] > 0 ? 1/fms.S[j] : 0.f);
         for (int i = 0; i < D/F16::block_size; ++i) {
             auto r = F16::load(R + F16::block_size*i);
@@ -1153,7 +1168,7 @@ struct FlashQKV {
     }
 
     template <typename FMS>
-    inline void normalize_and_store(const FMS& fms, int nq1, int stride_qkv, float * qkv, float * M, float * S) const {
+    inline void normalize_and_store(const FMS& fms, int nq1, int stride_qkv, float * qkv, const float * sinkf, float * M, float * S) {
         static_assert(q_step == FMS::q_step);
         if (M && S) {
             std::memcpy(M, fms.M, nq1*sizeof(float));
@@ -1173,7 +1188,7 @@ struct FlashQKV {
         } else {
             auto R = qkv_cache;
             for (int j = 0; j < nq1; ++j) {
-                normalize_and_store_1row(fms, j, R, qkv);
+                normalize_and_store_1row(fms, j, R, qkv, sinkf);
                 qkv += stride_qkv;
                 R   += D;
             }
@@ -1181,7 +1196,7 @@ struct FlashQKV {
     }
 
     template <typename FMS>
-    inline void normalize_and_store(const FMS& fms, int stride_qkv, float * qkv, float * M, float * S) const {
+    inline void normalize_and_store(const FMS& fms, int stride_qkv, float * qkv, const float * sinkf, float * M, float * S) {
         static_assert(q_step == FMS::q_step);
         if (M && S) {
             std::memcpy(M, fms.M, q_step*sizeof(float));
@@ -1201,7 +1216,7 @@ struct FlashQKV {
         } else {
             auto R = qkv_cache;
             for (int j = 0; j < q_step; ++j) {
-                normalize_and_store_1row(fms, j, R, qkv);
+                normalize_and_store_1row(fms, j, R, qkv, sinkf);
                 qkv += stride_qkv;
                 R   += D;
             }
@@ -1332,7 +1347,7 @@ void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, in
         FlashMS<q_step, k_step>& fms,
         FlashQKV<Dv, q_step, k_step>& fqkv,
         const float * q, const char * mask, float * qkv,
-        float * M, float * S) {
+        const float * sinkf, float * M, float * S) {
 #ifdef __aarch64__
     float16_t q_f16[Dk*q_step];
 #endif
@@ -1356,7 +1371,7 @@ void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, in
             vh.next_block(k_step);
             mr += k_step*sizeof(ggml_half);
         }
-        fqkv.normalize_and_store(fms, stride_qkv, qkv, M, S);
+        fqkv.normalize_and_store(fms, stride_qkv, qkv, sinkf, M, S);
 
         q    += q_step*stride_q;
         mask += q_step*stride_m;
@@ -1383,7 +1398,7 @@ void compute_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, in
             vh.next_block(k_step);
             mr += k_step*sizeof(ggml_half);
         }
-        fqkv.normalize_and_store(fms, n_left, stride_qkv, qkv, M, S);
+        fqkv.normalize_and_store(fms, n_left, stride_qkv, qkv, sinkf, M, S);
     }
 }
 
@@ -1392,7 +1407,7 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
         FlashMS<q_step, k_step>& fms,
         FlashQKV<Dv, q_step, k_step>& fqkv,
         const float * q, const char * mask, float * qkv,
-        float * M, float * S, char * qptr) {
+        const float * sinkf, float * M, float * S, char * qptr) {
     auto q8 = (typename KHelper::block_q8 *)qptr;
     if constexpr (q_step > 1 && std::is_same_v<KHelper, HelperQ80>) {
         if (nq1 == q_step) {
@@ -1412,7 +1427,7 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
                 vh.next_block(k_step);
                 mr += k_step*sizeof(ggml_half);
             }
-            fqkv.normalize_and_store(fms, stride_qkv, qkv, M, S);
+            fqkv.normalize_and_store(fms, stride_qkv, qkv, sinkf, M, S);
             return;
         }
     }
@@ -1449,10 +1464,10 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
         }
 #if FA_TIMING
         t1 = Perf::cur_time();
-        fqkv.normalize_and_store(fms, stride_qkv, qkv, M, S);
+        fqkv.normalize_and_store(fms, stride_qkv, qkv, sinkf, M, S);
         perf.accum_nolock(3, t1);
 #else
-        fqkv.normalize_and_store(fms, stride_qkv, qkv, M, S);
+        fqkv.normalize_and_store(fms, stride_qkv, qkv, sinkf, M, S);
 #endif
 
         q    += q_step*stride_q;
@@ -1474,7 +1489,7 @@ void compute_helper_q(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, 
             vh.next_block(k_step);
             mr += k_step*sizeof(ggml_half);
         }
-        fqkv.normalize_and_store(fms, n_left, stride_qkv, qkv, M, S);
+        fqkv.normalize_and_store(fms, n_left, stride_qkv, qkv, sinkf, M, S);
     }
 #if FA_TIMING
     Perf::instance().add(perf);
@@ -1504,7 +1519,7 @@ struct FlashAttn {
     static_assert(k_step%F16::block_size == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
-    FlashAttn(float scale, float softcap) : fms(scale, softcap) {}
+    FlashAttn(float scale, float softcap, const float * sinkf) : fms(scale, softcap), sinkf(sinkf) {}
 
     template <typename KHelper, typename VHelper>
     void compute(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
@@ -1533,7 +1548,7 @@ struct FlashAttn {
                         HelperQ80R8<Dk> khr4(nk1, kh);
 #endif
                         compute_helper_q<Dk, Dv, q_step, k_step, HelperQ80R8<Dk>, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
-                                khr4, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, M, S, qptr);
+                                khr4, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, M, S, qptr);
                         return;
 
                     }
@@ -1547,29 +1562,30 @@ struct FlashAttn {
                         HelperQ8KVR8<Dk> khr4(nk1, kh);
 #endif
                         compute_helper_q<Dk, Dv, q_step, k_step, HelperQ8KVR8<Dk>, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
-                                khr4, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, M, S, qptr);
+                                khr4, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, M, S, qptr);
                         return;
                     }
 #endif
                 }
                 compute_helper_q<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
-                        kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, M, S, qptr);
+                        kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, M, S, qptr);
 
             }
             else {
                 typename KHelper::block_q8 q8[q_step*(Dk/KHelper::block_size_q)];
                 compute_helper_q<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
-                        kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, M, S, (char *)q8);
+                        kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, M, S, (char *)q8);
             }
         }
         else {
             compute_helper<Dk, Dv, q_step, k_step, KHelper, VHelper, FlashQKfp32<Dk, q_step, k_step>>(
-                    kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, M, S);
+                    kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, fms, fqkv, q, mask, qkv, sinkf, M, S);
         }
     }
 
     FlashMS<q_step, k_step>      fms;
     FlashQKV<Dv, q_step, k_step> fqkv;
+    const float *                sinkf;
 
 };
 
@@ -1927,7 +1943,7 @@ struct FlashAttnBF16 {
     static_assert(k_step%32 == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
-    FlashAttnBF16(float scale, float softcap) : fms(scale, softcap) {}
+    FlashAttnBF16(float scale, float softcap, const float * sinkf) : fms(scale, softcap), sinkf(sinkf) {}
 
     template <typename KHelper, typename VHelper>
     void compute(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
@@ -1967,7 +1983,7 @@ struct FlashAttnBF16 {
 #if FA_TIMING
             t1 = Perf::cur_time();
 #endif
-            fqkv.normalize_and_store(fms, stride_qkv, qkv, M, S);
+            fqkv.normalize_and_store(fms, stride_qkv, qkv, sinkf, M, S);
 #if FA_TIMING
             perf.accum_nolock(4, t1);
 #endif
@@ -1990,7 +2006,7 @@ struct FlashAttnBF16 {
                 vh.next_block(k_step);
                 mr += k_step*sizeof(ggml_half);
             }
-            fqkv.normalize_and_store(fms, n_left, stride_qkv, qkv, M, S);
+            fqkv.normalize_and_store(fms, n_left, stride_qkv, qkv, sinkf, M, S);
         }
 #if FA_TIMING
         Perf::instance().add(perf);
@@ -1999,12 +2015,14 @@ struct FlashAttnBF16 {
 
     FlashMS<q_step, k_step>      fms;
     FlashQKV<Dv, q_step, k_step> fqkv;
+    const float *                sinkf;
 };
 #endif
 
 template <int Dk, int Dv, int k_step, typename KHelper, typename VHelper>
 inline void iqk_flash_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int stride_q, int stride_m, int stride_qkv,
-                        const float * q, const char * mask, float scale, float softcap, float * qkv, float * M, float * S) {
+                        const float * q, const char * mask, float scale, float softcap, float * qkv,
+                        const float * sinkf, float * M, float * S) {
 
     auto update = [&nq1, &mask, &q, &qkv, &M, &S, stride_q, stride_m, stride_qkv] (int n) {
         nq1 -= n;
@@ -2018,48 +2036,48 @@ inline void iqk_flash_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int str
     if (nk1 >= 512) {
         if (nq1 >= 128) {
             int n_step = nq1/128;
-            FlashAttn<Dk, Dv, 64, k_step> fa(scale, softcap);
+            FlashAttn<Dk, Dv, 64, k_step> fa(scale, softcap, sinkf);
             fa.compute(kh, vh, 128*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             if (update(128*n_step)) return;
         }
         if (nq1 >= 64) {
             int n_step = nq1/64;
-            FlashAttn<Dk, Dv, 64, k_step> fa(scale, softcap);
+            FlashAttn<Dk, Dv, 64, k_step> fa(scale, softcap, sinkf);
             fa.compute(kh, vh, 64*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             if (update(64*n_step)) return;
         }
         if (nq1 >= 32) {
             int n_step = nq1/32;
-            FlashAttn<Dk, Dv, 32, k_step> fa(scale, softcap);
+            FlashAttn<Dk, Dv, 32, k_step> fa(scale, softcap, sinkf);
             fa.compute(kh, vh, 32*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             if (update(32*n_step)) return;
         }
         if (nq1 >= 16) {
             int n_step = nq1/16;
-            FlashAttn<Dk, Dv, 16, k_step> fa(scale, softcap);
+            FlashAttn<Dk, Dv, 16, k_step> fa(scale, softcap, sinkf);
             fa.compute(kh, vh, 16*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             if (update(16*n_step)) return;
         }
     }
     if (nq1 >= 8) {
         int n_step = nq1/8;
-        FlashAttn<Dk, Dv, 8, k_step> fa(scale, softcap);
+        FlashAttn<Dk, Dv, 8, k_step> fa(scale, softcap, sinkf);
         fa.compute(kh, vh, 8*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
         if (update(8*n_step)) return;
     }
     else if (nq1 >= 4) {
         int n_step = nq1/4;
-        FlashAttn<Dk, Dv, 4, k_step> fa(scale, softcap);
+        FlashAttn<Dk, Dv, 4, k_step> fa(scale, softcap, sinkf);
         fa.compute(kh, vh, 4*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
         if (update(4*n_step)) return;
     }
     else if (nq1 >= 2) {
         int n_step = nq1/2;
-        FlashAttn<Dk, Dv, 2, k_step> fa(scale, softcap);
+        FlashAttn<Dk, Dv, 2, k_step> fa(scale, softcap, sinkf);
         fa.compute(kh, vh, 2*n_step, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
         if (update(2*n_step)) return;
     }
-    FlashAttn<Dk, Dv, 1, k_step> fa(scale, softcap);
+    FlashAttn<Dk, Dv, 1, k_step> fa(scale, softcap, sinkf);
     fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
 }
 
@@ -2067,26 +2085,26 @@ inline void iqk_flash_helper(KHelper& kh, VHelper& vh, int nq1, int nk1, int str
 template <int Dk, int Dv, int k_step>
 inline void iqk_flash_helper_T(int nq1, int nk1, int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * k, const char * v, const char * mask,
-                        float scale, float softcap, float * qkv, float * M, float * S) {
+                        float scale, float softcap, float * qkv, const float * sinkf, float * M, float * S) {
     HelperBF16<Dk, k_step> kh(k, stride_k);
     HelperBF16<Dv, k_step> vh(v, stride_v);
     if (nk1 >= 4096) {
         if (nq1 >= 64) {
-            FlashAttnBF16<Dk, Dv, 64, k_step> fa(scale, softcap);
+            FlashAttnBF16<Dk, Dv, 64, k_step> fa(scale, softcap, sinkf);
             fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             return;
         }
         else if (nq1 >= 16) {
-            FlashAttnBF16<Dk, Dv, 16, k_step> fa(scale, softcap);
+            FlashAttnBF16<Dk, Dv, 16, k_step> fa(scale, softcap, sinkf);
             fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
             return;
         }
     }
     if (nq1 >= 8) {
-        FlashAttnBF16<Dk, Dv, 8, k_step> fa(scale, softcap);
+        FlashAttnBF16<Dk, Dv, 8, k_step> fa(scale, softcap, sinkf);
         fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
     } else {
-        FlashAttnBF16<Dk, Dv, 1, k_step> fa(scale, softcap);
+        FlashAttnBF16<Dk, Dv, 1, k_step> fa(scale, softcap, sinkf);
         fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, (const char *)mask, qkv, M, S);
     }
 }
@@ -2096,43 +2114,43 @@ template <int Dk, int Dv, int k_step, typename KHelper>
 inline bool iqk_flash_helper_T(KHelper& kh, ggml_type type_v,
                         int nq1, int nk1, int stride_q, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * v, const char * mask,
-                        float scale, float softcap, float * qkv, float * M, float * S) {
+                        float scale, float softcap, float * qkv, const float * sinkf, float * M, float * S) {
 
     switch (type_v) {
         case GGML_TYPE_F16: {
             HelperF16 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #ifdef __AVX512BF16__
         case GGML_TYPE_BF16: {
             HelperBF16<Dv, k_step> vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #endif
         case GGML_TYPE_Q8_0: {
             HelperQ80 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_Q8_KV: {
             HelperQ8KV<Dv> vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_Q6_0: {
             HelperQ60 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #if GGML_IQK_FA_ALL_QUANTS
         case GGML_TYPE_Q4_0: {
             HelperQ40 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_Q4_1: {
             HelperQ41 vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_IQ4_NL: {
             HelperIQ4nl vh(v, stride_v);
-            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, M, S);
+            iqk_flash_helper<Dk, Dv, k_step>(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #endif
         default: return false;
@@ -2144,42 +2162,42 @@ template <int Dk, int Dv, int k_step>
 inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
                         int nq1, int nk1, int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,
                         const float * q, const char * k, const char * v, const char * mask,
-                        float scale, float softcap, float * qkv, float * M, float * S) {
+                        float scale, float softcap, float * qkv, const float * sinkf, float * M, float * S) {
 
     bool result = false;
     switch (type_k) {
         case GGML_TYPE_F16: {
             HelperF16 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_Q8_0: {
             HelperQ80 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_Q8_0_R8: {
             HelperQ80R8<Dk> kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_Q6_0: {
             HelperQ60 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #if GGML_IQK_FA_ALL_QUANTS
         case GGML_TYPE_Q8_KV: {
             HelperQ8KV<Dk> kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_Q4_0: {
             HelperQ40 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_Q4_1: {
             HelperQ41 kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
         case GGML_TYPE_IQ4_NL: {
             HelperIQ4nl kh(k, stride_k);
-            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, M, S);
+            result = iqk_flash_helper_T<Dk, Dv, k_step>(kh, type_v, nq1, nk1, stride_q, stride_v, stride_m, stride_qkv, q, v, mask, scale, softcap, qkv, sinkf, M, S);
         } break;
 #endif
         default: break;
@@ -2194,7 +2212,7 @@ inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
                          int stride_q, int stride_k, int stride_v, int stride_m, int stride_qkv,\
                          const float * q, const void * k, const void * v, const void * mask,\
                          float scale, float softcap,\
-                         float       * qkv, float * M, float * S)
+                         float       * qkv, const float * sinkf, float * M, float * S)
 
 IQK_FA_CASE(iqk_fa_576_512);
 IQK_FA_CASE(iqk_fa_192_128);

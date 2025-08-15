@@ -10,6 +10,11 @@
 #define LLAMA_API_INTERNAL
 #include "llama.h"
 #include <stdexcept>
+#include <climits>
+#include <cstdarg>
+#include <vector>
+#include <cinttypes>
+#include <cstring>
 
 #ifdef __GNUC__
 #ifdef __MINGW32__
@@ -33,6 +38,7 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
 #define LLAMA_LOG_INFO(...)  llama_log_internal(GGML_LOG_LEVEL_INFO , __VA_ARGS__)
 #define LLAMA_LOG_WARN(...)  llama_log_internal(GGML_LOG_LEVEL_WARN , __VA_ARGS__)
 #define LLAMA_LOG_ERROR(...) llama_log_internal(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
+#define LLAMA_LOG_DEBUG(...) llama_log_internal(GGML_LOG_LEVEL_DEBUG, __VA_ARGS__)
 
 //
 // helpers
@@ -166,3 +172,49 @@ struct ring_buffer {
     size_t pos = 0;
     std::vector<T> data;
 };
+
+LLAMA_ATTRIBUTE_FORMAT(1, 2)
+static std::string format(const char * fmt, ...) {
+    va_list ap;
+    va_list ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int size = vsnprintf(NULL, 0, fmt, ap);
+    GGML_ASSERT(size >= 0 && size < INT_MAX); // NOLINT
+    std::vector<char> buf(size + 1);
+    int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
+    GGML_ASSERT(size2 == size);
+    va_end(ap2);
+    va_end(ap);
+    return std::string(buf.data(), size);
+}
+
+static std::string llama_format_tensor_shape(const std::vector<int64_t> & ne) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%5" PRId64, ne.at(0));
+    for (size_t i = 1; i < ne.size(); i++) {
+        snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), ", %5" PRId64, ne.at(i));
+    }
+    return buf;
+}
+
+static std::string llama_format_tensor_shape(const struct ggml_tensor * t) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%5" PRId64, t->ne[0]);
+    for (int i = 1; i < GGML_MAX_DIMS; i++) {
+        snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), ", %5" PRId64, t->ne[i]);
+    }
+    return buf;
+}
+
+template <typename T>
+struct no_init {
+    T value;
+    no_init() { /* do nothing */ }
+};
+
+
+struct gguf_context;
+std::string gguf_kv_to_str(const gguf_context * ctx_gguf, int i);
+
+ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer);
