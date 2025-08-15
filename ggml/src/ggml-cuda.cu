@@ -3272,10 +3272,11 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 #endif
         }
 
-        if (node->op == GGML_OP_MUL_MAT_ID && node->ne[2] != 1) {
+        if (node->op == GGML_OP_MUL_MAT_ID && (node->ne[2] != 1 || node->src[2]->ne[0] != 1)) {
             use_cuda_graph = false; // This node type is not supported by CUDA graph capture
 #ifndef NDEBUG
-            GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported node type\n", __func__);
+            GGML_CUDA_LOG_DEBUG("%s(%s): disabling CUDA graphs due to unsupported node type %ld %ld\n",
+                    __func__, node->src[0]->name, node->ne[2], node->src[2]->ne[0]);
 #endif
         }
         if (node->op == GGML_OP_MOE_FUSED_UP_GATE) {
