@@ -201,23 +201,22 @@ std::vector<llama_token> llama_speculative_gen_draft(
     std::vector<llama_token> prompt_tgt_draft_model;
     if (!spec->vocab_dft_compatible) {
         std::string text;
-        text = common_detokenize(ctx_tgt, prompt_tgt_main_model, true);
+        text = llama_detokenize(ctx_tgt, prompt_tgt_main_model, true);
         text = replace_to_dft(spec, text);
         LLAMA_LOG_INFO("%s: main->draft detokenized string: '%s'\n", __func__, text.c_str());
-        prompt_tgt_draft_model = common_tokenize(ctx_dft, text, false, true);
+        prompt_tgt_draft_model = llama_tokenize(ctx_dft, text, false, true);
 
         // convert id_last to draft vocab. llama_detokenize is called directly to avoid an allocation
         const auto * model_tgt = llama_get_model(ctx_tgt);
-        const auto * vocab_tgt = llama_model_get_vocab(model_tgt);
 
-        int32_t n_chars = llama_detokenize(vocab_tgt, &id_last, 1, nullptr, 0, false, false);
+        int32_t n_chars = llama_detokenize(model_tgt, &id_last, 1, nullptr, 0, false, false);
         GGML_ASSERT(n_chars < 0 && "failed to detokenize id_last");
         text.resize(-n_chars);
-        llama_detokenize(vocab_tgt, &id_last, 1, text.data(), text.size(), false, false);
+        llama_detokenize(model_tgt, &id_last, 1, text.data(), text.size(), false, false);
         text = replace_to_dft(spec, text);
 
         LLAMA_LOG_INFO("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
-        id_last = common_tokenize(ctx_dft, text, false, true)[0];
+        id_last = llama_tokenize(ctx_dft, text, false, true)[0];
     }
     // prompt_tgt's tokens will always be compatible with ctx_dft
     const std::vector<llama_token> &prompt_tgt =
@@ -349,10 +348,10 @@ std::vector<llama_token> llama_speculative_gen_draft(
     }
 
     if (!spec->vocab_dft_compatible) {
-        std::string detokenized = common_detokenize(ctx_dft, result, true);
+        std::string detokenized = llama_detokenize(ctx_dft, result, true);
         detokenized = replace_to_tgt(spec, detokenized);
         LLAMA_LOG_INFO("draft->main detokenized string: '%s'\n", detokenized.c_str());
-        result = common_tokenize(ctx_tgt, detokenized, false, true);
+        result = llama_tokenize(ctx_tgt, detokenized, false, true);
         if (result.size() > (size_t)params.n_draft) {
             result.resize(params.n_draft);
         }
