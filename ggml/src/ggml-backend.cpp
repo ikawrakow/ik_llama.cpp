@@ -1860,6 +1860,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
         int cur_arg = 0;
+        std::vector<int32_t> ids;
+        std::set<int32_t> unique_ids;
 
         //printf("Graph split %d has %d inputs:\n", i, split->n_inputs);
         //for (int j = 0; j < split->n_inputs; j++) printf("  %s,  %s\n", split->inputs[j]->name,
@@ -1894,26 +1896,27 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     node->src[cur_arg] == input_cpy &&
                    (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE)) {
 
-                    ggml_backend_synchronize(input_backend);
+                    if (ids.empty()) {
+                        // find the ids
+                        ggml_tensor * ids_tensor = node->op == GGML_OP_MUL_MAT_ID ? node->src[2] : node->src[3];
+                        ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
+                        ggml_backend_synchronize(input_backend);
 
-                    // find the ids
-                    ggml_tensor * ids_tensor = node->op == GGML_OP_MUL_MAT_ID ? node->src[2] : node->src[3];
-                    std::vector<int32_t> ids(ggml_nbytes(ids_tensor) / sizeof(int32_t));
-                    ggml_backend_tensor_get_async(split_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
+                        ggml_backend_tensor_get_async(split_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
 
-                    ggml_backend_synchronize(split_backend);
+                        ggml_backend_synchronize(split_backend);
 
-                    std::set<int32_t> unique_ids;
-                    for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
-                        for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
-                            int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
-                            unique_ids.insert(id);
+                        for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
+                            for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
+                                int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
+                                unique_ids.insert(id);
+                            }
                         }
-                    }
 
-                    // group consecutive experts and copy them together
-                    GGML_ASSERT(!unique_ids.empty());
-                    //printf("Offloading %ld out of %ld experts\n", unique_ids.size(), node->src[0]->ne[2]);
+                        // group consecutive experts and copy them together
+                        GGML_ASSERT(!unique_ids.empty());
+
+                    }
 
                     auto it = unique_ids.begin();
                     int32_t first_id = *it;
