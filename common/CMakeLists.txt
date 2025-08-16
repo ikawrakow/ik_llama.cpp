@@ -76,6 +76,7 @@ add_library(${TARGET} STATIC
     minja.hpp
     ngram-cache.h
     ngram-cache.cpp
+    speculative.cpp
     )
 
 if (BUILD_SHARED_LIBS)
