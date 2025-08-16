@@ -3839,8 +3839,8 @@ int main(int argc, char ** argv) {
             { "system_prompt",               ctx_server.system_prompt.c_str() },
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params.n_parallel },
-            { "n_ctx",                       ctx_server.n_ctx }
             { "chat_template",               ctx_server.chat_templates.template_default->source() },
+            { "n_ctx",                       ctx_server.n_ctx }
         };
         if (ctx_server.params.use_jinja && ctx_server.chat_templates.template_tool_use) {
             data["chat_template_tool_use"] = ctx_server.chat_templates.template_tool_use->source();
