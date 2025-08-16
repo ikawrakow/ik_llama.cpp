@@ -1859,6 +1859,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
+        int cur_arg = 0;
+
         //printf("Graph split %d has %d inputs:\n", i, split->n_inputs);
         //for (int j = 0; j < split->n_inputs; j++) printf("  %s,  %s\n", split->inputs[j]->name,
         //        split->inputs[j]->src[0] ? split->inputs[j]->src[0]->name : "none");
@@ -1889,7 +1891,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (split->graph.n_nodes > 0 &&
                     ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
                     ggml_backend_buffer_is_host(input->buffer) &&
-                    node->src[0] == input_cpy &&
+                    node->src[cur_arg] == input_cpy &&
                    (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE)) {
 
                     ggml_backend_synchronize(input_backend);
@@ -1918,7 +1920,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     int32_t last_id = first_id;
 
                     auto copy_experts = [&](int32_t first_id, int32_t last_id) {
-                        const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];
+                        const size_t expert_size = (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE) ? input->nb[2] : input->nb[1];
                         const size_t expert_offset = first_id * expert_size;
                         const size_t expert_size_copy =  (last_id - first_id + 1) * expert_size;
                         const size_t padding = 512;
@@ -1929,6 +1931,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             (const uint8_t *)input->data + expert_offset, expert_offset,
                             // copy a bit extra to ensure there are no NaNs in the padding
                             expert_size_copy + padding_end);
+
                     };
 
                     for (++it; it != unique_ids.end(); ++it) {
@@ -1945,6 +1948,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         last_id = id;
                     }
                     copy_experts(first_id, last_id);
+                    if (node->op == GGML_OP_MOE_FUSED_UP_GATE) ++cur_arg;
                 } else
 #endif
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
