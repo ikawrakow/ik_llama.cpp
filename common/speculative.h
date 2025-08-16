@@ -13,9 +13,16 @@ struct llama_speculative_params {
     float p_min = 0.75f; // min probability required to accept a token in the draft
 };
 
-struct llama_speculative * llama_speculative_init(struct llama_context * ctx_dft);
+struct llama_speculative * llama_speculative_init(
+        struct llama_context * ctx_tgt,
+        struct llama_context * ctx_dft
+);
 
 void llama_speculative_free(struct llama_speculative * spec);
+
+void llama_speculative_add_replacement_tgt_dft(
+        struct llama_speculative * spec,
+        const char *source, const char *dest);
 
 bool llama_speculative_are_compatible(
         const struct llama_context * ctx_tgt,
