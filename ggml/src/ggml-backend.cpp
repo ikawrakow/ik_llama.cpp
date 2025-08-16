@@ -200,6 +200,7 @@ size_t ggml_backend_get_max_size(ggml_backend_t backend) {
 
 void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    if (offset + size > ggml_nbytes(tensor)) fprintf(stderr, "%s(%s): offset = %zu, size = %zu, nbytes = %zu\n", __func__, tensor->name, offset, size, ggml_nbytes(tensor));
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
     if (backend->iface.set_tensor_async == NULL) {
