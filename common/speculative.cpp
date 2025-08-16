@@ -206,15 +206,9 @@ std::vector<llama_token> llama_speculative_gen_draft(
         LLAMA_LOG_INFO("%s: main->draft detokenized string: '%s'\n", __func__, text.c_str());
         prompt_tgt_draft_model = llama_tokenize(ctx_dft, text, false, true);
 
-        // convert id_last to draft vocab. llama_detokenize is called directly to avoid an allocation
-        const auto * model_tgt = llama_get_model(ctx_tgt);
-
-        int32_t n_chars = llama_detokenize(model_tgt, &id_last, 1, nullptr, 0, false, false);
-        GGML_ASSERT(n_chars < 0 && "failed to detokenize id_last");
-        text.resize(-n_chars);
-        llama_detokenize(model_tgt, &id_last, 1, text.data(), text.size(), false, false);
-        text = replace_to_dft(spec, text);
-
+        // convert id_last to draft vocab
+        std::vector<llama_token> id_last_vec(1, id_last);
+        text = llama_detokenize(ctx_tgt, id_last_vec);
         LLAMA_LOG_INFO("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
         id_last = llama_tokenize(ctx_dft, text, false, true)[0];
     }

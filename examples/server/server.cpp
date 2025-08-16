@@ -937,7 +937,6 @@ struct server_context {
 
             if (!llama_speculative_are_compatible(ctx, llama_init_dft.context)) {
                 LOG_INFO("the draft model is not compatible with the target model. tokens will be translated between the draft and target models.", {{}});
-                return false;
             }
 
             const int n_ctx_dft = llama_n_ctx(llama_init_dft.context);
