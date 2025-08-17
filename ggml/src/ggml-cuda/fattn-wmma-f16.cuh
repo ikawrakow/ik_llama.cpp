@@ -96,7 +96,7 @@ static __global__ void flash_attn_ext_f16(
     const half  * V_h   = (const half  *) (V + nb22*(blockIdx.y / gqa_ratio)); // K and V have same shape
     const half  * maskh = (const half  *)  mask + (nb31/sizeof(half))* ic0;
     const half2 * mask2 = (const half2 *)  mask + (nb31/sizeof(half))*(ic0/2);
-    const float * sinks_f = sinks ? (const float *)sinks + blockIdx.y : nullptr;
+    [[maybe_unused]] const float * sinks_f = sinks ? (const float *)sinks + blockIdx.y : nullptr;
 
     const int stride_Q = nb01 / sizeof(float);
     const int stride_K = nb11 / sizeof(half);

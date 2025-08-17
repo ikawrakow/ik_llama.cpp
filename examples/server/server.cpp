@@ -152,8 +152,6 @@ struct server_task_result {
 
 };
 
-std::unordered_map<int, server_task_result > server_task_result_dict = {};
-
 // Helper functions for content cleaning
 static std::string remove_simple_function_calls(const std::string& content) {
     std::string cleaned = content;
@@ -446,9 +444,8 @@ struct server_slot {
         timings.prompt_per_token_ms = t_prompt_processing / n_prompt_tokens_processed;
         timings.prompt_per_second = 1e3 / t_prompt_processing * n_prompt_tokens_processed;
 
-
         timings.predicted_n = n_decoded;
-        timings.predicted_ms = (ggml_time_us() - t_start_generation) / 1e3;
+        timings.predicted_ms = t_token_generation;
         timings.predicted_per_token_ms = t_token_generation / n_decoded;
         timings.predicted_per_second = 1e3 / t_token_generation * n_decoded;
 
@@ -1819,9 +1816,9 @@ struct server_context {
         // populate timings if this is final response or timings_per_token is enabled
         if (slot.params.timings_per_token) {
             //res.data["timings"] = slot.get_formated_timings();
+            slot.t_token_generation = (ggml_time_us() - slot.t_start_generation) / 1e3;
             res.timings = slot.get_timings();
         }
-        server_task_result_dict[slot.id_task] = res;
         queue_results.send(std::move(res));
     }
 
@@ -1847,7 +1844,12 @@ struct server_context {
             {"stopped_limit",       slot.stopped_limit},
             {"stopping_word",       slot.stopping_word},
             {"tokens_cached",       slot.n_past},
-            {"timings",             slot.get_formated_timings()}
+            {"timings",             slot.get_formated_timings()},
+            {"usage",               json {
+                {"completion_tokens", slot.n_decoded},
+                {"prompt_tokens",     slot.n_prompt_tokens},
+                {"total_tokens",      slot.n_decoded + slot.n_prompt_tokens}
+            }}
         };
 
         if (slot.sparams.n_probs > 0) {
@@ -1867,6 +1869,8 @@ struct server_context {
 
             res.data["completion_probabilities"] = probs_vector_to_json(ctx, probs);
         }
+
+        res.timings = slot.get_timings();
 
         if (slot.oaicompat) {
             res.data["oaicompat_token_ctr"] = slot.n_decoded;
@@ -3058,6 +3062,11 @@ static json format_final_response_oaicompat(const json& request, json result, co
         {"id", completion_id}
     };
 
+    json timings = json_value(result, "timings", json::object());
+    if (!timings.empty()) {
+        res["timings"] = timings;
+    }
+
     if (server_verbose) {
         res["__verbose"] = result;
     }
@@ -3140,6 +3149,10 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
 
     // Always add final chunk (like original llama.cpp)
     if (!finish_reason.empty()) {
+        // usage
+        int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
+        int num_prompt_tokens = json_value(result, "tokens_evaluated", 0);
+
         json finish_chunk = {
             {"choices", json::array({json{{"finish_reason", finish_reason},
                                         {"index", 0},
@@ -3147,16 +3160,21 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
             {"created", t},
             {"id", completion_id},
             {"model", modelname},
-            {"object", "chat.completion.chunk"}
+            {"object", "chat.completion.chunk"},
+            {"usage", json {
+                {"completion_tokens", num_tokens_predicted},
+                {"prompt_tokens",     num_prompt_tokens},
+                {"total_tokens",      num_tokens_predicted + num_prompt_tokens}
+            }}
         };
         streaming_chunks.push_back(finish_chunk);
     }
 
-    if (server_task_result_dict.count(task_result.id) > 0)
-    {
+    if (task_result.timings.prompt_n != -1) {
         for (auto& chunk : streaming_chunks)
-            chunk.push_back({ "timings", server_task_result_dict[task_result.id].timings.to_json() });
+            chunk.push_back({ "timings", task_result.timings.to_json() });
     }
+
     // Return streaming chunks (could be just final chunk if no diffs)
     if (!streaming_chunks.empty()) {
         return streaming_chunks;
@@ -3229,11 +3247,11 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
         {"model",   modelname},
         {"object",  "chat.completion.chunk"}
     };
-    if (server_task_result_dict.count(task_result.id) > 0)
-    {
-        ret.push_back({ "timings", server_task_result_dict[task_result.id].timings.to_json() });
+    
+    if (task_result.timings.prompt_n != -1) {
+        ret.push_back({ "timings", task_result.timings.to_json() });
     }
-
+    
     //
     if (!finish_reason.empty()) {
         int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
