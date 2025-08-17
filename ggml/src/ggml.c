@@ -8993,22 +8993,6 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
-void ggml_flash_attn_ext_add_bounds(
-        struct ggml_tensor * a,
-        struct ggml_tensor * bounds) {
-    if (!bounds) {
-        a->src[5] = NULL;
-        return;
-    }
-
-    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-    GGML_ASSERT(bounds->type == GGML_TYPE_I32);
-    GGML_ASSERT(bounds->ne[0] == 2);
-    GGML_ASSERT(bounds->ne[1] >= a->src[0]->ne[1]);
-
-    a->src[5] = bounds;
-}
-
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(
@@ -18677,7 +18661,6 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     const struct ggml_tensor * v     = dst->src[2];
     const struct ggml_tensor * mask  = dst->src[3];
     const struct ggml_tensor * sinks = dst->src[4];
-    const struct ggml_tensor * bounds= dst->src[5];
 
     GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
     GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
@@ -18756,9 +18739,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                 dst->ne[2], dst->ne[1], dst->nb[1],
                 k->type, v->type,
                 Dk, Dv, neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1],
-                q->data, k->data, v->data, mask->data,
-                sinks ? sinks->data : NULL,
-                bounds ? bounds->data : NULL,
+                q->data, k->data, v->data, mask->data, sinks ? sinks->data : NULL,
                 scale, softcap, (float *)dst->data,
                 params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, ith, nth)) return;
 

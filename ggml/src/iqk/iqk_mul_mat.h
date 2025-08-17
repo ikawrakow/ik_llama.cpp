@@ -58,8 +58,7 @@ IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
                             const void  * k,        // k matrix. Assumed to be fp16, nq x nk elements
                             const void  * v,        // v matrix. Assumed to be fp16, nq x nk elements
                             const void  * mask,     // mask. If not null, assumed to be fp16. nq x nk elements
-                            const void  * sinks,    // attention sinks
-                            const void  * bounds,   // attention mask bounds
+                            const void  * sinks,    // mask. If not null, assumed to be fp16. nq x nk elements
                             float         scale,    // scale applied before softmax
                             float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             float       * qkv,      // v*softmax(scale*(k*q))
