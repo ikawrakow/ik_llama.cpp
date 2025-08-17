@@ -1,0 +1,26 @@
+language: cpp
+sudo: required
+dist: trusty
+
+cache:
+  apt: true
+  directories:
+    - /home/travis/.hunter/
+
+addons:
+  apt:
+    sources:
+      - ubuntu-toolchain-r-test
+      - george-edison55-precise-backports
+    packages:
+      - g++-5
+      - libsqlcipher-dev
+      - cmake
+
+before_install:
+  - export CXX="g++-5" CC="gcc-5"
+
+script: mkdir build && cd ./build && cmake .. && cmake --build . && ctest .
+
+# TODO: fix sqlcipher test
+# script: mkdir build && cd ./build && cmake -DENABLE_SQLCIPHER_TESTS=ON .. && make && ./tests
