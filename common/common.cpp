@@ -741,7 +741,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         std::string target = argv[i];
         CHECK_ARG
         std::string draft = argv[i];
-        params.replacements_draft.push_back({target, draft});
+        params.replacements_draft.emplace_back(std::move(target), std::move(draft));
         return true;
     }
     if (arg == "--cfg-negative-prompt") {
