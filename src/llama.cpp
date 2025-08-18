@@ -8478,20 +8478,25 @@ struct llm_build_context {
         return lctx.inp_out_ids;
     }
 
-    struct ggml_tensor * build_inp_KQ_mask(bool causal = true) {
+    struct ggml_tensor * build_inp_KQ_mask(bool causal = true, bool with_bounds = false) {
         lctx.inp_KQ_mask = causal
             ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
             : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         cb(lctx.inp_KQ_mask, "KQ_mask", -1);
         ggml_set_input(lctx.inp_KQ_mask);
 
-        lctx.inp_mask_bounds = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 2, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
-        ggml_set_input(lctx.inp_mask_bounds);
+        if (with_bounds) {
+            lctx.inp_mask_bounds = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 2, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+            ggml_set_input(lctx.inp_mask_bounds);
+        } else {
+            lctx.inp_mask_bounds = nullptr;
+        }
+
 
         return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask, GGML_TYPE_F16) : lctx.inp_KQ_mask;
     }
 
-    struct ggml_tensor * build_inp_KQ_mask_swa(bool causal = true) {
+    struct ggml_tensor * build_inp_KQ_mask_swa(bool causal = true, bool with_bounds = false) {
         GGML_ASSERT(hparams.n_swa > 0);
 
         lctx.inp_KQ_mask_swa = causal
@@ -8500,8 +8505,12 @@ struct llm_build_context {
         cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
         ggml_set_input(lctx.inp_KQ_mask_swa);
 
-        lctx.inp_mask_bounds_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 2, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
-        ggml_set_input(lctx.inp_mask_bounds_swa);
+        if (with_bounds) {
+            lctx.inp_mask_bounds_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, 2, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+            ggml_set_input(lctx.inp_mask_bounds_swa);
+        } else {
+            lctx.inp_mask_bounds_swa = nullptr;
+        }
 
         return flash_attn ? ggml_cast(ctx0, lctx.inp_KQ_mask_swa, GGML_TYPE_F16) : lctx.inp_KQ_mask_swa;
     }
@@ -8657,10 +8666,10 @@ struct llm_build_context {
 
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
         //bool is_swa = hparams.n_swa > 0 && h_params.n_swa_pattern > 0 ?
-        ggml_tensor * KQ_mask = build_inp_KQ_mask();
+        ggml_tensor * KQ_mask = build_inp_KQ_mask(true, cparams.flash_attn);
         ggml_tensor * KQ_mask_swa = nullptr;
         if (hparams.n_swa > 0 && hparams.n_swa_pattern > 0) {
-            KQ_mask_swa = build_inp_KQ_mask_swa();
+            KQ_mask_swa = build_inp_KQ_mask_swa(true, cparams.flash_attn);
         }
 
         //const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
@@ -12120,8 +12129,8 @@ struct llm_build_context {
 
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
         // gemma 2 requires different mask for layers using sliding window (SWA)
-        struct ggml_tensor * KQ_mask     = build_inp_KQ_mask(true);
-        struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa(true);
+        struct ggml_tensor * KQ_mask     = build_inp_KQ_mask(true, cparams.flash_attn);
+        struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa(true,cparams.flash_attn);
 
         for (int il = 0; il < n_layer; ++il) {
             // (il % 2) layers use SWA
@@ -12260,8 +12269,8 @@ struct llm_build_context {
 
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
         // gemma3 requires different mask for layers using sliding window (SWA)
-        struct ggml_tensor * KQ_mask     = build_inp_KQ_mask(true);
-        struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa(true);
+        struct ggml_tensor * KQ_mask     = build_inp_KQ_mask(true, cparams.flash_attn);
+        struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa(true, cparams.flash_attn);
 
         // "5-to-1 interleaved attention"
         // 5 layers of local attention followed by 1 layer of global attention
@@ -14308,8 +14317,8 @@ struct llm_build_context {
 
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
         // cohere2 requires different mask for layers using sliding window (SWA)
-        struct ggml_tensor * KQ_mask     = build_inp_KQ_mask();
-        struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa();
+        struct ggml_tensor * KQ_mask     = build_inp_KQ_mask(true, cparams.flash_attn);
+        struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa(true, cparams.flash_attn);
 
         // sliding window switch pattern
         const int32_t sliding_window_pattern = 4;
@@ -15410,8 +15419,8 @@ struct llm_build_context {
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
-        struct ggml_tensor * KQ_mask     = build_inp_KQ_mask();
-        struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa();
+        struct ggml_tensor * KQ_mask     = build_inp_KQ_mask(true, cparams.flash_attn);
+        struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa(true, cparams.flash_attn);
         //const int64_t n_embd_head = hparams.n_embd_head_v;
         const float kq_scale = 1.0f / sqrtf(float(n_rot)); //float(n_embd_head));
 
