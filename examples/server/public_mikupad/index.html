@@ -5543,21 +5543,29 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 	const [showCustomMaintenance, setShowCustomMaintenance] = useState(false);
 	const [maintenanceDuration, setMaintenanceDuration] = useState('');
 	const [maintenanceDbLoad, setMaintenanceDbLoad] = useState(0.5);
+	const [extensionLoaded, setExtensionLoaded] = useState('true');
 	const [configData, setConfigData] = useState('');
 
-	useEffect(() => {
-	const fetchData = async () => {
-        try {
-	        const res = await fetch('/zstd_get_configs');
-                const data = await res.json();
-                if (data.ok) {
-                    console.log(data.configs);
-                    setConfigData(data.configs);
-                }
-      } catch (err) {}   
-    };
-    fetchData();
-  }, []);
+        useEffect(() => {
+	        const checkVersion = async () => {
+		        try {
+		                const res = await fetch('/version');
+		                const data = await res.json();
+		                if (data.features?.zstd_compression) {
+		                	const res = await fetch('/zstd_get_configs');
+                                	const data = await res.json();
+	                                if (data.ok) {
+        					console.log(data.configs);
+						setConfigData(data.configs);
+					}
+		                }
+				else {
+					setExtensionLoaded(false);
+				}
+			} catch (err) {}
+		};
+		checkVersion();
+	}, []);
 
 	function replacePlaceholders(string,placeholders) {
 		// give placeholders as json object
@@ -7471,7 +7479,7 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
 				</button>
 
 			</${CollapsibleGroup}>
-			<${CollapsibleGroup} label="Database Tools" expanded>
+			${extensionLoaded && html`<${CollapsibleGroup} label="Database Tools" expanded>
     <div className="hbox">
         <button
             disabled=${!!cancel}
@@ -7592,9 +7600,9 @@ export function App({ sessionStorage, templateStorage, useSessionState, useDBTem
             </button>
         </div>
     `}
-</${CollapsibleGroup}>
+</${CollapsibleGroup}>`}
 
-      <${CollapsibleGroup} label="Slot and KV Save Mgmt">
+      <${CollapsibleGroup} label="Slot and KV Save Management">
         <button disabled=${!!cancel} onClick=${() => toggleModal("saved_prompts")}>
 
           Manage Slots and Saved Prompt
