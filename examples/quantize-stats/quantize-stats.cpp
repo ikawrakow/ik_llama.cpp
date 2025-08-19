@@ -844,7 +844,14 @@ static inline int best_index_iq3nl(const int8_t * values, float x) {
     return ix < 8 ? ix : x - values[ix-8] < values[ix-7] - x ? ix-8 : ix-7;
 }
 
-static void analyze_iq2kl(const char * name, int nrows, int n_per_row, const float * x_values, const float * imatrix, float& tot_mse, float& tot_elements) {
+static void analyze_iq2kl([[maybe_unused]] const char * name,
+                          [[maybe_unused]] int nrows,
+                          [[maybe_unused]] int n_per_row,
+                          [[maybe_unused]] const float * x_values,
+                          [[maybe_unused]] const float * imatrix,
+                          [[maybe_unused]] float& tot_mse,
+                          [[maybe_unused]] float& tot_elements) {
+#if 0
     constexpr int kBlockSize = 32;
     constexpr int ntry = 5;
     static const int k_index[64] = {-1, 0, -2, 1, -3, -4, 2, -5, -6, -7, -8, 3, -9, 4, -10, -11, 5, 6, 7, -12, 8, 9, 10, 11, -13, -14, -15, -16, 12, 13,
@@ -1168,8 +1175,8 @@ static void analyze_iq2kl(const char * name, int nrows, int n_per_row, const flo
     tot_mse += mse;
     tot_elements += sum_x2;
     printf("%s:  %g, %g  %g\n", name, sqrt(mse/(nrows*n_per_row)), sqrt(mse/sum_x2), sqrt(tot_mse/tot_elements));
+#endif
 }
-
 
 static void analyze_iq3ks(const char * name, int nrows, int n_per_row, const float * x_values, const float * imatrix, float& tot_mse, float& tot_elements,
         std::vector<int64_t>& Htot) {
