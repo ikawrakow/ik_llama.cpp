@@ -299,7 +299,7 @@ template <int D>
 struct HelperQ80R8 : public BaseHelper {
     using Base = BaseHelper;
     constexpr static ggml_type type = GGML_TYPE_Q8_0_R8;
-#ifdef __AVX2__
+#ifdef HAVE_FANCY_SIMD
     constexpr static int block_size_q = QK8_2;
     using block_q8 = block_q8_2;
 #else
