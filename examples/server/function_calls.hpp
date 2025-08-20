@@ -40,11 +40,14 @@ static std::string extract_content_from_mixed_input(const std::string& content, 
 
         // Remove <think>...</think> tags
         size_t think_start = 0;
+        size_t tool_start = 0;
         bool is_thinking = false;
         while ((think_start = result.find(k_think_start, think_start)) != std::string::npos) {
             size_t think_end = result.find(k_think_end, think_start);
             if (think_end != std::string::npos) {
-                result.erase(think_start, think_end + k_think_end.length() - think_start);
+                think_start = think_end + k_think_end.length();
+                tool_start  = think_start;
+                //result.erase(think_start, think_end + k_think_end.length() - think_start);
             } else {
                 is_thinking = true;
                 break;
@@ -58,7 +61,7 @@ static std::string extract_content_from_mixed_input(const std::string& content, 
         }
 
         // Remove DeepSeek R1 tool call syntax
-        size_t tool_start = 0;
+        //size_t tool_start = 0;
         while ((tool_start = result.find("<｜tool▁calls▁begin｜>", tool_start)) != std::string::npos) {
             size_t tool_end = result.find("<｜tool▁calls▁end｜>", tool_start);
             if (tool_end != std::string::npos) {
