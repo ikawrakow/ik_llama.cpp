@@ -33,21 +33,35 @@ static std::string extract_content_from_mixed_input(const std::string& content, 
         return qwen3::extract_content_during_parsing(content, is_partial);
     } else if (is_deepseek_r1_model(model_name)) {
         // DeepSeek R1 content extraction - remove <think> tags and tool calls
-        std::string result = content;
-        
+        constexpr std::string_view k_think_start{"<think>"};
+        constexpr std::string_view k_think_end{"</think>"};
+
+        auto result = content;
+
         // Remove <think>...</think> tags
         size_t think_start = 0;
-        while ((think_start = result.find("<think>", think_start)) != std::string::npos) {
-            size_t think_end = result.find("</think>", think_start);
+        size_t tool_start = 0;
+        bool is_thinking = false;
+        while ((think_start = result.find(k_think_start, think_start)) != std::string::npos) {
+            size_t think_end = result.find(k_think_end, think_start);
             if (think_end != std::string::npos) {
-                result.erase(think_start, think_end + 8 - think_start);
+                think_start = think_end + k_think_end.length();
+                tool_start  = think_start;
+                //result.erase(think_start, think_end + k_think_end.length() - think_start);
             } else {
+                is_thinking = true;
                 break;
             }
         }
-        
+
+        // Is this the right thing to do? If we have an open thinking tag, we just retrun and do not try to
+        // remove function calls.
+        if (is_thinking) {
+            return result;
+        }
+
         // Remove DeepSeek R1 tool call syntax
-        size_t tool_start = 0;
+        //size_t tool_start = 0;
         while ((tool_start = result.find("<｜tool▁calls▁begin｜>", tool_start)) != std::string::npos) {
             size_t tool_end = result.find("<｜tool▁calls▁end｜>", tool_start);
             if (tool_end != std::string::npos) {
@@ -56,7 +70,7 @@ static std::string extract_content_from_mixed_input(const std::string& content, 
                 break;
             }
         }
-        
+
         return result;
     } else {
         return kimi_k2::extract_content_during_parsing(content, is_partial);
@@ -67,21 +81,21 @@ static std::string extract_content_from_mixed_input(const std::string& content, 
 static ik_chat_msg parse_chat_message_incremental(const std::string& content, bool is_partial = false, const std::string& model_name = "") {
     ik_chat_msg msg;
     msg.role = "assistant";
-    
+
     try {
         json tool_calls_json;
         bool has_function_syntax = false;
-        
+
         // Route parsing based on model type
         if (is_qwen3_model(model_name)) {
             // Use Qwen3 XML parser
             tool_calls_json = parse_qwen3_tool_calls(content);
-            
+
             // Check for partial content during streaming
             if (is_partial && qwen3::is_partial_content_advanced(content)) {
                 throw std::runtime_error("partial structured content detected");
             }
-            
+
             // Check for malformed XML tool call syntax
             has_function_syntax = content.find("<tool_call>") != std::string::npos;
         } else if (is_deepseek_r1_model(model_name)) {
@@ -92,11 +106,11 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
                 syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
                 syntax.reasoning_in_content = true; // Fix for thinking tag termination issue
                 syntax.enable_tool_calls = true;
-                
+
                 common_chat_msg_parser parser(content, is_partial, syntax);
                 parser.parse();
                 auto result = parser.result();
-                
+
                 // Convert tool calls to JSON format expected by the system
                 tool_calls_json = json::array();
                 for (const auto& tool_call : result.tool_calls) {
@@ -107,7 +121,7 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
                     tc["function"]["arguments"] = tool_call.arguments;
                     tool_calls_json.push_back(tc);
                 }
-                
+
                 // Check for malformed DeepSeek R1 tool call syntax
                 has_function_syntax = content.find("<｜tool▁calls▁begin｜>") != std::string::npos;
             } catch (const common_chat_msg_partial_exception&) {
@@ -121,44 +135,44 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
         } else {
             // Default to Kimi-K2 parser
             tool_calls_json = parse_kimi_k2_tool_calls(content);
-            
+
             // Check for partial content during streaming
             if (is_partial && kimi_k2::is_partial_content_advanced(content)) {
                 throw std::runtime_error("partial structured content detected");
             }
-            
+
             // Check for malformed function call syntax
             has_function_syntax = content.find("functions.") != std::string::npos;
         }
-        
+
         bool parsing_succeeded = !tool_calls_json.empty();
-        
+
         if (has_function_syntax && !parsing_succeeded) {
             throw std::runtime_error("malformed function call syntax detected");
         }
-        
-        // Process successful parsing results  
+
+        // Process successful parsing results
         if (!tool_calls_json.empty()) {
             for (const auto& tc_json : tool_calls_json) {
                 try {
                     ik_chat_tool_call tc;
                     tc.id = tc_json.value("id", "");
-                    
+
                     if (!tc_json.contains("function") || !tc_json["function"].is_object() || !tc_json["function"].contains("name")) {
                         continue;
                     }
-                    
+
                     tc.name = tc_json["function"]["name"];
                     if (tc.name.empty()) {
                         continue;
                     }
-                    
+
                     if (tc_json["function"].contains("arguments")) {
                         tc.arguments = tc_json["function"]["arguments"];
                     } else {
                         tc.arguments = "{}";
                     }
-                    
+
                     // Validate arguments (only if not partial)
                     if (!is_partial && !tc.arguments.empty()) {
                         try {
@@ -168,13 +182,13 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
                             continue;
                         }
                     }
-                    
+
                     msg.tool_calls.push_back(tc);
                 } catch (const std::exception&) {
                     continue;
                 }
             }
-            
+
             // Use model-specific content extraction
             if (is_qwen3_model(model_name)) {
                 msg.content = qwen3::extract_content_during_parsing(content, is_partial);
@@ -193,23 +207,23 @@ static ik_chat_msg parse_chat_message_incremental(const std::string& content, bo
                 msg.content = kimi_k2::extract_content_during_parsing(content, is_partial);
             }
         }
-        
+
     } catch (const std::exception& e) {
         if (!is_partial) {
             // Original llama.cpp fallback pattern - use public API
             common_chat_syntax syntax;
             syntax.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;  // Use content-only format
-            
+
             // Use the public API that handles fallback internally
             common_chat_msg fallback_result = common_chat_parse(content, is_partial, syntax);
-            
+
             // Convert to ik_chat_msg
             msg.tool_calls.clear();
             msg.content = fallback_result.content;
         }
         // If is_partial=true, keep empty result (no content chunks during streaming)
     }
-    
+
     return msg;
 }
 
