@@ -2679,7 +2679,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     constexpr int qstep = 8;
     const int kqsx = threadIdx.x % qstep;
 
-#pragma unroll
+    #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * WARP_SIZE/qstep) {
         int i = i0 + threadIdx.y*(WARP_SIZE/qstep) + threadIdx.x/qstep;
 
@@ -2689,13 +2689,37 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 
         const block_iq2_k * bxi = (const block_iq2_k *)(x + i*stride) + kbx0;
 
-        auto all_values = (const int *)iq2k_table;
-
         const float d = bxi->d;
-
         uint16_t extra = bxi->extra >> (kqsx/4);
 
-    #pragma unroll
+#ifdef __CUDA_ARCH__
+
+        uint32_t extra32[2] = { uint32_t(extra & 0xff) * 0x01010101, uint32_t(extra >> 8) * 0x01010101 };
+        #pragma unroll
+        for (int l = 0; l < qstep/4; ++l) {
+            const int ql = get_int_b4(bxi->qs, kqsx + qstep*l);
+            uint32_t val1 = ((ql >> 0) & 0x33333333) | ((extra32[l] << 2) & 0x44444444);
+            uint32_t val2 = ((ql >> 2) & 0x33333333) | ((extra32[l] << 0) & 0x44444444);
+            int2 v1 = get_int_from_table_8(val1, iq2nl_values);
+            int2 v2 = get_int_from_table_8(val2, iq2nl_values);
+#ifdef INT8_MMA_AVAILABLE
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l +  0] = v1.x;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l +  8] = v2.x;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l + 16] = v1.y;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + kqsx + 32*l + 24] = v2.y;
+#else
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l +  0] = v1.x;
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l +  8] = v2.x;
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l + 16] = v1.y;
+            x_qs[i*(2*WARP_SIZE + 1)     + kqsx + 32*l + 24] = v2.y;
+#endif // INT8_MMA_AVAILABLE
+        }
+
+#else
+
+        auto all_values = (const int *)iq2k_table;
+
+        #pragma unroll
         for (int l = 0; l < qstep/4; ++l) {
 
             const int ql = get_int_b4(bxi->qs, kqsx + qstep*l);
@@ -2714,6 +2738,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 
             extra >>= 8;
         }
+#endif // __CUDA_ARCH__
 
 #ifdef INT8_MMA_AVAILABLE
         x_df[i*MMQ_MMA_TILE_X_K_Q3_K               + 2*kqsx+0] = d * (((bxi->scales[kqsx] >> 0) & 0xf) - 8);
