@@ -776,28 +776,21 @@ __device__ __forceinline__ void vec_dot_iq3_k_r4_q8_1(
     //scales[1] = __vcmpeq4((scales_h[is] >> ib32) & 0x01010101, 0x01010101);
     //scales[0] = __vsub4(scales[0] ^ scales[1], scales[1]);
     const int8_t * s8 = (const int8_t *)scales;
-    int2 val1;
-    const int * q2 = (const int *)bq3->qs + 8*ib32 + 4*is;
-    const int * qh = (const int *)bq3->qh + 4*ib32;
-    int aux32[2];
-    const uint8_t * aux8 = (const uint8_t *)aux32;
+    const uint32_t * q2 = (const uint32_t *)bq3->qs + 8*ib32 + 4*is;
+    const uint32_t * qh = (const uint32_t *)bq3->qh + 4*ib32;
     for (int i = 0; i < 4; ++i) {
-        auto values1 = iq3nl_values + (((bq3->extra[i+4*is] >> ib32) & 1) << 3);
+        uint32_t extra32 = uint32_t((bq3->extra[i+4*is] >> ib32) & 1) * 0x88888888;
+
         int sumi1 = 0;
-        int h = qh[i] >> 4*is;
-        aux32[0] = ((q2[i] >> 0) & 0x03030303) | ((h << 2) & 0x04040404);
-        aux32[1] = ((q2[i] >> 2) & 0x03030303) | ((h << 1) & 0x04040404);
-        val1.x  = int_from_table(aux8+0, (const uint8_t *)values1);
-        val1.y  = int_from_table(aux8+4, (const uint8_t *)values1);
-        sumi1 = ggml_cuda_dp4a(val1.x, q8[0], ggml_cuda_dp4a(val1.y, q8[1], sumi1));
-        aux32[0] = ((q2[i] >> 4) & 0x03030303) | ((h >> 0) & 0x04040404);
-        aux32[1] = ((q2[i] >> 6) & 0x03030303) | ((h >> 1) & 0x04040404);
-        val1.x  = int_from_table(aux8+0, (const uint8_t *)values1);
-        val1.y  = int_from_table(aux8+4, (const uint8_t *)values1);
-        sumi1 = ggml_cuda_dp4a(val1.x, q8[2], ggml_cuda_dp4a(val1.y, q8[3], sumi1));
+        uint32_t h = qh[i] >> 4*is;
+        uint32_t val1 = ((q2[i] >> 0) & 0x33333333) | extra32 | ((h << 2) & 0x04040404) | ((h << 4) & 0x40404040);
+        uint32_t val2 = ((q2[i] >> 2) & 0x33333333) | extra32 | ((h << 1) & 0x04040404) | ((h << 3) & 0x40404040);
+        int2 v1 = get_int_from_table_16(val1, iq3nl_values);
+        int2 v2 = get_int_from_table_16(val2, iq3nl_values);
+        sumi1 = ggml_cuda_dp4a(v1.x, q8[0], ggml_cuda_dp4a(v2.x, q8[1], sumi1));
+        sumi1 = ggml_cuda_dp4a(v1.y, q8[2], ggml_cuda_dp4a(v2.y, q8[3], sumi1));
         const float d = __half2float(bq3->d[i]) * d8;
         result[i] += d * sumi1 * s8[i] * (s8[i+4] ? -1 : 1);
-        //result[i] += d * sumi1 * s8[i];
     }
 }
 
