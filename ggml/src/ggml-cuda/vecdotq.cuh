@@ -1126,21 +1126,26 @@ static __device__ __forceinline__ float vec_dot_iq1_m_q8_1(
     return d * ((sumi[0] + sumf[0]) * sc0 + (sumi[1] + sumf[1]) * sc1);
 }
 
-static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4) {
-    const int      q0_32  = (q4 >> 0) & 0x0F0F0F0F;
-    const int8_t * q0_8   = (const int8_t *) &q0_32;
-    const char4    val0_8 = make_char4(
-        kvalues_iq4nl[q0_8[0]], kvalues_iq4nl[q0_8[1]], kvalues_iq4nl[q0_8[2]], kvalues_iq4nl[q0_8[3]]);
-
-    const int      q1_32  = (q4 >> 4) & 0x0F0F0F0F;
-    const int8_t * q1_8   = (const int8_t *) &q1_32;
-    const char4    val1_8 = make_char4(
-        kvalues_iq4nl[q1_8[0]], kvalues_iq4nl[q1_8[1]], kvalues_iq4nl[q1_8[2]], kvalues_iq4nl[q1_8[3]]);
-
-    return make_int2(*((const int *) &val0_8), *((const int *) &val1_8));
-}
-
 static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, const int8_t * values) {
+#if defined(__CUDA_ARCH__)
+    uint32_t v1, v2, v3, v4, mask;
+    const uint32_t * values32 = (const uint32_t *)values;
+
+    mask = (0x32103210 | ((q4 & 0x88888888) >> 1));
+    // Perform lookups in the lower half of the table (indices 0-7).
+    v1 = __byte_perm(values32[0], values32[1], q4);
+    // Perform lookups in the upper half of the table (indices 8-15).
+    v2 = __byte_perm(values32[2], values32[3], q4);
+    // Select between the low and high results based on the MSB of each index nibble.
+    v3 = __byte_perm(v1, v2, mask);
+    // Same for the upper part of q4.
+    v1 = __byte_perm(values32[0], values32[1], q4 >> 16);
+    v2 = __byte_perm(values32[2], values32[3], q4 >> 16);
+    v4 = __byte_perm(v1, v2, mask >> 16);
+
+    // Mix the results to get the final int2.
+    return make_int2(__byte_perm(v3, v4, 0x6420), __byte_perm(v3, v4, 0x7531));
+#else
     const int      q0_32  = (q4 >> 0) & 0x0F0F0F0F;
     const int8_t * q0_8   = (const int8_t *) &q0_32;
     const char4    val0_8 = make_char4(values[q0_8[0]], values[q0_8[1]], values[q0_8[2]], values[q0_8[3]]);
@@ -1150,6 +1155,11 @@ static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, con
     const char4    val1_8 = make_char4(values[q1_8[0]], values[q1_8[1]], values[q1_8[2]], values[q1_8[3]]);
 
     return make_int2(*((const int *) &val0_8), *((const int *) &val1_8));
+#endif
+}
+
+static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4) {
+    return get_int_from_table_16(q4, kvalues_iq4nl);
 }
 
 #define VDR_IQ4_NL_Q8_1_MMVQ 2
