@@ -14983,6 +14983,17 @@ static void ggml_compute_forward_mul_mat(
 #endif
 
 #if GGML_USE_IQK_MULMAT
+    if (ith == 0) {
+        static bool first_time = true;
+        if (first_time) {
+            first_time = false;
+#ifdef HAVE_FANCY_SIMD
+            printf("======================================= HAVE_FANCY_SIMD is defined\n");
+#else
+            printf("======================================= HAVE_FANCY_SIMD is NOT defined\n");
+#endif
+        }
+    }
     if (dst->type == GGML_TYPE_F32) {
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
                     ne02, ne03, ne12, ne13, nb02, nb03, nb12, nb13, nb2/sizeof(float), nb3/sizeof(float),

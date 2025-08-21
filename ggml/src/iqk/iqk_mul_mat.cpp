@@ -320,7 +320,8 @@ struct MulMat {
 #endif
         return type;
     }
-    static inline int num_rows(ggml_type type) {
+    static inline int num_rows([[maybe_unused]] ggml_type type) {
+        return 16;
 #ifdef HAVE_FANCY_SIMD
         switch (type) {
             case GGML_TYPE_Q2_K_R4:
