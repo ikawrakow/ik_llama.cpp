@@ -14,8 +14,6 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
     float * x_df = (float *) (x_qs + txs.qs);
 #endif // INT8_MMA_AVAILABLE
 
-    const int * all_values = (const int *)iq2k_table;
-
     const int kqsx = threadIdx.x/4;  // 0...7 -> block of 32
 
 #pragma unroll
@@ -32,10 +30,37 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
 
         const float d = __half2float(bxi->d[ir]);
 
-    #pragma unroll
+#ifdef __CUDA_ARCH__
+        #pragma unroll
         for (int l = 0; l < 2; ++l) {
 
-            auto values_l = all_values + (((bxi->extra[ir+4*l] >> kqsx) & 1) << 8);
+            uint32_t extra = uint32_t((bxi->extra[ir+4*l] >> kqsx) & 1) * 0x04040404;
+            extra = extra | (extra << 4);
+
+            const int ql = get_int_b4(bxi->qs, 8*kqsx + ir + 4*l);
+            uint32_t val1 = ((ql >> 0) & 0x33333333) | extra;
+            uint32_t val2 = ((ql >> 2) & 0x33333333) | extra;
+            int2 v1 = get_int_from_table_8(val1, iq2nl_values);
+            int2 v2 = get_int_from_table_8(val2, iq2nl_values);
+
+#ifdef INT8_MMA_AVAILABLE
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 0] = v1.x;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 1] = v2.x;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 2] = v1.y;
+            x_qs[i*MMQ_MMA_TILE_X_K_Q3_K + 8*kqsx + 4*l + 3] = v2.y;
+#else
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 0] = v1.x;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 1] = v2.x;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 2] = v1.y;
+            x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 3] = v2.y;
+#endif // INT8_MMA_AVAILABLE
+        }
+
+#else
+        #pragma unroll
+        for (int l = 0; l < 2; ++l) {
+
+            auto values_l = (const int *)iq2k_table + (((bxi->extra[ir+4*l] >> kqsx) & 1) << 8);
 
             const int ql = get_int_b4(bxi->qs, 8*kqsx + ir + 4*l);
 
@@ -51,6 +76,7 @@ template <int mmq_y, int nwarps, bool need_check> static __device__ __forceinlin
             x_qs[i*(2*WARP_SIZE + 1)     + 8*kqsx + 4*l + 3] = int_from_table_4((ql >> 6) & 0x03030303, values_l);
 #endif // INT8_MMA_AVAILABLE
         }
+#endif // __CUDA_ARCH__
 
         int is = 8*kqsx + ir;
         float dl1 = d * (((bxi->scales[is%32] >> 4*(is/32)) & 0xf) - 8);

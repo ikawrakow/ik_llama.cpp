@@ -187,7 +187,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
             break;
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ2_K_R4:
-            mmq_supported = ne11 < 2048;
+            mmq_supported = ne11 <= 3072;
             break;
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ4_K:
