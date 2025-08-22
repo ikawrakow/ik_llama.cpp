@@ -231,31 +231,36 @@ struct MulMat {
     static bool prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny);
     static inline ggml_type is_dequant_better(ggml_type type, int nrc_y) {
 #ifdef __AVX2__
+#ifdef HAVE_FANCY_SIMD
+        auto q8_k_type = GGML_TYPE_Q8_K_R16;
+#else
+        auto q8_k_type = GGML_TYPE_Q8_K_R8;
+#endif
         switch (type) {
-            case GGML_TYPE_IQ2_XXS: return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ2_XS : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ2_S  : return nrc_y >= 16 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ3_XXS: return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ4_XS : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ3_S  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ1_S  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ1_M  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_Q2_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_Q3_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
+            case GGML_TYPE_IQ2_XXS: return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ2_XS : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ2_S  : return nrc_y >= 16 ? q8_k_type : type;
+            case GGML_TYPE_IQ3_XXS: return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_XS : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ3_S  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ1_S  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ1_M  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_Q2_K   : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_Q3_K   : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q4_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q5_K   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q6_K   : return nrc_y >= 64 ? GGML_TYPE_Q8_0_R8 : type;
-            case GGML_TYPE_IQ2_KS : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ2_K  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ2_KL : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ3_KS : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ3_K  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ4_KS : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ4_KSS: return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ4_K  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ5_KS : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ5_K  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
-            case GGML_TYPE_IQ6_K  : return nrc_y >= 32 ? GGML_TYPE_Q8_K_R8 : type;
+            case GGML_TYPE_IQ2_KS : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ2_K  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ2_KL : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ3_KS : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ3_K  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_KS : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_KSS: return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ4_K  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ5_KS : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ5_K  : return nrc_y >= 32 ? q8_k_type : type;
+            case GGML_TYPE_IQ6_K  : return nrc_y >= 32 ? q8_k_type : type;
             case GGML_TYPE_Q4_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
             case GGML_TYPE_Q4_1   : return nrc_y >= 32 ? GGML_TYPE_Q8_1    : type;
             case GGML_TYPE_Q5_0   : return nrc_y >= 32 ? GGML_TYPE_Q8_0_R8 : type;
@@ -315,7 +320,8 @@ struct MulMat {
 #endif
         return type;
     }
-    static inline int num_rows(ggml_type type) {
+    static inline int num_rows([[maybe_unused]] ggml_type type) {
+        return 16;
 #ifdef HAVE_FANCY_SIMD
         switch (type) {
             case GGML_TYPE_Q2_K_R4:
@@ -346,7 +352,7 @@ struct MulMat {
             case GGML_TYPE_Q8_1:
             case GGML_TYPE_Q8_K_R8: return 8;
             case GGML_TYPE_Q4_0_R8:
-            case GGML_TYPE_Q8_0_R8:
+            case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
         }
@@ -381,6 +387,7 @@ struct MulMat {
             case GGML_TYPE_Q8_KV_R8:
             case GGML_TYPE_Q8_1:
             case GGML_TYPE_Q8_K_R8: return 8;
+            case GGML_TYPE_Q8_K_R16:
             case GGML_TYPE_BF16_R16: return 16;
             default: return 1;
         }
@@ -829,6 +836,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& mm, int Ny) {
         case GGML_TYPE_Q8_K_R8:
         case GGML_TYPE_Q8_KV:
         case GGML_TYPE_Q8_KV_R8:
+        case GGML_TYPE_Q8_K_R16:
             return iqk_set_kernels_kquants(ne00, typeA, typeB, mm.funcs, mm.func16);
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
@@ -924,6 +932,7 @@ bool MulMat::prepare(int typeA, int typeB, int ne00, MulMat& m, int /*Ny*/) {
         case GGML_TYPE_Q8_K_R8:
         case GGML_TYPE_Q8_KV:
         case GGML_TYPE_Q8_KV_R8:
+        case GGML_TYPE_Q8_K_R16:
             return iqk_set_kernels_kquants(ne00, typeA, typeB, m.funcs, m.func16);
         case GGML_TYPE_IQ2_KS:
         case GGML_TYPE_IQ2_K:
