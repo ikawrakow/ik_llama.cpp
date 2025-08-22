@@ -4087,7 +4087,6 @@ static void llm_load_hparams(
                     for (auto& item : hparams.n_head_kv_arr) item = n_nead_kv;
                     hparams.n_embd_head_k = 192;
                     hparams.n_embd_head_v = 128;
-                    //GGML_ABORT("Fatal error");
                 }
                 bool is_lite = (hparams.n_layer == 27);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
