@@ -127,3 +127,12 @@ __device__ __forceinline__ int int_from_table_x(const uint8_t * a8, const uint16
     return values[a8[0] | (a8[1] << 4)] | (values[a8[2] | (a8[3] << 4)] << 16);
 }
 
+#ifdef __CUDA_ARCH__
+static __device__ __forceinline__ int2 get_int_from_table_8(const int & q4, const int8_t * values) {
+    const uint32_t * values32 = (const uint32_t *)values;
+    uint32_t v1 = __byte_perm(values32[0], values32[1], q4);
+    uint32_t v2 = __byte_perm(values32[0], values32[1], q4 >> 16);
+    return make_int2(__byte_perm(v1, v2, 0x6420), __byte_perm(v1, v2, 0x7531));
+}
+#endif
+
