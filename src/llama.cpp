@@ -4072,22 +4072,21 @@ static void llm_load_hparams(
         case LLM_ARCH_DEEPSEEK2:
             {
                 if (hparams.n_head_kv() == 1) {
-                    printf("==========================================================================\n");
-                    printf("Detected incompatible DeepSeek model.\n");
-                    printf("Will try to fix, but there are no guarantees\n\n");
-                    printf("*** Your prompt processing speed will be crippled ***\n\n");
-                    printf("Consider making your own ik_llama.cpp compatible model or\n");
-                    printf("ask the model provider to make one for you,\n");
                     int n_nead_kv = hparams.n_gqa();
                     if (n_nead_kv%16 != 0 || hparams.n_embd_head_k != 576 || hparams.n_embd_head_v != 512 ||
                         hparams.n_rot != 64) {
+                        printf("==========================================================================\n");
+                        printf("Detected incompatible DeepSeek model without a known way to fixc it.\n");
+                        printf("Consider making your own ik_llama.cpp compatible model or\n");
+                        printf("ask the model provider to make one for you,\n\n");
                         printf("Sorry, uknown model => cannot fix it => bailing out\n");
+                        printf("==========================================================================\n");
                         GGML_ABORT("Fatal error");
                     }
+                    printf("================= Adjusted mainline llama.cpp MLA tensors to ik_llama.cpp\n");
                     for (auto& item : hparams.n_head_kv_arr) item = n_nead_kv;
                     hparams.n_embd_head_k = 192;
                     hparams.n_embd_head_v = 128;
-                    printf("==========================================================================\n");
                     //GGML_ABORT("Fatal error");
                 }
                 bool is_lite = (hparams.n_layer == 27);
