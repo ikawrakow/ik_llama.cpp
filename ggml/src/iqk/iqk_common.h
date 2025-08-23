@@ -148,6 +148,16 @@ typedef void (*mul_mat_t)(int n, const void * vx, size_t bx, const DataInfo& inf
             funcs[6] = kernel<Dequantizer, 7>;\
             funcs[7] = kernel<Dequantizer, 8>;\
 
+#define IQK_SET_MUL_MAT_FUNCTIONS_T2(kernel, Dequantizer, Block, funcs) \
+            funcs[0] = kernel<Dequantizer, 1, Block>;\
+            funcs[1] = kernel<Dequantizer, 2, Block>;\
+            funcs[2] = kernel<Dequantizer, 3, Block>;\
+            funcs[3] = kernel<Dequantizer, 4, Block>;\
+            funcs[4] = kernel<Dequantizer, 5, Block>;\
+            funcs[5] = kernel<Dequantizer, 6, Block>;\
+            funcs[6] = kernel<Dequantizer, 7, Block>;\
+            funcs[7] = kernel<Dequantizer, 8, Block>;\
+
 #define IQK_SET_MUL_MAT_FUNCTIONS(kernel, funcs) \
             funcs[0] = kernel<1>;\
             funcs[1] = kernel<2>;\
