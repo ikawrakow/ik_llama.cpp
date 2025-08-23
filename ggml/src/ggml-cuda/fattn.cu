@@ -5,8 +5,6 @@
 // SPDX-License-Identifier: MIT
 //
 
-#include "common.cuh"
-#include "fattn-common.cuh"
 #include "fattn-tile-f16.cuh"
 #include "fattn-tile-f32.cuh"
 #include "fattn-vec-f16-interface.cuh"
