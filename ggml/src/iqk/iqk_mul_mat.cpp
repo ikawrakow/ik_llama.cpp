@@ -321,7 +321,6 @@ struct MulMat {
         return type;
     }
     static inline int num_rows([[maybe_unused]] ggml_type type) {
-        return 16;
 #ifdef HAVE_FANCY_SIMD
         switch (type) {
             case GGML_TYPE_Q2_K_R4:
@@ -548,6 +547,11 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     //if (ith == 0) printf("%s: ne00 = %d, row_size_qx = %d, strideA = %d\n", __func__, int(ne00), int(row_size_qx), int(strideA));
 
     auto num_rows = MulMat::num_rows(ggml_type(typeA));
+    if (Nx%num_rows) {
+        fprintf(stderr, "%s: Nx = %d, Ny = %d, ne00 = %d, num_rows = %d, types = %s, %s\n", __func__, (int)Nx, (int)Ny,
+                (int)ne00, num_rows, ggml_type_name(ggml_type(typeA)), ggml_type_name(ggml_type(typeB)));
+        GGML_ASSERT(false);
+    }
     GGML_ASSERT(Nx%num_rows == 0);
     auto nrc_x = (Nx/num_rows + nth - 1)/nth;
     auto first_x = ith*nrc_x;
