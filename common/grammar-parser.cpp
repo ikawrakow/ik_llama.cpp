@@ -383,10 +383,13 @@ namespace grammar_parser {
                     }
                 }
             }
+            state.success = true;
             return state;
         } catch (const std::exception & err) {
-            fprintf(stderr, "%s: error parsing grammar: %s\n", __func__, err.what());
-            return parse_state();
+            fprintf(stderr, "%s: error parsing grammar: %s\n\n%s\n", __func__, err.what(), src);
+            parse_state state;
+            state.success = false;
+            return state;
         }
     }
 

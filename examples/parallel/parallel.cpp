@@ -253,7 +253,7 @@ int main(int argc, char ** argv) {
                     client.prompt   = client.input + "\nAssistant:";
                     client.response = "";
 
-                    llama_sampling_reset(client.ctx_sampling);
+                    llama_sampling_reset(llama_get_model_vocab(model), client.ctx_sampling);
 
                     // do not prepend BOS because we have a system prompt!
                     std::vector<llama_token> tokens_prompt;

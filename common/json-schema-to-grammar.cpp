@@ -267,7 +267,7 @@ static void _build_min_max_int(int min_value, int max_value, std::stringstream &
     throw std::runtime_error("At least one of min_value or max_value must be set");
 }
 
-const std::string SPACE_RULE = "| \" \" | \"\\n\" [ \\t]{0,20}";
+const std::string SPACE_RULE = "| \" \" | \"\\n\"{1,2} [ \\t]{0,20}";
 
 struct BuiltinRule {
     std::string content;
@@ -389,6 +389,7 @@ static std::string format_literal(const std::string & literal) {
 
 class SchemaConverter {
 private:
+    friend std::string build_grammar(const std::function<void(const common_grammar_builder&)>& cb, const common_grammar_options& options);
     std::function<json(const std::string &)> _fetch_json;
     bool _dotall;
     std::map<std::string, std::string> _rules;
@@ -1035,11 +1036,35 @@ public:
     }
 };
 
-std::string json_schema_to_grammar(const json & schema) {
-    SchemaConverter converter([](const std::string &) { return json::object(); }, /* dotall= */ false);
-    auto copy = schema;
-    converter.resolve_refs(copy, "input");
-    converter.visit(copy, "");
+std::string json_schema_to_grammar(const json & schema, bool force_gbnf) {
+#ifdef LLAMA_USE_LLGUIDANCE
+    if (!force_gbnf) {
+        return "%llguidance {}\nstart: %json " + schema.dump();
+    }
+#else
+    (void)force_gbnf;
+#endif // LLAMA_USE_LLGUIDANCE
+    return build_grammar([&](const common_grammar_builder& callbacks) {
+        auto copy = schema;
+        callbacks.resolve_refs(copy);
+        callbacks.add_schema("", copy);
+        });
+}
+
+std::string build_grammar(const std::function<void(const common_grammar_builder&)>& cb, const common_grammar_options& options) {
+    SchemaConverter converter([&](const std::string &) { return json(); }, options.dotall);
+    common_grammar_builder builder{
+        /* .add_rule = */ [&](const std::string& name, const std::string& rule) {
+            return converter._add_rule(name, rule);
+        },
+        /* .add_schema = */ [&](const std::string& name, const nlohmann::ordered_json& schema) {
+            return converter.visit(schema, name == "root" ? "" : name);
+        },
+            /* .resolve_refs = */ [&](nlohmann::ordered_json& schema) {
+                converter.resolve_refs(schema, "");
+            }
+    };
+    cb(builder);
     converter.check_errors();
     return converter.format_grammar();
 }

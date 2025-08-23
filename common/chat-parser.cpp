@@ -1,54 +1,69 @@
-// Chat parser implementation
 #include "chat-parser.h"
-#include "../examples/server/parsers/kimi_k2_parser.hpp"
-#include "json.hpp"
 #include "common.h"
+#include "log.h"
+#include "regex-partial.h"
+
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 using json = nlohmann::ordered_json;
 
 common_chat_msg_parser::common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_syntax & syntax)
-    : input_(input), is_partial_(is_partial), syntax_(syntax) {
-    // Initialize result with default role
+    : input_(input), is_partial_(is_partial), syntax_(syntax)
+{
     result_.role = "assistant";
+
+    while (true) {
+        std::string id = std::to_string(std::rand());
+        if (input.find(id) == std::string::npos) {
+            healing_marker_ = id;
+            break;
+        }
+    }
 }
 
 std::string common_chat_msg_parser::str(const common_string_range & rng) const {
-    if (rng.begin > input_.size() || rng.end > input_.size()) {
-        throw std::runtime_error("Range out of bounds");
-    }
+    GGML_ASSERT(rng.begin <= rng.end);
     return input_.substr(rng.begin, rng.end - rng.begin);
 }
 
-void common_chat_msg_parser::add_content(const std::string & content) {
+void common_chat_msg_parser::add_content(const std::string &content) {
     result_.content += content;
 }
 
-void common_chat_msg_parser::add_reasoning_content(const std::string & reasoning_content) {
+void common_chat_msg_parser::add_reasoning_content(const std::string &reasoning_content) {
     result_.reasoning_content += reasoning_content;
-}
-
-void common_chat_msg_parser::add_tool_call(const common_chat_tool_call & tool_call) {
-    result_.tool_calls.push_back(tool_call);
 }
 
 bool common_chat_msg_parser::add_tool_call(const std::string & name, const std::string & id, const std::string & arguments) {
     if (name.empty()) {
         return false;
     }
-    
+
     common_chat_tool_call tool_call;
     tool_call.name = name;
     tool_call.arguments = arguments;
     tool_call.id = id;
-    
+
+    // LOG("Tool call arguments:\n\traw: %s\n\tresult: %s\n", arguments.c_str(), tool_call.arguments.c_str());
     result_.tool_calls.emplace_back(tool_call);
+
     return true;
 }
-
 bool common_chat_msg_parser::add_tool_call(const json & tool_call) {
     std::string name = tool_call.contains("name") ? tool_call.at("name") : "";
     std::string id = tool_call.contains("id") ? tool_call.at("id") : "";
-    std::string arguments = tool_call.contains("arguments") ? tool_call.at("arguments") : "";
+    std::string arguments = "";
+    if (tool_call.contains("arguments")) {
+        if (tool_call.at("arguments").is_object()) {
+            arguments = tool_call.at("arguments").dump();
+        } else {
+            arguments = tool_call.at("arguments");
+        }
+    }
+
     return add_tool_call(name, id, arguments);
 }
 
@@ -60,25 +75,65 @@ bool common_chat_msg_parser::add_tool_calls(const json & arr) {
     }
     return true;
 }
-
-void common_chat_msg_parser::clear_tools() {
-    result_.tool_calls.clear();
+void common_chat_msg_parser::finish() {
+    if (!is_partial_ && pos_ != input_.size()) {
+        throw std::runtime_error("Unexpected content at end of input");// + input_.substr(pos_));
+    }
 }
 
-std::string common_chat_msg_parser::consume_rest() {
-    auto rest = input_.substr(pos_);
-    pos_ = input_.size();
-    return rest;
+bool common_chat_msg_parser::consume_spaces() {
+    const auto length = input_.size();
+    auto consumed = false;
+    while (pos_ < length && std::isspace(input_[pos_])) {
+        ++pos_;
+        consumed = true;
+    }
+    return consumed;
 }
 
 bool common_chat_msg_parser::try_consume_literal(const std::string & literal) {
-    if (pos_ + literal.size() <= input_.size()) {
-        if (input_.substr(pos_, literal.size()) == literal) {
-            pos_ += literal.size();
-            return true;
+    auto pos = pos_;
+    for (auto i = 0u; i < literal.size(); ++i) {
+        if (pos >= input_.size()) {
+            return false;
+        }
+        if (input_[pos] != literal[i]) {
+            return false;
+        }
+        ++pos;
+    }
+    pos_ = pos;
+    return true;
+}
+
+std::optional<common_chat_msg_parser::find_regex_result>  common_chat_msg_parser::try_find_literal(const std::string & literal) {
+    auto idx = input_.find(literal, pos_);
+    if (idx != std::string::npos) {
+        find_regex_result res;
+        res.prelude = input_.substr(pos_, idx - pos_);
+        auto end = idx + literal.size();
+        res.groups.emplace_back(common_string_range{idx, end});
+        move_to(end);
+        return res;
+    }
+    if (is_partial_) {
+        idx = string_find_partial_stop(input_, literal);
+        if (idx != std::string::npos && idx >= pos_) {
+            find_regex_result res;
+            res.prelude = input_.substr(pos_, idx - pos_);
+            auto end = input_.size();
+            res.groups.emplace_back(common_string_range{idx, end});
+            move_to(end);
+            return res;
         }
     }
-    return false;
+    return std::nullopt;
+}
+
+void common_chat_msg_parser::consume_literal(const std::string & literal) {
+    if (!try_consume_literal(literal)) {
+        throw common_chat_msg_partial_exception(literal);
+    }
 }
 
 bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think, const std::string & end_think) {
@@ -97,7 +152,6 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
             add_reasoning_content(stripped_reasoning);
         }
     };
-    
     if (syntax_.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
         if (syntax_.thinking_forced_open || try_consume_literal(start_think)) {
             if (auto res = try_find_literal(end_think)) {
@@ -109,198 +163,73 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
             if (!rest.empty()) {
                 handle_reasoning(rest, /* closed */ !is_partial());
             }
-            // Allow unclosed thinking tags for now (following original llama.cpp)
+            // Allow unclosed thinking tags, for now (https://github.com/ggml-org/llama.cpp/issues/13812, https://github.com/ggml-org/llama.cpp/issues/13877)
+            // if (!syntax_.thinking_forced_open) {
+            //     throw common_chat_msg_partial_exception(end_think);
+            // }
             return true;
         }
     }
     return false;
 }
 
-std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser::try_find_literal_legacy(const std::string & literal) {
-    auto idx = input_.find(literal, pos_);
-    if (idx != std::string::npos) {
-        find_regex_result res;
-        res.prelude = input_.substr(pos_, idx - pos_);
-        auto end = idx + literal.size();
-        res.groups.emplace_back(common_string_range{idx, end});
-        move_to(end);
-        return res;
-    }
-    
-    if (is_partial_) {
-        idx = string_find_partial_stop(input_, literal);
-        if (idx != std::string::npos && idx >= pos_) {
-            find_regex_result res;
-            res.prelude = input_.substr(pos_, idx - pos_);
-            auto end = input_.size();
-            res.groups.emplace_back(common_string_range{idx, end});
-            move_to(end);
-            return res;
-        }
-    }
-    return std::nullopt;
-}
-
-void common_chat_msg_parser::parse() {
-    switch (syntax_.format) {
-        case COMMON_CHAT_FORMAT_KIMI_K2:
-            parse_kimi_k2_format();
-            break;
-        case COMMON_CHAT_FORMAT_DEEPSEEK_R1:
-            parse_deepseek_r1_format();
-            break;
-        case COMMON_CHAT_FORMAT_GENERIC:
-            parse_generic_format();
-            break;
-        case COMMON_CHAT_FORMAT_CONTENT_ONLY:
-            add_content(consume_rest());
-            break;
-        default:
-            // Fallback to content-only for now
-            add_content(consume_rest());
-            break;
-    }
-}
-
-void common_chat_msg_parser::parse_kimi_k2_format() {
-    json tool_calls_json = kimi_k2::parse_tool_calls(input_);
-
-    if (is_partial_ && kimi_k2::is_partial_content_advanced(input_)) {
-        throw common_chat_msg_partial_exception("partial structured content detected");
-    }
-
-    bool has_function_syntax = input_.find("functions.") != std::string::npos;
-    bool parsing_succeeded = !tool_calls_json.empty();
-
-    if (has_function_syntax && !parsing_succeeded) {
-        throw std::runtime_error("malformed function call syntax detected");
-    }
-
-    if (!tool_calls_json.empty()) {
-        for (const auto& tc_json : tool_calls_json) {
-            try {
-                common_chat_tool_call tc;
-                tc.id = tc_json.value("id", "");
-
-                if (!tc_json.contains("function") || !tc_json["function"].contains("name")) {
-                    continue;
-                }
-
-                tc.name = tc_json["function"]["name"];
-                if (tc.name.empty()) {
-                    continue;
-                }
-
-                tc.arguments = tc_json["function"]["arguments"];
-
-                if (!is_partial_ && !tc.arguments.empty()) {
-                    try {
-                        auto parsed = json::parse(tc.arguments);
-                        (void)parsed;
-                    } catch (const std::exception&) {
-                        continue;
-                    }
-                }
-                add_tool_call(tc);
-            } catch (const std::exception&) {
-                continue;
-            }
-        }
-        add_content(kimi_k2::clean_content(input_));
-    } else {
-        add_content(input_);
-    }
+std::string common_chat_msg_parser::consume_rest() {
+    auto rest = input_.substr(pos_);
     pos_ = input_.size();
+    return rest;
 }
 
-void common_chat_msg_parser::parse_generic_format() {
-    add_content(consume_rest());
-}
-
-void common_chat_msg_parser::parse_deepseek_r1_format() {
-    // Delegate to the main chat.cpp function which has the corrected implementation
-    // This follows the original llama.cpp pattern where chat-parser delegates to chat.cpp
-    common_chat_parse_deepseek_r1(*this);
-}
-
-
-void common_chat_msg_parser::finish() {
-    // Any final processing can go here
-}
-
-common_chat_msg common_chat_msg_parser::result_and_reset() {
-    auto msg = result_;
-    result_ = common_chat_msg();
-    result_.role = "assistant";
-    pos_ = 0;
-    return msg;
-}
-
-// Content-only parsing for fallback scenarios
-
-// Format detection from chat template patterns (focused on DeepSeek R1 and Kimi K2)
-common_chat_format common_chat_format_detect(const std::string & chat_template) {
-    if (chat_template.empty()) {
-        return COMMON_CHAT_FORMAT_GENERIC;
+// Tries to find the regex, consumes it (pos right after it) and gives the prelude (right before it) and the groups to the callback.
+std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser::try_find_regex(const common_regex & regex, size_t from, bool add_prelude_to_content) {
+    auto m = regex.search(input_, from == std::string::npos ? pos_ : from);
+    if (m.type == COMMON_REGEX_MATCH_TYPE_NONE) {
+        return std::nullopt;
     }
-    
-    // Detect DeepSeek R1 format (following original llama.cpp detection logic)
-    if (chat_template.find("<｜tool▁calls▁begin｜>") != std::string::npos) {
-        return COMMON_CHAT_FORMAT_DEEPSEEK_R1;
-    }
-    
-    // Detect Kimi K2 format (our custom format)
-    if (chat_template.find("kimi") != std::string::npos ||
-        chat_template.find("Kimi") != std::string::npos ||
-        chat_template.find("functions.") != std::string::npos) {
-        return COMMON_CHAT_FORMAT_KIMI_K2;
-    }
-    
-    // Default to generic format for unknown templates
-    return COMMON_CHAT_FORMAT_GENERIC;
-}
+    auto prelude = input_.substr(pos_, m.groups[0].begin - pos_);
+    pos_ = m.groups[0].end;
 
-// Progressive parsing primitive - find literal (following original llama.cpp pattern)
-std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser::try_find_literal(const std::string & literal) {
-    auto idx = input_.find(literal, pos_);
-    if (idx != std::string::npos) {
-        find_regex_result res;
-        res.prelude = input_.substr(pos_, idx - pos_);
-        auto end = idx + literal.size();
-        res.groups.emplace_back(common_string_range{idx, end});
-        move_to(end);
-        return res;
+    if (add_prelude_to_content) {
+        add_content(prelude);
     }
-    
-    if (is_partial_) {
-        idx = string_find_partial_stop(input_, literal);
-        if (idx != std::string::npos && idx >= pos_) {
-            find_regex_result res;
-            res.prelude = input_.substr(pos_, idx - pos_);
-            auto end = input_.size();
-            res.groups.emplace_back(common_string_range{idx, end});
-            move_to(end);
-            return res;
+    if (m.type == COMMON_REGEX_MATCH_TYPE_PARTIAL) {
+        if (is_partial()) {
+            throw common_chat_msg_partial_exception(regex.str());
         }
+        return std::nullopt;
     }
-    return std::nullopt;
+    return find_regex_result{prelude, m.groups};
 }
 
-bool common_chat_msg_parser::consume_spaces() {
-    bool consumed = false;
-    while (pos_ < input_.length() && std::isspace(input_[pos_])) {
-        pos_++;
-        consumed = true;
+common_chat_msg_parser::find_regex_result common_chat_msg_parser::consume_regex(const common_regex & regex) {
+    if (auto result = try_consume_regex(regex)) {
+        return *result;
     }
-    return consumed;
+    throw common_chat_msg_partial_exception(regex.str());
 }
 
-void common_chat_msg_parser::set_healing_marker(const std::string & marker) {
-    healing_marker_ = marker;
+std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser::try_consume_regex(const common_regex & regex) {
+    auto m = regex.search(input_, pos_);
+    if (m.type == COMMON_REGEX_MATCH_TYPE_NONE) {
+        return std::nullopt;
+    }
+    if (m.type == COMMON_REGEX_MATCH_TYPE_PARTIAL) {
+        if (is_partial()) {
+            throw common_chat_msg_partial_exception(regex.str());
+        }
+        return std::nullopt;
+    }
+    if (m.groups[0].begin != pos_) {
+        // Didn't match at the current position.
+        return std::nullopt;
+    }
+    pos_ = m.groups[0].end;
+
+    return find_regex_result {
+        /* .prelude = */ "",
+        m.groups,
+    };
 }
 
-
-// Enhanced JSON parsing methods (following original llama.cpp patterns exactly)
 std::optional<common_json> common_chat_msg_parser::try_consume_json() {
     auto it = input_.cbegin() + pos_;
     const auto end = input_.cend();
@@ -327,8 +256,8 @@ common_json common_chat_msg_parser::consume_json() {
 }
 
 common_chat_msg_parser::consume_json_result common_chat_msg_parser::consume_json_with_dumped_args(
-    const std::vector<std::vector<std::string>>& args_paths,
-    const std::vector<std::vector<std::string>>& content_paths
+    const std::vector<std::vector<std::string>> & args_paths,
+    const std::vector<std::vector<std::string>> & content_paths
 ) {
     if (auto result = try_consume_json_with_dumped_args(args_paths, content_paths)) {
         return *result;
@@ -337,8 +266,8 @@ common_chat_msg_parser::consume_json_result common_chat_msg_parser::consume_json
 }
 
 std::optional<common_chat_msg_parser::consume_json_result> common_chat_msg_parser::try_consume_json_with_dumped_args(
-    const std::vector<std::vector<std::string>>& args_paths,
-    const std::vector<std::vector<std::string>>& content_paths
+    const std::vector<std::vector<std::string>> & args_paths,
+    const std::vector<std::vector<std::string>> & content_paths
 ) {
     auto partial = try_consume_json();
     if (!partial) {
@@ -366,137 +295,99 @@ std::optional<common_chat_msg_parser::consume_json_result> common_chat_msg_parse
                 /* .is_partial = */ false,
             };
         }
-        // TODO: Implement full path-based argument dumping logic from original
-        // For now, return the parsed JSON as-is
-        return consume_json_result {
-            partial->json,
-            /* .is_partial = */ false,
-        };
     }
-    
-    // Has healing marker - this is partial JSON
-    // TODO: Implement sophisticated partial JSON handling with path-based dumping
-    // For now, return partial result
-    return consume_json_result {
-        partial->json,
-        /* .is_partial = */ true,
-    };
-}
 
-bool common_chat_msg_parser::detect_partial_function_call(const std::string& content) {
-    if (content.empty()) return false;
-    
-    // Enhanced partial detection patterns
-    static const std::vector<std::string> partial_patterns = {
-        "functions",
-        "functions.",
-        "<tool_call",
-        "<tool_call>",
-        "<invoke",
-        "<|tool_calls_section_begin|>",
-        "<|tool_call_begin|>"
-    };
-    
-    for (const auto& pattern : partial_patterns) {
-        if (content.substr(0, pattern.length()) == pattern && content.length() <= pattern.length() + 50) {
-            return true;
-        }
-    }
-    
-    return false;
-}
+    LOG("Parsed partial JSON: %s (json_healing_marker: %s)\n", partial->json.dump().c_str(), partial->healing_marker.json_dump_marker.c_str());
 
-void common_chat_msg_parser::handle_partial_detection() {
-    if (!is_partial_) return;
-    
-    // Check for various partial patterns
-    std::string remaining = input_.substr(pos_);
-    
-    if (remaining.empty()) return;
-    
-    // Detect partial function calls
-    if (detect_partial_function_call(remaining)) {
-        set_healing_marker(remaining);
-        throw common_chat_msg_partial_exception("partial function call detected");
-    }
-    
-    // Enhanced partial JSON detection
-    if (remaining.find('{') != std::string::npos) {
-        size_t brace_pos = remaining.find('{');
-        std::string json_part = remaining.substr(brace_pos);
-        
-        // Check if JSON is incomplete
-        int brace_count = 0;
-        bool in_string = false;
-        bool escaped = false;
-        bool is_incomplete = true;
-        
-        for (size_t i = 0; i < json_part.length(); i++) {
-            char c = json_part[i];
-            
-            if (!escaped) {
-                if (c == '"' && !in_string) {
-                    in_string = true;
-                } else if (c == '"' && in_string) {
-                    in_string = false;
-                } else if (!in_string) {
-                    if (c == '{') brace_count++;
-                    else if (c == '}') brace_count--;
+    auto found_healing_marker = false;
+    std::vector<std::string> path;
+    std::function<json(const json &)> remove_unsupported_healings_and_dump_args = [&](const json & j) -> json {
+        if (is_arguments_path(path)) {
+            auto arguments = j.dump();
+            if (is_partial() && !partial->healing_marker.marker.empty()) {
+                auto idx = arguments.find(partial->healing_marker.json_dump_marker);
+                if (idx != std::string::npos) {
+                    arguments.resize(idx);
+                    found_healing_marker = true;
+                }
+                if (arguments == "\"") {
+                    // This happens because of completing `:"$magic` after `"arguments"`
+                    arguments = "";
                 }
             }
-            
-            escaped = (!escaped && c == '\\');
-            
-            if (brace_count == 0) {
-                is_incomplete = false;
-                break;
+            return arguments;
+        }
+        if (is_content_path(path)) {
+            if (!j.is_string()) {
+                throw std::runtime_error("Content path must be a string");
             }
+            std::string str = j;
+            auto idx = str.find(partial->healing_marker.marker); // not using json_dump_marker as we're inside a string
+            if (idx != std::string::npos) {
+                str.resize(idx);
+                found_healing_marker = true;
+            }
+            return str;
         }
-        
-        if (is_incomplete) {
-            set_healing_marker(json_part);
-            throw common_chat_msg_partial_exception("partial JSON detected");
+        if (j.is_object()) {
+            auto obj = json::object();
+            for (const auto & p : j.items()) {
+                const auto & key = p.key();
+                const auto & value = p.value();
+                const std::string key_str = key; // NOLINT
+                auto idx = key_str.find(healing_marker_);
+                if (idx != std::string::npos) {
+                    found_healing_marker = true;
+                    break;
+                }
+                path.push_back(key_str);
+                if (value.is_string()) {
+                    const std::string value_str = value;
+                    if (value_str.find(healing_marker_) != std::string::npos) {
+                        found_healing_marker = true;
+                        if (is_content_path(path)) {
+                            if (partial->healing_marker.marker == partial->healing_marker.json_dump_marker) {
+                                // The healing occurred inside the string: good. Otherwise we just ditch the entire key/value pair.
+                                obj[key] = remove_unsupported_healings_and_dump_args(value);
+                            }
+                        }
+                        break;
+                    }
+                    obj[key] = value;
+                } else {
+                    obj[key] = remove_unsupported_healings_and_dump_args(value);
+                }
+                path.pop_back();
+            }
+            return obj;
         }
-    }
-}
-
-// Regex-based parsing methods (ported from original llama.cpp)
-std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser::try_find_regex(const common_regex & regex, size_t from, bool add_prelude_to_content) {
-    auto m = regex.search(input_, from == std::string::npos ? pos_ : from);
-    if (m.type == COMMON_REGEX_MATCH_TYPE_NONE) {
-        return std::nullopt;
-    }
-    auto prelude = input_.substr(pos_, m.groups[0].begin - pos_);
-    pos_ = m.groups[0].end;
-
-    if (add_prelude_to_content) {
-        add_content(prelude);
-    }
-    if (m.type == COMMON_REGEX_MATCH_TYPE_PARTIAL) {
-        if (is_partial()) {
-            throw common_chat_msg_partial_exception(regex.str());
+        if (j.is_array()) {
+            auto arr = json::array();
+            for (const auto & value : j) {
+                if (value.is_string()) {
+                    std::string str = value;
+                    auto idx = str.find(healing_marker_);
+                    if (idx != std::string::npos) {
+                        // Don't heal array values that aren't in the arguments.
+                        found_healing_marker = true;
+                        break;
+                    }
+                }
+                arr.push_back(remove_unsupported_healings_and_dump_args(value));
+            }
+            return arr;
         }
-        return std::nullopt;
-    }
-    return find_regex_result{prelude, m.groups};
+        return j;
+    };
+
+    auto cleaned = remove_unsupported_healings_and_dump_args(partial->json);
+    LOG("Cleaned up JSON %s to %s (json_healing_marker : '%s')\n", partial->json.dump().c_str(), cleaned.dump().c_str(), partial->healing_marker.json_dump_marker.c_str());
+    return consume_json_result {
+        cleaned,
+        /* .is_partial = */ found_healing_marker,
+    };
 }
 
-common_chat_msg_parser::find_regex_result common_chat_msg_parser::consume_regex(const common_regex & regex) {
-    auto result = try_find_regex(regex);
-    if (!result) {
-        throw std::runtime_error("Expected regex not found: " + regex.str());
-    }
-    return *result;
+void common_chat_msg_parser::clear_tools() {
+    result_.tool_calls.clear();
 }
-
-std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser::try_consume_regex(const common_regex & regex) {
-    return try_find_regex(regex, pos_, false);
-}
-
-void common_chat_msg_parser::consume_literal(const std::string & literal) {
-    if (!try_consume_literal(literal)) {
-        throw std::runtime_error("Expected literal not found: " + literal);
-    }
-}
-
-// Get format name for debugging/logging (implemented in chat.cpp)
