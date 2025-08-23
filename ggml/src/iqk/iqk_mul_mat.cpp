@@ -502,10 +502,8 @@ extern "C" IQK_API bool iqk_mul_mat(long Nx, long Ny, long ne00,
     MulMat mm;
 
     auto etypeA = ggml_type(typeA);
-    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny); dequant_type != etypeA) {
-        if (!MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
-            return false;
-        }
+    if (auto dequant_type = MulMat::is_dequant_better(etypeA, Ny);
+             dequant_type != etypeA && MulMat::prepare(dequant_type, typeB, ne00, mm, Ny)) {
 
         constexpr int k_x_step = 32;
 
