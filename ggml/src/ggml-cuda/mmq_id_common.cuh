@@ -3746,9 +3746,6 @@ static void launch_mul_mat_q_id(ggml_backend_cuda_context & ctx, const mmq_args_
     const int ntzw = args.nchannels_y * args.nsamples_y;
     const dim3 block_nums_xy_tiling(nty, ntx, ntzw);
 
-    if (args.nchannels_y % args.nchannels_x) {
-        printf("Oops: args.nchannels_y = %d, args.nchannels_x = %d\n", args.nchannels_y, args.nchannels_x);
-    }
     GGML_ASSERT(args.nchannels_y % args.nchannels_x == 0);
     GGML_ASSERT(args.nsamples_y  % args.nsamples_x  == 0);
     const int channel_ratio = args.nchannels_y / args.nchannels_x;
