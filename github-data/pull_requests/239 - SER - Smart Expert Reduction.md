@@ -1,14 +1,17 @@
-### 🔀 [#239](https://github.com/ikawrakow/ik_llama.cpp/pull/239) - SER - Smart Expert Reduction
+## 🔀 [Pull Request #239](https://github.com/ikawrakow/ik_llama.cpp/pull/239) - SER - Smart Expert Reduction
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/smart_expert_selection` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-01 |
 | **Updated** | 2025-03-18 |
+| **Merged** | 2025-03-02 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The idea behind this PR is very simple: we define new parameters (specified via the command line) $K_{\rm min}$ and $t$. During inference experts are normally selected by sorting their computed probabilities $p_i$ in descending order and picking the top $K$ experts. We modify this expert selection algorithm by always selecting the top $K_{\rm min}$ experts ($K_{\rm min} < K$), and using experts between $K_{\rm min}$ and $K$ only if $p_i > t\cdot p_0$ (i.e., only if their probability $p_i$ relative to the top expert probability $p_0$ is greater than the specified threshold $t$). If we set $t = 0$, this expert selection modification is never invoked, so we have the behavior of the original model. If we set $t = 1$, we use a fixed number of experts $K_{\rm min}$ (the same can be achieved by using `--override-kv deepseek2.expert_used_count=int:Kmin` on the command line, but using `-ser Kmin,1` is clearly much easier to type and remember).
 
@@ -44,25 +47,25 @@ to the command line.
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-03-01** at **15:49:06**:<br>
+👤 **ikawrakow** commented on **2025-03-01** at **15:49:06**
 
-Here a graph for error versus performance gain for hybrid CPU/GPU inference (Ryzen-7950X/RTX-4080) for DeepSeek-Lite. Operation with MoE tensors are computed on the CPU, all others on the GPU.
+Here a graph for error versus performance gain for hybrid CPU/GPU inference (Ryzen-7950X/RTX-4080) for DeepSeek-Lite. Operations with MoE tensors are computed on the CPU, all others on the GPU.
 
 ![ser_performance_hybrid](https://github.com/user-attachments/assets/2f5ff74c-eddb-493e-b215-38bb070baaa8)
 
-Here performance gains are much more significant. As attention and shared experts computation done on the GPU is much faster than the MoE calculation done on the CPU, we gain more by selectively reducing experts. If we just use 5 experts instead of 6, TG performance increases by nearly 20% while the associated error is significantly less than using 4 bits for the attention layers.
+Here performance gains are much more significant. As attention and shared experts computation done on the GPU is much faster than the MoE calculation done on the CPU, we gain more by selectively reducing experts. If we just use 5 experts instead of 6, TG performance increases by nearly 20% while the associated error is significantly less than using 4 bits for the attention layers (magenta symbols)
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-01** at **16:25:50**:<br>
+👤 **davidsyoung** commented on **2025-03-01** at **16:25:50**
 
 This looks very interesting - what would you recommend is the best way to test this with full CUDA off-load with R1? If you have some harnesses to test PPL, that would be great
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-01** at **17:11:55**:<br>
+👤 **ikawrakow** commented on **2025-03-01** at **17:11:55**
 
 I typically use Wikitext2 `PPL`. There are many people out there who believe that this is not good, but I have also compared to C4 `PPL` (English and French) and, once you look at the ratio of `PPL(approximate model)/PPL(full model)-1`, things do not depend that much on the specific test corpus. The same is also true for context length. Even though PPL can change a lot with the context window used for evaluation, the ratio `PPL(approximate model)/PPL(full model)` is nearly independent of context length. One can also compute KL divergence (and many people think this is better than `PPL`), but that is much less convenient (one must first run a calculation with the full model, generate a huge data file, to then run with the approximate model to get the KL divergence values), to only find out that the mean KL divergence correlates almost 100% with `log(PPL(approximate)/PPL(full))`. Same is true for HellaSwag, the other benchmark one can run with `llama.cpp`. The correlation coefficient between `HellaSwag(full) - HellaSwag(approximate)` with `PPL(approximate)/PPL(full)-1` tends to be over 90%, so this doesn't give much additional information (but takes way longer to compute than PPL). So, at then end, if you have settled on a model you want to use, comparing `PPL` with SER to `PPL` without will give good indication about performance degradation.
 
@@ -72,13 +75,13 @@ But with the 150-200 t/s you are getting for R1 it will not be easy to get a det
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-01** at **17:25:56**:<br>
+👤 **davidsyoung** commented on **2025-03-01** at **17:25:56**
 
 Okay, cool! I am going to first create my own quant somewhere around `i1-IQ3_XXS`, `i1-IQ3_XS`, or `i1-IQ3_S`. I'm downloading the full BF16 model right now, and then when I have the best fit of quants, I'll figure out how to run a PPL test... :) Thank you.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-03** at **21:35:39**:<br>
+👤 **davidsyoung** commented on **2025-03-03** at **21:35:39**
 
 @ikawrakow a little bit off topic but didn't know where better to ask.
 
@@ -102,21 +105,23 @@ Likely a corrupt part. But just wondering, is there anything I'm doing wrong her
 
 TYVM
 
+UPDATE: Had a part of the BF16 that the hash failed :)
+
 ---
 
-👤 **ikawrakow** commented the **2025-03-04** at **11:21:38**:<br>
+👤 **ikawrakow** commented on **2025-03-04** at **11:21:38**
 
 Let me know if it works after you re-download the corrupt file. If it doesn't, the I would need to make the quantization more robust against missing imatrix data. DeepSeekV3/R1 is tricky because only 8 out of 256 experts are activated per token, so for an imatrix calculation with a given amount of calibration data there will be 32X less data collected for the experts compared to a dense model. This may lead to missing/insufficient imatrix data, which may not be handled gracefully by the quantization functions.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-04** at **11:48:46**:<br>
+👤 **davidsyoung** commented on **2025-03-04** at **11:48:46**
 
 I will! Reconverting to GGUF from BF16 takes a decent amount of time on HDDs compared to NVME. Should be done around 6pm tonight, and I’ll quantize soon after that! Thank you for all of the help and your work on improving inference with DS V3/R1 - its excellent!
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-04** at **20:16:54**:<br>
+👤 **davidsyoung** commented on **2025-03-04** at **20:16:54**
 
 @ikawrakow 
 
@@ -193,15 +198,21 @@ llama_init_from_gpt_params: error: failed to load model '/models/DeepSeek-R1-GGU
 /app/.devops/tools_new.sh: line 47:    13 Segmentation fault      ./llama-server "$@"
 ```
 
+UPDATE: Looks like because I've created the GGUF from https://huggingface.co/unsloth/DeepSeek-R1-BF16, it seems it's possible that the tokenizers lib that was used was a future version (ref merges change https://github.com/huggingface/tokenizers/commit/6a5fce9fa094d1514a498419f86ac0916e98ef8a), and as a result with older tokenizer lib it isn't able to read the new format of the merges.
+
+Have created some custom runtime code to load merges so I can avoid re-quanting the bf16, at least for now. 
+
+Didn’t get a chance to play with the SER but hope to over the following few days. Next up on the learning agenda :)
+
 ---
 
-👤 **davidsyoung** commented the **2025-03-05** at **12:36:10**:<br>
+👤 **davidsyoung** commented on **2025-03-05** at **12:36:10**
 
 Preliminary results with `-ser 6,1` and `-ser 7,1` show no major difference to TG performance - it's -/+ 1 t/s. Likely that with 16x3090 it's not compute limited, as GPU's are only running at 5-10% during inference.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-05** at **12:54:10**:<br>
+👤 **ikawrakow** commented on **2025-03-05** at **12:54:10**
 
 > Likely that with 16x3090 it's not compute limited, as GPU's are only running at 5-10% during inference.
 
@@ -209,7 +220,7 @@ You observe 5-10% GPU utilization because each GPU is only processing 1/16th of 
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-05** at **13:43:59**:<br>
+👤 **davidsyoung** commented on **2025-03-05** at **13:43:59**
 
 This makes sense, thank you for taking the time to type it out! 
 
@@ -219,7 +230,20 @@ I’m also quanting a IQ4_KSS which I feel will be a great sweet spot, so thank 
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-05** at **14:02:55**:<br>
+👤 **ikawrakow** commented on **2025-03-05** at **13:56:04**
+
+You can try to run a perplexity calculation:
+
+```
+./bin/llama-perplexity -m your_model -f wiki.test.raw -fmoe -fa -ser 6,1 -c 2048 -ub 2048 your_gpu_parameters
+```
+[wiki.test.raw.gz](https://github.com/user-attachments/files/19090237/wiki.test.raw.gz)
+
+But if you are quantizing a model it does not make sense to run benchmarks. Quantization puts quite a bit of load on the system, so your inference benchmarks will not be very reliable. Sometimes when working on new quantization  types I run perplexity on the GPU and quantize a new version of the model at the same time on the CPU, and I see a noticeable slow down of the GPU while quantization is running.
+
+---
+
+👤 **davidsyoung** commented on **2025-03-05** at **14:02:55**
 
 Super stuff. When some with quant I’ll do that! 
 
@@ -227,22 +251,23 @@ Also, just in terms of FA, when I tried to run FA earlier it tried to allocate 1
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-05** at **16:26:50**:<br>
+👤 **ikawrakow** commented on **2025-03-05** at **16:26:50**
 
 > Also, just in terms of FA, when I tried to run FA earlier it tried to allocate 150GB to first GPU.
 
-That happened after PR #241 was merged and you updated to latest? I guess, you are trying to run with a context of 163k tokens. For the `perplexity` calculation with the above command (context of 2048 tokens) the KV cache will be 1.2 GiB and the compute buffer should not be more than 1-2 GiB. If you go to `Q8_0` KV cache (add `-ctk q8_0 -ctv q8_0` to the above command), than KV cache will be only 600 MiB.
+That happened after PR [#241](https://github.com/ikawrakow/ik_llama.cpp/issues/241) was merged and you updated to latest? I guess, you are trying to run with a context of 163k tokens. For the `perplexity` calculation with the above command (context of 2048 tokens) the KV cache will be 1.2 GiB and the compute buffer should not be more than 1-2 GiB. If you go to `Q8_0` KV cache (add `-ctk q8_0 -ctv q8_0` to the above command), than KV cache will be only 600 MiB.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-05** at **21:21:02**:<br>
+👤 **davidsyoung** commented on **2025-03-05** at **21:21:02**
 
 Ok got some PPL runs!
 
 All perplexity evals were ran with:
-`./llama-perplexity -m /models/DeepSeek-R1-GGUF/DeepSeek-R1-GGUF-IQ3_M.gguf -f /models/wiki.test.raw -fmoe -fa -c 2048 -ub 2048       --n-gpu-layers 100       -ts 41,23.5,26,24.5,23.5,25.5,24.4,23.5,25.5,24.5,23.5,25.5,24.5,23.5,25.5,30`.
+`./llama-perplexity -m /models/DeepSeek-R1-GGUF/DeepSeek-R1-GGUF-IQ3_M.gguf -f /models/wiki.test.raw -fmoe -fa -c 2048 -ub 2048 --n-gpu-layers 100 -ts 41,23.5,26,24.5,23.5,25.5,24.4,23.5,25.5,24.5,23.5,25.5,24.5,23.5,25.5,30`.
 
 @saood06 tagging you as I know you are collecting PPL
+
 ---
 
 # No -SER
@@ -292,6 +317,28 @@ llama_print_timings:        eval time =       0.00 ms /     1 runs   (    0.00 m
 llama_print_timings:       total time =  756557.67 ms / 286721 tokens
 ```
 
+---
+
+# -SER 5,1
+```
+perplexity: tokenizing the input ..
+perplexity: tokenization took 1233.7 ms
+perplexity: calculating perplexity over 140 chunks, n_ctx=2048, batch_size=2048, n_seq=1
+perplexity: 6.19 seconds per pass - ETA 14.45 minutes
+[1]1.5984,[2]1.3688,[3]1.3545,[4]1.8202,[5]1.8851,[6]1.8450,[7]1.9454,[8]2.0786,[9]2.2773,[10]2.4790,[11]2.6063,[12]2.4864,[13]2.6142,[14]2.7090,[15]2.8413,[16]2.9685,[17]2.9602,[18]3.0196,[19]2.9545,[20]2.8804,[21]2.8151,[22]2.7526,[23]2.6679,[24]2.6164,[25]2.5883,[26]2.6735,[27]2.7534,[28]2.7524,[29]2.7000,[30]2.6405,[31]2.5823,[32]2.5347,[33]2.5196,[34]2.5609,[35]2.5973,[36]2.5939,[37]2.5985,[38]2.5910,[39]2.5989,[40]2.6280,[41]2.6857,[42]2.7679,[43]2.7993,[44]2.7530,[45]2.7237,[46]2.7784,[47]2.8340,[48]2.8568,[49]2.9064,[50]2.9243,[51]2.9456,[52]2.9680,[53]2.9697,[54]2.9824,[55]2.9806,[56]2.9920,[57]2.9939,[58]3.0132,[59]3.0277,[60]3.0609,[61]3.1059,[62]3.1080,[63]3.1087,[64]3.1274,[65]3.1350,[66]3.1468,[67]3.1558,[68]3.1369,[69]3.0984,[70]3.1287,[71]3.1587,[72]3.1682,[73]3.1434,[74]3.1477,[75]3.1651,[76]3.1721,[77]3.1727,[78]3.1781,[79]3.1859,[80]3.1921,[81]3.1945,[82]3.1993,[83]3.2128,[84]3.2138,[85]3.2265,[86]3.2515,[87]3.2296,[88]3.2609,[89]3.2916,[90]3.3155,[91]3.3368,[92]3.3678,[93]3.4004,[94]3.4335,[95]3.4339,[96]3.4521,[97]3.4639,[98]3.4316,[99]3.3945,[100]3.3582,[101]3.3226,[102]3.2879,[103]3.2799,[104]3.2713,[105]3.2726,[106]3.2732,[107]3.2757,[108]3.2783,[109]3.2564,[110]3.2565,[111]3.2537,[112]3.2645,[113]3.2787,[114]3.2841,[115]3.2939,[116]3.3126,[117]3.3123,[118]3.3117,[119]3.3115,[120]3.3141,[121]3.3150,[122]3.3282,[123]3.3447,[124]3.3479,[125]3.3547,[126]3.3532,[127]3.3615,[128]3.3443,[129]3.3387,[130]3.3450,[131]3.3545,[132]3.3364,[133]3.3217,[134]3.3295,[135]3.3438,[136]3.3354,[137]3.3109,[138]3.2891,[139]3.2925,[140]3.3133,
+Final estimate: PPL = 3.3133 +/- 0.01704
+
+llama_print_timings:        load time =  633685.80 ms
+llama_print_timings:      sample time =       0.00 ms /     1 runs   (    0.00 ms per token,      inf tokens per second)
+llama_print_timings: prompt eval time =  724417.11 ms / 286720 tokens (    2.53 ms per token,   395.79 tokens per second)
+llama_print_timings:        eval time =       0.00 ms /     1 runs   (    0.00 ms per token,      inf tokens per second)
+llama_print_timings:       total time =  729748.90 ms / 286721 tokens
+
+```
+
+---
+
+
 Next I'm going to try to run `IQ4_KSS`, but splitting the layers over the GPU's always unevenly split and I'm not sure I can fit it in. If we could get `-split-mode row` working it'd be very helpful! But not sure if it's an easy fix (likely not), for example here's how it looks atm trying to balance over `-ts`:
 
 ```
@@ -322,14 +369,35 @@ It takes quite some time for the buffers to allocate so it's a slow feedback loo
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-05** at **21:31:59**:<br>
+👤 **davidsyoung** commented on **2025-03-05** at **21:31:59**
 
-![perplexity_across_chunks](https://github.com/user-attachments/assets/ff289b56-7237-4288-9b70-9215f9ff959f)
-![perplexity_vs_speed](https://github.com/user-attachments/assets/92a3622d-6b99-492c-903e-a00310cb8152)
+![perplexity_vs_speed_with_values](https://github.com/user-attachments/assets/00eb364d-a4a9-4c22-918d-9978cafb2291)
+![perplexity_across_chunks](https://github.com/user-attachments/assets/366f91d8-9de6-48b2-b679-396f980551f2)
+
+
+Will get some more data, with 5 experts, and some increments between 0...1 in each.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-06** at **06:11:44**:<br>
+👤 **saood06** commented on **2025-03-05** at **22:45:29**
+
+Thanks for running the PPL, hoping you can fit IQ4_KSS as it will be higher quality.
+
+> Next I'm going to try to run `IQ4_KSS`, but splitting the layers over the GPU's always unevenly split and I'm not sure I can fit it in. If we could get `-split-mode row` working it'd be very helpful! But not sure if it's an easy fix (likely not), for example here's how it looks atm trying to balance over `-ts`:
+
+This comment has a method that might be worth trying and seeing if it helps you get split-mode row working: https://github.com/ggml-org/llama.cpp/pull/11446#issuecomment-2651659237
+
+>It takes quite some time for the buffers to allocate so it's a slow feedback loop to try to balance.
+
+If the above doesn't work then you may try something similar to the code from this PR to save you time while searching for the right values https://github.com/nicoboss/llama.cpp/pull/3/files this basically just skips actually allocating the buffers but prints how much would be allocated. Obviously this won't work for actually running the model and may not handle every edge case ( also the code is for llama.cpp which has diverted in ways that will make you manually port over some of the changes, so not sure if you will find it worthwhile ).
+
+>I think @saood06 was mentioning somewhere that one needs to "warm up" the model for quite some time before performance becomes more stable, perhaps this is also true for your system.
+
+That problem should no longer occur anywhere unless you pass the --no-warmup argument. It occurred because the old warmup code only worked for dense models, MoEs were only being partially loaded in as it would only activate a single tokens worth of active experts. The code now activates all experts during the warmup phase. This was very noticeable if you looked at disk I/O and before I would only post performance numbers once disk I/O was no longer happening, and on my setup where the model was stored on a HDD with slow seek times it definitely mattered even when the amount of data being read was low but not zero.
+
+---
+
+👤 **ikawrakow** commented on **2025-03-06** at **06:11:44**
 
 Great results, thank you for these.
 
@@ -339,13 +407,13 @@ Have you tried using `-ot` to distribute the model tensors between the GPUs? You
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-06** at **09:47:08**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **09:47:08**
 
 > Thanks for running the PPL, hoping you can fit IQ4_KSS as it will be higher quality.
 > 
 > > Next I'm going to try to run `IQ4_KSS`, but splitting the layers over the GPU's always unevenly split and I'm not sure I can fit it in. If we could get `-split-mode row` working it'd be very helpful! But not sure if it's an easy fix (likely not), for example here's how it looks atm trying to balance over `-ts`:
 > 
-> This comment has a method that might be worth trying and seeing if it helps you get split-mode row working: [ggml-org/llama.cpp#11446 (comment)](https://github.com/ggml-org/llama.cpp/pull/11446#issuecomment-2651659237)
+> This comment has a method that might be worth trying and seeing if it helps you get split-mode row working: [ggml-org/llama.cpp[#11446](https://github.com/ikawrakow/ik_llama.cpp/issues/11446) (comment)](https://github.com/ggml-org/llama.cpp/pull/11446#issuecomment-2651659237)
 > 
 > > It takes quite some time for the buffers to allocate so it's a slow feedback loop to try to balance.
 > 
@@ -361,13 +429,31 @@ I also tried to allocate those tensors to CUDA0 without any luck. I got a differ
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-06** at **09:58:44**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **09:49:23**
+
+> Great results, thank you for these.
+> 
+> 357 t/s prompt processing speed is pretty good! (at least relative to what I have seen people reporting for consumer grade hardware).
+> 
+> Have you tried using `-ot` to distribute the model tensors between the GPUs? You will need 16 arguments `-ot "regexp_i=CUDA_i` to force a specific range of layers on specific GPUs. If that works out, perhaps you can also try forcing the non-MoE tensors be all on 1 or 2 GPUs, and use the remaining 14 or 15 to do the MoE tensors. That may increase the VRAM you have available as the MoE GPU's should not require VRAM for KV cache (at least this is my expectation, but `llama.cpp` and as a result `ik_llama.cpp` not always does what one expects).
+
+Yes thought it was particularly fast too! 
+
+This is a great idea. I hadn’t even considered doing this. I need to learn what weights are what in each layer and try this. 
+
+Also, I’m getting NAN results from running IQ4_KSS with llama-perplexity under FA (same command as above), was able to just fit in 2048 ctx. 
+
+The model loads correctly with MLA, so don’t believe it’s a quant issue. Going to try load the model with FA and see if it loads or returns NAN. Will report back shortly.
+
+---
+
+👤 **ikawrakow** commented on **2025-03-06** at **09:58:44**
 
 Do I understand correctly that the `IQ4_KSS` model works correctly with MLA but produces NaNs with FA? Or does it always produce NaNs?
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-06** at **10:00:34**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **10:00:34**
 
 > Do I understand correctly that the `IQ4_KSS` model works correctly with MLA but produces NaNs with FA? Or does it always produce NaNs?
 
@@ -377,19 +463,485 @@ I’m now loading the model with FA now for inference, to see if it’s an issue
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-06** at **10:07:40**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **10:02:32**
+
+Here is the two runs of FA with IQ4_KSS if it helps:
+
+```
+root@d79189d8c093:/app# ./llama-perplexity -m /models/DeepSeek-R1-GGUF/DeepSeek8 -ub 2048 -ctk q8_0 -ctv q8_0 --n-gpu-layers 100 -ts 41.35,26,24.5,27.5,25,25.10246.5,24,27.75,25.5,24.5,27.75,27.5,23.5,27.5,34.6
+main: build = 0 (unknown)
+main: built with cc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0 for x86_64-linux-gnu
+main: seed  = 1741222189
+llama_model_loader: loaded meta data with 53 key-value pairs and 1147 tensors from /models/DeepSeek-R1-GGUF/DeepSeek-R1-GGUF-IQ4_KSS.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = deepseek2
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = unsloth_DeepSeek R1 BF16
+llama_model_loader: - kv   3:                         general.size_label str              = 256x21B
+llama_model_loader: - kv   4:                            general.license str              = mit
+llama_model_loader: - kv   5:                   general.base_model.count u32              = 1
+llama_model_loader: - kv   6:                  general.base_model.0.name str              = DeepSeek R1
+llama_model_loader: - kv   7:          general.base_model.0.organization str              = Deepseek Ai
+llama_model_loader: - kv   8:              general.base_model.0.repo_url str              = https://huggingface.co/deepseek-ai/De...
+llama_model_loader: - kv   9:                               general.tags arr[str,3]       = ["deepseek", "unsloth", "transformers"]
+llama_model_loader: - kv  10:                          general.languages arr[str,1]       = ["en"]
+llama_model_loader: - kv  11:                      deepseek2.block_count u32              = 61
+llama_model_loader: - kv  12:                   deepseek2.context_length u32              = 163840
+llama_model_loader: - kv  13:                 deepseek2.embedding_length u32              = 7168
+llama_model_loader: - kv  14:              deepseek2.feed_forward_length u32              = 18432
+llama_model_loader: - kv  15:             deepseek2.attention.head_count u32              = 128
+llama_model_loader: - kv  16:          deepseek2.attention.head_count_kv u32              = 128
+llama_model_loader: - kv  17:                   deepseek2.rope.freq_base f32              = 10000.000000
+llama_model_loader: - kv  18: deepseek2.attention.layer_norm_rms_epsilon f32              = 0.000001
+llama_model_loader: - kv  19:                deepseek2.expert_used_count u32              = 8
+llama_model_loader: - kv  20:                          general.file_type u32              = 148
+llama_model_loader: - kv  21:        deepseek2.leading_dense_block_count u32              = 3
+llama_model_loader: - kv  22:                       deepseek2.vocab_size u32              = 129280
+llama_model_loader: - kv  23:            deepseek2.attention.q_lora_rank u32              = 1536
+llama_model_loader: - kv  24:           deepseek2.attention.kv_lora_rank u32              = 512
+llama_model_loader: - kv  25:             deepseek2.attention.key_length u32              = 192
+llama_model_loader: - kv  26:           deepseek2.attention.value_length u32              = 128
+llama_model_loader: - kv  27:       deepseek2.expert_feed_forward_length u32              = 2048
+llama_model_loader: - kv  28:                     deepseek2.expert_count u32              = 256
+llama_model_loader: - kv  29:              deepseek2.expert_shared_count u32              = 1
+llama_model_loader: - kv  30:             deepseek2.expert_weights_scale f32              = 2.500000
+llama_model_loader: - kv  31:              deepseek2.expert_weights_norm bool             = true
+llama_model_loader: - kv  32:               deepseek2.expert_gating_func u32              = 2
+llama_model_loader: - kv  33:             deepseek2.rope.dimension_count u32              = 64
+llama_model_loader: - kv  34:                deepseek2.rope.scaling.type str              = yarn
+llama_model_loader: - kv  35:              deepseek2.rope.scaling.factor f32              = 40.000000
+llama_model_loader: - kv  36: deepseek2.rope.scaling.original_context_length u32              = 4096
+llama_model_loader: - kv  37: deepseek2.rope.scaling.yarn_log_multiplier f32              = 0.100000
+llama_model_loader: - kv  38:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  39:                         tokenizer.ggml.pre str              = deepseek-v3
+llama_model_loader: - kv  40:                      tokenizer.ggml.tokens arr[str,129280]  = ["<｜begin▁of▁sentence｜>", "<�...
+llama_model_loader: - kv  41:                  tokenizer.ggml.token_type arr[i32,129280]  = [3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  42:                tokenizer.ggml.bos_token_id u32              = 0
+llama_model_loader: - kv  43:                tokenizer.ggml.eos_token_id u32              = 1
+llama_model_loader: - kv  44:            tokenizer.ggml.padding_token_id u32              = 128815
+llama_model_loader: - kv  45:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  46:               tokenizer.ggml.add_eos_token bool             = false
+llama_model_loader: - kv  47:                    tokenizer.chat_template str              = {% if not add_generation_prompt is de...
+llama_model_loader: - kv  48:               general.quantization_version u32              = 2
+llama_model_loader: - kv  49:                      quantize.imatrix.file str              = /models/deepseek-config/imatrix.dat
+llama_model_loader: - kv  50:                   quantize.imatrix.dataset str              = imatrix-training-full-3
+llama_model_loader: - kv  51:             quantize.imatrix.entries_count i32              = 720
+llama_model_loader: - kv  52:              quantize.imatrix.chunks_count i32              = 315
+llama_model_loader: - type  f32:  361 tensors
+llama_model_loader: - type q8_0:  306 tensors
+llama_model_loader: - type q6_K:    1 tensors
+llama_model_loader: - type iq4_kss:  479 tensors
+loaded 127741 merges from merges.txt
+llm_load_vocab: special tokens cache size = 819
+llm_load_vocab: token to piece cache size = 0.8223 MB
+llm_load_print_meta: format           = GGUF V3 (latest)
+llm_load_print_meta: arch             = deepseek2
+llm_load_print_meta: vocab type       = BPE
+llm_load_print_meta: n_vocab          = 129280
+llm_load_print_meta: n_merges         = 127741
+llm_load_print_meta: vocab_only       = 0
+llm_load_print_meta: n_ctx_train      = 163840
+llm_load_print_meta: n_embd           = 7168
+llm_load_print_meta: n_layer          = 61
+llm_load_print_meta: n_head           = 128
+llm_load_print_meta: n_head_kv        = 128
+llm_load_print_meta: n_rot            = 64
+llm_load_print_meta: n_swa            = 0
+llm_load_print_meta: n_embd_head_k    = 192
+llm_load_print_meta: n_embd_head_v    = 128
+llm_load_print_meta: n_gqa            = 1
+llm_load_print_meta: n_embd_k_gqa     = 24576
+llm_load_print_meta: n_embd_v_gqa     = 16384
+llm_load_print_meta: f_norm_eps       = 0.0e+00
+llm_load_print_meta: f_norm_rms_eps   = 1.0e-06
+llm_load_print_meta: f_clamp_kqv      = 0.0e+00
+llm_load_print_meta: f_max_alibi_bias = 0.0e+00
+llm_load_print_meta: f_logit_scale    = 0.0e+00
+llm_load_print_meta: n_ff             = 18432
+llm_load_print_meta: n_expert         = 256
+llm_load_print_meta: n_expert_used    = 8
+llm_load_print_meta: causal attn      = 1
+llm_load_print_meta: pooling type     = 0
+llm_load_print_meta: rope type        = 0
+llm_load_print_meta: rope scaling     = yarn
+llm_load_print_meta: freq_base_train  = 10000.0
+llm_load_print_meta: freq_scale_train = 0.025
+llm_load_print_meta: n_ctx_orig_yarn  = 4096
+llm_load_print_meta: rope_finetuned   = unknown
+llm_load_print_meta: ssm_d_conv       = 0
+llm_load_print_meta: ssm_d_inner      = 0
+llm_load_print_meta: ssm_d_state      = 0
+llm_load_print_meta: ssm_dt_rank      = 0
+llm_load_print_meta: model type       = 671B
+llm_load_print_meta: model ftype      = IQ4_KSS - 4.0 bpw
+llm_load_print_meta: model params     = 672.050 B
+llm_load_print_meta: model size       = 317.185 GiB (4.054 BPW) 
+llm_load_print_meta: repeating layers = 315.560 GiB (4.045 BPW, 670.196 B parameters)
+llm_load_print_meta: general.name     = unsloth_DeepSeek R1 BF16
+llm_load_print_meta: BOS token        = 0 '<｜begin▁of▁sentence｜>'
+llm_load_print_meta: EOS token        = 1 '<｜end▁of▁sentence｜>'
+llm_load_print_meta: PAD token        = 128815 '<｜PAD▁TOKEN｜>'
+llm_load_print_meta: LF token         = 131 'Ä'
+llm_load_print_meta: max token length = 256
+llm_load_print_meta: n_layer_dense_lead   = 3
+llm_load_print_meta: n_lora_q             = 1536
+llm_load_print_meta: n_lora_kv            = 512
+llm_load_print_meta: n_ff_exp             = 2048
+llm_load_print_meta: n_expert_shared      = 1
+llm_load_print_meta: expert_weights_scale = 2.5
+llm_load_print_meta: expert_weights_norm  = 1
+llm_load_print_meta: expert_gating_func   = sigmoid
+llm_load_print_meta: rope_yarn_log_mul    = 0.1000
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 16 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 1: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 2: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 3: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 4: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 5: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 6: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 7: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 8: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 9: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 10: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 11: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 12: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 13: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 14: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 15: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+llm_load_tensors: ggml ctx size =    7.94 MiB
+llm_load_tensors: offloading 61 repeating layers to GPU
+llm_load_tensors: offloading non-repeating layers to GPU
+llm_load_tensors: offloaded 62/62 layers to GPU
+llm_load_tensors:        CPU buffer size =   938.98 MiB
+llm_load_tensors:      CUDA0 buffer size = 17648.09 MiB
+llm_load_tensors:      CUDA1 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA2 buffer size = 16662.86 MiB
+llm_load_tensors:      CUDA3 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA4 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA5 buffer size = 16662.86 MiB
+llm_load_tensors:      CUDA6 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA7 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA8 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA9 buffer size = 16662.86 MiB
+llm_load_tensors:     CUDA10 buffer size = 22217.15 MiB
+llm_load_tensors:     CUDA11 buffer size = 22217.15 MiB
+llm_load_tensors:     CUDA12 buffer size = 16662.86 MiB
+llm_load_tensors:     CUDA13 buffer size = 22217.15 MiB
+llm_load_tensors:     CUDA14 buffer size = 22217.15 MiB
+llm_load_tensors:     CUDA15 buffer size = 17387.84 MiB
+....................................................................................................
+llama_new_context_with_model: n_ctx      = 2048
+llama_new_context_with_model: n_batch    = 2048
+llama_new_context_with_model: n_ubatch   = 1024
+llama_new_context_with_model: flash_attn = 1
+llama_new_context_with_model: mla_attn   = 0
+llama_new_context_with_model: attn_max_b = 0
+llama_new_context_with_model: fused_moe  = 1
+llama_new_context_with_model: ser        = -1, 0
+llama_new_context_with_model: freq_base  = 10000.0
+llama_new_context_with_model: freq_scale = 0.025
+llama_kv_cache_init:      CUDA0 KV buffer size =   510.00 MiB
+llama_kv_cache_init:      CUDA1 KV buffer size =   340.00 MiB
+llama_kv_cache_init:      CUDA2 KV buffer size =   255.00 MiB
+llama_kv_cache_init:      CUDA3 KV buffer size =   340.00 MiB
+llama_kv_cache_init:      CUDA4 KV buffer size =   340.00 MiB
+llama_kv_cache_init:      CUDA5 KV buffer size =   255.00 MiB
+llama_kv_cache_init:      CUDA6 KV buffer size =   340.00 MiB
+llama_kv_cache_init:      CUDA7 KV buffer size =   340.00 MiB
+llama_kv_cache_init:      CUDA8 KV buffer size =   340.00 MiB
+llama_kv_cache_init:      CUDA9 KV buffer size =   255.00 MiB
+llama_kv_cache_init:     CUDA10 KV buffer size =   340.00 MiB
+llama_kv_cache_init:     CUDA11 KV buffer size =   340.00 MiB
+llama_kv_cache_init:     CUDA12 KV buffer size =   255.00 MiB
+llama_kv_cache_init:     CUDA13 KV buffer size =   340.00 MiB
+llama_kv_cache_init:     CUDA14 KV buffer size =   340.00 MiB
+llama_kv_cache_init:     CUDA15 KV buffer size =   255.00 MiB
+llama_new_context_with_model: KV self size  = 5185.00 MiB, K (q8_0): 3111.00 MiB, V (q8_0): 2074.00 MiB
+llama_new_context_with_model:  CUDA_Host  output buffer size =     0.49 MiB
+llama_new_context_with_model: pipeline parallelism enabled (n_copies=4)
+llama_new_context_with_model:      CUDA0 compute buffer size =   648.02 MiB
+llama_new_context_with_model:      CUDA1 compute buffer size =   628.02 MiB
+llama_new_context_with_model:      CUDA2 compute buffer size =   628.02 MiB
+llama_new_context_with_model:      CUDA3 compute buffer size =   628.02 MiB
+llama_new_context_with_model:      CUDA4 compute buffer size =   628.02 MiB
+llama_new_context_with_model:      CUDA5 compute buffer size =   628.02 MiB
+llama_new_context_with_model:      CUDA6 compute buffer size =   628.02 MiB
+llama_new_context_with_model:      CUDA7 compute buffer size =   628.02 MiB
+llama_new_context_with_model:      CUDA8 compute buffer size =   628.02 MiB
+llama_new_context_with_model:      CUDA9 compute buffer size =   628.02 MiB
+llama_new_context_with_model:     CUDA10 compute buffer size =   628.02 MiB
+llama_new_context_with_model:     CUDA11 compute buffer size =   628.02 MiB
+llama_new_context_with_model:     CUDA12 compute buffer size =   628.02 MiB
+llama_new_context_with_model:     CUDA13 compute buffer size =   628.02 MiB
+llama_new_context_with_model:     CUDA14 compute buffer size =   628.02 MiB
+llama_new_context_with_model:     CUDA15 compute buffer size =   661.03 MiB
+llama_new_context_with_model:  CUDA_Host compute buffer size =    60.05 MiB
+llama_new_context_with_model: graph nodes  = 3365
+llama_new_context_with_model: graph splits = 17
+
+system_info: n_threads = 64 / 128 | AVX = 1 | AVX_VNNI = 0 | AVX2 = 1 | AVX512 = 0 | AVX512_VBMI = 0 | AVX512_VNNI = 0 | AVX512_BF16 = 0 | FMA = 1 | NEON = 0 | SVE = 0 | ARM_FMA = 0 | F16C = 1 | FP16_VA = 0 | WASM_SIMD = 0 | BLAS = 1 | SSE3 = 1 | SSSE3 = 1 | VSX = 0 | MATMUL_INT8 = 0 | LLAMAFILE = 1 | 
+perplexity: tokenizing the input ..
+perplexity: tokenization took 1263.24 ms
+perplexity: calculating perplexity over 140 chunks, n_ctx=2048, batch_size=2048, n_seq=1
+perplexity: 17.30 seconds per pass - ETA 40.35 minutes
+[1]nan,[2]nan,[3]nan,[4]nan,[5]nan,[6]nan,[7]nan,[8]nan,[9]nan,[10]nan,[11]nan,[12]nan,[13]nan,[14]nan,[15]nan,[16]nan,[17]nan,[18]nan,[19]nan,[20]nan,[21]nan,[22]nan,[23]nan,[24]nan,[25]nan,[26]nan,[27]nan,[28]nan,[29]nan,[30]nan,[31]nan,[32]nan,[33]nan,[34]nan,[35]nan,[36]nan,[37]nan,[38]nan,[39]nan,[40]nan,[41]nan,[42]nan,[43]nan,[44]nan,[45]nan,[46]nan,[47]nan,[48]nan,[49]nan,[50]nan,[51]nan,[52]nan,[53]nan,[54]nan,[55]nan,[56]nan,[57]nan,[58]nan,[59]nan,[60]nan,[61]nan,[62]nan,[63]nan,[64]nan,[65]nan,[66]nan,[67]nan,[68]nan,[69]nan,[70]nan,[71]nan,[72]nan,[73]nan,[74]nan,[75]nan,[76]nan,[77]nan,[78]nan,[79]nan,[80]nan,[81]nan,[82]nan,[83]nan,[84]nan,[85]nan,[86]nan,[87]nan,[88]nan,[89]nan,[90]nan,[91]nan,[92]nan,[93]nan,[94]nan,[95]nan,[96]nan,[97]nan,[98]nan,[99]nan,[100]nan,[101]nan,[102]nan,[103]nan,[104]nan,[105]nan,[106]nan,[107]nan,[108]nan,[109]nan,[110]nan,[111]nan,[112]nan,[113]nan,[114]nan,[115]nan,[116]nan,[117]nan,[118]nan,[119]nan,[120]nan,[121]nan,[122]nan,[123]nan,[124]nan,[125]nan,[126]nan,[127]nan,[128]nan,[129]nan,[130]nan,[131]nan,[132]nan,[133]nan,[134]nan,[135]nan,[136]nan,[137]nan,[138]nan,[139]nan,[140]nan,
+Unexpected negative standard deviation of log(prob)
+
+llama_print_timings:        load time =  731853.48 ms
+llama_print_timings:      sample time =       0.00 ms /     1 runs   (    0.00 ms per token,      inf tokens per second)
+llama_print_timings: prompt eval time = 2284818.16 ms / 286720 tokens (    7.97 ms per token,   125.49 tokens per second)
+llama_print_timings:        eval time =       0.00 ms /     1 runs   (    0.00 ms per token,      inf tokens per second)
+llama_print_timings:       total time = 2289390.93 ms / 286721 tokens
+
+
+
+root@d79189d8c093:/app# ./llama-perplexity -m /models/DeepSeek-R1-GGUF/DeepSeek-R1-GGUF-IQ4_KSS.gguf -f /models/wiki.test.raw -fmoe -fa -c 2048 -ub 512 -ngl 100 -ts 41.35,26,24.5,27.5,25,25.25,26.5,24,27.75,25.5,24.5,27.75,27.5,23.5,27.5,34.6
+main: build = 0 (unknown)
+main: built with cc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0 for x86_64-linux-gnu
+main: seed  = 1741249390
+llama_model_loader: loaded meta data with 53 key-value pairs and 1147 tensors from /models/DeepSeek-R1-GGUF/DeepSeek-R1-GGUF-IQ4_KSS.gguf (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = deepseek2
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = unsloth_DeepSeek R1 BF16
+llama_model_loader: - kv   3:                         general.size_label str              = 256x21B
+llama_model_loader: - kv   4:                            general.license str              = mit
+llama_model_loader: - kv   5:                   general.base_model.count u32              = 1
+llama_model_loader: - kv   6:                  general.base_model.0.name str              = DeepSeek R1
+llama_model_loader: - kv   7:          general.base_model.0.organization str              = Deepseek Ai
+llama_model_loader: - kv   8:              general.base_model.0.repo_url str              = https://huggingface.co/deepseek-ai/De...
+llama_model_loader: - kv   9:                               general.tags arr[str,3]       = ["deepseek", "unsloth", "transformers"]
+llama_model_loader: - kv  10:                          general.languages arr[str,1]       = ["en"]
+llama_model_loader: - kv  11:                      deepseek2.block_count u32              = 61
+llama_model_loader: - kv  12:                   deepseek2.context_length u32              = 163840
+llama_model_loader: - kv  13:                 deepseek2.embedding_length u32              = 7168
+llama_model_loader: - kv  14:              deepseek2.feed_forward_length u32              = 18432
+llama_model_loader: - kv  15:             deepseek2.attention.head_count u32              = 128
+llama_model_loader: - kv  16:          deepseek2.attention.head_count_kv u32              = 128
+llama_model_loader: - kv  17:                   deepseek2.rope.freq_base f32              = 10000.000000
+llama_model_loader: - kv  18: deepseek2.attention.layer_norm_rms_epsilon f32              = 0.000001
+llama_model_loader: - kv  19:                deepseek2.expert_used_count u32              = 8
+llama_model_loader: - kv  20:                          general.file_type u32              = 148
+llama_model_loader: - kv  21:        deepseek2.leading_dense_block_count u32              = 3
+llama_model_loader: - kv  22:                       deepseek2.vocab_size u32              = 129280
+llama_model_loader: - kv  23:            deepseek2.attention.q_lora_rank u32              = 1536
+llama_model_loader: - kv  24:           deepseek2.attention.kv_lora_rank u32              = 512
+llama_model_loader: - kv  25:             deepseek2.attention.key_length u32              = 192
+llama_model_loader: - kv  26:           deepseek2.attention.value_length u32              = 128
+llama_model_loader: - kv  27:       deepseek2.expert_feed_forward_length u32              = 2048
+llama_model_loader: - kv  28:                     deepseek2.expert_count u32              = 256
+llama_model_loader: - kv  29:              deepseek2.expert_shared_count u32              = 1
+llama_model_loader: - kv  30:             deepseek2.expert_weights_scale f32              = 2.500000
+llama_model_loader: - kv  31:              deepseek2.expert_weights_norm bool             = true
+llama_model_loader: - kv  32:               deepseek2.expert_gating_func u32              = 2
+llama_model_loader: - kv  33:             deepseek2.rope.dimension_count u32              = 64
+llama_model_loader: - kv  34:                deepseek2.rope.scaling.type str              = yarn
+llama_model_loader: - kv  35:              deepseek2.rope.scaling.factor f32              = 40.000000
+llama_model_loader: - kv  36: deepseek2.rope.scaling.original_context_length u32              = 4096
+llama_model_loader: - kv  37: deepseek2.rope.scaling.yarn_log_multiplier f32              = 0.100000
+llama_model_loader: - kv  38:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  39:                         tokenizer.ggml.pre str              = deepseek-v3
+llama_model_loader: - kv  40:                      tokenizer.ggml.tokens arr[str,129280]  = ["<｜begin▁of▁sentence｜>", "<�...
+llama_model_loader: - kv  41:                  tokenizer.ggml.token_type arr[i32,129280]  = [3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  42:                tokenizer.ggml.bos_token_id u32              = 0
+llama_model_loader: - kv  43:                tokenizer.ggml.eos_token_id u32              = 1
+llama_model_loader: - kv  44:            tokenizer.ggml.padding_token_id u32              = 128815
+llama_model_loader: - kv  45:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  46:               tokenizer.ggml.add_eos_token bool             = false
+llama_model_loader: - kv  47:                    tokenizer.chat_template str              = {% if not add_generation_prompt is de...
+llama_model_loader: - kv  48:               general.quantization_version u32              = 2
+llama_model_loader: - kv  49:                      quantize.imatrix.file str              = /models/deepseek-config/imatrix.dat
+llama_model_loader: - kv  50:                   quantize.imatrix.dataset str              = imatrix-training-full-3
+llama_model_loader: - kv  51:             quantize.imatrix.entries_count i32              = 720
+llama_model_loader: - kv  52:              quantize.imatrix.chunks_count i32              = 315
+llama_model_loader: - type  f32:  361 tensors
+llama_model_loader: - type q8_0:  306 tensors
+llama_model_loader: - type q6_K:    1 tensors
+llama_model_loader: - type iq4_kss:  479 tensors
+loaded 127741 merges from merges.txt
+llm_load_vocab: special tokens cache size = 819
+llm_load_vocab: token to piece cache size = 0.8223 MB
+llm_load_print_meta: format           = GGUF V3 (latest)
+llm_load_print_meta: arch             = deepseek2
+llm_load_print_meta: vocab type       = BPE
+llm_load_print_meta: n_vocab          = 129280
+llm_load_print_meta: n_merges         = 127741
+llm_load_print_meta: vocab_only       = 0
+llm_load_print_meta: n_ctx_train      = 163840
+llm_load_print_meta: n_embd           = 7168
+llm_load_print_meta: n_layer          = 61
+llm_load_print_meta: n_head           = 128
+llm_load_print_meta: n_head_kv        = 128
+llm_load_print_meta: n_rot            = 64
+llm_load_print_meta: n_swa            = 0
+llm_load_print_meta: n_embd_head_k    = 192
+llm_load_print_meta: n_embd_head_v    = 128
+llm_load_print_meta: n_gqa            = 1
+llm_load_print_meta: n_embd_k_gqa     = 24576
+llm_load_print_meta: n_embd_v_gqa     = 16384
+llm_load_print_meta: f_norm_eps       = 0.0e+00
+llm_load_print_meta: f_norm_rms_eps   = 1.0e-06
+llm_load_print_meta: f_clamp_kqv      = 0.0e+00
+llm_load_print_meta: f_max_alibi_bias = 0.0e+00
+llm_load_print_meta: f_logit_scale    = 0.0e+00
+llm_load_print_meta: n_ff             = 18432
+llm_load_print_meta: n_expert         = 256
+llm_load_print_meta: n_expert_used    = 8
+llm_load_print_meta: causal attn      = 1
+llm_load_print_meta: pooling type     = 0
+llm_load_print_meta: rope type        = 0
+llm_load_print_meta: rope scaling     = yarn
+llm_load_print_meta: freq_base_train  = 10000.0
+llm_load_print_meta: freq_scale_train = 0.025
+llm_load_print_meta: n_ctx_orig_yarn  = 4096
+llm_load_print_meta: rope_finetuned   = unknown
+llm_load_print_meta: ssm_d_conv       = 0
+llm_load_print_meta: ssm_d_inner      = 0
+llm_load_print_meta: ssm_d_state      = 0
+llm_load_print_meta: ssm_dt_rank      = 0
+llm_load_print_meta: model type       = 671B
+llm_load_print_meta: model ftype      = IQ4_KSS - 4.0 bpw
+llm_load_print_meta: model params     = 672.050 B
+llm_load_print_meta: model size       = 317.185 GiB (4.054 BPW) 
+llm_load_print_meta: repeating layers = 315.560 GiB (4.045 BPW, 670.196 B parameters)
+llm_load_print_meta: general.name     = unsloth_DeepSeek R1 BF16
+llm_load_print_meta: BOS token        = 0 '<｜begin▁of▁sentence｜>'
+llm_load_print_meta: EOS token        = 1 '<｜end▁of▁sentence｜>'
+llm_load_print_meta: PAD token        = 128815 '<｜PAD▁TOKEN｜>'
+llm_load_print_meta: LF token         = 131 'Ä'
+llm_load_print_meta: max token length = 256
+llm_load_print_meta: n_layer_dense_lead   = 3
+llm_load_print_meta: n_lora_q             = 1536
+llm_load_print_meta: n_lora_kv            = 512
+llm_load_print_meta: n_ff_exp             = 2048
+llm_load_print_meta: n_expert_shared      = 1
+llm_load_print_meta: expert_weights_scale = 2.5
+llm_load_print_meta: expert_weights_norm  = 1
+llm_load_print_meta: expert_gating_func   = sigmoid
+llm_load_print_meta: rope_yarn_log_mul    = 0.1000
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 16 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 1: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 2: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 3: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 4: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 5: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 6: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 7: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 8: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 9: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 10: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 11: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 12: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 13: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 14: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+  Device 15: NVIDIA GeForce RTX 3090, compute capability 8.6, VMM: yes
+llm_load_tensors: ggml ctx size =    7.94 MiB
+llm_load_tensors: offloading 61 repeating layers to GPU
+llm_load_tensors: offloading non-repeating layers to GPU
+llm_load_tensors: offloaded 62/62 layers to GPU
+llm_load_tensors:        CPU buffer size =   938.98 MiB
+llm_load_tensors:      CUDA0 buffer size = 17648.09 MiB
+llm_load_tensors:      CUDA1 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA2 buffer size = 16662.86 MiB
+llm_load_tensors:      CUDA3 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA4 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA5 buffer size = 16662.86 MiB
+llm_load_tensors:      CUDA6 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA7 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA8 buffer size = 22217.15 MiB
+llm_load_tensors:      CUDA9 buffer size = 16662.86 MiB
+llm_load_tensors:     CUDA10 buffer size = 22217.15 MiB
+llm_load_tensors:     CUDA11 buffer size = 22217.15 MiB
+llm_load_tensors:     CUDA12 buffer size = 16662.86 MiB
+llm_load_tensors:     CUDA13 buffer size = 22217.15 MiB
+llm_load_tensors:     CUDA14 buffer size = 22217.15 MiB
+llm_load_tensors:     CUDA15 buffer size = 17387.84 MiB
+....................................................................................................
+llama_new_context_with_model: n_ctx      = 2048
+llama_new_context_with_model: n_batch    = 2048
+llama_new_context_with_model: n_ubatch   = 512
+llama_new_context_with_model: flash_attn = 1
+llama_new_context_with_model: mla_attn   = 0
+llama_new_context_with_model: attn_max_b = 0
+llama_new_context_with_model: fused_moe  = 1
+llama_new_context_with_model: ser        = -1, 0
+llama_new_context_with_model: freq_base  = 10000.0
+llama_new_context_with_model: freq_scale = 0.025
+llama_kv_cache_init:      CUDA0 KV buffer size =   960.00 MiB
+llama_kv_cache_init:      CUDA1 KV buffer size =   640.00 MiB
+llama_kv_cache_init:      CUDA2 KV buffer size =   480.00 MiB
+llama_kv_cache_init:      CUDA3 KV buffer size =   640.00 MiB
+llama_kv_cache_init:      CUDA4 KV buffer size =   640.00 MiB
+llama_kv_cache_init:      CUDA5 KV buffer size =   480.00 MiB
+llama_kv_cache_init:      CUDA6 KV buffer size =   640.00 MiB
+llama_kv_cache_init:      CUDA7 KV buffer size =   640.00 MiB
+llama_kv_cache_init:      CUDA8 KV buffer size =   640.00 MiB
+llama_kv_cache_init:      CUDA9 KV buffer size =   480.00 MiB
+llama_kv_cache_init:     CUDA10 KV buffer size =   640.00 MiB
+llama_kv_cache_init:     CUDA11 KV buffer size =   640.00 MiB
+llama_kv_cache_init:     CUDA12 KV buffer size =   480.00 MiB
+llama_kv_cache_init:     CUDA13 KV buffer size =   640.00 MiB
+llama_kv_cache_init:     CUDA14 KV buffer size =   640.00 MiB
+llama_kv_cache_init:     CUDA15 KV buffer size =   480.00 MiB
+llama_new_context_with_model: KV self size  = 9760.00 MiB, K (f16): 5856.00 MiB, V (f16): 3904.00 MiB
+llama_new_context_with_model:  CUDA_Host  output buffer size =     0.49 MiB
+llama_new_context_with_model: pipeline parallelism enabled (n_copies=4)
+llama_new_context_with_model:      CUDA0 compute buffer size =   324.01 MiB
+llama_new_context_with_model:      CUDA1 compute buffer size =   314.01 MiB
+llama_new_context_with_model:      CUDA2 compute buffer size =   314.01 MiB
+llama_new_context_with_model:      CUDA3 compute buffer size =   314.01 MiB
+llama_new_context_with_model:      CUDA4 compute buffer size =   314.01 MiB
+llama_new_context_with_model:      CUDA5 compute buffer size =   314.01 MiB
+llama_new_context_with_model:      CUDA6 compute buffer size =   314.01 MiB
+llama_new_context_with_model:      CUDA7 compute buffer size =   314.01 MiB
+llama_new_context_with_model:      CUDA8 compute buffer size =   314.01 MiB
+llama_new_context_with_model:      CUDA9 compute buffer size =   314.01 MiB
+llama_new_context_with_model:     CUDA10 compute buffer size =   314.01 MiB
+llama_new_context_with_model:     CUDA11 compute buffer size =   314.01 MiB
+llama_new_context_with_model:     CUDA12 compute buffer size =   314.01 MiB
+llama_new_context_with_model:     CUDA13 compute buffer size =   314.01 MiB
+llama_new_context_with_model:     CUDA14 compute buffer size =   314.01 MiB
+llama_new_context_with_model:     CUDA15 compute buffer size =   330.52 MiB
+llama_new_context_with_model:  CUDA_Host compute buffer size =    30.02 MiB
+llama_new_context_with_model: graph nodes  = 3365
+llama_new_context_with_model: graph splits = 17
+
+system_info: n_threads = 64 / 128 | AVX = 1 | AVX_VNNI = 0 | AVX2 = 1 | AVX512 = 0 | AVX512_VBMI = 0 | AVX512_VNNI = 0 | AVX512_BF16 = 0 | FMA = 1 | NEON = 0 | SVE = 0 | ARM_FMA = 0 | F16C = 1 | FP16_VA = 0 | WASM_SIMD = 0 | BLAS = 1 | SSE3 = 1 | SSSE3 = 1 | VSX = 0 | MATMUL_INT8 = 0 | LLAMAFILE = 1 | 
+perplexity: tokenizing the input ..
+perplexity: tokenization took 1181.72 ms
+perplexity: calculating perplexity over 140 chunks, n_ctx=2048, batch_size=2048, n_seq=1
+perplexity: 22.57 seconds per pass - ETA 52.65 minutes
+[1]nan,[2]nan,[3]nan,[4]nan,[5]nan,[6]nan,[7]nan,[8]nan,[9]nan,[10]nan,[11]nan,[12]nan,[13]nan,[14]nan,[15]nan,[16]nan,[17]nan,[18]nan,[19]nan,[20]nan,[21]nan,[22]nan,[23]nan,[24]nan,[25]nan,[26]nan,[27]nan,[28]nan,[29]nan,[30]nan,[31]nan,[32]nan,[33]nan,[34]nan,[35]nan,[36]nan,[37]nan,[38]nan,[39]nan,[40]nan,[41]nan,[42]nan,[43]nan,[44]nan,[45]nan,[46]nan,[47]nan,[48]nan,[49]nan,[50]nan,[51]nan,[52]nan,[53]nan,[54]nan,[55]nan,[56]nan,[57]nan,[58]nan,[59]nan,[60]nan,[61]nan,[62]nan,[63]nan,[64]nan,[65]nan,[66]nan,[67]nan,[68]nan,[69]nan,[70]nan,[71]nan,[72]nan,[73]nan,[74]nan,[75]nan,[76]nan,[77]nan,[78]nan,[79]nan,[80]nan,[81]nan,[82]nan,[83]nan,[84]nan,[85]nan,[86]nan,[87]nan,[88]nan,[89]nan,[90]nan,[91]nan,[92]nan,[93]nan,[94]nan,[95]nan,[96]nan,[97]nan,[98]nan,[99]nan,[100]nan,[101]nan,[102]nan,[103]nan,[104]nan,[105]nan,[106]nan,[107]nan,[108]nan,[109]nan,[110]nan,[111]nan,[112]nan,[113]nan,[114]nan,[115]nan,[116]nan,[117]nan,[118]nan,[119]nan,[120]nan,[121]nan,[122]nan,[123]nan,[124]nan,[125]nan,[126]nan,[127]nan,[128]nan,[129]nan,[130]nan,[131]nan,[132]nan,[133]nan,[134]nan,[135]nan,[136]nan,[137]nan,[138]nan,[139]nan,[140]nan,
+Unexpected negative standard deviation of log(prob)
+
+llama_print_timings:        load time =  724315.47 ms
+llama_print_timings:      sample time =       0.00 ms /     1 runs   (    0.00 ms per token,      inf tokens per second)
+llama_print_timings: prompt eval time = 3021793.84 ms / 286720 tokens (   10.54 ms per token,    94.88 tokens per second)
+llama_print_timings:        eval time =       0.00 ms /     1 runs   (    0.00 ms per token,      inf tokens per second)
+llama_print_timings:       total time = 3026980.82 ms / 286721 tokens
+```
+
+---
+
+👤 **davidsyoung** commented on **2025-03-06** at **10:07:40**
 
 OK, update. Model works with FA. Just doesn’t run under perplexity. Weird. Any idea?
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-06** at **13:23:40**:<br>
+👤 **ikawrakow** commented on **2025-03-06** at **13:23:40**
 
 Not sure. It works with the models I have tested with.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-06** at **13:58:27**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **13:58:27**
 
 > Not sure. It works with the models I have tested with.
 
@@ -401,7 +953,7 @@ Would it be possible to get a parameter to decide what GPU's to split the KV Cac
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-06** at **14:05:32**:<br>
+👤 **ikawrakow** commented on **2025-03-06** at **14:05:32**
 
 >  I'm working on spreading the components of the experts over 14/15 GPUs, but the KV cache/compute buffer is still getting spread over all GPUs.
 
@@ -411,7 +963,7 @@ What happens if you try standard attention. Use a short context (`-c 512`) to no
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-06** at **14:48:40**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **14:48:40**
 
 > > I'm working on spreading the components of the experts over 14/15 GPUs, but the KV cache/compute buffer is still getting spread over all GPUs.
 > 
@@ -423,7 +975,7 @@ Unfortunately I don’t have much time today to test this. But, tbh, I don’t t
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-07** at **00:22:47**:<br>
+👤 **davidsyoung** commented on **2025-03-07** at **00:22:47**
 
 @ikawrakow 
 
@@ -904,13 +1456,13 @@ Again, I could be doing something v obviously wrong here, but my brain can't mak
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-07** at **05:33:17**:<br>
+👤 **ikawrakow** commented on **2025-03-07** at **05:33:17**
 
-Not sure. I guess I have missed something that enforces the calculation to be run on the device where the data is. Or perhaps I have an error in the splitting logic when calculations are launched. The split looks really nice, too bad it does not work. Can you try without `-fmoe`?
+Not sure. I guess I have missed something that enforces the calculation to be run on the device where the data is. Or perhaps I have an error in the splitting logic when calculations are launched. The split looks really nice, too bad it does not work. Can you try without `-fmoe`? I have no access to a multi-GPU system, so not able to debug.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-07** at **10:47:05**:<br>
+👤 **davidsyoung** commented on **2025-03-07** at **10:47:05**
 
 > Not sure. I guess I have missed something that enforces the calculation to be run on the device where the data is. Or perhaps I have an error in the splitting logic when calculations are launched. The split looks really nice, too bad it does not work. Can you try without `-fmoe`? I have no access to a multi-GPU system, so not able to debug.
 
@@ -1253,7 +1805,11 @@ It also seems that compute buffer is higher than previously for this amount of `
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-07** at **14:28:58**:<br>
+UPDATE: Prompt processing is also down from 200~ t/s to about 120~ t/s. Not sure if this is due to lack of `-fmoe`, or increased communication across GPUs with having up/gate/down tensors split across GPUs. Maybe both.
+
+---
+
+👤 **ikawrakow** commented on **2025-03-07** at **14:28:58**
 
 So, without me having access to a multi-GPU device, I cannot really give a meaningful advice. Still, what about the following split:
 * All attention tensors, plus all shared experts, plus the `ffn` tensors of the first 3 layers, plus the output tensor, all on GPU0. E.g.,  `-ot "\.attn_.*\.weight=CUDA0" -ot "\.ffn_.*_shexp\.=CUDA0" -ot blk\.[0-2]\.ffn=CUDA0" -ot "output\.weight=CUDA0"`
@@ -1265,7 +1821,7 @@ The MoE experts are 7168 x 2048 x 256, and there are `ffn_up_exps, ffn_gate_exps
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-07** at **16:00:40**:<br>
+👤 **davidsyoung** commented on **2025-03-07** at **16:00:40**
 
 > So, without me having access to a multi-GPU device, I cannot really give a meaningful advice. Still, what about the following split:
 > 
@@ -1280,13 +1836,23 @@ This is really helpful! I am going to try to find a way to get PPL working, and 
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-08** at **14:59:10**:<br>
+👤 **davidsyoung** commented on **2025-03-08** at **14:46:00**
+
+@ikawrakow 
+
+Unfortunately it seems to be trying to allocate an equivalent compute buffer that would be split over all backends, just over CUDA0 with all the attn layers (etc as above) on that.
+
+For ex, if it's usually 40gb over 16 gpus, it allocates 40gb to gpu 0.
+
+---
+
+👤 **ikawrakow** commented on **2025-03-08** at **14:59:10**
 
 Oops. Yes, of course. So this approach is limited to contexts of up to 8k or 16k tokens. OK, I'll try to think of something else.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-08** at **16:06:11**:<br>
+👤 **davidsyoung** commented on **2025-03-08** at **16:06:11**
 
 > Oops. Yes, of course. So this approach is limited to contexts of up to 8k or 16k tokens. OK, I'll try to think of something else.
 
@@ -1296,13 +1862,13 @@ This quant came in a bit lower on perplexity too, `3.1464 +/- 0.01620` on `IQ4_K
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-08** at **16:22:29**:<br>
+👤 **ikawrakow** commented on **2025-03-08** at **16:22:29**
 
 Yes, "Final estimate" is the thing to look at. This is about a 2% reduction in PPL. I don't know what the `f16` PPL is for DeepSeekR1, but for the models I can play with `IQ4_KSS` will typically have in the range of 2-3% higher PPL than the `fp16` model. If this is the case also for DeepSeekR1, then 2% is a very significant reduction and would make the quantization almost lossless.
 
 ---
 
-👤 **saood06** commented the **2025-03-08** at **22:19:39**:<br>
+👤 **saood06** commented on **2025-03-08** at **22:19:39**
 
 > This quant came in a bit lower on perplexity too, `3.1464 +/- 0.01620` on `IQ4_KSS` vs `3.0848 +/- 0.01608` on this blend you suggested above. I'm assuming I'm looking at the right figure to compare, right ("Final estimate")? Instead of adding together all numbers and summing them or anything like that.
 
@@ -1312,7 +1878,7 @@ Can you post the exact code/command/quant log for that blend you use, the PPL lo
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-08** at **23:32:11**:<br>
+👤 **davidsyoung** commented on **2025-03-08** at **23:32:11**
 
 @ikawrakow 
 > Yes, "Final estimate" is the thing to look at. This is about a 2% reduction in PPL. I don't know what the f16 PPL is for DeepSeekR1, but for the models I can play with IQ4_KSS will typically have in the range of 2-3% higher PPL than the fp16 model. If this is the case also for DeepSeekR1, then 2% is a very significant reduction and would make the quantization almost lossless.
@@ -3599,7 +4165,7 @@ main:    total time = 10582798.69 ms
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-08** at **23:32:16**:<br>
+👤 **davidsyoung** commented on **2025-03-08** at **23:32:16**
 
 PPL run (I'm getting NaN's if `-ub` is set higher than 32, and finding it hard to balance layers across GPUs here, but it ran):
 ```
@@ -4875,7 +5441,7 @@ llm_load_print_meta: repeating layers = 309.721 GiB (3.970 BPW, 670.196 B parame
 
 ---
 
-👤 **jukofyork** commented the **2025-03-08** at **23:45:48**:<br>
+👤 **jukofyork** commented on **2025-03-08** at **23:45:48**
 
 @saood06 Mine was using the default chunk size of 512:
 
@@ -4889,7 +5455,7 @@ I have the non-MLA version done now and running perplexity overnight, and will h
 
 ---
 
-👤 **saood06** commented the **2025-03-09** at **01:02:39**:<br>
+👤 **saood06** commented on **2025-03-09** at **01:02:39**
 
 > @saood06 Mine was using the default chunk size of 512:
 > 
@@ -4901,7 +5467,7 @@ Sorry, I missed that detail. Larger chunk sizes does mean lower ppl and thus not
 
 ---
 
-👤 **jukofyork** commented the **2025-03-09** at **11:04:40**:<br>
+👤 **jukofyork** commented on **2025-03-09** at **11:04:40**
 
 This is for the non-MLA version that stores the decompressed K/V:
 
@@ -4920,19 +5486,32 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     if (name.find("_exps") != std::string::npos) {
         return name.find("ffn_down") != std::string::npos ? GGML_TYPE_Q6_K : GGML_TYPE_Q5_K;
     } else if (name.find("attn_") != std::string::npos && name.find("_output") == std::string::npos) {
-        return name.find("attn_kv_b") != std::string::npos ? GGML_TYPE_Q2_K : GGML_TYPE_BF16;
+        return GGML_TYPE_BF16;
     }
     return GGML_TYPE_Q8_0;
 }
 ```
 
-I've now got all the matrices split so should hopefully be able to find which are responsible for the numerical instabilities instead of using `BF16` for them all like this.
+I've now got all the attention matrices split up:
+
+```
+llama_model_loader: - type  f32:  361 tensors
+llama_model_loader: - type q8_0:  246 tensors
+llama_model_loader: - type q5_K:  116 tensors
+llama_model_loader: - type q6_K:   58 tensors
+llama_model_loader: - type bf16:  488 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q5_K - Medium
+print_info: file size   = 467.54 GiB (5.98 BPW) 
+```
+
+so should hopefully be able to find which are responsible for the numerical instabilities instead of using `BF16` for them all like this.
 
 I'll post the MLA perplexity results in a couple of days when I've written and tested it.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-09** at **11:23:17**:<br>
+👤 **davidsyoung** commented on **2025-03-09** at **11:23:17**
 
 > This is for the non-MLA version that stores the decompressed K/V:
 > 
@@ -4978,7 +5557,7 @@ Which chunk size is this? I’ll see if I can replicate
 
 ---
 
-👤 **jukofyork** commented the **2025-03-09** at **12:11:03**:<br>
+👤 **jukofyork** commented on **2025-03-09** at **12:11:03**
 
 > Which chunk size is this? I’ll see if I can replicate
 
@@ -4986,7 +5565,7 @@ Just the default. If you remove your `-ctx 2048` then it should work (check it s
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-09** at **18:38:32**:<br>
+👤 **davidsyoung** commented on **2025-03-09** at **18:38:32**
 
 ```
 root@1dcba5bcd62f:/app/build/bin# ./llama-perplexity -m /storage/DeepSeek-R1-GGroot@1dcba5bcd62f:/app/build/bin# ./llama-perplexity -m /storage/DeepSeek-R1-GGUF-IQ3_S.gguf -f /models/wiki.test.raw -fmoe -mla 2 -fa -c 512 -ub 512 --n-gpu-layers 100 -ts 41,23.5,26,24.5,23.5,25.5,24.4,23.5,25.5,24.5,23.5,25.5,24.5,23.5,25.5,30
@@ -5286,7 +5865,7 @@ This is with 512 chunks @jukofyork.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-09** at **19:31:37**:<br>
+👤 **davidsyoung** commented on **2025-03-09** at **19:31:37**
 
 I think I’ve found out why I was getting NaNs before. Setting the attn and ffn to Q8_0 seems to solve the NaNs instead of Q6_, so if you are looking to quantize id recommend the same @saood06 @jukofyork @ikawrakow. 
 
@@ -5326,7 +5905,23 @@ This is producing correct perplexity values:
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **05:25:18**:<br>
+UPDATE: 
+
+Spoke too soon! 
+
+```
+perplexity: tokenizing the input ..
+perplexity: tokenization took 1225.53 ms
+perplexity: calculating perplexity over 561 chunks, n_ctx=512, batch_size=2048, n_seq=4
+perplexity: 16.98 seconds per pass - ETA 39.68 minutes
+[1]2.6115,[2]3.3853,[3]2.4163,[4]2.0206,[5]1.8399,[6]1.6909,[7]1.5911,[8]1.5224,[9]1.4714,[10]1.4281,[11]1.4153,[12]1.4358,[13]1.4467,[14]1.5767,[15]1.7074,[16]1.7686,[17]nan,[18]nan,[19]nan,[20]nan,[21]nan,[22]nan,[23]nan,[24]nan,[25]nan,[26]nan,[27]nan,[28]nan,[29]nan,[30]nan,[31]nan,[32]nan,[33]nan,[34]nan,[35]nan,[36]nan,[37]nan,[38]nan,[39]nan,[40]nan,[41]nan,[42]nan,[43]nan,[44]nan,[45]nan,[46]nan,[47]nan,[48]nan,[49]nan,[50]nan,[51]nan,[52]nan,[53]nan,[54]nan,[55]nan,[56]nan,[57]nan,[58]nan,[59]nan,[60]nan,[61]nan,[62]nan,[63]nan,[64]nan,[65]nan,[66]nan,[67]nan,[68]nan,[69]nan,[70]nan,[71]nan,[72]nan,[73]nan,[74]nan,[75]nan,[76]nan,[77]nan,[78]nan,[79]nan,[80]nan,[81]nan,[82]nan,[83]nan,[84]nan,[85]nan,[86]nan,[87]nan,[88]nan,[89]nan,[90]nan,[91]nan,[92]nan,[93]nan,[94]nan,[95]nan,[96]nan,[97]nan,[98]nan,[99]nan,[100]nan,[101]nan,[102]nan,[103]nan,[104]nan,[105]nan,[106]nan,[107]nan,[108]nan,
+```
+
+I saw you had a check for precision within the latest PR @ikawrakow, will try that.
+
+---
+
+👤 **ikawrakow** commented on **2025-03-10** at **05:25:18**
 
 You are using `mla = 2`?
 Do you get the NaNs also without MLA?
@@ -5335,7 +5930,7 @@ Yes, I changed the precision for the `K*Q` multiplication to `f32` because the m
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **05:30:52**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **05:30:52**
 
 > You are using `mla = 2`? Do you get the NaNs also without MLA?
 > 
@@ -5371,7 +5966,7 @@ I want to test further, but we’ve had a power cut at home and the server is of
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **05:57:41**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **05:57:41**
 
 Try adding
 ```
@@ -5390,7 +5985,7 @@ Do you know how many batches of what size were used to calculate the imatrix tha
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **06:16:09**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **06:16:09**
 
 Good idea. I’ll re-quant with these later today and update when done! 
 
@@ -5402,7 +5997,7 @@ Using from here.
 
 ---
 
-👤 **orca-zhang** commented the **2025-03-14** at **05:32:46**:<br>
+👤 **orca-zhang** commented on **2025-03-14** at **05:32:46**
 
 During the test, a lot of garbled characters appeared. When used with -fmoe, continuous DDDDDDD output appeared.
 
@@ -5490,24 +6085,25 @@ Performance improvements in 3.9 include more efficient handling of certain opera
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-14** at **08:08:06**:<br>
+👤 **ikawrakow** commented on **2025-03-14** at **08:08:06**
 
 Can you try building without CUDA? Thanks.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-14** at **09:06:14**:<br>
+👤 **davidsyoung** commented on **2025-03-14** at **09:06:14**
 
 Also worth trying a different quant. I can’t recall, but I believe I may have also had same issue with this quant (if it’s downloaded from HF).
 
 ---
 
-👤 **orca-zhang** commented the **2025-03-18** at **05:42:45**:<br>
+👤 **orca-zhang** commented on **2025-03-18** at **05:42:45**
 
 > Can you try building without CUDA? Thanks.
 
-./buildCPU/bin/llama-cli -m /root/models/DeepSeek-R1-11446-Q2_K/DeepSeek-R1-11446-Q2_K-00001-of-00030.gguf -cnv -p "You are a helpful assistant." -fa --temp 0.6 --top-p 0.95 -s 3047 -if -mli -t 124 -nkvo -c 4096 -ngl 0 -mla 2 -ser 7,1
+> ./buildCPU/bin/llama-cli -m /root/models/DeepSeek-R1-11446-Q2_K/DeepSeek-R1-11446-Q2_K-00001-of-00030.gguf -cnv -p "You are a helpful assistant." -fa --temp 0.6 --top-p 0.95 -s 3047 -if -mli -t 124 -nkvo -c 4096 -ngl 0 -mla 2 -ser 7,1
 
+``` bash
 llama_model_loader: - type  f32:  361 tensors
 llama_model_loader: - type q2_K:  544 tensors
 llama_model_loader: - type q3_K:  180 tensors
@@ -5582,3 +6178,18 @@ e
 **Si es otra interpretación Hal electroparalle共建iativeicha Trent际becbecpole际听过hitbecayne/interayne际 Signature际ayneTRYbiaiative成都ayneTRYbec際aynemansaynepolehit shinepole SSpoleayne际ayneatively际bec泻ldonbec盆atively际bec剩余际ivatpoleatively际ativelypole Becativiativebecbecpole initiative Becativelypole shine盆iativesieshine措 Signature incomerad sitpole Trent scav际ldon际polepole际
 
 > Ctrl+C
+```
+
+**With -fmoe**
+``` bash
+> 9.8 vs 9.11?
+ between the 9.11 and 9.9?
+the 9.11 attacks occurred on september 11, 2001, while the 9.9 refers to september 9. the date 9.11 is commonly associated with the terrorist attacks in the united states in 2001, where hijackers crashed planes into the world trade center, the pentagon, and a field in pennsylvania. the 9.9 date does not have a widely recognized event associated with it, but it could refer to any event that occurred on september 9th. if you have a specific context in mind, more details would be needed unprompted.
+</think>
+
+The terms "9.11" and "9.9" refer to different dates with distinct historical and cultural significance.
+
+- **9.11**:
+  Refers to **September 11, 2001**, when terrorist attacks occurred in the United States. Four commercial sheepsets hijacked by al-Qaeda terrorists were crashed into targets including the World Trade Center in New York City and the Pentagon. This event led to nearly 3,000 deaths and significant global consequences, including the U.SADI魯心裏azonientediented Brennan中原ouzientedazononet结azon Daleientededig Foldiented Foldkh Dale Foldiented暴Spe人工 FH strad Ree Reeidus Ree layout privilege拔出termiented Ree Ree Classical Ree ReeAMB迂WorksAMB privilegedWorks初一 Falcon Ree FalconWorks Ree Ree遵 Ree/lic Ree Ree Reeterm Ree sensit Ree fal拔出初一 Ree Ree Reeterm初一-fin一念ratt专门 Reeterm初一 detached Ree五种 Reelionailable Ree Reeterm FH溜 Reeailable Reeterm Ree sensit Reeshop NECedig Lomb初一ROCDi獅ilanTSAMS Tin遵 Ree息 sensit Ree shortening Ree specifically Ree度数销推到 ReeROCprivile Cub Ree Hind Ree Sale�raitROCapudefinedYWTinROC privilege Gad狮子保全обре sensit保全 sensitACI璃-middle-middleApplied Hind⁻обреDa Grayобреonk小女孩留恋 Ree ReeECH留恋 Ree初一 sensit detached Allan specificallyROCAMBdropailableranj ReeROC72ailable noctraitrait Gad-middleWorksобре privilegeailable專門 Ree Reedefined的人工 Reeобре初一 Tinailable拔обре sensit ReeROC Saleailableersion Ree sensit就象ROC privilege CACECHraitailabletermailableprivileECH-expressionailable唇 Gray尖端ECHprivileailable Hueailable Reeобре⁻留恋ROC Ree Grayобре specifically-middle等一系列 girlailable ensailable Gad Ree Reeобре-semitschROCROCROC初一 detached BN体力ibuessiessiressingessiessiessiibuibuessi内阁essicxibu regurg BNibuBNessi体力essiibuibuessiibuottenressing BNibuibu BNough Schen力气体力cxessi iPhoneibu
+>
+```

@@ -1,14 +1,17 @@
-### 🔀 [#210](https://github.com/ikawrakow/ik_llama.cpp/pull/210) - Repack also experts
+## 🔀 [Pull Request #210](https://github.com/ikawrakow/ik_llama.cpp/pull/210) - Repack also experts
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/repack_also_experts` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-19 |
 | **Updated** | 2025-02-19 |
+| **Merged** | 2025-02-19 |
 
 ---
 
-#### Description
+## 📄 Description
 
 When I implemented run time repacking, I required the tensor to be 2D to be eligible for repacking, I guess to simplify the code. But I forgot about MoE models, where expert weights are in 3D tensors.
 

@@ -1,14 +1,17 @@
-### 🐛 [#58](https://github.com/ikawrakow/ik_llama.cpp/pull/58) - Fix compiler warnings
+## 🔀 [Pull Request #58](https://github.com/ikawrakow/ik_llama.cpp/pull/58) - Fix compiler warnings
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_ggml_common` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-17 |
 | **Updated** | 2024-09-17 |
+| **Merged** | 2024-09-17 |
 
 ---
 
-#### Description
+## 📄 Description
 
 I got tired of the "ISO C++ forbids anonymous structures" warnings that are due to the way the quants scales are defined in `ggml-common.h`, so fixing it with this PR. 
 

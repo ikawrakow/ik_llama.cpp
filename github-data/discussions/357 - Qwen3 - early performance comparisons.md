@@ -1,15 +1,16 @@
-### 🗣️ [#357](https://github.com/ikawrakow/ik_llama.cpp/discussions/357) - Qwen3 - early performance comparisons
+## 🗣️ [Discussion #357](https://github.com/ikawrakow/ik_llama.cpp/discussions/357) - Qwen3 - early performance comparisons
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-04-29 |
 | **Updated** | 2025-05-19 |
 
 ---
 
-#### Description
+## 📄 Description
 
-The Qwen3 models were [officially released](https://qwenlm.github.io/blog/qwen3/), and support was added in `ik_llama.cpp` in PR #355, so I was curious to run some performance benchmarks. As much as I would like to try the flagship model, I don't have enough horse power for that, so I experimented with [Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B), the 30B total, 3B active parameter MoE model.
+The Qwen3 models were [officially released](https://qwenlm.github.io/blog/qwen3/), and support was added in `ik_llama.cpp` in PR [#355](https://github.com/ikawrakow/ik_llama.cpp/issues/355), so I was curious to run some performance benchmarks. As much as I would like to try the flagship model, I don't have enough horse power for that, so I experimented with [Qwen3-30B-A3B](https://huggingface.co/Qwen/Qwen3-30B-A3B), the 30B total, 3B active parameter MoE model.
 
 This time I'm using a custom quantization where all experts are quantized with `IQ4_XS`, all attention tensors with `Q5_K`, and the output tensor is `Q6_K`. PPL for this model is only 1.25% above the PPL of the `bf16` model, so it is a pretty decent quality quantization. Benchmarks are run on a Ryzen-7950X system with an RTX-4080 GPU.  Compared are the latest `ik_kllama.cpp` and `llama.cpp` versions as of this morning (April 29 2025).
 
@@ -310,13 +311,14 @@ The next graph shows PP performance as a function of `N_KV`. Also here the perfo
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **ikawrakow** replied the **2025-04-29** at **13:57:33**:<br>
+👤 **ikawrakow** commented on **2025-04-29** at **13:57:33**
 
 Anyone who has the horse power to run Qwen3-235B-A22B, please feel free to add your results to this discussion.
 
-> 👤 **ubergarm** replied the **2025-04-29** at **16:30:10**:<br>
+> 👤 **ubergarm** replied on **2025-04-29** at **16:30:10**
+> 
 > I'm away from home but frantically trying to remote into a server I just got access too again and cook up a good Qwen3-235B-A22B mix for my home 3090TI 24GB VRAM + 96GB RAM system which is about the limit of common AM5 gaming rigs (with the faster and more supported 2x DIMM configuration).
 > 
 > Any particular reason you chose `IQ4_XS` for the experts over `IQ4_K` (possibly GPU inference speed?).
@@ -381,20 +383,22 @@ Anyone who has the horse power to run Qwen3-235B-A22B, please feel free to add y
 > </details>
 > 
 > Did you bother to make an imatrix for your quant, and if so, were you able to activate enough experts with your imatrix corpus text? Thanks again, exciting times with Qwen3 MoE out and wondering if R2 is around the corner haha...
+
+> 👤 **ikawrakow** replied on **2025-04-29** at **16:34:39**
 > 
-> 👤 **ikawrakow** replied the **2025-04-29** at **16:34:39**:<br>
 > > Any particular reason you chose IQ4_XS for the experts over IQ4_K (possibly GPU inference speed?).
 > 
 > I wanted to have a quantized model that I can run with `ik_llama.cpp` and with `llama.cpp` so we have a fair performance comparison.
 > 
 > I'm playing with some quantization recipes for Qwen3-30B-A3B. I'll post the results tomorrow, maybe that can be useful to you for "cooking" the  Qwen3-235B-A22B quants.
+
+> 👤 **Gaolingx** replied on **2025-05-06** at **13:15:17**
 > 
-> 👤 **Gaolingx** replied the **2025-05-06** at **13:15:17**:<br>
-> I run Qwen3-235B-A22B on my pc(#385 ), but the performance not better, might the memory performance of RAM is too slow...
+> I run Qwen3-235B-A22B on my pc([#385](https://github.com/ikawrakow/ik_llama.cpp/issues/385) ), but the performance not better, might the memory performance of RAM is too slow...
 
 ---
 
-👤 **ubergarm** replied the **2025-04-30** at **04:45:24**:<br>
+👤 **ubergarm** commented on **2025-04-30** at **04:45:24**
 
 Just "cooked" my first `ik_llama.cpp` exclusive experimental quant and uploaded to [huggingface ubergarm/Qwen3-235B-A22B-GGUF](https://huggingface.co/ubergarm/Qwen3-235B-A22B-GGUF). Just tried a benchmark on my local gaming rig as it just finished downloading. Hybrid GPU+CPU inferencing with about 12 ffn layers on GPU and the rest repacked on CPU. *Barely* fits in VRAM+RAM (had to close my browser haha).
 
@@ -1210,12 +1214,14 @@ KReclaimable              633.56          633.56
 
 Interestingly I could hear my fans spin up and down periodically every 15 seconds or so as the CPU ramped up and the GPU dropped down a bit. I noticed this more on the Q8_0 test visually with `btop` as the CPU would drop to almost 0 and the GPU would ramp up and oscillate slowly back and forth.
 
-> 👤 **ikawrakow** replied the **2025-04-30** at **06:07:34**:<br>
+> 👤 **ikawrakow** replied on **2025-04-30** at **06:07:34**
+> 
 > > Note that for some reason ik_llama.cpp could offload one additional ffn layer than mainline llama.cpp in this test
 > 
 > This is because the `ik_llama.cpp` CUDA compute buffer is smaller. This is most likely due to the fused `ffn_up+ffn_gate` op that you get with `-fmoe`. In any case, having 80 instead of 81 MoE experts competed on the CPU will not make a significant difference in performance.
+
+> 👤 **ubergarm** replied on **2025-04-30** at **17:46:53**
 > 
-> 👤 **ubergarm** replied the **2025-04-30** at **17:46:53**:<br>
 > I don't have access to enough RAM+VRAM currently to run the full `bf16`, so I'm using the `Q8_0` as the baseline for my imatrix data and PPL/KLD.
 > 
 > <details>
@@ -1311,13 +1317,14 @@ Interestingly I could hear my fans spin up and down periodically every 15 second
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-30** at **05:57:12**:<br>
+👤 **ikawrakow** commented on **2025-04-30** at **05:57:12**
 
 @ubergarm Can you try the attached `sweep_bench.cpp` adaptation for `llama.cpp` instead of your adaptation? Thanks! 
 
 [sweep-bench.cpp.gz](https://github.com/user-attachments/files/19971777/sweep-bench.cpp.gz)
 
-> 👤 **ubergarm** replied the **2025-04-30** at **17:21:50**:<br>
+> 👤 **ubergarm** replied on **2025-04-30** at **17:21:50**
+> 
 > I compared your `sweep-bench.cpp` adaptation to mainline llama.cpp with [my adaptation](https://github.com/ubergarm/llama.cpp/blob/ug/port-sweep-bench/examples/sweep-bench/sweep-bench.cpp) of @saood06 's code. A couple quick results suggest they are pretty similar for two benchmarks I had run:
 > 
 > ## bartowski/THUDM_GLM-Z1-32B-0414-IQ4_XS.gguf GQA FA
@@ -1339,7 +1346,7 @@ Interestingly I could hear my fans spin up and down periodically every 15 second
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-30** at **14:04:50**:<br>
+👤 **ikawrakow** commented on **2025-04-30** at **14:04:50**
 
 OK, after thinking more about this, I can see why mainline has a better large context TG performance on CUDA for Qwen3-235B-A22B (and previously noted for LLaMA-4): these models have a quite large GQA factor, and I'm still using the old CUDA FA implementation that did not take advantage of that. Improved GQA FA performance was added in [this mainline PR](https://github.com/ggml-org/llama.cpp/pull/12014).
 
@@ -1347,7 +1354,8 @@ OK, after thinking more about this, I can see why mainline has a better large co
 * Pickup the mainline PR (but heavy adaptation will be required as things have diverged a lot, and mainline FA does not support different K and V head sizes as required for DeepSeek models)
 * Finally sit down and write my own CUDA FA implementation
 
-> 👤 **ubergarm** replied the **2025-04-30** at **15:02:22**:<br>
+> 👤 **ubergarm** replied on **2025-04-30** at **15:02:22**
+> 
 > Interesting, yes, I first noticed this with GLM-4 (which uses GQA) in the [CUDA + Flash Attention case](https://github.com/ikawrakow/ik_llama.cpp/pull/344#issuecomment-2832581799) benchmark.
 > 
 > I still have the dream of converting an existing GQA architecture model to MLA but the additional fine-tuning required even with a fraction of the original training data seems daunting:
@@ -1360,15 +1368,16 @@ OK, after thinking more about this, I can see why mainline has a better large co
 > In the mean-time I'll re-run a couple `llama-sweep-bench` comparisons with your mainline `sweep-bench.cpp` adaptation to confirm or reject my prior benchmarks!
 > 
 > Thanks!
+
+> 👤 **ikawrakow** replied on **2025-04-30** at **16:14:03**
 > 
-> 👤 **ikawrakow** replied the **2025-04-30** at **16:14:03**:<br>
 > > I still have the dream of converting an existing GQA architecture model to MLA but the additional fine-tuning required even with a fraction of the original training data seems daunting:
 > 
-> But MLA is not all roses either. It took quite a bit of experimentation to arrive at a meaningful compromise between TG and PP performance. Mainline has a long way to go there (see #354). And then we have this much smaller KV cache, but then we need giant compute buffers to get meaningful performance, so we need to compute self attention in chunks to keep compute memory usage at a reasonable level, so suddenly the compute graph building becomes this huge pile of complications instead of being just a few tens of lines of simple code as ii is for the other models. And then seeing the massive drop in performance with large contexts in your DeepSeek-V3/R1 benchmarks, my guess is that it is still far from optimum.
+> But MLA is not all roses either. It took quite a bit of experimentation to arrive at a meaningful compromise between TG and PP performance. Mainline has a long way to go there (see [#354](https://github.com/ikawrakow/ik_llama.cpp/issues/354)). And then we have this much smaller KV cache, but then we need giant compute buffers to get meaningful performance, so we need to compute self attention in chunks to keep compute memory usage at a reasonable level, so suddenly the compute graph building becomes this huge pile of complications instead of being just a few tens of lines of simple code as ii is for the other models. And then seeing the massive drop in performance with large contexts in your DeepSeek-V3/R1 benchmarks, my guess is that it is still far from optimum.
 
 ---
 
-👤 **AesSedai** replied the **2025-05-03** at **00:37:46**:<br>
+👤 **AesSedai** commented on **2025-05-03** at **00:37:46**
 
 Hello, @artus-dev and @ubergarm asked me to run some sweeps for Qwen3-235B-A22B. My homelab has a substantial server with a VM in it that has the following allocation:
 ```
@@ -2635,7 +2644,8 @@ CPU performance TG comparison:
 GPU performance TG comparison:
 ![performance_comparison_tg_gpu](https://github.com/user-attachments/assets/293e3761-88f2-4cb9-8754-169aa9d6b153)
 
-> 👤 **AesSedai** replied the **2025-05-03** at **05:29:15**:<br>
+> 👤 **AesSedai** replied on **2025-05-03** at **05:29:15**
+> 
 > One more test, I disabled pipeline parallelism (setting it to 1) and re-built ik_llama.cpp:
 > ```
 > cmake -DBLAS_INCLUDE_DIRS=/usr/include/openblas -B build -DGGML_CUDA=ON -DGGML_RPC=ON -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DGGML_SCHED_MAX_COPIES=1
@@ -3510,7 +3520,7 @@ GPU performance TG comparison:
 
 ---
 
-👤 **ikawrakow** replied the **2025-05-03** at **05:47:58**:<br>
+👤 **ikawrakow** commented on **2025-05-03** at **05:47:58**
 
 Thank you for these results!
 
@@ -3520,15 +3530,17 @@ Prompt processing speed on CUDA will also benefit from larger u-batches (e.g., `
 
 The CUDA TG results are somewhat surprising (sharp performance drop with context length for `ik_llama.cpp`, performance basically the same as CPU-only for long context, performance decreasing with more layers offloaded to a second GPU).
 
-> 👤 **AesSedai** replied the **2025-05-03** at **06:07:58**:<br>
-> I just re-ran the above with 2x GPU for llama.cpp as well and edited the comment / graph. I was already re-running ik_llama w/o BLAS, I'll have the results of that shortly.
+> 👤 **AesSedai** replied on **2025-05-03** at **06:07:58**
 > 
-> 👤 **AesSedai** replied the **2025-05-03** at **06:19:29**:<br>
+> I just re-ran the above with 2x GPU for llama.cpp as well and edited the comment / graph. I was already re-running ik_llama w/o BLAS, I'll have the results of that shortly.
+
+> 👤 **AesSedai** replied on **2025-05-03** at **06:19:29**
+> 
 > Posted!
 
 ---
 
-👤 **AesSedai** replied the **2025-05-03** at **06:18:41**:<br>
+👤 **AesSedai** commented on **2025-05-03** at **06:18:41**
 
 Some more data, this time compiled w/ no BLAS:
 ```
@@ -4372,15 +4384,17 @@ ik_llama.cpp BLAS vs NO BLAS PP comparison:
 ik_llama.cpp BLAS vs NO BLAS TG comparison:
 ![performance_comparison_tg_gpu](https://github.com/user-attachments/assets/06035299-c021-4279-907e-cb1d6a2f9f74)
 
-> 👤 **ikawrakow** replied the **2025-05-03** at **06:24:36**:<br>
-> Oh, for CPU-only inference you want to build **without CUDA**. The almighty `ggml` back-end scheduler that is very difficult to work around takes all sorts of funny decisions where to run stuff when one has more than one back-end enabled.
+> 👤 **ikawrakow** replied on **2025-05-03** at **06:24:36**
 > 
-> 👤 **AesSedai** replied the **2025-05-03** at **06:25:03**:<br>
+> Oh, for CPU-only inference you want to build **without CUDA**. The almighty `ggml` back-end scheduler that is very difficult to work around takes all sorts of funny decisions where to run stuff when one has more than one back-end enabled.
+
+> 👤 **AesSedai** replied on **2025-05-03** at **06:25:03**
+> 
 > D'oh, okay. I can redo it :)
 
 ---
 
-👤 **AesSedai** replied the **2025-05-03** at **07:04:12**:<br>
+👤 **AesSedai** commented on **2025-05-03** at **07:04:12**
 
 ik_llama.cpp, no cuda, no blas:
 ```
@@ -4561,7 +4575,7 @@ main: n_kv_max = 16384, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 ---
 
-👤 **ikawrakow** replied the **2025-05-03** at **07:21:24**:<br>
+👤 **ikawrakow** commented on **2025-05-03** at **07:21:24**
 
 Thanks!
 
@@ -4569,17 +4583,20 @@ So, CPU PP is much better now and more inline with what I would have expected. L
 
 But I see that the Epyc 9355 has 32 cores, so we are using hyper-threading?
 
-> 👤 **AesSedai** replied the **2025-05-03** at **07:23:30**:<br>
+> 👤 **AesSedai** replied on **2025-05-03** at **07:23:30**
+> 
 > That's good news!
 > 
 > Yes, this is with hyperthreading. Out of the 64 threads on the system, 56 are passed through to the virtual machine and I have it configured to use 48 of those during the sweep.
 > 
 > Is there a particular `-t` count (or thread passthrough count) you would like me to try?
+
+> 👤 **ikawrakow** replied on **2025-05-03** at **07:27:14**
 > 
-> 👤 **ikawrakow** replied the **2025-05-03** at **07:27:14**:<br>
 > On bare metal one achieves the best performance by setting the number of threads to the physical core count. But I have no idea how a VM will behave. You can try `-t 32`, but that would be only better if you get 32 cores involved, and not e.g. 16 cores with 2 threads per core.
+
+> 👤 **AesSedai** replied on **2025-05-03** at **07:58:15**
 > 
-> 👤 **AesSedai** replied the **2025-05-03** at **07:58:15**:<br>
 > Yes, I think it's about a ~10% performance loss because it's in a VM. The system is a hypervisor though and used for other homelab things, so I'm fine taking that loss. I was able to run `likwid-bench` inside the VM before and achieve ~500GB/s memory bandwidth for reference, theoretical maximum is ~576GB/s.
 > 
 > For completeness sake, I've disabled SMT on the host:
@@ -4761,16 +4778,19 @@ But I see that the Epyc 9355 has 32 cores, so we are using hyper-threading?
 > ![performance_comparison_pp](https://github.com/user-attachments/assets/e37399af-4851-46f1-a73f-2611a51038da)
 > 
 > ![performance_comparison_tg](https://github.com/user-attachments/assets/6540f4da-1469-422b-a5cf-d39a45818016)
+
+> 👤 **ikawrakow** replied on **2025-05-03** at **08:08:26**
 > 
-> 👤 **ikawrakow** replied the **2025-05-03** at **08:08:26**:<br>
 > So, ~30% better for PP, but not much difference for TG. I need to understand the cause of the sharp drop in TG performance for the first ~2k tokens. I'll investigate.
 > 
 > Thanks a lot for these benchmarks!
+
+> 👤 **AesSedai** replied on **2025-05-03** at **08:10:21**
 > 
-> 👤 **AesSedai** replied the **2025-05-03** at **08:10:21**:<br>
 > You're welcome, let me know if you want me to re-run any of these benchmarks at some point in the future and I can pull / rebuild / re-test. Excited to see what shakes out!
+
+> 👤 **VinnyG9** replied on **2025-05-19** at **14:08:09**
 > 
-> 👤 **VinnyG9** replied the **2025-05-19** at **14:08:09**:<br>
 > > That's good news!
 > > 
 > > Yes, this is with hyperthreading. Out of the 64 threads on the system, 56 are passed through to the virtual machine and I have it configured to use 48 of those during the sweep.

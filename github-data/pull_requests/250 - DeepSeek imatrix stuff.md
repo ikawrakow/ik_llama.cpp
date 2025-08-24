@@ -1,14 +1,17 @@
-### 🔀 [#250](https://github.com/ikawrakow/ik_llama.cpp/pull/250) - DeepSeek imatrix stuff
+## 🔀 [Pull Request #250](https://github.com/ikawrakow/ik_llama.cpp/pull/250) - DeepSeek imatrix stuff
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/mla_imatrix` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-10 |
 | **Updated** | 2025-03-10 |
+| **Merged** | 2025-03-10 |
 
 ---
 
-#### Description
+## 📄 Description
 
 In DeepSeek models there are two additional tensors, `*attn_k_b.weight` and `*attn_v_b.weight` required for MLA. When MLA is enabled, these will get used for attention computation. When standard attention is used, then the `*attn_kv_b.weight` tensors are used instead. Hence, when one has used standard attention to compute the imatrix, there will be no data for `*attn_k_b.weight` and `*attn_v_b.weight`; if one uses MLA, then there will be no data for `*attn_kv_b.weight`. As the `*attn_v_b.weight` tensors are simply the lower half of `*attn_kv_b.weight` (i.e., the second half of rows), they "see" the exact same activations as the `*attn_kv_b.weight` tensors. This PR takes advantage of this and enables the usage of `*attn_kv_b.weight` imatrix data for `*attn_v_b.weight` and vice versa.
 
@@ -16,9 +19,9 @@ The situation with `*attn_k_b.weight`  is more tricky and will require a much bi
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **davidsyoung** commented the **2025-03-10** at **14:24:47**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **14:24:47**
 
 This is great, for lack of better understanding, if I am using an imatrix file that I assume was computed with standard attention, and I re-compute now, I should see better performance due to the `attn_v_b.weight` tensor now having imatrix data?
 
@@ -26,13 +29,13 @@ It's still of course lacking the imatrix data for `attn_k_b.weight` tensor. It w
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-10** at **15:08:27**:<br>
+👤 **ikawrakow** commented on **2025-03-10** at **15:08:27**
 
 If you are quantizing the attention tensors to `q8_0` you will not see a difference. The imatrix helps a lot for 1-, 2-, and 3-bit quantization, has a more modest impact at 4 bits, has almost no impact at 5 bits, and has basically no impact at 6+ bits.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-10** at **15:21:47**:<br>
+👤 **davidsyoung** commented on **2025-03-10** at **15:21:47**
 
 > If you are quantizing the attention tensors to `q8_0` you will not see a difference. The imatrix helps a lot for 1-, 2-, and 3-bit quantization, has a more modest impact at 4 bits, has almost no impact at 5 bits, and has basically no impact at 6+ bits.
 
