@@ -38,6 +38,7 @@
 #include <random>
 #include <algorithm>
 #include <src/llama-impl.h>
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
 #include <sqlite_modern_cpp.h>
 
 struct DatabaseHandle {
@@ -49,6 +50,7 @@ struct DatabaseHandle {
         db << "CREATE TABLE IF NOT EXISTS names (key TEXT PRIMARY KEY, data TEXT)";
     }
 };
+#endif
 
 using json = nlohmann::ordered_json;
 
@@ -3449,7 +3451,7 @@ int main(int argc, char ** argv) {
 
     // Necessary similarity of prompt for slot selection
     ctx_server.slot_prompt_similarity = params.slot_prompt_similarity;
-
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
     auto db_handle = std::make_shared<DatabaseHandle>(params.sql_save_file);
     bool sqlite_extension_loaded = false;
     if (!params.sqlite_zstd_ext_file.empty()) {
@@ -3472,6 +3474,9 @@ int main(int argc, char ** argv) {
         }
         sqlite3_enable_load_extension(conn, 0);
     }
+#else
+    auto db_handle = false;
+#endif
     // load the model
     if (!ctx_server.load_model(params)) {
         state.store(SERVER_STATE_ERROR);
@@ -4444,7 +4449,7 @@ int main(int argc, char ** argv) {
             return false;
         };
     };
-
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
     const auto handle_version = [&params, sqlite_extension_loaded](const httplib::Request&, httplib::Response& res) {
         res.set_content(
             json{{"version", 4},
@@ -4452,7 +4457,17 @@ int main(int argc, char ** argv) {
             "application/json"
         );
     };
+#else
+    const auto handle_version = [](const httplib::Request&, httplib::Response& res)-> void {
+        res.set_content(
+             json{{"version", 4},
+             {"features", {{"sql", false}, {"zstd_compression", false}}}}.dump(),
+             "application/json"
+        );
+    };
+#endif
 
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
     auto db_handler = [db_handle](auto func) {
         return [func, db_handle](const httplib::Request& req, httplib::Response& res) {
             res.set_header("Access-Control-Allow-Origin", "*");
@@ -4468,6 +4483,18 @@ int main(int argc, char ** argv) {
             }
         };
     };
+#else
+    auto db_handler = [db_handle](auto func) {
+        return [func, db_handle](const httplib::Request& req, httplib::Response& res) {
+            res.set_header("Access-Control-Allow-Origin", "*");
+            res.status = 500;
+            res.set_content(
+                json{{"ok", false}, {"message", "Sqlite3 support was not enabled. Recompile with '-DLLAMA_SERVER_SQLITE3=ON'"}}.dump(),
+                "application/json"
+            );
+        };
+    };
+#endif
 
     const auto normalize_store_name = [](const std::string& storeName) {
         if(storeName.empty()) return std::string("sessions");
@@ -4657,14 +4684,15 @@ int main(int argc, char ** argv) {
         svr->Post("/delete", handle_delete);
         //VACUUM is there for the extension but does not require the extension
         svr->Get ("/vacuum", handle_vacuum);
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
         if (sqlite_extension_loaded) {
             svr->Get ("/zstd_get_configs", handle_zstd_get_configs);
             svr->Post("/zstd_incremental_maintenance", handle_zstd_maintenance);
             svr->Post("/zstd_enable_transparent", handle_zstd_enable);
             svr->Post("/zstd_update_transparent", handle_zstd_config_update);
 	}
+#endif
     }
-
     //
     // Start the server
     //
