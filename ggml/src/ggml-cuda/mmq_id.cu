@@ -4131,6 +4131,46 @@ static void ggml_cuda_mul_mat_q_switch_type_id(ggml_backend_cuda_context & ctx, 
     }
 }
 
+void compute_row_ids(const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst, int32_t * expert_bounds,
+        int64_t ne02, int64_t ne12, int64_t n_expert_used, int64_t ne11, int64_t nb11, int64_t nb12, int64_t nb21,
+        cudaStream_t stream) {
+
+    const int si1  = nb21 / sizeof(int);
+    const int sis1 = nb12 / nb11;
+
+    switch (n_expert_used) {
+        case  2:
+            launch_mmq_ids_helper< 2> (ids, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+            break;
+        case  4:
+            launch_mmq_ids_helper< 4> (ids, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+            break;
+        case  6:
+            launch_mmq_ids_helper< 6> (ids, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+            break;
+        case  8:
+            launch_mmq_ids_helper< 8> (ids, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+            break;
+        case 16:
+            launch_mmq_ids_helper<16> (ids, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+            break;
+        case 32:
+            launch_mmq_ids_helper<32> (ids, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+            break;
+        default:
+            launch_mmq_ids_helper< 0> (ids, ids_src1, ids_dst, expert_bounds,
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
+            break;
+    }
+    CUDA_CHECK(cudaGetLastError());
+}
+
 void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
         const ggml_tensor * ids_tensor, ggml_tensor * dst, char * ids_data, char * src1_quantized_data) {
     GGML_ASSERT(       src1->type == GGML_TYPE_F32);
