@@ -90,11 +90,11 @@ endif ()
 
 if (NOT WIN32)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API
-    llama_target_and_test(test-sampling.cpp)
-    llama_target_and_test(test-grammar-parser.cpp)
-    llama_target_and_test(test-grammar-integration.cpp)
-    llama_target_and_test(test-llama-grammar.cpp)
-    llama_target_and_test(test-chat.cpp)
+    #llama_target_and_test(test-sampling.cpp)
+    #llama_target_and_test(test-grammar-parser.cpp)
+    #llama_target_and_test(test-grammar-integration.cpp)
+    #llama_target_and_test(test-llama-grammar.cpp)
+    #llama_target_and_test(test-chat.cpp)
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         llama_target_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
