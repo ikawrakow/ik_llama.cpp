@@ -37,6 +37,19 @@
 #include <random>
 #include <algorithm>
 #include <src/llama-impl.h>
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
+#include <sqlite_modern_cpp.h>
+
+struct DatabaseHandle {
+    sqlite::database db;
+
+    DatabaseHandle(const std::string& path) : db(path) {
+        db << "CREATE TABLE IF NOT EXISTS sessions (key TEXT PRIMARY KEY, data TEXT)";
+        db << "CREATE TABLE IF NOT EXISTS templates (key TEXT PRIMARY KEY, data TEXT)";
+        db << "CREATE TABLE IF NOT EXISTS names (key TEXT PRIMARY KEY, data TEXT)";
+    }
+};
+#endif
 
 using json = nlohmann::ordered_json;
 
@@ -3640,7 +3653,32 @@ int main(int argc, char ** argv) {
 
     // Necessary similarity of prompt for slot selection
     ctx_server.slot_prompt_similarity = params.slot_prompt_similarity;
-
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
+    auto db_handle = std::make_shared<DatabaseHandle>(params.sql_save_file);
+    bool sqlite_extension_loaded = false;
+    if (!params.sqlite_zstd_ext_file.empty()) {
+        auto* conn = db_handle->db.connection().get();
+        sqlite3_enable_load_extension(conn, 1);
+        char* errmsg = nullptr;
+        const int rc = sqlite3_load_extension(
+            conn,
+            params.sqlite_zstd_ext_file.c_str(),
+            nullptr,
+            &errmsg
+        );
+        if(rc != SQLITE_OK) {
+            const std::string err = errmsg ? errmsg : "Unknown extension error";
+            sqlite3_free(errmsg);
+            LOG_WARNING("Failed to load extension", {{"err", err}});
+        }
+	else {
+            sqlite_extension_loaded = true;
+        }
+        sqlite3_enable_load_extension(conn, 0);
+    }
+#else
+    auto db_handle = false;
+#endif
     // load the model
     if (!ctx_server.load_model(params)) {
         state.store(SERVER_STATE_ERROR);
@@ -4030,6 +4068,7 @@ int main(int argc, char ** argv) {
             { "chat_template",               common_chat_templates_source(ctx_server.chat_templates.get()) },
             { "bos_token",                   llama_token_to_piece(ctx_server.ctx, llama_token_bos(ctx_server.model), /* special= */ true)},
             { "eos_token",                   llama_token_to_piece(ctx_server.ctx, llama_token_eos(ctx_server.model), /* special= */ true)},
+            { "n_ctx",                       ctx_server.n_ctx }
 
         };
        
@@ -4563,9 +4602,28 @@ int main(int argc, char ** argv) {
                 std::vector<llama_token> tokens(n_token_count);
                 file.read(reinterpret_cast<char*>(tokens.data()), tokens.size() * sizeof(llama_token));
 
+                //C++17 is not modern enough to have a nice and portable way to get the mtime of a file
+                //so the following seems to be needed
+                auto ftime = fs::last_write_time(entry.path());
+                auto system_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                    ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now()
+                );
+                std::time_t c_time = std::chrono::system_clock::to_time_t(system_time);
+                std::tm tm_struct;
+                #if defined(_WIN32)
+                localtime_s(&tm_struct, &c_time);
+                #else
+                localtime_r(&c_time, &tm_struct);
+                #endif
+                std::ostringstream oss;
+                oss << std::put_time(&tm_struct, "%Y-%m-%d %H:%M:%S");
+                auto str_time = oss.str();
+
+
                 response.push_back({
                     {"filename", entry.path().filename().string()},
                     {"filesize", entry.file_size()},
+                    {"mtime", str_time},
                     {"token_count", n_token_count},
                     {"prompt", tokens_to_str(ctx_server.ctx, tokens.cbegin(), tokens.cend())}
                 });
@@ -4577,12 +4635,292 @@ int main(int argc, char ** argv) {
         res.set_content(response.dump(), "application/json; charset=utf-8");
     };
 
+    const auto list_slot_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
+        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        json response = json::array();
+        for (server_slot & slot : ctx_server.slots) {
+            response.push_back({
+                {"slot_id", slot.id},
+                {"token_count", slot.cache_tokens.size()},
+                {"prompt", tokens_to_str(ctx_server.ctx, slot.cache_tokens.cbegin(), slot.cache_tokens.cend())}
+            });
+        }
+        res.set_content(response.dump(), "application/json; charset=utf-8");
+    };
+
+
+    const auto delete_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
+        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        json response;
+        namespace fs = std::filesystem;
+
+        try {
+            const json body = json::parse(req.body);
+            const std::string filename_str = body.at("filename");
+
+            // prevent directory traversal attacks
+            if (filename_str.find("..") != std::string::npos || filename_str.find('/') != std::string::npos || filename_str.find('\\') != std::string::npos) {
+                res.status = 400;
+                response = {{"error", "Invalid filename format."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            const fs::path file_to_delete = fs::path(params.slot_save_path) / fs::path(filename_str);
+
+            if (!fs::exists(file_to_delete) || !fs::is_regular_file(file_to_delete)) {
+                res.status = 404;
+                response = {{"error", "File not found."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            if (fs::remove(file_to_delete)) {
+                response = {
+                    {"status", "deleted"},
+                    {"filename", filename_str}
+                };
+            } else {
+                res.status = 500;
+                response = {{"error", "Failed to delete the file."}};
+            }
+        } catch (const json::parse_error& e) {
+            res.status = 400;
+            response = {{"error", "Invalid JSON request body."}};
+        } catch (const json::out_of_range& e) {
+            res.status = 400;
+            response = {{"error", "Missing 'filename' key in request body."}};
+        } catch (const std::exception& e) {
+            res.status = 500;
+            response = {{"error", e.what()}};
+        }
+        res.set_content(response.dump(), "application/json; charset=utf-8");
+    };
+
+    const auto rename_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
+        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        json response;
+        namespace fs = std::filesystem;
+
+        try {
+            const json body = json::parse(req.body);
+            const std::string old_filename_str = body.at("old_filename");
+            const std::string new_filename_str = body.at("new_filename");
+
+            if (old_filename_str.find("..") != std::string::npos || old_filename_str.find_first_of("/\\") != std::string::npos ||
+                new_filename_str.find("..") != std::string::npos || new_filename_str.find_first_of("/\\") != std::string::npos) {
+                res.status = 400;
+                response = {{"error", "Invalid filename format."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            const fs::path old_path = fs::path(params.slot_save_path) / old_filename_str;
+            const fs::path new_path = fs::path(params.slot_save_path) / new_filename_str;
+
+            if (!fs::exists(old_path) || !fs::is_regular_file(old_path)) {
+                res.status = 404;
+                response = {{"error", "Source file not found."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            if (fs::exists(new_path)) {
+                res.status = 409;
+                response = {{"error", "Destination filename already exists."}};
+                res.set_content(response.dump(), "application/json; charset=utf-8");
+                return;
+            }
+
+            std::error_code ec;
+            fs::rename(old_path, new_path, ec);
+
+            if (ec) {
+                res.status = 500;
+                response = {{"error", "Failed to rename file: " + ec.message()}};
+            } else {
+                response = {
+                    {"status", "renamed"},
+                    {"old_filename", old_filename_str},
+                    {"new_filename", new_filename_str}
+                };
+            }
+
+        } catch (const json::parse_error& e) {
+            res.status = 400;
+            response = {{"error", "Invalid JSON request body."}};
+        } catch (const json::out_of_range& e) {
+            res.status = 400;
+            response = {{"error", "Missing 'old_filename' or 'new_filename' in request body."}};
+        } catch (const std::exception& e) {
+            res.status = 500;
+            response = {{"error", e.what()}};
+        }
+
+        res.set_content(response.dump(), "application/json; charset=utf-8");
+    };
+
     auto handle_static_file = [](unsigned char * content, size_t len, const char * mime_type) {
         return [content, len, mime_type](const httplib::Request &, httplib::Response & res) {
             res.set_content(reinterpret_cast<const char*>(content), len, mime_type);
             return false;
         };
     };
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
+    const auto handle_version = [&params, sqlite_extension_loaded](const httplib::Request&, httplib::Response& res) {
+        res.set_content(
+            json{{"version", 4},
+            {"features", {{"sql", !params.sql_save_file.empty()}, {"zstd_compression", sqlite_extension_loaded}}}}.dump(),
+            "application/json"
+        );
+    };
+#else
+    const auto handle_version = [](const httplib::Request&, httplib::Response& res)-> void {
+        res.set_content(
+             json{{"version", 4},
+             {"features", {{"sql", false}, {"zstd_compression", false}}}}.dump(),
+             "application/json"
+        );
+    };
+#endif
+
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
+    auto db_handler = [db_handle](auto func) {
+        return [func, db_handle](const httplib::Request& req, httplib::Response& res) {
+            res.set_header("Access-Control-Allow-Origin", "*");
+	    try {
+                const json body = !req.body.empty() ? json::parse(req.body) : json::object();
+                func(*db_handle, body, req, res);
+            } catch(const std::exception& e) {
+                res.status = 500;
+                res.set_content(
+                    json{{"ok", false}, {"message", e.what()}}.dump(),
+                    "application/json"
+                );
+            }
+        };
+    };
+#else
+    auto db_handler = [db_handle](auto func) {
+        return [func, db_handle](const httplib::Request& req, httplib::Response& res) {
+            res.set_header("Access-Control-Allow-Origin", "*");
+            res.status = 500;
+            res.set_content(
+                json{{"ok", false}, {"message", "Sqlite3 support was not enabled. Recompile with '-DLLAMA_SERVER_SQLITE3=ON'"}}.dump(),
+                "application/json"
+            );
+        };
+    };
+#endif
+
+    const auto normalize_store_name = [](const std::string& storeName) {
+        if(storeName.empty()) return std::string("sessions");
+
+        std::string normalized;
+        normalized.reserve(storeName.size());
+
+        for(char c : storeName) {
+            if(std::isalpha(static_cast<unsigned char>(c))) {
+                normalized.push_back(std::tolower(static_cast<unsigned char>(c)));
+            }
+        }
+
+        return normalized.empty() ? "sessions" : normalized;
+    };
+
+    const auto get_key_string = [](const json& j) {
+        return j.is_string() ? j.get<std::string>() : j.dump();
+    };
+
+
+    const auto handle_load = db_handler([normalize_store_name, get_key_string](auto& db, const json& body, auto&, auto& res) {
+        std::string data;
+	const std::string store = normalize_store_name(body["storeName"]);
+	db.db << "SELECT data FROM " + store + " WHERE key = ?" << get_key_string(body["key"]) >> data;
+	if(data.empty()) {
+            res.status = 404;
+            res.set_content(json{{"ok", false}, {"message", "Key not found"}}.dump(), "application/json");
+        } else {
+            json response{{"ok", true}};
+	    response["result"] = (store == "names") ? json(data) : json::parse(data);
+            res.set_content(response.dump(), "application/json");
+        }
+    });
+
+    const auto handle_save = db_handler([normalize_store_name, get_key_string](auto& db, const json& body, auto&, auto& res) {
+        const std::string store = normalize_store_name(body["storeName"]);
+        const std::string data = (store == "names") ? body["data"].get<std::string>() : body["data"].dump();
+        db.db << "INSERT OR REPLACE INTO " + store + " (key, data) VALUES (?, ?)" << get_key_string(body["key"]) << data;
+        res.set_content(json{{"ok", true}, {"result", "Data saved successfully"}}.dump(), "application/json");
+    });
+
+    const auto handle_rename = db_handler([get_key_string](auto& db, const json& body, auto&, auto& res) {
+        db.db << "UPDATE names SET data = ? WHERE key = ?"
+            << body["newName"].get<std::string>()
+            << get_key_string(body["key"]);
+        res.set_content(json{{"ok", true}, {"result", "Session renamed successfully"}}.dump(), "application/json");
+    });
+
+    const auto handle_all = db_handler([normalize_store_name](auto& db, const json& body, auto&, auto& res) {
+        json result = json::object();
+        db.db << "SELECT key, data FROM " + normalize_store_name(body["storeName"]) >>
+            [&](const std::string& key, const std::string& data) {
+                result[key] = json::parse(data);
+            };
+        res.set_content(json{{"ok", true}, {"result", result}}.dump(), "application/json");
+    });
+
+    const auto handle_sessions = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        json result = json::object();
+        db.db << "SELECT key, data FROM names" >> [&](const std::string& key, const std::string& data) {
+            result[key] = data;
+        };
+        res.set_content(json{{"ok", true}, {"result", result}}.dump(), "application/json");
+    });
+
+    const auto handle_delete = db_handler([normalize_store_name, get_key_string](auto& db, const json& body, auto&, auto& res) {
+        db.db << "DELETE FROM " + normalize_store_name(body["storeName"]) + " WHERE key = ?"
+            << get_key_string(body["key"]);
+        res.set_content(json{{"ok", true}, {"result", "Session deleted successfully"}}.dump(), "application/json");
+    });
+
+    const auto handle_vacuum = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        json result = json::object();
+        db.db << "VACUUM";
+        res.set_content(json{"ok", true}.dump(), "application/json");
+    });
+
+    const auto handle_zstd_get_configs = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        json result = json::object();
+        db.db << "SELECT id, config FROM _zstd_configs" >> [&](const std::string id, const std::string& config) {
+            result[id] = config;
+        };
+        res.set_content(json{{"ok", true}, {"configs", result}}.dump(), "application/json");
+    });
+
+    const auto handle_zstd_maintenance = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        std::string data;
+        if (body["duration"].is_null()) {
+            db.db << "select zstd_incremental_maintenance(?, ?)" <<  nullptr << body["db_load"].get<double>() >> data;
+        }
+	else {
+            db.db << "select zstd_incremental_maintenance(?, ?)" << body["duration"].get<double>() << body["db_load"].get<double>() >> data;
+        }
+        json response{{"ok", true}};
+        response["result"] = json::parse(data);
+        res.set_content(response.dump(), "application/json");
+    });
+
+    const auto handle_zstd_enable = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        db.db << "select zstd_enable_transparent('{\"table\": \"" + body["table"].get<std::string>() + "\",\"column\": \"" + body["column"].get<std::string>() + "\", \"compression_level\": " + std::to_string(body["compression_level"].get<int>()) + ", \"dict_chooser\": \"''a''\", \"train_dict_samples_ratio\": " + std::to_string(body["train_dict_samples_ratio"].get<int>()) + "}')";
+        res.set_content(json{"ok", true}.dump(), "application/json");
+    });
+
+    const auto handle_zstd_config_update = db_handler([](auto& db, const json& body, auto&, auto& res) {
+        std::string patch_json = "{\"compression_level\": " + std::to_string(body["compression_level"].get<int>()) + ", \"train_dict_samples_ratio\": " + std::to_string(body["train_dict_samples_ratio"].get<int>()) + "}";
+        db.db << "update _zstd_configs set config = json_patch(config, '" + patch_json + "')";
+        res.set_content(json{{"ok", true}}.dump(), "application/json");
+    });
 
     //
     // Router
@@ -4642,12 +4980,36 @@ int main(int argc, char ** argv) {
     svr->Post("/lora-adapters",       handle_lora_adapters_apply);
     // Save & load slots
     svr->Get ("/slots",               handle_slots);
+    svr->Get ("/slots/list",          list_slot_prompts);
     if (!params.slot_save_path.empty()) {
         // these endpoints rely on slot_save_path existing
         svr->Post("/slots/:id_slot",  handle_slots_action);
         svr->Get ("/list",            list_saved_prompts);
-    }
+        svr->Post("/delete_prompt",   delete_saved_prompt);
+        svr->Post("/rename_prompt",   rename_saved_prompt);
 
+    }
+    svr->Get ("/version", handle_version);
+    if (!params.sql_save_file.empty()) {
+        // these endpoints rely on sql_save_file existing
+        svr->Post("/load", handle_load);
+        svr->Post("/save", handle_save);
+        svr->Post("/rename", handle_rename);
+        svr->Post("/all", handle_all);
+        svr->Post("/sessions", handle_sessions);
+        svr->Get ("/sessions", handle_sessions);
+        svr->Post("/delete", handle_delete);
+        //VACUUM is there for the extension but does not require the extension
+        svr->Get ("/vacuum", handle_vacuum);
+#ifdef SQLITE3_MODERN_CPP_SUPPORT
+        if (sqlite_extension_loaded) {
+            svr->Get ("/zstd_get_configs", handle_zstd_get_configs);
+            svr->Post("/zstd_incremental_maintenance", handle_zstd_maintenance);
+            svr->Post("/zstd_enable_transparent", handle_zstd_enable);
+            svr->Post("/zstd_update_transparent", handle_zstd_config_update);
+	}
+#endif
+    }
     //
     // Start the server
     //
