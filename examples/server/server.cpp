@@ -923,7 +923,7 @@ struct server_context {
             chat_templates = llama_chat_templates_from_model(model, params.chat_template);
         }
         GGML_ASSERT(chat_templates.template_default.get() != nullptr);
-      
+
         // Load draft model for speculative decoding if specified
         if (!params.model_draft.empty()) {
             LOG_INFO("loading draft model", {{"model", params.model_draft}});
@@ -946,8 +946,7 @@ struct server_context {
             }
 
             if (!llama_speculative_are_compatible(ctx, llama_init_dft.context)) {
-                LOG_ERROR("the draft model is not compatible with the target model", {});
-                return false;
+                LOG_INFO("the draft model is not compatible with the target model. tokens will be translated between the draft and target models.", {{}});
             }
 
             const int n_ctx_dft = llama_n_ctx(llama_init_dft.context);
@@ -1042,11 +1041,15 @@ struct server_context {
                     return;
                 }
 
-                slot.spec = llama_speculative_init(slot.ctx_dft);
+                slot.spec = llama_speculative_init(ctx, slot.ctx_dft);
                 if (slot.spec == nullptr) {
                     LOG_ERROR("failed to create speculator", {});
                     return;
                 }
+                for (auto & pair : params.replacements_draft) {
+                    llama_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
+                }
+
             }
 
             slot.reset();

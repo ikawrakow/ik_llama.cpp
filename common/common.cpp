@@ -282,6 +282,11 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
         }
     }
 
+    for (auto & rep : params.replacements_draft) {
+        string_process_escapes(rep.first);
+        string_process_escapes(rep.second);
+    }
+
     if (!params.kv_overrides.empty()) {
         params.kv_overrides.emplace_back();
         params.kv_overrides.back().key[0] = 0;
@@ -729,6 +734,14 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
                 params.sparams.dry_sequence_breakers.emplace_back(""+value[i]);
             }
         }
+        return true;
+    }
+    if (arg == "--spec-replace") {
+        CHECK_ARG
+        std::string target = argv[i];
+        CHECK_ARG
+        std::string draft = argv[i];
+        params.replacements_draft.emplace_back(std::move(target), std::move(draft));
         return true;
     }
     if (arg == "--cfg-negative-prompt") {
