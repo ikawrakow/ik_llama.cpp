@@ -2316,7 +2316,7 @@ static inline bool prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n
 
     CUDA_CHECK(cudaMemcpyAsync(dev_row_mapping.get(), rmapping.data(),
                 cum_moe_counts[n_as]*sizeof(mmid_row_mapping), cudaMemcpyHostToDevice, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
+    //CUDA_CHECK(cudaStreamSynchronize(stream));
 
     return is_ser;
 }
