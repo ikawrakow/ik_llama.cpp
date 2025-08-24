@@ -46,7 +46,6 @@ if (MSVC)
 endif()
 # target_link_libraries(${TARGET} PRIVATE "/STACK:104857600")
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-find_package(SQLite3 REQUIRED)
 target_link_libraries(${TARGET} PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
 
 if (LLAMA_SERVER_SSL)
