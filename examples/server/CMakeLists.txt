@@ -1,6 +1,7 @@
 set(TARGET llama-server)
 option(LLAMA_SERVER_VERBOSE "Build verbose logging option for Server" ON)
 option(LLAMA_SERVER_SSL     "Build SSL support for the server"        OFF)
+option(LLAMA_SERVER_SQLITE3 "Build SQlite3 support for the server"    OFF)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -44,13 +45,20 @@ if (MSVC)
 	  )
 endif()
 # target_link_libraries(${TARGET} PRIVATE "/STACK:104857600")
-target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})																	 
+target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
 
 if (LLAMA_SERVER_SSL)
     find_package(OpenSSL REQUIRED)
     target_link_libraries(${TARGET} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     target_compile_definitions(${TARGET} PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+endif()
+
+if (LLAMA_SERVER_SQLITE3)
+    find_package(SQLite3  REQUIRED)
+    target_link_libraries(${TARGET} PRIVATE SQLite::SQLite3)
+    target_include_directories(${TARGET} PUBLIC ./sqlite_modern_cpp/hdr)
+    target_compile_definitions(${TARGET} PRIVATE SQLITE3_MODERN_CPP_SUPPORT)
 endif()
 
 if (WIN32)
