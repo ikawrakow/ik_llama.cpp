@@ -39,6 +39,7 @@
 #include "ggml-cuda/conv-transpose-1d.cuh"
 #include "ggml-cuda/add-id.cuh"
 #include "ggml-cuda/graph.cuh"
+#include "ggml-cuda/mmq_id.cuh"
 
 #include <algorithm>
 #include <array>
@@ -2391,6 +2392,10 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             return false;
         }
     }
+
+    ggml_cuda_mul_mat_q_id(ctx, src0, src1, ids, dst, nullptr, nullptr);
+    return false;
+
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
