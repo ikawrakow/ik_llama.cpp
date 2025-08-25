@@ -596,7 +596,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q4_1 * bxi = (const block_q4_1 *) x + kbx0 + i*stride + kbx;
+        const block_q4_1 * bxi = (const block_q4_1 *)(x + i*stride) + kbx0 + kbx;
         const int qs0 = get_int_b4(bxi->qs, kqsx);
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
@@ -619,7 +619,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q4_1 * bxi = (const block_q4_1 *) x + kbx0 + i*stride + kbxd;
+        const block_q4_1 * bxi = (const block_q4_1 *)(x + i*stride) + kbx0 + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_dm[i*MMQ_MMA_TILE_X_K_Q8_1           + kbxd] = bxi->dm;
@@ -699,7 +699,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q5_0 * bxi = (const block_q5_0 *) x + kbx0 + i*stride + kbx;
+        const block_q5_0 * bxi = (const block_q5_0 *)(x + i*stride) + kbx0 + kbx;
 
         const int ql = get_int_b2(bxi->qs, kqsx);
         const int qh = get_int_b2(bxi->qh, 0) >> (4 * kqsx);
@@ -739,7 +739,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q5_0 * bxi = (const block_q5_0 *) x + kbx0 + i*stride + kbxd;
+        const block_q5_0 * bxi = (const block_q5_0 *)(x + i*stride) + kbx0 + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0           + kbxd] = bxi->d;
@@ -777,7 +777,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q5_1 * bxi = (const block_q5_1 *) x + kbx0 + i*stride + kbx;
+        const block_q5_1 * bxi = (const block_q5_1 *)(x + i*stride) + kbx0 + kbx;
 
         const int ql = get_int_b4(bxi->qs, kqsx);
         const int qh = get_int_b4(bxi->qh, 0) >> (4 * kqsx);
@@ -815,7 +815,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q5_1 * bxi = (const block_q5_1 *) x + kbx0 + i*stride + kbxd;
+        const block_q5_1 * bxi = (const block_q5_1 *)(x + i*stride) + kbx0 + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_dm[i*MMQ_MMA_TILE_X_K_Q8_1           + kbxd] = bxi->dm;
@@ -915,7 +915,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_mxfp4 * bxi = (const block_mxfp4 *) x + kbx0 + i*stride + kbx;
+        const block_mxfp4 * bxi = (const block_mxfp4 *)(x + i*stride) + kbx0 + kbx;
 
         const int aux_q4 = get_int_b1(bxi->qs, kqsx);
         const int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
@@ -942,7 +942,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_mxfp4 * bxi = (const block_mxfp4 *) x + kbx0 + i*stride + kbxd;
+        const block_mxfp4 * bxi = (const block_mxfp4 *)(x + i*stride) + kbx0 + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_df[i*MMQ_MMA_TILE_X_K_Q8_1                 + kbxd] = ggml_cuda_e8m0_to_fp32(bxi->e)*0.5f;
@@ -1476,7 +1476,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q2_K * bxi = (const block_q2_K *) x + kbx0 + i*stride;
+        const block_q2_K * bxi = (const block_q2_K *)(x + i*stride) + kbx0;
 
         const int x_ql_0 = get_int_b2(bxi->qs, kqsx);
 
@@ -1795,7 +1795,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q3_K * bxi = (const block_q3_K *) x + kbx0 + i*stride;
+        const block_q3_K * bxi = (const block_q3_K *)(x + i*stride) + kbx0;
 
         const int x_ql_0 = get_int_b2(bxi->qs,    kqsx);
         const int x_qh_0 = get_int_b2(bxi->hmask, kqsx % (QI3_K/2)) >> (4 * (kqsx / (QI3_K/2)));
@@ -1826,7 +1826,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q3_K * bxi = (const block_q3_K *) x + kbx0 + i*stride;
+        const block_q3_K * bxi = (const block_q3_K *)(x + i*stride) + kbx0;
 
         const int ksc = threadIdx.x % 4;
 
@@ -1862,7 +1862,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q3_K * bxi = (const block_q3_K *) x + kbx0 + i*stride;
+        const block_q3_K * bxi = (const block_q3_K *)(x + i*stride) + kbx0;
 
         x_df[i] = bxi->d;
     }
@@ -1941,7 +1941,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride;
+        const block_q4_K * bxi = (const block_q4_K *)(x + i*stride) + kbx0;
         const int qs0 = get_int_b4(bxi->qs, txi);
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
@@ -1970,7 +1970,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
                 i = min(i, i_max);
             }
 
-            const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride;
+            const block_q4_K * bxi = (const block_q4_K *)(x + i*stride) + kbx0;
 
             const int * scales = (const int *) bxi->scales;
             const int ksc = threadIdx.x % 2;
@@ -1998,7 +1998,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride;
+        const block_q4_K * bxi = (const block_q4_K *)(x + i*stride) + kbx0;
 
         x_dm[i] = bxi->dm;
     }
@@ -2011,7 +2011,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + i*stride + (threadIdx.x % (MMQ_TILE_NE_K/8)) / (QI4_K/8);
+        const block_q4_K * bxi = (const block_q4_K *)(x + i*stride) + kbx0 + (threadIdx.x % (MMQ_TILE_NE_K/8)) / (QI4_K/8);
 
         const int * scales = (const int *) bxi->scales;
 
@@ -2085,7 +2085,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = (const block_q5_K *) x + kbx0 + i*stride;
+        const block_q5_K * bxi = (const block_q5_K *)(x + i*stride) + kbx0;
         const int ky = QR5_K*txi;
 
         const int ql = get_int_b4(bxi->qs, txi);
@@ -2126,7 +2126,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
                 i = min(i, i_max);
             }
 
-            const block_q5_K * bxi = (const block_q5_K *) x + kbx0 + i*stride;
+            const block_q5_K * bxi = (const block_q5_K *)(x + i*stride) + kbx0;
 
             const int * scales = (const int *) bxi->scales;
             const int ksc = threadIdx.x % 2;
@@ -2154,7 +2154,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = (const block_q5_K *) x + kbx0 + i*stride;
+        const block_q5_K * bxi = (const block_q5_K *)(x + i*stride) + kbx0;
 
         x_dm[i] = bxi->dm;
     }
@@ -2168,7 +2168,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q5_K * bxi = (const block_q5_K *) x + kbx0 + i*stride;
+        const block_q5_K * bxi = (const block_q5_K *)(x + i*stride) + kbx0;
 
         const int * scales = (const int *) bxi->scales;
 
@@ -2291,7 +2291,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q6_K * bxi = (const block_q6_K *) x + kbx0 + i*stride + (threadIdx.x % (MMQ_TILE_NE_K/8)) / 4;
+        const block_q6_K * bxi = (const block_q6_K *)(x + i*stride) + kbx0 + (threadIdx.x % (MMQ_TILE_NE_K/8)) / 4;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_sc[i*MMQ_MMA_TILE_X_K_Q6_K + threadIdx.x%4] = get_int_b2(bxi->scales, threadIdx.x % (MMQ_TILE_NE_K/8));
@@ -2588,7 +2588,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq2_xxs * bxi = (const block_iq2_xxs *) x + kbx0 + i*stride;
+        const block_iq2_xxs * bxi = (const block_iq2_xxs *)(x + i*stride) + kbx0;
 
         const int q2 = get_int_b2(bxi->qs, 2*kqsx+0);
         const uint8_t * aux8 = (const uint8_t *) &q2;
@@ -2650,7 +2650,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq2_xs * bxi = (const block_iq2_xs *) x + kbx0 + i*stride;
+        const block_iq2_xs * bxi = (const block_iq2_xs *)(x + i*stride) + kbx0;
 
         const int2 q2_packed = make_int2(get_int_b2(bxi->qs, 2*kqsx+0), get_int_b2(bxi->qs, 2*kqsx+1));
         const uint16_t * q2 = (const uint16_t *) &q2_packed;
@@ -2710,7 +2710,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq2_s * bxi = (const block_iq2_s *) x + kbx0 + i*stride;
+        const block_iq2_s * bxi = (const block_iq2_s *)(x + i*stride) + kbx0;
 
         const int       qs_packed = get_int_b2(bxi->qs, kqsx);
         const uint8_t * qs        = (const uint8_t *) &qs_packed;
@@ -2777,7 +2777,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq3_xxs * bxi = (const block_iq3_xxs *) x + kbx0 + i*stride;
+        const block_iq3_xxs * bxi = (const block_iq3_xxs *)(x + i*stride) + kbx0;
 
         const int2 q3_packed = make_int2(get_int_b2(bxi->qs, 2*kqsx+0), get_int_b2(bxi->qs, 2*kqsx+1));
         const uint8_t * q3 = (const uint8_t *) &q3_packed;
@@ -2837,7 +2837,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq3_s * bxi = (const block_iq3_s *) x + kbx0 + i*stride;
+        const block_iq3_s * bxi = (const block_iq3_s *)(x + i*stride) + kbx0;
 
         const int2      qs_packed = make_int2(get_int_b2(bxi->qs, 2*kqsx+0), get_int_b2(bxi->qs, 2*kqsx+1));
         const uint8_t * qs        = (const uint8_t *) &qs_packed;
@@ -2904,7 +2904,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq1_s * bxi = (const block_iq1_s *) x + kbx0 + i*stride;
+        const block_iq1_s * bxi = (const block_iq1_s *)(x + i*stride) + kbx0;
 
         const int       qs_packed = get_int_b2(bxi->qs, kqsx);
         const uint8_t * qs        = (const uint8_t *) &qs_packed;
@@ -2964,7 +2964,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq4_xs * bxi = (const block_iq4_xs *) x + kbx0 + i*stride;
+        const block_iq4_xs * bxi = (const block_iq4_xs *)(x + i*stride) + kbx0;
 
         const int aux_q4 = get_int_b4(bxi->qs, kqsx);
         const int2 v = get_int_from_table_16(aux_q4, kvalues_iq4nl);
@@ -2988,7 +2988,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq4_xs * bxi = (const block_iq4_xs *) x + kbx0 + i*stride;
+        const block_iq4_xs * bxi = (const block_iq4_xs *)(x + i*stride) + kbx0;
 
         const float d = __half2float(bxi->d);
 
