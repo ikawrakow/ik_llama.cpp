@@ -2394,13 +2394,10 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         }
     }
 
-    //printf("src0(%s): %ld x %ld x %ld, src1: %ld x %ld x %ld dst: ids: %ld x %ld x %ld, %ld x %ld x %ld\n",
-    //        src0->name, src0->ne[0], src0->ne[1], src0->ne[2], src1->ne[0], src1->ne[1], src1->ne[2],
-    //        ids->ne[0], ids->ne[1], ids->ne[2], dst->ne[0], dst->ne[1], dst->ne[2]);
-
-    ggml_cuda_mul_mat_q_id(ctx, src0, src1, ids, dst, nullptr, nullptr);
-    return false;
-
+    if (ggml_is_quantized(src0->type) && ggml_cuda_can_use_mmq_id(src0->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
+        ggml_cuda_mul_mat_q_id(ctx, src0, src1, ids, dst, nullptr, nullptr);
+        return false;
+    }
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -2679,19 +2676,14 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
     cudaStream_t stream = ctx.stream();
 
-    ggml_tensor src0_1_row = *src0_1;
-    ggml_tensor src0_2_row = *src0_2;
-    ggml_tensor src1_row   = *src1;
-    ggml_tensor dst_row    = *dst;
-    ggml_tensor final_dst;
-    ggml_tensor final_src;
-
     const int64_t n_as = ne02;
     const int64_t n_ids = ids->ne[0];
 
-    if (src1->ne[2] <= 2048 &&
+    ggml_tensor dst_row = *dst;
+
+    if (src1->ne[2] <= 2048 && // TODO: this depends on number of total vs number of active experts -> need to find optimum threshod
         ggml_is_quantized(src0_1->type) && src0_1->type == src0_2->type && src1->ne[1] == 1 && src1->ne[3] == 1 &&
-        ggml_cuda_should_use_mmq(src0_1->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
+        ggml_cuda_can_use_mmq_id(src0_1->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
 
         const int64_t ne_get_rows = ne12 * n_ids;
         ggml_cuda_pool_alloc<int32_t> ids_device(ctx.pool(), ne_get_rows + ne_get_rows + n_as + 1);
@@ -2746,7 +2738,6 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         }
         CUDA_CHECK(cudaGetLastError());
 
-
         if (next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
             ggml_cuda_should_use_mmq(next->src[0]->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
             //ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, (char *)ids_device.get(), nullptr);
@@ -2761,6 +2752,12 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     const char * ids_dev = (const char *) ids->data;
     CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    ggml_tensor src0_1_row = *src0_1;
+    ggml_tensor src0_2_row = *src0_2;
+    ggml_tensor src1_row   = *src1;
+    ggml_tensor final_dst;
+    ggml_tensor final_src;
 
     char * src0_1_original = (char *) src0_1->data;
     char * src0_2_original = (char *) src0_2->data;
