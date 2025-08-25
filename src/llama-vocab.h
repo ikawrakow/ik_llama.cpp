@@ -176,3 +176,6 @@ private:
 };
 
 const struct llama_vocab * llama_get_vocab(const struct llama_context * ctx);
+bool llama_token_is_eog(const struct llama_vocab* vocab, llama_token token);
+llama_token llama_token_bos(const struct llama_vocab* vocab);
+llama_token llama_token_eos(const struct llama_vocab* vocab);

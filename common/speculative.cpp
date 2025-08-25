@@ -3,7 +3,7 @@
 #include "common.h"
 #include "sampling.h"
 #include "llama-impl.h"
-
+#include "llama-vocab.h"
 #include <cstring>
 #include <algorithm>
 #include <map>
@@ -302,7 +302,7 @@ std::vector<llama_token> llama_speculative_gen_draft(
 
     llama_decode(ctx_dft, batch);
 
-    llama_sampling_reset(smpl);
+    llama_sampling_reset(llama_get_vocab(ctx_dft), smpl);
 
     // sample n_draft tokens from the draft model
     for (int i = 0; i < params.n_draft; ++i) {
