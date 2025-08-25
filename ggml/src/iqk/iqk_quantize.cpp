@@ -9890,6 +9890,18 @@ bool check_tensor_for_blocks_256_fp16(const ggml_tensor * tensor) {
     if (nbad > 0) {
         fprintf(stderr, "%s: found %d NaN block scales out of %ld blocks in tensor %s\n", __func__,
                 nbad, ggml_nrows(tensor)*nblock, tensor->name);
+        if (tensor->ne[2] > 1) {
+            int nb = tensor->ne[0]/QK_K;
+            for (int64_t i02 = 0; i02 < tensor->ne[2]; ++i02) {
+                int nbad_expert = 0;
+                auto xex = (const char *)((const char *)tensor->data + i02*tensor->nb[2]);
+                for (int64_t i01 = 0; i01 < tensor->ne[1]; ++i01) {
+                    auto xr = (const Block *)(xex + i01*tensor->nb[1]);
+                    nbad_expert += check_row_for_blocks_256_fp16(nb, xr);
+                }
+                if (nbad_expert > 0) fprintf(stderr,"    there are %d NaN block scales for expert %ld\n", nbad_expert, i02);
+            }
+        }
         return false;
     }
     return true;
