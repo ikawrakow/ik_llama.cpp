@@ -493,7 +493,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q4_0 * bxi = (const block_q4_0 *) x + kbx0 + i*stride + kbx;
+        const block_q4_0 * bxi = (const block_q4_0 *)(x + i*stride) + kbx0 + kbx;
         const int qs0 = get_int_b2(bxi->qs, kqsx);
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
@@ -516,7 +516,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q4_0 * bxi = (const block_q4_0 *) x + kbx0 + i*stride + kbxd;
+        const block_q4_0 * bxi = (const block_q4_0 *)(x + i*stride) + kbx0 + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0           + kbxd] = bxi->d;
@@ -854,7 +854,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q8_0 * bxi = (const block_q8_0 *) x + kbx0 + i*stride + kbx;
+        const block_q8_0 * bxi = (const block_q8_0 *)(x + i*stride) + kbx0 + kbx;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_qs[i*MMQ_MMA_TILE_X_K_Q8_0 + 0             + txi] = get_int_b2(bxi[0].qs,                   kqsx);
@@ -877,7 +877,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q8_0 * bxi = (const block_q8_0 *) x + kbx0 + i*stride + kbxd;
+        const block_q8_0 * bxi = (const block_q8_0 *)(x + i*stride) + kbx0 + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0                 + kbxd] = bxi->d;
@@ -2243,7 +2243,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q6_K * bxi = (const block_q6_K *) x + kbx0 + i*stride;
+        const block_q6_K * bxi = (const block_q6_K *)(x + i*stride) + kbx0;
 
         const int ql = get_int_b2(bxi->ql, txi);
         const int ql0 = (ql >> 0) & 0x0F0F0F0F;
@@ -2273,7 +2273,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_q6_K * bxi = (const block_q6_K *) x + kbx0 + i*stride;
+        const block_q6_K * bxi = (const block_q6_K *)(x + i*stride) + kbx0;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_df[i*MMQ_MMA_TILE_X_K_Q6_K]           = bxi->d;
@@ -2525,7 +2525,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq4_nl * bxi = (const block_iq4_nl *) x + kbx0 + i*stride + kbx;
+        const block_iq4_nl * bxi = (const block_iq4_nl *)(x + i*stride) + kbx0 + kbx;
 
         const int aux_q4 = get_int_b2(bxi->qs, kqsx);
         const int2 v = get_int_from_table_16(aux_q4, kvalues_iq4nl);
@@ -2552,7 +2552,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq4_nl * bxi = (const block_iq4_nl *) x + kbx0 + i*stride + kbxd;
+        const block_iq4_nl * bxi = (const block_iq4_nl *)(x + i*stride) + kbx0 + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
         x_df[i*MMQ_MMA_TILE_X_K_Q8_0             + kbxd] = __half2float(bxi->d);
@@ -3248,7 +3248,7 @@ struct mmq_type_traits_id<mmq_x, mmq_y, need_check, GGML_TYPE_IQ4_XS> {
 
 template <ggml_type type, int mmq_x, bool need_check, bool fixup>
 static __device__ __forceinline__ void mul_mat_q_process_tile_id(
-        const char * __restrict__ x, const int offset_x, const int * __restrict__ y,
+        const char * __restrict__ x, const int * __restrict__ y,
         const int * __restrict__ ids_dst, float * __restrict__ dst, float * __restrict__ tmp_fixup,
         const int stride_row_x, const int ncols_y, const int stride_col_dst,
         const int tile_x_max_i, const int tile_y_max_j, const int kb0_start, const int kb0_stop) {
@@ -3276,7 +3276,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile_id(
     float sum[mmq_x*mmq_y / (nwarps*warp_size)] = {0.0f};
 
     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
-        load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+        load_tiles(x, tile_x, kb0, tile_x_max_i, stride_row_x);
 
         {
             const int * by0 = y + ncols_y*(kb0*(qk*sizeof(block_q8_1_mmq) / (4*QK8_1*sizeof(int))) + 0*sizeof(block_q8_1_mmq)/sizeof(int));
@@ -3419,11 +3419,12 @@ static __global__ void mul_mat_q_id(
         const int tile_x_max_i = nrows_x  - it*mmq_y - 1;
         const int tile_y_max_j = col_diff - jt*mmq_x - 1;
 
-        const int offset_x = (wt/sample_ratio)*stride_sample_x + (zt/channel_ratio)*stride_channel_x + it*mmq_y*stride_row_x;
+        const int64_t offset_x = (wt/sample_ratio )*int64_t(stride_sample_x)
+                               + (zt/channel_ratio)*int64_t(stride_channel_x) + it*mmq_y*int64_t(stride_row_x);
 
         constexpr bool fixup = false;
         mul_mat_q_process_tile_id<type, mmq_x, need_check, fixup>
-            (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
+            (x + offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, 0, ncols_x/qk);
         return;
     }
@@ -3497,11 +3498,12 @@ static __global__ void mul_mat_q_id(
         const int tile_x_max_i = nrows_x  - it*mmq_y - 1;
         const int tile_y_max_j = col_diff - jt*mmq_x - 1;
 
-        const int offset_x = (wt/sample_ratio)*stride_sample_x + (zt/channel_ratio)*stride_channel_x + it*mmq_y*stride_row_x;
+        const int64_t offset_x = (wt/sample_ratio )*int64_t(stride_sample_x)
+                               + (zt/channel_ratio)*int64_t(stride_channel_x) + it*mmq_y*int64_t(stride_row_x);
 
         constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
         mul_mat_q_process_tile_id<type, mmq_x, need_check, fixup>
-            (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
+            (x + offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
 
         kbc += blocks_per_ne00;
@@ -3564,11 +3566,12 @@ static __global__ void mul_mat_q_id(
     const int tile_x_max_i = nrows_x  - it*mmq_y - 1;
     const int tile_y_max_j = col_diff - jt*mmq_x - 1;
 
-    const int offset_x = (wt/sample_ratio)*stride_sample_x + (zt/channel_ratio)*stride_channel_x + it*mmq_y*stride_row_x;
+    const int64_t offset_x = (wt/sample_ratio )*int64_t(stride_sample_x)
+                           + (zt/channel_ratio)*int64_t(stride_channel_x) + it*mmq_y*int64_t(stride_row_x);
 
     constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
     mul_mat_q_process_tile_id<type, mmq_x, need_check, fixup>
-        (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
+        (x + offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
          tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
 }
 

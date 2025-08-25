@@ -261,11 +261,11 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
     cudaStream_t stream = ctx.stream();
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
-    const size_t ts_src0 = ggml_type_size(src0->type);
+    //const size_t ts_src0 = ggml_type_size(src0->type);
     const size_t ts_src1 = ggml_type_size(src1->type);
     const size_t ts_dst  = ggml_type_size(dst->type);
 
-    GGML_ASSERT(       nb00       == ts_src0);
+    //GGML_ASSERT(       nb00       == ts_src0);
     GGML_ASSERT(       nb10       == ts_src1);
     GGML_ASSERT(       nb0        == ts_dst);
     GGML_ASSERT(ids_tensor->nb[0] == ggml_type_size(ids_tensor->type));
@@ -291,11 +291,11 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
 
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
 
-    const int64_t s01 = src0->nb[1] / ts_src0;
+    const int64_t s01 = src0->nb[1];// / ts_src0;
     const int64_t s1  =  dst->nb[1] / ts_dst;
-    const int64_t s02 = src0->nb[2] / ts_src0;
+    const int64_t s02 = src0->nb[2];// / ts_src0;
     const int64_t s2  =  dst->nb[2] / ts_dst;
-    const int64_t s03 = src0->nb[3] / ts_src0;
+    const int64_t s03 = src0->nb[3];// / ts_src0;
     const int64_t s3  =  dst->nb[3] / ts_dst;
 
     const bool use_stream_k = (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA)

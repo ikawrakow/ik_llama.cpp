@@ -27,7 +27,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             i = min(i, i_max);
         }
 
-        const block_iq2_k * bxi = (const block_iq2_k *)x + i*stride + kbx0;
+        const block_iq2_k * bxi = (const block_iq2_k *)(x + i*stride) + kbx0;
 
         const float d = bxi->d;
         uint16_t extra = bxi->extra >> (kqsx/4);
@@ -115,7 +115,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         int i4 = i/4;
         int ir = i%4;
 
-        const block_iq2_k_r4 * bxi = (const block_iq2_k_r4 *)x + 4*i4*stride + kbx0;
+        const block_iq2_k_r4 * bxi = (const block_iq2_k_r4 *)(x + 4*i4*stride) + kbx0;
 
         const float d = __half2float(bxi->d[ir]);
 
