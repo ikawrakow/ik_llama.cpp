@@ -7261,6 +7261,19 @@ static bool llm_load_tensors(
         if (n_modified > 0) printf("============ Modified %d tensors\n", n_modified);
     }
 
+    if (true) {
+        int nbad = 0;
+        for (auto& it : model.tensors_by_name) {
+            if (ggml_backend_buffer_is_host(it.second->buffer)) {
+                if (!iqk_validate_tensor(it.second)) ++nbad;
+            }
+        }
+        if (nbad > 0) {
+            LLAMA_LOG_ERROR("Found %d bad tensors in model\n", nbad);
+            throw std::runtime_error("Bad tensors in model");
+        }
+    }
+
     if (!ml.use_mmap && ml.repack_tensors) {
         int n_repacked = 0;
         for (auto& it : model.tensors_by_name) {
