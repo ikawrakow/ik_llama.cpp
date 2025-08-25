@@ -234,6 +234,12 @@ static void ggml_cuda_mul_mat_q_switch_type_id(ggml_backend_cuda_context & ctx, 
         case GGML_TYPE_IQ4_K_R4:
             mul_mat_q_case_id<GGML_TYPE_IQ4_K_R4>(ctx, args, stream);
             break;
+        case GGML_TYPE_IQ5_KS:
+            mul_mat_q_case_id<GGML_TYPE_IQ5_KS>(ctx, args, stream);
+            break;
+        case GGML_TYPE_IQ5_KS_R4:
+            mul_mat_q_case_id<GGML_TYPE_IQ5_KS_R4>(ctx, args, stream);
+            break;
         default:
             GGML_ABORT("fatal error");
             break;
@@ -471,6 +477,8 @@ bool ggml_cuda_can_use_mmq_id(enum ggml_type type, int cc, int64_t ne11) {
         case GGML_TYPE_IQ4_KS_R4:
         case GGML_TYPE_IQ4_K:
         case GGML_TYPE_IQ4_K_R4:
+        case GGML_TYPE_IQ5_KS:
+        case GGML_TYPE_IQ5_KS_R4:
             mmq_supported = true;
             break;
         default:
