@@ -615,13 +615,8 @@ struct HelperIQ4nl final : public BaseHelper {
     constexpr static int block_size_q = QK8_0;
 #else
     HelperIQ4nl(const char * data, int stride) : Base(data, stride) {}
-#ifdef HAVE_FANCY_SIMD
     using block_q8 = block_q8_2;
     constexpr static int block_size_q = QK8_2;
-#else
-    using block_q8 = block_q8_0;
-    constexpr static int block_size_q = QK8_0;
-#endif
 #endif
 
     // Needed for v * softmax(k * q)
