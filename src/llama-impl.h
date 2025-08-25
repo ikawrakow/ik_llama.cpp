@@ -15,6 +15,7 @@
 #include <vector>
 #include <cinttypes>
 #include <cstring>
+#include <string>
 
 #ifdef __GNUC__
 #ifdef __MINGW32__
