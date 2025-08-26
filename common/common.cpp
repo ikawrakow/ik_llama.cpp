@@ -1516,15 +1516,31 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--jinja") {
+        CHECK_ARG
         params.use_jinja = true;
         return true;
     }
+    if (arg == "--chat-template-kwargs") {
+        CHECK_ARG
+        std::string value = argv[i];
+        auto parsed = json::parse(value);
+        for (const auto& item : parsed.items()) {
+            params.default_template_kwargs[item.key()] = item.value().dump();
+        }
+        return true;
+    }
     if (arg == "--reasoning-format") {
+        CHECK_ARG
         std::string value = argv[i];
         if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
         else if (value == "none") { params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
         else { std::invalid_argument("invalid value"); }
         params.reasoning_format = common_reasoning_format_from_name(value);
+        return true;
+    }
+    if (arg == "--no-prefill-assistant") {
+        CHECK_ARG
+        params.prefill_assistant = false;
         return true;
     }
     if (arg == "--slot-prompt-similarity" || arg == "-sps") {
@@ -1846,7 +1862,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                         "- none: leaves thoughts unparsed in `message.content`\n"
                         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
                         "(default: none)", });
+    options.push_back({ "main",      "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
     options.push_back({ "main",      "       --reasoning-budget N",  "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)" });
+    options.push_back({ "main",      "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
+            "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n" });
     options.push_back({ "grammar" });
     options.push_back({ "*",           "       --grammar GRAMMAR",      "BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '%s')", sparams.grammar.c_str() });
     options.push_back({ "*",           "       --grammar-file FNAME",   "file to read grammar from" });

@@ -2132,7 +2132,7 @@ struct server_context {
         res.id       = slot.id_task;
         res.id_multi = slot.id_multi;
         res.error    = false;
-        res.stop = slot.stop; // to do: set value
+        res.stop = true; // to do: set value
         res.stream = slot.params.stream;
         res.content = slot.generated_text;
         res.oaicompat = slot.params.oaicompat;
@@ -4352,7 +4352,7 @@ int main(int argc, char ** argv) {
                     }
                 }
                 bool ok = true;
-                if (send_done && successful_completion) {
+                if (successful_completion) {
                     static const std::string done_message = "data: [DONE]\n\n";
                     LOG_VERBOSE("data stream", {{"to_send", done_message}});
                     if (!sink.write(done_message.c_str(), done_message.size())) {
