@@ -1516,7 +1516,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--jinja") {
-        CHECK_ARG
         params.use_jinja = true;
         return true;
     }
@@ -1532,9 +1531,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--reasoning-format") {
         CHECK_ARG
         std::string value = argv[i];
-        if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
-        else if (value == "none") { params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
-        else { std::invalid_argument("invalid value"); }
         params.reasoning_format = common_reasoning_format_from_name(value);
         return true;
     }
