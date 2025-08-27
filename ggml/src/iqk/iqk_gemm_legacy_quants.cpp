@@ -1988,7 +1988,7 @@ bool iqk_set_kernels_legacy_quants(int ne00, int typeA, int typeB, std::array<mu
 #ifdef HAVE_FANCY_SIMD
             set_functions<IQ4_NL_UnpackerU>(kernels);
 #else
-            set_functions<IQ4_NL_UnpackernS>(kernels);
+            set_functions<IQ4_NL_UnpackerS>(kernels);
 #endif
             break;
         case GGML_TYPE_MXFP4:
