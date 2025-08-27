@@ -7609,7 +7609,7 @@ size_t quantize_iq1_s_r4(const float * src, void * dst, int64_t nrows, int64_t n
                         weight[j] = imatrix[kBlockSize*ibl + j]*sqrt(sigma2 + xb[j]*xb[j]);
                         sumwx += weight[j]*std::abs(xb[j]);
                     }
-                    if (!sumwx) {
+                    if (sumwx < 1e-14f) {
                         printf("Found block with mismatching importance/model weights\n");
                         // Either all weights are zero, or xb is zero where weight is not zero.
                         // In both of these cases it is better to simply ignore the imatrix
