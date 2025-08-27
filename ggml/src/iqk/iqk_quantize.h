@@ -326,6 +326,8 @@ void iqk_quantize_any(int from_type, int to_type,
                       const void * GGML_RESTRICT x, void * GGML_RESTRICT y, void * work_buffer,
                       to_float_t to_float, from_float_t from_float, int ith, int nth);
 
+bool iqk_validate_tensor(const struct ggml_tensor * src);
+
 #ifdef __cplusplus
 }
 #endif
