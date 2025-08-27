@@ -1166,6 +1166,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.use_thp = true;
         return true;
     }
+    if (arg == "-vq" || arg == "--validate-quants") {
+        params.validate_quants = true;
+        return true;
+    }
     if (arg == "--numa") {
         CHECK_ARG
         std::string value(argv[i]);
@@ -2571,6 +2575,7 @@ struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & 
     mparams.check_tensors   = params.check_tensors;
     mparams.repack_tensors  = params.repack_tensors;
     mparams.use_thp         = params.use_thp;
+    mparams.validate_quants = params.validate_quants;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -3719,6 +3724,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "no_mmap: %s # default: false\n", !params.use_mmap ? "true" : "false");
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
+    fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
     fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);

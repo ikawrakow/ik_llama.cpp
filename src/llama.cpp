@@ -4751,6 +4751,7 @@ static bool llm_load_tensors(
         int main_gpu,
         const float * tensor_split,
         bool use_mlock,
+        bool validate_quants,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     model.t_start_us = ggml_time_us();
@@ -7261,7 +7262,7 @@ static bool llm_load_tensors(
         if (n_modified > 0) printf("============ Modified %d tensors\n", n_modified);
     }
 
-    if (true) {
+    if (validate_quants) {
         int nbad = 0;
         for (auto& it : model.tensors_by_name) {
             if (ggml_backend_buffer_is_host(it.second->buffer)) {
@@ -7374,7 +7375,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #endif
 
         if (!llm_load_tensors(
-            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.tensor_split, params.use_mlock,
+            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.tensor_split,
+            params.use_mlock, params.validate_quants,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;

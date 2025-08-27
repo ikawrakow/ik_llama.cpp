@@ -377,7 +377,8 @@ extern "C" {
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
         bool repack_tensors;// repack if available
-        bool use_thp;       // uase transparent huge pages (linux only)
+        bool use_thp;       // use transparent huge pages (linux only)
+        bool validate_quants; // if true, check for NaNs while loading the model
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
