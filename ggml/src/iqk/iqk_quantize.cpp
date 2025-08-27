@@ -4289,14 +4289,13 @@ size_t quantize_iq5_ks(const float * src, void * dst, int64_t nrows, int64_t n_p
     constexpr int kBlockSize = 32;
     GGML_ASSERT(n_per_row%QK_K == 0);
     auto row_size = ggml_row_size(GGML_TYPE_IQ5_KS, n_per_row);
-    char * qrow = (char *)dst;
     float weight[kBlockSize];
     std::vector<float> all_scales(n_per_row/kBlockSize);
-    for (int64_t row = 0; row < nrows; ++row) {
-        quantize_row_iq5_ks_impl(QK_K, kBlockSize, n_per_row, src, qrow, all_scales.data(), weight, iq5nl_values, imatrix, 5);
-        src += n_per_row;
-        qrow += row_size;
-    }
+    QHelper helper(imatrix, n_per_row, kBlockSize);
+    auto q_func = [&all_scales, &weight, block_size = kBlockSize] (const float * x, void * vy, int n_per_row, const float * imatrix) {
+        quantize_row_iq5_ks_impl(QK_K, block_size, n_per_row, x, (char *)vy, all_scales.data(), weight, iq5nl_values, imatrix, 5);
+    };
+    helper.quantize(nrows, src, dst, row_size, q_func);
     return nrows * row_size;
 }
 
