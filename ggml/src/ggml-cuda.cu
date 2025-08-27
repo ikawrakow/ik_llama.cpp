@@ -2681,7 +2681,15 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
     ggml_tensor dst_row = *dst;
 
-    if (src1->ne[2] <= 2048 && // TODO: this depends on number of total vs number of active experts -> need to find optimum threshod
+    // The heuristics src1->ne[2] <= 32*src0->ne[2] to use the mul_mat_id implementation instead of the original version
+    // is derived from
+    //    * DeepSeek-Lite:  64 total, 6 active experts
+    //    * GPT-OSS-20B  :  32 total, 4 active experts
+    //    * Qwen3-30B-A3B: 128 total, 8 active experts
+    // My original hypothesis was that it is dependent on the total/active experts ratio, but from these 3 it
+    // looks like it really depends just on the total number of experts.
+    // TODO: verify with more models, or perhaps make the magic constant '32' to be defined via a compile time define.
+    if (src1->ne[2] <= 32*src0->ne[2] &&
         ggml_is_quantized(src0_1->type) && src0_1->type == src0_2->type && src1->ne[1] == 1 && src1->ne[3] == 1 &&
         ggml_cuda_can_use_mmq_id(src0_1->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
 
