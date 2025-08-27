@@ -4738,9 +4738,13 @@ size_t quantize_iq4_nl_r4(const float * src, void * dst, int64_t nrows, int64_t 
     GGML_ASSERT(nrows%4 == 0);
     auto row_size_nl = ggml_row_size(GGML_TYPE_IQ4_NL, n_per_row);
     std::vector<char> qtmp(4*row_size_nl);
+    QHelper helper(imatrix, n_per_row, 32);
+    auto q_func = [] (const float * x, void * vy, int n_per_row, const float * imatrix) {
+        quantize_iq4_nl(x, (char *)vy, 1, n_per_row, imatrix);
+    };
     char * qrow = (char *)dst;
     for (int row = 0; row < nrows; row += 4) {
-        quantize_iq4_nl(src, qtmp.data(), 4, n_per_row, imatrix);
+        helper.quantize(4, src, qtmp.data(), row_size_nl, q_func);
         repack_iq4_nl(4, n_per_row, (const block_iq4_nl *)qtmp.data(), (block_iq4_nl_r4 *)qrow, false);
         src += 4*n_per_row;
         qrow += 4*row_size_nl;
