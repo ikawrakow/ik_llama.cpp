@@ -8227,6 +8227,8 @@ public:
     inline int bin3(int idim, float x) const { return x < m_mid[2*idim+0] ? 0 : x < m_mid[2*idim+1] ? 1 : 2; }
 
     static inline void set_weights(float sigma2_scale, int nblock, const float * x, const float * imatrix, float * row_weights) {
+        constexpr float kEps2   = 1e-14f;
+        constexpr float kWeight = 1e-4f;
         for (int ibl = 0; ibl < nblock; ++ibl) {
 
             const float * xbl = x + ibl*kSuperBlockSize;
@@ -8234,11 +8236,29 @@ public:
 
             float sumx2 = 0;
             for (int j = 0; j < kSuperBlockSize; ++j) sumx2 += xbl[j]*xbl[j];
+            if (sumx2 < kEps2*kSuperBlockSize) {
+                // all x in th super block are (almost) zero
+                for (int j = 0; j < kSuperBlockSize; ++j) wbl[j] = kWeight;
+                continue;
+            }
             const float sigma2 = sigma2_scale*sumx2/kSuperBlockSize;
 
             if (imatrix) {
-                const float * qw = imatrix + ibl*kSuperBlockSize;
-                for (int j = 0; j < kSuperBlockSize; ++j) wbl[j] = qw[j] * sqrtf(sigma2 + xbl[j]*xbl[j]);
+                for (int ib = 0; ib < kSuperBlockSize/kBlockSize; ++ib) {
+                    const float * qw = imatrix + ibl*kSuperBlockSize + ib*kBlockSize;
+                    const float * xb = xbl + ib*kBlockSize;
+                    float * wb = wbl + ib*kBlockSize;
+                    float sumwx = 0, sumw2 = 0, sumx2 = 0;
+                    for (int j = 0; j < kBlockSize; ++j) {
+                        wb[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
+                        sumwx += wb[j]*std::abs(xb[j]);
+                        sumw2 += wb[j]*wb[j];
+                        sumx2 += xb[j]*xb[j];
+                    }
+                    if (sumx2 < kEps2 || sumw2 < kEps2 || sumwx < kEps2) {
+                        for (int j = 0; j < kBlockSize; ++j) wb[j] = kWeight;
+                    }
+                }
             } else {
                 for (int j = 0; j < kSuperBlockSize; ++j) wbl[j] = 0.25f*sigma2 + xbl[j]*xbl[j];
             }
@@ -9390,14 +9410,24 @@ void quantize_row_iq3_kt_impl(const float * x, void * vy, int n_per_row, const f
             float scale_0 = std::max(84.f, 123.f*amax/amax_row);
             //float scale_0 = std::max(64.f, 123.f*amax/amax_row);
             float best = 0;
+            bool found_solution = false;
             for (int itry = -3; itry <= 3; ++itry) {
                 quantizer.find_best_match(amax/(scale_0 + kStep*itry), xaux, weight, best_idx);
                 auto [d, score] = quantizer.find_best_scale(xaux, weight, best_idx);
                 if (score > best) {
                     best = score;
+                    found_solution = true;
                     scales[ib] = d;
                     std::memcpy(best_idx+Q::kNg, best_idx, Q::kNg*sizeof(int));
                 }
+            }
+            if (!found_solution) {
+                fprintf(stderr, "======================= %s: failed to find solution for a block\n", __func__);
+                fprintf(stderr, "Model weights and importances:\n");
+                for (int j = 0; j < Q::kBlockSize; ++j) {
+                    fprintf(stderr, "%2d  %g  %g\n", j, xaux[j], weight[j]);
+                }
+                GGML_ASSERT(false);
             }
 
             auto xt = qtmp + ibl*Q::kSuperBlockSize + ib*Q::kBlockSize;
