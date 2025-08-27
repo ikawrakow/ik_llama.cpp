@@ -9906,12 +9906,62 @@ bool check_tensor_for_blocks_256_fp16(const ggml_tensor * tensor) {
     }
     return true;
 }
+struct F32Scale {
+    static inline int check_row(const char * data) {
+        float d = *(const float *)data;
+        return isfinite(d) ? 0 : 1;
+    }
+};
+struct F16Scale {
+    static inline int check_row(const char * data) {
+        float d = GGML_FP16_TO_FP32(*(const ggml_half *)data);
+        return isfinite(d) ? 0 : 1;
+    }
+};
+template <int nr>
+struct F32ScaleRX {
+    static inline int check_row(const char * data) {
+        auto d = (const float *)data;
+        int nbad = 0;
+        for (int i = 0; i < nr; ++i) {
+            if (!isfinite(d[i])) ++nbad;
+        }
+        return nbad;
+    }
+};
+template <int nr>
+struct F16ScaleRX {
+    static inline int check_row(const char * data) {
+        auto d = (const ggml_half *)data;
+        int nbad = 0;
+        for (int i = 0; i < nr; ++i) {
+            if (!isfinite(GGML_FP16_TO_FP32(d[i]))) ++nbad;
+        }
+        return nbad;
+    }
+};
+template <typename RS>
+bool check_tensor_row_scales(const ggml_tensor * tensor) {
+    auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+    int num_rows = ggml_nrows(tensor);
+    auto data = (const char *)tensor->data;
+    int nbad = 0;
+    for (int row = 0; row < num_rows; ++row) {
+        nbad += RS::check_row(data);
+        data += row_size;
+    }
+    if (nbad > 0) {
+        fprintf(stderr, "%s: found %d NaN row scales out of %d rows in tensor %s\n", __func__,
+                nbad, num_rows, tensor->name);
+        return false;
+    }
+    return true;
+}
 }
 
 bool iqk_validate_tensor(const ggml_tensor * tensor) {
     if (!tensor) return true;
     if (!ggml_is_contiguous(tensor)) return true;
-    //if (tensor->type != GGML_TYPE_IQ3_K) return true;
 
     switch (tensor->type) {
         case GGML_TYPE_IQ2_K: return check_tensor_for_blocks_256_fp16<block_iq2_k>(tensor);
@@ -9925,18 +9975,21 @@ bool iqk_validate_tensor(const ggml_tensor * tensor) {
         case GGML_TYPE_IQ3_XXS: return check_tensor_for_blocks_256_fp16<block_iq3_xxs>(tensor);
         case GGML_TYPE_IQ3_S:   return check_tensor_for_blocks_256_fp16<block_iq3_s>(tensor);
         case GGML_TYPE_IQ4_XS:  return check_tensor_for_blocks_256_fp16<block_iq4_xs>(tensor);
+        case GGML_TYPE_IQ2_BN:
+        case GGML_TYPE_IQ4_KSS:
+        case GGML_TYPE_IQ4_KS:
+        case GGML_TYPE_IQ5_KS:  return check_tensor_row_scales<F32Scale>(tensor);
+        case GGML_TYPE_IQ2_BN_R4:
+        case GGML_TYPE_IQ4_KS_R4:
+        case GGML_TYPE_IQ5_KS_R4: return check_tensor_row_scales<F32ScaleRX<4>>(tensor);
+        case GGML_TYPE_IQ1_BN:
+        case GGML_TYPE_IQ2_KS:
+        case GGML_TYPE_IQ2_KL:
+        case GGML_TYPE_IQ3_KS: return check_tensor_row_scales<F16Scale>(tensor);
+        case GGML_TYPE_IQ1_S_R4:
+        case GGML_TYPE_IQ1_M_R4: return check_tensor_row_scales<F16ScaleRX<4>>(tensor);
+
         default: break;
     }
-    //int nblock = tensor->ne[0]/QK_K;
-    //for (int row = 0; row < ggml_nrows(tensor); ++row) {
-    //    auto x = (const block_iq3_k *)((const char *)tensor->data + tensor->nb[1]*row);
-    //    for (int ib = 0; ib < nblock; ++ib) {
-    //        float d = GGML_FP16_TO_FP32(x[ib].d);
-    //        if (isnan(d)) {
-    //            fprintf(stderr, "%s: found NaN in %s\n", __func__, tensor->name);
-    //            return false;
-    //        }
-    //    }
-    //}
     return true;
 }
