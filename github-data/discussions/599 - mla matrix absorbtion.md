@@ -1,13 +1,14 @@
-### 🗣️ [#599](https://github.com/ikawrakow/ik_llama.cpp/discussions/599) - mla matrix absorbtion
+## 🗣️ [Discussion #599](https://github.com/ikawrakow/ik_llama.cpp/discussions/599) - mla matrix absorbtion
 
 | **Author** | `magikRUKKOLA` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-07-11 |
-| **Updated** | 2025-07-15 |
+| **Updated** | 2025-07-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 As a prefill optimization for the long context as implemented in ktransformers.  I found some cool docs.  Will leave it here.
 
@@ -130,29 +131,30 @@ This transforms MLA from a memory-bound problem into a compute-bound one, better
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **ikawrakow** replied the **2025-07-11** at **12:16:34**:<br>
+👤 **ikawrakow** commented on **2025-07-11** at **12:16:34**
 
 @magikRUKKOLA 
 
-You may want to check #246, #260, #273. 
+You may want to check [#246](https://github.com/ikawrakow/ik_llama.cpp/issues/246), [#260](https://github.com/ikawrakow/ik_llama.cpp/issues/260), [#273](https://github.com/ikawrakow/ik_llama.cpp/issues/273). 
 
-As far as I can tell, #246, which explains the basic idea of reducing the amount of multiply-adds when using MLA, precedes the linked doc by about a month, and is surprisingly similar to what they wrote.
+As far as I can tell, [#246](https://github.com/ikawrakow/ik_llama.cpp/issues/246), which explains the basic idea of reducing the amount of multiply-adds when using MLA, precedes the linked doc by about a month, and is surprisingly similar to what they wrote.
 
-#260 explains the `-amb` option, which limits the amount of intermediate compute buffer storage required.
+[#260](https://github.com/ikawrakow/ik_llama.cpp/issues/260) explains the `-amb` option, which limits the amount of intermediate compute buffer storage required.
 
-#273 is the best MLA version in `ik_llama.cpp`. The MLA=2 variant (explained in #246) is used for prompt processing, the original MLA (MLA=1) is used for token generation. The main reason it took a while to arrive at #273 was the struggle to implement the MLA=1 case efficiently on CUDA (and the struggle was due to the much larger than usual attention head sizes of 576 and 512).
+[#273](https://github.com/ikawrakow/ik_llama.cpp/issues/273) is the best MLA version in `ik_llama.cpp`. The MLA=2 variant (explained in [#246](https://github.com/ikawrakow/ik_llama.cpp/issues/246)) is used for prompt processing, the original MLA (MLA=1) is used for token generation. The main reason it took a while to arrive at [#273](https://github.com/ikawrakow/ik_llama.cpp/issues/273) was the struggle to implement the MLA=1 case efficiently on CUDA (and the struggle was due to the much larger than usual attention head sizes of 576 and 512).
 
 If you look at all merged PRs, you will see that it has been quite a journey to arrive at what we have today for doing fast DeepSeek inference.
 
 ---
 
-👤 **ubergarm** replied the **2025-07-11** at **22:10:57**:<br>
+👤 **ubergarm** commented on **2025-07-11** at **22:10:57**
 
 A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonshotai/Kimi-K2-Instruct .... :sob: lol...
 
-> 👤 **magikRUKKOLA** replied the **2025-07-11** at **23:35:48**:<br>
+> 👤 **magikRUKKOLA** replied on **2025-07-11** at **23:35:48**
+> 
 > @ubergarm 
 > > A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonshotai/Kimi-K2-Instruct .... 😭 lol...
 > 
@@ -167,16 +169,18 @@ A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonsho
 > > Agentic Intelligence: Specifically designed for **tool use**, reasoning, and autonomous problem-solving.
 > 
 > I suggest that the setup how the tool usage can be applied with ik_llama.cpp should be documented somewhere.  Basically we need a MITM-tool to translate JSON<->TOOL_CALL_TOKENS.  And that's about it.
+
+> 👤 **ewhacc** replied on **2025-07-12** at **09:59:24**
 > 
-> 👤 **ewhacc** replied the **2025-07-12** at **09:59:24**:<br>
 > @ubergarm 
 > Are you going to cook quants?  ^^;   It uses deekseek architecture, so I'm hoping it runs in ik_llama.cpp flawlessly.
 > 
 > I have 512G RAM and would like to test IQ2.  I thought 256G is the best because using 512G (with higher bits) is too slow.  I was wrong.  Kimi-K2 keep the active experts the same but almost doubled the weights.  I guess tg speed is about the same, but pp will be slower.
 > 
 > I'm downloading original FP8 now.  I don't know why I'm doing this... ^^
+
+> 👤 **ubergarm** replied on **2025-07-12** at **15:43:55**
 > 
-> 👤 **ubergarm** replied the **2025-07-12** at **15:43:55**:<br>
 > @ewhacc 
 > 
 > I haven't looked to see if existing methods for going from fp8 safetensors to bf16 GGUFs would work on that model yet. I use the evshrion llama.cpp fork (from fairydreamings original MLA fork) plus triton-cpu to convert deepseek 671B without a GPU on a big RAM box. That is the first challenge.
@@ -184,8 +188,9 @@ A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonsho
 > Next you'll need over 1TB RAM to inference the Q8_0 to make an imatrix. I don't have access to the big RAM box right now, so I can't do this step at the moment. Plus its a pain to free up like 4TB disk space lol...
 > 
 > Keep us posted, I'm sure people will want to run this monster eventually
+
+> 👤 **ubergarm** replied on **2025-07-12** at **15:45:52**
 > 
-> 👤 **ubergarm** replied the **2025-07-12** at **15:45:52**:<br>
 > @magikRUKKOLA 
 > 
 > > I suggest that the setup how the tool usage can be applied with ik_llama.cpp should be documented somewhere. Basically we need a MITM-tool to translate JSON<->TOOL_CALL_TOKENS. And that's about it.
@@ -193,16 +198,18 @@ A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonsho
 > One guy put together a function calling wrapper thing, not sure if it is applicable here: https://github.com/ikawrakow/ik_llama.cpp/issues/407#issuecomment-2953602943
 > 
 > I haven't tried it personally.
+
+> 👤 **magikRUKKOLA** replied on **2025-07-12** at **20:58:08**
 > 
-> 👤 **magikRUKKOLA** replied the **2025-07-12** at **20:58:08**:<br>
 > > @magikRUKKOLA
 > > 
-> > One guy put together a function calling wrapper thing, not sure if it is applicable here: [#407 (comment)](https://github.com/ikawrakow/ik_llama.cpp/issues/407#issuecomment-2953602943)
+> > One guy put together a function calling wrapper thing, not sure if it is applicable here: [[#407](https://github.com/ikawrakow/ik_llama.cpp/issues/407) (comment)](https://github.com/ikawrakow/ik_llama.cpp/issues/407#issuecomment-2953602943)
 > > 
 > 
 > Yeah, I noticed.  I suggest some docs should be created on how to provide a frontend for the ik_llama.cpp to support the tool calling.  But first let me observe what solution would be the most elegant.
+
+> 👤 **magikRUKKOLA** replied on **2025-07-12** at **21:05:55**
 > 
-> 👤 **magikRUKKOLA** replied the **2025-07-12** at **21:05:55**:<br>
 > @ewhacc 
 > 
 > > I have 512G RAM and would like to test IQ2.
@@ -222,8 +229,9 @@ A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonsho
 > 
 > Yeah, I made a same mistake.
 > Small tip/note -- it you chose to use DDR4 don't buy 3200 MT/s (unless its for Lenovo machines).  The Samsung 2666 MT/s ECC overclocks with 1.35V great with crazy timings.  But you would have to install the additional fans and the heatsinks on top of the RAM.  Also, Gigabyte MC62-G40-00 suck -- it doesn't allow overclocking.
+
+> 👤 **magikRUKKOLA** replied on **2025-07-13** at **14:09:14**
 > 
-> 👤 **magikRUKKOLA** replied the **2025-07-13** at **14:09:14**:<br>
 > 621GB Q4_K quant dropped!
 > 
 > https://huggingface.co/KVCache-ai/Kimi-K2-Instruct-GGUF
@@ -232,7 +240,7 @@ A new model with MLA just dropped only 1000B-A32B https://huggingface.co/moonsho
 
 ---
 
-👤 **ewhacc** replied the **2025-07-13** at **11:25:36**:<br>
+👤 **ewhacc** commented on **2025-07-13** at **11:25:36**
 
 @ubergarm
 
@@ -250,7 +258,8 @@ Edit:  Failed to get q8_0.    I don't know it needs 1T RAM, but seems not a RAM 
 python ev_llama.cpp/convert_hf_to_gguf.py Kimi-K2-Instruct --outfile  Kimi-K2-Instruct-q8 --outtype q8_0
 ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
 
-> 👤 **ubergarm** replied the **2025-07-13** at **16:29:49**:<br>
+> 👤 **ubergarm** replied on **2025-07-13** at **16:29:49**
+> 
 > @ewhacc 
 > 
 > > I just tried fp8_cast_bf16.py but got VRAM OOM.
@@ -284,26 +293,30 @@ ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
 > I don't have access to enough RAM at the moment. Maybe will in the next few weeks :crossed_fingers: 
 > 
 > Thanks for blazing the trail! And feel free to open a new discussion/issue specific to Kimi-K2 etc...
+
+> 👤 **magikRUKKOLA** replied on **2025-07-13** at **18:17:56**
 > 
-> 👤 **magikRUKKOLA** replied the **2025-07-13** at **18:17:56**:<br>
 > > I don't have access to enough RAM at the moment. Maybe will in the next few weeks 🤞
 > 
 > Hey bro, are you in EU?  I can drop you some 1TB DDR5 RAM with a huge discount.
+
+> 👤 **ubergarm** replied on **2025-07-13** at **18:38:54**
 > 
-> 👤 **ubergarm** replied the **2025-07-13** at **18:38:54**:<br>
 > @magikRUKKOLA 
 > 
 > Oh man, thanks for the offer, no I'm in east coast usa currently. wendell at level1techs.com is hooking me up with access to a new remote rig he's assembling that is a big dual socket 1.5TB beast that should be online sooner than I expected!
+
+> 👤 **ewhacc** replied on **2025-07-14** at **00:16:44**
 > 
-> 👤 **ewhacc** replied the **2025-07-14** at **00:16:44**:<br>
 > @ubergarm 
 > You had have gone through all this tough process. Thank so much for sharing experience.
 > 
 > > Yes, if you can run inferencing with the 2TB VRAM+RAM bf16 GGUF, then you could use it directly for imatrix. I haven't tested the quality difference in terms of perplexity, but I believe the Q8_0 is sufficient given it is quite similar to the native fp8.
 > 
 > Oops, 2TB.  Sounds like going through Q8_0 is a must.
+
+> 👤 **ubergarm** replied on **2025-07-14** at **02:53:30**
 > 
-> 👤 **ubergarm** replied the **2025-07-14** at **02:53:30**:<br>
 > @ewhacc 
 > 
 > So Wendell just hooked me up with remote access to a big dual socket AMD CPU rig with 42TB of kioxia flash storage i put into two RAID0 arrays and with almost 1.5TB RAM - (no GPUs). So working through it now using the "mainline" method of casting the fp8 safetensors to bf16 safetensors first. 
@@ -311,8 +324,9 @@ ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
 > If I can get that working, I'll try to see if it is possible to adapt the evshiron fork to do the same MLA treatment to Kimi-K2 as it does for deepseek models and do the direct fp8 safetensors -> bf16 GGUF
 > 
 > A few folks working on it also here feel free to join with your findings: https://huggingface.co/gabriellarson/Kimi-K2-Instruct-GGUF/discussions/1
+
+> 👤 **ewhacc** replied on **2025-07-14** at **03:12:39**
 > 
-> 👤 **ewhacc** replied the **2025-07-14** at **03:12:39**:<br>
 > @ubergarm 
 > > A few folks working on it also here feel free to join with your findings: https://huggingface.co/gabriellarson/Kimi-K2-Instruct-GGUF/discussions/1
 > 
@@ -320,7 +334,7 @@ ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
 
 ---
 
-👤 **ewhacc** replied the **2025-07-13** at **11:30:20**:<br>
+👤 **ewhacc** commented on **2025-07-13** at **11:30:20**
 
 @magikRUKKOLA 
 >  Small tip/note -- it you chose to use DDR4 don't buy 3200 MT/s (unless its for Lenovo machines). The Samsung 2666 MT/s ECC overclocks with 1.35V great with crazy timings. But you would have to install the additional fans and the heatsinks on top of the RAM. Also, Gigabyte MC62-G40-00 suck -- it doesn't allow overclocking.
@@ -329,7 +343,7 @@ Thank you for the tip.  Yeah, I have temped to overclock DDR4, and even DDR5.  B
 
 ---
 
-👤 **magikRUKKOLA** replied the **2025-07-15** at **19:59:27**:<br>
+👤 **magikRUKKOLA** commented on **2025-07-15** at **19:59:27**
 
 ATTN!  Below is not a joke.  Its an actual latest commit for the flashinfer.  Please pay attention:
 

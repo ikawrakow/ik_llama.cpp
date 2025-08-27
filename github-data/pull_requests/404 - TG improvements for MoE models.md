@@ -1,18 +1,21 @@
-### 🔀 [#404](https://github.com/ikawrakow/ik_llama.cpp/pull/404) - TG improvements for MoE models
+## 🔀 [Pull Request #404](https://github.com/ikawrakow/ik_llama.cpp/pull/404) - TG improvements for MoE models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/remove_unnessessary_ids_copy` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-10 |
 | **Updated** | 2025-05-10 |
+| **Merged** | 2025-05-10 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR does 3 things:
 * Removes an unnecessary device to host copy of selected experts IDs on CUDA. This results in a few percent improvement of CUDA TG speed for MoE models
-* Fixes bugs related to Smart Experts Reduction (SER, see #239). The issue was that the `GGML_OP_GET_ROWS` op implementation did not consider disabled experts for float tensors. As a result, when combining the results of the experts garbage weights were used for the disabled experts, which could lead to NaNs.  
+* Fixes bugs related to Smart Experts Reduction (SER, see [#239](https://github.com/ikawrakow/ik_llama.cpp/issues/239)). The issue was that the `GGML_OP_GET_ROWS` op implementation did not consider disabled experts for float tensors. As a result, when combining the results of the experts garbage weights were used for the disabled experts, which could lead to NaNs.  
 * Further improves CUDA TG performance with SER enabled. Here the `ggml_cuda_op_mul_mat_vec_q_id` function did not consider that an expert may be disabled, and needlessly calculated the matrix-vector multiplication for disabled experts.
 
 Prompt processing is not eaffected by these changes.

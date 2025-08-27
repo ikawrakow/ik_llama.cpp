@@ -1,18 +1,21 @@
-### 🔀 [#32](https://github.com/ikawrakow/ik_llama.cpp/pull/32) - Zen4 Flash Attention
+## 🔀 [Pull Request #32](https://github.com/ikawrakow/ik_llama.cpp/pull/32) - Zen4 Flash Attention
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/zen4_flash_attn` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-01 |
 | **Updated** | 2024-09-01 |
+| **Merged** | 2024-09-01 |
 
 ---
 
-#### Description
+## 📄 Description
 
 ### TL;DR
 
-This PR adds a flash attention (FA) implementation optimized for the Zen4 architecture as part of the quest to improve CPU inference for long contexts (#25, #26).
+This PR adds a flash attention (FA) implementation optimized for the Zen4 architecture as part of the quest to improve CPU inference for long contexts ([#25](https://github.com/ikawrakow/ik_llama.cpp/issues/25), [#26](https://github.com/ikawrakow/ik_llama.cpp/issues/26)).
 
 ### Limitations
 

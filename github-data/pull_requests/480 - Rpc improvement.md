@@ -1,14 +1,17 @@
-### 🔀 [#480](https://github.com/ikawrakow/ik_llama.cpp/pull/480) - Rpc improvement
+## 🔀 [Pull Request #480](https://github.com/ikawrakow/ik_llama.cpp/pull/480) - Rpc improvement
 
 | **Author** | `firecoperana` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `rpc_improvement` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-01 |
 | **Updated** | 2025-06-25 |
+| **Merged** | 2025-06-08 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Include various improvement of rpc from mainline including: 
 1. adding rpc backend to override tensor option
@@ -25,21 +28,21 @@ Include various improvement of rpc from mainline including:
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **saood06** commented the **2025-06-01** at **02:58:58**:<br>
+👤 **saood06** commented on **2025-06-01** at **02:58:58**
 
-Has this been tested? If so with what models and backends and what configurations. I attempted a similar PR a while ago, see #193 and when tested it did not work with Qwen2.5 72B since on mainline the PR that added "non-512 aligned tensors" was created to add support for that model. I also found that using KV cache quantization still did not work with RPC with or without #193.
+Has this been tested? If so with what models and backends and what configurations. I attempted a similar PR a while ago, see [#193](https://github.com/ikawrakow/ik_llama.cpp/issues/193) and when tested it did not work with Qwen2.5 72B since on mainline the PR that added "non-512 aligned tensors" was created to add support for that model. I also found that using KV cache quantization still did not work with RPC with or without [#193](https://github.com/ikawrakow/ik_llama.cpp/issues/193).
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-01** at **05:43:47**:<br>
+👤 **ikawrakow** commented on **2025-06-01** at **05:43:47**
 
 I don't use RPC, so need other people to confirm that this works.
 
 ---
 
-👤 **saood06** commented the **2025-06-01** at **06:20:06**:<br>
+👤 **saood06** commented on **2025-06-01** at **06:20:06**
 
 > I don't use RPC, so need other people to confirm that this works.
 
@@ -47,31 +50,49 @@ I don't mind testing and reviewing this but before I do, I want to know what new
 
 ---
 
-👤 **firecoperana** commented the **2025-06-01** at **12:45:44**:<br>
+👤 **firecoperana** commented on **2025-06-01** at **12:45:44**
 
 I tested various quants of Deepseek v2.5, v3, v3 0324 models and it works. V3 0324 is the one with MLA support from mainline. Didn't test other models as I don't use them on this repo.
 
 ---
 
-👤 **firecoperana** commented the **2025-06-01** at **13:08:24**:<br>
+👤 **saood06** commented on **2025-06-01** at **12:53:03**
+
+> I tested various quants of Deepseek v2.5, v3, v3 0324 models and it works. V3 0324 is the one with MLA support from mainline. Didn't test other models as I don't use them on this repo.
+
+Did you test with `-ot` or cache quantization? Do you mind sharing performance and what hardware you used?
+
+---
+
+👤 **firecoperana** commented on **2025-06-01** at **13:08:24**
 
 My main machine is 3090 with 128GB ddr4. I did -ot to override individual expert tensors to my other machines with ddr4 3000mhz ram and 3060, and with --cache-type-k q8_0 and batch size of 512, in which case I can load the whole model into either vram and ram. I use cpu RPC backend to use ram from remote machines. For Deepseek V3 Q2_K_XL, I can get 10 it/s for pp and 3 it/s for inferencing. Deepseek V2.5 Q4 is about 6-7 it/s for inferencing.
 
 ---
 
-👤 **firecoperana** commented the **2025-06-01** at **13:24:34**:<br>
+👤 **saood06** commented on **2025-06-01** at **13:16:15**
+
+> My main machine is 3090 with 128GB ddr4. I did -ot to override individual expert tensors to my other machines with ddr4 3000mhz ram and 3060, and with --cache-type-k q8_0 and batch size of 512, in which case I can load the whole model into either vram and ram. I use cpu RPC backend to use ram from remote machines. For Deepseek V3 Q2_K_XL, I can get 10 it/s for pp and 3 it/s for inferencing. Deepseek V2.5 Q4 is about 6-7 it/s for inferencing.
+
+Thank you for the details. For now I'll do some testing on Deepseek, with an RPC backend on my 3090 and `-ot`, with the rest of the model in RAM on the DDR4 server I usually use for inference.
+
+For reference with my pure IQ4_K_R4 I get similar speeds you get with RPC for both PP and TG so hopefully with RPC it can improve (and since those quants are now supported on CUDA, I won't need to make a new quant).
+
+---
+
+👤 **firecoperana** commented on **2025-06-01** at **13:24:34**
 
 Be sure to set -t n -c in cpu backend, where n is the number of threads you want the tensors in ram to use. -c is to load tensors from local files next time. This is useful if you have slow LAN transfer speed.
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-02** at **09:25:04**:<br>
+👤 **ikawrakow** commented on **2025-06-02** at **09:25:04**
 
 No user feedback here, so new strategy: I'll merge this tomorrow. If we don't get bug reports, all is good. If we do get bug reports, all is good too because we know that it needs further work.
 
 ---
 
-👤 **saood06** commented the **2025-06-02** at **10:15:59**:<br>
+👤 **saood06** commented on **2025-06-02** at **10:15:59**
 
 > No user feedback here, so new strategy: I'll merge this tomorrow. If we don't get bug reports, all is good. If we do get bug reports, all is good too because we know that it needs further work.
 
@@ -79,21 +100,45 @@ I haven't found the time to test this, but I do plan to, in the next few days. (
 
 ---
 
-👤 **firecoperana** commented the **2025-06-08** at **13:42:29**:<br>
+👤 **ikawrakow** commented on **2025-06-08** at **11:52:02**
 
-> I get build errors after merging this PR, so reverted. Please fix and resubmit.
-
-What's the error? Does the error happen when you set DGGML_RPC=OFF?
+I get build errors after merging this PR, so reverted. Please fix and resubmit.
 
 ---
 
-👤 **firecoperana** commented the **2025-06-08** at **14:23:46**:<br>
+👤 **firecoperana** commented on **2025-06-08** at **13:42:29**
+
+> I get build errors after merging this PR, so reverted. Please fix and resubmit.
+
+What's the error? Does the error happen only when you set DGGML_RPC=OFF?
+
+---
+
+👤 **ikawrakow** commented on **2025-06-08** at **13:48:08**
+
+```
+/home/iwan/other/ik_llama.cpp/common/common.cpp: In function ‘bool gpt_params_find_arg(int, char**, const std::string&, gpt_params&, int&, bool&)’:
+/home/iwan/other/ik_llama.cpp/common/common.cpp:1013:13: error: ‘ggml_backend_rpc_buffer_type’ was not declared in this scope; did you mean ‘ggml_backend_cpu_buffer_type’?
+ 1013 |             ggml_backend_rpc_buffer_type(server.c_str());
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |             ggml_backend_cpu_buffer_type
+/home/iwan/other/ik_llama.cpp/common/common.cpp:1016:9: error: ‘ggml_backend_rpc_buffer_type’ was not declared in this scope; did you mean ‘ggml_backend_cpu_buffer_type’?
+ 1016 |         ggml_backend_rpc_buffer_type(servers.c_str());
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      |         ggml_backend_cpu_buffer_type
+```
+
+This is with `-DGGML_RPC=OFF`
+
+---
+
+👤 **firecoperana** commented on **2025-06-08** at **14:23:46**
 
 Fixed
 
 ---
 
-👤 **saood06** commented the **2025-06-22** at **20:52:33**:<br>
+👤 **saood06** commented on **2025-06-22** at **20:52:33**
 
 Finally got around to testing this. It seems functional (sweep-bench testing only), but I couldn't get any performance advantage from offloading Deepseek-V3 based models via RPC to my 3090. I know when I tested that on mainline I also noticed a performance regression (that went up with the more I offloaded).
 
@@ -105,7 +150,7 @@ I may revisit when I eventually get an infiniband connection between the two com
 
 ---
 
-👤 **firecoperana** commented the **2025-06-23** at **00:37:44**:<br>
+👤 **firecoperana** commented on **2025-06-23** at **00:37:44**
 
 > Finally got around to testing this. It seems functional (sweep-bench testing only), but I couldn't get any performance advantage from offloading Deepseek-V3 based models via RPC to my 3090. I know when I tested that on mainline I also noticed a performance regression (that went up with the more I offloaded).
 > 
@@ -119,7 +164,7 @@ Can you add --tensor-split 0,99? This will make sure all non-expert layers are o
 
 ---
 
-👤 **saood06** commented the **2025-06-23** at **01:07:12**:<br>
+👤 **saood06** commented on **2025-06-23** at **01:07:12**
 
 > Can you add --tensor-split 0,99? This will make sure all non-expert layers are offloaded to RPC machine. You could try to offload expert layers to your 3090 with blk.(12|13).ffn_.*_exps=RPC[10.0.0.250:50052] to fully use 3090's VRAM. 
 
@@ -313,7 +358,7 @@ There definitely was a lot of network traffic happening during inference. I don'
 
 ---
 
-👤 **HariboApfel** commented the **2025-06-25** at **08:06:14**:<br>
+👤 **HariboApfel** commented on **2025-06-25** at **08:06:14**
 
 i am encountering abysmal performance with ik_llama and rpc. I "assume" its rpc related.
 
@@ -367,12 +412,116 @@ any help would be apprichiated.
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-25** at **10:45:43**:<br>
+👤 **ikawrakow** commented on **2025-06-25** at **08:53:42**
+
+I never use RPC, so somebody else should comment.
+
+---
+
+👤 **HariboApfel** commented on **2025-06-25** at **10:17:36**
+
+i got rpc atleast working after redoing the arguments from the 1st post.
+
+using 
+
+`./ik_llama.cpp/build/bin/llama-cli \
+  --model models/ubergarm/DeepSeek-R1-0528-GGUF/IQ2_K_R4/DeepSeek-R1-0528-IQ2_K_R4-00001-of-00005.gguf \
+  --threads 48 \
+  --n-gpu-layers 99 \
+  --temp 0.6 \
+  --top_p 0.95 \
+  --min_p 0.01 \
+  --ctx-size 16384 \
+  --flash-attn \
+  -mla 3 -fa \
+  -amb 512 \
+  -fmoe \
+  -ctk q8_0 \
+  -ot "blk\.(1|2|3|4|5|6)\.ffn_.*=CUDA0" \
+  -ot "blk\.(7|8|9|10)\.ffn_.*=CUDA1" \
+  -ot "blk\.(11|12|13|14)\.ffn_.*=CUDA2" \
+  -ot "blk\.(15|16|17|18)\.ffn_.*=CUDA3" \
+  --override-tensor exps=CPU \
+  --prompt`
+
+to only run it on one host gets me closer to "expected performance"
+
+`llama_print_timings:        load time =   98945.88 ms
+llama_print_timings:      sample time =      45.19 ms /   384 runs   (    0.12 ms per token,  8497.27 tokens per second)
+llama_print_timings: prompt eval time =    5969.18 ms /   224 tokens (   26.65 ms per token,    37.53 tokens per second)
+llama_print_timings:        eval time =   57680.32 ms /   383 runs   (  150.60 ms per token,     6.64 tokens per second)
+llama_print_timings:       total time =   63916.49 ms /   607 tokens`
+
+
+with RPC
+
+`./ik_llama.cpp/build/bin/llama-cli \
+  --rpc "$RPC_SERVERS" \
+  --model models/ubergarm/DeepSeek-R1-0528-GGUF/IQ2_K_R4/DeepSeek-R1-0528-IQ2_K_R4-00001-of-00005.gguf \
+  --threads 48 \
+  --n-gpu-layers 99 \
+  --temp 0.6 \
+  --top_p 0.95 \
+  --min_p 0.01 \
+  --ctx-size 16384 \
+  --flash-attn \
+  -mla 3 -fa \
+  -amb 512 \
+  -fmoe \
+  -ctk q8_0 \
+  -ot "blk\.(1|2|3|4|5|6)\.ffn_.*=CUDA0" \
+  -ot "blk\.(7|8|9|10)\.ffn_.*=CUDA1" \
+  -ot "blk\.(11|12|13|14)\.ffn_.*=CUDA2" \
+  -ot "blk\.(15|16|17|18)\.ffn_.*=CUDA3" \
+  -ot "blk\.(19|20|21|22)\.ffn_.*=RPC[10.0.0.28:50052]" \
+  -ot "blk\.(23|24|25|26)\.ffn_.*=RPC[10.0.0.28:50053]" \
+  -ot "blk\.(27|28|29|30)\.ffn_.*=RPC[10.0.0.28:50054]" \
+  -ot "blk\.(31|32|33|34)\.ffn_.*=RPC[10.0.0.28:50055]" \
+  -ot "blk\.(35|36|37|38)\.ffn_.*=RPC[10.0.0.40:50052]" \
+  -ot "blk\.(39|40|41|42)\.ffn_.*=RPC[10.0.0.40:50053]" \
+  -ot "blk\.(43|44|45|46)\.ffn_.*=RPC[10.0.0.40:50054]" \
+  -ot "blk\.(47|48|49|50)\.ffn_.*=RPC[10.0.0.40:50055]" \
+  --override-tensor exps=CPU \
+  --prompt`
+
+i get around 5.5T/s
+`
+llama_print_timings:        load time =  568857.08 ms
+llama_print_timings:      sample time =     963.77 ms /  7798 runs   (    0.12 ms per token,  8091.13 tokens per second)
+llama_print_timings: prompt eval time =    8689.40 ms /   224 tokens (   38.79 ms per token,    25.78 tokens per second)
+llama_print_timings:        eval time = 1420492.95 ms /  7797 runs   (  182.18 ms per token,     5.49 tokens per second)
+llama_print_timings:       total time = 1432903.60 ms /  8021 tokens`
+
+which is still less then llama.cpp with the same rpc setting with the unsloth unsloth/DeepSeek-R1-0528-GGUF/UD-Q2_K_XL quant ??
+
+the only real difference would be the -ot setting there- 
+for llama.cpp i use
+
+` --cache-type-k q4_0 \
+  --threads 48 \
+  --n-gpu-layers 99 \
+  --prio 3 \
+  --temp 0.6 \
+  --top_p 0.95 \
+  --min_p 0.01 \
+  --flash-attn \
+  --ctx-size 16384 \
+  -ot "\.(3[5-9]|4[0-9]|5[0-9]|6[0-9]|7[0-9]|8[0-9]|9[0-9]|[0-9][0-9][0-9])\.ffn_up_exps.=CPU" \
+  -no-cnv \
+  --prompt`
+
+giving me 7.5T/s
+
+i would have assumend IK_llama is faster.
+
+---
+
+👤 **ikawrakow** commented on **2025-06-25** at **10:45:43**
 
 You can use Unsloth's UD-Q2_K_XL model (or any model that works with `llama.cpp`) with `ik_llama.cpp` just fine, and that would be more of an apples-to-apples comparison. It would also be useful to use the same cache type if you are after a performance comparison.
 
 ---
 
-👤 **firecoperana** commented the **2025-06-25** at **16:12:42**:<br>
+👤 **firecoperana** commented on **2025-06-25** at **16:12:42**
 
 Also for fair comparison, please compare if allocation of vram buffer and layers for each gpu and cpu are the same as mainline. I use tensor-split to control the exact number of layers for each gpu. And note that ik_llama has different order for tensor split than llama.cpp.
