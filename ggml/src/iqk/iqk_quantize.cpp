@@ -1464,12 +1464,11 @@ size_t quantize_iq2_ks(const float * src, void * dst, int64_t nrows, int64_t n_p
     int nblock = n_per_row/QK_K;
     std::vector<float> all_scales(nblock*(QK_K/kBlockSize)), all_sw(nblock*(QK_K/kBlockSize));
     std::vector<int8_t> all_Ls(nblock*(QK_K/kBlockSize));
-    char * qrow = (char *)dst;
-    for (int64_t row = 0; row < nrows; ++row) {
-        quantize_row_iq2_ks_impl(src, (void *)qrow, n_per_row, imatrix, all_scales.data(), all_sw.data(), all_Ls.data());
-        src += n_per_row;
-        qrow += row_size;
-    }
+    auto q_func = [&all_scales, &all_sw, &all_Ls] (const float * x, void * vy, int n_per_row, const float * imatrix) {
+        quantize_row_iq2_ks_impl(x, vy, n_per_row, imatrix, all_scales.data(), all_sw.data(), all_Ls.data());
+    };
+    QHelper helper(imatrix, n_per_row, kBlockSize);
+    helper.quantize(nrows, src, dst, row_size, q_func);
     return nrows * row_size;
 }
 
@@ -1829,12 +1828,11 @@ size_t quantize_iq2_kl(const float * src, void * dst, int64_t nrows, int64_t n_p
     auto row_size = ggml_row_size(GGML_TYPE_IQ2_KL, n_per_row);
     int nblock = n_per_row/QK_K;
     std::vector<float> all_scales(nblock*(QK_K/kBlockSize));
-    char * qrow = (char *)dst;
-    for (int64_t row = 0; row < nrows; ++row) {
-        quantize_row_iq2_kl_impl(src, (void *)qrow, n_per_row, imatrix, all_scales.data());
-        src += n_per_row;
-        qrow += row_size;
-    }
+    auto q_func = [&all_scales] (const float * x, void * vy, int n_per_row, const float * imatrix) {
+        quantize_row_iq2_kl_impl(x, vy, n_per_row, imatrix, all_scales.data());
+    };
+    QHelper helper(imatrix, n_per_row, kBlockSize);
+    helper.quantize(nrows, src, dst, row_size, q_func);
     return nrows * row_size;
 }
 
@@ -4638,75 +4636,6 @@ static void quantize_row_iq4_kss_impl(int n_per_row, const float * x, char * cy,
     }
     if (sumq2 > 0) *dptr = sumqx/sumq2 * 1.01f;
 }
-
-void prune_iq4ks_to_iq4kss(int n_per_row, const uint16_t * table, const char * cx, const float * x, char *cy,
-        const float * quant_weights, float * weight, float * all_scales) {
-    constexpr int kBlockSize = 32;
-    float xv[4], wv[4];
-    uint16_t vps[kBlockSize/4];
-    const float * dptr_ks = (const float *)cx;
-    const float d_ks = *dptr_ks;
-    const block_iq4_ks * iq4ks = (const block_iq4_ks *)(dptr_ks + 1);
-    float * dptr = (float *)cy;
-    *dptr = d_ks;
-    block_iq4_kss * y = (block_iq4_kss *)(dptr + 1);
-    int nblock = n_per_row/QK_K;
-    float max_abs_scale = 0;
-    for (int ibl = 0; ibl < nblock; ++ibl) {
-        auto scales = all_scales + ibl*(QK_K/kBlockSize);
-        const float * xbl = x + ibl*QK_K;
-        float sigma2 = 0;
-        for (int j = 0; j < QK_K; ++j) sigma2 += xbl[j]*xbl[j];
-        sigma2 *= 2.f/QK_K;
-        const uint16_t * q4 = (const uint16_t *)iq4ks[ibl].qs;
-        for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
-            const float * xb = xbl + ib*kBlockSize;
-            if (quant_weights) {
-                const float * qw = quant_weights + ibl*QK_K + ib*kBlockSize;
-                for (int j = 0; j < kBlockSize; ++j) weight[j] = qw[j] * sqrtf(sigma2 + xb[j]*xb[j]);
-            } else {
-                for (int j = 0; j < kBlockSize; ++j) weight[j] = xb[j]*xb[j];
-            }
-            const int8_t * values = iq4k_values + ((iq4ks[ibl].scales[ib] & 1) << 4);
-            float dl  = d_ks * ((iq4ks[ibl].scales[ib] & 254) - 127);
-            float sumqx = 0, sumq2 = 0;
-            for (int k = 0; k < kBlockSize/4; ++k) {
-                xv[0] =     xb[2*k+0]; xv[1] =     xb[2*k+kBlockSize/2]; xv[2] =     xb[2*k+1]; xv[3] =     xb[2*k+1+kBlockSize/2];
-                wv[0] = weight[2*k+0]; wv[1] = weight[2*k+kBlockSize/2]; wv[2] = weight[2*k+1]; wv[3] = weight[2*k+1+kBlockSize/2];
-                auto vp = prune_iq4ks(q4[k], values, xv, wv, dl);
-                vps[k] = table[vp & 0x7fff];
-                for (int j = 0; j < 4; ++j) {
-                    float q = values[(vp >> 4*j) & 0xf];
-                    sumqx += wv[j]*q*xv[j];
-                    sumq2 += wv[j]*q*q;
-                }
-            }
-            for (int k = 0; k < kBlockSize/8; ++k) {
-                y[ibl].qs[(kBlockSize/8)*ib + k] = vps[2*k+0] | (vps[2*k+1] << 15) | (((iq4ks[ibl].scales[ib] >> 2*k) & 3) << 30);
-                //y[ibl].qs[(kBlockSize/8)*ib + k] = vps[2*k+0] | (vps[2*k+1] << 15);
-            }
-            scales[ib] = sumq2 > 0 ? sumqx/sumq2 : dl;
-            max_abs_scale = std::max(max_abs_scale, scales[ib]);
-            q4 += kBlockSize/4;
-        }
-    }
-    //if (!max_abs_scale) return;
-    //float d = max_abs_scale/127;
-    //*dptr = d;
-    //float id = 1/d;
-    //for (int ibl = 0; ibl < nblock; ++ibl) {
-    //    auto scales = all_scales + ibl*(QK_K/kBlockSize);
-    //    for (int ib = 0; ib < QK_K/kBlockSize; ++ib) {
-    //        int l = nearest_int(0.5f*(id*scales[ib]+127.f));
-    //        l = std::max(0, std::min(127, l)) << 1;
-    //        l |= (iq4ks[ibl].scales[ib] & 1);
-    //        for (int k = 0; k < 4; ++k) {
-    //            //y[ibl].qs[4*ib+k] &= 0x3fffffff;
-    //            y[ibl].qs[4*ib+k] |= (((l >> 2*k) & 3) << 30);
-    //        }
-    //    }
-    //}
-}
 }
 
 size_t quantize_iq4_kss(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
@@ -4741,19 +4670,6 @@ void dequantize_row_iq4_kss(const block_iq4_kss * x, float * y, int64_t k) {
     for (int ibl = 0; ibl < k/QK_K; ++ibl) {
         auto qs = (const uint16_t *)x[ibl].qs;
         for (int ib = 0; ib < QK_K/32; ++ib) {
-            //uint8_t ls = ((qs[0] >> 30) | ((qs[1] >> 28) & 0x0c) | ((qs[2] >> 26) & 0x30) | ((qs[3] >> 24) & 0xc0));
-            //const int8_t * values = iq4k_values + ((ls & 1) << 4);
-            //const float dl = d * ((ls & 254) - 127);
-            //for (int k = 0; k < 4; ++k) {
-            //    uint16_t vl = qs[k] & 0x7fff;
-            //    vl ^= (vl << 1);
-            //    uint16_t vh = (qs[k] >> 15) & 0x7fff;
-            //    vh ^= (vh << 1);
-            //    for (int j = 0; j < 4; ++j) {
-            //        y[4*k + j +  0] = dl*values[(vl >> 4*j) & 0xf];
-            //        y[4*k + j + 16] = dl*values[(vh >> 4*j) & 0xf];
-            //    }
-            //}
             int16_t ls = 0;
             for (int k = 0; k < 8; ++k) {
                 aux16[k] = qs[k] & 0xfffe;
