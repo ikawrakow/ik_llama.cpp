@@ -314,7 +314,7 @@ void compute_row_ids(const int32_t * ids, int32_t * ids_src1, int32_t * ids_dst,
 }
 
 void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
-        const ggml_tensor * ids_tensor, ggml_tensor * dst, char * ids_data, char * src1_quantized_data) {
+        const ggml_tensor * ids_tensor, ggml_tensor * dst, char * ids_data, char * src1_quantized_data, bool is_next) {
     GGML_ASSERT(       src1->type == GGML_TYPE_F32);
     GGML_ASSERT(       dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(ids_tensor->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
@@ -377,6 +377,7 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
         ids_src1 = (int32_t *)ids_data;
         ids_dst  = ids_src1 + ne_get_rows;
         expert_bounds = ids_dst + ne_get_rows;
+        if (is_next) ids_src1 = ids_dst;
     }
     else {
         GGML_ASSERT(ids_tensor->nb[0] == ggml_element_size(ids_tensor));
