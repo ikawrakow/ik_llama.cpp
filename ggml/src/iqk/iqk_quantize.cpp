@@ -3014,14 +3014,10 @@ void quantize_row_iq5_k(const float * x, void * vy, int64_t k) {
 
 size_t quantize_iq5_k(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     GGML_ASSERT(n_per_row%QK_K == 0);
-    int nblock = n_per_row/QK_K;
-    char * qrow = (char *)dst;
-    for (int64_t row = 0; row < nrows; ++row) {
-        quantize_row_iq5_k_impl(src, (void *)qrow, n_per_row, imatrix);
-        src += n_per_row;
-        qrow += nblock*sizeof(block_iq5_k);
-    }
-    return nrows * nblock * sizeof(block_iq5_k);
+    QHelper helper(imatrix, n_per_row, 16);
+    auto row_size = ggml_row_size(GGML_TYPE_IQ5_K, n_per_row);
+    helper.quantize(nrows, src, dst, row_size, quantize_row_iq5_k_impl);
+    return nrows * row_size;
 }
 
 //
@@ -3377,19 +3373,18 @@ void quantize_row_iq6_k(const float * x, void * vy, int64_t k) {
 
 size_t quantize_iq6_k(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     GGML_ASSERT(n_per_row%QK_K == 0);
-    int nblock = n_per_row/QK_K;
-    char * qrow = (char *)dst;
     float values[128];
     for (int i = 0; i < 64; ++i) {
         values[i] = iq6nl_values[i];
         values[i+64] = values[i] + S_IQ6K;
     }
-    for (int64_t row = 0; row < nrows; ++row) {
-        quantize_row_iq6_k_impl(src, (void *)qrow, n_per_row, imatrix, values, values + 64);
-        src += n_per_row;
-        qrow += nblock*sizeof(block_iq6_k);
-    }
-    return nrows * nblock * sizeof(block_iq6_k);
+    auto q_func = [values] (const float * x, void * vy, int n_per_row, const float * imatrix) {
+        quantize_row_iq6_k_impl(x, vy, n_per_row, imatrix, values, values + 64);
+    };
+    auto row_size = ggml_row_size(GGML_TYPE_IQ6_K, n_per_row);
+    QHelper helper(imatrix, n_per_row, 16);
+    helper.quantize(nrows, src, dst, row_size, q_func);
+    return nrows * row_size;
 }
 
 namespace {
