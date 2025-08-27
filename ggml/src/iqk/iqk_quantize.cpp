@@ -5152,8 +5152,12 @@ size_t quantize_q6_0_r4(const float * src, void * dst, int64_t nrows, int64_t n_
     auto row_size_0 = ggml_row_size(GGML_TYPE_Q6_0, n_per_row);
     std::vector<char> qtmp(4*row_size_0);
     char * qrow = (char *)dst;
+    QHelper helper(imatrix, n_per_row, 32);
+    auto q_func = [] (const float * x, void * vy, int n_per_row, const float * imatrix) {
+        quantize_q6_0(x, (char *)vy, 1, n_per_row, imatrix);
+    };
     for (int row = 0; row < nrows; row += 4) {
-        quantize_q6_0(src, qtmp.data(), 4, n_per_row, imatrix);
+        helper.quantize(4, src, qtmp.data(), row_size_0, q_func);
         repack_q6_0(4, n_per_row, (const block_q6_0 *)qtmp.data(), (block_q6_0_r4 *)qrow, false);
         src += 4*n_per_row;
         qrow += 4*row_size_0;
