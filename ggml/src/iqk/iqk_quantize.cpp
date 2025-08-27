@@ -4849,11 +4849,15 @@ static void modify_q4_0_r8(int64_t k, char * cy) {
 
 size_t quantize_q4_0_r8(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     GGML_ASSERT(nrows%8 == 0);
-    auto row_size_nl = ggml_row_size(GGML_TYPE_IQ4_NL, n_per_row);
+    auto row_size_nl = ggml_row_size(GGML_TYPE_Q4_0, n_per_row);
     std::vector<char> qtmp(8*row_size_nl);
+    QHelper helper(imatrix, n_per_row, 32);
+    auto q_func = [] (const float * x, void * vy, int n_per_row, const float * imatrix) {
+        quantize_q4_0(x, (char *)vy, 1, n_per_row, imatrix);
+    };
     char * qrow = (char *)dst;
     for (int row = 0; row < nrows; row += 8) {
-        quantize_q4_0(src, qtmp.data(), 8, n_per_row, imatrix);
+        helper.quantize(8, src, qtmp.data(), row_size_nl, q_func);
         repack_q4_0(8, n_per_row, (const block_q4_0 *)qtmp.data(), (block_iq4_nl_r8 *)qrow, false);
         src += 8*n_per_row;
         qrow += 8*row_size_nl;
