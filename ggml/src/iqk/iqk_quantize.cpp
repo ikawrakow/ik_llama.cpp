@@ -4710,20 +4710,17 @@ void prune_iq4ks_to_iq4kss(int n_per_row, const uint16_t * table, const char * c
 }
 
 size_t quantize_iq4_kss(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
-    constexpr int kBlockSize = 32; //128;
+    constexpr int kBlockSize = 32;
     GGML_ASSERT(n_per_row%QK_K == 0);
     auto row_size    = ggml_row_size(GGML_TYPE_IQ4_KSS, n_per_row);
-    auto row_size_ks = ggml_row_size(GGML_TYPE_IQ4_KS, n_per_row);
-    std::vector<char> work(row_size_ks);
     std::vector<float> all_scales(n_per_row/kBlockSize);
     float weight[kBlockSize];
-    auto qrow = (char *)dst;
     auto table = scramble_table();
-    for (int row = 0; row < nrows; ++row) {
-        quantize_row_iq4_kss_impl(n_per_row, src, qrow, all_scales.data(), weight, iq4k_values, imatrix, table, 7);
-        src  += n_per_row;
-        qrow += row_size;
-    }
+    QHelper helper(imatrix, n_per_row, kBlockSize);
+    auto q_func = [&all_scales, &weight, table] (const float * x, void * vy, int n_per_row, const float * imatrix) {
+        quantize_row_iq4_kss_impl(n_per_row, x, (char *)vy, all_scales.data(), weight, iq4k_values, imatrix, table, 7);
+    };
+    helper.quantize(nrows, src, dst, row_size, q_func);
     return nrows * row_size;
 }
 
