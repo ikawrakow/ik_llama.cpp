@@ -2674,22 +2674,22 @@ void quantize_row_iq4_k(const float * x, void * vy, int64_t k) {
 
 size_t quantize_iq4_k(const float * src, void * dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     GGML_ASSERT(n_per_row%QK_K == 0);
-    int nblock = n_per_row/QK_K;
-    char * qrow = (char *)dst;
     uint8_t L[QK_K];
     float weight[16];
     float scales[QK_K/16];
-    for (int64_t row = 0; row < nrows; ++row) {
-        block_iq4_k * iq4 = (block_iq4_k *)qrow;
+    auto q_func = [&L, &weight, &scales] (const float * x, void * vy, int n_per_row, const float * imatrix) {
+        block_iq4_k * iq4 = (block_iq4_k *)vy;
+        int nblock = n_per_row/QK_K;
         for (int ibl = 0; ibl < nblock; ++ibl) {
-            const float * qw = imatrix ? imatrix + QK_K*ibl : NULL;
-            quantize_row_iq4_k_impl_bs16(QK_K, 16, src + QK_K*ibl, iq4 + ibl,
+            const float * qw = imatrix ? imatrix + QK_K*ibl : nullptr;
+            quantize_row_iq4_k_impl_bs16(QK_K, 16, x + QK_K*ibl, iq4 + ibl,
                     scales, weight, L, iq4k_values, qw, 7);
         }
-        src += n_per_row;
-        qrow += nblock*sizeof(block_iq4_k);
-    }
-    return nrows * nblock * sizeof(block_iq4_k);
+    };
+    auto row_size = ggml_row_size(GGML_TYPE_IQ4_K, n_per_row);
+    QHelper helper(imatrix, n_per_row, 16);
+    helper.quantize(nrows, src, dst, row_size, q_func);
+    return nrows * row_size;
 }
 
 //
