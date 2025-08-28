@@ -103,7 +103,8 @@ static __global__ void mmq_ids_helper(
         const mmq_ids_helper_store store_it = store[itc];
         const int it       = store_it.it();
         const int iex_used = store_it.iex_used();
-        ids_src1[nex_prev + itc] = it*sis1          + iex_used % nchannels_y;
+        //ids_src1[nex_prev + itc] = it*sis1          + iex_used % nchannels_y;
+        ids_src1[nex_prev + itc] = it;
         ids_dst [nex_prev + itc] = it*n_expert_used + iex_used;
     }
 
