@@ -1947,7 +1947,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
                     amax = ax; max = xb[j];
                 }
             }
-            if (!amax) {
+            if (amax < 1e-9f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -1955,6 +1955,7 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
             float id = 1/d;
             float sumqx_p = 0, sumq2_p = 0;
             float sumqx_m = 0, sumq2_m = 0;
+            float best = 0;
             for (int j = 0; j < 16; ++j) {
                 float w = weight[j];
                 float al = id*xb[j];
@@ -1967,8 +1968,10 @@ static void quantize_row_iq3_k_impl(const float * x, void * vy, int n_per_row, c
                 sumqx_m += w*q*xb[j];
                 sumq2_m += w*q*q;
             }
-            d = sumqx_p/sumq2_p;
-            float best = d*sumqx_p;
+            if (sumq2_p > 0) {
+                d = sumqx_p/sumq2_p;
+                best = d*sumqx_p;
+            }
             if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
                 d = sumqx_m/sumq2_m; best = d*sumqx_m;
             }
@@ -2231,7 +2234,7 @@ static void quantize_row_iq3_ks_impl(const int super_block_size, const int block
                     amax = ax; max = xb[j];
                 }
             }
-            if (!amax) {
+            if (amax < 1e-9f) {
                 scales[ib] = 0;
                 continue;
             }
@@ -2239,6 +2242,7 @@ static void quantize_row_iq3_ks_impl(const int super_block_size, const int block
             float id = 1/d;
             float sumqx_p = 0, sumq2_p = 0;
             float sumqx_m = 0, sumq2_m = 0;
+            float best = 0;
             for (int j = 0; j < block_size; ++j) {
                 float w = weight[j];
                 float al = id*xb[j];
@@ -2251,12 +2255,14 @@ static void quantize_row_iq3_ks_impl(const int super_block_size, const int block
                 sumqx_m += w*q*xb[j];
                 sumq2_m += w*q*q;
             }
-            d = sumqx_p/sumq2_p;
-            bool is_shifted = false;
-            float best = d*sumqx_p;
+            if (sumq2_p > 0) {
+                d = sumqx_p/sumq2_p;
+                best = d*sumqx_p;
+            }
             if (sumq2_m > 0 && sumqx_m*sumqx_m > best*sumq2_m) {
                 d = sumqx_m/sumq2_m; best = d*sumqx_m;
             }
+            bool is_shifted = false;
             for (int itry = -ntry; itry <= ntry; ++itry) {
                 id = (itry + values[0])/max;
                 sumqx_p = sumq2_p = 0;
