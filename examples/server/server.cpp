@@ -183,7 +183,7 @@ struct server_task_result {
     bool has_new_line;
     std::string stopping_word;
 
-    bool post_sampling_probs;
+    bool post_sampling_probs = false;
     std::vector<completion_token_output> probs_output;
     std::vector<std::string>  response_fields;
 
@@ -203,9 +203,9 @@ struct server_task_result {
     json to_json_final() {
         switch (oaicompat) {
         case OAICOMPAT_TYPE_NONE:
-            return to_json_non_oaicompat();
+            return to_json_non_oaicompat_final();
         case OAICOMPAT_TYPE_COMPLETION:
-            return to_json_oaicompat();
+            return to_json_oaicompat_final();
         case OAICOMPAT_TYPE_CHAT:
             return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat_final();
         default:
@@ -216,9 +216,9 @@ struct server_task_result {
     json to_json_partial() {
         switch (oaicompat) {
         case OAICOMPAT_TYPE_NONE:
-            return to_json_non_oaicompat();
+            return to_json_non_oaicompat_partial();
         case OAICOMPAT_TYPE_COMPLETION:
-            return to_json_oaicompat();
+            return to_json_oaicompat_partial();
         case OAICOMPAT_TYPE_CHAT:
             return  to_json_oaicompat_chat_partial();
         default:
@@ -226,7 +226,28 @@ struct server_task_result {
         }
     }
 
-    json to_json_non_oaicompat() {
+    json to_json_non_oaicompat_partial() {
+        // non-OAI-compat JSON
+        json res = json{
+            {"index",            index},
+            {"content",          content},
+            {"tokens",           tokens},
+            {"stop",             false},
+            {"id_slot",          id_multi},
+            {"tokens_predicted", n_decoded},
+            {"tokens_evaluated", n_prompt_tokens},
+        };
+        // populate the timings object when needed (usually for the last response or with timings_per_token enabled)
+        if (timings.prompt_n > 0) {
+            res.push_back({ "timings", timings.to_json() });
+        }
+        if (!probs_output.empty()) {
+            res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
+        }
+        return res;
+    }
+
+    json to_json_non_oaicompat_final() {
         json res = json{
             {"index",               index},
             {"content",             stream ? "" : content}, // in stream mode, content is already in last partial chunk
@@ -251,7 +272,7 @@ struct server_task_result {
         return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
     }
 
-    json to_json_oaicompat() {
+    json to_json_oaicompat_partial() {
         std::time_t t = std::time(0);
         json logprobs = json(nullptr); // OAI default to null
         if (!stream && probs_output.size() > 0) {
@@ -286,7 +307,50 @@ struct server_task_result {
 
         // extra fields for debugging purposes
         if (verbose) {
-            res["__verbose"] = to_json_non_oaicompat();
+            res["__verbose"] = to_json_non_oaicompat_partial();
+        }
+        if (timings.prompt_n >= 0) {
+            res.push_back({ "timings", timings.to_json() });
+        }
+
+        return res;
+    }
+
+    json to_json_oaicompat_final() {
+        std::time_t t = std::time(0);
+        json logprobs = json(nullptr); // OAI default to null
+        if (!stream && probs_output.size() > 0) {
+            logprobs = json{
+                {"content", completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs)},
+            };
+        }
+        json finish_reason = "length";
+        if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+            finish_reason = "stop";
+        }
+        json res = json{
+            {"choices",            json::array({
+                json{
+                    {"text",          stream ? "" : content}, // in stream mode, content is already in last partial chunk
+                    {"index",         index},
+                    {"logprobs",      logprobs},
+                    {"finish_reason", finish_reason},
+                }
+            })},
+            {"created",            t},
+            {"model",              oaicompat_model},
+            {"object",             "text_completion"},
+            {"usage", json {
+                {"completion_tokens", n_decoded},
+                {"prompt_tokens",     n_prompt_tokens},
+                {"total_tokens",      n_decoded + n_prompt_tokens}
+            }},
+            {"id", oaicompat_cmpl_id}
+        };
+
+        // extra fields for debugging purposes
+        if (verbose) {
+            res["__verbose"] = to_json_non_oaicompat_final();
         }
         if (timings.prompt_n >= 0) {
             res.push_back({ "timings", timings.to_json() });
@@ -314,6 +378,11 @@ struct server_task_result {
                 {"id", oaicompat_cmpl_id},
                 {"model", oaicompat_model},
                 {"object", "chat.completion.chunk"},
+                {"usage", json {
+                    {"completion_tokens", n_decoded},
+                    {"prompt_tokens",     n_prompt_tokens},
+                    {"total_tokens",      n_decoded + n_prompt_tokens},
+                }},
                 });
         };
         // We have to send an initial update to conform to openai behavior
@@ -389,7 +458,7 @@ struct server_task_result {
 
         // extra fields for debugging purposes
         if (verbose) {
-            res["__verbose"] = to_json_non_oaicompat();
+            res["__verbose"] = to_json_non_oaicompat_final();
         }
         if (timings.prompt_n >= 0) {
             res.push_back({ "timings", timings.to_json() });
@@ -457,7 +526,7 @@ struct server_task_result {
         }
         // extra fields for debugging purposes
         if (verbose && !deltas.empty()) {
-            deltas.front()["__verbose"] = to_json_non_oaicompat();
+            deltas.front()["__verbose"] = to_json_non_oaicompat_final();
         }
 
         return deltas;
@@ -2120,7 +2189,6 @@ struct server_context {
         }
         // populate timings if this is final response or timings_per_token is enabled
         if (slot.params.timings_per_token) {
-            //res.data["timings"] = slot.get_formated_timings();
             res.timings = slot.get_timings();
         }
         queue_results.send(std::move(res));
@@ -2143,12 +2211,12 @@ struct server_context {
         res.n_prompt_tokens = slot.n_prompt_tokens;
         res.oaicompat_model = slot.oaicompat_model;
         res.data     = json {
-            //{"content",             !slot.params.stream ? slot.generated_text : ""},
+            {"content",             !slot.params.stream ? slot.generated_text : ""},
             {"id_slot",             slot.id},
             {"stop",                true},
             {"model",               params.model_alias},
-            //{"tokens_predicted",    slot.n_decoded},
-            //{"tokens_evaluated",    slot.n_prompt_tokens},
+            {"tokens_predicted",    slot.n_decoded},
+            {"tokens_evaluated",    slot.n_prompt_tokens},
             {"generation_settings", get_formated_generation(slot)},
             {"prompt",              slot.prompt},
             {"truncated",           slot.truncated},
@@ -2157,7 +2225,7 @@ struct server_context {
             {"stopped_limit",       slot.stopped_limit},
             {"stopping_word",       slot.stopping_word},
             {"tokens_cached",       slot.n_past},
-            //{"timings",             slot.get_formated_timings()},
+            {"timings",             slot.get_formated_timings()},
             //{"oaicompat_chat_format",  slot.params.oaicompat_chat_format},
         };
 
@@ -2176,7 +2244,7 @@ struct server_context {
                         slot.generated_token_probs.end());
             }
             //res.generation_params = slot.params;
-            //res.data["completion_probabilities"] = probs_vector_to_json(ctx, probs);
+            res.data["completion_probabilities"] = probs_vector_to_json(ctx, probs);
         }
 
         res.timings = slot.get_timings();
