@@ -2758,11 +2758,6 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         return false;
     }
 
-    std::vector<char> ids_host(ggml_nbytes(ids));
-    const char * ids_dev = (const char *) ids->data;
-    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-
     ggml_tensor src0_1_row = *src0_1;
     ggml_tensor src0_2_row = *src0_2;
     ggml_tensor src1_row   = *src1;
@@ -2836,20 +2831,19 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
     bool first = false; //true;
 
-    ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool());
-    std::vector<int> moe_counts, cum_moe_counts;
+    const int64_t ne_get_rows = ne12 * n_ids;
+    ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), ne_get_rows + (n_as + 2)/2);
 
-    bool is_ser = prepare_row_mappigs(ctx, n_as, n_ids, ids, moe_counts, cum_moe_counts, dev_row_mapping);
-    if (is_ser) {
-        if (fuse_down) {
-            CUDA_CHECK(cudaMemsetAsync(next->data, 0, ggml_nbytes(next), stream));
-        } else {
-            CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
-        }
-    }
+    compute_row_ids2((const int32_t *)ids->data, dev_row_mapping.get(), (int32_t *)(dev_row_mapping.get() + ne_get_rows),
+            ne02, ne12, n_ids, ne11, nb11, nb12, ids->nb[1], stream);
+
+    std::vector<int> cum_moe_counts(n_as + 1);
+    CUDA_CHECK(cudaMemcpyAsync(cum_moe_counts.data(), dev_row_mapping.get() + ne_get_rows, (n_as+1)*sizeof(int),
+                cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     for (int64_t i02 = 0; i02 < n_as; i02++) {
-        int64_t num_src1_rows = moe_counts[i02];
+        int64_t num_src1_rows = cum_moe_counts[i02+1] - cum_moe_counts[i02];
 
         if (num_src1_rows == 0) continue;
         size_t mapping_offset = cum_moe_counts[i02];
