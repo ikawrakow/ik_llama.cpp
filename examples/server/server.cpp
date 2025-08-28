@@ -183,7 +183,7 @@ struct server_task_result {
     bool has_new_line;
     std::string stopping_word;
 
-    bool post_sampling_probs = false;
+    bool post_sampling_probs = true;
     std::vector<completion_token_output> probs_output;
     std::vector<std::string>  response_fields;
 
