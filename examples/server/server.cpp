@@ -183,7 +183,7 @@ struct server_task_result {
     bool has_new_line;
     std::string stopping_word;
 
-    bool post_sampling_probs = true;
+    bool post_sampling_probs = false;
     std::vector<completion_token_output> probs_output;
     std::vector<std::string>  response_fields;
 
@@ -2212,6 +2212,7 @@ struct server_context {
         res.oaicompat_model = slot.oaicompat_model;
         res.data     = json {
             {"content",             !slot.params.stream ? slot.generated_text : ""},
+            {"generated_text",      slot.generated_text},  // Always include full text for finish_reason logic
             {"id_slot",             slot.id},
             {"stop",                true},
             {"model",               params.model_alias},
