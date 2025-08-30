@@ -108,6 +108,7 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
         case GGML_TYPE_IQ4_KT:
             return MMQ_Q8_1_DS_LAYOUT_D4;
         default:
+            fprintf(stderr, "Unhandled type %s (%d)\n", ggml_type_name(type_x), type_x);
             GGML_ABORT("fatal error");
             break;
     }
