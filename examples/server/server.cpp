@@ -761,8 +761,7 @@ struct server_slot {
     }
 
     const common_chat_msg& update_chat_msg(std::vector<common_chat_msg_diff>& diffs) {
-        auto previous_msg = chat_msg;
-        
+        auto previous_msg = chat_msg;      
         auto new_msg = common_chat_parse(
             generated_text,
             /* is_partial= */ stop != STOP_TYPE_EOS,
@@ -772,9 +771,9 @@ struct server_slot {
             chat_msg = new_msg;
             diffs = common_chat_msg_diff::compute_diffs(previous_msg, new_msg.empty() ? previous_msg : new_msg);
         }
-        LLAMA_LOG_DEBUG("Parsing chat message: %s\n", generated_text.c_str());
-        LLAMA_LOG_DEBUG("Parsing chat message: %s\n", chat_msg.reasoning_content.c_str());
-        LLAMA_LOG_DEBUG("Parsing chat message: %s\n", chat_msg.content.c_str());
+        //LLAMA_LOG_DEBUG("Parsing chat message: %s\n", generated_text.c_str());
+        //LLAMA_LOG_DEBUG("Parsing chat message: %s\n", chat_msg.reasoning_content.c_str());
+        //LLAMA_LOG_DEBUG("Parsing chat message: %s\n", chat_msg.content.c_str());
         return chat_msg;
     }
 
