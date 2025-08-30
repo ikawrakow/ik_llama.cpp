@@ -2572,7 +2572,7 @@ struct server_context {
                                 GGML_ASSERT(slot.ga_n == 1);
 
                                 // reuse any previously computed tokens that are common with the new prompt
-                                slot.n_past = common_part(slot.cache_tokens, prompt_tokens);
+                                slot.n_past = common_part(ctx, model, slot.cache_tokens, slot.prompt);
 
                                 // push the prompt into the sampling context (do not apply grammar)
                                 for (int i = 0; i < slot.n_past; ++i) {

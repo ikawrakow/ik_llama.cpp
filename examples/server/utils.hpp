@@ -314,6 +314,33 @@ static size_t common_part(const std::string & a, const std::string & b) {
     return i;
 }
 
+static size_t common_part(const llama_context * ctx, const llama_model * model, const std::vector<llama_token> & a, const std::string & b) {
+    size_t pos = 0;
+    size_t token_idx = 0;
+
+    for (const auto & token : a) {
+        std::string piece = llama_token_to_piece(ctx, token);
+
+        if (pos + piece.size() <= b.size() && b.compare(pos, piece.size(), piece) == 0) {
+            pos += piece.size();
+            token_idx++;
+            continue;
+        }
+
+        //Below is to handle the auto insert BOS case
+        if (token_idx == 0 && token == llama_token_bos(model)) {
+            token_idx++;
+            continue;
+        }
+
+        return token_idx;
+    }
+
+    return token_idx;
+}
+
+
+
 static bool ends_with(const std::string & str, const std::string & suffix) {
     return str.size() >= suffix.size() && 0 == str.compare(str.size() - suffix.size(), suffix.size(), suffix);
 }
