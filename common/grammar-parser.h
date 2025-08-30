@@ -22,6 +22,7 @@ namespace grammar_parser {
         std::vector<std::vector<llama_grammar_element>> rules;
 
         std::vector<const llama_grammar_element *> c_rules();
+        bool success;
     };
 
     parse_state parse(const char * src);

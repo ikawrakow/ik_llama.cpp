@@ -615,7 +615,7 @@ int main(int argc, char ** argv) {
 
             if (n_past > 0) {
                 if (is_interacting) {
-                    llama_sampling_reset(ctx_sampling);
+                    llama_sampling_reset(llama_get_model_vocab(model), ctx_sampling);
                 }
                 is_interacting = false;
             }
