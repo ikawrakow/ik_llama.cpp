@@ -3943,7 +3943,7 @@ struct mmq_args_id {
     int64_t ncols_x; int64_t nrows_x; int64_t ncols_dst; int64_t stride_row_x; int64_t ncols_y; int64_t nrows_dst;
     int64_t nchannels_x; int64_t nchannels_y; int64_t stride_channel_x; int64_t stride_channel_y; int64_t stride_channel_dst;
     int64_t nsamples_x; int64_t nsamples_y; int64_t stride_sample_x; int64_t stride_sample_y; int64_t stride_sample_dst;
-    bool use_stream_k; int64_t ncols_max;
+    bool use_stream_k; int64_t ncols_max; int n_experts_used; int n_total_experts;
 };
 
 template<ggml_type type>
@@ -4057,8 +4057,20 @@ void mul_mat_q_case_id(ggml_backend_cuda_context & ctx, const mmq_args_id & args
     const int warp_size = ggml_cuda_get_physical_warp_size_host(); //ggml_cuda_info().devices[id].warp_size;
     const int nwarps    = mmq_get_nwarps_host(cc, warp_size);
 
-    const int mmq_x_max = get_mmq_x_max_host(cc);
+    int mmq_x_max = get_mmq_x_max_host(cc);
     const int mmq_y = get_mmq_y_host(cc);
+
+    int ncols_max = args.ncols_max;
+    if (args.ids_dst && 4*args.n_experts_used < args.n_total_experts) {
+        ncols_max *= 4*args.n_experts_used;
+        ncols_max /= args.n_total_experts;
+        if (ncols_max < 1) ncols_max = 1;
+        ncols_max = 32*((ncols_max + 31)/32);
+        //ncols_max = 16*((ncols_max + 15)/16);
+        if (ncols_max > args.ncols_max) ncols_max = args.ncols_max;
+        //printf("%s: ncols_max = %d, %d\n", __func__, (int)args.ncols_max, ncols_max);
+        //mmq_x_max /= 2;
+    }
 
     int mmq_x_best  = 0;
     int ntiles_x_best = INT_MAX;
@@ -4070,7 +4082,7 @@ void mul_mat_q_case_id(ggml_backend_cuda_context & ctx, const mmq_args_id & args
             continue;
         }
 
-        const int ntiles_x = (args.ncols_max + mmq_x - 1) / mmq_x;
+        const int ntiles_x = (ncols_max + mmq_x - 1) / mmq_x;
 
         if (ntiles_x < ntiles_x_best) {
             mmq_x_best = mmq_x;
