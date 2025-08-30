@@ -7612,6 +7612,33 @@ static struct ggml_tensor * llm_build_ffn(
           llm_ffn_gate_type   type_gate,
          const llm_build_cb & cb,
                         int   il) {
+
+    if (up && gate && !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
+            (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
+        auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
+                        type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU;
+        cur = ggml_fused_up_gate(ctx, up, gate, cur, unary_op);
+        cb(cur, "ffn_up_gate", il);
+        if (down) {
+            cur = llm_build_lora_mm(lctx, ctx, down, cur);
+            if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
+                // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+                ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+            }
+        }
+        if (down_b) {
+            cb(cur, "ffn_down", il);
+        }
+        if (down_b) {
+            cur = ggml_add(ctx, cur, down_b);
+        }
+        if (down_s) {
+            cur = ggml_mul(ctx, cur, down_s);
+            cb(cur, "ffn_down_s", il);
+        }
+        return cur;
+    }
+
     struct ggml_tensor * tmp = up ? llm_build_lora_mm(lctx, ctx, up, cur) : cur;
     cb(tmp, "ffn_up", il);
 
