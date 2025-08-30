@@ -8912,31 +8912,58 @@ struct llm_build_context {
                 // rope freq factors for llama3; may return nullptr for llama2 and other models
                 struct ggml_tensor * rope_factors = build_rope_factors(il);
 
-                // compute Q and K and RoPE them
-                struct ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
-                if (hparams.f_attention_scale != 0) {
-                    // Why is hparams.f_attention_scale not simply absorbed into model.layers[il].wq ?
-                    Qcur = ggml_scale(ctx0, Qcur, hparams.f_attention_scale);
-                }
+                auto Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
                 cb(Qcur, "Qcur", il);
+                auto Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
+                cb(Kcur, "Kcur", il);
+                auto Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
+                cb(Vcur, "Vcur", il);
+                ggml_build_forward_expand(gf, Qcur);
+                ggml_build_forward_expand(gf, Kcur);
+                ggml_build_forward_expand(gf, Vcur);
+
+                if (hparams.f_attention_scale != 0) {
+                    Qcur = ggml_scale(ctx0, Qcur, hparams.f_attention_scale);
+                    cb(Qcur, "Qcur", il);
+                }
                 if (model.layers[il].bq) {
                     Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
                     cb(Qcur, "Qcur", il);
                 }
-
-                struct ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
-                cb(Kcur, "Kcur", il);
                 if (model.layers[il].bk) {
                     Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
                     cb(Kcur, "Kcur", il);
                 }
-
-                struct ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
-                cb(Vcur, "Vcur", il);
                 if (model.layers[il].bv) {
                     Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                     cb(Vcur, "Vcur", il);
                 }
+
+                //// compute Q and K and RoPE them
+                //struct ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+                //if (hparams.f_attention_scale != 0) {
+                //    // Why is hparams.f_attention_scale not simply absorbed into model.layers[il].wq ?
+                //    Qcur = ggml_scale(ctx0, Qcur, hparams.f_attention_scale);
+                //}
+                //cb(Qcur, "Qcur", il);
+                //if (model.layers[il].bq) {
+                //    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+                //    cb(Qcur, "Qcur", il);
+                //}
+
+                //struct ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
+                //cb(Kcur, "Kcur", il);
+                //if (model.layers[il].bk) {
+                //    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+                //    cb(Kcur, "Kcur", il);
+                //}
+                //
+                //struct ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
+                //cb(Vcur, "Vcur", il);
+                //if (model.layers[il].bv) {
+                //    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+                //    cb(Vcur, "Vcur", il);
+                //}
 
                 if (use_rope) {
                     Qcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_pos, rope_factors,
