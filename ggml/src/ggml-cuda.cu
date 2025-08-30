@@ -2521,7 +2521,7 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     return false;
 }
 
-static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * next) {
+static bool ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * next) {
     const ggml_tensor * src0_1 = dst->src[0];
     const ggml_tensor * src0_2 = dst->src[1];
     const ggml_tensor * src0 = src0_1;
@@ -2972,6 +2972,60 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     return fuse_down;
 }
 
+static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0_1 = dst->src[0];
+    const ggml_tensor * src0_2 = dst->src[1];
+    const ggml_tensor * src1 = dst->src[2];
+
+    GGML_ASSERT(ggml_is_quantized(src0_1->type));
+    GGML_ASSERT(src0_1->type == src0_2->type);
+    GGML_ASSERT(src1->ne[2] == 1);
+    GGML_ASSERT(src1->ne[3] == 1);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(!ggml_backend_buffer_is_cuda_split(src0_1->buffer));
+    GGML_ASSERT(!ggml_backend_buffer_is_cuda_split(src0_2->buffer));
+
+    auto stream = ctx.stream();
+
+    auto ne10_padded = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
+    auto nb10_padded = ne10_padded*sizeof(block_q8_1)/QK8_1;
+    auto quantized_size = nb10_padded*src1->ne[1];
+    if (src1->ne[1] > 8) {
+        quantized_size += get_mmq_x_max_host(ggml_cuda_info().devices[ctx.device].cc)*sizeof(block_q8_1_mmq);
+    }
+    ggml_cuda_pool_alloc<float> dst_up(ctx.pool(), ggml_nelements(dst));
+    ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool(), quantized_size);
+    if (src1->ne[1] <= 8) {
+        quantize_row_q8_1_cuda((const float *)src1->data, (void *)src1_quantized.get(), src1->ne[0], src1->ne[1], 1, nb10_padded,
+                src0_1->type, stream);
+        CUDA_CHECK(cudaGetLastError());
+
+        ggml_cuda_op_mul_mat_vec_q(ctx, src0_1, src1, dst, (const char *)src0_1->data, nullptr, src1_quantized.get(), dst_up.get(),
+                0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
+        CUDA_CHECK(cudaGetLastError());
+
+        ggml_cuda_op_mul_mat_vec_q(ctx, src0_2, src1, dst, (const char *)src0_2->data, nullptr, src1_quantized.get(), (float *)dst->data,
+                0, src0_2->ne[1], src1->ne[1], ne10_padded, stream);
+        CUDA_CHECK(cudaGetLastError());
+    } else {
+        quantize_mmq_q8_1_cuda((const float *)src1->data, src1_quantized.get(), src1->ne[0], src1->ne[1], 1, ne10_padded, src0_1->type, stream);
+        CUDA_CHECK(cudaGetLastError());
+
+        ggml_cuda_op_mul_mat_q(ctx, src0_1, src1, dst, (const char *)src0_1->data, nullptr, src1_quantized.get(), dst_up.get(),
+                0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
+        CUDA_CHECK(cudaGetLastError());
+
+        ggml_cuda_op_mul_mat_q(ctx, src0_2, src1, dst, (const char *)src0_2->data, nullptr, src1_quantized.get(), (float *)dst->data,
+                0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
+                    (const float *)dst->data, dst_up.get(), (float *)dst->data);
+    CUDA_CHECK(cudaGetLastError());
+
+}
+
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst, struct ggml_tensor * next, bool& skip_next) {
     // why is this here instead of mul_mat?
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_cuda_split(dst->src[0]->buffer)) {
@@ -3097,7 +3151,10 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             skip_next = ggml_cuda_mul_mat_id(ctx, dst, next);
             break;
         case GGML_OP_MOE_FUSED_UP_GATE:
-            skip_next = ggml_cuda_up_gate_unary(ctx, dst, next);
+            skip_next = ggml_cuda_moe_up_gate_unary(ctx, dst, next);
+            break;
+        case GGML_OP_FUSED_UP_GATE:
+            ggml_cuda_up_gate_unary(ctx, dst);
             break;
         case GGML_OP_SCALE:
             ggml_cuda_op_scale(ctx, dst);
@@ -3950,10 +4007,12 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_MOE_FUSED_UP_GATE:
+        case GGML_OP_FUSED_UP_GATE:
             {
+                bool is_fused_up_gate = op->op == GGML_OP_MOE_FUSED_UP_GATE || op->op == GGML_OP_FUSED_UP_GATE;
                 struct ggml_tensor * a = op->src[0];
-                struct ggml_tensor * b = op->op == GGML_OP_MOE_FUSED_UP_GATE ? op->src[2] : op->src[1];
-                if (op->op == GGML_OP_MOE_FUSED_UP_GATE && a->type != op->src[1]->type) {
+                struct ggml_tensor * b = is_fused_up_gate ? op->src[2] : op->src[1];
+                if (is_fused_up_gate && a->type != op->src[1]->type) {
                     printf("%s: returning false for GGML_OP_MOE_FUSED_UP_GATE because src0->type != src1->type\n", __func__);
                     return false;
                 }
