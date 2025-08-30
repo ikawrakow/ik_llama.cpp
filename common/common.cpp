@@ -1004,6 +1004,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.fused_moe_up_gate = true;
         return true;
     }
+    if (arg == "-no-fug" || arg == "--no-fused-up-gate") {
+        params.fused_up_gate = false;
+        return true;
+    }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
         CHECK_ARG
         auto values = string_split_pairs<int,float>(argv[i], ',');
@@ -1760,6 +1764,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
     options.push_back({ "*",           "-fmoe, --fused-moe",            "enable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disaable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction,","experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
                                                                         "in conversation mode, this will be used as system prompt\n"
@@ -2660,6 +2665,7 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.mla_attn          = params.mla_attn;
     cparams.attn_max_batch    = params.attn_max_batch;
     cparams.fused_moe_up_gate = params.fused_moe_up_gate;
+    cparams.fused_up_gate     = params.fused_up_gate;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
 
@@ -3756,6 +3762,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "mla_attn: %d # default: 0\n", params.mla_attn);
     fprintf(stream, "attn_max_batch: %d # default: 0\n", params.attn_max_batch);
     fprintf(stream, "fused_moe: %s # default: false\n", params.fused_moe_up_gate ? "true" : "false");
+    fprintf(stream, "fused_up_gate: %s # default: true\n", params.fused_up_gate ? "true" : "false");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 

@@ -2072,6 +2072,7 @@ struct llama_cparams {
     int  mla_attn;
     int  attn_max_batch;
     bool fused_moe_up_gate;
+    bool fused_up_gate;
     int  min_experts;
     float thresh_experts;
 
@@ -7613,8 +7614,9 @@ static struct ggml_tensor * llm_build_ffn(
          const llm_build_cb & cb,
                         int   il) {
 
-    if (up && gate && !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
-            (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
+    if (lctx.cparams.fused_up_gate &&
+        up && gate && !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
+        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU;
         cur = ggml_fused_up_gate(ctx, up, gate, cur, unary_op);
@@ -8250,6 +8252,7 @@ struct llm_build_context {
     const int  mla_attn;
     const int  attn_max_batch;
     const bool fused_moe_up_gate;
+    const bool fused_up_gate;
     const int  min_experts;
     const float thresh_experts;
 
@@ -8305,6 +8308,7 @@ struct llm_build_context {
         mla_attn         (cparams.mla_attn),
         attn_max_batch   (cparams.attn_max_batch),
         fused_moe_up_gate(cparams.fused_moe_up_gate),
+        fused_up_gate    (cparams.fused_up_gate),
         min_experts      (cparams.min_experts),
         thresh_experts   (cparams.thresh_experts),
         pooling_type     (cparams.pooling_type),
@@ -18950,6 +18954,7 @@ struct llama_context_params llama_context_default_params() {
         /*.mla_attn                    =*/ 0,
         /*.attn_max_batch              =*/ 0,
         /*.fused_moe_up_gate           =*/ false,
+        /*.fused_up_gate               =*/ true,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.abort_callback              =*/ nullptr,
@@ -19157,6 +19162,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.mla_attn         = params.mla_attn;
     cparams.attn_max_batch   = params.attn_max_batch;
     cparams.fused_moe_up_gate= params.fused_moe_up_gate;
+    cparams.fused_up_gate    = params.fused_up_gate;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
 
@@ -19236,6 +19242,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: mla_attn   = %d\n",     __func__, cparams.mla_attn);
     LLAMA_LOG_INFO("%s: attn_max_b = %d\n",     __func__, cparams.attn_max_batch);
     LLAMA_LOG_INFO("%s: fused_moe  = %d\n",     __func__, cparams.fused_moe_up_gate);
+    LLAMA_LOG_INFO("%s: fused_up_gate = %d\n",     __func__, cparams.fused_up_gate);
     LLAMA_LOG_INFO("%s: ser        = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base  = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale = %g\n",     __func__, cparams.rope_freq_scale);
