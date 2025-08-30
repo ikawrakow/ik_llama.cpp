@@ -2996,7 +2996,7 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     ggml_cuda_pool_alloc<float> dst_up(ctx.pool(), ggml_nelements(dst));
     ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool(), quantized_size);
     if (src1->ne[1] <= 8) {
-        quantize_row_q8_1_cuda((const float *)src1->data, (void *)src1_quantized.get(), src1->ne[0], src1->ne[1], 1, nb10_padded,
+        quantize_row_q8_1_cuda((const float *)src1->data, (void *)src1_quantized.get(), src1->ne[0], src1->ne[1], 1, ne10_padded,
                 src0_1->type, stream);
         CUDA_CHECK(cudaGetLastError());
 
