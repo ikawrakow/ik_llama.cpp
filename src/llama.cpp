@@ -13342,7 +13342,7 @@ struct llm_build_context {
 
         // whether to use n_tokens as the matrix dimension during multiplication or n_head
         // n_tokens is higher during prompt processing, this allows to optimize for this case
-        bool pp_opt = n_tokens >= 128; // Is it a fixed constant or is it somehow relared to n_head? original: n_tokens > n_head;
+        bool pp_opt = n_tokens >= 32; //128; // Is it a fixed constant or is it somehow relared to n_head? original: n_tokens > n_head;
 
         for (int il = 0; il < n_layer; ++il) {
             struct ggml_tensor * inpSA = inpL;

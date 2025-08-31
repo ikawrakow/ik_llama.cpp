@@ -2395,7 +2395,7 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     }
 
     if (ggml_is_quantized(src0->type) && ggml_cuda_can_use_mmq_id(src0->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
-        ggml_cuda_mul_mat_q_id(ctx, src0, src1, ids, dst, nullptr, nullptr);
+        ggml_cuda_mul_mat_q_id(ctx, src0, src1, ids, dst, nullptr, nullptr, false);
         return false;
     }
 
@@ -2702,36 +2702,38 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         compute_row_ids((const int32_t *)ids->data, ids_src1, ids_dst, expert_bounds,
                 ne02, ne12, n_ids, ne11, nb11, nb12, ids->nb[1], stream);
 
-        const int64_t ne11_flat = ne12*n_ids;
-        const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
-        size_t nbytes_src1_q8_1 = ne11_flat*ne10_padded * sizeof(block_q8_1)/QK8_1 +
-                get_mmq_x_max_host(ggml_cuda_info().devices[ctx.device].cc)*sizeof(block_q8_1_mmq);
-        ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool(), nbytes_src1_q8_1);
-
-        size_t ts_src1 = ggml_type_size(src1->type);
-        quantize_mmq_q8_1_cuda_id((const float *)src1->data, ids_src1, src1_quantized.get(),
-                src0_1->type, ne10, src1->nb[1] / ts_src1, src1->nb[2] / ts_src1, src1->nb[2] / ts_src1,
-                ne10_padded, ne11_flat, 1, 1, stream);
-
         ggml_cuda_pool_alloc<char> dst_up_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
         ggml_cuda_pool_alloc<char> dst_gate_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
 
-        dst_row.data = dst_up_contiguous.get();
-        ggml_cuda_mul_mat_q_id(ctx, src0_1, src1, ids, &dst_row, (char *)ids_device.get(), src1_quantized.get());
-        if (dst->src[4]) {
-            ggml_cuda_add_id((const float *)dst_row.data, (const float *)dst->src[4]->data, (const int32_t *)ids->data,
-                    (float *)dst_row.data, dst_row.ne[0], dst_row.ne[1], dst_row.ne[2], dst_row.ne[0], dst_row.ne[1],
-                    dst_row.nb[1], dst_row.nb[2], dst->src[4]->nb[1], ids->nb[1], stream);
-            CUDA_CHECK(cudaGetLastError());
-        }
+        {
+            const int64_t ne11_flat = ne12*n_ids;
+            const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
+            size_t nbytes_src1_q8_1 = ne11_flat*ne10_padded * sizeof(block_q8_1)/QK8_1 +
+                get_mmq_x_max_host(ggml_cuda_info().devices[ctx.device].cc)*sizeof(block_q8_1_mmq);
+            ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool(), nbytes_src1_q8_1);
 
-        dst_row.data = dst_gate_contiguous.get();
-        ggml_cuda_mul_mat_q_id(ctx, src0_2, src1, ids, &dst_row, (char *)ids_device.get(), src1_quantized.get());
-        if (dst->src[5]) {
-            ggml_cuda_add_id((const float *)dst_row.data, (const float *)dst->src[5]->data, (const int32_t *)ids->data,
-                    (float *)dst_row.data, dst_row.ne[0], dst_row.ne[1], dst_row.ne[2], dst_row.ne[0], dst_row.ne[1],
-                    dst_row.nb[1], dst_row.nb[2], dst->src[4]->nb[1], ids->nb[1], stream);
-            CUDA_CHECK(cudaGetLastError());
+            size_t ts_src1 = ggml_type_size(src1->type);
+            quantize_mmq_q8_1_cuda_id((const float *)src1->data, ids_src1, src1_quantized.get(),
+                    src0_1->type, ne10, src1->nb[1] / ts_src1, src1->nb[2] / ts_src1, src1->nb[2] / ts_src1,
+                    ne10_padded, ne11_flat, 1, 1, stream);
+
+            dst_row.data = dst_up_contiguous.get();
+            ggml_cuda_mul_mat_q_id(ctx, src0_1, src1, ids, &dst_row, (char *)ids_device.get(), src1_quantized.get(), false);
+            if (dst->src[4]) {
+                ggml_cuda_add_id((const float *)dst_row.data, (const float *)dst->src[4]->data, (const int32_t *)ids->data,
+                        (float *)dst_row.data, dst_row.ne[0], dst_row.ne[1], dst_row.ne[2], dst_row.ne[0], dst_row.ne[1],
+                        dst_row.nb[1], dst_row.nb[2], dst->src[4]->nb[1], ids->nb[1], stream);
+                CUDA_CHECK(cudaGetLastError());
+            }
+
+            dst_row.data = dst_gate_contiguous.get();
+            ggml_cuda_mul_mat_q_id(ctx, src0_2, src1, ids, &dst_row, (char *)ids_device.get(), src1_quantized.get(), false);
+            if (dst->src[5]) {
+                ggml_cuda_add_id((const float *)dst_row.data, (const float *)dst->src[5]->data, (const int32_t *)ids->data,
+                        (float *)dst_row.data, dst_row.ne[0], dst_row.ne[1], dst_row.ne[2], dst_row.ne[0], dst_row.ne[1],
+                        dst_row.nb[1], dst_row.nb[2], dst->src[4]->nb[1], ids->nb[1], stream);
+                CUDA_CHECK(cudaGetLastError());
+            }
         }
 
         auto unary_op = (ggml_unary_op)dst->op_params[0];
@@ -2748,18 +2750,13 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
         if (next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
             ggml_cuda_should_use_mmq(next->src[0]->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
-            //ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, (char *)ids_device.get(), nullptr);
-            ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, nullptr, nullptr);
+            ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, (char *)ids_device.get(), nullptr, true);
+            //ggml_cuda_mul_mat_q_id(ctx, next->src[0], dst, ids, next, nullptr, nullptr);
             return true;
         }
 
         return false;
     }
-
-    std::vector<char> ids_host(ggml_nbytes(ids));
-    const char * ids_dev = (const char *) ids->data;
-    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     ggml_tensor src0_1_row = *src0_1;
     ggml_tensor src0_2_row = *src0_2;
@@ -2834,20 +2831,19 @@ static bool ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
     bool first = false; //true;
 
-    ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool());
-    std::vector<int> moe_counts, cum_moe_counts;
+    const int64_t ne_get_rows = ne12 * n_ids;
+    ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool(), ne_get_rows + (n_as + 2)/2);
 
-    bool is_ser = prepare_row_mappigs(ctx, n_as, n_ids, ids, moe_counts, cum_moe_counts, dev_row_mapping);
-    if (is_ser) {
-        if (fuse_down) {
-            CUDA_CHECK(cudaMemsetAsync(next->data, 0, ggml_nbytes(next), stream));
-        } else {
-            CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
-        }
-    }
+    compute_row_ids2((const int32_t *)ids->data, dev_row_mapping.get(), (int32_t *)(dev_row_mapping.get() + ne_get_rows),
+            ne02, ne12, n_ids, ne11, nb11, nb12, ids->nb[1], stream);
+
+    std::vector<int> cum_moe_counts(n_as + 1);
+    CUDA_CHECK(cudaMemcpyAsync(cum_moe_counts.data(), dev_row_mapping.get() + ne_get_rows, (n_as+1)*sizeof(int),
+                cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     for (int64_t i02 = 0; i02 < n_as; i02++) {
-        int64_t num_src1_rows = moe_counts[i02];
+        int64_t num_src1_rows = cum_moe_counts[i02+1] - cum_moe_counts[i02];
 
         if (num_src1_rows == 0) continue;
         size_t mapping_offset = cum_moe_counts[i02];
