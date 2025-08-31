@@ -4054,6 +4054,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "MUL_MAT",
     "MUL_MAT_ID",
     "OUT_PROD",
+    "FUSED_UP_GATE",
     "MOE_FUSED_UP_GATE",
 
     "SCALE",
@@ -4115,7 +4116,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS_BACK",
 };
 
-static_assert(GGML_OP_COUNT == 82, "GGML_OP_COUNT != 82");
+static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 82");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4150,6 +4151,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "X*Y",
     "X[i]*Y",
     "X*Y",
+    "X*Y1&X*Y2",
     "X*Y1&X*Y2",
 
     "x*v",
@@ -4211,7 +4213,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss_back(x,y)",
 };
 
-static_assert(GGML_OP_COUNT == 82, "GGML_OP_COUNT != 82");
+static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 82");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -7156,6 +7158,44 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
     result->src[3] = ids;
     result->src[4] = as_up_b;
     result->src[5] = as_gate_b;
+
+    ggml_set_op_params_i32(result, 0, (int32_t) op);
+
+    return result;
+}
+
+struct ggml_tensor * ggml_fused_up_gate(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * up,
+            struct ggml_tensor  * gate,
+            struct ggml_tensor  * b,
+            enum   ggml_unary_op  op) {
+    if (!ggml_is_quantized(up->type) || up->type != gate->type || !ggml_are_same_shape(up, gate)) {
+        struct ggml_tensor * result_up   = ggml_mul_mat(ctx, up,   b);
+        struct ggml_tensor * result_gate = ggml_mul_mat(ctx, gate, b);
+        return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
+    }
+    GGML_ASSERT(!ggml_is_transposed(up));
+    GGML_ASSERT(!ggml_is_transposed(gate));
+
+    GGML_ASSERT(up->ne[2] == 1); // as is 3d (one matrix per expert)
+    GGML_ASSERT(up->ne[3] == 1); // as is 3d (one matrix per expert)
+    GGML_ASSERT(b->ne[2] == 1); // b is 3d
+    GGML_ASSERT(b->ne[3] == 1); // b is 3d
+    GGML_ASSERT(up->ne[0] == b->ne[0]); // can_mul_mat
+
+    const bool is_node = false;
+
+    const int64_t ne[4] = { up->ne[1], b->ne[1], 1, 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op   = GGML_OP_FUSED_UP_GATE;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = up;
+    result->src[1] = gate;
+    result->src[2] = b;
+    result->src[3] = NULL;
+    result->src[4] = NULL;
 
     ggml_set_op_params_i32(result, 0, (int32_t) op);
 
@@ -15667,6 +15707,75 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
 #undef MMID_MATRIX_ROW
 }
+
+static void ggml_compute_forward_mul_mat_up_gate(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+
+    GGML_ASSERT(dst->src[0]->type == dst->src[1]->type);
+    GGML_ASSERT(ggml_are_same_shape(dst->src[0], dst->src[1]));
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    const struct ggml_tensor * src1 = dst->src[2];
+    const struct ggml_tensor * src0_1 = dst->src[0];
+    const struct ggml_tensor * src0_2 = dst->src[1];
+    const struct ggml_tensor * src0 = src0_1; // so GGML_TENSOR_BINARY_OP_LOCALS works
+
+    GGML_ASSERT(ggml_is_quantized(src0_1->type) && src0_1->type == src0_2->type);
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const enum ggml_type type = src0->type;
+
+    enum ggml_type    const vec_dot_type    = type_traits[type].vec_dot_type;
+
+    // we don't support permuted src0 or src1
+    GGML_ASSERT(nb00 == ggml_type_size(type));
+    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+
+    // dst cannot be transposed or permuted
+    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(nb0 <= nb1);
+    GGML_ASSERT(nb1 <= nb2);
+    GGML_ASSERT(nb2 <= nb3);
+    GGML_ASSERT(ne13 == 1);
+
+    ggml_from_float_t const from_float = type_traits[vec_dot_type].from_float;
+
+    char * wdata = params->wdata;
+
+    const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
+    const size_t nbw2 = nbw1*ne11;
+    const size_t nbw3 = nbw2*ne12;
+
+    assert(params->wsize >= ne13*nbw3);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+
+    for (int64_t i13 = 0; i13 < ne13; ++i13) {
+        for (int64_t i12 = 0; i12 < ne12; ++i12) {
+            for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
+                from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                           (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                           ne10);
+            }
+        }
+    }
+
+    ggml_barrier(params->shared);
+
+    const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+
+    if (!iqk_moe_fused_up_gate(ne01, ne11, ne00, ne11, dst->op_params[0],
+                         type, src0_1->data, src0_2->data, nb01,
+                         vec_dot_type, (const char *)wdata, row_size,
+                         NULL, NULL,
+                         (float *)dst->data, nb1, nb2,
+                         NULL, ith, nth)) GGML_ABORT("fatal error");
+
+}
 #endif
 
 // ggml_compute_forward_out_prod
@@ -20403,6 +20512,10 @@ static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_mul_mat_id_up_gate(params, tensor);
             } break;
+        case GGML_OP_FUSED_UP_GATE:
+            {
+                ggml_compute_forward_mul_mat_up_gate(params, tensor);
+            } break;
         case GGML_OP_OUT_PROD:
             {
                 ggml_compute_forward_out_prod(params, tensor);
@@ -21169,6 +21282,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
         case GGML_OP_MOE_FUSED_UP_GATE:
+            {
+                GGML_ABORT("fatal error"); // TODO: not implemented
+            }
+        case GGML_OP_FUSED_UP_GATE:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -22189,6 +22306,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_MOE_FUSED_UP_GATE:
+        case GGML_OP_FUSED_UP_GATE:
         case GGML_OP_OUT_PROD:
             {
                 n_tasks = n_threads;
@@ -22410,6 +22528,16 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
                     cur += n_as * sizeof(int64_t);               // matrix_row_counts
                     cur += n_as * src2->ne[2] * sizeof(int64_t); // matrix_rows
+                } break;
+            case GGML_OP_FUSED_UP_GATE:
+                {
+                    cur = 0;
+                    const struct ggml_tensor * src0 = node->src[0];
+                    const struct ggml_tensor * src2 = node->src[2];
+                    const enum ggml_type vec_dot_type = type_traits[src0->type].vec_dot_type;
+                    if (src2->type != vec_dot_type) {
+                        cur += ggml_row_size(vec_dot_type, node->src[1]->ne[0]) * ggml_nrows(node->src[1]);
+                    }
                 } break;
             case GGML_OP_OUT_PROD:
                 {

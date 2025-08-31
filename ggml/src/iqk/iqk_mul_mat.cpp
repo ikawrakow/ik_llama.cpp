@@ -739,7 +739,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth) {
 
     const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
-    assert(row_mapping != nullptr);
+    //assert(row_mapping != nullptr);
 
     MulMat mm;
 
