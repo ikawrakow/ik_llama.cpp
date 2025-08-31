@@ -261,6 +261,7 @@ struct cmd_params {
     bool warmup;
     bool repack = false;
     bool fmoe = false;
+    bool no_fug = false;
     bool use_thp = false;
     output_formats output_format;
     output_formats output_format_stderr;
@@ -297,6 +298,7 @@ static const cmd_params cmd_params_defaults = {
     /* repack               */ false,
     /* use_thp              */ false,
     /* fmoe                 */ false,
+    /* no_fug               */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -339,6 +341,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
     printf("  -ot, --override-tensor pattern      (default: none)\n");
     printf("  -fmoe, --fused-moe <0|1>            (default: %s)\n", cmd_params_defaults.fmoe? "1" : "0");
+    printf("  -no-fug, --no-fused-up-gate <0|1>   (default: %s)\n", cmd_params_defaults.no_fug? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
 }
@@ -736,6 +739,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.fmoe = std::stoi(argv[i]);
+        } else if (arg == "-no-fug" || arg == "--no-fused-up-gate") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.no_fug = std::stoi(argv[i]);
         } else if (arg == "-ot" || arg == "--override-tensor") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -820,6 +829,7 @@ struct cmd_params_instance {
     bool embeddings;
     bool repack = false;
     bool fmoe = false;
+    bool no_fug = false;
     bool use_thp = false;
     const llama_model_tensor_buft_override* buft_overrides;
 
@@ -866,6 +876,7 @@ struct cmd_params_instance {
         cparams.mla_attn = mla_attn;
         cparams.attn_max_batch = attn_max_batch;
         cparams.fused_moe_up_gate = fmoe;
+        cparams.fused_up_gate = !no_fug;
         cparams.min_experts = ser.first;
         cparams.thresh_experts = ser.second;
         cparams.embeddings = embeddings;
@@ -924,6 +935,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .no_fug       = */ params.no_fug,
                 /* .use_thp      = */ params.use_thp,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
@@ -958,6 +970,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .no_fug       = */ params.no_fug,
                 /* .use_thp      = */ params.use_thp,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
@@ -992,6 +1005,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .no_fug       = */ params.no_fug,
                 /* .use_thp      = */ params.use_thp,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
@@ -1026,6 +1040,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
                 /* .fmoe         = */ params.fmoe,
+                /* .no_fug       = */ params.no_fug,
                 /* .use_thp      = */ params.use_thp,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
@@ -1071,6 +1086,7 @@ struct test {
     bool embeddings;
     bool repack = false;
     bool fmoe = false;
+    bool no_fug = false;
     bool use_thp = false;
     int n_prompt;
     int n_gen;
@@ -1104,7 +1120,7 @@ struct test {
         use_mmap = inst.use_mmap;
         embeddings = inst.embeddings;
         repack = inst.repack;
-        fmoe = inst.fmoe;
+        no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         n_prompt = inst.n_prompt;
         n_gen = inst.n_gen;
@@ -1196,7 +1212,7 @@ struct test {
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser",
-            "tensor_split", "use_mmap", "embeddings", "repack", "fused_moe", "use_thp",
+            "tensor_split", "use_mmap", "embeddings", "repack", "fused_moe", "fused_up_gate", "use_thp",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1218,7 +1234,7 @@ struct test {
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" ||field == "f16_kv" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
-            field == "fused_moe") {
+            field == "fused_moe" || field == "fused_up_gate") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1261,7 +1277,7 @@ struct test {
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser),
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
-            std::to_string(repack), std::to_string(fmoe), std::to_string(use_thp),
+            std::to_string(repack), std::to_string(fmoe), std::to_string(no_fug), std::to_string(use_thp),
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
             std::to_string(avg_ts()), std::to_string(stdev_ts()),
@@ -1445,6 +1461,9 @@ struct markdown_printer : public printer {
         if (field == "fused_moe") {
             return 4;
         }
+        if (field == "fused_up_gate") {
+            return 6;
+        }
         if (field == "test") {
             return 13;
         }
@@ -1493,6 +1512,9 @@ struct markdown_printer : public printer {
         }
         if (field == "fused_moe") {
             return "fmoe";
+        }
+        if (field == "fused_up_gate") {
+            return "no-fug";
         }
         if (field == "embeddings") {
             return "embd";
@@ -1566,6 +1588,9 @@ struct markdown_printer : public printer {
         }
         if (params.fmoe != cmd_params_defaults.fmoe) {
             fields.emplace_back("fused_moe");
+        }
+        if (params.no_fug != cmd_params_defaults.no_fug) {
+            fields.emplace_back("fused_up_gate");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
