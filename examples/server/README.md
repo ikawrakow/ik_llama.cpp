@@ -12,6 +12,11 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
  * Multimodal (wip)
  * Monitoring endpoints
  * Schema-constrained JSON response format
+ * Prefilling of assistant messages similar to the Claude API
+ * [Function calling](../../docs/function-calling.md) / tool use for ~any model
+ * Speculative decoding
+ * Easy-to-use web UI
+
 
 The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggerganov/llama.cpp/issues/4216).
 
@@ -585,59 +590,76 @@ Takes a prefix and a suffix and returns the predicted completion as stream.
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
 - `chat_template` - the model's original Jinja2 prompt template
 
+
 ### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
 
-Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
+Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
 
-    *Options:*
+If model supports multimodal, you can input the media file via `image_url` content part. We support both base64 and remote URL as input. See OAI documentation for more.
 
-    See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). While some OpenAI-specific features such as function calling aren't supported, llama.cpp `/completion`-specific features such as `mirostat` are supported.
+*Options:*
 
-    The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}`), similar to other OpenAI-inspired API providers.
+See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
 
-    *Examples:*
+The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
 
-    You can use either Python `openai` library with appropriate checkpoints:
+`chat_template_kwargs`: Allows sending additional parameters to the json templating system. For example: `{"enable_thinking": false}`
 
-    ```python
-    import openai
+`reasoning_format`: The reasoning format to be parsed. If set to `none`, it will output the raw generated text.
 
-    client = openai.OpenAI(
-        base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
-        api_key = "sk-no-key-required"
-    )
+`thinking_forced_open`: Force a reasoning model to always output the reasoning. Only works on certain models.
 
-    completion = client.chat.completions.create(
-    model="gpt-3.5-turbo",
-    messages=[
-        {"role": "system", "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."},
-        {"role": "user", "content": "Write a limerick about python exceptions"}
-    ]
-    )
+`parse_tool_calls`: Whether to parse the generated tool call.
 
-    print(completion.choices[0].message)
-    ```
+*Examples:*
 
-    ... or raw HTTP requests:
+You can use either Python `openai` library with appropriate checkpoints:
 
-    ```shell
-    curl http://localhost:8080/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer no-key" \
-    -d '{
-    "model": "gpt-3.5-turbo",
-    "messages": [
-    {
-        "role": "system",
-        "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."
-    },
-    {
-        "role": "user",
-        "content": "Write a limerick about python exceptions"
-    }
-    ]
-    }'
-    ```
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    api_key = "sk-no-key-required"
+)
+
+completion = client.chat.completions.create(
+  model="gpt-3.5-turbo",
+  messages=[
+    {"role": "system", "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."},
+    {"role": "user", "content": "Write a limerick about python exceptions"}
+  ]
+)
+
+print(completion.choices[0].message)
+```
+
+... or raw HTTP requests:
+
+```shell
+curl http://localhost:8080/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer no-key" \
+-d '{
+"model": "gpt-3.5-turbo",
+"messages": [
+{
+    "role": "system",
+    "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."
+},
+{
+    "role": "user",
+    "content": "Write a limerick about python exceptions"
+}
+]
+}'
+```
+
+*Tool call support*
+
+[OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) is supported with the `--jinja` flag (and may require a `--chat-template-file` override to get the right tool-use compatible Jinja template; worst case, `--chat-template chatml` may also work).
+
+**See our [Function calling](../../docs/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 

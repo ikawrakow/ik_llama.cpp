@@ -80,13 +80,22 @@ export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
  * recommended for DeepsSeek-R1, filter out content between <think> and </think> tags
  */
 export function filterThoughtFromMsgs(messages: APIMessage[]) {
+  console.debug({ messages });
   return messages.map((msg) => {
+    if (msg.role !== 'assistant') {
+      return msg;
+    }
+    // assistant message is always a string
+    const contentStr = msg.content as string;
     return {
       role: msg.role,
       content:
         msg.role === 'assistant'
-          ? msg.content.split('</think>').at(-1)!.trim()
-          : msg.content,
+          ? contentStr
+              .split(/<\/think>|<\|end\|>/)
+              .at(-1)!
+              .trim()
+          : contentStr,
     } as APIMessage;
   });
 }

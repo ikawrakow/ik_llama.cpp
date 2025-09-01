@@ -22071,6 +22071,23 @@ struct llama_grammar * llama_grammar_init(
 void llama_grammar_free(struct llama_grammar * grammar) {
     llama_grammar_free_impl(grammar);
 }
+//
+//void llama_grammar_init_lazy(struct llama_sampler* smpl) {
+//
+//    if (!grammar) {
+//        return;
+//    }
+//    std::vector<const char*>  trigger_patterns_c;
+//    trigger_patterns_c.reserve(grammar.grammar->trigger_patterns.size());
+//    for (auto& trigger_pattern : grammar.grammar->trigger_patterns) {
+//        trigger_patterns_c.push_back(trigger_pattern.pattern.c_str());
+//    }
+//    //auto* grammar_new = llama_grammar_init_impl(grammar->vocab, "", "root",
+//    //    grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
+//    //    grammar->trigger_tokens.data(), grammar->trigger_tokens.size());
+//
+//}
+
 
 struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar) {
     return llama_grammar_copy_impl(grammar);
@@ -22197,6 +22214,7 @@ int llama_split_path(char * split_path, size_t maxlen, const char * path_prefix,
     }
     return 0;
 }
+
 
 struct llama_sampler_dry * llama_sampler_init_dry(const struct llama_vocab* vocab, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
     return llama_sampler_init_dry_impl(*vocab, vocab->n_tokens(), dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, seq_breakers, num_breakers);

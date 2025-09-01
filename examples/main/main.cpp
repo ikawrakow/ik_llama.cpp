@@ -1,8 +1,8 @@
 #include "common.h"
-
+#include "chat.h"
 #include "console.h"
 #include "llama.h"
-#include "chat-template.hpp"
+#include "minja/chat-template.hpp"
 #include <cassert>
 #include <cinttypes>
 #include <cmath>
@@ -119,12 +119,11 @@ static void llama_log_callback_logTee(ggml_log_level level, const char * text, v
     LOG_TEE("%s", text);
 }
 
-static std::string chat_add_and_format(struct llama_model * model, common_chat_templates &chat_templates, std::vector<llama_chat_msg> & chat_msgs, std::string role, std::string content) {
-    llama_chat_msg new_msg{role, content};
-    auto formatted = llama_chat_format_single(model, 
-        *chat_templates.template_default, chat_msgs, new_msg, role == "user", g_params->use_jinja);
+static std::string chat_add_and_format(struct llama_model * model, common_chat_templates &chat_templates, std::vector<common_chat_msg> & chat_msgs, std::string role, std::string content) {
+    common_chat_msg new_msg{role, content};
+    auto formatted = common_chat_format_single(&chat_templates, chat_msgs, new_msg, role == "user", g_params->use_jinja);
     chat_msgs.push_back({role, content});
-    LOG("formatted: %s\n", formatted.c_str());
+    fprintf(stdout, "formatted: %s\n", formatted.c_str());
     return formatted;
 }
 
@@ -201,7 +200,7 @@ int main(int argc, char ** argv) {
     llama_model * model;
     llama_context * ctx;
     llama_context * ctx_guidance = NULL;
-    std::vector<llama_chat_msg> chat_msgs;
+    std::vector<common_chat_msg> chat_msgs;
     g_model = &model;
     g_ctx = &ctx;
 
@@ -220,7 +219,7 @@ int main(int argc, char ** argv) {
         LOG_TEE("%s: error: unable to load model\n", __func__);
         return 1;
     }
-    auto chat_templates = llama_chat_templates_from_model(model, params.chat_template);
+    auto chat_templates = common_chat_templates_init(model, params.chat_template);
 
     const int n_ctx_train = llama_n_ctx_train(model);
     const int n_ctx = llama_n_ctx(ctx);
@@ -233,7 +232,8 @@ int main(int argc, char ** argv) {
     // print chat template example in conversation mode
     if (params.conversation) {
         if (params.enable_chat_template) {
-            LOG_TEE("%s: chat template example: %s\n", __func__, llama_chat_format_example(model, *chat_templates.template_default, params.use_jinja).c_str());
+            //LOG_TEE("%s: chat template example: %s\n", __func__, common_chat_format_example(model, *chat_templates.template_default, params.use_jinja).c_str());
+            LOG_TEE("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates.get(), params.use_jinja).c_str());
         } else {
             LOG_TEE("%s: in-suffix/prefix is specified, chat template will be disabled\n", __func__);
         }
@@ -287,7 +287,7 @@ int main(int argc, char ** argv) {
             prompt = params.system_prompt;
 
             if (!prompt.empty()) {
-                prompt = chat_add_and_format(model, chat_templates,chat_msgs, "system", prompt);
+                prompt = chat_add_and_format(model, *chat_templates,chat_msgs, "system", prompt);
             }
         }
         else {
@@ -867,7 +867,7 @@ int main(int argc, char ** argv) {
                     }
 
                     if (params.enable_chat_template) {
-                        chat_add_and_format(model, chat_templates, chat_msgs, "assistant", assistant_ss.str());
+                        chat_add_and_format(model, *chat_templates, chat_msgs, "assistant", assistant_ss.str());
                     }
                     is_interacting = true;
                     printf("\n");
@@ -932,7 +932,7 @@ int main(int argc, char ** argv) {
 
                     bool format_chat = params.conversation && params.enable_chat_template;
                     std::string user_inp = format_chat
-                        ? chat_add_and_format(model, chat_templates, chat_msgs, "user", std::move(buffer))
+                        ? chat_add_and_format(model, *chat_templates, chat_msgs, "user", std::move(buffer))
                         : std::move(buffer);
                     // TODO: one inconvenient of current chat template implementation is that we can't distinguish between user input and special tokens (prefix/postfix)
                     const auto line_pfx = ::llama_tokenize(ctx, params.input_prefix, false, true);
@@ -972,7 +972,8 @@ int main(int argc, char ** argv) {
 
             if (n_past > 0 || waiting_for_first_input) {
                 if (is_interacting) {
-                    llama_sampling_reset(ctx_sampling);
+                    
+                    llama_sampling_reset(llama_get_model_vocab(model), ctx_sampling);
                 }
                 is_interacting = false;
                 waiting_for_first_input = false;
