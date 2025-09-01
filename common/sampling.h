@@ -1,9 +1,8 @@
 #pragma once
 
 #include "llama.h"
-
 #include "grammar-parser.h"
-
+#include <set>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -20,6 +19,23 @@ enum class llama_sampler_type : char {
     TOP_N_SIGMA = 'n',
     TYPICAL_P   = 'y',
     TEMPERATURE = 't'
+};
+
+enum common_grammar_trigger_type {
+    COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN,
+    COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
+    COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
+    COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+};
+
+struct common_grammar_trigger {
+    common_grammar_trigger_type type;
+    std::string value;
+    llama_token token = LLAMA_TOKEN_NULL;
+
+    // T can only be nlohmann::ordered_json
+    template <class T> T to_json() const;
+    template <class T> static common_grammar_trigger from_json(const T& in);
 };
 
 // sampling parameters
@@ -67,8 +83,11 @@ typedef struct llama_sampling_params {
         llama_sampler_type::TEMPERATURE
     };
 
-    std::string grammar;  // optional BNF-like grammar to constrain sampling
 
+    std::string grammar;  // optional BNF-like grammar to constrain sampling
+    bool                                grammar_lazy = false;
+    std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
+    std::set<llama_token>               preserved_tokens;
     // Classifier-Free Guidance
     // https://arxiv.org/abs/2306.17806
     std::string cfg_negative_prompt; // string to help guidance
@@ -106,7 +125,7 @@ struct llama_sampling_context {
     std::mt19937 rng;
 };
 
-#include "common.h"
+
 
 // Create a new sampling context instance.
 struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vocab, const struct llama_sampling_params & params);
@@ -116,7 +135,7 @@ void llama_sampling_free(struct llama_sampling_context * ctx);
 // Reset the sampler context
 // - clear prev tokens
 // - reset grammar
-void llama_sampling_reset(llama_sampling_context * ctx);
+void llama_sampling_reset(const struct llama_vocab* vocab, llama_sampling_context * ctx);
 
 // Set the sampler seed
 void llama_sampling_set_rng_seed(struct llama_sampling_context * ctx, uint32_t seed);
@@ -186,3 +205,6 @@ llama_token_data_array * llama_sampling_get_candidates(struct llama_sampling_con
 std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<llama_token> & draft);
 
 std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft);
+
+llama_grammar* llama_sampler_init_llg(const llama_vocab* vocab,
+    const char* grammar_kind, const char* grammar_data);

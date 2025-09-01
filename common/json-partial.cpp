@@ -1,12 +1,9 @@
-#include "json-partial.h"
-
+#include <json-partial.h>
+#include "ggml.h"
 #include "log.h"
-#include "../ggml/include/ggml.h"
-#include "../examples/server/utils.hpp"
-
-#include "json.hpp"
-
 #include <string>
+
+#include <json.hpp>
 
 using json = nlohmann::ordered_json;
 
@@ -129,7 +126,7 @@ bool common_json_parse(
             return true;
         } catch (const std::exception & ex) {
             // No, needs healing.
-            LOG_VERBOSE("Failed to parse up to error", {{"error", ex.what()}, {"content", std::string(it, temptative_end)}});
+            LOG("Failed to parse up to error: %s: <<<%s>>>\n", ex.what(), std::string(it, temptative_end).c_str());
         }
         auto can_parse = [](const std::string & str) {
             try {

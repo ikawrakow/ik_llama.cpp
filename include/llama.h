@@ -272,6 +272,7 @@ extern "C" {
         LLAMA_SPLIT_MODE_ROW     = 2, // split rows across GPUs
     };
 
+
     typedef struct llama_token_data {
         llama_token id; // token id
         float logit;    // log-odds of the token
@@ -1113,6 +1114,23 @@ extern "C" {
     // Get list of built-in chat templates
     LLAMA_API int32_t llama_chat_builtin_templates(const char ** output, size_t len);
 
+    typedef void* llama_sampler_context_t;
+
+    // user code can implement the interface below in order to create custom llama_sampler
+    struct llama_sampler_i {
+        const char* (*name)  (const struct llama_sampler* smpl);                                 // can be NULL
+        void                   (*accept)(struct llama_sampler* smpl, llama_token token);              // can be NULL
+        void                   (*apply) (struct llama_sampler* smpl, llama_token_data_array* cur_p); // required
+        void                   (*reset) (struct llama_sampler* smpl);                                 // can be NULL
+        struct llama_sampler* (*clone) (const struct llama_sampler* smpl);                                 // can be NULL if ctx is NULL
+        void                   (*free)  (struct llama_sampler* smpl);                                 // can be NULL if ctx is NULL
+    };
+
+    struct llama_sampler {
+        struct llama_sampler_i* iface;
+        llama_sampler_context_t   ctx;
+    };
+
     //
     // Grammar
     //
@@ -1127,6 +1145,8 @@ extern "C" {
             const llama_grammar_element ** rules,
                                  size_t    n_rules,
                                  size_t    start_rule_index);
+
+    LLAMA_API void llama_grammar_init_lazy(struct llama_sampler_grammar * grammar);
 
     LLAMA_API void llama_grammar_free(struct llama_grammar * grammar);
 
@@ -1243,6 +1263,40 @@ extern "C" {
             struct llama_context * ctx,
           llama_token_data_array * candidates_p,
                            float   top_n_sigma);
+
+
+LLAMA_API void                   llama_sampler_reset(struct llama_sampler* smpl);
+
+LLAMA_API struct llama_grammar* llama_sampler_init_grammar(
+    const struct llama_vocab* vocab,
+    const char* grammar_str,
+
+        const char* grammar_root);
+    /// @details Lazy grammar sampler, introduced in https://github.com/ggerganov/llama.cpp/pull/9639
+/// @param trigger_words A list of words that will trigger the grammar sampler. This may be updated to a loose regex syntax (w/ ^) in a near future.
+/// @param trigger_tokens A list of tokens that will trigger the grammar sampler.
+DEPRECATED(LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy(
+    const struct llama_vocab* vocab,
+        const char* grammar_str,
+        const char* grammar_root,
+        const char** trigger_words,
+        size_t num_trigger_words,
+        const llama_token* trigger_tokens,
+        size_t num_trigger_tokens),
+    "use llama_sampler_init_grammar_lazy_patterns instead");
+
+
+/// @details Lazy grammar sampler, introduced in https://github.com/ggml-org/llama.cpp/pull/9639
+/// @param trigger_patterns A list of patterns that will trigger the grammar sampler. Pattern will be matched from the start of the generation output, and grammar sampler will be fed content starting from its first match group.
+/// @param trigger_tokens A list of tokens that will trigger the grammar sampler. Grammar sampler will be fed content starting from the trigger token included.
+LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
+    const struct llama_vocab* vocab,
+    const char* grammar_str,
+    const char* grammar_root,
+    const char** trigger_patterns,
+    size_t num_trigger_patterns,
+    const llama_token* trigger_tokens,
+    size_t num_trigger_tokens);
 
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
     LLAMA_API struct llama_sampler_dry * llama_sampler_init_dry(

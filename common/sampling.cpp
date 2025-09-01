@@ -1,7 +1,10 @@
 #define LLAMA_API_INTERNAL
 #include "sampling.h"
 #include "llama-vocab.h"
+#include "common.h"
 #include <random>
+#include "json.hpp"
+using json = nlohmann::ordered_json;
 
 struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vocab, const struct llama_sampling_params & params) {
     struct llama_sampling_context * result = new llama_sampling_context();
@@ -9,10 +12,68 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
     result->params  = params;
     result->grammar = nullptr;
 
+
+    struct llama_grammar* grmr;
+    if (params.grammar.compare(0, 11, "%llguidance") == 0) {
+#ifdef LLAMA_USE_LLGUIDANCE
+        grmr = llama_sampler_init_llg(vocab, "lark", params.grammar.c_str());
+#else
+        GGML_ABORT("llguidance (cmake -DLLAMA_LLGUIDANCE=ON) is not enabled");
+#endif // LLAMA_USE_LLGUIDANCE
+    }
+    else {
+
+        std::vector<std::string> trigger_patterns;
+        std::vector<std::string> patterns_anywhere;
+        std::vector<llama_token> trigger_tokens;
+        for (const auto& trigger : params.grammar_triggers) {
+            switch (trigger.type) {
+            case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
+            {
+                const auto& word = trigger.value;
+                patterns_anywhere.push_back(regex_escape(word));
+                break;
+            }
+            case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
+            {
+                patterns_anywhere.push_back(trigger.value);
+                break;
+            }
+            case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL:
+            {
+                trigger_patterns.push_back(trigger.value);
+                break;
+            }
+            case COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN:
+            {
+                const auto token = trigger.token;
+                trigger_tokens.push_back(token);
+                break;
+            }
+            default:
+                GGML_ASSERT(false && "unknown trigger type");
+            }
+        }
+
+        if (!patterns_anywhere.empty()) {
+            trigger_patterns.push_back("^[\\s\\S]*?(" + string_join(patterns_anywhere, "|") + ")[\\s\\S]*");
+        }
+
+        std::vector<const char*> trigger_patterns_c;
+        trigger_patterns_c.reserve(trigger_patterns.size());
+        for (const auto& regex : trigger_patterns) {
+            trigger_patterns_c.push_back(regex.c_str());
+        }
+        grmr = params.grammar_lazy
+            ? llama_sampler_init_grammar_lazy_patterns(vocab, params.grammar.c_str(), "root",
+                trigger_patterns_c.data(), trigger_patterns_c.size(),
+                trigger_tokens.data(), trigger_tokens.size())
+            : llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root");
+
     // if there is a grammar, parse it
     if (!params.grammar.empty()) {
         result->parsed_grammar = grammar_parser::parse(params.grammar.c_str());
-
+            if (result->parsed_grammar.success) {
         // will be empty (default) if there are parse errors
         if (result->parsed_grammar.rules.empty()) {
             fprintf(stderr, "%s: failed to parse grammar\n", __func__);
@@ -26,21 +87,15 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
             delete result;
             return nullptr;
         }
-
-        std::vector<const llama_grammar_element *> grammar_rules(result->parsed_grammar.c_rules());
-
-        struct llama_grammar * grammar = llama_grammar_init(
-                grammar_rules.data(),
-                grammar_rules.size(), result->parsed_grammar.symbol_ids.at("root"));
-        if (grammar == nullptr) {
+                if (grmr == nullptr) {
             throw std::runtime_error("Failed to initialize llama_grammar");
         }
-        result->grammar = grammar;
     }
+        }
     result->prev.resize(params.n_prev);
-
     result->n_valid = 0;
-
+    }
+    result->grammar = grmr;
     // init DRY
     for (const auto& cnstr : params.samplers_sequence)
     {
@@ -75,27 +130,71 @@ void llama_sampling_free(struct llama_sampling_context * ctx) {
     delete ctx;
 }
 
-void llama_sampling_reset(llama_sampling_context * ctx) {
+void llama_sampling_reset(const struct llama_vocab* vocab, llama_sampling_context * ctx) {
+
     if (ctx->grammar != NULL) {
         llama_grammar_free(ctx->grammar);
         ctx->grammar = NULL;
     }
-
-    if (!ctx->parsed_grammar.rules.empty()) {
-        std::vector<const llama_grammar_element *> grammar_rules(ctx->parsed_grammar.c_rules());
-
-        struct llama_grammar * grammar = llama_grammar_init(
-                grammar_rules.data(),
-                grammar_rules.size(), ctx->parsed_grammar.symbol_ids.at("root"));
-        if (grammar == nullptr) {
-            throw std::runtime_error("Failed to initialize llama_grammar");
-        }
-        ctx->grammar = grammar;
+    struct llama_grammar* grmr;
+    auto params = ctx->params;
+    if (params.grammar.compare(0, 11, "%llguidance") == 0) {
+#ifdef LLAMA_USE_LLGUIDANCE
+        grmr = llama_sampler_init_llg(vocab, "lark", params.grammar.c_str());
+#else
+        GGML_ABORT("llguidance (cmake -DLLAMA_LLGUIDANCE=ON) is not enabled");
+#endif // LLAMA_USE_LLGUIDANCE
     }
+    else {
+        std::vector<std::string> trigger_patterns;
+        std::vector<std::string> patterns_anywhere;
+        std::vector<llama_token> trigger_tokens;
+        for (const auto& trigger : params.grammar_triggers) {
+            switch (trigger.type) {
+            case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
+            {
+                const auto& word = trigger.value;
+                patterns_anywhere.push_back(regex_escape(word));
+                break;
+            }
+            case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
+            {
+                patterns_anywhere.push_back(trigger.value);
+                break;
+            }
+            case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL:
+            {
+                trigger_patterns.push_back(trigger.value);
+                break;
+            }
+            case COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN:
+            {
+                const auto token = trigger.token;
+                trigger_tokens.push_back(token);
+                break;
+            }
+            default:
+                GGML_ASSERT(false && "unknown trigger type");
+            }
+        }
+        if (!patterns_anywhere.empty()) {
+            trigger_patterns.push_back("^[\\s\\S]*?(" + string_join(patterns_anywhere, "|") + ")[\\s\\S]*");
+        }
 
-    std::fill(ctx->prev.begin(), ctx->prev.end(), 0);
-    ctx->cur.clear();
-    ctx->n_valid = 0;
+        std::vector<const char*> trigger_patterns_c;
+        trigger_patterns_c.reserve(trigger_patterns.size());
+        for (const auto& regex : trigger_patterns) {
+            trigger_patterns_c.push_back(regex.c_str());
+        }
+
+        grmr = params.grammar_lazy
+            ? llama_sampler_init_grammar_lazy_patterns(vocab, params.grammar.c_str(), "root",
+                trigger_patterns_c.data(), trigger_patterns_c.size(),
+                trigger_tokens.data(), trigger_tokens.size())
+            : llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root");
+        }
+
+    ctx->grammar = grmr;
     llama_sampler_dry_reset(ctx->smpl);
 }
 
@@ -498,7 +597,10 @@ void llama_sampling_accept(
         struct llama_context * ctx_main,
         llama_token id,
         bool apply_grammar) {
+    if (ctx_sampling->prev.size() > 0) {
     ctx_sampling->prev.erase(ctx_sampling->prev.begin());
+
+    }
     ctx_sampling->prev.push_back(id);
 
     if (ctx_sampling->grammar != NULL && apply_grammar) {
@@ -552,3 +654,29 @@ std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_samplin
     return result;
 }
 
+
+
+
+
+template <>
+json common_grammar_trigger::to_json() const {
+    json out{
+        {"type", (int)type},
+        {"value", value},
+    };
+    if (type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) {
+        out["token"] = (int)token;
+    }
+    return out;
+}
+
+template <>
+common_grammar_trigger common_grammar_trigger::from_json(const json& in) {
+    common_grammar_trigger out;
+    out.type = (common_grammar_trigger_type)in.at("type").get<int>();
+    out.value = in.at("value").get<std::string>();
+    if (out.type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) {
+        out.token = (llama_token)in.at("token").get<int>();
+    }
+    return out;
+}

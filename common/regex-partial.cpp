@@ -118,7 +118,7 @@ std::string regex_to_reversed_partial_regex(const std::string & pattern) {
                 if (it == end) {
                     throw std::runtime_error("Unmatched '{' in pattern");
                 }
-                auto parts = string_split(std::string(start, it), ',');
+                auto parts = string_split(std::string(start, it), ",");
                 ++it;
                 if (parts.size() > 2) {
                     throw std::runtime_error("Invalid repetition range in pattern");

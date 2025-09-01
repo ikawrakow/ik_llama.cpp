@@ -9,8 +9,23 @@ enum common_regex_match_type {
     COMMON_REGEX_MATCH_TYPE_FULL,
 };
 
-// Include full definition of common_string_range
-#include "chat.h"
+struct common_string_range {
+    size_t begin;
+    size_t end;
+    common_string_range(size_t begin, size_t end) : begin(begin), end(end) {
+        if (begin > end) {
+            throw std::runtime_error("Invalid range");
+        }
+    }
+    // prevent default ctor
+    common_string_range() = delete;
+    bool empty() const {
+        return begin == end;
+    }
+    bool operator==(const common_string_range & other) const {
+        return begin == other.begin && end == other.end;
+    }
+};
 
 struct common_regex_match {
     common_regex_match_type type = COMMON_REGEX_MATCH_TYPE_NONE;
