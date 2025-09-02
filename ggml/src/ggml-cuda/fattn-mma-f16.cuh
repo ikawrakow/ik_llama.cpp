@@ -1400,7 +1400,7 @@ void launch_fattn_mma(
     dim3 blocks_num;
     if (stream_k) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
-        const int max_blocks = 2*nsm;
+        const int max_blocks = Q->ne[1] > 1 ? 2*nsm : nsm;
         const int tiles_nwaves = (ntiles_total + max_blocks - 1) / max_blocks;
         const int tiles_efficiency_percent = 100 * ntiles_total / (max_blocks*tiles_nwaves);
 
