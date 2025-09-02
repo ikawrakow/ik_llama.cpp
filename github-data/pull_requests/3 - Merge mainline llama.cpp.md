@@ -1,21 +1,24 @@
-### 🔀 [#3](https://github.com/ikawrakow/ik_llama.cpp/pull/3) - Merge mainline llama.cpp
+## 🔀 [Pull Request #3](https://github.com/ikawrakow/ik_llama.cpp/pull/3) - Merge mainline llama.cpp
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/merge_July_26_2024` |
+| **Target Branch** | `main` |
 | **Created** | 2024-07-26 |
 | **Updated** | 2024-07-27 |
+| **Merged** | 2024-07-27 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Only quick testing so far.
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2024-07-27** at **05:54:36**:<br>
+👤 **ikawrakow** commented on **2024-07-27** at **05:54:36**
 
 Seems to be working -> merging

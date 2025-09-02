@@ -1,13 +1,14 @@
-### 🗣️ [#266](https://github.com/ikawrakow/ik_llama.cpp/discussions/266) - Benchmarking DeepSeek R1 - 16x3090
+## 🗣️ [Discussion #266](https://github.com/ikawrakow/ik_llama.cpp/discussions/266) - Benchmarking DeepSeek R1 - 16x3090
 
 | **Author** | `davidsyoung` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-03-18 |
 | **Updated** | 2025-03-21 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Wanted to create a resource for anyone looking to optimise `-b -ub -amb` with `-mla 2 -fa -fmoe` with offloading DeepSeek R1 fully on CUDA with ik_llama.cpp @ https://github.com/ikawrakow/ik_llama.cpp/commit/dcdfad29f7d2b831f1c84751f00bda14cc359a84.
 
@@ -387,9 +388,9 @@ _TG shows no notable difference._
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **davidsyoung** replied the **2025-03-18** at **09:37:29**:<br>
+👤 **davidsyoung** commented on **2025-03-18** at **09:37:29**
 
 ### Mixed quant of `Q8` for attn, `Q5 down / IQ4_XS up|gate` for layers 3-8, and `IQ4_XS down / IQ3_S up|gate`.
 
@@ -421,47 +422,51 @@ perplexity: 11.69 seconds per pass - ETA 27.32 minutes
 Final estimate: PPL = 3.4178 +/- 0.01891
 ```
 
-> 👤 **fredlas** replied the **2025-03-19** at **15:49:40**:<br>
-> Were you thinking of uploading this to huggingface, by any chance? I can reproduce and upload it myself if necessary, but I haven't downloaded the full R1 weights yet, and would be happy to continue avoiding that if possible!
+> 👤 **fredlas** replied on **2025-03-19** at **15:49:40**
 > 
-> 👤 **ubergarm** replied the **2025-03-19** at **22:37:04**:<br>
+> Were you thinking of uploading this to huggingface, by any chance? I can reproduce and upload it myself if necessary, but I haven't downloaded the full R1 weights yet, and would be happy to continue avoiding that if possible!
+
+> 👤 **ubergarm** replied on **2025-03-19** at **22:37:04**
+> 
 > @fredlas do you have any specific hardware configuration in mind? e.g. how much system RAM, and GPUs / VRAM? I put together rough notes on making your own custom quant in [this quick-start guide discussion](https://github.com/ikawrakow/ik_llama.cpp/discussions/258). I believe @davidsyoung has tailored the quant specific to his 16x3090 = 384 GB VRAM setup.
 > 
 > I've made a couple quants now and have one okay one for 256GB RAM + 24GB VRAM single GPU configuration with better perplexity than unsloth `UD-Q2_K_XL` but just a little bit slower. I'm still experimenting to see how the various types effect generation speed vs perplexity while fitting inside the envelope of my current hardware.
 > 
 > You can get started with `ik_llama.cpp` including `-mla 2` and repacked quants now with an existing unsloth quant or whatever you have probably. (sorry if you already know this, I'm still new here!) Cheers!
+
+> 👤 **davidsyoung** replied on **2025-03-19** at **23:18:56**
 > 
-> 👤 **davidsyoung** replied the **2025-03-19** at **23:18:56**:<br>
 > I might be able to upload if you give me enough time, however, I actually recommend getting used to quanting as there’s _a lot_ tweaking you may want to do. 
 > 
 > For example, I don’t actually think this quant suits my setup best yet, and I’m actually underutilising one GPU. I just haven’t found a way to split the layers that well yet.
+
+> 👤 **fredlas** replied on **2025-03-21** at **02:37:16**
 > 
-> 👤 **fredlas** replied the **2025-03-21** at **02:37:16**:<br>
 > @ubergarm 307GiB happens to be right around the size I'm thinking of. 72GiB VRAM + 256GiB RAM, for queuing up jobs to run overnight with 16k context - should just fit in there, I think. Funny coincidence for an extremely different configuration! Thanks for that guide - I made my own quants of Wizard2 8x22B a while back, but long enough that I was probably going to have to basically relearn it.
 > 
 > @davidsyoung I'd say don't upload them just for my sake if you weren't already planning to - I just thought I'd check in case I could stay lazy. Plus this size range is probably pretty niche anyways; might not really be worth it in terms of helping people.
 
 ---
 
-👤 **ikawrakow** replied the **2025-03-18** at **09:44:15**:<br>
+👤 **ikawrakow** commented on **2025-03-18** at **09:44:15**
 
 Thank you for this. I think it can be really useful for people.
 
 ---
 
-👤 **saood06** replied the **2025-03-18** at **20:14:25**:<br>
+👤 **saood06** commented on **2025-03-18** at **20:14:25**
 
 @ikawrakow Can I convert this to a discussion?
 
 ---
 
-👤 **davidsyoung** replied the **2025-03-18** at **20:19:37**:<br>
+👤 **davidsyoung** commented on **2025-03-18** at **20:19:37**
 
 All good with me @saood06
 
 ---
 
-👤 **ikawrakow** replied the **2025-03-18** at **20:29:32**:<br>
+👤 **ikawrakow** commented on **2025-03-18** at **20:29:32**
 
 > @ikawrakow Can I convert this to a discussion?
 
