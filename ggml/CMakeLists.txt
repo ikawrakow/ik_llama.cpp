@@ -103,7 +103,7 @@ if (WIN32)
 endif()
 
 # ggml core
-set(GGML_SCHED_MAX_COPIES  "4" CACHE STRING "ggml: max input copies for pipeline parallelism")
+set(GGML_SCHED_MAX_COPIES  "1" CACHE STRING "ggml: max input copies for pipeline parallelism")
 set(GGML_MAX_CONTEXTS       "" CACHE STRING "ggml: max model contexts (override only; defaults to 64 in the code)")
 
 # 3rd party libs / backends
