@@ -1209,7 +1209,7 @@ static __device__ __forceinline__ int warp_reduce_all(int x) {
     }
 }
 
-template <int ncols1>
+template <int ncols1, bool is_swa>
 __launch_bounds__(FATTN_KQ_STRIDE/2, 1)
 static __global__ void flash_attn_mask_to_KV_min_max(
         const half2 * __restrict__ mask, int2 * __restrict__ KV_min_max, const int ne30, const int s31, const int s33) {
@@ -1248,6 +1248,13 @@ static __global__ void flash_attn_mask_to_KV_min_max(
         if (!all_inf) {
             break;
         }
+    }
+
+    if constexpr (!is_swa) {
+        if (threadIdx.x == 0) {
+            KV_min_max[sequence*ne31 + jt] = {0, KV_max_sj + FATTN_KQ_STRIDE};
+        }
+        return;
     }
 
     if (threadIdx.x == 0) {
@@ -1316,6 +1323,9 @@ void launch_fattn_mma(
 
     GGML_ASSERT(Q->ne[3] == 1);
 
+    int n_swa;
+    memcpy(&n_swa, (const int *) KQV->op_params + 4, sizeof(int));
+
     ggml_cuda_pool & pool = ctx.pool();
     cudaStream_t main_stream = ctx.stream();
     const int id  = ggml_cuda_get_device();
@@ -1371,7 +1381,7 @@ void launch_fattn_mma(
     const int ntiles_x = ((Q->ne[1] + ncols1 - 1) / ncols1);
     const int ntiles_total = ntiles_x * (Q->ne[2] / ncols2) * Q->ne[3];
 
-    if (mask && (Q->ne[1] >= 1024 || K->ne[1] >= 1024)) {
+    if (mask && (Q->ne[1] >= 1024 || (n_swa > 0 && K->ne[1] >= FATTN_KQ_STRIDE + n_swa))) {
         const int s31 = mask->nb[1] / sizeof(half2);
         const int s33 = mask->nb[3] / sizeof(half2);
         const dim3 blocks_num_KV_max(ntiles_x, Q->ne[3], 1);
@@ -1379,8 +1389,13 @@ void launch_fattn_mma(
         const int ne_KV_max = blocks_num_KV_max.x*blocks_num_KV_max.y;
         const int iter_k = K->ne[1] / FATTN_KQ_STRIDE;
         KV_min_max.alloc(ne_KV_max);
-        flash_attn_mask_to_KV_min_max<ncols1><<<blocks_num_KV_max, block_dim_KV_max, 0, main_stream>>>
-            ((const half2 *) mask->data, KV_min_max.ptr, iter_k, s31, s33);
+        if (n_swa > 0) {
+            flash_attn_mask_to_KV_min_max<ncols1, true><<<blocks_num_KV_max, block_dim_KV_max, 0, main_stream>>>
+                ((const half2 *) mask->data, KV_min_max.ptr, iter_k, s31, s33);
+        } else {
+            flash_attn_mask_to_KV_min_max<ncols1, false><<<blocks_num_KV_max, block_dim_KV_max, 0, main_stream>>>
+                ((const half2 *) mask->data, KV_min_max.ptr, iter_k, s31, s33);
+        }
         CUDA_CHECK(cudaGetLastError());
     }
 
