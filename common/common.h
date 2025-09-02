@@ -15,14 +15,18 @@
 
 #define LOG_NO_FILE_LINE_FUNCTION
 #include "log.h"
-
+#include <set>
 #include <cmath>
 #include <string>
+#include <sstream>
+#include <string_view>
 #include <vector>
 #include <random>
 #include <thread>
 #include <unordered_map>
 #include <tuple>
+#include <map>
+#include <sstream>
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -72,6 +76,14 @@ int32_t cpu_get_num_math();
 enum dimre_method {
     DIMRE_METHOD_PCA,
     DIMRE_METHOD_MEAN,
+};
+
+// reasoning API response format (not to be confused as chat template's reasoning format)
+enum common_reasoning_format {
+    COMMON_REASONING_FORMAT_NONE,
+    COMMON_REASONING_FORMAT_AUTO,
+    COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY, // Extract thinking tag contents and return as `message.reasoning_content`, or leave inline in <think> tags in stream mode
+    COMMON_REASONING_FORMAT_DEEPSEEK,        // Extract thinking tag contents and return as `message.reasoning_content`, including in streaming deltas.
 };
 
 struct gpt_params {
@@ -240,13 +252,21 @@ struct gpt_params {
     bool use_jinja = false;                                                                                 // NOLINT
     std::string system_prompt = "";
     bool enable_chat_template = true;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    int reasoning_budget = -1;
+    bool prefill_assistant = true;
 
     std::vector<std::string> api_keys;
 
     std::string ssl_file_key  = "";
     std::string ssl_file_cert = "";
 
-    bool endpoint_slots   = true;
+    std::map<std::string, std::string> default_template_kwargs;
+
+    // "advanced" endpoints are disabled by default for better security
+    bool webui            = true;
+    bool endpoint_slots   = false;
+    bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
 
     bool log_json = false;
@@ -314,19 +334,24 @@ std::string gpt_params_get_system_info(const gpt_params & params);
 //
 // String utils
 //
-
-std::vector<std::string> string_split(std::string input, char separator);
-std::string string_join(const std::vector<std::string> & strs, const std::string & delimiter);
-
+std::string string_join(const std::vector<std::string>& values, const std::string& separator);
 std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();
 
-void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
+static bool string_starts_with(const std::string& str,
+    const std::string& prefix) {  // While we wait for C++20's std::string::starts_with...
+    return str.rfind(prefix, 0) == 0;
+}
 
-// Additional string utilities for builder pattern compatibility
-bool string_starts_with(const std::string & str, const std::string & prefix);
-bool string_ends_with(const std::string_view & str, const std::string_view & suffix);
-size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop);
+std::vector<std::string> string_split(const std::string& str, const std::string& delimiter);
+std::vector<std::string> string_split(const std::string& str, char delim);
+
+void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
+// While we wait for C++20's std::string::ends_with...
+bool string_ends_with(const std::string_view& str, const std::string_view& suffix);
+size_t string_find_partial_stop(const std::string_view& str, const std::string_view& stop);
+
+std::string regex_escape(const std::string& s);
 
 template<class T>
 static std::vector<T> string_split(const std::string & str, char delim) {
@@ -340,6 +365,22 @@ static std::vector<T> string_split(const std::string & str, char delim) {
         values.push_back(value);
     }
     return values;
+}
+
+template<>
+std::vector<std::string> string_split<std::string>(const std::string& input, char separator)
+{
+    std::vector<std::string> parts;
+    size_t begin_pos = 0;
+    size_t separator_pos = input.find(separator);
+    while (separator_pos != std::string::npos) {
+        std::string part = input.substr(begin_pos, separator_pos - begin_pos);
+        parts.emplace_back(part);
+        begin_pos = separator_pos + 1;
+        separator_pos = input.find(separator, begin_pos);
+    }
+    parts.emplace_back(input.substr(begin_pos, separator_pos - begin_pos));
+    return parts;
 }
 
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);
@@ -432,52 +473,59 @@ bool llama_should_add_bos_token(const llama_model * model);
 //
 // Chat template utils
 //
+//struct common_tool_call {
+//    std::string name;
+//    std::string arguments;
+//    std::string id;
+//};
+//
+//// same with llama_chat_message, but uses std::string
+//struct common_chat_msg {
+//    std::string role;
+//    std::string content;
+//    std::vector<common_tool_call> tool_calls;
+//    std::string reasoning_content = "";
+//};
 
-// same with llama_chat_message, but uses std::string
-struct llama_chat_msg {
-    std::string role;
-    std::string content;
-};
-
-// Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
-bool llama_chat_verify_template(const struct llama_model* , const std::string& tmpl, bool use_jinja);
-
-namespace minja {
-    class chat_template;
-}
-
-typedef minja::chat_template common_chat_template;
-
-struct common_chat_templates {
-    bool has_explicit_template; // Model had builtin template or template overridde was specified.
-    std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
-    std::unique_ptr<common_chat_template> template_tool_use;
-};
-
-
-// CPP wrapper for llama_chat_apply_template
-// If the built-in template is not supported, we default to chatml
-// If the custom "tmpl" is not supported, we throw an error
-std::string llama_chat_apply_template(
-    const struct llama_model* model,
-    const common_chat_template& tmpl,
-    const std::vector< llama_chat_msg>& chat,
-    bool add_ass,
-    bool use_jinja);
-
-// Format single message, while taking into account the position of that message in chat history
-std::string  llama_chat_format_single(const struct llama_model* model,
-    const common_chat_template& tmpl,
-    const std::vector< llama_chat_msg>& past_msg,
-    const  llama_chat_msg& new_msg,
-    bool add_ass,
-    bool use_jinja);
-
-// Returns an example of formatted chat
-std::string  llama_chat_format_example(const struct llama_model* model,
-    const common_chat_template& tmpl, bool use_jinja);
-
-common_chat_templates  llama_chat_templates_from_model(const struct llama_model* model, const std::string& chat_template_override);
+//// Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
+//bool llama_chat_verify_template(const struct llama_model* , const std::string& tmpl, bool use_jinja);
+//
+//namespace minja {
+//    class chat_template;
+//}
+//
+//typedef minja::chat_template common_chat_template;
+//
+//struct common_chat_templates {
+//    bool has_explicit_template; // Model had builtin template or template overridde was specified.
+//    std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
+//    std::unique_ptr<common_chat_template> template_tool_use;
+//};
+//
+//
+//// CPP wrapper for llama_chat_apply_template
+//// If the built-in template is not supported, we default to chatml
+//// If the custom "tmpl" is not supported, we throw an error
+//std::string llama_chat_apply_template(
+//    const struct llama_model* model,
+//    const common_chat_template& tmpl,
+//    const std::vector< common_chat_msg>& chat,
+//    bool add_ass,
+//    bool use_jinja);
+//
+//// Format single message, while taking into account the position of that message in chat history
+//std::string  llama_chat_format_single(const struct llama_model* model,
+//    const common_chat_template& tmpl,
+//    const std::vector< common_chat_msg>& past_msg,
+//    const  common_chat_msg& new_msg,
+//    bool add_ass,
+//    bool use_jinja);
+//
+//// Returns an example of formatted chat
+//std::string  llama_chat_format_example(const struct llama_model* model,
+//    const common_chat_template& tmpl, bool use_jinja);
+//
+//common_chat_templates  llama_chat_templates_from_model(const struct llama_model* model, const std::string& chat_template_override);
 
 
 //
