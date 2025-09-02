@@ -1160,6 +1160,7 @@ struct ggml_backend_sched {
 
     uint32_t op_offload[(GGML_OP_COUNT + 31)/32];
 
+    bool only_active_experts;
     bool debug;
 };
 
@@ -1178,6 +1179,11 @@ void ggml_backend_sched_set_op_offload(ggml_backend_sched_t sched, enum ggml_op 
     } else {
         sched->op_offload[i] &= (~(1u << j));
     }
+}
+
+void ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool on_or_off) {
+    if (!sched) return;
+    sched->only_active_experts = on_or_off;
 }
 
 static inline bool ggml_backend_sched_offload_enabled(ggml_backend_sched_t sched, enum ggml_op op) {
@@ -1889,9 +1895,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
-#if 1
+
                 ggml_tensor * node = split->graph.nodes[0];
-                if (split->graph.n_nodes > 0 &&
+                if (sched->only_active_experts && split->graph.n_nodes > 0 &&
                     ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
                     ggml_backend_buffer_is_host(input->buffer) &&
                     node->src[cur_arg] == input_cpy &&
@@ -1954,7 +1960,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     copy_experts(first_id, last_id);
                     if (node->op == GGML_OP_MOE_FUSED_UP_GATE) ++cur_arg;
                 } else
-#endif
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                 if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
