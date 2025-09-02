@@ -1035,9 +1035,6 @@ static __global__ void flash_attn_mma_ext_f16(
     int kb0_start_kernel = kb0_start * kb_niter;
     int kb0_stop_kernel  = kb0_stop  * kb_niter;
     if (bounds) {
-        if (kb0_start_kernel*KQ_per_iter >= bounds[jt].y || kb0_stop_kernel*KQ_per_iter < bounds[jt].x) {
-            return;
-        }
         kb0_start_kernel = max(kb0_start_kernel, bounds[jt].x / KQ_per_iter);
         kb0_stop_kernel  = min(kb0_stop_kernel,  bounds[jt].y / KQ_per_iter);
     }
