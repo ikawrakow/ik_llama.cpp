@@ -9008,6 +9008,8 @@ struct ggml_tensor * ggml_flash_attn_ext(
     float params[] = { scale, max_bias, softcap };
     ggml_set_op_params(result, params, sizeof(params));
 
+    ggml_set_op_params_i32(result, 4, 0);
+
     result->op   = GGML_OP_FLASH_ATTN_EXT;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = q;
@@ -18879,7 +18881,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                 Dk, Dv, neq1, nek1, q->nb[1], k->nb[1], v->nb[1], mask->nb[1],
                 q->data, k->data, v->data, mask->data, sinks ? sinks->data : NULL,
                 scale, softcap, (float *)dst->data,
-                params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, ith, nth)) return;
+                params->wdata, (barrier_t)ggml_barrier, (void *)params->shared, ith, nth, dst->op_params[4])) return;
 
 //    if (max_bias <= 0.0f && q->type == GGML_TYPE_F32 && mask && mask->type == GGML_TYPE_F16) {
 //        //if (ith == 0) printf("k: %ld x %ld x %ld, q: %ld x %ld x %ld, v: %ld x %ld x %ld mask: %ld x %ld x %ld\n",

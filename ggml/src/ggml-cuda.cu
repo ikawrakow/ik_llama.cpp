@@ -4288,8 +4288,9 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
         if (batch_size < min_batch_size) return false;
         int64_t n_experts_tot    = op->src[0]->ne[2];
         int64_t n_experts_active = ids->ne[0];
-        //printf("%s(%s): op->ne[2] = %ld, n_experts_tot = %ld, n_experts_active = %ld, ids: %s, %ld x %ld x %ld x %ld\n", __func__, op->name, op->ne[2], n_experts_tot, n_experts_active, ids->name, ids->ne[0], ids->ne[1], ids->ne[2], ids->ne[3]);
-        return batch_size*n_experts_active >= min_batch_size*n_experts_tot;
+        bool should_offload = batch_size*n_experts_active >= min_batch_size*n_experts_tot;
+        //printf("%s(%s): op->ne[2] = %ld, n_experts_tot = %ld, n_experts_active = %ld, ids: %s, %ld x %ld x %ld x %ld -> %d (%ld, %ld)\n", __func__, op->name, op->ne[2], n_experts_tot, n_experts_active, ids->name, ids->ne[0], ids->ne[1], ids->ne[2], ids->ne[3], should_offload, batch_size*n_experts_active, min_batch_size*n_experts_tot);
+        return should_offload;
     }
 
     return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;

@@ -424,6 +424,7 @@ extern "C" {
         bool fused_up_gate;     // whether to use fused up/gate op [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
+        bool only_active_experts;
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
