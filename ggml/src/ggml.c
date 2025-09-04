@@ -9008,6 +9008,8 @@ struct ggml_tensor * ggml_flash_attn_ext(
     float params[] = { scale, max_bias, softcap };
     ggml_set_op_params(result, params, sizeof(params));
 
+    ggml_set_op_params_i32(result, 4, 0);
+
     result->op   = GGML_OP_FLASH_ATTN_EXT;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = q;
