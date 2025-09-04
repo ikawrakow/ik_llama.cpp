@@ -18965,6 +18965,7 @@ struct llama_context_params llama_context_default_params() {
         /*.fused_up_gate               =*/ true,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
+        /*.only_active_experts         =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
@@ -19554,6 +19555,11 @@ struct llama_context * llama_new_context_with_model(
             }
             ggml_backend_sched_set_op_offload(ctx->sched, ggml_op(op), on_off);
         }
+    }
+
+    if (params.only_active_experts) {
+        LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXX Setting only active experts offload\n");
+        ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
 
     return ctx;

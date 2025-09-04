@@ -1378,6 +1378,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--offload-only-active-experts" || arg == "-ooae") {
+        params.only_active_exps = true;
+        return true;
+    }
     if (arg == "--host") {
         CHECK_ARG
         params.hostname = argv[i];
@@ -2746,6 +2750,7 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.fused_up_gate     = params.fused_up_gate;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
+    cparams.only_active_experts = params.only_active_exps;
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
