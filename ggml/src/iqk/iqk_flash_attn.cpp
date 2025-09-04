@@ -71,9 +71,22 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                             float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             float       * qkv,      // v*softmax(scale*(k*q))
                             [[maybe_unused]] void * work_buffer_in, [[maybe_unused]] barrier_t barrier, [[maybe_unused]] void * barrier_data,
-                            int ith, int nth) {
+                            int ith, int nth, int n_swa) {
 
     if (type_q != 0 || type_mask != 1 || max_bias > 0) return false;
+
+    if (n_swa > 0) {
+        constexpr int kMinBatch = 256;
+        int ntokens = std::max(kMinBatch, neq1);
+        int nblock  = (ntokens + n_swa + kMinBatch - 1)/kMinBatch;
+        int first   = nek1 - nblock*kMinBatch;
+        if (first > 0) {
+            k = (const char *)k + int64_t(first)*stride_k;
+            v = (const char *)v + int64_t(first)*stride_v;
+            mask = (const uint16_t *)mask + first;
+            nek1 -= first;
+        }
+    }
 
     int rk2 = neq2/nek2;
     int rv2 = neq2/nev2;
@@ -83,7 +96,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     int first_k = 0, last_k = nek1;
     if (neq3 == 1 && rk2 > 1 && neq1 == 1 && nek1 > 256) {
         // This is a quick hack for SWA models.
-        // Given that the mask is the same for all layers, ideally we should determinbe the
+        // Given that the mask is the same for all layers, ideally we should determine the
         // cache bounds once, and reuse for the whole graph. But even with this simple hack
         // we get non-negligible performance gains for SWA models and long context.
         auto umask = (const uint16_t *)mask;
@@ -339,7 +352,7 @@ bool iqk_flash_attn_noalibi([[maybe_unused]] int type_q, [[maybe_unused]] int ty
                             [[maybe_unused]] float         softcap,  // if > 0, a "soft-cap" operation is applied before softmax
                             [[maybe_unused]] float       * qkv,      // v*softmax(scale*(k*q))
                             [[maybe_unused]] void * work_buffer, [[maybe_unused]] barrier_t barrier, [[maybe_unused]] void * barrier_data,
-                            [[maybe_unused]] int ith, [[maybe_unused]] int nth) {
+                            [[maybe_unused]] int ith, [[maybe_unused]] int nth, [[maybe_unused]] int n_swa) {
     return false;
 }
 
