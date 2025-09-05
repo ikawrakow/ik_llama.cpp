@@ -1857,6 +1857,10 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     struct ggml_backend_sched_split * splits = sched->splits;
 
+    std::vector<int32_t> ids;
+    std::vector<uint32_t> unique_ids;
+    ggml_tensor * last_ids_tensor = nullptr;
+
 
     for (int i = 0; i < sched->n_splits; i++) {
 #if IK_PRINT_TIMING
@@ -1865,14 +1869,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         struct ggml_backend_sched_split * split = &splits[i];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+        ggml_backend_t last_input_backend = nullptr;
 
         int cur_arg = 0;
-        std::vector<int32_t> ids;
-        std::set<int32_t> unique_ids;
-
-        //printf("Graph split %d has %d inputs:\n", i, split->n_inputs);
-        //for (int j = 0; j < split->n_inputs; j++) printf("  %s,  %s\n", split->inputs[j]->name,
-        //        split->inputs[j]->src[0] ? split->inputs[j]->src[0]->name : "none");
 
         // copy the input tensors to the split backend
         for (int j = 0; j < split->n_inputs; j++) {
@@ -1903,31 +1902,45 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     node->src[cur_arg] == input_cpy &&
                    (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE)) {
 
-                    if (ids.empty()) {
-                        // find the ids
-                        ggml_tensor * ids_tensor = node->op == GGML_OP_MUL_MAT_ID ? node->src[2] : node->src[3];
-                        ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
+                    if (input_backend != last_input_backend) {
                         ggml_backend_synchronize(input_backend);
+                        last_input_backend = input_backend;
+                    }
 
-                        ggml_backend_tensor_get_async(split_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
+                    //printf("node: %s have %d inputs, processing input %d\n", node->name, split->n_inputs, j);
+                    ggml_tensor * ids_tensor = node->op == GGML_OP_MUL_MAT_ID ? node->src[2] : node->src[3];
+                    auto ids_backend = split_backend;
 
-                        ggml_backend_synchronize(split_backend);
+                    // if the ids tensor is also an input of the split, it may not have been copied yet to the split backend
+                    // in that case, we use the original ids tensor
+                    for (int jj = j + 1; jj < split->n_inputs; ++jj) {
+                        if (ids_tensor == tensor_copy(split->inputs[jj], split_backend_id, sched->cur_copy)) {
+                            ids_tensor = split->inputs[jj];
+                            ids_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[jj]);
+                            break;
+                        }
+                    }
 
+                    int n_expert = input->ne[2];
+
+                    if (ids_tensor != last_ids_tensor) {
+                        ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
+
+                        ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
+
+                        ggml_backend_synchronize(ids_backend);
+
+                        unique_ids.resize((n_expert + 31)/32);
+                        std::memset(unique_ids.data(), 0, unique_ids.size()*sizeof(uint32_t));
                         for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
                             for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
                                 int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
-                                unique_ids.insert(id);
+                                unique_ids[id >> 5] |= (1u << (id & 31));
                             }
                         }
 
-                        // group consecutive experts and copy them together
-                        GGML_ASSERT(!unique_ids.empty());
-
+                        last_ids_tensor = ids_tensor;
                     }
-
-                    auto it = unique_ids.begin();
-                    int32_t first_id = *it;
-                    int32_t last_id = first_id;
 
                     auto copy_experts = [&](int32_t first_id, int32_t last_id) {
                         const size_t expert_size = (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE) ? input->nb[2] : input->nb[1];
@@ -1944,20 +1957,22 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                     };
 
-                    for (++it; it != unique_ids.end(); ++it) {
-                        const int32_t id = *it;
+                    auto next_on_id = [&unique_ids, n_expert] (int id) {
+                        while (id < n_expert && (unique_ids[id >> 5] & (1u << (id & 31))) == 0) ++id;
+                        return id;
+                    };
+                    auto next_off_id = [&unique_ids, n_expert] (int id) {
+                        while (id < n_expert && (unique_ids[id >> 5] & (1u << (id & 31))) != 0) ++id;
+                        return id;
+                    };
 
-                        if (id == last_id + 1) {
-                            last_id = id;
-                            continue;
-                        }
-
-                        copy_experts(first_id, last_id);
-
-                        first_id = id;
-                        last_id = id;
+                    int first_id = next_on_id(0);
+                    while (first_id < n_expert) {
+                        int last_id = next_off_id(first_id+1);
+                        copy_experts(first_id, last_id-1);
+                        first_id = next_on_id(last_id);
                     }
-                    copy_experts(first_id, last_id);
+
                     if (node->op == GGML_OP_MOE_FUSED_UP_GATE) ++cur_arg;
                 } else
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
