@@ -257,7 +257,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_EXP_PROBS_B: (
-            "model.layers.{bid}.mlp.gate.e_score_correction", # deepseek-v3 dots1
+            "model.layers.{bid}.mlp.gate.e_score_correction",           # deepseek-v3 dots1
+            "model.layers.{bid}.mlp.moe_statics.e_score_correction",    # ernie4.5-moe
         ),
 
         # Feed-forward up
