@@ -4743,7 +4743,9 @@ GGML_CALL bool ggml_is_permuted(const struct ggml_tensor * tensor) {
 }
 
 GGML_CALL bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor) {
-    return ggml_nbytes(tensor) == ggml_nelements(tensor) * ggml_type_size(tensor->type)/ggml_blck_size(tensor->type);
+    return ggml_nbytes(tensor) == ggml_nrows(tensor)*ggml_row_size(tensor->type, tensor->ne[0]);
+    // The ongoing mainline obsession with blocks of quants does not work with per tensor row scales
+    //return ggml_nbytes(tensor) == ggml_nelements(tensor) * ggml_type_size(tensor->type)/ggml_blck_size(tensor->type);
 }
 
 GGML_CALL bool ggml_is_contiguous_channels(const struct ggml_tensor * tensor) {
