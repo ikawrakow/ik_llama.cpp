@@ -275,34 +275,29 @@ struct server_task_result {
     json to_json_oaicompat_partial() {
         std::time_t t = std::time(0);
         json logprobs = json(nullptr); // OAI default to null
-        if (!stream && probs_output.size() > 0) {
+        if (probs_output.size() > 0) {
             logprobs = json{
                 {"content", completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs)},
             };
         }
-        json finish_reason = "length";
-        if (stop) {
-        //if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
-            finish_reason = "stop";
-        }
         json res = json{
             {"choices",            json::array({
                 json{
-                    {"text",          stream ? "" : content}, // in stream mode, content is already in last partial chunk
+                    {"text",          content},
                     {"index",         index},
                     {"logprobs",      logprobs},
-                    {"finish_reason", finish_reason},
+                    {"finish_reason", nullptr},
                 }
             })},
             {"created",            t},
             {"model",              oaicompat_model},
             {"object",             "text_completion"},
             {"usage", json {
-                {"completion_tokens", n_decoded},
-                {"prompt_tokens",     n_prompt_tokens},
-                {"total_tokens",      n_decoded + n_prompt_tokens}
+	            {"completion_tokens", n_decoded},
+	            {"prompt_tokens",     n_prompt_tokens},
+	            {"total_tokens",      n_decoded + n_prompt_tokens}
             }},
-            {"id", oaicompat_cmpl_id}
+            {"id",                 oaicompat_cmpl_id}
         };
 
         // extra fields for debugging purposes
