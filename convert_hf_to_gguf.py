@@ -320,7 +320,7 @@ class Model:
                         gguf.LlamaFileType.MOSTLY_Q4_0,
                         gguf.LlamaFileType.MOSTLY_Q4_1,
                     ):
-                        data_qtype = gguf.GGMLQuantizationType.Q5_0  
+                        data_qtype = gguf.GGMLQuantizationType.Q5_0
                     elif self.ftype in (
                         gguf.LlamaFileType.MOSTLY_Q5_0,
                         gguf.LlamaFileType.MOSTLY_Q5_1,
@@ -418,7 +418,7 @@ class Model:
 
         logger.info("Set model quantization version")
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
-        
+
         logger.info("***********************************************************************************************")
         logger.info("** Converting to `q4_0`,`q4_1`,`q5_0`, `q5_1` or `q6_0` is not equiv to using `llama-quantize`!")
         logger.info("** Ftype `q4_0`,`q4_1` are here converting embeddings, output, attn_k and attn_v/qkv in q5_0.")
@@ -2195,8 +2195,8 @@ class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
 
-@ModelBase.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
-class Ernie4_5Model(TextModel):
+@Model.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
+class Ernie4_5Model(Model):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5
 
     def set_vocab(self):
@@ -2242,7 +2242,7 @@ class Ernie4_5Model(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
-@ModelBase.register("Ernie4_5_MoeForCausalLM")
+@Model.register("Ernie4_5_MoeForCausalLM")
 class Ernie4_5MoeModel(Ernie4_5Model):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5_MOE
     _experts: list[dict[str, Tensor]] | None = None
