@@ -1,14 +1,17 @@
-### 🔀 [#566](https://github.com/ikawrakow/ik_llama.cpp/pull/566) - Adding IQ3_KS quants
+## 🔀 [Pull Request #566](https://github.com/ikawrakow/ik_llama.cpp/pull/566) - Adding IQ3_KS quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq3_ks_v2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-07-01 |
 | **Updated** | 2025-07-02 |
+| **Merged** | 2025-07-02 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR adds `IQ3_KS` - 3.1875 bpw quants with a block size of 32. This makes the `IQX_KS` quant series complete
 
@@ -94,15 +97,54 @@ Here a few sweep-benches for LlaMA-3.1-8B-Instruct
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-07-02** at **07:27:42**:<br>
+👤 **ikawrakow** commented on **2025-07-02** at **07:27:42**
 
 Let's merge this so people don't get crashes when trying to run `IQ3_KS` models with the main branch.
 
 ---
 
-👤 **Nexesenex** commented the **2025-07-02** at **15:01:59**:<br>
+👤 **Nexesenex** commented on **2025-07-02** at **13:09:32**
+
+On a SicariusSicariiStuff_Nano_Imp_1B-bf16 Llama 3.2 1B model I had on my drive.
+
+PPL 512 wikitest eng.
+IQ3_XXS, output Q6_K : 39.9308 +/- 0.36424
+IQ3_KS V1 (your old branch), output Q6_K : 37.4846 +/- 0.34625
+IQ3_KS V2 (this one), output IQ5_K : 35.3730 +/- 0.32563 (that's a clear improvement)
+Q3_K, output Q6_K : 31.3082 +/- 0.28644
+IQ3_S, output Q6_K : 34.0241 +/- 0.31115
+IQ3_K, output Q6_K : 33.2313 +/- 0.30001
+
+IQ3_KT FTYPE
+llama_model_loader: - type  f32:   34 tensors
+llama_model_loader: - type q5_K:    1 tensors (output)
+llama_model_loader: - type iq3_s:    1 tensors (embeddings)
+llama_model_loader: - type iq3_k:   16 tensors (attn_output)
+llama_model_loader: - type iq5_k:   16 tensors (attn_v)
+llama_model_loader: - type iq3_kt:   80 tensors
+PPL 512 Wikitest eng : PPL = 35.3279 +/- 0.32366 (IQ3_KS_v2 compete quite well on this model)
+
+Also, merged successfully on Croco.cpp, and it infers properly.
+
+---
+
+👤 **Nexesenex** commented on **2025-07-02** at **14:05:49**
+
+@Ikawrakow : You brought us SOTA quants in the 2.1-2.2x bpw and 3.1x-3.2 bpw range with the KS and KT quants (and so, IQ2_XXS, XS, and IQ3_XXS are close to obsolescence now), and IQ2_K/IQ2_S remain on duty, but there's now a SOTA quants gap in the 2.4-3.1bpw range.
+
+Would it be possible, mathematically wise, and interesting for you to develop a new IQ2_KL quant (in the 2.6875-2.75bpw range?), and offer a much more performant alternative to IQ2_S and IQ2_K, in line of what you developed recently?
+
+---
+
+👤 **ikawrakow** commented on **2025-07-02** at **14:25:59**
+
+I have been thinking about this, but don't have a good idea how to spend the extra bits (extra compared to, e.g., `IQ2_KS`) without making inference inefficient. A larger Trellis quant based on `IQ2_KT` is also tricky as at 2 bpw (excluding block scales) we are already at 65k possibilities for a group of 8 quants, so going to 2.5 bpw would increase this to a million, which would make quantization time prohibitive. But if I go to groups of 4, that's only 1024 possibilities at 2.5 bpw, so this is not going to be very good. I could make a hybrid thing between `IQ2_KS` and a codebook (as the i-quants), but that brings CPU performance down, which is not good as most `ik_llama.cpp` users use it for the giant MoE models where TG runs on the CPU. But yes, If I come up with a good idea for a ~2.6-2.7 bpw quant, I will add it.
+
+---
+
+👤 **Nexesenex** commented on **2025-07-02** at **15:01:59**
 
 Thanks for the explanation, I understand that the alternatives you have atm are quite unpractical.
 
