@@ -1355,6 +1355,13 @@ struct server_context {
         }
 
         metrics.init();
+
+        // thinking is enabled if:
+        // 1. It's not explicitly disabled (reasoning_budget == 0)
+        // 2. The chat template supports it
+        const bool enable_thinking = params.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
+        //LLAMA_LOG_INFO("Enable thinking? %d\n", enable_thinking);
+
         oai_parser_opt = {
             /* use_jinja             */ params.use_jinja,
             /* prefill_assistant     */ params.prefill_assistant,
@@ -1363,7 +1370,7 @@ struct server_context {
             /* common_chat_templates */ chat_templates.get(),
             /* allow_image           */  false,
             /* allow_audio           */  false,
-            /* enable_thinking       */ params.reasoning_budget != 0,
+            /* enable_thinking       */ enable_thinking,
         };
     }
 

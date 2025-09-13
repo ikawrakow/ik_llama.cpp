@@ -59,9 +59,9 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     if (body.contains(key) && !body.at(key).is_null()) {
         try {
             return body.at(key);
-        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const &) {
+        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const& err) {
             std::stringstream ss;
-            ss << "Wrong type supplied for parameter '" << key << "'. Expected '" << json(default_value).type_name() << "', using default value.";
+            ss << "Wrong type supplied for parameter '" << key << "'. Expected '" << json(default_value).type_name() << "', using default value: "<< err.what();
             LOG_WARNING(ss.str().c_str(), body);
             return default_value;
         }
@@ -557,6 +557,18 @@ static json oaicompat_chat_params_parse(
         inputs.chat_template_kwargs[item.key()] = item.value().dump();
     }
 
+    // parse the "enable_thinking" kwarg to override the default value
+    auto enable_thinking_kwarg = json_value(inputs.chat_template_kwargs, "enable_thinking", std::string(""));
+    if (enable_thinking_kwarg == "true") {
+        inputs.enable_thinking = true;
+    }
+    else if (enable_thinking_kwarg == "false") {
+        inputs.enable_thinking = false;
+    }
+    else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
+        throw std::runtime_error("invalid type for \"enable_thinking\" (expected boolean, got string)");
+    }
+
     /*"whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
         "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n"*/
     bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" &&opt.prefill_assistant;
@@ -572,7 +584,7 @@ static json oaicompat_chat_params_parse(
 
         /* TODO: test this properly */
         inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
-        if ((!inputs.enable_thinking) || inputs.chat_template_kwargs.find("enable_thinking") != inputs.chat_template_kwargs.end()) {
+        if (inputs.enable_thinking) {
             throw std::runtime_error("Assistant response prefill is incompatible with enable_thinking.");
         }
         inputs.add_generation_prompt = true;
