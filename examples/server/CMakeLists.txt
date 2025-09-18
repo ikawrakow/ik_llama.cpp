@@ -17,7 +17,7 @@ set(TARGET_SRCS
 )
 set(PUBLIC_ASSETS
     index.html.gz
-    loading.html
+
 )
 
 foreach(asset ${PUBLIC_ASSETS})
@@ -29,14 +29,15 @@ foreach(asset ${PUBLIC_ASSETS})
         OUTPUT "${output}"
         COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
     )
+	message("TARGET_SRCS contains: ${input}")
 	set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
 																
 endforeach()
 
-
 # include new llamacpp webui
 set(ALT_PUBLIC_ASSETS
     index_llamacpp.html.gz
+	loading.html
 )
 
 foreach(asset ${ALT_PUBLIC_ASSETS})
@@ -48,6 +49,7 @@ foreach(asset ${ALT_PUBLIC_ASSETS})
         OUTPUT "${output}"
         COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
     )
+	message("TARGET_SRCS contains: ${input}")
 	set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
 																
 endforeach()

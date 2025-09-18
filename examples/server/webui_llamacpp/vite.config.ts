@@ -26,8 +26,8 @@ function llamaCppBuildPlugin() {
 			// Ensure the SvelteKit adapter has finished writing to ../public
 			setTimeout(() => {
 				try {
-					const indexPath = resolve('../public/index.html');
-					const gzipPath = resolve('../public/index.html.gz');
+					const indexPath = resolve('../public_llamacpp/index_llamacpp.html');
+					const gzipPath = resolve('../public_llamacpp/index_llamacpp.html.gz');
 
 					if (!existsSync(indexPath)) {
 						return;
@@ -65,7 +65,7 @@ function llamaCppBuildPlugin() {
 					}
 
 					writeFileSync(gzipPath, compressed);
-					console.log('✓ Created index.html.gz');
+					console.log('✓ Created index_llamacpp.html.gz');
 				} catch (error) {
 					console.error('Failed to create gzip file:', error);
 				}

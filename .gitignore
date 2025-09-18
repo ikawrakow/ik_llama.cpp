@@ -130,3 +130,4 @@ poetry.toml
 
 # Scripts
 !/scripts/install-oneapi.bat
+/examples/server/webui_llamacpp/.gitignore

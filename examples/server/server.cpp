@@ -23,6 +23,7 @@
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 #include "index.html.gz.hpp"
+#include "index_llamacpp.html.gz.hpp"
 #include "loading.html.hpp"
 
 #include <atomic>
@@ -4152,6 +4153,7 @@ int main(int argc, char ** argv) {
             { "chat_template",               common_chat_templates_source(ctx_server.chat_templates.get()) },
             { "bos_token",                   llama_token_to_piece(ctx_server.ctx, llama_token_bos(ctx_server.model), /* special= */ true)},
             { "eos_token",                   llama_token_to_piece(ctx_server.ctx, llama_token_eos(ctx_server.model), /* special= */ true)},
+            { "model_path",                  ctx_server.params.model },
             { "n_ctx",                       ctx_server.n_ctx }
 
         };
@@ -5009,38 +5011,51 @@ int main(int argc, char ** argv) {
     //
     // Router
     //
-
-    // register static assets routes
-    if (!params.public_path.empty()) {
-        // Set the base directory for serving static files
-        svr->set_base_dir(params.public_path);
+    if (params.webui == COMMON_WEBUI_NONE) {
+        LLAMA_LOG_INFO("Web UI is disabled\n");
     }
-
-    {
+    else {
         // register static assets routes
         if (!params.public_path.empty()) {
             // Set the base directory for serving static files
-            bool is_found = svr->set_mount_point("/", params.public_path);
-            if (!is_found) {
-                GGML_ABORT("%s: static assets path not found: %s\n", __func__, params.public_path.c_str());
-                return 1;
-            }
+            svr->set_base_dir(params.public_path);
         }
-        else {
-            // using embedded static index.html
-            svr->Get("/", [](const httplib::Request& req, httplib::Response& res) {
-                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
-                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
+
+        {
+            // register static assets routes
+            if (!params.public_path.empty()) {
+                // Set the base directory for serving static files
+                bool is_found = svr->set_mount_point("/", params.public_path);
+                if (!is_found) {
+                    GGML_ABORT("%s: static assets path not found: %s\n", __func__, params.public_path.c_str());
+                    return 1;
                 }
-                else {
-                    res.set_header("Content-Encoding", "gzip");
-                    // COEP and COOP headers, required by pyodide (python interpreter)
-                    res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                    res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                    res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
-                }
-                return false;
-                });
+            }
+            else {
+
+                // using embedded static index.html
+                svr->Get("/", [params](const httplib::Request& req, httplib::Response& res) {
+                    if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+                        res.set_content("Error: gzip is not supported by this browser", "text/plain");
+                    }
+                    else {
+                        res.set_header("Content-Encoding", "gzip");
+                        // COEP and COOP headers, required by pyodide (python interpreter)
+                        res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                        if (params.webui == COMMON_WEBUI_AUTO) {
+                            res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
+                        }
+                        else if (params.webui == COMMON_WEBUI_LLAMACPP) {
+                            res.set_content(reinterpret_cast<const char*>(index_llamacpp_html_gz), index_llamacpp_html_gz_len, "text/html; charset=utf-8");
+                        }
+                        else {
+                            res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
+                        }
+                    }
+                    return false;
+                    });
+            }
         }
     }
     // register API routes
@@ -5072,6 +5087,42 @@ int main(int argc, char ** argv) {
         svr->Post("/delete_prompt",   delete_saved_prompt);
         svr->Post("/rename_prompt",   rename_saved_prompt);
 
+    }
+    // SPA fallback route - serve index.html for any route that doesn't match API endpoints
+// This enables client-side routing for dynamic routes like /chat/[id]
+    if (params.webui && params.public_path.empty()) {
+        // Only add fallback when using embedded static files
+        svr->Get(".*", [](const httplib::Request& req, httplib::Response& res) {
+            // Skip API routes - they should have been handled above
+            if (req.path.find("/v1/") != std::string::npos ||
+                req.path.find("/health") != std::string::npos ||
+                req.path.find("/metrics") != std::string::npos ||
+                req.path.find("/props") != std::string::npos ||
+                req.path.find("/models") != std::string::npos ||
+                req.path.find("/api/tags") != std::string::npos ||
+                req.path.find("/completions") != std::string::npos ||
+                req.path.find("/chat/completions") != std::string::npos ||
+                req.path.find("/embeddings") != std::string::npos ||
+                req.path.find("/tokenize") != std::string::npos ||
+                req.path.find("/detokenize") != std::string::npos ||
+                req.path.find("/lora-adapters") != std::string::npos ||
+                req.path.find("/slots") != std::string::npos) {
+                return false; // Let other handlers process API routes
+            }
+
+            // Serve index.html for all other routes (SPA fallback)
+            if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+                res.set_content("Error: gzip is not supported by this browser", "text/plain");
+            }
+            else {
+                res.set_header("Content-Encoding", "gzip");
+                // COEP and COOP headers, required by pyodide (python interpreter)
+                res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+                res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
+            }
+            return false;
+            });
     }
     svr->Get ("/version", handle_version);
     if (!params.sql_save_file.empty()) {
