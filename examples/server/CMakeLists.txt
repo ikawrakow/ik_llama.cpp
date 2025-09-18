@@ -33,6 +33,26 @@ foreach(asset ${PUBLIC_ASSETS})
 																
 endforeach()
 
+
+# include new llamacpp webui
+set(ALT_PUBLIC_ASSETS
+    index_llamacpp.html.gz
+)
+
+foreach(asset ${ALT_PUBLIC_ASSETS})
+    set(input "${CMAKE_CURRENT_SOURCE_DIR}/public_llamacpp/${asset}")
+    set(output "${CMAKE_CURRENT_BINARY_DIR}/${asset}.hpp")
+    list(APPEND TARGET_SRCS ${output})
+    add_custom_command(
+        DEPENDS "${input}"
+        OUTPUT "${output}"
+        COMMAND "${CMAKE_COMMAND}" "-DINPUT=${input}" "-DOUTPUT=${output}" -P "${PROJECT_SOURCE_DIR}/scripts/xxd.cmake"
+    )
+	set_source_files_properties(${output} PROPERTIES GENERATED TRUE)
+																
+endforeach()
+
+
 add_executable(${TARGET} ${TARGET_SRCS})
 install(TARGETS ${TARGET} RUNTIME)
 target_compile_definitions(${TARGET} PRIVATE
