@@ -22,6 +22,7 @@ import toast from 'react-hot-toast'
 type SettKey = keyof typeof CONFIG_DEFAULT;
 
 const BASIC_KEYS: SettKey[] = [
+  'reasoning_format',
   'temperature',
   'top_k',
   'top_p',
