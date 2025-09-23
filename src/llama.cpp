@@ -7950,6 +7950,10 @@ llm_expert_gating_func_type   gating_op,
             ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
+    if (graph) {
+        ggml_build_forward_expand(graph, weights);
+    }
+
     if (gating_op == LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
         weights = ggml_reshape_2d(ctx, weights, n_expert_used, n_tokens);
         weights = ggml_soft_max(ctx, weights); // [n_expert_used, n_tokens]
@@ -8960,7 +8964,7 @@ struct llm_build_context {
                         LLM_FFN_SILU, false,
                         false, 0.0,
                         LLM_EXPERT_GATING_FUNC_SIGMOID,
-                        cb, il);
+                        cb, il, gf);
 
                 // Shared experts
                 ggml_tensor * shexp_out = llm_build_ffn(ctx0, lctx, ffn_inp_normed,
@@ -8991,7 +8995,7 @@ struct llm_build_context {
                         LLM_FFN_SILU, true,
                         false, 0.0,
 			            LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                        cb, il);
+                        cb, il, gf);
                 cb(cur, "ffn_moe_out", il);
             }
 
@@ -9648,7 +9652,7 @@ struct llm_build_context {
                     LLM_FFN_GELU, true,
                     false, 0.0,
 		    LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    cb, il);
+                    cb, il, gf);
             cb(cur, "ffn_moe_out", il);
 
             // Grok
@@ -9791,7 +9795,7 @@ struct llm_build_context {
                     LLM_FFN_SILU, true,
                     false, 0.0,
 		    LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    cb, il);
+                    cb, il, gf);
             cb(cur, "ffn_moe_out", il);
 
             cur = ggml_add(ctx0, cur, ffn_inp);
@@ -10923,7 +10927,7 @@ struct llm_build_context {
                         LLM_FFN_SILU, false,
                         false, 0.0,
 			LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                        cb, il);
+                        cb, il, gf);
             cb(cur, "ffn_moe_out", il);
 
             // FFN shared expert
@@ -11188,7 +11192,7 @@ struct llm_build_context {
                         LLM_FFN_SILU, true,
                         false, 0.0,
 			LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                        cb, il);
+                        cb, il, gf);
             cb(cur, "ffn_moe_out", il);
 
             cur = ggml_add(ctx0, cur, ffn_inp);
@@ -13451,7 +13455,7 @@ struct llm_build_context {
                     LLM_FFN_SILU, true,
                     false, 0.0,
 		    LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    cb, il);
+                    cb, il, gf);
             cb(cur, "ffn_moe_out", il);
 
             cur = ggml_add(ctx0, cur, ffn_out);
@@ -13940,7 +13944,7 @@ struct llm_build_context {
                             LLM_FFN_SILU, hparams.expert_weights_norm,
                             true, hparams.expert_weights_scale,
 			    (enum llm_expert_gating_func_type) hparams.expert_gating_func,
-                            cb, il);
+                            cb, il, gf);
                 cb(moe_out, "ffn_moe_out", il);
 
                 // FFN shared expert
@@ -14116,7 +14120,7 @@ struct llm_build_context {
                                             LLM_FFN_SILU, hparams.expert_weights_norm,
                                             true, hparams.expert_weights_scale,
                                             (enum llm_expert_gating_func_type) hparams.expert_gating_func,
-                                            cb, il);
+                                            cb, il, gf);
                 cb(routed_out, "routed_out", il);
 
                 {
@@ -15377,7 +15381,7 @@ struct llm_build_context {
                             LLM_FFN_SILU, hparams.expert_weights_norm,
                             true, hparams.expert_weights_scale,
                             (enum llm_expert_gating_func_type) hparams.expert_gating_func,
-                            cb, il);
+                            cb, il, gf);
                 cb(moe_out, "ffn_moe_out", il);
 
                 {
@@ -15670,7 +15674,7 @@ struct llm_build_context {
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    cb, il);
+                    cb, il, gf);
                 cb(moe_out, "ffn_moe_out", il);
 
                 // Shared expert (if present)
@@ -15835,7 +15839,7 @@ struct llm_build_context {
                     0.0,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
                     cb,
-                    il);
+                    il, gf);
             cb(cur_moe, "ffn_moe_out", il);
 
             ggml_tensor * ffn_out = ggml_add(ctx0, cur_moe, cur_mlp);

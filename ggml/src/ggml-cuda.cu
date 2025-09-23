@@ -41,6 +41,7 @@
 #include "ggml-cuda/graph.cuh"
 #include "ggml-cuda/mmq_id.cuh"
 #include "ggml-cuda/quantize_id.cuh"
+#include "ggml-cuda/topk-moe.cuh"
 
 #include <algorithm>
 #include <array>
@@ -3030,7 +3031,8 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
 }
 
-static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst, struct ggml_tensor * next, bool& skip_next) {
+static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst, struct ggml_tensor * next,
+        const ggml_cgraph * cgraph, int & i) {
     // why is this here instead of mul_mat?
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_cuda_split(dst->src[0]->buffer)) {
         ggml_cuda_set_peer_access(dst->src[1]->ne[1], ctx.device);
@@ -3152,10 +3154,10 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             }
             break;
         case GGML_OP_MUL_MAT_ID:
-            skip_next = ggml_cuda_mul_mat_id(ctx, dst, next);
+            if (ggml_cuda_mul_mat_id(ctx, dst, next)) ++i;
             break;
         case GGML_OP_MOE_FUSED_UP_GATE:
-            skip_next = ggml_cuda_moe_up_gate_unary(ctx, dst, next);
+            if (ggml_cuda_moe_up_gate_unary(ctx, dst, next)) ++i;
             break;
         case GGML_OP_FUSED_UP_GATE:
             ggml_cuda_up_gate_unary(ctx, dst);
@@ -3185,7 +3187,17 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_diag_mask_inf(ctx, dst);
             break;
         case GGML_OP_SOFT_MAX:
-            ggml_cuda_op_soft_max(ctx, dst);
+            if (i + 4 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_RESHAPE  &&
+                cgraph->nodes[i+2]->op == GGML_OP_ARGSORT  &&
+                cgraph->nodes[i+3]->op == GGML_OP_VIEW     &&
+                cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS &&
+                ggml_cuda_should_use_topk_moe(cgraph->nodes[i], cgraph->nodes[i+4])) {
+                ggml_cuda_op_topk_moe(ctx, cgraph->nodes[i], cgraph->nodes[i+4], cgraph->nodes[i+3]);
+                i += 4;
+            } else {
+                ggml_cuda_op_soft_max(ctx, dst);
+            }
             break;
         case GGML_OP_SOFT_CAP_MAX:
             ggml_cuda_op_soft_cap_max(ctx, dst);
@@ -3592,13 +3604,11 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 GGML_UNUSED(integrated);
 #endif // NDEBUG
 
-                bool skip_next = false;
-                bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, next, skip_next);
+                bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, next, cgraph, i);
                 if (!ok) {
                     GGML_CUDA_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
                 GGML_ASSERT(ok);
-                if (skip_next) ++i;
             }
         }
 #ifdef USE_CUDA_GRAPH
