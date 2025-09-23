@@ -1117,14 +1117,16 @@ extern "C" {
 
     typedef void* llama_sampler_context_t;
 
+    struct llama_sampler;
+
     // user code can implement the interface below in order to create custom llama_sampler
     struct llama_sampler_i {
-        const char* (*name)  (const struct llama_sampler* smpl);                                 // can be NULL
-        void                   (*accept)(struct llama_sampler* smpl, llama_token token);              // can be NULL
-        void                   (*apply) (struct llama_sampler* smpl, llama_token_data_array* cur_p); // required
-        void                   (*reset) (struct llama_sampler* smpl);                                 // can be NULL
-        struct llama_sampler* (*clone) (const struct llama_sampler* smpl);                                 // can be NULL if ctx is NULL
-        void                   (*free)  (struct llama_sampler* smpl);                                 // can be NULL if ctx is NULL
+        const char* (*name)  (const struct llama_sampler*);                               // can be NULL
+        void                   (*accept)(struct llama_sampler*, llama_token);             // can be NULL
+        void                   (*apply) (struct llama_sampler*, llama_token_data_array*); // required
+        void                   (*reset) (struct llama_sampler*);                          // can be NULL
+        struct llama_sampler* (*clone) (const struct llama_sampler*);                     // can be NULL if ctx is NULL
+        void                   (*free)  (struct llama_sampler* smpl);                     // can be NULL if ctx is NULL
     };
 
     struct llama_sampler {
@@ -1147,6 +1149,7 @@ extern "C" {
                                  size_t    n_rules,
                                  size_t    start_rule_index);
 
+    struct llama_sampler_grammar;
     LLAMA_API void llama_grammar_init_lazy(struct llama_sampler_grammar * grammar);
 
     LLAMA_API void llama_grammar_free(struct llama_grammar * grammar);
