@@ -16,6 +16,7 @@ export const CONFIG_DEFAULT = {
   showTokensPerSecond: false,
   showThoughtInProgress: false,
   excludeThoughtOnReq: true,
+  reasoning_format: 'auto',
   // make sure these default values are in sync with `common.h`
   samplers: 'dkypmxnt',
   temperature: 0.8,
@@ -42,6 +43,7 @@ export const CONFIG_DEFAULT = {
   pyIntepreterEnabled: false,
 };
 export const CONFIG_INFO: Record<string, string> = {
+  reasoning_format : 'Specify how to parse reasoning content. none: reasoning content in content block. auto: reasoning content in reasoning_content. ',
   apiKey: 'Set the API Key if you are using --api-key option for the server.',
   systemMessage: 'The starting message that defines how model should behave.',
   samplers:
