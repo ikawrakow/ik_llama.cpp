@@ -22740,9 +22740,6 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         int64_t tim1 = ggml_time_us();
 #endif
         node_n = ggml_compute_forward(&params, node, cgraph, node_n);
-        //if (ggml_compute_forward(&params, node, node_n < cgraph->n_nodes-1 ? cgraph->nodes[node_n+1] : NULL)) {
-        //    ++node_n;
-        //}
 #if IK_PRINT_TIMING
         int64_t tim2 = ggml_time_us();
         t_eval += tim2 - tim1;
