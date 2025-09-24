@@ -14974,9 +14974,11 @@ static inline uint32_t simple_gcd(uint32_t a, uint32_t b) {
     return a;
 }
 
-static void ggml_compute_forward_mul_mat(
+static int ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
-              struct ggml_tensor * dst) {
+              struct ggml_tensor * dst,
+        const struct ggml_cgraph * cgraph,
+                 int node_n) {
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -15017,12 +15019,6 @@ static void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
-#if GGML_USE_LLAMAFILE
-    // broadcast factors
-    const int64_t r2 = ne12 / ne02;
-    const int64_t r3 = ne13 / ne03;
-#endif
-
 #if GGML_USE_IQK_MULMAT
     if (ith == 0) {
         static bool first_time = true;
@@ -15040,32 +15036,8 @@ static void ggml_compute_forward_mul_mat(
                     ne02, ne03, ne12, ne13, nb02, nb03, nb12, nb13, nb2/sizeof(float), nb3/sizeof(float),
                     src0->type, src0->data, nb01,
                     src1->type, src1->data, nb11,
-                    (float *)dst->data, nb1/sizeof(float), ith, nth)) return;
+                    (float *)dst->data, nb1/sizeof(float), ith, nth)) return node_n;
     }
-#endif
-
-#if GGML_USE_LLAMAFILE
-
-    const bool src1_cont = ggml_is_contiguous(src1);
-
-    if (src1_cont) {
-        for (int64_t i13 = 0; i13 < ne13; i13++)
-            for (int64_t i12 = 0; i12 < ne12; i12++)
-                if (!llamafile_sgemm(ne01, ne11, ne00/ggml_blck_size(src0->type),
-                                     (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03,
-                                     nb01/ggml_type_size(src0->type),
-                                     (const char *)src1->data + i12*nb12 + i13*nb13,
-                                     nb11/ggml_type_size(src1->type),
-                                     (char *)dst->data + i12*nb2 + i13*nb3,
-                                     nb1/ggml_type_size(dst->type),
-                                     ith, nth,
-                                     src0->type,
-                                     src1->type,
-                                     dst->type))
-                    goto UseGgmlGemm1;
-        return;
-    }
-UseGgmlGemm1:;
 #endif
 
     if (src1->type != vec_dot_type) {
@@ -15092,50 +15064,26 @@ UseGgmlGemm1:;
         }
         else {
 
-//#ifdef GGML_USE_IQK_MULMAT
-//        int ts = type_traits[vec_dot_type].type_size;
-//        int bs = type_traits[vec_dot_type].blck_size;
-//        int64_t blocks_per_row = ne10/bs;
-//        int64_t num_blocks = ne11*ne12*ne13*blocks_per_row;
-//        int gcd = simple_gcd(128, ts); // 128 is to cover cache line sizes for common architectures without getting involved
-//                                       // with trying to get it from ggml
-//        int64_t num_blocks_gcd = (num_blocks + gcd - 1)/gcd;
-//        int64_t block_per_thread = ((num_blocks_gcd + nth - 1)/nth)*gcd;
-//        int64_t first_block = ith*block_per_thread;
-//        int64_t last_block = MIN(num_blocks, first_block + block_per_thread);
-//        while (first_block < last_block) {
-//            int64_t i13 = first_block/(ne11*ne12*blocks_per_row);
-//            int64_t i12 = (first_block - i13*ne11*ne12*blocks_per_row)/(ne11*blocks_per_row);
-//            int64_t i11 = (first_block - (i13*ne12 + i12)*ne11*blocks_per_row)/blocks_per_row;
-//            int64_t i10 = first_block % blocks_per_row;
-//            int64_t blocks_to_do = MIN(blocks_per_row - i10, last_block - first_block);
-//            from_float((float *)((char *)src1->data + i13*nb13 + i12*nb12 + i11*nb11) + i10*bs,
-//                    (void *)(wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + i10*ts), blocks_to_do*bs);
-//            first_block += blocks_to_do;
-//        }
-//#else
-
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                int64_t i11_processed = 0;
+            for (int64_t i13 = 0; i13 < ne13; ++i13) {
+                for (int64_t i12 = 0; i12 < ne12; ++i12) {
+                    int64_t i11_processed = 0;
 #if !GGML_USE_IQK_MULMAT
-                if ((ggml_n_dims(src1) == 2) && from_float_to_mat && gemm) {
-                    for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
-                        from_float_to_mat((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                                          (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                                          4, ne10, blck_size_interleave);
+                    if ((ggml_n_dims(src1) == 2) && from_float_to_mat && gemm) {
+                        for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
+                            from_float_to_mat((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                                    (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                                    4, ne10, blck_size_interleave);
+                        }
+                        i11_processed = ne11 - ne11 % 4;
                     }
-                    i11_processed = ne11 - ne11 % 4;
-                }
 #endif
-                for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                           (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                           ne10);
+                    for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
+                        from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                                ne10);
+                    }
                 }
             }
-        }
-//#endif
         }
 
         ggml_barrier(params->shared);
@@ -15145,17 +15093,10 @@ UseGgmlGemm1:;
         if (ith == 0) printf("quantize(%s): %d us\n", dst->name, (int)(t2 - t1));
 #endif
 
-        if (ith == 0) {
-            // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
-            //atomic_store(&params->shared->current_chunk, nth);
-        }
-
-        ggml_barrier(params->shared);
     }
 
     const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
 
-#if GGML_USE_IQK_MULMAT
     if (src1->type != vec_dot_type && dst->type == GGML_TYPE_F32) {
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
         if (iqk_mul_mat_4d(ne01, ne11, ne00,
@@ -15163,32 +15104,27 @@ UseGgmlGemm1:;
                     nb2/sizeof(float), nb3/sizeof(float),
                     src0->type, src0->data, nb01,
                     vec_dot_type, wdata, row_size,
-                    (float *)dst->data, nb1/sizeof(float), ith, nth)) return;
+                    (float *)dst->data, nb1/sizeof(float), ith, nth)) {
+            while (node_n < cgraph->n_nodes - 1 &&
+                   cgraph->nodes[node_n+1]->op == GGML_OP_MUL_MAT &&
+                   cgraph->nodes[node_n+1]->src[1] == src1 &&
+                   type_traits[cgraph->nodes[node_n+1]->src[0]->type].vec_dot_type == vec_dot_type) {
+                struct ggml_tensor * dst_next  = cgraph->nodes[node_n+1];
+                struct ggml_tensor * src0_next = dst_next->src[0];
+                GGML_ASSERT(dst_next->type == GGML_TYPE_F32);
+                GGML_ASSERT(src0_next->ne[0] == ne00);
+                //if (ith == 0) printf("Fusing %s\n", src0_next->name);
+                if (!iqk_mul_mat_4d(src0_next->ne[1], ne11, ne00,
+                    src0_next->ne[2], src0_next->ne[3], ne12, ne13, src0_next->nb[2], src0_next->nb[3], row_size*ne11, row_size*ne11*ne12,
+                    dst_next->nb[2]/sizeof(float), dst_next->nb[3]/sizeof(float),
+                    src0_next->type, src0_next->data, src0_next->nb[1],
+                    vec_dot_type, wdata, row_size,
+                    (float *)dst_next->data, dst_next->nb[1]/sizeof(float), ith, nth)) break;
+                ++node_n;
+            }
+        }
+        return node_n;
     }
-#endif
-
-#if GGML_USE_LLAMAFILE
-    if (src1->type != vec_dot_type) {
-        const size_t row_size = ggml_row_size(vec_dot_type, ne10);
-
-        for (int64_t i13 = 0; i13 < ne13; i13++)
-            for (int64_t i12 = 0; i12 < ne12; i12++)
-                if (!llamafile_sgemm(ne01, ne11, ne00/ggml_blck_size(src0->type),
-                                     (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03,
-                                     nb01/ggml_type_size(src0->type),
-                                     (const char *)wdata + (i12*ne11 + i13*ne12*ne11)*row_size,
-                                     row_size/ggml_type_size(vec_dot_type),
-                                     (char *)dst->data + i12*nb2 + i13*nb3,
-                                     nb1/ggml_type_size(dst->type),
-                                     ith, nth,
-                                     src0->type,
-                                     vec_dot_type,
-                                     dst->type))
-                    goto UseGgmlGemm2;
-        return;
-    }
-UseGgmlGemm2:;
-#endif
 
     if (ith == 0) {
         atomic_store(&params->shared->current_chunk, nth);
@@ -15243,7 +15179,7 @@ UseGgmlGemm2:;
         int64_t src0_end   = ((ith + 1) * ne01) / nth;
         src0_start = (src0_start % matmul_num_cols) ? src0_start + matmul_num_cols - (src0_start % matmul_num_cols): src0_start;
         src0_end   = (src0_end   % matmul_num_cols) ? src0_end   + matmul_num_cols - (src0_end   % matmul_num_cols): src0_end;
-        if (src0_start >= src0_end) return;
+        if (src0_start >= src0_end) return node_n;
 
         // If there are more than three rows in src1, use gemm; otherwise, use gemv.
         if (gemm && (ne11 > 3)) {
@@ -15255,7 +15191,7 @@ UseGgmlGemm2:;
                  (const char *) src0->data + src0_start * nb01, (const char *) src1_wdata + (src1_col_stride * iter), 1,
                  src0_end - src0_start);
         }
-        return;
+        return node_n;
     }
 
     // The first chunk comes from our thread_id, the rest will get auto-assigned.
@@ -15279,6 +15215,8 @@ UseGgmlGemm2:;
 
         current_chunk = atomic_fetch_add(&params->shared->current_chunk, 1);
     }
+
+    return node_n;
 }
 
 // ggml_compute_forward_mul_mat_id
@@ -20392,7 +20330,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
     GGML_ASSERT(params);
 
     if (tensor->op == GGML_OP_NONE || ggml_is_empty(tensor)) {
-        return false;
+        return i;
     }
 
 #if IK_PRINT_TIMING
@@ -20506,7 +20444,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_MUL_MAT:
             {
-                ggml_compute_forward_mul_mat(params, tensor);
+                i = ggml_compute_forward_mul_mat(params, tensor, cgraph, i);
             } break;
         case GGML_OP_MUL_MAT_ID:
             {
