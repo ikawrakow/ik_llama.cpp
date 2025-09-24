@@ -14,6 +14,7 @@
 #include <cstring>
 #include <type_traits>
 #include <vector>
+#include <algorithm>
 
 #include "ggml-impl.h"
 #include "ggml-quants.h"
@@ -1139,6 +1140,64 @@ void MulMat::relu(int n, const float * x, float * y) {
 
 #endif
 } // namespace
+
+namespace {
+void iqk_topk_moe(int n_experts, int n_experts_used, const float * logits,
+        float * weights, int32_t * ids, void * work) {
+
+    if (work) {
+        auto sorted = (std::pair<float, int> *)work;
+        for (int j = 0; j < n_experts; ++j) sorted[j] = {logits[j], j};
+
+        std::partial_sort(sorted, sorted + n_experts_used, sorted + n_experts, std::greater<std::pair<float,int>>{});
+
+        float max = sorted[0].first;
+        float sum = 0;
+        for (int j = 0; j < n_experts; ++j) {
+            float p = expf(sorted[j].first - max);
+            weights[j] = p;
+            ids[j] = sorted[j].second;
+            sum += p;
+        }
+        float norm = 1/sum;
+        for (int j = 0; j < n_experts; ++j) weights[j] *= norm;
+    } else {
+        for (int j = 0; j < n_experts; ++j) ids[j] = j;
+
+        std::partial_sort(ids, ids + n_experts_used, ids + n_experts,
+                [logits] (int i1, int i2) {
+                    return logits[i1] > logits[i2];
+                });
+
+        float max = logits[ids[0]];
+        float sum = 0;
+        for (int j = 0; j < n_experts_used; ++j) {
+            float p = expf(logits[ids[j]] - max);
+            weights[j] = p;
+            sum += p;
+        }
+        for (int j = n_experts_used; j < n_experts; ++j) {
+            sum += expf(logits[ids[j]] - max);
+        }
+        float norm = 1/sum;
+        for (int j = 0; j < n_experts_used; ++j) weights[j] *= norm;
+    }
+}
+}
+
+void iqk_topk_moe(int n_experts, int n_experts_used, int nrows, const float * logits,
+        float * weights, int32_t * ids, int ith, int nth) {
+
+    int npt = (nrows + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = std::min(nrows, first + npt);
+    for (int row = first; row < last; ++row) {
+        auto row_logits  = logits  + row*n_experts;
+        auto row_weights = weights + row*n_experts_used;
+        auto row_ids     = ids     + row*n_experts;
+        iqk_topk_moe(n_experts, n_experts_used, row_logits, row_weights, row_ids, nullptr);
+    }
+}
 
 #ifdef GGML_IQK_FLASH_ATTENTION
 

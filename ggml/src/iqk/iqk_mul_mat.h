@@ -65,6 +65,9 @@ IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float max_bias,
                             void * work_buffer, barrier_t barrier, void * barrier_data,
                             int ith, int nth, int n_swa);
 
+IQK_API void iqk_topk_moe(int n_experts, int n_experts_used, int nrows, const float * logits,
+        float * weights, int32_t * ids, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif
