@@ -20386,9 +20386,10 @@ static void ggml_compute_forward_cross_entropy_loss_back(
 
 /////////////////////////////////
 
-static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor, struct ggml_tensor * next) {
+static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor,
+        const struct ggml_cgraph * cgraph, int i) {
+
     GGML_ASSERT(params);
-    GGML_UNUSED(next);
 
     if (tensor->op == GGML_OP_NONE || ggml_is_empty(tensor)) {
         return false;
@@ -20398,7 +20399,6 @@ static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggm
     int64_t t1 = ggml_time_us();
 #endif
 
-    bool skip_next = false;
     switch (tensor->op) {
         case GGML_OP_DUP:
             {
@@ -20586,7 +20586,21 @@ static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_SOFT_MAX:
             {
-                ggml_compute_forward_soft_max(params, tensor);
+                if (i + 4 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_RESHAPE  &&
+                    cgraph->nodes[i+2]->op == GGML_OP_ARGSORT  &&
+                    cgraph->nodes[i+3]->op == GGML_OP_VIEW     &&
+                    cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS &&
+                    cgraph->nodes[i+0]->type == GGML_TYPE_F32  &&
+                    cgraph->nodes[i+4]->type == GGML_TYPE_F32  &&
+                    cgraph->nodes[i+3]->type == GGML_TYPE_I32) {
+                    iqk_topk_moe(cgraph->nodes[i]->ne[0], cgraph->nodes[i+4]->ne[1], cgraph->nodes[i]->ne[1],
+                            (const float *)cgraph->nodes[i]->data, (float *)cgraph->nodes[i+4]->data, (int32_t *)cgraph->nodes[i+3]->data,
+                            params->ith, params->nth);
+                    i += 4;
+                } else {
+                    ggml_compute_forward_soft_max(params, tensor);
+                }
             } break;
         case GGML_OP_SOFT_MAX_BACK:
             {
@@ -20764,7 +20778,7 @@ static bool ggml_compute_forward(struct ggml_compute_params * params, struct ggm
     int64_t t2 = ggml_time_us();
     if (params->ith == 0) printf("%s(%s): %d us\n", ggml_op_name(tensor->op), tensor->name, (int)(t2 - t1));
 #endif
-    return skip_next;
+    return i;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -22725,9 +22739,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
 #endif
-        if (ggml_compute_forward(&params, node, node_n < cgraph->n_nodes-1 ? cgraph->nodes[node_n+1] : NULL)) {
-            ++node_n;
-        }
+        node_n = ggml_compute_forward(&params, node, cgraph, node_n);
 #if IK_PRINT_TIMING
         int64_t tim2 = ggml_time_us();
         t_eval += tim2 - tim1;
