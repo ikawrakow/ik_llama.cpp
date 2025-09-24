@@ -17788,13 +17788,20 @@ static void llama_tensor_dequantize_internal(
         return;
     }
 
-    if (nthread < 2) {
+    if (nthread < 2 || (ggml_is_quantized(tensor->type) && qtype.row_meta_size > 0)) {
         if (tensor->type == GGML_TYPE_F16) {
             ggml_fp16_to_fp32_row((ggml_fp16_t *)tensor->data, f32_output, nelements);
         } else if (tensor->type == GGML_TYPE_BF16) {
             ggml_bf16_to_fp32_row((ggml_bf16_t *)tensor->data, f32_output, nelements);
         } else if (ggml_is_quantized(tensor->type)) {
-            qtype.to_float(tensor->data, f32_output, nelements);
+            auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+            int nrows = ggml_nrows(tensor);
+            auto qsrc = (const char *)tensor->data;
+            for (int row = 0; row < nrows; ++row) {
+                qtype.to_float(qsrc, f32_output, tensor->ne[0]);
+                qsrc += row_size;
+                f32_output += tensor->ne[0];
+            }
         } else {
             GGML_ABORT("fatal error"); // unreachable
         }
