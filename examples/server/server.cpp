@@ -173,6 +173,7 @@ struct server_task_result {
     std::vector<llama_token> tokens;
 
     bool stream;
+    bool include_usage;
     std::string prompt;
     //slot_params generation_params;
 
@@ -500,22 +501,22 @@ struct server_task_result {
             {"model",              oaicompat_model},
             {"object",             "chat.completion.chunk"},
          });
-
-        // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
-        // https://platform.openai.com/docs/api-reference/chat_streaming/streaming#chat_streaming/streaming-choices
-        deltas.push_back({
-            {"choices", json::array()},
-            {"created",            t},
-            {"id",                 oaicompat_cmpl_id},
-            {"model",              oaicompat_model},
-            {"object",             "chat.completion.chunk"},
-            {"usage", json {
-                {"completion_tokens", n_decoded},
-                {"prompt_tokens",     n_prompt_tokens},
-                {"total_tokens",      n_decoded + n_prompt_tokens},
-            }},
-            });
-
+        if (include_usage) {
+            // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
+            // https://platform.openai.com/docs/api-reference/chat_streaming/streaming#chat_streaming/streaming-choices
+            deltas.push_back({
+                {"choices", json::array()},
+                {"created",            t},
+                {"id",                 oaicompat_cmpl_id},
+                {"model",              oaicompat_model},
+                {"object",             "chat.completion.chunk"},
+                {"usage", json {
+                    {"completion_tokens", n_decoded},
+                    {"prompt_tokens",     n_prompt_tokens},
+                    {"total_tokens",      n_decoded + n_prompt_tokens},
+                }},
+                });
+        }
         if (timings.prompt_n >= 0) {
             deltas.back().push_back({ "timings", timings.to_json() });
         }
@@ -547,6 +548,7 @@ struct server_task_multi {
 
 struct slot_params {
     bool stream       = true;
+    bool include_usage = false;
     bool cache_prompt = true; // remember the prompt to avoid reprocessing all prompt
 
     int32_t  n_keep    =  0; // number of tokens to keep from initial prompt
@@ -1359,7 +1361,7 @@ struct server_context {
         // thinking is enabled if:
         // 1. It's not explicitly disabled (reasoning_budget == 0)
         // 2. The chat template supports it
-        const bool enable_thinking = params.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
+        const bool enable_thinking = params.use_jinja && params.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
         //LLAMA_LOG_INFO("Enable thinking? %d\n", enable_thinking);
 
         oai_parser_opt = {
@@ -1514,6 +1516,8 @@ struct server_context {
         }
         slot.params.timings_per_token = json_value(data, "timings_per_token", false);
         slot.params.stream             = json_value(data, "stream",            false);
+        auto stream_opt = json_value(data, "stream_options", json::object());
+        slot.params.include_usage = json_value(stream_opt, "include_usage", false);
         slot.params.cache_prompt       = json_value(data, "cache_prompt",      true);
         slot.params.n_predict          = json_value(data, "n_predict",         json_value(data, "max_tokens", default_params.n_predict));
         slot.sparams.top_k             = json_value(data, "top_k",             default_sparams.top_k);
@@ -2206,6 +2210,7 @@ struct server_context {
         res.error    = false;
         res.stop = true; // to do: set value
         res.stream = slot.params.stream;
+        res.include_usage = slot.params.include_usage;
         res.content = slot.generated_text;
         res.oaicompat = slot.params.oaicompat;
         res.oaicompat_model = slot.params.oaicompat_model;

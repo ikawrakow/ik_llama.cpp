@@ -215,7 +215,7 @@ export const AppContextProvider = ({
         messages,
         stream: true,
         cache_prompt: true,
-        reasoning_format: 'none',
+        reasoning_format: config.reasoning_format===''?'auto':config.reasoning_format,
         samplers: config.samplers,
         temperature: config.temperature,
         dynatemp_range: config.dynatemp_range,
@@ -226,7 +226,7 @@ export const AppContextProvider = ({
         typical_p: config.typical_p,
         xtc_probability: config.xtc_probability,
         xtc_threshold: config.xtc_threshold,
-		top_n_sigma: config.top_n_sigma,
+		    top_n_sigma: config.top_n_sigma,
         repeat_last_n: config.repeat_last_n,
         repeat_penalty: config.repeat_penalty,
         presence_penalty: config.presence_penalty,
@@ -257,14 +257,35 @@ export const AppContextProvider = ({
         throw new Error(body?.error?.message || 'Unknown error');
       }
       const chunks = getSSEStreamAsync(fetchResponse);
+      let thinkingTagOpen = false;
       for await (const chunk of chunks) {
         // const stop = chunk.stop;
         if (chunk.error) {
           throw new Error(chunk.error?.message || 'Unknown error');
         }
+        
+        const reasoningContent = chunk.choices?.[0]?.delta?.reasoning_content;
+        if (reasoningContent) {
+          if (pendingMsg.content === null || pendingMsg.content === '') {
+            thinkingTagOpen = true;
+            pendingMsg = {
+              ...pendingMsg,
+              content: '<think>' + reasoningContent,
+            };
+          } else {
+            pendingMsg = {
+              ...pendingMsg,
+              content: pendingMsg.content + reasoningContent,
+            };
+          }
+        }
         const addedContent = chunk.choices?.[0]?.delta?.content;
-        const lastContent = pendingMsg.content || '';
+        let lastContent = pendingMsg.content || '';
         if (addedContent) {
+            if (thinkingTagOpen) {
+              lastContent = lastContent + '</think>';
+              thinkingTagOpen = false;
+            }
           pendingMsg = {
             ...pendingMsg,
             content: lastContent + addedContent,
