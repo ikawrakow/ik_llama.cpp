@@ -40,7 +40,7 @@
 #include <syscall.h>
 #endif
 
-#define IK_PRINT_TIMING 0
+#define IK_PRINT_TIMING 1
 
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
@@ -20326,8 +20326,6 @@ static void ggml_compute_forward_cross_entropy_loss_back(
 
 static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor,
         const struct ggml_cgraph * cgraph, int i) {
-
-    struct ggml_tensor * next = i < cgraph->n_nodes-1 ? cgraph->nodes[i+1] : NULL;
 
     GGML_ASSERT(params);
 
