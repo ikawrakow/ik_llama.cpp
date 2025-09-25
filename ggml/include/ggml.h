@@ -700,16 +700,19 @@ extern "C" {
     };
 
     enum ggml_log_level {
-        GGML_LOG_LEVEL_ERROR = 2,
+        GGML_LOG_LEVEL_NONE  = 0,
+        GGML_LOG_LEVEL_DEBUG = 1,
+        GGML_LOG_LEVEL_INFO  = 2,
         GGML_LOG_LEVEL_WARN  = 3,
-        GGML_LOG_LEVEL_INFO  = 4,
-        GGML_LOG_LEVEL_DEBUG = 5
+        GGML_LOG_LEVEL_ERROR = 4,
+        GGML_LOG_LEVEL_CONT  = 5, // continue previous log
     };
 
     enum ggml_tensor_flag {
         GGML_TENSOR_FLAG_INPUT  = 1,
         GGML_TENSOR_FLAG_OUTPUT = 2,
         GGML_TENSOR_FLAG_PARAM  = 4,
+        GGML_TENSOR_FLAG_LOSS   = 8, // ...defines loss for numerical optimization (multiple loss tensors add up)
     };
 
     // ggml object
