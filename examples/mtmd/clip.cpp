@@ -4283,15 +4283,18 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             GGML_ABORT("Unknown projector type");
     }
 
-    // ggml_backend_cpu_set_n_threads(ctx->backend_cpu, n_threads);
-    ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
-    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-    if (reg) {
-        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
-        if (ggml_backend_set_n_threads_fn) {
-            ggml_backend_set_n_threads_fn(ctx->backend_cpu, n_threads);
-        }
+    if (ctx->backend_cpu) {
+        ggml_backend_cpu_set_n_threads(ctx->backend_cpu, n_threads);
     }
+    //// ggml_backend_cpu_set_n_threads(ctx->backend_cpu, n_threads);
+    //ggml_backend_dev_t dev = ggml_backend_get_device(ctx->backend_cpu);
+    //ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    //if (reg) {
+    //    auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+    //    if (ggml_backend_set_n_threads_fn) {
+    //        ggml_backend_set_n_threads_fn(ctx->backend_cpu, n_threads);
+    //    }
+    //}
 
     auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
@@ -4312,7 +4315,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     // the last node is the embedding tensor
-    ggml_tensor * embeddings = ggml_graph_node(gf, -1);
+    //ggml_tensor * embeddings = ggml_graph_node(gf, -1);
+    GGML_ASSERT(gf->n_nodes > 0);
+    ggml_tensor * embeddings = gf->nodes[gf->n_nodes-1];
 
     // sanity check (only support batch size of 1 for now)
     const int n_tokens_out = embeddings->ne[1];
