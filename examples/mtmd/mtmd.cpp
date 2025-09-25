@@ -334,10 +334,10 @@ private:
     std::string token_to_piece(const llama_vocab * vocab, llama_token token, bool special) {
         std::string piece;
         piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
-        const int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+        const int n_chars = llama_vocab_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
         if (n_chars < 0) {
             piece.resize(-n_chars);
-            int check = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+            int check = llama_vocab_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
             GGML_ASSERT(check == -n_chars);
         } else {
             piece.resize(n_chars);
@@ -720,10 +720,10 @@ struct mtmd_tokenizer {
         // upper limit for the number of tokens
         int n_tokens = text.length() + 2 * add_special;
         std::vector<llama_token> result(n_tokens);
-        n_tokens = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+        n_tokens = llama_vocab_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
         if (n_tokens < 0) {
             result.resize(-n_tokens);
-            int check = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+            int check = llama_vocab_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
             GGML_ASSERT(check == -n_tokens);
         } else {
             result.resize(n_tokens);

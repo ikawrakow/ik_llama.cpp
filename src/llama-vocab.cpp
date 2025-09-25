@@ -3770,7 +3770,7 @@ llama_token llama_token_fim_sep(const struct llama_vocab * vocab) {
 // tokenization
 //
 
-int32_t llama_tokenize(
+int32_t llama_vocab_tokenize(
     const struct llama_vocab * vocab,
                   const char * text,
                      int32_t   text_len,
@@ -3781,7 +3781,7 @@ int32_t llama_tokenize(
     return vocab->tokenize(text, text_len, tokens, n_tokens_max, add_special, parse_special);
 }
 
-int32_t llama_token_to_piece(
+int32_t llama_vocab_token_to_piece(
     const struct llama_vocab * vocab,
                  llama_token   token,
                         char * buf,

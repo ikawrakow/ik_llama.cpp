@@ -581,6 +581,14 @@ extern "C" {
     LLAMA_API int32_t llama_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_n_layer    (const struct llama_model * model);
 
+    // Compat
+    static    int32_t     llama_model_n_embd(const struct llama_model * model) { return llama_n_embd(model); }
+    LLAMA_API bool        llama_vocab_get_add_bos(const struct llama_vocab * vocab);
+    LLAMA_API bool        llama_vocab_get_add_eos(const struct llama_vocab * vocab);
+    LLAMA_API int32_t     llama_vocab_n_tokens(const struct llama_vocab * vocab);
+    LLAMA_API llama_token llama_vocab_bos(const struct llama_vocab * vocab);
+    LLAMA_API llama_token llama_vocab_eos(const struct llama_vocab * vocab);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_rope_freq_scale_train(const struct llama_model * model);
 
@@ -1061,6 +1069,14 @@ extern "C" {
                          int32_t   n_tokens_max,
                             bool   add_special,
                             bool   parse_special);
+    LLAMA_API int32_t llama_vocab_tokenize(
+        const struct llama_vocab * vocab,
+                      const char * text,
+                         int32_t   text_len,
+                     llama_token * tokens,
+                         int32_t   n_tokens_max,
+                            bool   add_special,
+                            bool   parse_special);
 
     // Token Id -> Piece.
     // Uses the vocabulary in the provided context.
@@ -1069,6 +1085,13 @@ extern "C" {
     // @param special If true, special tokens are rendered in the output.
     LLAMA_API int32_t llama_token_to_piece(
               const struct llama_model * model,
+                           llama_token   token,
+                                  char * buf,
+                               int32_t   length,
+                               int32_t   lstrip,
+                                  bool   special);
+    LLAMA_API int32_t llama_vocab_token_to_piece(
+              const struct llama_vocab * vocab,
                            llama_token   token,
                                   char * buf,
                                int32_t   length,
