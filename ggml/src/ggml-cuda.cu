@@ -42,6 +42,8 @@
 #include "ggml-cuda/mmq_id.cuh"
 #include "ggml-cuda/quantize_id.cuh"
 #include "ggml-cuda/topk-moe.cuh"
+#include "ggml-cuda/conv2d.cuh"
+#include "ggml-cuda/conv2d-dw.cuh"
 
 #include <algorithm>
 #include <array>
@@ -3291,6 +3293,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_IM2COL:
             ggml_cuda_op_im2col(ctx, dst);
+            break;
+        case GGML_OP_CONV_2D:
+            ggml_cuda_op_conv2d(ctx, dst);
+            break;
+        case GGML_OP_CONV_2D_DW:
+            ggml_cuda_op_conv2d_dw(ctx, dst);
             break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             ggml_cuda_op_conv_transpose_1d(ctx,dst);
