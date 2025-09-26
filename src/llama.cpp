@@ -8714,7 +8714,7 @@ struct llm_build_context {
         return lctx.inp_pos;
     }
 
-    struct ggml_tensor * build_inpup_scale(int n_tokens) {
+    struct ggml_tensor * build_input_scale(int n_tokens) {
         int n_pos_per_token = 1;
         lctx.inp_scale = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, 1, n_tokens*n_pos_per_token);
         cb(lctx.inp_scale, "inp_scale", -1);
@@ -8946,7 +8946,7 @@ struct llm_build_context {
         struct ggml_tensor * inp_pos = build_inp_pos();
 
         if (model.arch == LLM_ARCH_LLAMA4) {
-            inp_attn_scale = build_inpup_scale(n_tokens);
+            inp_attn_scale = build_input_scale(n_tokens);
         }
 
         // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
