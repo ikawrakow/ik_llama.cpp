@@ -1,13 +1,14 @@
-### 🗣️ [#619](https://github.com/ikawrakow/ik_llama.cpp/discussions/619) - gpu p2p utilization
+## 🗣️ [Discussion #619](https://github.com/ikawrakow/ik_llama.cpp/discussions/619) - gpu p2p utilization
 
 | **Author** | `magikRUKKOLA` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-07-16 |
-| **Updated** | 2025-07-17 |
+| **Updated** | 2025-07-24 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Is there any mode of the llm inference in ik_llama.cpp that utilizes the p2p functionality between the GPUs?  That would include the NVLINKs and, most importantly, the regular p2p master-slave functionality as enabled by the opensource nvidia drivers (see https://github.com/aikitoria/open-gpu-kernel-modules ).
 
@@ -53,3 +54,11 @@ Uh oh?
 4426             dpct::dev_mgr::instance().get_device(dst_ctx->device).queues_wait_and_throw()));
 4427 #endif
 ```
+
+---
+
+## 💬 Discussion
+
+👤 **Ph0rk0z** commented on **2025-07-24** at **11:44:19**
+
+Increase your peer max batch size when compiling and for sure it uses it. You're looking at the intel code.

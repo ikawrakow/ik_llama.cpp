@@ -1,14 +1,17 @@
-### 🔀 [#493](https://github.com/ikawrakow/ik_llama.cpp/pull/493) - MMQ implementation for IQ4_KS_R4 and IQ5_KS_R4
+## 🔀 [Pull Request #493](https://github.com/ikawrakow/ik_llama.cpp/pull/493) - MMQ implementation for IQ4_KS_R4 and IQ5_KS_R4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/mmq_iq_ks_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-05 |
 | **Updated** | 2025-06-05 |
+| **Merged** | 2025-06-05 |
 
 ---
 
-#### Description
+## 📄 Description
 
 These two can use the more efficient block-of-32 MMQ GEMM kernels, so having MMQ implementation for them makes sense.
 

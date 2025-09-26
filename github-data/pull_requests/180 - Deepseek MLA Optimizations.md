@@ -1,14 +1,16 @@
-### 🔀 [#180](https://github.com/ikawrakow/ik_llama.cpp/pull/180) - Deepseek MLA Optimizations
+## 🔀 [Pull Request #180](https://github.com/ikawrakow/ik_llama.cpp/pull/180) - Deepseek MLA Optimizations
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `main` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-29 |
 | **Updated** | 2025-02-10 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Very direct port of https://github.com/ggerganov/llama.cpp/pull/11446
 
@@ -33,9 +35,28 @@ Is there any chance to convert old imatrix files (such as [this](https://hugging
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-01-29** at **09:16:02**:<br>
+👤 **ikawrakow** commented on **2025-01-29** at **08:39:37**
+
+This hurts prompt processing (a.k.a prefill) speed very significantly. Here is what I get for Deepseek2-Lite `FP16` on my Ryzen-7950X with this PR vs the main branch. The MLA cache is supposed to make attention more efficient, so advantage should increase with increasing prompt length. Instead we see that it gets worse: 
+
+| model               |     params | threads | rtr |     test |   t/s (main)     |   t/s (PR)       |   Speedup |
+| ------------------- | ---------: | ------: | --: | -------: | ---------------: | ---------------: | --------: |
+| deepseek2 16B F16   |    15.76 B |      16 |   1 |    pp256 |    316.36 ± 0.85 |    308.83 ± 0.56 |  0.976    |
+| deepseek2 16B F16   |    15.76 B |      16 |   1 |    pp512 |    386.42 ± 0.70 |    358.51 ± 1.58 |  0.928    |
+| deepseek2 16B F16   |    15.76 B |      16 |   1 |   pp1024 |    377.85 ± 1.10 |    336.19 ± 0.63 |  0.890    |
+| deepseek2 16B F16   |    15.76 B |      16 |   1 |   pp2048 |    361.73 ± 1.55 |    298.20 ± 1.46 |  0.824    |
+| deepseek2 16B F16   |    15.76 B |      16 |   1 |   pp4096 |    332.09 ± 0.07 |    240.84 ± 0.40 |  0.725    |
+| deepseek2 16B F16   |    15.76 B |      16 |   1 |   pp8192 |    282.16 ± 0.77 |    169.77 ± 0.83 |  0.602    |
+
+TG is indeed better, and advantage increases with KV cache size. But if we have to wait twice as long to process the prompt, it will take quite a few generated tokens to recover the time lost in the prefill step.
+
+I think we need to either try to understand why the attention part is so much slower when processing batches of tokens and fix it, or simply wait for  @fairydreaming to fix their PR.
+
+---
+
+👤 **ikawrakow** commented on **2025-01-29** at **09:16:02**
 
 Here is how much time is being spent in the various matrix multiplications in the attention part when processing a prompt of 8192 tokens:
 
@@ -69,7 +90,7 @@ Maybe this can be useful when trying to optimize.
 
 ---
 
-👤 **saood06** commented the **2025-01-29** at **09:28:49**:<br>
+👤 **saood06** commented on **2025-01-29** at **09:28:49**
 
 >This hurts prompt processing (a.k.a prefill) speed very significantly.
 >[...]
@@ -85,13 +106,13 @@ I was drawn in to this PR for the TG benefits, it should have also been a draft 
 
 ---
 
-👤 **ikawrakow** commented the **2025-01-29** at **09:33:33**:<br>
+👤 **ikawrakow** commented on **2025-01-29** at **09:33:33**
 
 @saood06 Perhaps a good way to move forward is to add an additional architecture (`deepseek-mla` or similar), but keep the original  `deepseek2/3`. In this way, depending on use case, one can choose the improved TG speed after long prompts or the better PP speed when generating a few tokens after processing a long prompt.
 
 ---
 
-👤 **saood06** commented the **2025-01-29** at **10:21:32**:<br>
+👤 **saood06** commented on **2025-01-29** at **10:21:32**
 
 >Perhaps a good way to move forward is to add an additional architecture (deepseek-mla or similar), but keep the original deepseek2/3. In this way, depending on use case, one can choose the improved TG speed after long prompts or the better PP speed when generating a few tokens after processing a long prompt.
 
@@ -99,7 +120,7 @@ I'll do that. I'll still leave it in a draft as I'm waiting to see how it progre
 
 ---
 
-👤 **ikawrakow** commented the **2025-01-29** at **11:40:16**:<br>
+👤 **ikawrakow** commented on **2025-01-29** at **11:40:16**
 
 So, as far as I can tell, the attention implementation in this PR leads to ~3X more multiply-adds (madds) when performing matrix multiplications. For prompt processing here we need `2 x 512 x 16 x n_token^2` madds, whereas the original implementation requires  `(192 + 128) x 16 x n_token^2` madds. For TG, the PR still requires 3X more madds, namely `2 x 512 x n_prompt` madds here vs `(192 + 128) x 16 x n_prompt` on main. The only reason TG ends up being faster here is the shape of the tensors: On main it is 16 matrix multiplications each being `192 x n_prompt  * 192 x 1` (`K*Q`) or `n_prompt x 128 * n_prompt x 1` (`V*softmax(K*Q)`). I.e., we have 16 GEMVs, which are 100% memory bound on modern CPU's. In this PR the TG shapes are  `512 x n_prompt * 512 x 16` and `n_prompt x 512 * n_prompt x 16`, so real GEMMs with much higher FLOPs, so we end up needing less time despite doing more work. Hence, the way it is implemented, there is no way one can recover PP performance.
 
@@ -107,13 +128,13 @@ These figures are of course specific to the Deepseek2-Lite model. It may be diff
 
 ---
 
-👤 **fairydreaming** commented the **2025-01-29** at **12:49:35**:<br>
+👤 **fairydreaming** commented on **2025-01-29** at **12:49:35**
 
 @ikawrakow I think applying the trick with "absorbing" matrices mentioned in the DeepSeek V2 paper shall fix this, I'm working on that.
 
 ---
 
-👤 **ikawrakow** commented the **2025-01-29** at **13:14:33**:<br>
+👤 **ikawrakow** commented on **2025-01-29** at **13:14:33**
 
 @fairydreaming 
 
@@ -123,17 +144,43 @@ Btw, I observe that `attn_kv_b.weight` is still present in the model. Is it need
 
 ---
 
-👤 **fairydreaming** commented the **2025-01-30** at **11:23:08**:<br>
+👤 **fairydreaming** commented on **2025-01-29** at **13:42:54**
+
+> @fairydreaming
+> 
+> Great!
+> 
+> Btw, I observe that `attn_kv_b.weight` is still present in the model. Is it needed, given that we now have `attn_k_b.weight` and `attn_v_b.weight` ?
+
+No it's not needed for the current version of the code, I will remove it later once I settle on a final set of weights.
+
+---
+
+👤 **fairydreaming** commented on **2025-01-30** at **11:23:08**
 
 @ikawrakow Unfortunately the idea with speeding things up thanks to the matrix absorption is wrong: https://github.com/ggerganov/llama.cpp/pull/11446#issuecomment-2624177134
 
 I'm not sure why they mentioned it in the DeepSeek paper.
 
-Regarding other possible optimizations do you know how much work is needed to add support for multiplication of transposed matrices to ggml_mul_mat()? The problem is that I use kv cache for multiplication both directly and then in transposed form. I got around this problem by storing kv cache in both regular and transposed forms, but it doubles the amount of required memory.
+Regarding other possible optimizations do you know how much work is needed to add support for multiplication of transposed matrices to ggml_mul_mat()? The problem is that I use kv cache for multiplication first directly and then in transposed form. I got around this problem by storing kv cache in both regular and transposed forms, but it doubles the amount of required memory.
 
 ---
 
-👤 **fairydreaming** commented the **2025-01-30** at **12:39:37**:<br>
+👤 **ikawrakow** commented on **2025-01-30** at **12:09:17**
+
+@fairydreaming 
+
+I took a look at the Deepseek-R1 model (out of my league memory and disk space wise), so even there rank-512 cannot be really considered "low-rank" (and it seems it is rank-1536 for `Q`). So yes, at first glance it does not look like pre-multiplying the matrices would be fruitful.
+
+Concerning multiplication of transposed matrices in `ggml_mul_mat`: also this will not help you improve prompt processing speed. In this case the computational graph is not memory bound, so reducing cache size will not speed it up as the number of madds remains the same.
+
+I think one should make Flash Attention work with different K and V head sizes. I did a quick attempt but it doesn't look like I found all the places where `head_size(K) == head_size(V)` is being assumed in `llama.cpp`.
+
+Out of curiosity, did you ever try this repository with your Epyc CPU?
+
+---
+
+👤 **fairydreaming** commented on **2025-01-30** at **12:39:37**
 
 > @fairydreaming
 
@@ -165,7 +212,7 @@ Generation was ~4.6% faster, while prompt processing was ~90% faster, impressive
 
 ---
 
-👤 **ikawrakow** commented the **2025-01-30** at **13:42:04**:<br>
+👤 **ikawrakow** commented on **2025-01-30** at **13:42:04**
 
 10 t/s TG for Deepseek-R1 - wow! 
 
@@ -175,7 +222,7 @@ I'm playing with Deepseek-Lite and I'm finding that the CUDA performance is pret
 
 ---
 
-👤 **saood06** commented the **2025-01-30** at **16:15:26**:<br>
+👤 **saood06** commented on **2025-01-30** at **16:15:26**
 
 I ran batched-bench at batch size 1 with TG at 32 at various PP to show PP performance and TG performance at different context lengths. Batched-bench numbers are noisy because they do not use repetitions like llama-bench and this model on this machine seems to have some variance, but all data is shown after dropping the cache's and running the model until it is fully in the page cache.
 
@@ -203,7 +250,7 @@ IQ4_K_R4 on main:
 |  8192 |     32 |    1 |   8224 | 1391.722 |     5.89 |   43.056 |     0.74 | 1434.778 |     5.73 |
 
 
-Looking at the 8K context results, PP does drop from 5.89 to 4.05, but TG jumps from 0.74 to 2.00. At q8_0 (results below) PP again drops 6.06 to 4.03, but TG benefits going from 0.99 to 1.94. I would test/run this model at even higher context, but I would either need a smaller quant or to use RPC (for reference the KV cache at n_ctx of 8224 is 40,233.55 MiB)
+Looking at the 8K context results, PP does drop from 5.89 to 4.05, but TG jumps from 0.74 to 2.00. At q8_0 (results below) PP again drops 6.06 to 4.03, but TG benefits going from 0.99 to 1.94. I would test/run this model at even higher context, but I would either need a smaller quant or to use RPC (for reference the F16/F16 KV cache at n_ctx 8224 is 40,233.55 MiB)
 
 <details>
   <summary>Expand to see more runs with q8_0 and q6_0 K cache tested as well</summary>
@@ -286,11 +333,11 @@ Other people have reported poor performance even for the larger Deepseek models 
 
 >So, I guess, your Epyc system wipes the floor with any GPU setup using partial GPU offload of Deepseek-R1.
 
-Partial offload is reported benefited by this: https://github.com/ggerganov/llama.cpp/pull/11397 and it is something I plan to test/use.
+Partial offload is reported to benefit from this: https://github.com/ggerganov/llama.cpp/pull/11397 and it is something I plan to test/use.
 
 ---
 
-👤 **ikawrakow** commented the **2025-01-30** at **17:12:27**:<br>
+👤 **ikawrakow** commented on **2025-01-30** at **17:12:27**
 
 > not sure why FA is needed for that
 
@@ -302,7 +349,7 @@ I just made Deepseek-Lite also work on my Mac (M2-Max). I get TG-128 = 70 t/s on
 
 ---
 
-👤 **fairydreaming** commented the **2025-02-01** at **08:09:20**:<br>
+👤 **fairydreaming** commented on **2025-02-01** at **08:09:20**
 
 > So, as far as I can tell, the attention implementation in this PR leads to ~3X more multiply-adds (madds) when performing matrix multiplications. For prompt processing here we need `2 x 512 x 16 x n_token^2` madds, whereas the original implementation requires `(192 + 128) x 16 x n_token^2` madds. For TG, the PR still requires 3X more madds, namely `2 x 512 x n_prompt` madds here vs `(192 + 128) x 16 x n_prompt` on main. The only reason TG ends up being faster here is the shape of the tensors: On main it is 16 matrix multiplications each being `192 x n_prompt * 192 x 1` (`K*Q`) or `n_prompt x 128 * n_prompt x 1` (`V*softmax(K*Q)`). I.e., we have 16 GEMVs, which are 100% memory bound on modern CPU's. In this PR the TG shapes are `512 x n_prompt * 512 x 16` and `n_prompt x 512 * n_prompt x 16`, so real GEMMs with much higher FLOPs, so we end up needing less time despite doing more work. Hence, the way it is implemented, there is no way one can recover PP performance.
 
@@ -310,13 +357,13 @@ This is something that I kind of intuitively expected, I mean the whole point of
 
 ---
 
-👤 **saood06** commented the **2025-02-09** at **15:02:19**:<br>
+👤 **saood06** commented on **2025-02-09** at **15:02:19**
 
-This is superseded by #188. Closing
+This is superseded by [#188](https://github.com/ikawrakow/ik_llama.cpp/issues/188). Closing
 
 ---
 
-👤 **jukofyork** commented the **2025-02-10** at **16:48:36**:<br>
+👤 **jukofyork** commented on **2025-02-10** at **16:48:36**
 
 @saood06
 
@@ -324,16 +371,26 @@ Just saw your linked post.
 
 I see you have a slightly faster prompt processing speed, but what I'm confused about is why when I have everything on the GPU apart from the 3 sets of non-shared experts' tensors, why batch processing it's gaining anything hardly, eg:
 
-- I can get 3.5 -5 tokens per second for token generation with careful NUMA placement and 30 threads of a 2-CPU system with ~78GB/s per node.
-- I can only get 9-10 tokens per second when using a batch of 1024+ and it should be pulling each set of tensors from RAM to VRAM and doing the work for the 1024 tokens in parallel. IMO this shouild be showing speeds like what KTrasnformers is, but it's nothing like this and I'm near 100% sure there will be some glaring flaw in the way this is handled ***if*** I could actually profile the GGML stuff and see clearly WTF is going on to cause this!
+- I can get 3.5-5 tokens per second for token generation with careful NUMA placement and 30 threads of a 2-CPU system with ~78GB/s per node.
+- I can only get 9-10 tokens per second for prompt processing when using a batch of 1024+ and it should be pulling each set of tensors from RAM to VRAM and doing the work for the 1024 tokens in parallel with 15x the memory bandwidth and 100x+ the compute. IMO this should be showing speeds like what KTrasnformers is, but it's nothing like this and I'm near 100% sure there will be some glaring flaw in the way this is handled ***if*** I could actually profile the GGML stuff and see clearly WTF is going on to cause this!
 
 ---
 
-👤 **jukofyork** commented the **2025-02-10** at **17:15:49**:<br>
+👤 **saood06** commented on **2025-02-10** at **17:12:58**
+
+>I can only get 9-10 tokens per second for prompt processing when using a batch of 1024+ and it should be pulling each set of tensors from RAM to VRAM and doing the work for the 1024 tokens in parallel with 15x the memory bandwidth and 100x+ the compute. IMO this should be showing speeds like what KTrasnformers is, but it's nothing like this and I'm near 100% sure there will be some glaring flaw in the way this is handled if I could actually profile the GGML stuff and see clearly WTF is going on to cause this!
+
+Can you try this fork, without MLA and this PR: https://github.com/ikawrakow/ik_llama.cpp/pull/200 which adds FA support. This should be the fastest prompt processing you can do. Fairydreaming on his system with this fork without MLA and without FA and more optimizations reported 50 tok/s. https://github.com/ikawrakow/ik_llama.cpp/pull/180#issuecomment-2624398627
+
+If you want to try MLA, just use the -mla flag, which will turn MLA on.
+
+---
+
+👤 **jukofyork** commented on **2025-02-10** at **17:15:49**
 
 > > I can only get 9-10 tokens per second for prompt processing when using a batch of 1024+ and it should be pulling each set of tensors from RAM to VRAM and doing the work for the 1024 tokens in parallel with 15x the memory bandwidth and 100x+ the compute. IMO this should be showing speeds like what KTrasnformers is, but it's nothing like this and I'm near 100% sure there will be some glaring flaw in the way this is handled if I could actually profile the GGML stuff and see clearly WTF is going on to cause this!
 > 
-> Can you try this fork, without MLA and this PR: #200 which adds FA support. This should be the fastest prompt processing you can do. Fairydreaming on his system with this fork without MLA and without FA and more optimizations reported 50 tok/s. [#180 (comment)](https://github.com/ikawrakow/ik_llama.cpp/pull/180#issuecomment-2624398627)
+> Can you try this fork, without MLA and this PR: [#200](https://github.com/ikawrakow/ik_llama.cpp/issues/200) which adds FA support. This should be the fastest prompt processing you can do. Fairydreaming on his system with this fork without MLA and without FA and more optimizations reported 50 tok/s. [[#180](https://github.com/ikawrakow/ik_llama.cpp/issues/180) (comment)](https://github.com/ikawrakow/ik_llama.cpp/pull/180#issuecomment-2624398627)
 > 
 > If you want to try MLA, just use the -mla flag, which will turn MLA on.
 
