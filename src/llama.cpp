@@ -8707,7 +8707,8 @@ struct llm_build_context {
     }
 
     struct ggml_tensor * build_inp_pos() {
-        lctx.inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+        int n_pos_per_embd = hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ? 4 : 1;
+        lctx.inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, int64_t(n_tokens)*n_pos_per_embd);
         cb(lctx.inp_pos, "inp_pos", -1);
         ggml_set_input(lctx.inp_pos);
         return lctx.inp_pos;
@@ -16297,8 +16298,19 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 
     if (batch.pos && lctx.inp_pos) {
         const int64_t n_tokens = batch.n_tokens;
-
-        ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*ggml_element_size(lctx.inp_pos));
+        const int n_pos_per_embd =  hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ? 4 : 1;
+        if (batch.token && n_pos_per_embd == 4) {
+            std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
+            for (int i = 0; i < n_tokens; ++i) {
+                pos_data[               i] = batch.pos[i];
+                pos_data[    n_tokens + i] = batch.pos[i];
+                pos_data[2 * n_tokens + i] = batch.pos[i];
+                pos_data[3 * n_tokens + i] = 0; // 4th dim is 0
+            }
+            ggml_backend_tensor_set(lctx.inp_pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(lctx.inp_pos));
+        } else {
+            ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*ggml_element_size(lctx.inp_pos));
+        }
     }
 
     if (lctx.inp_pos && lctx.inp_scale) {
