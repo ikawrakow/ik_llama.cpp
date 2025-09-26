@@ -5088,42 +5088,7 @@ int main(int argc, char ** argv) {
         svr->Post("/rename_prompt",   rename_saved_prompt);
 
     }
-    // SPA fallback route - serve index.html for any route that doesn't match API endpoints
-// This enables client-side routing for dynamic routes like /chat/[id]
-    if (params.webui && params.public_path.empty()) {
-        // Only add fallback when using embedded static files
-        svr->Get(".*", [](const httplib::Request& req, httplib::Response& res) {
-            // Skip API routes - they should have been handled above
-            if (req.path.find("/v1/") != std::string::npos ||
-                req.path.find("/health") != std::string::npos ||
-                req.path.find("/metrics") != std::string::npos ||
-                req.path.find("/props") != std::string::npos ||
-                req.path.find("/models") != std::string::npos ||
-                req.path.find("/api/tags") != std::string::npos ||
-                req.path.find("/completions") != std::string::npos ||
-                req.path.find("/chat/completions") != std::string::npos ||
-                req.path.find("/embeddings") != std::string::npos ||
-                req.path.find("/tokenize") != std::string::npos ||
-                req.path.find("/detokenize") != std::string::npos ||
-                req.path.find("/lora-adapters") != std::string::npos ||
-                req.path.find("/slots") != std::string::npos) {
-                return false; // Let other handlers process API routes
-            }
 
-            // Serve index.html for all other routes (SPA fallback)
-            if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
-                res.set_content("Error: gzip is not supported by this browser", "text/plain");
-            }
-            else {
-                res.set_header("Content-Encoding", "gzip");
-                // COEP and COOP headers, required by pyodide (python interpreter)
-                res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
-            }
-            return false;
-            });
-    }
     svr->Get ("/version", handle_version);
     if (!params.sql_save_file.empty()) {
         // these endpoints rely on sql_save_file existing
