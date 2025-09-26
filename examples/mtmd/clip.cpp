@@ -408,6 +408,9 @@ struct clip_ctx {
         if (!backend_cpu) {
             throw std::runtime_error("failed to initialize CPU backend");
         }
+        int n_backend = ggml_backend_reg_get_count();
+        LOG_INF("%s: have %d back-ends:\n", __func__, n_backend);
+        for (int i = 0; i < n_backend; ++i) printf("  %d:  %s\n", i, ggml_backend_reg_get_name(i));
         if (ctx_params.use_gpu) {
             auto backend_name = std::getenv("MTMD_BACKEND_DEVICE");
             if (backend_name != nullptr) {
@@ -417,7 +420,7 @@ struct clip_ctx {
                     LOG_WRN("%s: Warning: Failed to initialize \"%s\" backend, falling back to default GPU backend\n", __func__, backend_name);
                 }
             }
-            if (!backend) {
+            if (!backend && n_backend > 1) {
                 backend = ggml_backend_reg_init_backend(1, nullptr);
                 //backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
                 //backend = backend ? backend : ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
