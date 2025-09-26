@@ -907,6 +907,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.mmproj.url = argv[i];
         return true;
     }
+    if (arg == "--no-mmproj-offload") {
+        params.mmproj_use_gpu = false;
+        return true;
+    }
     if (arg == "--image") {
         CHECK_ARG
         params.image.emplace_back(argv[i]);
