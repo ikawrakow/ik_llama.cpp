@@ -4236,7 +4236,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS",
     "CROSS_ENTROPY_LOSS_BACK",
 
-    "GPU",
+    "GLU",
 };
 
 static_assert(GGML_OP_COUNT == 86, "GGML_OP_COUNT != 86");
