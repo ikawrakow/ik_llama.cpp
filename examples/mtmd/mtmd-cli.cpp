@@ -36,7 +36,7 @@ static volatile bool g_is_interrupted = false;
  */
 
 static void show_additional_info(int /*argc*/, char ** argv) {
-    LOG(
+    LOG_TEE(
         "Experimental CLI for multimodal\n\n"
         "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> --audio <audio> -p <prompt>\n\n"
         "  -m and --mmproj are required\n"
@@ -102,15 +102,15 @@ void common_init() {
 #else
     const char * build_type = " (debug)";
 #endif
-    LOG("build: %d (%s) with %s for %s%s\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT, LLAMA_COMPILER, LLAMA_BUILD_TARGET, build_type);
+    LOG_TEE("build: %d (%s) with %s for %s%s\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT, LLAMA_COMPILER, LLAMA_BUILD_TARGET, build_type);
 }
 
 
 #ifndef LOG_ERR
-#define LOG_ERR LOG
+#define LOG_ERR LOG_TEE
 #endif
 #ifndef LOG_INF
-#define LOG_INF LOG
+#define LOG_INF LOG_TEE
 #endif
 #ifndef LOG_DBG
 #define LOG_DBG LOG
@@ -162,7 +162,7 @@ struct mtmd_cli_context {
         }
 
         tmpls = common_chat_templates_init(model, params.chat_template);
-        LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(tmpls.get(), params.use_jinja, params.default_template_kwargs).c_str());
+        LOG_TEE("%s: chat template example:\n%s\n", __func__, common_chat_format_example(tmpls.get(), params.use_jinja, params.default_template_kwargs).c_str());
 
         init_vision_context(params);
 
@@ -368,23 +368,23 @@ int main(int argc, char ** argv) {
         }
 
     } else {
-        LOG("\n Running in chat mode, available commands:");
+        LOG_TEE("\n Running in chat mode, available commands:");
         if (mtmd_support_vision(ctx.ctx_vision.get())) {
-            LOG("\n   /image <path>    load an image");
+            LOG_TEE("\n   /image <path>    load an image");
         }
         if (mtmd_support_audio(ctx.ctx_vision.get())) {
-            LOG("\n   /audio <path>    load an audio");
+            LOG_TEE("\n   /audio <path>    load an audio");
         }
-        LOG("\n   /clear           clear the chat history");
-        LOG("\n   /quit or /exit   exit the program");
-        LOG("\n");
+        LOG_TEE("\n   /clear           clear the chat history");
+        LOG_TEE("\n   /quit or /exit   exit the program");
+        LOG_TEE("\n");
 
         bool is_first_msg = true;
         std::string content;
 
         while (!g_is_interrupted) {
             g_is_generating = false;
-            LOG("\n> ");
+            LOG_TEE("\n> ");
             console::set_display(console::user_input);
             std::string line;
             console::readline(line, false);
@@ -401,7 +401,7 @@ int main(int argc, char ** argv) {
                 ctx.n_past = 0;
                 llama_kv_cache_seq_rm(ctx.lctx, 0, 1, -1);
                 //llama_memory_seq_rm(llama_get_memory(ctx.lctx), 0, 1, -1); // keep BOS
-                LOG("Chat history cleared\n\n");
+                LOG_TEE("Chat history cleared\n\n");
                 continue;
             }
             g_is_generating = true;
@@ -414,7 +414,7 @@ int main(int argc, char ** argv) {
                 }
                 std::string media_path = line.substr(7);
                 if (ctx.load_media(media_path)) {
-                    LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
+                    LOG_TEE("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
                     content += mtmd_default_marker();
                 }
                 // else, error is already printed by libmtmd
@@ -437,8 +437,8 @@ int main(int argc, char ** argv) {
             is_first_msg = false;
         }
     }
-    if (g_is_interrupted) LOG("\nInterrupted by user\n");
-    LOG("\n\n");
+    if (g_is_interrupted) LOG_TEE("\nInterrupted by user\n");
+    LOG_TEE("\n\n");
     llama_print_timings(ctx.lctx);
     //llama_perf_context_print(ctx.lctx);
     return g_is_interrupted ? 130 : 0;
