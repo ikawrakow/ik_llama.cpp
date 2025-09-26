@@ -218,7 +218,7 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
     llama_tokens generated_tokens;
     for (int i = 0; i < n_predict; i++) {
         if (i > n_predict || !g_is_generating || g_is_interrupted) {
-            LOG("\n");
+            LOG_TEE("\n");
             break;
         }
 
@@ -227,15 +227,15 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
         common_sampler_accept(ctx.smpl, ctx.lctx, token_id, true);
 
         if (llama_vocab_is_eog(ctx.vocab, token_id) || ctx.check_antiprompt(generated_tokens)) {
-            LOG("\n");
+            LOG_TEE("\n");
             break; // end of generation
         }
 
-        LOG("%s", common_token_to_piece(ctx.lctx, token_id).c_str());
+        LOG_TEE("%s", common_token_to_piece(ctx.lctx, token_id).c_str());
         fflush(stdout);
 
         if (g_is_interrupted) {
-            LOG("\n");
+            LOG_TEE("\n");
             break;
         }
 
