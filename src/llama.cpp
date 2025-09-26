@@ -10920,11 +10920,8 @@ struct llm_build_context {
             }
 
             if (il == n_layer - 1 && inp_out_ids) {
-                struct ggml_tensor * inp_out_ids = build_inp_out_ids();
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-                //cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-                //inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
 
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
@@ -16309,7 +16306,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             }
             ggml_backend_tensor_set(lctx.inp_pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(lctx.inp_pos));
         } else {
-            ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*ggml_element_size(lctx.inp_pos));
+            ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(lctx.inp_pos));
         }
     }
 
