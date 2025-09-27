@@ -3,8 +3,6 @@
 #include "log.h"
 #include <string>
 
-#include <json.hpp>
-
 using json = nlohmann::ordered_json;
 
 enum common_json_stack_element_type {
