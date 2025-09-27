@@ -85,7 +85,8 @@ void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
     if (buffer->iface.free_buffer != NULL) {
         buffer->iface.free_buffer(buffer);
     }
-    free(buffer);
+    delete buffer;
+    //free(buffer);
 }
 
 size_t ggml_backend_buffer_get_size(ggml_backend_buffer_t buffer) {

@@ -68,6 +68,29 @@ struct llama_control_vector_load_info;
 int32_t cpu_get_num_physical_cores();
 int32_t cpu_get_num_math();
 
+enum llama_example {
+    LLAMA_EXAMPLE_COMMON,
+    LLAMA_EXAMPLE_SPECULATIVE,
+    LLAMA_EXAMPLE_MAIN,
+    LLAMA_EXAMPLE_EMBEDDING,
+    LLAMA_EXAMPLE_PERPLEXITY,
+    LLAMA_EXAMPLE_RETRIEVAL,
+    LLAMA_EXAMPLE_PASSKEY,
+    LLAMA_EXAMPLE_IMATRIX,
+    LLAMA_EXAMPLE_BENCH,
+    LLAMA_EXAMPLE_SERVER,
+    LLAMA_EXAMPLE_CVECTOR_GENERATOR,
+    LLAMA_EXAMPLE_EXPORT_LORA,
+    LLAMA_EXAMPLE_MTMD,
+    LLAMA_EXAMPLE_LOOKUP,
+    LLAMA_EXAMPLE_PARALLEL,
+    LLAMA_EXAMPLE_TTS,
+    LLAMA_EXAMPLE_DIFFUSION,
+    LLAMA_EXAMPLE_FINETUNE,
+
+    LLAMA_EXAMPLE_COUNT,
+};
+
 //
 // CLI argument parsing
 //
@@ -84,6 +107,14 @@ enum common_reasoning_format {
     COMMON_REASONING_FORMAT_AUTO,
     COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY, // Extract thinking tag contents and return as `message.reasoning_content`, or leave inline in <think> tags in stream mode
     COMMON_REASONING_FORMAT_DEEPSEEK,        // Extract thinking tag contents and return as `message.reasoning_content`, including in streaming deltas.
+};
+
+struct model_paths {
+    std::string path        = ""; // model local path                                       // NOLINT
+    std::string url         = ""; // model url to download                                  // NOLINT
+    std::string hf_repo     = ""; // HF repo                                                // NOLINT
+    std::string hf_file     = ""; // HF file                                                // NOLINT
+    std::string docker_repo = ""; // Docker repo                                            // NOLINT
 };
 
 struct gpt_params {
@@ -230,8 +261,10 @@ struct gpt_params {
     std::string cache_type_k_draft = ""; // KV cache data type for K for the draft model
     std::string cache_type_v_draft = ""; // KV cache data type for V for the draft model
 
-    // multimodal models (see examples/llava)
-    std::string mmproj = "";        // path to multimodal projector
+    // multimodal models (see examples/mtmd)
+    model_paths mmproj;
+    bool mmproj_use_gpu = true;     // use GPU for multimodal model
+    bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
 
     // embedding
