@@ -235,8 +235,8 @@
 #define GGML_MAX_DIMS           4
 #define GGML_MAX_PARAMS         2048
 #ifndef GGML_MAX_CONTEXTS
-// Maximum number of model contexts (e.g., for model shards). 
-// Increase this value using -DGGML_MAX_CONTEXTS=<value> in CMake 
+// Maximum number of model contexts (e.g., for model shards).
+// Increase this value using -DGGML_MAX_CONTEXTS=<value> in CMake
 // if you need to load more than 64 model shards.
 #define GGML_MAX_CONTEXTS 64
 #endif
@@ -255,6 +255,12 @@
 
 #define GGML_EXIT_SUCCESS 0
 #define GGML_EXIT_ABORTED 1
+
+#define GGML_ROPE_TYPE_NEOX   2
+#define GGML_ROPE_TYPE_MROPE  8
+#define GGML_ROPE_TYPE_VISION 24
+
+#define GGML_MROPE_SECTIONS   4
 
 #define GGUF_MAGIC "GGUF"
 
@@ -647,6 +653,9 @@ extern "C" {
         GGML_OP_SOFTCAP,
         GGML_OP_SOFT_CAP_MAX,
 
+        GGML_OP_CONV_2D,
+        GGML_OP_CONV_2D_DW,
+
         GGML_OP_FLASH_ATTN_EXT,
         GGML_OP_FLASH_ATTN_BACK,
         GGML_OP_SSM_CONV,
@@ -670,6 +679,9 @@ extern "C" {
 
         GGML_OP_CROSS_ENTROPY_LOSS,
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
+
+        GGML_OP_GLU,
+
         GGML_OP_COUNT,
     };
 
@@ -682,13 +694,14 @@ extern "C" {
         GGML_UNARY_OP_ELU,
         GGML_UNARY_OP_RELU,
         GGML_UNARY_OP_SIGMOID,
-        GGML_UNARY_OP_GELU,
+        GGML_UNARY_OP_GELU_ERF,
         GGML_UNARY_OP_GELU_QUICK,
         GGML_UNARY_OP_SILU,
         GGML_UNARY_OP_HARDSWISH,
         GGML_UNARY_OP_HARDSIGMOID,
         GGML_UNARY_OP_SWIGLU,
         GGML_UNARY_OP_SWIGLU_OAI,
+        GGML_UNARY_OP_GELU,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -700,16 +713,19 @@ extern "C" {
     };
 
     enum ggml_log_level {
-        GGML_LOG_LEVEL_ERROR = 2,
+        GGML_LOG_LEVEL_NONE  = 0,
+        GGML_LOG_LEVEL_DEBUG = 1,
+        GGML_LOG_LEVEL_INFO  = 2,
         GGML_LOG_LEVEL_WARN  = 3,
-        GGML_LOG_LEVEL_INFO  = 4,
-        GGML_LOG_LEVEL_DEBUG = 5
+        GGML_LOG_LEVEL_ERROR = 4,
+        GGML_LOG_LEVEL_CONT  = 5, // continue previous log
     };
 
     enum ggml_tensor_flag {
         GGML_TENSOR_FLAG_INPUT  = 1,
         GGML_TENSOR_FLAG_OUTPUT = 2,
         GGML_TENSOR_FLAG_PARAM  = 4,
+        GGML_TENSOR_FLAG_LOSS   = 8, // ...defines loss for numerical optimization (multiple loss tensors add up)
     };
 
     // ggml object
@@ -1270,6 +1286,16 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // GELU using erf (error function) when possible
+    // some backends may fallback to approximation based on Abramowitz and Stegun formula
+    GGML_API struct ggml_tensor * ggml_gelu_erf(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_gelu_erf_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
     GGML_API struct ggml_tensor * ggml_gelu_quick(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1296,6 +1322,100 @@ extern "C" {
             struct ggml_tensor  * b,
             float                 alpha,
             float                 limit);
+
+    //
+    // *** from mainline begin ***
+    //
+    enum ggml_glu_op {
+        GGML_GLU_OP_REGLU,
+        GGML_GLU_OP_GEGLU,
+        GGML_GLU_OP_SWIGLU,
+        GGML_GLU_OP_SWIGLU_OAI,
+        GGML_GLU_OP_GEGLU_ERF,
+        GGML_GLU_OP_GEGLU_QUICK,
+
+        GGML_GLU_OP_COUNT,
+    };
+    GGML_API const char * ggml_glu_op_name(enum ggml_glu_op op);
+    GGML_API enum ggml_glu_op ggml_get_glu_op(const struct ggml_tensor * tensor);
+
+    GGML_API struct ggml_tensor * ggml_glu(
+            struct ggml_context * ctx,
+             struct ggml_tensor * a,
+             enum ggml_glu_op     op,
+             bool                 swapped);
+
+    GGML_API struct ggml_tensor * ggml_glu_split(
+            struct ggml_context * ctx,
+             struct ggml_tensor * a,
+             struct ggml_tensor * b,
+             enum ggml_glu_op     op);
+
+    GGML_API struct ggml_tensor * ggml_reglu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_reglu_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_reglu_split(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_geglu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_split(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_swiglu_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_swiglu_split(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_geglu_erf(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_erf_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_erf_split(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_geglu_quick(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_quick_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_quick_split(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    //
+    // *** from mainline end ***
+    //
+
 
     // a - x
     // b - dy
@@ -1761,6 +1881,23 @@ extern "C" {
             float                 beta_fast,
             float                 beta_slow);
 
+    GGML_API struct ggml_tensor * ggml_rope_multi(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * c,
+            int                   n_dims,
+            int                   sections[GGML_MROPE_SECTIONS],
+            int                   mode,
+            int                   n_ctx_orig,
+            float                 freq_base,
+            float                 freq_scale,
+            float                 ext_factor,
+            float                 attn_factor,
+            float                 beta_fast,
+            float                 beta_slow);
+
+
     // in-place, returns view(a)
     GGML_API struct ggml_tensor * ggml_rope_ext_inplace(
             struct ggml_context * ctx,
@@ -1776,6 +1913,23 @@ extern "C" {
             float                 attn_factor,
             float                 beta_fast,
             float                 beta_slow);
+
+    GGML_API struct ggml_tensor * ggml_rope_multi_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * c,
+            int                   n_dims,
+            int                   sections[GGML_MROPE_SECTIONS],
+            int                   mode,
+            int                   n_ctx_orig,
+            float                 freq_base,
+            float                 freq_scale,
+            float                 ext_factor,
+            float                 attn_factor,
+            float                 beta_fast,
+            float                 beta_slow);
+
 
     GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_rope_custom(
             struct ggml_context * ctx,
@@ -1929,6 +2083,34 @@ extern "C" {
             struct ggml_tensor  * b,
             int                   stride);
 
+    // depthwise (via im2col and mul_mat)
+    GGML_API struct ggml_tensor * ggml_conv_2d_dw(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,  // convolution kernel
+            struct ggml_tensor  * b,  // data
+            int                  s0,  // stride dimension 0
+            int                  s1,  // stride dimension 1
+            int                  p0,  // padding dimension 0
+            int                  p1,  // padding dimension 1
+            int                  d0,  // dilation dimension 0
+            int                  d1); // dilation dimension 1
+
+    // Depthwise 2D convolution
+    // may be faster than ggml_conv_2d_dw, but not available in all backends
+    // a:   KW    KH    1    C    convolution kernel
+    // b:   W     H     C    N    input data
+    // res: W_out H_out C    N
+    GGML_API struct ggml_tensor * ggml_conv_2d_dw_direct(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            int                   stride0,
+            int                   stride1,
+            int                   pad0,
+            int                   pad1,
+            int                   dilation0,
+            int                   dilation1);
+
     enum ggml_op_pool {
         GGML_OP_POOL_MAX,
         GGML_OP_POOL_AVG,
@@ -1956,24 +2138,49 @@ extern "C" {
             float                 p0,
             float                 p1);
 
+    enum ggml_scale_mode {
+        GGML_SCALE_MODE_NEAREST  = 0,
+        GGML_SCALE_MODE_BILINEAR = 1,
+
+        GGML_SCALE_MODE_COUNT
+    };
+
+    enum ggml_scale_flag {
+        GGML_SCALE_FLAG_ALIGN_CORNERS = (1 << 8)
+    };
+
     // nearest interpolate
     // multiplies ne0 and ne1 by scale factor
     // used in stable-diffusion
     GGML_API struct ggml_tensor * ggml_upscale(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            int                   scale_factor);
+            int                   scale_factor,
+            enum ggml_scale_mode  mode);
 
-    // nearest interpolate
-    // nearest interpolate to specified dimensions
-    // used in tortoise.cpp
-    GGML_API struct ggml_tensor * ggml_upscale_ext(
+    // interpolate
+    // interpolate scale to specified dimensions
+    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_upscale_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   ne0,
             int                   ne1,
             int                   ne2,
-            int                   ne3);
+            int                   ne3,
+            enum ggml_scale_mode  mode),
+        "use ggml_interpolate instead");
+
+    // Up- or downsamples the input to the specified size.
+    // 2D scale modes (eg. bilinear) are applied to the first two dimensions.
+    GGML_API struct ggml_tensor * ggml_interpolate(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int64_t               ne0,
+            int64_t               ne1,
+            int64_t               ne2,
+            int64_t               ne3,
+            uint32_t              mode); // ggml_scale_mode [ | ggml_scale_flag...]
+
 
     // pad each dimension with zeros: [x, ..., x] -> [x, ..., x, 0, ..., 0]
     GGML_API struct ggml_tensor * ggml_pad(

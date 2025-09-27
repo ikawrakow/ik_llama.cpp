@@ -117,13 +117,12 @@ extern "C" {
     //    LLAMA_VOCAB_PRE_TYPE_KIMI_K2        = 38, //llama.cpp lists this as 37
     //};
 
-    // note: these values should be synchronized with ggml_rope
-    // TODO: maybe move this enum to ggml.h (ggml_rope_type)
     enum llama_rope_type {
-        LLAMA_ROPE_TYPE_NONE = -1,
-        LLAMA_ROPE_TYPE_NORM =  0,
-        LLAMA_ROPE_TYPE_NEOX = 2,
-        LLAMA_ROPE_TYPE_GLM  =  4,
+        LLAMA_ROPE_TYPE_NONE   = -1,
+        LLAMA_ROPE_TYPE_NORM   = 0,
+        LLAMA_ROPE_TYPE_NEOX   = GGML_ROPE_TYPE_NEOX,
+        LLAMA_ROPE_TYPE_MROPE  = GGML_ROPE_TYPE_MROPE,
+        LLAMA_ROPE_TYPE_VISION = GGML_ROPE_TYPE_VISION,
     };
 
     enum llama_token_type { //TODO: remove, required until per token attributes are available from GGUF file
@@ -581,6 +580,14 @@ extern "C" {
     LLAMA_API int32_t llama_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_n_layer    (const struct llama_model * model);
 
+    // Compat
+    static    int32_t     llama_model_n_embd(const struct llama_model * model) { return llama_n_embd(model); }
+    LLAMA_API bool        llama_vocab_get_add_bos(const struct llama_vocab * vocab);
+    LLAMA_API bool        llama_vocab_get_add_eos(const struct llama_vocab * vocab);
+    LLAMA_API int32_t     llama_vocab_n_tokens(const struct llama_vocab * vocab);
+    LLAMA_API llama_token llama_vocab_bos(const struct llama_vocab * vocab);
+    LLAMA_API llama_token llama_vocab_eos(const struct llama_vocab * vocab);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_rope_freq_scale_train(const struct llama_model * model);
 
@@ -1018,6 +1025,7 @@ extern "C" {
 
     // Check if the token is supposed to end generation (end-of-generation, eg. EOS, EOT, etc.)
     LLAMA_API bool llama_token_is_eog(const struct llama_model * model, llama_token token);
+    LLAMA_API bool llama_vocab_is_eog(const struct llama_vocab * vocab, llama_token token);
 
     // Identify if Token Id is a control token or a render-able token
     LLAMA_API bool llama_token_is_control(const struct llama_model * model, llama_token token);
@@ -1061,6 +1069,14 @@ extern "C" {
                          int32_t   n_tokens_max,
                             bool   add_special,
                             bool   parse_special);
+    LLAMA_API int32_t llama_vocab_tokenize(
+        const struct llama_vocab * vocab,
+                      const char * text,
+                         int32_t   text_len,
+                     llama_token * tokens,
+                         int32_t   n_tokens_max,
+                            bool   add_special,
+                            bool   parse_special);
 
     // Token Id -> Piece.
     // Uses the vocabulary in the provided context.
@@ -1069,6 +1085,13 @@ extern "C" {
     // @param special If true, special tokens are rendered in the output.
     LLAMA_API int32_t llama_token_to_piece(
               const struct llama_model * model,
+                           llama_token   token,
+                                  char * buf,
+                               int32_t   length,
+                               int32_t   lstrip,
+                                  bool   special);
+    LLAMA_API int32_t llama_vocab_token_to_piece(
+              const struct llama_vocab * vocab,
                            llama_token   token,
                                   char * buf,
                                int32_t   length,

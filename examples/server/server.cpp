@@ -1235,7 +1235,7 @@ struct server_context {
 
         chat_templates = common_chat_templates_init(model, params.chat_template);
         try {
-            common_chat_format_example(chat_templates.get(), params.use_jinja);
+            common_chat_format_example(chat_templates.get(), params.use_jinja, {});
         }
         catch (const std::exception& e) {
             LOG_WARNING("%s: The chat template that comes with this model is not yet supported, falling back to chatml. This may cause the model to output suboptimal responses\n", __func__);
@@ -3778,7 +3778,7 @@ int main(int argc, char ** argv) {
     });
 
     LOG_INFO("chat template", {
-        {"chat_example", common_chat_format_example(ctx_server.chat_templates.get(), ctx_server.params.use_jinja).c_str()
+        {"chat_example", common_chat_format_example(ctx_server.chat_templates.get(), ctx_server.params.use_jinja, {}).c_str()
         },
             {"built_in",     params.chat_template.empty()},
         });
