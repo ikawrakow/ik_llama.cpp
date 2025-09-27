@@ -65,15 +65,12 @@ add_library(${TARGET} STATIC
     console.cpp
     grammar-parser.h
     grammar-parser.cpp
-    json.hpp
     json-partial.h
     json-partial.cpp
     llguidance.cpp
     json-schema-to-grammar.cpp
     train.h
     train.cpp
-    minja/chat-template.hpp
-    minja/minja.hpp
     ngram-cache.h
     ngram-cache.cpp
     speculative.cpp
