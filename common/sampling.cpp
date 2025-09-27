@@ -3,7 +3,7 @@
 #include "llama-vocab.h"
 #include "common.h"
 #include <random>
-#include "json.hpp"
+#include <nlohmann/json.hpp>
 using json = nlohmann::ordered_json;
 
 struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vocab, const struct llama_sampling_params & params) {
