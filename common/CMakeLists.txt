@@ -65,15 +65,12 @@ add_library(${TARGET} STATIC
     console.cpp
     grammar-parser.h
     grammar-parser.cpp
-    json.hpp
     json-partial.h
     json-partial.cpp
     llguidance.cpp
     json-schema-to-grammar.cpp
     train.h
     train.cpp
-    minja/chat-template.hpp
-    minja/minja.hpp
     ngram-cache.h
     ngram-cache.cpp
     speculative.cpp
@@ -123,6 +120,6 @@ if (LLAMA_LLGUIDANCE)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} llguidance)
 endif ()
 
-target_include_directories(${TARGET} PUBLIC .)
-target_compile_features   (${TARGET} PUBLIC cxx_std_11)
+target_include_directories(${TARGET} PUBLIC . ../vendor)
+target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 target_link_libraries     (${TARGET} PRIVATE ${LLAMA_COMMON_EXTRA_LIBS} PUBLIC llama Threads::Threads)

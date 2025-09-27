@@ -233,7 +233,7 @@ int main(int argc, char ** argv) {
     if (params.conversation) {
         if (params.enable_chat_template) {
             //LOG_TEE("%s: chat template example: %s\n", __func__, common_chat_format_example(model, *chat_templates.template_default, params.use_jinja).c_str());
-            LOG_TEE("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates.get(), params.use_jinja).c_str());
+            LOG_TEE("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates.get(), params.use_jinja, {}).c_str());
         } else {
             LOG_TEE("%s: in-suffix/prefix is specified, chat template will be disabled\n", __func__);
         }

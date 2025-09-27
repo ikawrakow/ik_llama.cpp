@@ -12,7 +12,6 @@
 #include "common.h"
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
-#include "json.hpp"
 #include "llama-vocab.h"
 #include "llama.h"
 #include "chat.h"
@@ -899,7 +898,16 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--mmproj") {
         CHECK_ARG
-        params.mmproj = argv[i];
+        params.mmproj.path = argv[i];
+        return true;
+    }
+    if (arg == "--mmproj-url") {
+        CHECK_ARG
+        params.mmproj.url = argv[i];
+        return true;
+    }
+    if (arg == "--no-mmproj-offload") {
+        params.mmproj_use_gpu = false;
         return true;
     }
     if (arg == "--image") {
