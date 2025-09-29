@@ -3299,9 +3299,12 @@ inline std::pair<mul_mat_t, int> mul_mat_kernel(int int_typeA, int nq) {
         if (nq == 4) return std::make_pair(mul_mat_qX_0_q8_2_Tx<Q8_0_1_Unpacker, 4, k_step>, 4);
         MAKE_FUNCS(mul_mat_qX_1_q8_2_T<Q8_0_1_Unpacker, nq);
 #else
-        if (nq == 1) return std::make_pair(mul_mat_qX_0_q8_0_Tx<Q8_0_Unpacker, 1, k_step>, 1);
-        if (nq == 2) return std::make_pair(mul_mat_qX_0_q8_0_Tx<Q8_0_Unpacker, 2, k_step>, 2);
-        if (nq == 4) return std::make_pair(mul_mat_qX_0_q8_0_Tx<Q8_0_Unpacker, 4, k_step>, 4);
+        //if (nq == 1) return std::make_pair(mul_mat_qX_0_q8_0_Tx<Q8_0_Unpacker, 1, k_step>, 1);
+        //if (nq == 2) return std::make_pair(mul_mat_qX_0_q8_0_Tx<Q8_0_Unpacker, 2, k_step>, 2);
+        //if (nq == 4) return std::make_pair(mul_mat_qX_0_q8_0_Tx<Q8_0_Unpacker, 4, k_step>, 4);
+        if (nq == 1) return std::make_pair(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 1, block_q8_2>, 1);
+        if (nq == 2) return std::make_pair(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 2, block_q8_2>, 2);
+        if (nq == 4) return std::make_pair(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 4, block_q8_2>, 4);
         if (nq == 3) return std::make_pair(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 3, block_q8_2>, 3);
         if (nq == 5) return std::make_pair(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 5, block_q8_2>, 5);
         if (nq == 6) return std::make_pair(mul_mat_qX_0_q8_0_T<Q8_0_Unpacker, 6, block_q8_2>, 6);
