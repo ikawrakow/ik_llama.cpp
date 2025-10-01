@@ -6741,7 +6741,7 @@ static bool llm_load_tensors(
                             layer.nextn.embed_tokens     = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", final_layer),
                                         { n_embd, n_vocab },
-                                        flags);
+                                        flags | TENSOR_NOT_REQUIRED);
                             // ENORM, HNORM: [embd]
                             layer.nextn.enorm            = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_ENORM, "weight", final_layer),
@@ -6755,12 +6755,12 @@ static bool llm_load_tensors(
                             layer.nextn.shared_head_head = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", final_layer),
                                         { n_embd, n_vocab },
-                                        flags);
+                                        flags | TENSOR_NOT_REQUIRED);
                             // SHARED_HEAD_NORM: [embd]
                             layer.nextn.shared_head_norm = create_tensor(ctx_for_layer(final_layer),
                                         tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", final_layer),
                                         { n_embd },
-                                        flags);
+                                        flags | TENSOR_NOT_REQUIRED);
                         }
                     }
                 }
