@@ -226,7 +226,8 @@ struct HelperQ8KV final : public BaseHelper {
 struct HelperQ80 final : public BaseHelper {
     using Base = BaseHelper;
     constexpr static ggml_type type = GGML_TYPE_Q8_0;
-#ifdef HAVE_FANCY_SIMD
+//#ifdef HAVE_FANCY_SIMD
+#ifdef __AVX2__
     using block_q8 = block_q8_2;
     constexpr static int block_size_q = QK8_2;
 #else

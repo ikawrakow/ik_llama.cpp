@@ -1925,11 +1925,13 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
     printf("Maximum KLD: %10.6f\n", kld_values.back());
     printf("99.9%%   KLD: %10.6f\n", percentile(kld_values, 0.999f));
     printf("99.0%%   KLD: %10.6f\n", percentile(kld_values, 0.990f));
-    printf("99.0%%   KLD: %10.6f\n", percentile(kld_values, 0.990f));
+    printf("95.0%%   KLD: %10.6f\n", percentile(kld_values, 0.950f));
+    printf("90.0%%   KLD: %10.6f\n", percentile(kld_values, 0.900f));
     printf("Median  KLD: %10.6f\n", kld_median);
     printf("10.0%%   KLD: %10.6f\n", percentile(kld_values, 0.100f));
     printf(" 5.0%%   KLD: %10.6f\n", percentile(kld_values, 0.050f));
     printf(" 1.0%%   KLD: %10.6f\n", percentile(kld_values, 0.010f));
+    printf(" 0.1%%   KLD: %10.6f\n", percentile(kld_values, 0.001f));
     printf("Minimum KLD: %10.6f\n", kld_values.front());
 
     printf("\n");
