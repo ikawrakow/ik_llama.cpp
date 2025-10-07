@@ -4251,8 +4251,17 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
             launch_mul_mat_q<type, 128>(ctx, args, stream);
             break;
         default:
-            fprintf(stderr, "mmq_x_best=%d\n", mmq_x_best);
+            {
+            fprintf(stderr, "type=%s, mmq_x_best=%d\n", ggml_type_name(type), mmq_x_best);
+            fprintf(stderr, "  id = %d, nsm = %d, cc = %d, smpbo = %d\n", id, nsm, cc, smpbo);
+            fprintf(stderr, "  mmq_x_max = %d, mmq_y = %d, use_stream_k = %d\n", mmq_x_max, mmq_y, use_stream_k);
+            for (int mmq_x = 8; mmq_x <= mmq_x_max && nparts_best > 1; mmq_x += 8) {
+                const int granularity = mmq_get_granularity_host(mmq_x, cc);
+                const int shmem = mmq_get_shmem<type>(mmq_x, mmq_y, cc);
+                fprintf(stderr, "    mmq_x = %d, granularity = %d, shmem = %d\n", mmq_x, granularity, shmem);
+            }
             GGML_ABORT("fatal error");
+            }
             break;
     }
 }
