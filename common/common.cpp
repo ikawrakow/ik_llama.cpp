@@ -1907,6 +1907,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                  "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
                         "- none: leaves thoughts unparsed in `message.content`\n"
                         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
+                        "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
                         "(default: none)", });
     options.push_back({ "main",      "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
     options.push_back({ "main",      "       --reasoning-budget N",  "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)" });

@@ -296,7 +296,7 @@ struct gpt_params {
     bool use_jinja = false;                                                                                 // NOLINT
     std::string system_prompt = "";
     bool enable_chat_template = true;
-    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int reasoning_budget = -1;
     bool prefill_assistant = true;
 

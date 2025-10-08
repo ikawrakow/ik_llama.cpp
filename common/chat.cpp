@@ -1207,6 +1207,8 @@ static common_chat_params common_chat_params_init_llama_3_x(const common_chat_te
     return data;
 }
 static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder, bool with_builtin_tools = false) {
+    builder.try_parse_reasoning("<think>", "</think>");
+
     if (!builder.syntax().parse_tool_calls) {
         builder.add_content(builder.consume_rest());
         return;
@@ -2411,6 +2413,7 @@ common_chat_params common_chat_templates_apply(
 }
 
 static void common_chat_parse_content_only(common_chat_msg_parser & builder) {
+    builder.try_parse_reasoning("<think>", "</think>");
     builder.add_content(builder.consume_rest());
 }
 
