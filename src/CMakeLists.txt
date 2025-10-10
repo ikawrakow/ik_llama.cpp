@@ -26,6 +26,8 @@ add_library(llama
             llama-quantize.cpp
             llama-arch.h
             llama-arch.cpp
+            llama-hparams.h
+            llama-hparams.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp

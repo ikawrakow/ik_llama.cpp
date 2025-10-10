@@ -240,6 +240,8 @@ struct llama_hparams {
         return std::fabs(b - a) <= abs_tol;
     }
 
+    static const char * rope_scaling_type_name(llama_rope_scaling_type);
+
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");
