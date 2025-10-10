@@ -347,3 +347,29 @@ struct llama_lora_adapter {
         }
     }
 };
+
+// helper to handle gguf constants
+// usage:
+//
+//   const auto tn = LLM_TN(LLM_ARCH_LLAMA);
+//
+//   std::string name = tn(LLM_TENSOR_OUTPUT);                     -> "output"
+//   std::string name = tn(LLM_TENSOR_TOKEN_EMBD, "bias");         -> "token_embd.bias"
+//   std::string name = tn(LLM_TENSOR_ATTN_NORM, "weight", 3);     -> "blk.3.attn_norm.weight"
+//
+struct LLM_TN {
+    LLM_TN(llm_arch arch) : arch(arch) {}
+
+    llm_arch arch;
+
+    std::string operator()(llm_tensor tensor) const;
+
+    std::string operator()(llm_tensor tensor, const std::string & suffix) const;
+
+    std::string operator()(llm_tensor tensor, int bid) const;
+
+    std::string operator()(llm_tensor tensor, const std::string & suffix, int bid) const;
+
+    std::string operator()(llm_tensor tensor, const std::string & suffix, int bid, int xid) const;
+};
+

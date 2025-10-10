@@ -21,6 +21,8 @@ add_library(llama
             llama-model-loader.cpp
             llama-build-context.h
             llama-build-context.cpp
+            llama-model.h
+            llama-model.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp
