@@ -8177,3 +8177,343 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
 
     return gf;
 }
+
+ggml_cgraph * llm_build_context::llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids) {
+    llama_batch dummy;
+    dummy.n_tokens = 0;
+
+    llm_build_cb cb = [&](struct ggml_tensor * , const char * , int ) { };
+
+    struct llm_build_context llm(lctx, dummy, cb, false, false);
+
+    llm.init();
+
+    struct ggml_cgraph * result = llm.build_defrag(ids);
+
+    llm.free();
+
+    return result;
+}
+
+ggml_cgraph * llm_build_context::llama_build_graph_k_shift(llama_context & lctx) {
+    llama_batch dummy;
+    dummy.n_tokens = 0;
+
+    llm_build_cb cb = [&](struct ggml_tensor * , const char * , int ) { };
+
+    struct llm_build_context llm(lctx, dummy, cb, false, false);
+
+    llm.init();
+
+    struct ggml_cgraph * result = llm.build_k_shift();
+
+    llm.free();
+
+    return result;
+}
+
+struct ggml_cgraph * llm_build_context::llama_build_graph_s_copy(llama_context & lctx) {
+    llama_batch dummy;
+    dummy.n_tokens = 0;
+
+    llm_build_cb cb = [&](struct ggml_tensor * , const char * , int ) { };
+
+    struct llm_build_context llm(lctx, dummy, cb, false, false);
+
+    llm.init();
+
+    struct ggml_cgraph * result = llm.build_s_copy();
+
+    llm.free();
+
+    return result;
+}
+
+ggml_cgraph * llm_build_context::llama_build_graph(
+         llama_context & lctx,
+     const llama_batch & batch,
+                  bool   worst_case) {
+    const auto & model = lctx.model;
+
+#if IK_PRINT_TIMING
+    auto tim1 = ggml_time_us();
+#endif
+
+    // this callback allows us to apply custom logic to each tensor (e.g. ggml-alloc, offloading, etc.)
+    llm_build_cb cb = [&](struct ggml_tensor * cur, const char * name, int il) {
+        if (il >= 0) {
+            ggml_format_name(cur, "%s-%d", name, il);
+        } else {
+            ggml_set_name(cur, name);
+        }
+
+        if (!lctx.cparams.offload_kqv) {
+            if (strcmp(name, "kqv_merged_cont") == 0) {
+                // all nodes between the KV store and the attention output are run on the CPU
+                ggml_backend_sched_set_tensor_backend(lctx.sched, cur, lctx.backend_cpu);
+            }
+        }
+
+        // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
+        // FIXME: fix in ggml_backend_sched
+        const bool full_offload = lctx.model.n_gpu_layers > (int)lctx.model.hparams.n_layer;
+        if (batch.n_tokens < 32 || full_offload) {
+            if (il != -1 && strcmp(name, "norm") == 0) {
+                for (auto * backend : lctx.backends) {
+                    if (ggml_backend_supports_buft(backend, lctx.model.buft_layer[il].buft) &&
+                        (ggml_backend_supports_op(backend, cur) || ggml_backend_offload_op(backend, cur))) {
+                        ggml_backend_sched_set_tensor_backend(lctx.sched, cur, backend);
+                        break;
+                    }
+                }
+            }
+        }
+    };
+
+    struct ggml_cgraph * result = NULL;
+
+    const llama_vocab * vocab = &lctx.model.vocab; //llama_get_vocab(&lctx);
+    llama_token bos = vocab->token_bos();
+    llama_token eos = vocab->token_eos();
+    bool is_warming_up = lctx.n_eval == 0 && (batch.n_tokens == 1 && (batch.token[0] == ((bos != -1) ? bos : eos)));
+    struct llm_build_context llm(lctx, batch, cb, worst_case, is_warming_up);
+
+    llm.init();
+
+    switch (model.arch) {
+        case LLM_ARCH_LLAMA:
+        case LLM_ARCH_LLAMA4:
+        case LLM_ARCH_GRANITE:
+        case LLM_ARCH_GRANITE_MOE:
+            {
+                result = llm.build_llama();
+            } break;
+        case LLM_ARCH_DECI:
+            {
+                result = llm.build_deci();
+            } break;
+        case LLM_ARCH_BAICHUAN:
+            {
+                result = llm.build_baichuan();
+            } break;
+        case LLM_ARCH_FALCON:
+            {
+                result = llm.build_falcon();
+            } break;
+        case LLM_ARCH_GROK:
+            {
+                result = llm.build_grok();
+            } break;
+        case LLM_ARCH_STARCODER:
+            {
+                result = llm.build_starcoder();
+            } break;
+        case LLM_ARCH_REFACT:
+            {
+                result = llm.build_refact();
+            } break;
+        case LLM_ARCH_BERT:
+        case LLM_ARCH_JINA_BERT_V2:
+        case LLM_ARCH_NOMIC_BERT:
+            {
+                result = llm.build_bert();
+            } break;
+        case LLM_ARCH_BLOOM:
+            {
+                result = llm.build_bloom();
+            } break;
+        case LLM_ARCH_MPT:
+            {
+                result = llm.build_mpt();
+            } break;
+         case LLM_ARCH_STABLELM:
+            {
+                result = llm.build_stablelm();
+            } break;
+        case LLM_ARCH_QWEN:
+            {
+                result = llm.build_qwen();
+            } break;
+        case LLM_ARCH_QWEN2:
+            {
+                result = llm.build_qwen2();
+            } break;
+        case LLM_ARCH_QWEN2VL:
+            {
+                result = llm.build_qwen2vl();
+            } break;
+        case LLM_ARCH_QWEN2MOE:
+            {
+                result = llm.build_qwen2moe();
+            } break;
+        case LLM_ARCH_QWEN3:
+            {
+                result = llm.build_qwen3();
+            } break;
+        case LLM_ARCH_QWEN3MOE:
+            {
+                result = llm.build_qwen3moe();
+            } break;
+        case LLM_ARCH_PHI2:
+            {
+                result = llm.build_phi2();
+            } break;
+        case LLM_ARCH_PHI3:
+            {
+                result = llm.build_phi3();
+            } break;
+        case LLM_ARCH_PLAMO:
+            {
+                result = llm.build_plamo();
+            } break;
+        case LLM_ARCH_GPT2:
+            {
+                result = llm.build_gpt2();
+            } break;
+        case LLM_ARCH_CODESHELL:
+            {
+                result = llm.build_codeshell();
+            } break;
+        case LLM_ARCH_ORION:
+            {
+                result = llm.build_orion();
+            } break;
+        case LLM_ARCH_INTERNLM2:
+            {
+                result = llm.build_internlm2();
+            } break;
+        case LLM_ARCH_MINICPM:
+            {
+                result = llm.build_minicpm();
+            } break;
+        case LLM_ARCH_GEMMA:
+            {
+                result = llm.build_gemma();
+            } break;
+        case LLM_ARCH_GEMMA2:
+            {
+                result = llm.build_gemma2();
+            } break;
+        case LLM_ARCH_GEMMA3:
+            {
+                result = llm.build_gemma3();
+            } break;
+        case LLM_ARCH_STARCODER2:
+            {
+                result = llm.build_starcoder2();
+            } break;
+        case LLM_ARCH_MAMBA:
+            {
+                result = llm.build_mamba();
+            } break;
+        case LLM_ARCH_XVERSE:
+            {
+                result = llm.build_xverse();
+            } break;
+        case LLM_ARCH_COMMAND_R:
+            {
+                result = llm.build_command_r();
+            } break;
+        case LLM_ARCH_DBRX:
+            {
+                result = llm.build_dbrx();
+            } break;
+        case LLM_ARCH_OLMO:
+            {
+                result = llm.build_olmo();
+            } break;
+        case LLM_ARCH_OPENELM:
+            {
+                result = llm.build_openelm();
+            } break;
+        case LLM_ARCH_GPTNEOX:
+            {
+                result = llm.build_gptneox();
+            } break;
+        case LLM_ARCH_ARCTIC:
+            {
+                result = llm.build_arctic();
+            } break;
+        case LLM_ARCH_DEEPSEEK2:
+            {
+                result = llm.build_deepseek2();
+            } break;
+        case LLM_ARCH_CHATGLM:
+            {
+                result = llm.build_chatglm();
+            } break;
+        case LLM_ARCH_GLM4:
+            {
+                result = llm.build_glm4();
+            } break;
+        case LLM_ARCH_GLM4_MOE:
+            {
+                result = llm.build_glm4_moe();
+            } break;
+        case LLM_ARCH_BITNET:
+            {
+                result = llm.build_bitnet();
+            } break;
+        case LLM_ARCH_BITNET_B158:
+        case LLM_ARCH_BITNET_25:
+            {
+                result = llm.build_bitnet_158();
+            } break;
+        case LLM_ARCH_COHERE2:
+            {
+                result = llm.build_cohere2();
+            } break;
+        case LLM_ARCH_T5:
+            {
+                if (lctx.is_encoding) {
+                    result = llm.build_t5_encoder();
+                } else {
+                    result = llm.build_t5_decoder();
+                }
+            } break;
+        case LLM_ARCH_T5ENCODER:
+            {
+                result = llm.build_t5_encoder();
+            } break;
+        case LLM_ARCH_JAIS:
+            {
+                result = llm.build_jais();
+            } break;
+        case LLM_ARCH_DOTS1:
+            {
+                result = llm.build_dots1();
+            } break;
+        case LLM_ARCH_ERNIE4_5:
+        {
+            result = llm.build_ernie4_5();
+        } break;
+        case LLM_ARCH_ERNIE4_5_MOE:
+        {
+            result = llm.build_ernie4_5_moe();
+        } break;
+        case LLM_ARCH_HUNYUAN_MOE:
+            {
+                result = llm.build_hunyuan_moe();
+            } break;
+        case LLM_ARCH_OPENAI_MOE:
+            {
+                result = llm.build_openai_moe();
+            } break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+
+    // add on pooling layer
+    if (lctx.cparams.embeddings) {
+        result = llm.append_pooling(result);
+    }
+
+    llm.free();
+
+#if IK_PRINT_TIMING
+    auto tim2 = ggml_time_us();
+    printf("%s(...): %d us\n", __func__, int(tim2-tim1));
+#endif
+
+    return result;
+}

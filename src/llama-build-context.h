@@ -354,4 +354,12 @@ llm_expert_gating_func_type   gating_op,
                 gating_op, cb, il, graph);
     }
 
+    static ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids);
+
+    static ggml_cgraph * llama_build_graph_k_shift(llama_context & lctx);
+
+    static ggml_cgraph * llama_build_graph_s_copy(llama_context & lctx);
+
+    static ggml_cgraph * llama_build_graph(llama_context & lctx, const llama_batch & batch, bool worst_case);
+
 };
