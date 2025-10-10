@@ -167,3 +167,7 @@ struct llama_model_loader {
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);
 };
+
+void llm_load_arch(llama_model_loader & ml, llama_model & model);
+
+void llm_load_hparams(llama_model_loader & ml, llama_model & model);

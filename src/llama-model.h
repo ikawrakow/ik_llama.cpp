@@ -373,3 +373,6 @@ struct LLM_TN {
     std::string operator()(llm_tensor tensor, const std::string & suffix, int bid, int xid) const;
 };
 
+std::string llama_model_ftype_name(llama_ftype ftype);
+
+const char * llama_model_type_name(e_model type);

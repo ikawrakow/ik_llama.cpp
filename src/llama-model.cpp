@@ -1166,10 +1166,15 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
 };
 
 std::string LLM_TN::operator()(llm_tensor tensor) const {
-    if (LLM_TENSOR_NAMES.at(arch).find(tensor) == LLM_TENSOR_NAMES.at(arch).end()) {
-        return "__missing__";
+    auto& map = LLM_TENSOR_NAMES.at(arch);
+    if (auto it = map.find(tensor); it != map.end()) {
+        return it->second;
     }
-    return LLM_TENSOR_NAMES.at(arch).at(tensor);
+    return "__missing__";
+    //if (LLM_TENSOR_NAMES.at(arch).find(tensor) == LLM_TENSOR_NAMES.at(arch).end()) {
+    //    return "__missing__";
+    //}
+    //return LLM_TENSOR_NAMES.at(arch).at(tensor);
 }
 
 std::string LLM_TN::operator()(llm_tensor tensor, const std::string & suffix) const {
@@ -1200,3 +1205,169 @@ std::string LLM_TN::operator()(llm_tensor tensor, const std::string & suffix, in
     return ::format(LLM_TENSOR_NAMES.at(arch).at(tensor).c_str(), bid, xid) + "." + suffix;
 }
 
+std::string llama_model_ftype_name(llama_ftype ftype) {
+    if (ftype & LLAMA_FTYPE_GUESSED) {
+        return llama_model_ftype_name((enum llama_ftype) (ftype & ~LLAMA_FTYPE_GUESSED)) + " (guessed)";
+    }
+
+    switch (ftype) {
+        case LLAMA_FTYPE_ALL_F32:         return "all F32";
+        case LLAMA_FTYPE_MOSTLY_F16:      return "F16";
+        case LLAMA_FTYPE_MOSTLY_BF16:     return "BF16";
+        case LLAMA_FTYPE_MOSTLY_BF16_R16: return "BF16_R16";
+        case LLAMA_FTYPE_MOSTLY_Q4_0:     return "Q4_0";
+        case LLAMA_FTYPE_MOSTLY_Q4_1:     return "Q4_1";
+        case LLAMA_FTYPE_MOSTLY_Q5_0:     return "Q5_0";
+        case LLAMA_FTYPE_MOSTLY_Q5_1:     return "Q5_1";
+        case LLAMA_FTYPE_MOSTLY_Q6_0:     return "Q6_0";
+        case LLAMA_FTYPE_MOSTLY_Q8_0:     return "Q8_0";
+        case LLAMA_FTYPE_MOSTLY_Q8_KV:    return "Q8_KV";
+        case LLAMA_FTYPE_MOSTLY_Q2_K:     return "Q2_K - Medium";
+        case LLAMA_FTYPE_MOSTLY_Q2_K_R4:  return "Q2_K_R4";
+        case LLAMA_FTYPE_MOSTLY_Q2_K_S:   return "Q2_K - Small";
+        case LLAMA_FTYPE_MOSTLY_Q3_K_S:   return "Q3_K - Small";
+        case LLAMA_FTYPE_MOSTLY_Q3_K_M:   return "Q3_K - Medium";
+        case LLAMA_FTYPE_MOSTLY_Q3_K_L:   return "Q3_K - Large";
+        case LLAMA_FTYPE_MOSTLY_Q3_K_R4:  return "Q3_K_R4";
+        case LLAMA_FTYPE_MOSTLY_Q4_K_S:   return "Q4_K - Small";
+        case LLAMA_FTYPE_MOSTLY_Q4_K_R4:  return "Q4_K_R4";
+        case LLAMA_FTYPE_MOSTLY_Q4_K_M:   return "Q4_K - Medium";
+        case LLAMA_FTYPE_MOSTLY_Q5_K_S:   return "Q5_K - Small";
+        case LLAMA_FTYPE_MOSTLY_Q5_K_R4:  return "Q5_K_R4";
+        case LLAMA_FTYPE_MOSTLY_Q5_K_M:   return "Q5_K - Medium";
+        case LLAMA_FTYPE_MOSTLY_Q6_K:     return "Q6_K";
+        case LLAMA_FTYPE_MOSTLY_Q6_K_R4:  return "Q6_K_R4";
+        case LLAMA_FTYPE_MOSTLY_Q8_K_R8:  return "Q8_K_R8";
+        case LLAMA_FTYPE_MOSTLY_Q8_KV_R8: return "Q8_KV_R8";
+        case LLAMA_FTYPE_MOSTLY_IQ2_XXS:  return "IQ2_XXS - 2.0625 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_XXS_R4:return "IQ2_XXS_R4 - 2.0625 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_XS:   return "IQ2_XS - 2.3125 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_XS_R4:return "IQ2_XS_R4 - 2.3125 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_KS:   return "IQ2_KS - 2.1875 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_S:    return "IQ2_S - 2.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_M:    return "IQ2_M - 2.7 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_M_R4: return "IQ2_M_R4 - 2.7 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_XS:   return "IQ3_XS - 3.3 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_XXS:  return "IQ3_XXS - 3.0625 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ1_KT:   return "IQ1_KT - 1.75 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_KT:   return "IQ2_KT - 2.125 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_KT:   return "IQ3_KT - 3.125 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_KT:   return "IQ4_KT - 4.0 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_XXS_R4: return "IQ3_XXS_R4 - 3.0625 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ1_S:    return "IQ1_S - 1.5625 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ1_S_R4: return "IQ1_S_R4 - 1.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ1_M_R4: return "IQ1_M_R4 - 1.75 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ1_M:    return "IQ1_M - 1.75 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_NL:   return "IQ4_NL - 4.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_NL_R4:return "IQ4_NL_R4 - 4.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_XS_R8:return "IQ4_XS_R8 - 4.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q4_0_R8:  return "Q4_0_R8 - 4.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q5_0_R4:  return "Q5_0_R4 - 5.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q6_0_R4:  return "Q6_0_R4 - 6.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q8_0_R8:  return "Q8_0_R8 - 8.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_MXFP4:    return "MXFP4 - 4.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_XS:   return "IQ4_XS - 4.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_KS:   return "IQ4_KS - 4.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_KS_R4:return "IQ4_KS_R4 - 4.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ5_KS_R4:return "IQ5_KS_R4 - 5.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_KSS:  return "IQ4_KSS - 4.0 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ5_KS:   return "IQ5_KS - 5.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_K:    return "IQ2_K - 2.375 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_K_R4: return "IQ2_K_R4 - 2.375 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_KS:   return "IQ3_KS - 3.1875 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ2_KL:   return "IQ2_KL - 2.6875 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_K:    return "IQ3_K - 3.4325 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_K_R4: return "IQ3_K_R4 - 3.4325 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_KL:   return "IQ3_KL - 4 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_K:    return "IQ4_K - 4.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ4_K_R4: return "IQ4_K_R4 - 4.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ5_K:    return "IQ5_K - 5.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ5_K_R4: return "IQ5_K_R4 - 5.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ6_K:    return "IQ6_K - 6.6 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ1_BN:   return "IQ1_BN - 1.625 bpw Bitnet";
+        case LLAMA_FTYPE_MOSTLY_IQ2_BN:   return "IQ2_BN - 2.00 bpw Bitnet";
+        case LLAMA_FTYPE_MOSTLY_IQ2_BN_R4:return "IQ2_BN_R4 - 2.00 bpw Bitnet";
+        case LLAMA_FTYPE_MOSTLY_IQ3_S:    return "IQ3_S - 3.4375 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_S_R4: return "IQ3_S_R4 - 3.4375 bpw";
+        case LLAMA_FTYPE_MOSTLY_IQ3_M:    return "IQ3_S mix - 3.66 bpw";
+        case LLAMA_FTYPE_MOSTLY_Q4_0_4_4: return "Q4_0_4_4";
+        case LLAMA_FTYPE_MOSTLY_Q4_0_4_8: return "Q4_0_4_8";
+        case LLAMA_FTYPE_MOSTLY_Q4_0_8_8: return "Q4_0_8_8";
+
+        default: return "unknown, may not work";
+    }
+}
+
+const char * llama_model_type_name(e_model type) {
+    switch (type) {
+        case MODEL_14M:           return "14M";
+        case MODEL_17M:           return "17M";
+        case MODEL_22M:           return "22M";
+        case MODEL_33M:           return "33M";
+        case MODEL_60M:           return "60M";
+        case MODEL_70M:           return "70M";
+        case MODEL_80M:           return "80M";
+        case MODEL_109M:          return "109M";
+        case MODEL_137M:          return "137M";
+        case MODEL_160M:          return "160M";
+        case MODEL_220M:          return "220M";
+        case MODEL_250M:          return "250M";
+        case MODEL_270M:          return "270M";
+        case MODEL_335M:          return "335M";
+        case MODEL_410M:          return "410M";
+        case MODEL_450M:          return "450M";
+        case MODEL_770M:          return "770M";
+        case MODEL_780M:          return "780M";
+        case MODEL_0_5B:          return "0.5B";
+        case MODEL_1B:            return "1B";
+        case MODEL_1_3B:          return "1.3B";
+        case MODEL_1_4B:          return "1.4B";
+        case MODEL_2B:            return "2B";
+        case MODEL_2_8B:          return "2.8B";
+        case MODEL_3B:            return "3B";
+        case MODEL_4B:            return "4B";
+        case MODEL_6B:            return "6B";
+        case MODEL_6_9B:          return "6.9B";
+        case MODEL_7B:            return "7B";
+        case MODEL_8B:            return "8B";
+        case MODEL_9B:            return "9B";
+        case MODEL_11B:           return "11B";
+        case MODEL_12B:           return "12B";
+        case MODEL_13B:           return "13B";
+        case MODEL_14B:           return "14B";
+        case MODEL_15B:           return "15B";
+        case MODEL_16B:           return "16B";
+        case MODEL_20B:           return "20B";
+        case MODEL_30B:           return "30B";
+        case MODEL_32B:           return "32B";
+        case MODEL_34B:           return "34B";
+        case MODEL_35B:           return "35B";
+        case MODEL_40B:           return "40B";
+        case MODEL_65B:           return "65B";
+        case MODEL_70B:           return "70B";
+        case MODEL_106B_A12B:     return "106B.A12B";
+        case MODEL_142B:          return "142B";
+        case MODEL_236B:          return "236B";
+        case MODEL_355B_A32B:     return "355B.A32B";
+        case MODEL_314B:          return "314B";
+        case MODEL_405B:          return "405B";
+        case MODEL_671B:          return "671B";
+        case MODEL_SMALL:         return "0.1B";
+        case MODEL_MEDIUM:        return "0.4B";
+        case MODEL_LARGE:         return "0.8B";
+        case MODEL_XL:            return "1.5B";
+        case MODEL_A2_7B:         return "A2.7B";
+        case MODEL_8x7B:          return "8x7B";
+        case MODEL_8x22B:         return "8x22B";
+        case MODEL_16x12B:        return "16x12B";
+        case MODEL_10B_128x3_66B: return "10B+128x3.66B";
+        case MODEL_57B_A14B:      return "57B.A14B";
+        case MODEL_27B:           return "27B";
+        case MODEL_17B_16E:       return "17Bx16E (Scout)";
+        case MODEL_17B_128E:      return "17Bx128E (Maverick)";
+        case MODEL_80B_A13B:      return "80B.A13B";
+        case MODEL_21B_A3B:       return "21B.A3B";
+        case MODEL_300B_A47B:     return "300B.A47B";
+        default:                  return "?B";
+    }
+}

@@ -23,6 +23,7 @@ add_library(llama
             llama-build-context.cpp
             llama-model.h
             llama-model.cpp
+            llama-quantize.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp
