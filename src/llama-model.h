@@ -230,7 +230,6 @@ struct llama_layer {
 
 struct llama_lora_adapter;
 
-
 struct llama_model {
     e_model     type  = MODEL_UNKNOWN;
     llm_arch    arch  = LLM_ARCH_UNKNOWN;
@@ -301,4 +300,50 @@ struct llama_model {
     std::set<llama_lora_adapter *> lora_adapters;
 
     ~llama_model();
+
+    // Not actually needed, but left in place for now
+    size_t max_nodes() const { return 65536; }
+};
+
+struct llama_lora_weight {
+    struct ggml_tensor * a = nullptr;
+    struct ggml_tensor * b = nullptr;
+    llama_lora_weight() = default;
+    llama_lora_weight(struct ggml_tensor * a, struct ggml_tensor * b): a(a), b(b) {}
+};
+
+struct llama_lora_adapter {
+    llama_model * base_model;
+    // map tensor name to lora_a_b
+    std::unordered_map<std::string, struct llama_lora_weight> ab_map;
+    std::vector<struct ggml_context *> ctxs;
+    std::vector<ggml_backend_buffer_t> bufs;
+
+    float alpha;
+
+    llama_lora_adapter(struct llama_model * base_model): base_model(base_model) {
+        base_model->lora_adapters.insert(this);
+    }
+
+    llama_lora_weight * get_weight(struct ggml_tensor * w) {
+        std::string name(w->name);
+        auto pos = ab_map.find(name);
+        if (ab_map.find(name) != ab_map.end()) {
+            return &pos->second;
+        }
+        return nullptr;
+    }
+
+    ~llama_lora_adapter() {
+        for (struct ggml_context * ctx : ctxs) {
+            ggml_free(ctx);
+        }
+        for (ggml_backend_buffer_t buf : bufs) {
+            ggml_backend_buffer_free(buf);
+        }
+        auto pos = base_model->lora_adapters.find(this);
+        if (pos != base_model->lora_adapters.end()) {
+            base_model->lora_adapters.erase(pos);
+        }
+    }
 };

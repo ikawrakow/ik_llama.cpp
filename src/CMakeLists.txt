@@ -19,6 +19,8 @@ add_library(llama
             llama-sampling.cpp
             llama-mmap.cpp
             llama-model-loader.cpp
+            llama-build-context.h
+            llama-build-context.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp
