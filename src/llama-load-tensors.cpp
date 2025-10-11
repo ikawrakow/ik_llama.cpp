@@ -216,23 +216,23 @@ ggml_context * create_tensors_helper::ctx_for_layer_split(int i) const {
 }
 
 #define LOADING_PRELUDE \
-        const auto & hparams = model.hparams; \
-        const int64_t n_layer       = hparams.n_layer; \
-        const int64_t n_head        = hparams.n_head(); \
-        const int64_t n_head_kv     = hparams.n_head_kv(); \
-        const int64_t n_embd        = hparams.n_embd; \
-        const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(); \
-        const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa(); \
-        const int64_t n_embd_head_k = hparams.n_embd_head_k; \
-        const int64_t n_embd_head_v = hparams.n_embd_head_v; \
-        const int64_t n_ff          = hparams.n_ff(); \
-        const int64_t n_embd_gqa    = n_embd_v_gqa; \
-        const int64_t n_vocab       = hparams.n_vocab; \
-        const int64_t n_vocab_type  = hparams.n_vocab_type; \
-        const int64_t n_rot         = hparams.n_rot; \
-        const int64_t n_expert      = hparams.n_expert; \
-        const int64_t n_expert_used = hparams.n_expert_used; \
-        const int64_t n_ctx_train   = hparams.n_ctx_train; \
+        [[maybe_unused]] const auto & hparams = model.hparams; \
+        [[maybe_unused]] const int64_t n_layer       = hparams.n_layer; \
+        [[maybe_unused]] const int64_t n_head        = hparams.n_head(); \
+        [[maybe_unused]] const int64_t n_head_kv     = hparams.n_head_kv(); \
+        [[maybe_unused]] const int64_t n_embd        = hparams.n_embd; \
+        [[maybe_unused]] const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(); \
+        [[maybe_unused]] const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa(); \
+        [[maybe_unused]] const int64_t n_embd_head_k = hparams.n_embd_head_k; \
+        [[maybe_unused]] const int64_t n_embd_head_v = hparams.n_embd_head_v; \
+        [[maybe_unused]] const int64_t n_ff          = hparams.n_ff(); \
+        [[maybe_unused]] const int64_t n_embd_gqa    = n_embd_v_gqa; \
+        [[maybe_unused]] const int64_t n_vocab       = hparams.n_vocab; \
+        [[maybe_unused]] const int64_t n_vocab_type  = hparams.n_vocab_type; \
+        [[maybe_unused]] const int64_t n_rot         = hparams.n_rot; \
+        [[maybe_unused]] const int64_t n_expert      = hparams.n_expert; \
+        [[maybe_unused]] const int64_t n_expert_used = hparams.n_expert_used; \
+        [[maybe_unused]] const int64_t n_ctx_train   = hparams.n_ctx_train; \
         if (n_expert > 0 && hparams.n_expert_used == 0) { \
             throw std::runtime_error("model has expert layers but no expert layers are used"); \
         } \

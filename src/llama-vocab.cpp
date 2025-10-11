@@ -3567,33 +3567,8 @@ int32_t llama_vocab_n_tokens(const struct llama_vocab * vocab) {
     return vocab->n_tokens();
 }
 
-// deprecated
-int32_t llama_n_vocab(const struct llama_vocab * vocab) {
-    return llama_vocab_n_tokens(vocab);
-}
-
-enum llama_vocab_type llama_vocab_type(const struct llama_vocab * vocab) {
-    return vocab->get_type();
-}
-
-const char * llama_vocab_get_text(const struct llama_vocab * vocab, llama_token token) {
-    return vocab->token_get_text(token);
-}
-
-float llama_vocab_get_score(const struct llama_vocab * vocab, llama_token token) {
-    return vocab->token_get_score(token);
-}
-
-enum llama_token_attr llama_vocab_get_attr(const struct llama_vocab * vocab, llama_token token) {
-    return vocab->token_get_attr(token);
-}
-
 bool llama_vocab_is_eog(const struct llama_vocab * vocab, llama_token token) {
     return vocab->is_eog(token);
-}
-
-bool llama_vocab_is_control(const struct llama_vocab * vocab, llama_token token) {
-    return vocab->is_control(token);
 }
 
 llama_token llama_vocab_bos(const struct llama_vocab * vocab) {
@@ -3604,27 +3579,6 @@ llama_token llama_vocab_eos(const struct llama_vocab * vocab) {
     return vocab->token_eos();
 }
 
-llama_token llama_vocab_eot(const struct llama_vocab * vocab) {
-    return vocab->token_eot();
-}
-
-// deprecated
-llama_token llama_vocab_cls(const struct llama_vocab * vocab) {
-    return vocab->token_bos();
-}
-
-llama_token llama_vocab_sep(const struct llama_vocab * vocab) {
-    return vocab->token_sep();
-}
-
-llama_token llama_vocab_nl (const struct llama_vocab * vocab) {
-    return vocab->token_nl();
-}
-
-llama_token llama_vocab_pad(const struct llama_vocab * vocab) {
-    return vocab->token_pad();
-}
-
 bool llama_vocab_get_add_bos(const struct llama_vocab * vocab) {
     return vocab->get_add_bos();
 }
@@ -3633,61 +3587,9 @@ bool llama_vocab_get_add_eos(const struct llama_vocab * vocab) {
     return vocab->get_add_eos();
 }
 
-bool llama_vocab_get_add_sep(const struct llama_vocab * vocab) {
-    return vocab->get_add_sep();
-}
-
-llama_token llama_vocab_fim_pre(const struct llama_vocab * vocab) {
-    return vocab->token_fim_pre();
-}
-
-llama_token llama_vocab_fim_suf(const struct llama_vocab * vocab) {
-    return vocab->token_fim_suf();
-}
-
-llama_token llama_vocab_fim_mid(const struct llama_vocab * vocab) {
-    return vocab->token_fim_mid();
-}
-
-llama_token llama_vocab_fim_pad(const struct llama_vocab * vocab) {
-    return vocab->token_fim_pad();
-}
-
-llama_token llama_vocab_fim_rep(const struct llama_vocab * vocab) {
-    return vocab->token_fim_rep();
-}
-
-llama_token llama_vocab_fim_sep(const struct llama_vocab * vocab) {
-    return vocab->token_fim_sep();
-}
-
-llama_token llama_vocab_mask(const struct llama_vocab* vocab) {
-    return vocab->token_mask();
-}
-
-// deprecated
-const char * llama_token_get_text(const struct llama_vocab * vocab, llama_token token) {
-    return llama_vocab_get_text(vocab, token);
-}
-
-// deprecated
-float llama_token_get_score(const struct llama_vocab * vocab, llama_token token) {
-    return llama_vocab_get_score(vocab, token);
-}
-
-// deprecated
-enum llama_token_attr llama_token_get_attr(const struct llama_vocab * vocab, llama_token token) {
-    return llama_vocab_get_attr(vocab, token);
-}
-
 // deprecated
 bool llama_token_is_eog(const struct llama_vocab * vocab, llama_token token) {
     return llama_vocab_is_eog(vocab, token);
-}
-
-// deprecated
-bool llama_token_is_control(const struct llama_vocab * vocab, llama_token token) {
-    return llama_vocab_is_control(vocab, token);
 }
 
 // deprecated
@@ -3698,72 +3600,6 @@ llama_token llama_token_bos(const struct llama_vocab * vocab) {
 // deprecated
 llama_token llama_token_eos(const struct llama_vocab * vocab) {
     return llama_vocab_eos(vocab);
-}
-
-// deprecated
-llama_token llama_token_eot(const struct llama_vocab * vocab) {
-    return llama_vocab_eot(vocab);
-}
-
-// deprecated
-llama_token llama_token_cls(const struct llama_vocab * vocab) {
-    //return llama_vocab_cls(vocab);
-    return llama_vocab_bos(vocab); // avoid deprecation warning
-}
-
-// deprecated
-llama_token llama_token_sep(const struct llama_vocab * vocab) {
-    return llama_vocab_sep(vocab);
-}
-
-// deprecated
-llama_token llama_token_nl (const struct llama_vocab * vocab) {
-    return llama_vocab_nl(vocab);
-}
-
-// deprecated
-llama_token llama_token_pad(const struct llama_vocab * vocab) {
-    return llama_vocab_pad(vocab);
-}
-
-// deprecated
-bool llama_add_bos_token(const struct llama_vocab * vocab) {
-    return llama_vocab_get_add_bos(vocab);
-}
-
-// deprecated
-bool llama_add_eos_token(const struct llama_vocab * vocab) {
-    return llama_vocab_get_add_eos(vocab);
-}
-
-// deprecated
-llama_token llama_token_fim_pre(const struct llama_vocab * vocab) {
-    return llama_vocab_fim_pre(vocab);
-}
-
-// deprecated
-llama_token llama_token_fim_suf(const struct llama_vocab * vocab) {
-    return llama_vocab_fim_suf(vocab);
-}
-
-// deprecated
-llama_token llama_token_fim_mid(const struct llama_vocab * vocab) {
-    return llama_vocab_fim_mid(vocab);
-}
-
-// deprecated
-llama_token llama_token_fim_pad(const struct llama_vocab * vocab) {
-    return llama_vocab_fim_pad(vocab);
-}
-
-// deprecated
-llama_token llama_token_fim_rep(const struct llama_vocab * vocab) {
-    return llama_vocab_fim_rep(vocab);
-}
-
-// deprecated
-llama_token llama_token_fim_sep(const struct llama_vocab * vocab) {
-    return llama_vocab_fim_sep(vocab);
 }
 
 //
@@ -3791,13 +3627,13 @@ int32_t llama_vocab_token_to_piece(
     return vocab->token_to_piece(token, buf, length, lstrip, special);
 }
 
-int32_t llama_detokenize(
-    const struct llama_vocab * vocab,
-           const llama_token * tokens,
-                     int32_t   n_tokens,
-                        char * text,
-                     int32_t   text_len_max,
-                        bool   remove_special,
-                        bool   unparse_special) {
-    return vocab->detokenize(tokens, n_tokens, text, text_len_max, remove_special, unparse_special);
-}
+//int32_t llama_detokenize(
+//    const struct llama_vocab * vocab,
+//           const llama_token * tokens,
+//                     int32_t   n_tokens,
+//                        char * text,
+//                     int32_t   text_len_max,
+//                        bool   remove_special,
+//                        bool   unparse_special) {
+//    return vocab->detokenize(tokens, n_tokens, text, text_len_max, remove_special, unparse_special);
+//}

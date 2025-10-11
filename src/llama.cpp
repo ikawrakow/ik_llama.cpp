@@ -154,26 +154,6 @@ static std::string trim(const std::string & str) {
     return str.substr(start, end - start);
 }
 
-static bool is_float_close(float a, float b, float abs_tol) {
-    // Check for non-negative tolerance
-    if (abs_tol < 0.0) {
-        throw std::invalid_argument("Tolerance must be non-negative");
-    }
-
-    // Exact equality check
-    if (a == b) {
-        return true;
-    }
-
-    // Check for infinities
-    if (std::isinf(a) || std::isinf(b)) {
-        return false;
-    }
-
-    // Regular comparison using the provided absolute tolerance
-    return std::fabs(b - a) <= abs_tol;
-}
-
 enum llm_chat_template {
     LLM_CHAT_TEMPLATE_CHATML,
     LLM_CHAT_TEMPLATE_LLAMA_2,
@@ -319,23 +299,6 @@ std::string gguf_kv_to_str(const gguf_context * ctx_gguf, int i) {
 //
 // llama helpers
 //
-
-// NOTE: avoid ever using this except for building the token_to_piece caches
-static std::string llama_token_to_piece(const struct llama_model * model, llama_token token, bool special) {
-    std::string piece;
-    piece.resize(piece.capacity());  // using string internal cache
-    const int n_chars = llama_token_to_piece(model, token, &piece[0], piece.size(), 0, special);
-    if (n_chars < 0) {
-        piece.resize(-n_chars);
-        int check = llama_token_to_piece(model, token, &piece[0], piece.size(), 0, special);
-        GGML_ASSERT(check == -n_chars);
-    }
-    else {
-        piece.resize(n_chars);
-    }
-
-    return piece;
-}
 
 ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer) {
     ggml_backend_buffer_type_t buft = nullptr;
@@ -666,12 +629,9 @@ static bool llama_kv_cache_init(
     }
     if (needs_v_cache) cache.v_l.reserve(n_layer);
 
-    bool warn = true;
     int n_mla = 0;
     for (int i = 0; i < (int) n_layer; i++) {
-        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
-        const uint32_t n_head       = hparams.n_head(i);
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k;
 
@@ -682,7 +642,6 @@ static bool llama_kv_cache_init(
         if (cparams.mla_attn) {
             // DeepSeek MLA
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
-            const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
             //LLAMA_LOG_INFO("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
             if (cparams.flash_attn) {
@@ -1090,17 +1049,6 @@ static uint32_t llama_kv_cache_get_padding(const struct llama_cparams & cparams)
 // load LLaMA models
 //
 
-static const char * llama_model_vocab_type_name(enum llama_vocab_type type){
-    switch (type) {
-        case LLAMA_VOCAB_TYPE_NONE: return "no vocab";
-        case LLAMA_VOCAB_TYPE_SPM:  return "SPM";
-        case LLAMA_VOCAB_TYPE_BPE:  return "BPE";
-        case LLAMA_VOCAB_TYPE_WPM:  return "WPM";
-        case LLAMA_VOCAB_TYPE_UGM:  return "UGM";
-        default:                    return "unknown";
-    }
-}
-
 void llm_load_arch(llama_model_loader & ml, llama_model & model) {
     model.arch = ml.get_arch();
     if (model.arch == LLM_ARCH_UNKNOWN) {
@@ -1277,7 +1225,6 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         // is no MLA + FA for prompt processing, and MLA + FA for token generation, it would be useful
         // to change the MLA setting on the fly, depending on context. In that case, having prepared
         // the MLA tensors here is the right ting to do^TM.
-        const uint32_t n_embd_head_qk_rope = hparams.n_rot;
         const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
         const uint32_t kv_lora_rank = hparams.n_lora_kv;
         const int32_t n_embd_head_v = hparams.n_embd_head_v;
@@ -1288,9 +1235,8 @@ static void llm_prepare_mla(llama_model & model, int mla) {
             // Somehow the number of heads is being defined as being per layer. Not sure why this is the
             // case, but for now we do not support strange models that have different numbers of heads
             // in different model layers.
-            if (hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
+            if ((int)hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
         }
-        auto total_size_wkb = 0;
         size_t max_wkv_size = 0;
         size_t max_wk_size = 0;
         for (auto& l : model.layers) {
@@ -1414,10 +1360,6 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     // preparation of wkv_b impossible. It also has the benefit that wkv_b will get automatically
     // run-time repacked if the rtr option is set.
     //
-    const uint32_t n_embd_head_qk_rope = hparams.n_rot;
-    const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
-    const uint32_t kv_lora_rank = hparams.n_lora_kv;
-    const int32_t n_embd_head_v = hparams.n_embd_head_v;
     const int32_t n_head        = hparams.n_head(0);
     std::vector<uint8_t> work_data;
     LLAMA_LOG_INFO("============ %s: need to compute %d wkv_b tensors\n", __func__, n_to_compute);
@@ -1425,7 +1367,7 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         // Somehow the number of heads is being defined as being per layer. Not sure why this is the
         // case, but for now we do not support strange models that have different numbers of heads
         // in different model layers.
-        if (hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
+        if ((int)hparams.n_head(il) != n_head) throw std::runtime_error("Unsupported configuration");
     }
 
     size_t context_size = ggml_tensor_overhead()*16*n_layer;
@@ -1434,12 +1376,8 @@ static void llm_prepare_mla(llama_model & model, int mla) {
     auto ctx = ggml_init(params);
     auto graph = ggml_new_graph_custom(ctx, 8, false);
 
-    //layer.wk_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_B, "weight", i), {n_embd_head_qk_nope, kv_lora_rank, n_head}, 0);
-    //layer.wv_b = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V_B, "weight", i), {kv_lora_rank, n_embd_head_v, n_head}, 0);
-
     std::vector<char> wk_buffer, wv_buffer;
     std::vector<char> tmp_buffer;
-    //std::vector<uint8_t> tensor_data(2*n_embd_head_qk_nope*kv_lora_rank*n_head*sizeof(float) + max_wk_size);
     for (int il = 0; il < n_layer; ++il) {
         auto& l = model.layers[il];
         if (l.wkv_b || !l.wk_b || !l.wv_b) continue;
@@ -3514,6 +3452,7 @@ struct llama_model_params llama_model_default_params() {
         /*.check_tensors               =*/ false,
         /*.repack_tensors              =*/ false,
         /*.use_thp                     =*/ false,
+        /*.validate_quants             =*/ false,
     };
 
 #ifdef GGML_USE_METAL
@@ -4296,10 +4235,6 @@ int32_t llama_n_embd(const struct llama_model * model) {
 
 int32_t llama_n_layer(const struct llama_model * model) {
     return model->hparams.n_layer;
-}
-
-int32_t llama_n_head(const struct llama_model * model) {
-    return model->hparams.n_head();
 }
 
 float llama_rope_freq_scale_train(const struct llama_model * model) {
@@ -5903,11 +5838,6 @@ llama_token llama_token_eos(const struct llama_model * model) {
     return model->vocab.token_eos();
 }
 
-// What is cls?
-//llama_token llama_token_cls(const struct llama_model * model) {
-//    return llama_token_cls_impl(model->vocab);
-//}
-
 llama_token llama_token_sep(const struct llama_model * model) {
     return model->vocab.token_sep();
 }
@@ -5942,36 +5872,6 @@ llama_token llama_token_suffix(const struct llama_model * model) {
 
 llama_token llama_token_eot(const struct llama_model * model) {
     return model->vocab.token_eot();
-}
-
-// deprecated
-llama_token llama_token_fim_pre(const struct llama_model * model) {
-    return model->vocab.token_fim_pre();
-}
-
-// deprecated
-llama_token llama_token_fim_suf(const struct llama_model * model) {
-    return model->vocab.token_fim_suf();
-}
-
-// deprecated
-llama_token llama_token_fim_mid(const struct llama_model * model) {
-    return model->vocab.token_fim_mid();
-}
-
-// deprecated
-llama_token llama_token_fim_pad(const struct llama_model * model) {
-    return model->vocab.token_fim_pad();
-}
-
-// deprecated
-llama_token llama_token_fim_rep(const struct llama_model * model) {
-    return model->vocab.token_fim_rep();
-}
-
-// deprecated
-llama_token llama_token_fim_sep(const struct llama_model * model) {
-    return model->vocab.token_fim_sep();
 }
 
 //
@@ -6781,7 +6681,7 @@ void llama_sample_top_n_sigma(struct llama_context * ctx, llama_token_data_array
 }
 
 
-void llama_sample_dry(struct llama_context* ctx, struct llama_sampler_dry* smpl,  llama_token_data_array* candidates_p) {
+void llama_sample_dry([[maybe_unused]] struct llama_context* ctx, struct llama_sampler_dry* smpl,  llama_token_data_array* candidates_p) {
     llama_sampler_dry_apply(smpl, candidates_p);
 }
 
