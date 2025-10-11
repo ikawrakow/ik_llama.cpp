@@ -19,6 +19,16 @@ add_library(llama
             llama-sampling.cpp
             llama-mmap.cpp
             llama-model-loader.cpp
+            llama-load-tensors.cpp
+            llama-build-context.h
+            llama-build-context.cpp
+            llama-model.h
+            llama-model.cpp
+            llama-quantize.cpp
+            llama-arch.h
+            llama-arch.cpp
+            llama-hparams.h
+            llama-hparams.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp

@@ -1,6 +1,7 @@
 #include "llama-model-loader.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
+#include "llama-model.h"
 #include "ggml.h"
 //#include "ggml-backend.h"
 
@@ -20,6 +21,7 @@
 #include <map>
 #include <array>
 #include <future>
+#include <regex>
 
 #if defined(_WIN32)
     #define WIN32_LEAN_AND_MEAN
@@ -1080,3 +1082,4 @@ template bool llama_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv
 template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
 
 template std::enable_if<std::is_integral<unsigned int>::value, bool>::type llama_model_loader::get_arr_n<unsigned int>(enum llm_kv, unsigned int&, bool);
+
