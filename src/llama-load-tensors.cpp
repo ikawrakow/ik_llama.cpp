@@ -13,7 +13,141 @@
 
 #define LLAMA_API_INTERNAL
 
-load_lensor_helper::load_lensor_helper(llama_model_loader & _ml, llama_model & _model) : ml(_ml), model(_model) {
+struct create_tensors_helper : public create_tensors_helper_interface {
+
+    create_tensors_helper(llama_model_loader & ml, llama_model & model);
+    ~create_tensors_helper() = default;
+
+    //virtual std::map<ggml_backend_buffer_type_t, int> & buft_layer_count_map() override {
+    //    return buft_layer_count;
+    //}
+
+    virtual std::map<ggml_backend_buffer_type_t, ggml_context *> & get_ctx_map() override {
+        return ctx_map;
+    }
+
+    virtual size_t get_ctx_size() const override { return ctx_size; }
+
+    bool create_tensors() override;
+
+    bool create_llama_tensors(const LLM_TN & tn);
+
+    bool create_deci_tensors(const LLM_TN & tn);
+
+    bool create_llama4_tensors(const LLM_TN & tn);
+
+    bool create_grok_tensors(const LLM_TN & tn);
+
+    bool create_dbrx_tensors(const LLM_TN & tn);
+
+    bool create_baichuan_tensors(const LLM_TN & tn, bool with_ffn_norm = true);
+
+    bool create_falcon_tensors(const LLM_TN & tn);
+
+    bool create_starcoder_tensors(const LLM_TN & tn);
+
+    bool create_bert_tensors(const LLM_TN & tn);
+
+    bool create_jina_bert2_tensors(const LLM_TN & tn);
+
+    bool create_bloom_tensors(const LLM_TN & tn);
+
+    bool create_mpt_tensors(const LLM_TN & tn);
+
+    bool create_stablelm_tensors(const LLM_TN & tn);
+
+    bool create_qwen_tensors(const LLM_TN & tn);
+
+    bool create_qwen2_tensors(const LLM_TN & tn);
+
+    bool create_qwen2_moe_tensors(const LLM_TN & tn);
+
+    bool create_qwen3_tensors(const LLM_TN & tn);
+
+    bool create_qwen3_moe_tensors(const LLM_TN & tn);
+
+    bool create_phi2_tensors(const LLM_TN & tn);
+
+    bool create_phi3_tensors(const LLM_TN & tn);
+
+    bool create_gpt2_tensors(const LLM_TN & tn);
+
+    bool create_codeshell_tensors(const LLM_TN & tn);
+
+    bool create_orion_tensors(const LLM_TN & tn);
+
+    bool create_internlm_tensors(const LLM_TN & tn);
+
+    bool create_gemma_tensors(const LLM_TN & tn, int version);
+
+    bool create_starcoder2_tensors(const LLM_TN & tn);
+
+    bool create_mamba_tensors(const LLM_TN & tn);
+
+    bool create_xverse_tensors(const LLM_TN & tn);
+
+    bool create_command_r_tensors(const LLM_TN & tn);
+
+    bool create_olmo_tensors(const LLM_TN & tn);
+
+    bool create_openelm_tensors(const LLM_TN & tn);
+
+    bool create_gptneox_tensors(const LLM_TN & tn);
+
+    bool create_arctix_tensors(const LLM_TN & tn);
+
+    bool create_deepseek2_tensors(const LLM_TN & tn);
+
+    bool create_glm4_tensors(const LLM_TN & tn);
+
+    bool create_glm4_moe_tensors(const LLM_TN & tn);
+
+    bool create_bitnet_tensors(const LLM_TN & tn);
+
+    bool create_bitnet2_tensors(const LLM_TN & tn);
+
+    bool create_t5_tensors(const LLM_TN & tn);
+
+    bool create_tsencoder_tensors(const LLM_TN & tn);
+
+    bool create_jais_tensors(const LLM_TN & tn);
+
+    bool create_chatglm_tensors(const LLM_TN & tn);
+
+    bool create_cohere2_tensors(const LLM_TN & tn);
+
+    bool create_dots1_tensors(const LLM_TN & tn);
+
+    bool create_ernie45_tensors(const LLM_TN & tn);
+
+    bool create_hunyuan_tensors(const LLM_TN & tn);
+
+    bool create_openai_moe_tensors(const LLM_TN & tn);
+
+    llama_model_loader & ml;
+    llama_model        & model;
+
+    ggml_tensor * create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags = 0);
+
+    void create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias);
+    void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true);
+
+    void create_std_attn(int i, const LLM_TN & tn, llama_layer & layer, int n_embd, int n_embd_gqa, ggml_context * ctx_split);
+    void create_std_ffn(int i, const LLM_TN & tn, llama_layer & layer, int n_ff, int n_embd, ggml_context * ctx_split);
+
+    inline ggml_context * ctx_for_layer(int i) const;
+    inline ggml_context * ctx_for_layer_split(int i) const;
+
+    std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
+    std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
+    size_t ctx_size;
+
+    ggml_context * ctx_input;
+    ggml_context * ctx_output;
+    ggml_context * ctx_output_split;
+};
+
+create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_model & _model) : ml(_ml), model(_model) {
 
     const int n_layer = model.hparams.n_layer;
     buft_layer_count[model.buft_input.buft]++;
@@ -43,7 +177,7 @@ load_lensor_helper::load_lensor_helper(llama_model_loader & _ml, llama_model & _
     }
 }
 
-ggml_tensor * load_lensor_helper::create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags) {
+ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags) {
     if (ml.tensor_buft_overrides) {
         for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
             std::regex pattern(overrides->pattern);
@@ -73,11 +207,11 @@ ggml_tensor * load_lensor_helper::create_tensor(ggml_context * ctx, const std::s
     return ml.create_tensor(ctx, name, ne, flags);
 }
 
-ggml_context * load_lensor_helper::ctx_for_layer(int i) const {
+ggml_context * create_tensors_helper::ctx_for_layer(int i) const {
     return ctx_map.at(model.buft_layer[i].buft);
 }
 
-ggml_context * load_lensor_helper::ctx_for_layer_split(int i) const {
+ggml_context * create_tensors_helper::ctx_for_layer_split(int i) const {
     return ctx_map.at(model.buft_layer[i].buft_matrix);
 }
 
@@ -109,7 +243,7 @@ ggml_context * load_lensor_helper::ctx_for_layer_split(int i) const {
         bool use_mmap_buffer = true;
 
 
-void load_lensor_helper::load_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm) {
+void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm) {
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
     if (has_norm) {
@@ -123,22 +257,22 @@ void load_lensor_helper::load_embd_output(const LLM_TN & tn, int n_embd, int n_v
     }
 }
 
-void load_lensor_helper::load_std_attn(int i, const LLM_TN & tn, llama_layer & layer, int n_embd, int n_embd_gqa, ggml_context * ctx_split) {
+void create_tensors_helper::create_std_attn(int i, const LLM_TN & tn, llama_layer & layer, int n_embd, int n_embd_gqa, ggml_context * ctx_split) {
     layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
     layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
     layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
     layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
 }
 
-void load_lensor_helper::load_std_ffn(int i, const LLM_TN & tn, llama_layer & layer, int n_ff, int n_embd, ggml_context * ctx_split) {
+void create_tensors_helper::create_std_ffn(int i, const LLM_TN & tn, llama_layer & layer, int n_ff, int n_embd, ggml_context * ctx_split) {
     layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff});
     layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd});
     layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
 }
 
-bool load_lensor_helper::load_llama_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -164,7 +298,7 @@ bool load_lensor_helper::load_llama_tensors(const LLM_TN & tn) {
         layer.rope_freqs = create_tensor(ctx_layer, tn(LLM_TENSOR_ROPE_FREQS, "weight"), {n_embd/n_head/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
 
         if (n_expert == 0) {
-            load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+            create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
 
             // optional MLP bias
             layer.ffn_gate_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "bias", i), {n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -206,10 +340,10 @@ bool load_lensor_helper::load_llama_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_deci_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_deci_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -257,7 +391,7 @@ bool load_lensor_helper::load_deci_tensors(const LLM_TN & tn) {
         }
 
         if (n_ff > 0) {
-            load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+            create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
         }
 
         // optional MLP bias
@@ -268,9 +402,9 @@ bool load_lensor_helper::load_deci_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_llama4_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_llama4_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     GGML_ASSERT(hparams.n_moe_layer_step > 0 && "Llama 4 requires n_moe_layer_step > 0");
     for (int i = 0; i < n_layer; ++i) {
@@ -306,19 +440,19 @@ bool load_lensor_helper::load_llama4_tensors(const LLM_TN & tn) {
             layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd    }, 0);
             layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {    n_embd, n_ff_shexp}, 0);
         } else {
-            load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+            create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
         }
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_grok_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_grok_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     if (n_expert == 0) {
         throw std::runtime_error("Grok model cannot have zero experts");
     }
 
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff/* / n_expert_used*/; // grok-1 n_ff_exp == n_ff
     for (int i = 0; i < n_layer; ++i) {
@@ -381,13 +515,13 @@ bool load_lensor_helper::load_grok_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_dbrx_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_dbrx_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     if (n_expert == 0) {
         throw std::runtime_error("DBRX model cannot have zero experts");
     }
 
-    load_default_embd_output(tn, n_embd, n_vocab, false);
+    create_default_embd_output(tn, n_embd, n_vocab, false);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -410,9 +544,9 @@ bool load_lensor_helper::load_dbrx_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_baichuan_tensors(const LLM_TN & tn, bool with_ffn_norm) {
+bool create_tensors_helper::create_baichuan_tensors(const LLM_TN & tn, bool with_ffn_norm) {
     LOADING_PRELUDE
-    load_default_embd_output(tn, n_embd, n_vocab, false);
+    create_default_embd_output(tn, n_embd, n_vocab, false);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -431,12 +565,12 @@ bool load_lensor_helper::load_baichuan_tensors(const LLM_TN & tn, bool with_ffn_
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_falcon_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_falcon_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
@@ -472,7 +606,7 @@ bool load_lensor_helper::load_falcon_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_starcoder_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_starcoder_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
     model.pos_embd = create_tensor(ctx_input, tn(LLM_TENSOR_POS_EMBD,   "weight"), {n_embd, n_ctx_train});
@@ -516,7 +650,7 @@ bool load_lensor_helper::load_starcoder_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_bert_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_bert_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd     = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab});
     model.type_embd    = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_vocab_type});
@@ -569,7 +703,7 @@ bool load_lensor_helper::load_bert_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_jina_bert2_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_jina_bert2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd  = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}); // word_embeddings
     model.type_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_vocab_type}); // token_type_embeddings
@@ -619,7 +753,7 @@ bool load_lensor_helper::load_jina_bert2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_bloom_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_bloom_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd   = create_tensor(ctx_input,  tn(LLM_TENSOR_TOKEN_EMBD,      "weight"), {n_embd, n_vocab});
     model.tok_norm   = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd});
@@ -659,7 +793,7 @@ bool load_lensor_helper::load_bloom_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_mpt_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_mpt_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
     model.pos_embd = create_tensor(ctx_input, tn(LLM_TENSOR_POS_EMBD,   "weight"), {n_embd, n_ctx_train}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -711,10 +845,10 @@ bool load_lensor_helper::load_mpt_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_stablelm_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_stablelm_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    load_default_embd_output(tn, n_embd, n_vocab, true);
+    create_default_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -743,14 +877,14 @@ bool load_lensor_helper::load_stablelm_tensors(const LLM_TN & tn) {
         layer.ffn_norm   = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.ffn_norm_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "bias", i),   {n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_qwen_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_qwen_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -766,12 +900,12 @@ bool load_lensor_helper::load_qwen_tensors(const LLM_TN & tn) {
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
-        load_std_ffn(i, tn, layer, n_ff/2, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff/2, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_qwen2_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_qwen2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
@@ -807,15 +941,15 @@ bool load_lensor_helper::load_qwen2_tensors(const LLM_TN & tn) {
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_qwen2_moe_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_qwen2_moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -860,7 +994,7 @@ bool load_lensor_helper::load_qwen2_moe_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_qwen3_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
@@ -891,14 +1025,14 @@ bool load_lensor_helper::load_qwen3_tensors(const LLM_TN & tn) {
         layer.attn_q_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k});
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_qwen3_moe_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -933,7 +1067,7 @@ bool load_lensor_helper::load_qwen3_moe_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_phi2_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_phi2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
@@ -981,7 +1115,7 @@ bool load_lensor_helper::load_phi2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_phi3_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_phi3_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     const int64_t n_embd_head = n_embd / n_head;
 
@@ -1009,7 +1143,7 @@ bool load_lensor_helper::load_phi3_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_gpt2_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_gpt2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
     model.pos_embd = create_tensor(ctx_input, tn(LLM_TENSOR_POS_EMBD,   "weight"), {n_embd, n_ctx_train});
@@ -1048,9 +1182,9 @@ bool load_lensor_helper::load_gpt2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_codeshell_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_codeshell_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    load_default_embd_output(tn, n_embd, n_vocab, true);
+    create_default_embd_output(tn, n_embd, n_vocab, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1079,7 +1213,7 @@ bool load_lensor_helper::load_codeshell_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-void load_lensor_helper::load_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias) {
+void create_tensors_helper::create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias) {
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
     model.output_norm   = create_tensor(ctx_output,       tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
@@ -1089,9 +1223,9 @@ void load_lensor_helper::load_default_embd_output(const LLM_TN & tn, int n_embd,
     model.output        = create_tensor(ctx_output_split, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab});
 }
 
-bool load_lensor_helper::load_orion_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_orion_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    load_default_embd_output(tn, n_embd, n_vocab, true);
+    create_default_embd_output(tn, n_embd, n_vocab, true);
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
@@ -1109,14 +1243,14 @@ bool load_lensor_helper::load_orion_tensors(const LLM_TN & tn) {
         layer.ffn_norm   = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
         layer.ffn_norm_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "bias", i),   {n_embd});
 
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_internlm_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_internlm_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    load_default_embd_output(tn, n_embd, n_vocab, false);
+    create_default_embd_output(tn, n_embd, n_vocab, false);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1132,12 +1266,12 @@ bool load_lensor_helper::load_internlm_tensors(const LLM_TN & tn) {
 
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_gemma_tensors(const LLM_TN & tn, int version) {
+bool create_tensors_helper::create_gemma_tensors(const LLM_TN & tn, int version) {
     LOADING_PRELUDE
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
@@ -1167,7 +1301,7 @@ bool load_lensor_helper::load_gemma_tensors(const LLM_TN & tn, int version) {
         }
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
         if (version > 1) {
             layer.ffn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd});
         }
@@ -1175,7 +1309,7 @@ bool load_lensor_helper::load_gemma_tensors(const LLM_TN & tn, int version) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_starcoder2_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_starcoder2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
@@ -1226,7 +1360,7 @@ bool load_lensor_helper::load_starcoder2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_mamba_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_mamba_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     const int64_t d_conv  = hparams.ssm_d_conv;
@@ -1279,10 +1413,10 @@ bool load_lensor_helper::load_mamba_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_xverse_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_xverse_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1298,12 +1432,12 @@ bool load_lensor_helper::load_xverse_tensors(const LLM_TN & tn) {
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_command_r_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_command_r_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
@@ -1333,28 +1467,28 @@ bool load_lensor_helper::load_command_r_tensors(const LLM_TN & tn) {
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
 
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_olmo_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_olmo_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    load_embd_output(tn, n_embd, n_vocab, false);
+    create_embd_output(tn, n_embd, n_vocab, false);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
         auto & layer = model.layers[i];
 
-        load_std_attn(i, tn, layer, n_embd, n_embd_gqa, ctx_split);
-        load_std_ffn (i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_attn(i, tn, layer, n_embd, n_embd_gqa, ctx_split);
+        create_std_ffn (i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_openelm_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_openelm_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
@@ -1384,12 +1518,12 @@ bool load_lensor_helper::load_openelm_tensors(const LLM_TN & tn) {
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head*n_embd_head_k, n_embd});
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
-        load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_gptneox_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_gptneox_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
@@ -1428,10 +1562,10 @@ bool load_lensor_helper::load_gptneox_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_arctix_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_arctix_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1441,11 +1575,11 @@ bool load_lensor_helper::load_arctix_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
-        load_std_attn(i, tn, layer, n_embd, n_embd_gqa, ctx_split);
+        create_std_attn(i, tn, layer, n_embd, n_embd_gqa, ctx_split);
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
-        load_std_ffn (i, tn, layer, n_embd, n_embd, ctx_split);
+        create_std_ffn (i, tn, layer, n_embd, n_embd, ctx_split);
 
         layer.ffn_gate_inp  = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert});
         layer.ffn_norm_exps = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM_EXPS, "weight", i), {n_embd});
@@ -1456,7 +1590,7 @@ bool load_lensor_helper::load_arctix_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_deepseek2_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     const bool is_lite = (hparams.n_layer == 27);
@@ -1539,7 +1673,7 @@ bool load_lensor_helper::load_deepseek2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_glm4_moe_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     const int64_t n_expert_shared = hparams.n_expert_shared;
@@ -1547,7 +1681,7 @@ bool load_lensor_helper::load_glm4_moe_tensors(const LLM_TN & tn) {
     GGML_ASSERT(hparams.n_expert > 0 && "n_expert must be > 0 for GLM4_MOE MoE layers");
     GGML_ASSERT(hparams.n_expert_used > 0 && "n_expert_used must be > 0 for GLM4_MOE MoE layers");
 
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1654,7 +1788,7 @@ bool load_lensor_helper::load_glm4_moe_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_bitnet_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_bitnet_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
@@ -1695,7 +1829,7 @@ bool load_lensor_helper::load_bitnet_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_bitnet2_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_bitnet2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
@@ -1781,7 +1915,7 @@ bool load_lensor_helper::load_bitnet2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_t5_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_t5_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     const auto n_rel_attn_bkts = hparams.n_rel_attn_bkts;
 
@@ -1843,7 +1977,7 @@ bool load_lensor_helper::load_t5_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_tsencoder_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_tsencoder_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     const auto n_rel_attn_bkts = hparams.n_rel_attn_bkts;
 
@@ -1881,7 +2015,7 @@ bool load_lensor_helper::load_tsencoder_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_jais_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_jais_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
@@ -1922,7 +2056,7 @@ bool load_lensor_helper::load_jais_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_chatglm_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_chatglm_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd   = create_tensor(ctx_input,  tn(LLM_TENSOR_TOKEN_EMBD,      "weight"), {n_embd, n_vocab});
 
@@ -1954,7 +2088,7 @@ bool load_lensor_helper::load_chatglm_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_cohere2_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_cohere2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
@@ -1971,13 +2105,13 @@ bool load_lensor_helper::load_cohere2_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
 
-        load_std_attn(i, tn, layer, n_embd, n_embd_gqa, ctx_split);
-        load_std_ffn (i, tn, layer, n_ff, n_embd, ctx_split);
+        create_std_attn(i, tn, layer, n_embd, n_embd_gqa, ctx_split);
+        create_std_ffn (i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_glm4_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_glm4_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
     model.tok_embd   = create_tensor(ctx_input,  tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -2021,7 +2155,7 @@ bool load_lensor_helper::load_glm4_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_dots1_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_dots1_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     const int64_t n_ff_exp        = hparams.n_ff_exp;
@@ -2071,10 +2205,10 @@ bool load_lensor_helper::load_dots1_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_ernie45_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_ernie45_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         auto& layer = model.layers[i];
@@ -2113,16 +2247,16 @@ bool load_lensor_helper::load_ernie45_tensors(const LLM_TN & tn) {
             }
         }
         else { // Dense layers
-            load_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+            create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
         }
     }
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_hunyuan_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_hunyuan_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    load_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -2154,7 +2288,7 @@ bool load_lensor_helper::load_hunyuan_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_openai_moe_tensors(const LLM_TN & tn) {
+bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
     const int64_t n_ff_exp = hparams.n_ff_exp;
@@ -2199,7 +2333,7 @@ bool load_lensor_helper::load_openai_moe_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool load_lensor_helper::load_tensors() {
+bool create_tensors_helper::create_tensors() {
     const auto tn = LLM_TN(model.arch);
     bool use_mmap_buffer = true;
     switch (model.arch) {
@@ -2208,111 +2342,115 @@ bool load_lensor_helper::load_tensors() {
         case LLM_ARCH_MINICPM:
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
-            use_mmap_buffer = load_llama_tensors(tn); break;
+            use_mmap_buffer = create_llama_tensors(tn); break;
         case LLM_ARCH_DECI:
-            use_mmap_buffer = load_deci_tensors(tn); break;
+            use_mmap_buffer = create_deci_tensors(tn); break;
         case LLM_ARCH_LLAMA4:
-            use_mmap_buffer = load_llama4_tensors(tn); break;
+            use_mmap_buffer = create_llama4_tensors(tn); break;
         case LLM_ARCH_GROK:
-            use_mmap_buffer = load_grok_tensors(tn); break;
+            use_mmap_buffer = create_grok_tensors(tn); break;
         case LLM_ARCH_DBRX:
-            use_mmap_buffer = load_dbrx_tensors(tn); break;
+            use_mmap_buffer = create_dbrx_tensors(tn); break;
         case LLM_ARCH_BAICHUAN:
-            use_mmap_buffer = load_baichuan_tensors(tn); break;
+            use_mmap_buffer = create_baichuan_tensors(tn); break;
         case LLM_ARCH_FALCON:
-            use_mmap_buffer = load_falcon_tensors(tn); break;
+            use_mmap_buffer = create_falcon_tensors(tn); break;
         case LLM_ARCH_STARCODER:
-            use_mmap_buffer = load_starcoder_tensors(tn); break;
+            use_mmap_buffer = create_starcoder_tensors(tn); break;
         case LLM_ARCH_BERT:
         case LLM_ARCH_NOMIC_BERT:
-            use_mmap_buffer = load_bert_tensors(tn); break;
+            use_mmap_buffer = create_bert_tensors(tn); break;
         case LLM_ARCH_JINA_BERT_V2:
-            use_mmap_buffer = load_jina_bert2_tensors(tn); break;
+            use_mmap_buffer = create_jina_bert2_tensors(tn); break;
         case LLM_ARCH_BLOOM:
-            use_mmap_buffer = load_bloom_tensors(tn); break;
+            use_mmap_buffer = create_bloom_tensors(tn); break;
         case LLM_ARCH_MPT:
-            use_mmap_buffer = load_mpt_tensors(tn); break;
+            use_mmap_buffer = create_mpt_tensors(tn); break;
         case LLM_ARCH_STABLELM:
-            use_mmap_buffer = load_stablelm_tensors(tn); break;
+            use_mmap_buffer = create_stablelm_tensors(tn); break;
         case LLM_ARCH_QWEN:
-            use_mmap_buffer = load_qwen_tensors(tn); break;
+            use_mmap_buffer = create_qwen_tensors(tn); break;
         case LLM_ARCH_QWEN2:
         case LLM_ARCH_QWEN2VL:
-            use_mmap_buffer = load_qwen2_tensors(tn); break;
+            use_mmap_buffer = create_qwen2_tensors(tn); break;
         case LLM_ARCH_QWEN2MOE:
-            use_mmap_buffer = load_qwen2_moe_tensors(tn); break;
+            use_mmap_buffer = create_qwen2_moe_tensors(tn); break;
         case LLM_ARCH_QWEN3:
-            use_mmap_buffer = load_qwen3_tensors(tn); break;
+            use_mmap_buffer = create_qwen3_tensors(tn); break;
         case LLM_ARCH_QWEN3MOE:
-            use_mmap_buffer = load_qwen3_moe_tensors(tn); break;
+            use_mmap_buffer = create_qwen3_moe_tensors(tn); break;
         case LLM_ARCH_PHI2:
-            use_mmap_buffer = load_phi2_tensors(tn); break;
+            use_mmap_buffer = create_phi2_tensors(tn); break;
         case LLM_ARCH_PHI3:
-            use_mmap_buffer = load_phi3_tensors(tn); break;
+            use_mmap_buffer = create_phi3_tensors(tn); break;
         case LLM_ARCH_PLAMO:
-            use_mmap_buffer = load_baichuan_tensors(tn, false); break;
+            use_mmap_buffer = create_baichuan_tensors(tn, false); break;
         case LLM_ARCH_GPT2:
-            use_mmap_buffer = load_gpt2_tensors(tn); break;
+            use_mmap_buffer = create_gpt2_tensors(tn); break;
         case LLM_ARCH_CODESHELL:
-            use_mmap_buffer = load_codeshell_tensors(tn); break;
+            use_mmap_buffer = create_codeshell_tensors(tn); break;
         case LLM_ARCH_ORION:
-            use_mmap_buffer = load_orion_tensors(tn); break;
+            use_mmap_buffer = create_orion_tensors(tn); break;
         case LLM_ARCH_INTERNLM2:
-            use_mmap_buffer = load_internlm_tensors(tn); break;
+            use_mmap_buffer = create_internlm_tensors(tn); break;
         case LLM_ARCH_GEMMA:
-            use_mmap_buffer = load_gemma_tensors(tn, 1); break;
+            use_mmap_buffer = create_gemma_tensors(tn, 1); break;
         case LLM_ARCH_GEMMA2:
-            use_mmap_buffer = load_gemma_tensors(tn, 2); break;
+            use_mmap_buffer = create_gemma_tensors(tn, 2); break;
         case LLM_ARCH_GEMMA3:
-            use_mmap_buffer = load_gemma_tensors(tn, 3); break;
+            use_mmap_buffer = create_gemma_tensors(tn, 3); break;
         case LLM_ARCH_STARCODER2:
-            use_mmap_buffer = load_starcoder2_tensors(tn); break;
+            use_mmap_buffer = create_starcoder2_tensors(tn); break;
         case LLM_ARCH_MAMBA:
-            use_mmap_buffer = load_mamba_tensors(tn); break;
+            use_mmap_buffer = create_mamba_tensors(tn); break;
         case LLM_ARCH_XVERSE:
-            use_mmap_buffer = load_xverse_tensors(tn); break;
+            use_mmap_buffer = create_xverse_tensors(tn); break;
         case LLM_ARCH_COMMAND_R:
-            use_mmap_buffer = load_command_r_tensors(tn); break;
+            use_mmap_buffer = create_command_r_tensors(tn); break;
         case LLM_ARCH_OLMO:  // adapted from LLM_ARCH_LLAMA with norm params removed
-            use_mmap_buffer = load_olmo_tensors(tn); break;
+            use_mmap_buffer = create_olmo_tensors(tn); break;
         case LLM_ARCH_OPENELM:
-            use_mmap_buffer = load_openelm_tensors(tn); break;
+            use_mmap_buffer = create_openelm_tensors(tn); break;
         case LLM_ARCH_GPTNEOX:
-            use_mmap_buffer = load_gptneox_tensors(tn); break;
+            use_mmap_buffer = create_gptneox_tensors(tn); break;
         case LLM_ARCH_ARCTIC:
-            use_mmap_buffer = load_arctix_tensors(tn); break;
+            use_mmap_buffer = create_arctix_tensors(tn); break;
         case LLM_ARCH_DEEPSEEK2:
-            use_mmap_buffer = load_deepseek2_tensors(tn); break;
+            use_mmap_buffer = create_deepseek2_tensors(tn); break;
         case LLM_ARCH_GLM4_MOE:
-            use_mmap_buffer = load_glm4_moe_tensors(tn); break;
+            use_mmap_buffer = create_glm4_moe_tensors(tn); break;
         case LLM_ARCH_BITNET:
-            use_mmap_buffer = load_bitnet_tensors(tn); break;
+            use_mmap_buffer = create_bitnet_tensors(tn); break;
         case LLM_ARCH_BITNET_B158:
         case LLM_ARCH_BITNET_25:
-            use_mmap_buffer = load_bitnet2_tensors(tn); break;
+            use_mmap_buffer = create_bitnet2_tensors(tn); break;
         case LLM_ARCH_T5:
-            use_mmap_buffer = load_t5_tensors(tn); break;
+            use_mmap_buffer = create_t5_tensors(tn); break;
         case LLM_ARCH_T5ENCODER:
-            use_mmap_buffer = load_tsencoder_tensors(tn); break;
+            use_mmap_buffer = create_tsencoder_tensors(tn); break;
         case LLM_ARCH_JAIS:
-            use_mmap_buffer = load_jais_tensors(tn); break;
+            use_mmap_buffer = create_jais_tensors(tn); break;
         case LLM_ARCH_CHATGLM:
-            use_mmap_buffer = load_chatglm_tensors(tn); break;
+            use_mmap_buffer = create_chatglm_tensors(tn); break;
         case LLM_ARCH_COHERE2:
-            use_mmap_buffer = load_cohere2_tensors(tn); break;
+            use_mmap_buffer = create_cohere2_tensors(tn); break;
         case LLM_ARCH_GLM4:
-            use_mmap_buffer = load_glm4_tensors(tn); break;
+            use_mmap_buffer = create_glm4_tensors(tn); break;
         case LLM_ARCH_DOTS1:
-            use_mmap_buffer = load_dots1_tensors(tn); break;
+            use_mmap_buffer = create_dots1_tensors(tn); break;
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
-            use_mmap_buffer = load_ernie45_tensors(tn); break;
+            use_mmap_buffer = create_ernie45_tensors(tn); break;
         case LLM_ARCH_HUNYUAN_MOE:
-            use_mmap_buffer = load_hunyuan_tensors(tn); break;
+            use_mmap_buffer = create_hunyuan_tensors(tn); break;
         case LLM_ARCH_OPENAI_MOE:
-            use_mmap_buffer = load_openai_moe_tensors(tn); break;
+            use_mmap_buffer = create_openai_moe_tensors(tn); break;
         default:
             throw std::runtime_error("unknown architecture");
     }
     return use_mmap_buffer;
+}
+
+std::unique_ptr<create_tensors_helper_interface> create_tensors_helper_interface::instance(llama_model_loader & ml, llama_model & model) {
+    return std::make_unique<create_tensors_helper>(ml, model);
 }

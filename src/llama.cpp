@@ -1641,15 +1641,18 @@ static bool llm_load_tensors(
         }
     }
 
-    load_lensor_helper lth(ml, model);
+    auto cth = create_tensors_helper_interface::instance(ml, model);
 
-    LLAMA_LOG_INFO("%s: ggml ctx size = %7.2f MiB\n", __func__, model.ctxs.size()*lth.ctx_size/1024.0/1024.0);
+    auto ctx_size = cth->get_ctx_size();
+    auto & ctx_map = cth->get_ctx_map();
+
+    LLAMA_LOG_INFO("%s: ggml ctx size = %7.2f MiB\n", __func__, model.ctxs.size()*ctx_size/1024.0/1024.0);
 
     if (hparams.n_expert > 0 && hparams.n_expert_used == 0) {
         throw std::runtime_error("model has expert layers but no expert layers are used");
     }
 
-    lth.load_tensors();
+    cth->create_tensors();
 
     ml.done_getting_tensors();
 
@@ -1658,13 +1661,13 @@ static bool llm_load_tensors(
 
     // create the backend buffers
     std::vector<std::pair<ggml_context *, llama_buf_map>> ctx_bufs;
-    ctx_bufs.reserve(lth.ctx_map.size());
+    ctx_bufs.reserve(ctx_map.size());
 
     // Ensure we have enough capacity for the maximum backend buffer we will potentially create
-    size_t n_max_backend_buffer = lth.ctx_map.size() * ml.files.size();
+    size_t n_max_backend_buffer = ctx_map.size() * ml.files.size();
     model.bufs.reserve(n_max_backend_buffer);
 
-    for (auto & it : lth.ctx_map) {
+    for (auto & it : ctx_map) {
         ggml_backend_buffer_type_t buft = it.first;
         ggml_context * ctx              = it.second;
 
