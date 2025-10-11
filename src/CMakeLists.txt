@@ -19,6 +19,7 @@ add_library(llama
             llama-sampling.cpp
             llama-mmap.cpp
             llama-model-loader.cpp
+            llama-load-tensors.cpp
             llama-build-context.h
             llama-build-context.cpp
             llama-model.h

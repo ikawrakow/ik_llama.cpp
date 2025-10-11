@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <array>
+#include <cmath>
 
 #define LLAMA_MAX_LAYERS  512
 
