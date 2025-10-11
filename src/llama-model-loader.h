@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+#include <map>
 
 enum llama_fver {
     GGUF_FILE_VERSION_V1 = 1,
@@ -28,6 +29,8 @@ static const char * llama_file_version_name(llama_fver version) {
 }
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
+
+struct llama_layer;
 
 struct llama_model_loader {
     int n_kv      = 0;
@@ -166,4 +169,17 @@ struct llama_model_loader {
             llama_mlocks * lmlocks,
             llama_progress_callback progress_callback,
             void * progress_callback_user_data);
+};
+
+void llm_load_arch(llama_model_loader & ml, llama_model & model);
+
+void llm_load_hparams(llama_model_loader & ml, llama_model & model);
+
+struct create_tensors_helper_interface {
+    virtual ~create_tensors_helper_interface() = default;
+    virtual bool create_tensors() = 0;
+    virtual std::map<ggml_backend_buffer_type_t, ggml_context *> & get_ctx_map() = 0;
+    virtual size_t get_ctx_size() const = 0;
+
+    static std::unique_ptr<create_tensors_helper_interface> instance(llama_model_loader & ml, llama_model & model);
 };

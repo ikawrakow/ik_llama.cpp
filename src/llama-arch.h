@@ -298,3 +298,5 @@ enum llm_tensor {
 };
 
 llm_arch llm_arch_from_string(const std::string & name);
+
+const char * llama_model_arch_name(llm_arch arch);
