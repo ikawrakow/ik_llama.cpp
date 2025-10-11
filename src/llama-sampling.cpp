@@ -450,8 +450,6 @@ void llama_sample_xtc_impl(struct llama_sampling * smpl, llama_token_data_array 
 
     llama_sample_softmax_impl(nullptr, candidates);
 
-    auto cur_size = candidates->size;
-
     int pos_last = 0;
 
     for (size_t i = 0; i < candidates->size; ++i) {
@@ -471,7 +469,7 @@ void llama_sample_xtc_impl(struct llama_sampling * smpl, llama_token_data_array 
 }
 
 void llama_sample_top_n_sigma_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, float top_n_sigma) {
-    
+
     if (top_n_sigma <= 0.0f || candidates->size < 4) {
         // top_n_sigma <= 0: disabled
         // candidates->size < 4: no point in applying the transformation for fewer than 4 logits.
@@ -1132,14 +1130,15 @@ static void llama_sampler_grammar_free(struct llama_sampler* smpl) {
     delete ctx;
 }
 
-static struct llama_sampler_i llama_sampler_grammar_i = {
-    /* .name   = */ llama_sampler_grammar_name,
-    /* .accept = */ llama_sampler_grammar_accept_impl,
-    /* .apply  = */ llama_sampler_grammar_apply,
-    /* .reset  = */ llama_sampler_grammar_reset,
-    /* .clone  = */ NULL,
-    /* .free   = */ llama_sampler_grammar_free,
-};
+// ?
+//static struct llama_sampler_i llama_sampler_grammar_i = {
+//    /* .name   = */ llama_sampler_grammar_name,
+//    /* .accept = */ llama_sampler_grammar_accept_impl,
+//    /* .apply  = */ llama_sampler_grammar_apply,
+//    /* .reset  = */ llama_sampler_grammar_reset,
+//    /* .clone  = */ NULL,
+//    /* .free   = */ llama_sampler_grammar_free,
+//};
 
 struct llama_grammar* llama_sampler_init_grammar_impl(
     const struct llama_vocab* vocab,
@@ -1152,7 +1151,7 @@ struct llama_grammar* llama_sampler_init_grammar_impl(
     size_t num_trigger_tokens,
     const char** trigger_patterns,
     size_t num_trigger_patterns) {
-    auto* ctx = new llama_sampler_grammar;
+    // Huh? this is not used and leaks. auto* ctx = new llama_sampler_grammar;
     struct llama_grammar* grammar;
     if (grammar_str != nullptr && grammar_str[0] != '\0') {
         // TODO: remove trigger_words support.

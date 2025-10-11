@@ -455,13 +455,11 @@ void llm_build_context::llm_build_kv_store(
                     int64_t   il) {
     const int64_t n_ctx = cparams.n_ctx;
 
-    const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
+    //const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
     const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
-    const int64_t n_head        = hparams.n_head(il);
     const int64_t n_head_kv     = hparams.n_head_kv(il);
     const int64_t n_embd_head_k = hparams.n_embd_head_k;
-    const int64_t n_embd_head_v = hparams.n_embd_head_v;
 
     GGML_ASSERT(kv.size == n_ctx);
 
@@ -957,7 +955,7 @@ static ggml_tensor * llm_build_kqv(
     const int64_t n_head        = hparams.n_head(il);
     const int64_t n_head_kv     = hparams.n_head_kv(il);
     const int64_t n_embd_head_k = hparams.n_embd_head_k;
-    const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(il);
+    //const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(il);
     const int64_t n_embd_head_v = hparams.n_embd_head_v;
     const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa(il);
 
@@ -1082,7 +1080,7 @@ static ggml_tensor * llm_build_kqv(
             auto r2v = q->ne[2] / v->ne[2];
             n_step = q->ne[2];
             n_per_step = 1;
-            ggml_tensor * kqv;
+            ggml_tensor * kqv = nullptr;
             for (int i12 = 0; i12 < q->ne[2]; i12 += n_per_step) {
                 int this_ne12 = i12 + n_per_step <= q->ne[2] ? n_per_step : q->ne[2] - i12;
                 int i02 = i12/r2k;
@@ -5889,7 +5887,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 
             if (lctx.cparams.mla_attn) {
 
-                ggml_tensor * kv_cache_trans;
+                ggml_tensor * kv_cache_trans = nullptr;
 
                 if (lctx.cparams.mla_attn == 1 && !lctx.cparams.flash_attn) {
                     ggml_tensor * kv_cache_trans_view = ggml_view_2d(ctx0, kv_self.v_l[il], n_tokens, kv_lora_rank,
@@ -6018,9 +6016,9 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                 }
                 else {
 
-                    ggml_tensor * kqv_compressed;
+                    ggml_tensor * kqv_compressed = nullptr;
 
-                    auto wkv_b = model.layers[il].wkv_b;
+                    //auto wkv_b = model.layers[il].wkv_b;
                     auto wk_b = model.layers[il].wk_b->ne[1] == kv_lora_rank ? model.layers[il].wk_b
                         : ggml_reshape_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head);
 
