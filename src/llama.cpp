@@ -2160,35 +2160,21 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                 for (auto& w : workers) w = std::thread(compute, it++);
                 compute(it);
                 for (auto& w : workers) w.join();
-                if (data) {
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data[i*n_kv + j] = -INFINITY;
-                        }
+                int64_t n_tokens_padded = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+                if (n_tokens_padded > n_tokens) {
+                    if (data) {
+                        std::fill(data + int64_t(n_tokens)*n_kv, data + n_tokens_padded*n_kv, -INFINITY);
                     }
-                }
-                if (data_f16) {
-                    ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data_f16[i*n_kv + j] = h_inf;
-                        }
+                    if (data_f16) {
+                        ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        std::fill(data_f16 + int64_t(n_tokens)*n_kv, data_f16 + n_tokens_padded*n_kv, h_inf);
                     }
-                }
-
-                if (data_swa) {
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data_swa[i*n_kv + j] = -INFINITY;
-                        }
+                    if (data_swa) {
+                        std::fill(data_swa + int64_t(n_tokens)*n_kv, data_swa + n_tokens_padded*n_kv, -INFINITY);
                     }
-                }
-                if (data_swa_f16) {
-                    ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data_swa_f16[i*n_kv + j] = h_inf;
-                        }
+                    if (data_swa_f16) {
+                        ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        std::fill(data_swa_f16 + int64_t(n_tokens)*n_kv, data_swa_f16 + n_tokens_padded*n_kv, h_inf);
                     }
                 }
             }
@@ -2248,35 +2234,21 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     }
                 }
 
-                if (data) {
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
-                        }
+                int64_t n_tokens_padded = GGML_PAD(n_tokens, GGML_KQ_MASK_PAD);
+                if (n_tokens_padded > n_tokens) {
+                    if (data) {
+                        std::fill(data + int64_t(n_tokens)*n_kv, data + n_tokens_padded*n_kv, -INFINITY);
                     }
-                }
-                if (data_f16) {
-                    ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data_f16[h*(n_kv*n_tokens) + i*n_kv + j] = h_inf;
-                        }
+                    if (data_f16) {
+                        ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        std::fill(data_f16 + int64_t(n_tokens)*n_kv, data_f16 + n_tokens_padded*n_kv, h_inf);
                     }
-                }
-
-                if (data_swa) {
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data_swa[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
-                        }
+                    if (data_swa) {
+                        std::fill(data_swa + int64_t(n_tokens)*n_kv, data_swa + n_tokens_padded*n_kv, -INFINITY);
                     }
-                }
-                if (data_swa_f16) {
-                    ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
-                    for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                        for (int j = 0; j < n_kv; ++j) {
-                            data_swa_f16[h*(n_kv*n_tokens) + i*n_kv + j] = h_inf;
-                        }
+                    if (data_swa_f16) {
+                        ggml_half h_inf = ggml_fp32_to_fp16(-INFINITY);
+                        std::fill(data_swa_f16 + int64_t(n_tokens)*n_kv, data_swa_f16 + n_tokens_padded*n_kv, h_inf);
                     }
                 }
             }
