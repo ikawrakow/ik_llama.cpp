@@ -276,6 +276,12 @@ ggml_tensor * llm_build_context::build_inp_out_ids() {
 }
 
 ggml_tensor * llm_build_context::build_inp_KQ_mask(bool causal) {
+    if (causal && flash_attn) {
+        lctx.inp_KQ_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        cb(lctx.inp_KQ_mask, "KQ_mask", -1);
+        ggml_set_input(lctx.inp_KQ_mask);
+        return lctx.inp_KQ_mask;
+    }
     lctx.inp_KQ_mask = causal
         ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
         : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
@@ -287,6 +293,12 @@ ggml_tensor * llm_build_context::build_inp_KQ_mask(bool causal) {
 
 ggml_tensor * llm_build_context::build_inp_KQ_mask_swa(bool causal) {
     GGML_ASSERT(hparams.n_swa > 0);
+    if (causal && flash_attn) {
+        lctx.inp_KQ_mask_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        cb(lctx.inp_KQ_mask_swa, "KQ_mask_swa", -1);
+        ggml_set_input(lctx.inp_KQ_mask_swa);
+        return lctx.inp_KQ_mask_swa;
+    }
 
     lctx.inp_KQ_mask_swa = causal
         ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
