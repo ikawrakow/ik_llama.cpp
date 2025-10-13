@@ -135,8 +135,12 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     void create_std_attn(int i, const LLM_TN & tn, llama_layer & layer, int n_embd, int n_embd_gqa, ggml_context * ctx_split);
     void create_std_ffn(int i, const LLM_TN & tn, llama_layer & layer, int n_ff, int n_embd, ggml_context * ctx_split);
 
-    inline ggml_context * ctx_for_layer(int i) const;
-    inline ggml_context * ctx_for_layer_split(int i) const;
+    inline ggml_context * ctx_for_layer(int i) const {
+        return ctx_map.at(model.buft_layer[i].buft);
+    }
+    inline ggml_context * ctx_for_layer_split(int i) const {
+        return ctx_map.at(model.buft_layer[i].buft_matrix);
+    }
 
     std::map<ggml_backend_buffer_type_t, int> buft_layer_count;
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
@@ -145,6 +149,23 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     ggml_context * ctx_input;
     ggml_context * ctx_output;
     ggml_context * ctx_output_split;
+
+    inline ggml_context * ctx_for_buft(ggml_backend_buffer_type_t buft) {
+        if (auto it = ctx_map.find(buft); it != ctx_map.end()) return it->second;
+
+        ggml_init_params params = { /*.mem_size   =*/ ctx_size, /*.mem_buffer =*/ NULL, /*.no_alloc   =*/ true, };
+
+        ggml_context * ctx = ggml_init(params);
+        if (!ctx) {
+            throw std::runtime_error(format("failed to create ggml context"));
+        }
+
+        ctx_map[buft] = ctx;
+        model.ctxs.emplace_back(ctx);
+
+        return ctx;
+
+    }
 };
 
 create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_model & _model) : ml(_ml), model(_model) {
@@ -183,36 +204,12 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
             std::regex pattern(overrides->pattern);
             if (std::regex_search(name, pattern)) {
                 LLAMA_LOG_INFO("Tensor %s buffer type overriden to %s\n", name.c_str(), ggml_backend_buft_name(overrides->buft));
-                if (auto it = ctx_map.find(overrides->buft); it != ctx_map.end()) ctx = it->second;
-                else {
-                    ggml_init_params params = {
-                        /*.mem_size   =*/ ctx_size,
-                        /*.mem_buffer =*/ NULL,
-                        /*.no_alloc   =*/ true,
-                    };
-
-                    ggml_context * ctx = ggml_init(params);
-                    if (!ctx) {
-                        throw std::runtime_error(format("failed to create ggml context"));
-                    }
-
-                    ctx_map[overrides->buft] = ctx;
-                    model.ctxs.emplace_back(ctx);
-
-                }
+                ctx = ctx_for_buft(overrides->buft);
                 break;
             }
         }
     }
     return ml.create_tensor(ctx, name, ne, flags);
-}
-
-ggml_context * create_tensors_helper::ctx_for_layer(int i) const {
-    return ctx_map.at(model.buft_layer[i].buft);
-}
-
-ggml_context * create_tensors_helper::ctx_for_layer_split(int i) const {
-    return ctx_map.at(model.buft_layer[i].buft_matrix);
 }
 
 #define LOADING_PRELUDE \
