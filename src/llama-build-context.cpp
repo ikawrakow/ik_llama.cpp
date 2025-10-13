@@ -8151,12 +8151,16 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
         cur = llm_build_norm(ctx0, cur,  hparams, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_post_norm", il);
 
+        bool use_dup_bias = cur->ne[1] < 32 && model.layers[il].ffn_up_exps_b_dup &&
+                                               model.layers[il].ffn_gate_exps_b_dup &&
+                                               model.layers[il].ffn_down_exps_b_dup;
+
         // MoE branch
         cur = llm_build_moe_ffn(ctx0, lctx, cur,
                 model.layers[il].ffn_gate_inp,  model.layers[il].ffn_gate_inp_b,
-                model.layers[il].ffn_up_exps,   model.layers[il].ffn_up_exps_b,
-                model.layers[il].ffn_gate_exps, model.layers[il].ffn_gate_exps_b,
-                model.layers[il].ffn_down_exps, model.layers[il].ffn_down_exps_b,
+                model.layers[il].ffn_up_exps,   use_dup_bias ? model.layers[il].ffn_up_exps_b_dup : model.layers[il].ffn_up_exps_b,
+                model.layers[il].ffn_gate_exps, use_dup_bias ? model.layers[il].ffn_gate_exps_b_dup : model.layers[il].ffn_gate_exps_b,
+                model.layers[il].ffn_down_exps, use_dup_bias ? model.layers[il].ffn_down_exps_b_dup : model.layers[il].ffn_down_exps_b,
                 nullptr,
                 n_expert, n_expert_used,
                 LLM_FFN_SWIGLU_OAI_MOE, false,
