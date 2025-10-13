@@ -1968,7 +1968,9 @@ struct server_context {
                 slot.generated_text.erase(
                     slot.generated_text.begin() + pos + stop_pos,
                     slot.generated_text.end());
-                pos = std::min(slot.n_sent_text, slot.generated_text.size());
+                // Update n_sent_text to not exceed the new generated_text size
+                slot.n_sent_text = std::min(slot.n_sent_text, slot.generated_text.size());
+                pos = slot.n_sent_text;
             } else {
                 is_stop_full = false;
                 stop_pos = slot.find_stopping_strings(str_test, token_str.size(), false);
@@ -1980,6 +1982,9 @@ struct server_context {
                 result.text_to_send = slot.generated_text.substr(pos, std::string::npos);
                 slot.n_sent_text += result.text_to_send.size();
                 // add the token to slot queue and cache
+            } else if (stop_pos != std::string::npos) {
+                // Handle partial stop - update n_sent_text to the end of the current text
+                slot.n_sent_text = slot.generated_text.size();
             }
 
             slot.add_token_string(result);
