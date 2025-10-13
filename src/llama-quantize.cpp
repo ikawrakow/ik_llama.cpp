@@ -20,6 +20,18 @@
 #define QK_K 256
 #define QK_IQ1BN 64
 
+#if defined(_WIN32)
+    #define WIN32_LEAN_AND_MEAN
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #include <windows.h>
+    #ifndef PATH_MAX
+        #define PATH_MAX MAX_PATH
+    #endif
+    #include <io.h>
+#endif
+
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
