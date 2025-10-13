@@ -10,30 +10,6 @@
 #if defined(GGML_COMMON_DECL_C)
 #include <stdint.h>
 
-// --- Begin MSVC SIMD operator overloads ---
-#ifdef _MSC_VER
-#include <immintrin.h>
-
-// AVX-512 integer bitwise operators
-inline __m512i operator|(const __m512i& a, const __m512i& b) { return _mm512_or_si512(a, b); }
-inline __m512i operator&(const __m512i& a, const __m512i& b) { return _mm512_and_si512(a, b); }
-inline __m512i operator^(const __m512i& a, const __m512i& b) { return _mm512_xor_si512(a, b); }
-
-// AVX2 integer bitwise operators
-inline __m256i operator|(const __m256i& a, const __m256i& b) { return _mm256_or_si256(a, b); }
-inline __m256i operator&(const __m256i& a, const __m256i& b) { return _mm256_and_si256(a, b); }
-inline __m256i operator^(const __m256i& a, const __m256i& b) { return _mm256_xor_si256(a, b); }
-
-#ifdef __ARM_NEON
-#include <arm_neon.h>
-inline uint8x16_t operator|(uint8x16_t a, uint8x16_t b) { return vorrq_u8(a, b); }
-inline uint8x16_t operator&(uint8x16_t a, uint8x16_t b) { return vandq_u8(a, b); }
-inline int8x16_t operator|(int8x16_t a, int8x16_t b) { return vreinterpretq_s8_u8(vorrq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
-inline int8x16_t operator&(int8x16_t a, int8x16_t b) { return vreinterpretq_s8_u8(vandq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
-#endif
-#endif
-// --- End MSVC SIMD operator overloads ---
-
 typedef uint16_t ggml_half;
 typedef uint32_t ggml_half2;
 
@@ -788,6 +764,34 @@ static_assert(sizeof(block_iq5_ks_r4) == 4*sizeof(block_iq5_ks), "wrong iq5_ks_r
 
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL
+
+////////////////////////////////////////////////////////////////////////////////
+
+// --- Begin MSVC SIMD operator overloads ---
+#ifdef __cplusplus
+#ifdef _MSC_VER
+#include <immintrin.h>
+
+// AVX-512 integer bitwise operators
+inline __m512i operator|(const __m512i& a, const __m512i& b) { return _mm512_or_si512(a, b); }
+inline __m512i operator&(const __m512i& a, const __m512i& b) { return _mm512_and_si512(a, b); }
+inline __m512i operator^(const __m512i& a, const __m512i& b) { return _mm512_xor_si512(a, b); }
+
+// AVX2 integer bitwise operators
+inline __m256i operator|(const __m256i& a, const __m256i& b) { return _mm256_or_si256(a, b); }
+inline __m256i operator&(const __m256i& a, const __m256i& b) { return _mm256_and_si256(a, b); }
+inline __m256i operator^(const __m256i& a, const __m256i& b) { return _mm256_xor_si256(a, b); }
+
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+inline uint8x16_t operator|(uint8x16_t a, uint8x16_t b) { return vorrq_u8(a, b); }
+inline uint8x16_t operator&(uint8x16_t a, uint8x16_t b) { return vandq_u8(a, b); }
+inline int8x16_t operator|(int8x16_t a, int8x16_t b) { return vreinterpretq_s8_u8(vorrq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
+inline int8x16_t operator&(int8x16_t a, int8x16_t b) { return vreinterpretq_s8_u8(vandq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
+#endif
+#endif
+#endif
+// --- End MSVC SIMD operator overloads ---
 
 ////////////////////////////////////////////////////////////////////////////////
 
