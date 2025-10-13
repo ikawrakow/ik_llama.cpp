@@ -275,7 +275,7 @@ jobs:
     strategy:
       matrix:
         arch: ['x64'] #, 'arm64'
-        instr: ['noavx', 'avx', 'avx2', 'avx512', 'avx512bf16']
+        instr: ['noavx', 'avx', 'avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi', 'avx512_vnni_vbmi_bf16']
 
     steps:
       - name: Clone
@@ -312,9 +312,11 @@ jobs:
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
             -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} ^
-            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512bf16') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_BF16=${{ matrix.instr == 'avx512bf16' && 'ON' || 'OFF' }} ^
+            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
             -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
             -DGGML_MAX_CONTEXTS=2048 ^
             ${{ env.CMAKE_ARGS }}
@@ -424,7 +426,7 @@ jobs:
     strategy:
       matrix:
         cuda: ['12.8'] # , '11.7'
-        instr: ['avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi'] # 'avx', 'noavx' won't compile because missing declarations all over the place
+        instr: ['avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi', 'avx512_vnni_vbmi_bf16'] # 'avx', 'noavx' won't compile because missing declarations all over the place
         
     steps:
       - name: Clone
@@ -457,11 +459,11 @@ jobs:
             -DGGML_NATIVE=OFF ^
             -DGGML_OPENMP=ON ^
             -DGGML_AVX=${{ matrix.instr == 'avx' && 'ON' || 'OFF' }} ^
-            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi') && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_VBMI=${{ matrix.instr == 'avx512_vnni_vbmi' && 'ON' || 'OFF' }} ^
-            -DGGML_AVX512_BF16=${{ matrix.instr == 'avx512_vnni_bf16' && 'ON' || 'OFF' }} ^
+            -DGGML_AVX2=${{ (matrix.instr == 'avx2' || matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512=${{ (matrix.instr == 'avx512' || matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VNNI=${{ (matrix.instr == 'avx512_vnni' || matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_VBMI=${{ (matrix.instr == 'avx512_vnni_vbmi' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
+            -DGGML_AVX512_BF16=${{ (matrix.instr == 'avx512_vnni_bf16' || matrix.instr == 'avx512_vnni_vbmi_bf16') && 'ON' || 'OFF' }} ^
             -DGGML_CUDA=ON ^
             -DGGML_SCHED_MAX_COPIES=1 ^
             -DGGML_CUDA_IQK_FORCE_BF16=1 ^
