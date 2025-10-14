@@ -1862,7 +1862,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<uint32_t> unique_ids;
     ggml_tensor * last_ids_tensor = nullptr;
 
-
     for (int i = 0; i < sched->n_splits; i++) {
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
@@ -1872,7 +1871,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         ggml_backend_t split_backend = sched->backends[split_backend_id];
         ggml_backend_t last_input_backend = nullptr;
 
-        int cur_arg = 0;
 
         // copy the input tensors to the split backend
         for (int j = 0; j < split->n_inputs; j++) {
@@ -1900,7 +1898,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (sched->only_active_experts && split->graph.n_nodes > 0 &&
                     ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
                     ggml_backend_buffer_is_host(input->buffer) &&
-                    node->src[cur_arg] == input_cpy &&
                    (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE)) {
 
                     if (input_backend != last_input_backend) {
@@ -1922,7 +1919,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         }
                     }
 
-                    int n_expert = input->ne[2];
+                    int n_expert = node->src[0]->ne[2];
 
                     if (ids_tensor != last_ids_tensor) {
                         ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
@@ -1943,12 +1940,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         last_ids_tensor = ids_tensor;
                     }
 
+                    const size_t expert_size = input->ne[2] > 1 ? input->nb[2] : input->nb[1];
+
+                    if (input->ne[2] > 1) {
+
                     auto copy_experts = [&](int32_t first_id, int32_t last_id) {
-                        const size_t expert_size = (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE) ? input->nb[2] : input->nb[1];
                         const size_t expert_offset = first_id * expert_size;
                         const size_t expert_size_copy =  (last_id - first_id + 1) * expert_size;
                         const size_t padding = 512;
-                        const size_t padding_end = last_id < input->ne[2] - 1 ? std::min<size_t>(expert_size, padding) : 0;
+                        const size_t padding_end = last_id < n_expert - 1 ? std::min<size_t>(expert_size, padding) : 0;
 
                         ggml_backend_tensor_set_async(split_backend,
                             input_cpy,
@@ -1974,7 +1974,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         first_id = next_on_id(last_id);
                     }
 
-                    if (node->op == GGML_OP_MOE_FUSED_UP_GATE) ++cur_arg;
+                    } else {
+                        auto copy_size = ggml_nbytes(input);
+                        ggml_backend_tensor_set_async(split_backend, input_cpy, input->data, 0, copy_size);
+                    }
+
                 } else
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
