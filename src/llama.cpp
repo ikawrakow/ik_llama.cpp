@@ -194,6 +194,9 @@ enum llm_chat_template {
     LLM_CHAT_TEMPLATE_KIMI_K2,
     LLM_CHAT_TEMPLATE_OPENAI_MOE,
     LLM_CHAT_TEMPLATE_GROK_2,
+    LLM_CHAT_TEMPLATE_BAILING,
+    LLM_CHAT_TEMPLATE_BAILING_THINK,
+    LLM_CHAT_TEMPLATE_BAILING2,
     LLM_CHAT_TEMPLATE_UNKNOWN,
 };
 
@@ -236,6 +239,10 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "gpt-oss",           LLM_CHAT_TEMPLATE_OPENAI_MOE        },
     { "bitnet",            LLM_CHAT_TEMPLATE_BITNET            },
     { "grok-2",            LLM_CHAT_TEMPLATE_GROK_2            },
+    { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
+    { "bailing-think",     LLM_CHAT_TEMPLATE_BAILING_THINK     },
+    { "bailing2",          LLM_CHAT_TEMPLATE_BAILING2          },
+
 };
 
 //
@@ -1198,6 +1205,19 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
         LLAMA_LOG_INFO("%s: f_embedding_scale = %f\n", __func__, hparams.f_embedding_scale);
         LLAMA_LOG_INFO("%s: f_residual_scale  = %f\n", __func__, hparams.f_residual_scale);
         LLAMA_LOG_INFO("%s: f_attention_scale = %f\n", __func__, hparams.f_attention_scale);
+    }
+
+    if (model.arch == LLM_ARCH_BAILINGMOE2) {
+        LLAMA_LOG_INFO("%s: n_layer_dense_lead   = %d\n",     __func__, hparams.n_layer_dense_lead);
+        LLAMA_LOG_INFO("%s: n_ff_exp             = %d\n",     __func__, hparams.n_ff_exp);
+        LLAMA_LOG_INFO("%s: n_ff_shexp           = %d\n",     __func__, hparams.n_ff_shexp);
+        LLAMA_LOG_INFO("%s: n_expert_shared      = %d\n",     __func__, hparams.n_expert_shared);
+        LLAMA_LOG_INFO("%s: n_expert_groups      = %d\n",     __func__, hparams.n_expert_groups);
+        LLAMA_LOG_INFO("%s: n_group_used         = %d\n",     __func__, hparams.n_group_used);
+        LLAMA_LOG_INFO("%s: expert_weights_scale = %.1f\n",   __func__, hparams.expert_weights_scale);
+        LLAMA_LOG_INFO("%s: expert_weights_norm  = %d\n",     __func__, hparams.expert_weights_norm);
+        LLAMA_LOG_INFO("%s: expert_gating_func   = %s\n",     __func__, llama_expert_gating_func_name((llm_expert_gating_func_type) hparams.expert_gating_func));
+        LLAMA_LOG_INFO("%s: nextn_predict_layers = %d\n",     __func__, hparams.nextn_predict_layers);
     }
 
     vocab.print_info();
@@ -4444,6 +4464,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_DOTS1:
         case LLM_ARCH_HUNYUAN_MOE:
         case LLM_ARCH_OPENAI_MOE:
+        case LLM_ARCH_BAILINGMOE2:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -6255,6 +6276,12 @@ static llm_chat_template llama_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_GIGACHAT;
     } else if (tmpl_contains("<|role_start|>")) {
         return LLM_CHAT_TEMPLATE_MEGREZ;
+    } else if (tmpl_contains("<role>ASSISTANT</role>") && tmpl_contains("'HUMAN'")) {
+        return LLM_CHAT_TEMPLATE_BAILING;
+    } else if (tmpl_contains("<role>ASSISTANT</role>") && tmpl_contains("\"HUMAN\"") && tmpl_contains("<think>")) {
+        return LLM_CHAT_TEMPLATE_BAILING_THINK;
+    } else if (tmpl_contains("<role>ASSISTANT</role>") && tmpl_contains("<role>HUMAN</role>") && tmpl_contains("<|role_end|>")) {
+        return LLM_CHAT_TEMPLATE_BAILING2;
     } else if (tmpl_contains("<|header_start|>") && tmpl_contains("<|header_end|>")) {
         return LLM_CHAT_TEMPLATE_LLAMA4;
     } else if (tmpl_contains("<|endofuserprompt|>")) {
@@ -6656,6 +6683,49 @@ static int32_t llama_chat_apply_template_internal(
 
         if (add_ass) {
             ss << "<|role_start|>assistant<|role_end|>";
+        }
+    }  else if (tmpl == LLM_CHAT_TEMPLATE_BAILING || tmpl == LLM_CHAT_TEMPLATE_BAILING_THINK) {
+        // Bailing (Ling/Ring) template
+        for (auto message : chat) {
+            std::string role(message->role);
+
+            if (role == "user") {
+                role = "HUMAN";
+            } else {
+                std::transform(role.begin(), role.end(), role.begin(), ::toupper);
+            }
+
+            ss << "<role>" << role << "</role>" << message->content;
+        }
+
+        if (add_ass) {
+            ss << "<role>ASSISTANT</role>";
+
+            if (tmpl == LLM_CHAT_TEMPLATE_BAILING_THINK) {
+                ss << "<think>";
+            }
+        }
+    }  else if (tmpl == LLM_CHAT_TEMPLATE_BAILING2) {
+        // Bailing2 (Ling 2.0) template
+        bool has_system = !chat.empty() && std::string(chat[0]->role) == "system";
+
+        if (!has_system) {
+            ss << "<role>SYSTEM</role>detailed thinking off<|role_end|>";
+        }
+
+        for (auto message : chat) {
+            std::string role(message->role);
+
+            if (role == "user") {
+                role = "HUMAN";
+            } else {
+                std::transform(role.begin(), role.end(), role.begin(), ::toupper);
+            }
+
+            ss << "<role>" << role << "</role>" << message->content << "<|role_end|>";
+        }
+        if (add_ass) {
+            ss << "<role>ASSISTANT</role>";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_LLAMA4) {
         // Llama 4
