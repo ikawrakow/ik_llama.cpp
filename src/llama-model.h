@@ -178,6 +178,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_exps_b = nullptr;
     struct ggml_tensor * ffn_down_exps_b = nullptr;
     struct ggml_tensor * ffn_up_exps_b = nullptr;
+    struct ggml_tensor * ffn_gate_exps_b_dup = nullptr;
+    struct ggml_tensor * ffn_down_exps_b_dup = nullptr;
+    struct ggml_tensor * ffn_up_exps_b_dup = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;

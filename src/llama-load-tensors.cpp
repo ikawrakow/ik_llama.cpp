@@ -127,7 +127,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     llama_model_loader & ml;
     llama_model        & model;
 
-    ggml_tensor * create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags = 0);
+    ggml_tensor * create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags = 0,
+            ggml_context ** actual_ctx = nullptr);
 
     void create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias);
     void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true);
@@ -198,7 +199,8 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
     }
 }
 
-ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags) {
+ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne,
+        int flags, ggml_context ** actual_context) {
     if (ml.tensor_buft_overrides) {
         for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
             std::regex pattern(overrides->pattern);
@@ -209,6 +211,7 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
             }
         }
     }
+    if (actual_context) *actual_context = ctx;
     return ml.create_tensor(ctx, name, ne, flags);
 }
 
@@ -2311,10 +2314,11 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
 
         layer.attn_sinks = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head}, 0);
 
+        ggml_context *ctx_ffn_gate, *ctx_ffn_up, *ctx_ffn_down;
         layer.ffn_gate_inp  = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {  n_embd, n_expert}, 0);
-        layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
-        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
-        layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+        layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0, &ctx_ffn_gate);
+        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0, &ctx_ffn_down);
+        layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0, &ctx_ffn_up);
 
         // bias
         layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_head * n_rot}, 0);
@@ -2322,10 +2326,24 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
         layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_head_kv * n_rot}, 0);
         layer.bo = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd}, 0);
 
+        ggml_context *ctx_ffn_gate_b, *ctx_ffn_up_b, *ctx_ffn_down_b;
         layer.ffn_gate_inp_b  = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP,  "bias", i), {n_expert}, 0);
-        layer.ffn_gate_exps_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert}, 0);
-        layer.ffn_down_exps_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i), {  n_embd, n_expert}, 0);
-        layer.ffn_up_exps_b   = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert}, 0);
+        layer.ffn_gate_exps_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_gate_b);
+        layer.ffn_down_exps_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i), {  n_embd, n_expert}, 0, &ctx_ffn_down_b);
+        layer.ffn_up_exps_b   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_up_b);
+
+        if (ctx_ffn_gate_b != ctx_ffn_gate) {
+            layer.ffn_gate_exps_b_dup = create_tensor(ctx_ffn_gate, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert},
+                    llama_model_loader::TENSOR_DUPLICATED);
+        }
+        if (ctx_ffn_up_b != ctx_ffn_up) {
+            layer.ffn_up_exps_b_dup = create_tensor(ctx_ffn_up, tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert},
+                    llama_model_loader::TENSOR_DUPLICATED);
+        }
+        if (ctx_ffn_down_b != ctx_ffn_down) {
+            layer.ffn_down_exps_b_dup = create_tensor(ctx_ffn_down, tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i), {  n_embd, n_expert},
+                    llama_model_loader::TENSOR_DUPLICATED);
+        }
     }
     return use_mmap_buffer;
 }
