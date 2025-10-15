@@ -17593,21 +17593,44 @@ static void ggml_compute_forward_set_rows_f32(
 
     ggml_from_float_t const from_float = type_traits[dst->type].from_float;
 
-    for (int64_t i03 = 0; i03 < ne03; ++i03) {
-        for (int64_t i02 = 0; i02 < ne02; ++i02) {
-            for (int64_t i = ir0; i < ir1; ++i) {
-                const int64_t i12 = i03%ne12;
-                const int64_t i11 = i02%ne11;
-                const int64_t i10 = i;
+    if (src1->type == GGML_TYPE_I64) {
+        for (int64_t i03 = 0; i03 < ne03; ++i03) {
+            for (int64_t i02 = 0; i02 < ne02; ++i02) {
+                for (int64_t i = ir0; i < ir1; ++i) {
+                    const int64_t i12 = i03%ne12;
+                    const int64_t i11 = i02%ne11;
+                    const int64_t i10 = i;
 
-                const int64_t i1 = *(int64_t*) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+                    const int64_t i1 = *(int64_t*) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
 
-                GGML_ASSERT(i1 >= 0 && i1 < ne1);
+                    GGML_ASSERT(i1 >= 0 && i1 < ne1);
 
-                from_float((const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
-                                           ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                    from_float((const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
+                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                }
             }
         }
+    }
+    else if (src1->type == GGML_TYPE_I32) {
+        for (int64_t i03 = 0; i03 < ne03; ++i03) {
+            for (int64_t i02 = 0; i02 < ne02; ++i02) {
+                for (int64_t i = ir0; i < ir1; ++i) {
+                    const int64_t i12 = i03%ne12;
+                    const int64_t i11 = i02%ne11;
+                    const int64_t i10 = i;
+
+                    const int64_t i1 = *(int32_t*) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+
+                    GGML_ASSERT(i1 >= 0 && i1 < ne1);
+
+                    from_float((const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
+                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                }
+            }
+        }
+    }
+    else {
+        GGML_ABORT("Fatal error");
     }
 }
 

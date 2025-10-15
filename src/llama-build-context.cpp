@@ -820,7 +820,7 @@ llm_expert_gating_func_type   gating_op,
         selection_probs = logits;
     }
 
-    if (false && lctx.model.arch == LLM_ARCH_BAILINGMOE2) {
+    if (lctx.model.arch == LLM_ARCH_BAILINGMOE2 && n_tokens > 0) {
         auto& hparams = lctx.model.hparams;
         const int64_t n_exp_per_group = n_expert / hparams.n_expert_groups;
 
