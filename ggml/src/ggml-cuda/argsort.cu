@@ -13,9 +13,20 @@ static inline __device__ void ggml_cuda_swap(T & a, T & b) {
     b = tmp;
 }
 
-template<ggml_sort_order order>
-static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int ncols, int ncols_pad,
-        int min_experts, float thresh_experts) {
+struct store_ser {
+    constexpr static bool has_thresh = true;
+    int   min_experts;
+    float thresh_experts;
+    store_ser(int min, float thresh) : min_experts(min), thresh_experts(thresh) {}
+};
+
+struct store {
+    constexpr static bool has_thresh = false;
+};
+
+template<ggml_sort_order order, typename Store>
+static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int ncols, int ncols_pad, Store s) {
+//        int min_experts, float thresh_experts) {
     // bitonic sort
     int col = threadIdx.x;
     int row = blockIdx.y;
@@ -58,19 +69,30 @@ static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int n
         }
     }
 
-    if (min_experts >= 0 && min_experts < ncols && thresh_experts > 0) {
+    if constexpr (Store::has_thresh) {
         __syncthreads();
         float max_val = x_row[dst_row[0]];
         if (col < ncols) {
-            dst[row * ncols + col] = col < min_experts || x_row[dst_row[col]] >= thresh_experts*max_val ? dst_row[col] : -1;
+            dst[row * ncols + col] = col < s.min_experts || x_row[dst_row[col]] >= s.thresh_experts*max_val ? dst_row[col] : -1;
         }
-    }
-    else {
-        // copy the result to dst without the padding
+    } else {
         if (col < ncols) {
             dst[row * ncols + col] = dst_row[col];
         }
     }
+    //if (min_experts >= 0 && min_experts < ncols && thresh_experts > 0) {
+    //    __syncthreads();
+    //    float max_val = x_row[dst_row[0]];
+    //    if (col < ncols) {
+    //        dst[row * ncols + col] = col < min_experts || x_row[dst_row[col]] >= thresh_experts*max_val ? dst_row[col] : -1;
+    //    }
+    //}
+    //else {
+    //    // copy the result to dst without the padding
+    //    if (col < ncols) {
+    //        dst[row * ncols + col] = dst_row[col];
+    //    }
+    //}
 }
 
 static int next_power_of_2(int x) {
@@ -94,9 +116,21 @@ static void argsort_f32_i32_cuda(const float * x, int * dst, const int ncols, co
     GGML_ASSERT(shared_mem <= ggml_cuda_info().devices[ggml_cuda_get_device()].smpb);
 
     if (order == GGML_SORT_ORDER_ASC) {
-        k_argsort_f32_i32<GGML_SORT_ORDER_ASC><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, min_experts, thresh_experts);
+        if (min_experts >= 0 && min_experts < ncols && thresh_experts > 0) {
+            k_argsort_f32_i32<GGML_SORT_ORDER_ASC, store_ser><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad,
+                    {min_experts, thresh_experts});
+        } else {
+            k_argsort_f32_i32<GGML_SORT_ORDER_ASC, store><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, {});
+        }
+        //k_argsort_f32_i32<GGML_SORT_ORDER_ASC><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, min_experts, thresh_experts);
     } else if (order == GGML_SORT_ORDER_DESC) {
-        k_argsort_f32_i32<GGML_SORT_ORDER_DESC><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, min_experts, thresh_experts);
+        if (min_experts >= 0 && min_experts < ncols && thresh_experts > 0) {
+            k_argsort_f32_i32<GGML_SORT_ORDER_DESC, store_ser><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad,
+                    {min_experts, thresh_experts});
+        } else {
+            k_argsort_f32_i32<GGML_SORT_ORDER_DESC, store><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, {});
+        }
+        //k_argsort_f32_i32<GGML_SORT_ORDER_DESC><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, min_experts, thresh_experts);
     } else {
         GGML_ABORT("fatal error");
     }
