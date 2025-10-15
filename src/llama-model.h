@@ -84,6 +84,8 @@ enum e_model {
     MODEL_17B_128E,
     MODEL_80B_A13B,
     MODEL_300B_A47B, // Ernie MoE big
+    MODEL_16B_A1B,
+    MODEL_100B_A6B,
 };
 
 struct llama_layer_nextn {

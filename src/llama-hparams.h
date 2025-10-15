@@ -24,6 +24,7 @@ struct llama_hparams {
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
     uint32_t n_layer;
+    int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
     uint32_t n_rot;
     uint32_t n_swa = 0; // sliding window attention (SWA)
     uint32_t n_swa_pattern = 1; // by default, all layers use non-sliding-window attention
@@ -39,22 +40,30 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 
     uint32_t n_layer_dense_lead = 0;
-    uint32_t n_lora_q = 0;
-    uint32_t n_lora_kv = 0;
-    uint32_t n_ff_exp = 0;
-    uint32_t n_ff_shexp = 0;
-    uint32_t n_expert_shared = 0;
-    float    expert_weights_scale = 0.0;
-    bool     expert_weights_norm = false;
-    uint32_t expert_gating_func = LLM_EXPERT_GATING_FUNC_SOFTMAX;
+    uint32_t n_lora_q           = 0;
+    uint32_t n_lora_kv          = 0;
+    uint32_t n_ff_exp           = 0;
+    uint32_t n_ff_shexp         = 0;
+    uint32_t n_expert_shared    = 0;
+    uint32_t n_norm_groups      = 0;
+    uint32_t n_expert_groups    = 0;
+    uint32_t n_group_used       = 0;
+    uint32_t n_group_experts    = 0;
+
+    float    expert_group_scale   = 0.05f;
+    float    expert_weights_scale = 0.0f;
+    bool     expert_weights_norm  = false;
+    uint32_t expert_gating_func   = LLM_EXPERT_GATING_FUNC_SOFTMAX;
+    uint32_t moe_every_n_layers   = 0;
     uint32_t nextn_predict_layers = 0;
 
     float f_norm_eps;
     float f_norm_rms_eps;
+    float f_norm_group_eps;
 
-    float f_attn_logit_softcapping = 50.0f;
+    float f_attn_logit_softcapping   = 50.0f;
     float f_router_logit_softcapping = 30.0f;
-    float f_final_logit_softcapping = 30.0f;
+    float f_final_logit_softcapping  = 30.0f;
 
     float    rope_attn_factor = 1.0f;
     float    rope_freq_base_train;
@@ -62,12 +71,12 @@ struct llama_hparams {
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa;
     uint32_t n_ctx_orig_yarn;
-    float    rope_yarn_log_mul;
+    float    rope_yarn_log_mul = 0.0f;
 
-    float    yarn_ext_factor = -1.0f;
-    float    yarn_attn_factor = 1.0f;
-    float    yarn_beta_fast = 32.0f;
-    float    yarn_beta_slow = 1.0f;
+    float    yarn_ext_factor  = -1.0f;
+    float    yarn_attn_factor =  1.0f;
+    float    yarn_beta_fast   = 32.0f;
+    float    yarn_beta_slow   =  1.0f;
 
     std::array<int, 4> rope_sections;
 
