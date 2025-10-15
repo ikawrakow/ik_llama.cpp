@@ -27,6 +27,7 @@ class TensorNameMap:
             "model.layers.{bid}.pre_attn_norm",          # grok-2
             "embedding.word_embeddings",                 # chatglm
             "transformer.token_embeddings",              # openelm
+            "model.word_embeddings",                     # bailingmoe
             "shared",                                    # t5
         ),
 
@@ -129,6 +130,7 @@ class TensorNameMap:
             "h.{bid}.self_attention.query_key_value",                              # bloom
             "language_model.encoder.layers.{bid}.self_attention.query_key_value",  # persimmon
             "model.layers.{bid}.self_attn.query_key_value",                        # persimmon
+            "model.layers.{bid}.attention.query_key_value",                        # bailingmoe2
             "h.{bid}.attn.c_attn",                                                 # gpt2
             "transformer.h.{bid}.mixer.Wqkv",                                      # phi2
             "encoder.layers.{bid}.attn.Wqkv",                                      # nomic-bert
@@ -187,6 +189,7 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.out_proj",                            # gpt-j
             "language_model.encoder.layers.{bid}.self_attention.dense",     # persimmon
             "model.layers.{bid}.self_attn.dense",                           # persimmon
+            "model.layers.{bid}.attention.dense",                           # bailingmoe2
             "h.{bid}.attn.c_proj",                                          # gpt2
             "transformer.h.{bid}.mixer.out_proj",                           # phi2
             "model.layers.layers.{bid}.self_attn.o_proj",                   # plamo
@@ -263,6 +266,7 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_EXP_PROBS_B: (
             "model.layers.{bid}.mlp.gate.e_score_correction",           # deepseek-v3 dots1
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",    # ernie4.5-moe
+            "model.layers.{bid}.mlp.gate.expert_bias",                  # bailingmoe2
         ),
 
         # Feed-forward up
@@ -382,6 +386,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.q_ln",                             # sea-lion
             "encoder.layer.{bid}.attention.self.layer_norm_q",                # jina-bert-v2
             "transformer.layers.{bid}.attn.q_norm",                           # openelm
+            "model.layers.{bid}.attention.query_layernorm",                   # bailingmoe2
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
@@ -391,6 +396,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.k_ln",                             # sea-lion
             "encoder.layer.{bid}.attention.self.layer_norm_k",                # jina-bert-v2
             "transformer.layers.{bid}.attn.k_norm",                           # openelm
+            "model.layers.{bid}.attention.key_layernorm",                     # bailingmoe2
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
@@ -403,6 +409,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.rms_norm_3",   # Grok
             "encoder.layer.{bid}.mlp.layernorm",            # jina-bert-v2
             "encoder.layer.{bid}.layer_norm_2"              # jina-v2-code
+            "model.layers.{bid}.final_layernorm",           # bailingmoe2
         ),
 
         MODEL_TENSOR.SSM_IN: (
