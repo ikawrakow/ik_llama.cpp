@@ -4253,6 +4253,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "TIMESTEP_EMBEDDING",
     "ARGSORT",
     "ARGSORT_THRESH",
+    "GROUPED_TOPK",
     "LEAKY_RELU",
     "SOFTCAP",
     "SOFT_CAP_MAX",
@@ -4288,7 +4289,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 87, "GGML_OP_COUNT != 87");
+static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4356,6 +4357,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "timestep_embedding(timesteps, dim, max_period)",
     "argsort(x)",
     "argsort_thresh(x)",
+    "grouped_topk(x)",
     "leaky_relu(x)",
     "k2*tanh(k1*x)",
     "soft_max(k2*tanh(k1*x))",
@@ -4391,7 +4393,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x),"
 };
 
-static_assert(GGML_OP_COUNT == 87, "GGML_OP_COUNT != 87");
+static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -9438,6 +9440,35 @@ struct ggml_tensor * ggml_argsort_thresh(
 
     return result;
 }
+
+struct ggml_tensor * ggml_grouped_topk(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   num_groups,
+            int                   num_top_groups,
+            int                   nk) {
+
+    GGML_ASSERT(num_top_groups < num_groups);
+    GGML_ASSERT(a->ne[0] % num_groups == 0);
+    int64_t n_per_group = a->ne[0] / num_groups;
+    GGML_ASSERT(n_per_group >= nk);
+
+    bool is_node = false;
+
+    //struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_I32, GGML_MAX_DIMS, a->ne);
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, num_groups);
+    ggml_set_op_params_i32(result, 1, num_top_groups);
+    ggml_set_op_params_i32(result, 2, nk);
+
+    result->op   = GGML_OP_GROUPED_TOPK;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
 
 // ggml_top_k
 
@@ -20024,6 +20055,24 @@ static void ggml_compute_forward_argsort_thresh(
     }
 }
 
+static void ggml_compute_forward_grouped_topk(
+    const struct ggml_compute_params * params,
+    struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                iqk_grouped_top_k(dst, params->ith, params->nth);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_flash_attn_ext
 
 static void ggml_compute_forward_flash_attn_ext_f16(
@@ -22521,6 +22570,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_argsort_thresh(params, tensor);
             } break;
+        case GGML_OP_GROUPED_TOPK:
+            {
+                ggml_compute_forward_grouped_topk(params, tensor);
+            } break;
         case GGML_OP_LEAKY_RELU:
             {
                 ggml_compute_forward_leaky_relu(params, tensor);
@@ -23539,6 +23592,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
+        case GGML_OP_GROUPED_TOPK:
+            {
+                GGML_ABORT("fatal error"); // TODO: not implemented
+            }
         case GGML_OP_LEAKY_RELU:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
@@ -24281,6 +24338,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_ARGSORT:
         case GGML_OP_ARGSORT_THRESH:
+        case GGML_OP_GROUPED_TOPK:
         case GGML_OP_FLASH_ATTN_EXT:
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
