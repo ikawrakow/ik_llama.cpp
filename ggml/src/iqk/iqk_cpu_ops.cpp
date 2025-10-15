@@ -1,3 +1,9 @@
+//
+// Copyright (C) 2025 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "iqk_cpu_ops.h"
 #include "ggml.h"
 
@@ -26,7 +32,6 @@ void iqk_argsort(ggml_tensor * dst, int ith, int nth) {
     int ne00 = src->ne[0];
     thread_local std::vector<std::pair<float,int>> aux;
     if ((int)aux.size() < ne00) aux.resize(ne00);
-    //std::vector<std::pair<float,int>> aux(ne00);
 
     for (int ir = first; ir < last; ++ir) {
         auto data = (const float *)((const char *)src->data + ir*src->nb[1]);
