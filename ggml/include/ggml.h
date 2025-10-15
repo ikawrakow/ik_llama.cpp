@@ -630,6 +630,7 @@ extern "C" {
         GGML_OP_TRANSPOSE,
         GGML_OP_GET_ROWS,
         GGML_OP_GET_ROWS_BACK,
+        GGML_OP_SET_ROWS,
         GGML_OP_DIAG,
         GGML_OP_DIAG_MASK_INF,
         GGML_OP_DIAG_MASK_ZERO,
@@ -1559,6 +1560,19 @@ extern "C" {
             struct ggml_tensor  * a,
             float                 s);
 
+    // x = s * a + b
+    GGML_API struct ggml_tensor * ggml_scale_bias(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 s,
+        float                 b);
+
+    GGML_API struct ggml_tensor * ggml_scale_bias_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 s,
+        float                 b);
+
     GGML_API struct ggml_tensor * ggml_softcap(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1780,6 +1794,23 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             struct ggml_tensor  * c);
+
+    // a TD  [n_embd, ne1,    ne2,    ne3]
+    // b TS  [n_embd, n_rows, ne02,   ne03] | ne02 == ne2, ne03 == ne3
+    // c I64 [n_rows, ne11,   ne12,   1]    | c[i] in [0, ne1)
+    //
+    // undefined behavior if destination rows overlap
+    //
+    // broadcast:
+    //   ne2 % ne11 == 0
+    //   ne3 % ne12 == 0
+    //
+    // return view(a)
+    GGML_API struct ggml_tensor * ggml_set_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,  // destination
+            struct ggml_tensor  * b,  // source
+            struct ggml_tensor  * c); // row indices
 
     GGML_API struct ggml_tensor * ggml_diag(
         struct ggml_context     * ctx,
