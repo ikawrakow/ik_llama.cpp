@@ -650,6 +650,7 @@ extern "C" {
         GGML_OP_TIMESTEP_EMBEDDING,
         GGML_OP_ARGSORT,
         GGML_OP_ARGSORT_THRESH,
+        GGML_OP_GROUPED_TOPK,
         GGML_OP_LEAKY_RELU,
         GGML_OP_SOFTCAP,
         GGML_OP_SOFT_CAP_MAX,
@@ -2265,6 +2266,13 @@ extern "C" {
             int                   k,
             int                   min_entries,
             float                 thresh);
+    GGML_API struct ggml_tensor * ggml_grouped_topk(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   num_groups,
+            int                   num_top_groups,
+            int                   nk,
+            int                   topk_experts);
 
 #define GGML_KQ_MASK_PAD 16
 
