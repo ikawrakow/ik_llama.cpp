@@ -57,29 +57,41 @@ void iqk_grouped_top_k(ggml_tensor * dst, int ith, int nth) {
     GGML_ASSERT(ne00%n_groups == 0);
     int n_per_group = ne00/n_groups;
     GGML_ASSERT(nk <= n_per_group);
+    GGML_ASSERT(n_top_groups <= n_groups);
 
-    size_t work_size = n_per_group + n_groups;
-    work_size = std::max(work_size, size_t(n_per_group*n_top_groups));
-    auto& aux = get_work_buffer(n_per_group + n_groups);
+    size_t work_size = n_groups + n_per_group*n_top_groups;
+    auto& aux = get_work_buffer(work_size);
 
-    auto groups = aux.data() + n_per_group;
+    auto groups = aux.data() + n_per_group*n_top_groups;
 
     for (int ir = first; ir < last; ++ir) {
         auto data = (const float *)((const char *)src->data + ir*src->nb[1]);
         auto result = (int32_t *)((char *)dst->data + ir*dst->nb[1]);
-        for (int ig = 0; ig < n_groups; ++ig) {
-            //groups[ig] = { group_score(n_per_group, data + ig*n_per_group), ig };
-            //groups[ig] = { group_score_max(n_per_group, data + ig*n_per_group), ig };
-            groups[ig] = { group_score(n_per_group, nk, data + ig*n_per_group, (float *)aux.data()), ig };
+        if (ne0 > n_per_group*n_top_groups) {
+            for (int j = 0; j < ne0; ++j) result[j] = j;
+            continue;
         }
-        std::partial_sort(groups, groups + n_top_groups, groups + n_groups, std::greater<std::pair<float,int>>{});
+        if (n_top_groups < n_groups) {
+            for (int ig = 0; ig < n_groups; ++ig) {
+                //groups[ig] = { group_score(n_per_group, data + ig*n_per_group), ig };
+                //groups[ig] = { group_score_max(n_per_group, data + ig*n_per_group), ig };
+                groups[ig] = { group_score(n_per_group, nk, data + ig*n_per_group, (float *)aux.data()), ig };
+            }
+            std::partial_sort(groups, groups + n_top_groups, groups + n_groups, std::greater<std::pair<float,int>>{});
 
-        for (int ig = 0; ig < n_top_groups; ++ig) {
-            int i0 = n_per_group * ig;
-            int j0 = n_per_group * groups[ig].second;
-            for (int j = 0; j < n_per_group; ++j) aux[i0 + j] = { data[j0 + j], j0 + j };
+            for (int ig = 0; ig < n_top_groups; ++ig) {
+                int i0 = n_per_group * ig;
+                int j0 = n_per_group * groups[ig].second;
+                for (int j = 0; j < n_per_group; ++j) aux[i0 + j] = { data[j0 + j], j0 + j };
+            }
+        } else {
+            for (int j = 0; j < ne00; ++j) aux[j] = { data[j], j };
         }
-        std::partial_sort(aux.begin(), aux.begin() + ne0, aux.end(), std::greater<std::pair<float,int>>{});
+        if (ne0 < n_top_groups*n_per_group) {
+            std::partial_sort(aux.begin(), aux.begin() + ne0, aux.begin() + n_top_groups*n_per_group, std::greater<std::pair<float,int>>{});
+        } else {
+            std::sort(aux.begin(), aux.begin() + ne0, std::greater<std::pair<float,int>>{});
+        }
         for (int j = 0; j < ne0; ++j) result[j] = aux[j].second;
 
     }
