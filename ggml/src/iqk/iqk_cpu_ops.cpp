@@ -37,9 +37,9 @@ inline std::vector<std::pair<float,int>> & get_work_buffer(size_t size) {
 
 void iqk_grouped_top_k(ggml_tensor * dst, int ith, int nth) {
     auto src = dst->src[0];
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_I32);
     GGML_ASSERT(src->type == GGML_TYPE_F32);
-    GGML_ASSERT(ggml_are_same_shape(src, dst));
+    GGML_ASSERT(ggml_nrows(src) == ggml_nrows(dst));
 
     auto nrows = ggml_nrows(src);
     auto npt   = (nrows + nth - 1)/nth;
@@ -52,17 +52,21 @@ void iqk_grouped_top_k(ggml_tensor * dst, int ith, int nth) {
     int nk           = dst->op_params[2];
 
     int ne00 = src->ne[0];
+    int ne0  = dst->ne[0];
+    GGML_ASSERT(ne0 <= ne00);
     GGML_ASSERT(ne00%n_groups == 0);
     int n_per_group = ne00/n_groups;
     GGML_ASSERT(nk <= n_per_group);
 
+    size_t work_size = n_per_group + n_groups;
+    work_size = std::max(work_size, size_t(n_per_group*n_top_groups));
     auto& aux = get_work_buffer(n_per_group + n_groups);
 
     auto groups = aux.data() + n_per_group;
 
     for (int ir = first; ir < last; ++ir) {
         auto data = (const float *)((const char *)src->data + ir*src->nb[1]);
-        auto result = (float *)((char *)dst->data + ir*dst->nb[1]);
+        auto result = (int32_t *)((char *)dst->data + ir*dst->nb[1]);
         for (int ig = 0; ig < n_groups; ++ig) {
             //groups[ig] = { group_score(n_per_group, data + ig*n_per_group), ig };
             //groups[ig] = { group_score_max(n_per_group, data + ig*n_per_group), ig };
@@ -71,13 +75,12 @@ void iqk_grouped_top_k(ggml_tensor * dst, int ith, int nth) {
         std::partial_sort(groups, groups + n_top_groups, groups + n_groups, std::greater<std::pair<float,int>>{});
 
         for (int ig = 0; ig < n_top_groups; ++ig) {
-            int jg = groups[ig].second;
-            for (int j = 0; j < n_per_group; ++j) result[jg*n_per_group + j] = data[jg*n_per_group + j];
+            int i0 = n_per_group * ig;
+            int j0 = n_per_group * groups[ig].second;
+            for (int j = 0; j < n_per_group; ++j) aux[i0 + j] = { data[j0 + j], j0 + j };
         }
-        for (int ig = n_top_groups; ig < n_groups; ++ig) {
-            int jg = groups[ig].second;
-            for (int j = 0; j < n_per_group; ++j) result[jg*n_per_group + j] = -INFINITY;
-        }
+        std::partial_sort(aux.begin(), aux.begin() + ne0, aux.end(), std::greater<std::pair<float,int>>{});
+        for (int j = 0; j < ne0; ++j) result[j] = aux[j].second;
 
     }
 

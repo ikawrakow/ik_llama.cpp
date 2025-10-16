@@ -820,46 +820,15 @@ llm_expert_gating_func_type   gating_op,
         selection_probs = logits;
     }
 
+    // select experts
+    ggml_tensor * selected_experts;
     if (true && lctx.model.arch == LLM_ARCH_BAILINGMOE2 && n_tokens > 0) {
         auto& hparams = lctx.model.hparams;
-
-        selection_probs = ggml_grouped_topk(ctx, selection_probs, hparams.n_expert_groups, hparams.n_group_used, 2);
-        cb(selection_probs, "ffn_moe_probs_masked", il);
-
-//        const int64_t n_exp_per_group = n_expert / hparams.n_expert_groups;
-//
-//        // organize experts into n_expert_groups
-//        ggml_tensor * selection_groups = ggml_view_2d(ctx, ggml_cont(ctx, ggml_transpose(ctx, selection_probs)), n_tokens * n_exp_per_group, hparams.n_expert_groups, n_tokens * n_exp_per_group * sizeof(float), 0); // [n_tokens * n_exp_per_group, n_expert_groups]
-//#if 0
-//        ggml_tensor * group_scores = ggml_top_k(ctx, selection_groups, 2); // [2, n_expert_groups]
-//        group_scores = ggml_get_rows(ctx, ggml_reshape_3d(ctx, selection_groups, 1, selection_groups->ne[0], selection_groups->ne[1]), group_scores); // [1, 2, n_expert_groups]
-//
-//        // get top n_group_used expert groups
-//        group_scores = ggml_transpose(ctx, ggml_sum_rows(ctx, ggml_reshape_2d(ctx, group_scores, group_scores->ne[1], group_scores->ne[2]))); // [n_expert_groups, 1]
-//#else
-//        // Replace top_k(2) with argmax due to backend limitations, ideally we should use something like argmax2 instead
-//        ggml_tensor * group_scores = ggml_reshape_2d(ctx, ggml_argmax(ctx, selection_groups), 1, selection_groups->ne[1]); // [1, n_expert_groups]
-//        group_scores = ggml_get_rows(ctx, ggml_reshape_3d(ctx, selection_groups, 1, selection_groups->ne[0], selection_groups->ne[1]), group_scores); // [1, 1, n_expert_groups]
-//
-//        // get top n_group_used expert groups
-//        group_scores = ggml_transpose(ctx, ggml_reshape_2d(ctx, group_scores, group_scores->ne[1], group_scores->ne[2])); // [n_expert_groups, 1]
-//#endif
-//        ggml_tensor * expert_groups = ggml_top_k(ctx, ggml_cont(ctx, group_scores), hparams.n_group_used); // [n_group_used, 1]
-//        cb(expert_groups->src[0], "ffn_moe_group_argsort", il);
-//        cb(expert_groups, "ffn_moe_group_topk", il);
-//
-//        // mask out the other groups
-//        selection_probs = ggml_get_rows(ctx, selection_groups, expert_groups); // [n_tokens * n_exp_per_group, n_group_used]
-//        selection_probs = ggml_set_rows(ctx, ggml_scale_bias(ctx, selection_groups, 0.0f, -INFINITY), selection_probs, expert_groups); // [n_tokens * n_exp_per_group, n_expert_groups]
-//        selection_probs = ggml_view_2d(ctx, selection_probs, n_tokens, n_expert, n_tokens * sizeof(float), 0); // [n_tokens, n_expert]
-//        selection_probs = ggml_cont(ctx, ggml_transpose(ctx, selection_probs)); // [n_expert, n_tokens]
-//        cb(selection_probs, "ffn_moe_probs_masked", il);
+        selected_experts = ggml_grouped_topk(ctx, selection_probs, hparams.n_expert_groups, hparams.n_group_used, 2, n_expert_used);
+    } else {
+        selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
+                lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
     }
-
-    // select experts
-    ggml_tensor * selected_experts = ggml_top_k_thresh(ctx, selection_probs, n_expert_used,
-            lctx.cparams.min_experts, lctx.cparams.thresh_experts); // [n_expert_used, n_tokens]
-    cb(selected_experts->src[0], "ffn_moe_argsort", il);
     cb(selected_experts, "ffn_moe_topk", il);
     ggml_tensor * weights = ggml_get_rows(ctx,
             ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]

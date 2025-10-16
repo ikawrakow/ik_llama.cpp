@@ -2271,7 +2271,8 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   num_groups,
             int                   num_top_groups,
-            int                   nk);
+            int                   nk,
+            int                   topk_experts);
 
 #define GGML_KQ_MASK_PAD 16
 

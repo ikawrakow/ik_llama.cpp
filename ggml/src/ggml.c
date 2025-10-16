@@ -9446,17 +9446,21 @@ struct ggml_tensor * ggml_grouped_topk(
             struct ggml_tensor  * a,
             int                   num_groups,
             int                   num_top_groups,
-            int                   nk) {
+            int                   nk,
+            int                   topk_experts) {
 
-    GGML_ASSERT(num_top_groups < num_groups);
+    GGML_ASSERT(num_top_groups <= num_groups);
     GGML_ASSERT(a->ne[0] % num_groups == 0);
+    GGML_ASSERT(a->ne[0] >= topk_experts);
     int64_t n_per_group = a->ne[0] / num_groups;
     GGML_ASSERT(n_per_group >= nk);
 
     bool is_node = false;
 
-    //struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_I32, GGML_MAX_DIMS, a->ne);
-    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    int64_t ne[GGML_MAX_DIMS];
+    for (int i = 1; i < GGML_MAX_DIMS; ++i) ne[i] = a->ne[i];
+    ne[0] = topk_experts;
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_I32, GGML_MAX_DIMS, ne);
 
     ggml_set_op_params_i32(result, 0, num_groups);
     ggml_set_op_params_i32(result, 1, num_top_groups);
