@@ -12,6 +12,7 @@
 #include "ggml.h"
 #include "ggml-aarch64.h"
 #include "iqk/iqk_quantize.h"
+#include "iqk/iqk_cpu_ops.h"
 #if GGML_USE_IQK_MULMAT
 #include "iqk/iqk_mul_mat.h"
 #include "iqk/iqk_config.h"
@@ -9408,6 +9409,7 @@ struct ggml_tensor * ggml_argsort(
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_I32, GGML_MAX_DIMS, a->ne);
 
     ggml_set_op_params_i32(result, 0, (int32_t) order);
+    ggml_set_op_params_i32(result, 1, (int32_t) a->ne[0]);
 
     result->op   = GGML_OP_ARGSORT;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -9446,6 +9448,7 @@ struct ggml_tensor * ggml_top_k(
     GGML_ASSERT(a->ne[0] >= k);
 
     struct ggml_tensor * result = ggml_argsort(ctx, a, GGML_SORT_ORDER_DESC);
+    ggml_set_op_params_i32(result, 1, k);
 
     result = ggml_view_4d(ctx, result,
                 k, result->ne[1], result->ne[2], result->ne[3],
@@ -19942,7 +19945,8 @@ static void ggml_compute_forward_argsort(
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_argsort_f32(params, dst);
+                iqk_argsort(dst, params->ith, params->nth);
+                //ggml_compute_forward_argsort_f32(params, dst);
             } break;
         default:
             {
