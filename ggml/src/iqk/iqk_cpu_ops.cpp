@@ -1,3 +1,9 @@
+//
+// Copyright (C) 2025 Iwan Kawrakow
+// MIT license
+// SPDX-License-Identifier: MIT
+//
+
 #include "iqk_cpu_ops.h"
 #include "ggml.h"
 
@@ -95,7 +101,6 @@ void iqk_grouped_top_k(ggml_tensor * dst, int ith, int nth) {
         for (int j = 0; j < ne0; ++j) result[j] = aux[j].second;
 
     }
-
 }
 
 void iqk_argsort(ggml_tensor * dst, int ith, int nth) {
