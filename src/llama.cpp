@@ -3754,6 +3754,7 @@ struct llama_context_params llama_context_default_params() {
         /*.mla_attn                    =*/ 0,
         /*.attn_max_batch              =*/ 0,
         /*.fused_moe_up_gate           =*/ false,
+        /*.grouped_expert_routing      =*/ false,
         /*.fused_up_gate               =*/ true,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
@@ -3963,6 +3964,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.mla_attn         = params.mla_attn;
     cparams.attn_max_batch   = params.attn_max_batch;
     cparams.fused_moe_up_gate= params.fused_moe_up_gate;
+    cparams.grouped_expert_routing = params.grouped_expert_routing;
     cparams.fused_up_gate    = params.fused_up_gate;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
@@ -4043,6 +4045,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: mla_attn   = %d\n",     __func__, cparams.mla_attn);
     LLAMA_LOG_INFO("%s: attn_max_b = %d\n",     __func__, cparams.attn_max_batch);
     LLAMA_LOG_INFO("%s: fused_moe  = %d\n",     __func__, cparams.fused_moe_up_gate);
+    LLAMA_LOG_INFO("%s: grouped er = %d\n",     __func__, cparams.grouped_expert_routing);
     LLAMA_LOG_INFO("%s: fused_up_gate = %d\n",     __func__, cparams.fused_up_gate);
     LLAMA_LOG_INFO("%s: ser        = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base  = %.1f\n",   __func__, cparams.rope_freq_base);

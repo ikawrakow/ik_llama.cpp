@@ -78,6 +78,7 @@ struct llm_build_context {
     const int  mla_attn;
     const int  attn_max_batch;
     const bool fused_moe_up_gate;
+    const bool grouped_expert_routing;
     const bool fused_up_gate;
     const int  min_experts;
     const float thresh_experts;
