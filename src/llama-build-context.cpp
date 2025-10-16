@@ -48,6 +48,7 @@ llm_build_context::llm_build_context(
         mla_attn         (cparams.mla_attn),
         attn_max_batch   (cparams.attn_max_batch),
         fused_moe_up_gate(cparams.fused_moe_up_gate),
+        grouped_expert_routing(cparams.grouped_expert_routing),
         fused_up_gate    (cparams.fused_up_gate),
         min_experts      (cparams.min_experts),
         thresh_experts   (cparams.thresh_experts),
@@ -822,7 +823,7 @@ llm_expert_gating_func_type   gating_op,
 
     // select experts
     ggml_tensor * selected_experts;
-    if (true && lctx.model.arch == LLM_ARCH_BAILINGMOE2 && n_tokens > 0) {
+    if (lctx.cparams.grouped_expert_routing && lctx.model.arch == LLM_ARCH_BAILINGMOE2 && n_tokens > 0) {
         auto& hparams = lctx.model.hparams;
         selected_experts = ggml_grouped_topk(ctx, selection_probs, hparams.n_expert_groups, hparams.n_group_used, 2, n_expert_used);
     } else {
