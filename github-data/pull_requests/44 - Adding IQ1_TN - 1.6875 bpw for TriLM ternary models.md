@@ -1,14 +1,17 @@
-### 🔀 [#44](https://github.com/ikawrakow/ik_llama.cpp/pull/44) - Adding IQ1_TN - 1.6875 bpw for TriLM ternary models
+## 🔀 [Pull Request #44](https://github.com/ikawrakow/ik_llama.cpp/pull/44) - Adding IQ1_TN - 1.6875 bpw for TriLM ternary models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1_tn` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-09 |
 | **Updated** | 2024-09-09 |
+| **Merged** | 2024-09-09 |
 
 ---
 
-#### Description
+## 📄 Description
 
 For the Bitnt-1.58b ternary models I had added `IQ1_BN` (1.625 bpw) and `IQ2_BN` (2.0 bpw) quants. But for TriLM I only added `IQ2_TN` (2.0625 bpw). This PR fills the gap adding the corresponding 1.6875 bpw quantization type `IQ1_TN`.
 
@@ -46,9 +49,9 @@ As `IQ2_BN` PP performance is better than `IQ1_BN`, these tables indicate that m
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2024-09-09** at **11:56:12**:<br>
+👤 **ikawrakow** commented on **2024-09-09** at **11:56:12**
 
 For the record, here is how this PR improves `IQ1/2_BN` performance for PP
 

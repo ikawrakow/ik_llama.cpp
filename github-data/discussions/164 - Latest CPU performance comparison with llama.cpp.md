@@ -1,13 +1,14 @@
-### 🗣️ [#164](https://github.com/ikawrakow/ik_llama.cpp/discussions/164) - Latest CPU performance comparison with llama.cpp
+## 🗣️ [Discussion #164](https://github.com/ikawrakow/ik_llama.cpp/discussions/164) - Latest CPU performance comparison with llama.cpp
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-12-24 |
-| **Updated** | 2025-04-28 |
+| **Updated** | 2025-07-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 There has been quite a bit of development here and in mainline `llama.cpp` since the performance results on the front page were generated, so I decided to make a new CPU performance comparison.
 
@@ -111,9 +112,9 @@ The fastest way to do prompt processing with `ik_llama.cpp` is the new 8-bit, 8-
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **saood06** replied the **2025-01-10** at **23:34:54**:<br>
+👤 **saood06** commented on **2025-01-10** at **23:34:54**
 
 I ran some benchmarks on an AVX2 machine (Xeon E5-2683 v4, 32 core, quad channel broadwell) on an IQ4_XS of Midnight Miqu 70B v1.5 via batched bench ( with arguments -pps -fa -t 32 -npp 128,256,512 -ntg 128,256 -npl 1,2,4,8,16,32 -c 32768 [context only needed to be set for llama.cpp as otherwise it would skip some tests but ik_llama.cpp defaulted to 32768] ), build 4404 for llama.cpp. No runtime repacking for ik_llama.cpp.
 I was curious about batch performance since there is inference software like arrows or loom which would definitely benefit from it.
@@ -278,7 +279,7 @@ I only ask because I'm not sure if the 80 tensors going from q5_K to iq5_k is lo
 
 ---
 
-👤 **ikawrakow** replied the **2025-01-11** at **07:28:46**:<br>
+👤 **ikawrakow** commented on **2025-01-11** at **07:28:46**
 
 @saood06 Thanks for testing.
 
@@ -294,7 +295,8 @@ Sorry, the goal was to make the `_R4` quants use the same quantization mixes, bu
 
 `IQ5_K` is normally quite a bit better than `Q5_K`, so most of the time I would expect this to perform better.
 
-> 👤 **saood06** replied the **2025-01-11** at **09:59:16**:<br>
+> 👤 **saood06** replied on **2025-01-11** at **09:59:16**
+> 
 > >Sorry, the goal was to make the _R4 quants use the same quantization mixes, but apparently I have not quite succeeded. The function where the quantization type is selected is quite messy. But instead of re-quantizing to *_R4, you can use the -rtr command line option, which will make your model use the exact same mix of quantization types (but those where an _R4 variant is available will be repacked to that).
 > 
 > No worries, I only made the quant to test (for actual use, I'd make an IQK quant) and I didn't realize batched-bench supported rtr. It also didn't matter for this machine and test, but I also wasn't sure how runtime repacking and NUMA would behave, if the runtime repacking would interfere with the benefits from POSIX_MADV_RANDOM.
@@ -308,13 +310,15 @@ Sorry, the goal was to make the `_R4` quants use the same quantization mixes, bu
 > Once almost all the model is in system cache, it did Prompt processing at 11.5 t/s, and token generation at 2.75 t/s. I still couldn't get it to fully fault, but it did basically stop paging, and performance stopped improving, once it hit those numbers.
 > 
 > I couldn't get it to run with an _R4 quant it hit the GGML_ASSERT(nrc_x%4 == 0), but even without that I'm still happy with the performance of it.
+
+> 👤 **ikawrakow** replied on **2025-01-11** at **10:38:23**
 > 
-> 👤 **ikawrakow** replied the **2025-01-11** at **10:38:23**:<br>
 > > I couldn't get it to run with an _R4 quant it hit the GGML_ASSERT(nrc_x%4 == 0), but even without that I'm still happy with the performance of it.
 > 
 > Can you post the assert you see? I was hoping to have covered all places where one needs to check for divisibility by 4 before using `_R4` quants, but apparently I'm still missing checks somewhere. What are the tensor dimensions of this model?
+
+> 👤 **saood06** replied on **2025-01-11** at **11:03:54**
 > 
-> 👤 **saood06** replied the **2025-01-11** at **11:03:54**:<br>
 > >Can you post the assert you see?
 > 
 > Here's the full error output I got when trying to run it. I put it in a detail's thing as it is long.
@@ -664,27 +668,31 @@ Sorry, the goal was to make the `_R4` quants use the same quantization mixes, bu
 > https://huggingface.co/unsloth/DeepSeek-V3-GGUF/tree/main/DeepSeek-V3-Q2_K_L?show_file_info=DeepSeek-V3-Q2_K_L%2FDeepSeek-V3-Q2_K_L-00001-of-00005.gguf
 > 
 > That link should list them in a relatively nice format. You'll have to click through to view all 5 parts though.
+
+> 👤 **ikawrakow** replied on **2025-01-11** at **11:17:30**
 > 
-> 👤 **ikawrakow** replied the **2025-01-11** at **11:17:30**:<br>
 > Thanks! This explains it. It is a MoE model, so I must have forgotten to make sure the number of rows is a multiple of 4 when splitting work between threads in the MoE matrix multiplication implementation. I'll try to fix it.
+
+> 👤 **saood06** replied on **2025-01-12** at **18:08:54**
 > 
-> 👤 **saood06** replied the **2025-01-12** at **18:08:54**:<br>
 > >Thanks! This explains it.
 > 
 > I'm glad you were able to figure out the issue.
 > 
 > >I'll try to fix it.
 > 
-> I see you did with #170, now the _R4 works for Deepseek V3 but performance is different from what I was expecting. I am pleasantly surprised by token generation going from 2.75 t/s to 3.10 t/s. Prompt processing on the other hand dropped from 11.5 t/s to 9.8 t/s.
+> I see you did with [#170](https://github.com/ikawrakow/ik_llama.cpp/issues/170), now the _R4 works for Deepseek V3 but performance is different from what I was expecting. I am pleasantly surprised by token generation going from 2.75 t/s to 3.10 t/s. Prompt processing on the other hand dropped from 11.5 t/s to 9.8 t/s.
 > 
 > Either way thanks for the quick fix. The bump in TG speeds is nice, even if PP speed went down for me.
+
+> 👤 **ikawrakow** replied on **2025-01-13** at **05:54:15**
 > 
-> 👤 **ikawrakow** replied the **2025-01-13** at **05:54:15**:<br>
 > > Prompt processing on the other hand dropped from 11.5 t/s to 9.8 t/s.
 > 
 > This is strange. In my testing with Mixtral8x7B, after the fix `IQ4_XS_R4` is about 30% faster than `IQ4_XS` for prompt processing. Deepseek V3 is beyond my compute capabilities, so not able to investigate.
+
+> 👤 **saood06** replied on **2025-01-19** at **13:00:33**
 > 
-> 👤 **saood06** replied the **2025-01-19** at **13:00:33**:<br>
 > >after the fix IQ4_XS_R4 is about 30% faster than IQ4_XS for prompt processing
 > 
 > I've been testing IQ4_K_R4 vs IQ4_K. but I will test both IQ4_XS some for Mixtral-8x22B as I plan to test that, and I'll give some numbers against llama.cpp.
@@ -695,7 +703,7 @@ Sorry, the goal was to make the `_R4` quants use the same quantization mixes, bu
 
 ---
 
-👤 **ikawrakow** replied the **2025-01-11** at **07:58:35**:<br>
+👤 **ikawrakow** commented on **2025-01-11** at **07:58:35**
 
 > > Performance is good, but I don't understand why odd batch sizes seem to perform better. 
 
@@ -708,30 +716,34 @@ Clearly I'm doing something there that works better for odd number of queries. I
 
 ---
 
-👤 **saood06** replied the **2025-01-19** at **13:33:06**:<br>
+👤 **saood06** commented on **2025-01-19** at **13:33:06**
 
 >We see that the CPU performance gap has widened significantly since July when I made the comparison on the front page.
 
 Do you plan to update the README.md with these numbers? The R4 quants are very impressive.
 
-> 👤 **ikawrakow** replied the **2025-01-19** at **15:30:36**:<br>
+> 👤 **ikawrakow** replied on **2025-01-19** at **15:30:36**
+> 
 > I should, I know. It is just that I prefer to solve problems rather that write about how I solved the problem and what came out.
+
+> 👤 **saood06** replied on **2025-04-27** at **09:33:26**
 > 
-> 👤 **saood06** replied the **2025-04-27** at **09:33:26**:<br>
 > You made a good list of things [here](https://github.com/ikawrakow/ik_llama.cpp/discussions/256#discussioncomment-12496828), the "Why?" section can be updated with newer models like the official bitnet release, Deepseek, Llama-4. Updating the benchmarks though I know is a lot.
+
+> 👤 **ikawrakow** replied on **2025-04-28** at **14:29:33**
 > 
-> 👤 **ikawrakow** replied the **2025-04-28** at **14:29:33**:<br>
-> Something like PR #352 ?
+> Something like PR [#352](https://github.com/ikawrakow/ik_llama.cpp/issues/352) ?
 
 ---
 
-👤 **bartowski1182** replied the **2025-01-23** at **02:58:19**:<br>
+👤 **bartowski1182** commented on **2025-01-23** at **02:58:19**
 
 Out of curiousity, do you intend to maintain this fork as an alternative to llama.cpp perpetually? or is it more of a testing grounds before upstreaming?
 
 wondering if it's worth recommending people run this specifically for better performance or if it's more of a "bleeding edge" kind of project that people should just wait to get later when it's more ready
 
-> 👤 **ikawrakow** replied the **2025-01-23** at **08:18:58**:<br>
+> 👤 **ikawrakow** replied on **2025-01-23** at **08:18:58**
+> 
 > > Out of curiousity, do you intend to maintain this fork as an alternative to llama.cpp perpetually? or is it more of a testing grounds before upstreaming?
 > 
 > Nothing is perpetual in this world :smiley: 
@@ -741,15 +753,16 @@ wondering if it's worth recommending people run this specifically for better per
 > It is also a bit of a chicken and egg game: I'll only get a more significant number of users if people know (or at least expect) that I'm seriously committed to his project and the project gets advertised around social networks, but I can only know if I want to seriously commit to maintaining this project long term for a significant number of users if I already have many users and have dealt with the associated bug reports and feature requests :smiley:
 > 
 > As it stands, this project is only useful for technical users who are not scared to build the project themself (no docker images and pre-build binaries), and are using one of the platforms I develop/test on (Linux and macOS, `AVX2` or `ARM_NEON` CPUs, newer Nvidia GPUs). It may or may not work on Windows/Android/etc, old Nvidia or AMD GPUs, etc. I absolutely don't have the bandwidth (or desire) to be supporting every operating system and computing platform under the sun, including 10+ year old CPUs and GPUs, and obscure platforms used by exactly 3 people in the worlds, as `llama.cpp` does.
+
+> 👤 **bartowski1182** replied on **2025-01-23** at **15:12:49**
 > 
-> 👤 **bartowski1182** replied the **2025-01-23** at **15:12:49**:<br>
 > yeah that makes sense! would be cool to see someone attempt to upstream some improvements but I understand your lack of desire considering it's probably quite the headache
 > 
 > Good to know though you intend to keep this going for at least awhile
 
 ---
 
-👤 **saood06** replied the **2025-01-30** at **22:48:57**:<br>
+👤 **saood06** commented on **2025-01-30** at **22:48:57**
 
 I was curious due to Deepseek's design to test the MHA 35B c4ai-command-r-v01.Q8_0 on my Xeon E5-2683 v4. Ran as much context as I had RAM for. TG is set 5 not 32 as it was slow.
 

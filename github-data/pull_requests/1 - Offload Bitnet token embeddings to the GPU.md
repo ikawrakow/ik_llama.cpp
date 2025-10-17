@@ -1,14 +1,18 @@
-### 🔀 [#1](https://github.com/ikawrakow/ik_llama.cpp/pull/1) - Offload Bitnet token embeddings to the GPU
+## 🔀 [Pull Request #1](https://github.com/ikawrakow/ik_llama.cpp/pull/1) - Offload Bitnet token embeddings to the GPU
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/bitnet_token_embedding_gpu` |
+| **Target Branch** | `main` |
 | **Created** | 2024-07-26 |
 | **Updated** | 2024-07-26 |
+| **Merged** | 2024-07-26 |
+| **Assignees** | `ikawrakow` |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR puts the `token_embedding` tensor on the GPU for the Bitnet-1.58b model. This results in a significantly improved performance on CUDA/Metal as can be seen in the table. `CUDA` is for RTX-4080, `Metal` is for a 30-code M2-Max GPU, the host CPU is a Ryzen-7950X for `CUDA`.
 

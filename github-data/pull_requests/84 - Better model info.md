@@ -1,14 +1,17 @@
-### 🔀 [#84](https://github.com/ikawrakow/ik_llama.cpp/pull/84) - Better model info
+## 🔀 [Pull Request #84](https://github.com/ikawrakow/ik_llama.cpp/pull/84) - Better model info
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/better_model_info` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-10 |
 | **Updated** | 2024-10-10 |
+| **Merged** | 2024-10-10 |
 
 ---
 
-#### Description
+## 📄 Description
 
 In the quantization literature they always ignore the token embedding and output tensors (they leave them as `f16`). But when `llama.cpp` loads a model, it prints a bits-per-weight (bpw) value that is basically `total file size on disk / total number of parameters`. As this includes the output tensor, which is almost always quantized with more bpw, this makes the i- and k-quants appear not competitive.
 

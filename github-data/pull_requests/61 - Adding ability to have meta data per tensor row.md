@@ -1,14 +1,18 @@
-### 🔀 [#61](https://github.com/ikawrakow/ik_llama.cpp/pull/61) - Adding ability to have meta data per tensor row
+## 🔀 [Pull Request #61](https://github.com/ikawrakow/ik_llama.cpp/pull/61) - Adding ability to have meta data per tensor row
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/per_row_scale` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-25 |
 | **Updated** | 2024-09-27 |
+| **Merged** | 2024-09-27 |
+| **Labels** | `Breaking change` |
 
 ---
 
-#### Description
+## 📄 Description
 
 `ggml` is very opinionated on the topic of tensor data layout - things must be organized in blocks of a known size, the number of elements in a block must be fixed, etc. There are many places where it is assumed that a contiguous tensor row with `ne` elements occupies `ne * ts / bs` bytes, where `ts` is the "type size" and `bs` is the "block size". This is not very useful when one wants to have some meta data per tensor or per row (e.g., tensor or row scale, quant values in a K-means clustering based quantization, etc.).
 
