@@ -41,47 +41,58 @@ inline std::vector<std::pair<float,int>> & get_work_buffer(size_t size) {
 
 }
 #ifdef __ARM_NEON
-inline float32x4_t v_biased_sigmoid(float32x4_t x, float32x4_t b) {
+inline float32x4_t v_sigmoid(float32x4_t x) {
     const float32x4_t one = vdupq_n_f32(1.0f);
     const float32x4_t zero = vdupq_n_f32(0.0f);
     const float32x4_t neg_x = vsubq_f32(zero, x);
     const float32x4_t exp_neg_x = v_expf(neg_x);
     const float32x4_t one_plus_exp_neg_x = vaddq_f32(one, exp_neg_x);
-    return vaddq_f32(b, vdivq_f32(one, one_plus_exp_neg_x));
+    return vdivq_f32(one, one_plus_exp_neg_x);
 }
 #endif
 #ifdef __AVX2__
-inline __m256 v_biased_sigmoid(__m256 x, __m256 b) {
+inline __m256 v_sigmoid(__m256 x) {
     const __m256 one = _mm256_set1_ps(1);
     const __m256 zero  = _mm256_setzero_ps();
     const __m256 neg_x = _mm256_sub_ps(zero, x);
     const __m256 exp_neg_x = v_expf(neg_x);
     const __m256 one_plus_exp_neg_x = _mm256_add_ps(one, exp_neg_x);
-    return _mm256_add_ps(b, _mm256_div_ps(one, one_plus_exp_neg_x));
+    return _mm256_div_ps(one, one_plus_exp_neg_x);
 }
 #endif
 #if defined __AVX512F__ && defined __AVX512DQ__
-inline __m512 v_biased_sigmoid(__m512 x, __m512 b) {
+inline __m512 v_sigmoid(__m512 x) {
     const __m512 one = _mm512_set1_ps(1);
     const __m512 zero = _mm512_setzero_ps();
     const __m512 neg_x = _mm512_sub_ps(zero, x);
     const __m512 exp_neg_x = v_expf(neg_x);
     const __m512 one_plus_exp_neg_x = _mm512_add_ps(one, exp_neg_x);
-    return _mm512_add_ps(b, _mm512_div_ps(one, one_plus_exp_neg_x));
+    return _mm512_div_ps(one, one_plus_exp_neg_x);
 }
 #endif
-inline void biased_sigmoid(int n, const float * x, const float * bias, float * y) {
+inline void biased_sigmoid(int n, const float * x, const float * bias, float * y, float * z) {
     int i = 0;
 #if defined __AVX512F__ && defined __AVX512DQ__
-    for (; i + 15 < n; i += 16) _mm512_storeu_ps(y + i, v_biased_sigmoid(_mm512_loadu_ps(x + i), _mm512_loadu_ps(bias + i)));
+    for (; i + 15 < n; i += 16) {
+        auto v = v_sigmoid(_mm512_loadu_ps(x + i));
+        _mm512_storeu_ps(y + i, _mm512_add_ps(v, _mm512_loadu_ps(bias + i)));
+        _mm512_storeu_ps(z + i, v);
+    }
 #endif
 #if defined __AVX2__ && defined __FMA__
-    for (; i + 7 < n; i += 8) _mm256_storeu_ps(y + i, v_biased_sigmoid(_mm256_loadu_ps(x + i), _mm256_loadu_ps(bias + i)));
+    for (; i + 7 < n; i += 8) {
+        auto v = v_sigmoid(_mm256_loadu_ps(x + i));
+        _mm256_storeu_ps(y + i, _mm256_add_ps(v, _mm256_loadu_ps(bias + i)));
+        _mm256_storeu_ps(z + i, v);
+    }
 #endif
 #ifdef __ARM_NEON
     for (; i + 3 < n; i += 4) vst1q_f32(y + i, v_biased_sigmoid(vld1q_f32(x + i), vld1q_f32(bias + i)));
 #endif
-    for (; i < n; ++i) y[i] = 1/(1 + expf(-x[i])) + bias[i];
+    for (; i < n; ++i) {
+        z[i] = 1/(1 + expf(-x[i]));
+        y[i] = y[i] + bias[i];
+    }
 }
 }
 
@@ -214,17 +225,18 @@ void iqk_bailingmoev2_experts(struct ggml_tensor * dst, struct ggml_tensor * top
     GGML_ASSERT(nk <= n_per_group);
     GGML_ASSERT(n_top_groups <= n_groups);
 
-    size_t work_size = n_groups + n_per_group*n_top_groups + (ne00 + 1)/2;
+    size_t work_size = n_groups + n_per_group*n_top_groups + ne00;
     auto& aux = get_work_buffer(work_size);
 
     auto groups = aux.data() + n_per_group*n_top_groups;
-    auto values = (float *)(groups + n_groups);
+    auto biased_values = (float *)(groups + n_groups);
+    auto values = biased_values + ne00;
 
     auto bias = (const float *)t_bias->data;
 
     for (int ir = first; ir < last; ++ir) {
         auto data = (const float *)((const char *)probs->data + ir*probs->nb[1]);
-        biased_sigmoid(ne00, data, bias, values);
+        biased_sigmoid(ne00, data, bias, biased_values, values);
         //for (int j = 0; j < ne00; ++j) values[j] = 1/(1 + expf(-data[j])) + bias[j];
         auto weights = (float *)((char *)dst->data + ir*dst->nb[2]);
         auto ids = (int32_t *)((char *)topk->data + ir*topk->nb[1]);
@@ -237,21 +249,21 @@ void iqk_bailingmoev2_experts(struct ggml_tensor * dst, struct ggml_tensor * top
         }
         if (n_top_groups < n_groups) {
             for (int ig = 0; ig < n_groups; ++ig) {
-                groups[ig] = { group_score(n_per_group, nk, values + ig*n_per_group, (float *)aux.data()), ig };
+                groups[ig] = { group_score(n_per_group, nk, biased_values + ig*n_per_group, (float *)aux.data()), ig };
             }
             std::partial_sort(groups, groups + n_top_groups, groups + n_groups, std::greater<std::pair<float,int>>{});
 
             for (int ig = 0; ig < n_top_groups; ++ig) {
                 int i0 = n_per_group * ig;
                 int j0 = n_per_group * groups[ig].second;
-                for (int j = 0; j < n_per_group; ++j) aux[i0 + j] = { values[j0 + j], j0 + j };
+                for (int j = 0; j < n_per_group; ++j) aux[i0 + j] = { biased_values[j0 + j], j0 + j };
             }
         } else {
-            for (int j = 0; j < ne00; ++j) aux[j] = { values[j], j };
+            for (int j = 0; j < ne00; ++j) aux[j] = { biased_values[j], j };
         }
         std::partial_sort(aux.begin(), aux.begin() + ne0, aux.begin() + n_top_groups*n_per_group, std::greater<std::pair<float,int>>{});
         for (int j = 0; j < ne0; ++j) {
-            weights[j] = aux[j].first;
+            weights[j] = values[aux[j].second];
             ids[j]     = aux[j].second;
         }
 

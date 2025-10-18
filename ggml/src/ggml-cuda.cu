@@ -3173,7 +3173,16 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     ggml_cuda_op_relu(ctx, dst);
                     break;
                 case GGML_UNARY_OP_SIGMOID:
-                    ggml_cuda_op_sigmoid(ctx, dst);
+                    if (i + 4 < cgraph->n_nodes &&
+                        cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
+                        cgraph->nodes[i+2]->op == GGML_OP_ADD &&
+                        cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&
+                        cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS) {
+                        cuda_bailingmoev2_experts(ctx, cgraph->nodes[i+4], cgraph->nodes[i+3]);
+                        i += 4;
+                    } else {
+                        ggml_cuda_op_sigmoid(ctx, dst);
+                    }
                     break;
                 case GGML_UNARY_OP_HARDSIGMOID:
                     ggml_cuda_op_hardsigmoid(ctx, dst);
