@@ -22611,7 +22611,17 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_UNARY:
             {
-                ggml_compute_forward_unary(params, tensor);
+                const enum ggml_unary_op unary_op = ggml_get_unary_op(tensor);
+                if (unary_op == GGML_UNARY_OP_SIGMOID && i + 4 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
+                    cgraph->nodes[i+2]->op == GGML_OP_ADD &&
+                    cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&
+                    cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS) {
+                    iqk_bailingmoev2_experts(cgraph->nodes[i+4], cgraph->nodes[i+3], params->ith, params->nth);
+                    i += 4;
+                } else {
+                    ggml_compute_forward_unary(params, tensor);
+                }
             } break;
         case GGML_OP_GLU:
             {

@@ -18,6 +18,8 @@ void iqk_grouped_top_k(struct ggml_tensor * dst, int ith, int nth);
 
 void iqk_argsort(struct ggml_tensor * dst, int ith, int nth);
 
+void iqk_bailingmoev2_experts(struct ggml_tensor * dst, struct ggml_tensor * topk, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif
