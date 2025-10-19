@@ -22612,7 +22612,16 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
         case GGML_OP_UNARY:
             {
                 const enum ggml_unary_op unary_op = ggml_get_unary_op(tensor);
-                if (unary_op == GGML_UNARY_OP_SIGMOID && i + 4 < cgraph->n_nodes &&
+                if (unary_op == GGML_UNARY_OP_SIGMOID && i + 5 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
+                    cgraph->nodes[i+2]->op == GGML_OP_ADD &&
+                    cgraph->nodes[i+3]->op == GGML_OP_ARGSORT &&
+                    cgraph->nodes[i+4]->op == GGML_OP_VIEW &&
+                    cgraph->nodes[i+5]->op == GGML_OP_GET_ROWS) {
+                    iqk_glm45moe_experts(cgraph->nodes[i+5], cgraph->nodes[i+4], params->ith, params->nth);
+                    i += 5;
+                }
+                else if (unary_op == GGML_UNARY_OP_SIGMOID && i + 4 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                     cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                     cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&

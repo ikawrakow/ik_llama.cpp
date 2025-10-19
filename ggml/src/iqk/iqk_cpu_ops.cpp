@@ -87,11 +87,39 @@ inline void biased_sigmoid(int n, const float * x, const float * bias, float * y
     }
 #endif
 #ifdef __ARM_NEON
-    for (; i + 3 < n; i += 4) vst1q_f32(y + i, v_biased_sigmoid(vld1q_f32(x + i), vld1q_f32(bias + i)));
+    for (; i + 3 < n; i += 4) {
+        auto v = v_sigmoid(vld1q_f32(x + i));
+        vst1q_f32(y + i, vaddq_f32(v, vld1q_f32(bias + i)));
+        vst1q_f32(z + i, v);
+    }
 #endif
     for (; i < n; ++i) {
         z[i] = 1/(1 + expf(-x[i]));
         y[i] = y[i] + bias[i];
+    }
+}
+inline void biased_sigmoid(int n, const float * x, const float * bias, float * y) {
+    int i = 0;
+#if defined __AVX512F__ && defined __AVX512DQ__
+    for (; i + 15 < n; i += 16) {
+        auto v = v_sigmoid(_mm512_loadu_ps(x + i));
+        _mm512_storeu_ps(y + i, _mm512_add_ps(v, _mm512_loadu_ps(bias + i)));
+    }
+#endif
+#if defined __AVX2__ && defined __FMA__
+    for (; i + 7 < n; i += 8) {
+        auto v = v_sigmoid(_mm256_loadu_ps(x + i));
+        _mm256_storeu_ps(y + i, _mm256_add_ps(v, _mm256_loadu_ps(bias + i)));
+    }
+#endif
+#ifdef __ARM_NEON
+    for (; i + 3 < n; i += 4) {
+        auto v = v_sigmoid(vld1q_f32(x + i));
+        vst1q_f32(y + i, vaddq_f32(v, vld1q_f32(bias + i)));
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = 1/(1 + expf(-x[i])) + bias[i];
     }
 }
 }
@@ -270,3 +298,50 @@ void iqk_bailingmoev2_experts(struct ggml_tensor * dst, struct ggml_tensor * top
     }
 }
 
+void iqk_glm45moe_experts(struct ggml_tensor * dst, struct ggml_tensor * topk_view, int ith, int nth) {
+    GGML_ASSERT(topk_view->op == GGML_OP_VIEW);
+    auto topk     = topk_view->src[0];
+    auto topk_src = topk->src[0];
+    auto probs    = topk_src->src[0]->src[0];
+    auto t_bias   = topk_src->src[1];
+
+    auto nrows = ggml_nrows(probs);
+    auto npt   = (nrows + nth - 1)/nth;
+    auto first = npt*ith;
+    auto last  = std::min(first + npt, nrows);
+    if (last <= first) return;
+
+    int ne00 = probs->ne[0];
+    int ne0  = topk_view->ne[0];
+    GGML_ASSERT(ggml_is_contiguous(probs));
+    GGML_ASSERT(t_bias->ne[1] == 1);
+    GGML_ASSERT(t_bias->ne[0] == probs->ne[0]);
+    GGML_ASSERT(ne0 == dst->ne[1]);
+    GGML_ASSERT(ne0 <= ne00);
+
+    size_t work_size = 2*ne00;
+    auto& aux = get_work_buffer(work_size);
+
+    auto biased_values = (float *)(aux.data() + ne00);
+    //auto values = biased_values + ne00;
+
+    auto bias = (const float *)t_bias->data;
+
+    for (int ir = first; ir < last; ++ir) {
+        auto data = (const float *)((const char *)probs->data + ir*probs->nb[1]);
+        //biased_sigmoid(ne00, data, bias, biased_values, values);
+        biased_sigmoid(ne00, data, bias, biased_values);
+        auto weights = (float *)((char *)dst->data + ir*dst->nb[2]);
+        auto ids = (int32_t *)((char *)topk->data + ir*topk->nb[1]);
+        for (int j = 0; j < ne00; ++j) aux[j] = { biased_values[j], j };
+        if (ne0 < ne00) {
+            std::partial_sort(aux.begin(), aux.begin() + ne0, aux.begin() + ne00, std::greater<std::pair<float,int>>{});
+        } else {
+            std::sort(aux.begin(), aux.begin() + ne00, std::greater<std::pair<float,int>>{});
+        }
+        for (int j = 0; j < ne0; ++j) {
+            weights[j] = 1/(1 + expf(-data[aux[j].second]));
+            ids[j]     = aux[j].second;
+        }
+    }
+}

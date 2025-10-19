@@ -3182,14 +3182,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                         cuda_glm45moe_experts(ctx, cgraph->nodes[i+5], cgraph->nodes[i+4]);
                         i += 5;
                     }
-                    //else if (i + 5 < cgraph->n_nodes) {
-                    //    printf("sigmoid(%s) -> %s(%s) -> %s(%s) -> %s(%s) -> %s(%s) -> %s(%s)\n", dst->name,
-                    //            ggml_op_name(cgraph->nodes[i+1]->op), cgraph->nodes[i+1]->name,
-                    //            ggml_op_name(cgraph->nodes[i+2]->op), cgraph->nodes[i+2]->name,
-                    //            ggml_op_name(cgraph->nodes[i+3]->op), cgraph->nodes[i+3]->name,
-                    //            ggml_op_name(cgraph->nodes[i+4]->op), cgraph->nodes[i+4]->name,
-                    //            ggml_op_name(cgraph->nodes[i+5]->op), cgraph->nodes[i+5]->name);
-                    //}
                     else if (i + 4 < cgraph->n_nodes &&
                         cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                         cgraph->nodes[i+2]->op == GGML_OP_ADD &&
