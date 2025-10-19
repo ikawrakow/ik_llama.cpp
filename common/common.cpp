@@ -1152,7 +1152,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--cpu-moe" || arg == "-cmoe") {
-        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate)_exps"), ggml_backend_cpu_buffer_type()});
+        params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
         return true;
     }
     if (arg == "--n-cpu-moe" || arg == "-ncmoe") {
@@ -1164,7 +1164,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             return true;
         }
         for (int32_t l = 0; l < n_layers; ++l) {
-            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)_exps)";
+            std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)_exps\\.weight)";
             params.tensor_buft_overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
         }
         return true;
