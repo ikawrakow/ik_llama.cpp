@@ -3336,7 +3336,17 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_sum_rows(ctx, dst);
             break;
         case GGML_OP_ARGSORT:
-            ggml_cuda_op_argsort(ctx, dst);
+            if (i + 5 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
+                cgraph->nodes[i+2]->op == GGML_OP_GET_ROWS &&
+                cgraph->nodes[i+3]->op == GGML_OP_RESHAPE &&
+                cgraph->nodes[i+4]->op == GGML_OP_SOFT_MAX &&
+                cgraph->nodes[i+5]->op == GGML_OP_RESHAPE) {
+                cuda_openai_experts(ctx, dst, cgraph->nodes[i+4]);
+                i += 5;
+            } else {
+                ggml_cuda_op_argsort(ctx, dst);
+            }
             break;
         case GGML_OP_ARGSORT_THRESH:
             ggml_cuda_op_argsort_thresh(ctx, dst);
