@@ -22357,7 +22357,15 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_SUM_ROWS:
             {
-                ggml_compute_forward_sum_rows(params, tensor);
+                if (i + 1 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_DIV &&
+                    cgraph->nodes[i+1]->src[1] == tensor &&
+                    cgraph->nodes[i+1]->src[0] == tensor->src[0]) {
+                    iqk_sumrows_div(cgraph->nodes[i+1], params->ith, params->nth);
+                    ++i;
+                } else {
+                    ggml_compute_forward_sum_rows(params, tensor);
+                }
             } break;
         case GGML_OP_MEAN:
             {
@@ -22568,7 +22576,17 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_ARGSORT:
             {
-                ggml_compute_forward_argsort(params, tensor);
+                if (false && i + 5 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
+                    cgraph->nodes[i+2]->op == GGML_OP_GET_ROWS &&
+                    cgraph->nodes[i+3]->op == GGML_OP_RESHAPE &&
+                    cgraph->nodes[i+4]->op == GGML_OP_SOFT_MAX &&
+                    cgraph->nodes[i+5]->op == GGML_OP_RESHAPE) {
+                    iqk_openai_experts(tensor, cgraph->nodes[i+4], params->ith, params->nth);
+                    i += 5;
+                } else {
+                    ggml_compute_forward_argsort(params, tensor);
+                }
             } break;
         case GGML_OP_ARGSORT_THRESH:
             {
@@ -22611,7 +22629,26 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_UNARY:
             {
-                ggml_compute_forward_unary(params, tensor);
+                const enum ggml_unary_op unary_op = ggml_get_unary_op(tensor);
+                if (unary_op == GGML_UNARY_OP_SIGMOID && i + 5 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
+                    cgraph->nodes[i+2]->op == GGML_OP_ADD &&
+                    cgraph->nodes[i+3]->op == GGML_OP_ARGSORT &&
+                    cgraph->nodes[i+4]->op == GGML_OP_VIEW &&
+                    cgraph->nodes[i+5]->op == GGML_OP_GET_ROWS) {
+                    iqk_glm45moe_experts(cgraph->nodes[i+5], cgraph->nodes[i+4], params->ith, params->nth);
+                    i += 5;
+                }
+                else if (unary_op == GGML_UNARY_OP_SIGMOID && i + 4 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
+                    cgraph->nodes[i+2]->op == GGML_OP_ADD &&
+                    cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&
+                    cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS) {
+                    iqk_bailingmoev2_experts(cgraph->nodes[i+4], cgraph->nodes[i+3], params->ith, params->nth);
+                    i += 4;
+                } else {
+                    ggml_compute_forward_unary(params, tensor);
+                }
             } break;
         case GGML_OP_GLU:
             {
