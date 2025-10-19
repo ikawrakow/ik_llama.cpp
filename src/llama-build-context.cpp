@@ -836,15 +836,15 @@ llm_expert_gating_func_type   gating_op,
             ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
-    if (graph) {
-        ggml_build_forward_expand(graph, weights);
-    }
-
     if (gating_op == LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
         weights = ggml_reshape_2d(ctx, weights, n_expert_used, n_tokens);
         weights = ggml_soft_max(ctx, weights); // [n_expert_used, n_tokens]
         weights = ggml_reshape_3d(ctx, weights, 1, n_expert_used, n_tokens);
         cb(weights, "ffn_moe_weights_softmax", il);
+    }
+
+    if (graph) {
+        ggml_build_forward_expand(graph, weights);
     }
 
     if (norm_w) {
