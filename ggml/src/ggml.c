@@ -22568,7 +22568,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_ARGSORT:
             {
-                if (i + 5 < cgraph->n_nodes &&
+                if (false && i + 5 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                     cgraph->nodes[i+2]->op == GGML_OP_GET_ROWS &&
                     cgraph->nodes[i+3]->op == GGML_OP_RESHAPE &&

@@ -209,15 +209,15 @@ void iqk_argsort(ggml_tensor * dst, int ith, int nth) {
         for (int j = 0; j < ne00; ++j) aux[j] = {data[j], j};
         if (nk < ne00) {
             if (order == GGML_SORT_ORDER_DESC) {
-                std::partial_sort(aux.begin(), aux.begin() + nk, aux.end(), std::greater<std::pair<float,int>>{});
+                std::partial_sort(aux.begin(), aux.begin() + nk, aux.begin() + ne00, std::greater<std::pair<float,int>>{});
             } else {
-                std::partial_sort(aux.begin(), aux.begin() + nk, aux.end());
+                std::partial_sort(aux.begin(), aux.begin() + nk, aux.begin() + ne00);
             }
         } else {
             if (order == GGML_SORT_ORDER_DESC) {
-                std::sort(aux.begin(), aux.end(), std::greater<std::pair<float,int>>{});
+                std::sort(aux.begin(), aux.begin() + ne00, std::greater<std::pair<float,int>>{});
             } else {
-                std::sort(aux.begin(), aux.end());
+                std::sort(aux.begin(), aux.begin() + ne00);
             }
         }
         auto y = (int32_t *)((char *)dst->data + ir*dst->nb[1]);
@@ -361,8 +361,6 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
     GGML_ASSERT(ggml_is_contiguous(probs));
     GGML_ASSERT(ggml_is_contiguous(softmax));
     GGML_ASSERT(ne0 <= ne00);
-    //if (ith == 0) printf("%s: ne00 = %d, ne0 = %d, topk: %s, softmax: %s\n", __func__, ne00, ne0, ggml_type_name(topk->type), ggml_type_name(softmax->type));
-    //if (ith == 0) printf("%s: ne00 = %d, ne0 = %d, topk: %s, %ld x %ld x %ld x %ld, %zu x %zu x %zu x %zu\n", __func__, ne00, ne0, ggml_type_name(topk->type), topk->ne[0], topk->ne[1], topk->ne[2], topk->ne[3], topk->nb[0], topk->nb[1], topk->nb[2], topk->nb[3]);
 
     size_t work_size = ne00;
     auto& aux = get_work_buffer(work_size);
