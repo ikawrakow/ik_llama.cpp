@@ -3333,7 +3333,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_pool2d(ctx, dst);
             break;
         case GGML_OP_SUM_ROWS:
-            ggml_cuda_op_sum_rows(ctx, dst);
+            if (i + 1 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_DIV &&
+                cgraph->nodes[i+1]->src[1] == dst &&
+                cgraph->nodes[i+1]->src[0] == dst->src[0]) {
+                ggml_cuda_op_sum_rows_div(ctx, cgraph->nodes[i+1]);
+                ++i;
+            } else {
+                ggml_cuda_op_sum_rows(ctx, dst);
+            }
             break;
         case GGML_OP_ARGSORT:
             if (i + 5 < cgraph->n_nodes &&

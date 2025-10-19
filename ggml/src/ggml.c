@@ -22357,7 +22357,15 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_SUM_ROWS:
             {
-                ggml_compute_forward_sum_rows(params, tensor);
+                if (i + 1 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_DIV &&
+                    cgraph->nodes[i+1]->src[1] == tensor &&
+                    cgraph->nodes[i+1]->src[0] == tensor->src[0]) {
+                    iqk_sumrows_div(cgraph->nodes[i+1], params->ith, params->nth);
+                    ++i;
+                } else {
+                    ggml_compute_forward_sum_rows(params, tensor);
+                }
             } break;
         case GGML_OP_MEAN:
             {

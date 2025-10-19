@@ -14,6 +14,8 @@ extern "C" {
 
 struct ggml_tensor;
 
+void iqk_sumrows_div(struct ggml_tensor * div, int ith, int nth);
+
 void iqk_grouped_top_k(struct ggml_tensor * dst, int ith, int nth);
 
 void iqk_argsort(struct ggml_tensor * dst, int ith, int nth);

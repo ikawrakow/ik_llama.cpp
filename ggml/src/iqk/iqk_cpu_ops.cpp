@@ -124,6 +124,28 @@ inline void biased_sigmoid(int n, const float * x, const float * bias, float * y
 }
 }
 
+void iqk_sumrows_div(struct ggml_tensor * div, int ith, int nth) {
+    auto src = div->src[0];
+    GGML_ASSERT(src->type == GGML_TYPE_F32);
+    GGML_ASSERT(div->type == GGML_TYPE_F32);
+
+    int ne00  = src->ne[0];
+    int nrows = ggml_nrows(src);
+    int npt   = (nrows + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = std::min(first + npt, nrows);
+    if (last < first) return;
+
+    for (int ir = first; ir < last; ++ir) {
+        auto values = (const float *)((const char *)src->data + ir*src->nb[1]);
+        float sum = 0;
+        for (int j = 0; j < ne00; ++j) sum += values[j];
+        float norm = sum > 0 ? 1/sum : 0.0f;
+        auto result = (float *)((char *)div->data + ir*div->nb[1]);
+        for (int j = 0; j < ne00; ++j) result[j] = values[j]*norm;
+    }
+}
+
 void iqk_grouped_top_k(ggml_tensor * dst, int ith, int nth) {
     auto src = dst->src[0];
     GGML_ASSERT(dst->type == GGML_TYPE_I32);
