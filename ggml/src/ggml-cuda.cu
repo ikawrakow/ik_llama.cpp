@@ -3173,12 +3173,29 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     ggml_cuda_op_relu(ctx, dst);
                     break;
                 case GGML_UNARY_OP_SIGMOID:
-                    if (i + 4 < cgraph->n_nodes &&
+                    if (i + 5 < cgraph->n_nodes &&
+                        cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
+                        cgraph->nodes[i+2]->op == GGML_OP_ADD &&
+                        cgraph->nodes[i+3]->op == GGML_OP_ARGSORT &&
+                        cgraph->nodes[i+4]->op == GGML_OP_VIEW &&
+                        cgraph->nodes[i+5]->op == GGML_OP_GET_ROWS) {
+                        cuda_glm45moe_experts(ctx, cgraph->nodes[i+5], cgraph->nodes[i+4]);
+                        i += 5;
+                    }
+                    //else if (i + 5 < cgraph->n_nodes) {
+                    //    printf("sigmoid(%s) -> %s(%s) -> %s(%s) -> %s(%s) -> %s(%s) -> %s(%s)\n", dst->name,
+                    //            ggml_op_name(cgraph->nodes[i+1]->op), cgraph->nodes[i+1]->name,
+                    //            ggml_op_name(cgraph->nodes[i+2]->op), cgraph->nodes[i+2]->name,
+                    //            ggml_op_name(cgraph->nodes[i+3]->op), cgraph->nodes[i+3]->name,
+                    //            ggml_op_name(cgraph->nodes[i+4]->op), cgraph->nodes[i+4]->name,
+                    //            ggml_op_name(cgraph->nodes[i+5]->op), cgraph->nodes[i+5]->name);
+                    //}
+                    else if (i + 4 < cgraph->n_nodes &&
                         cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                         cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                         cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&
                         cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS) {
-                        cuda_bailingmoev2_experts(ctx, cgraph->nodes[i+4], cgraph->nodes[i+3]);
+                        cuda_bailingmoev2_experts(ctx, cgraph->nodes[i+4], cgraph->nodes[i+4]);
                         i += 4;
                     } else {
                         ggml_cuda_op_sigmoid(ctx, dst);
