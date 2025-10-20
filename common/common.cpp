@@ -1391,7 +1391,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--no-offload-only-active-experts" || arg == "-no-ooae") {
-        params.only_active_exps = true;
+        params.only_active_exps = false;
         return true;
     }
     if (arg == "--host") {
