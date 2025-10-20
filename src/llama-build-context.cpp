@@ -863,7 +863,7 @@ llm_expert_gating_func_type   gating_op,
 
         weights = ggml_reshape_3d(ctx, weights, 1, n_expert_used, n_tokens);
     }
-    if (scale_w) {
+    if (scale_w && std::abs(w_scale-1) > 1e-5f) {
         weights = ggml_scale(ctx, weights, w_scale);
         cb(weights, "ffn_moe_weights_scaled", il);
     }

@@ -532,7 +532,7 @@ static bool llama_kv_cache_init(
 
     const struct llama_hparams & hparams = model.hparams;
 
-    const int64_t  n_layer = hparams.n_layer;
+    const int64_t  n_layer = hparams.n_layer - hparams.nextn_predict_layers;
 
     cache.has_shift = false;
 
