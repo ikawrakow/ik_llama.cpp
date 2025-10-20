@@ -119,7 +119,7 @@ static __global__ void rms_norm_f32(const float * x, float * dst, const int ncol
             s_sum[warp_id] = tmp;
         }
         __syncthreads();
-        tmp = s_sum[lane_id];
+        tmp = lane_id < block_size/WARP_SIZE ? s_sum[lane_id] : 0.0f;
         tmp = warp_reduce_sum(tmp);
     }
 
@@ -198,7 +198,7 @@ static __global__ void fused_rms_norm_f32(const float * x, const float * y, floa
             s_sum[warp_id] = tmp;
         }
         __syncthreads();
-        tmp = s_sum[lane_id];
+        tmp = lane_id < block_size/WARP_SIZE ? s_sum[lane_id] : 0.0f;
         tmp = warp_reduce_sum(tmp);
     }
 
