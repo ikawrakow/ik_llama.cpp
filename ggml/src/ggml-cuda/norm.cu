@@ -455,3 +455,86 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
         fused_rms_norm_f32_nc_cuda(src0_d, src1_d, dst_d, ne00, src0->ne[1], src0->ne[2], src0->ne[3], s01, s02, s03, eps, stream);
     }
 }
+
+template <int block_size>
+static __global__ void fused_add_rms_norm_f32(const float * a, const float * b, const float * c,
+        float * dst_add, float * dst, const int ncols, const float eps) {
+    const int row = blockIdx.x*blockDim.y + threadIdx.y;
+    const int tid = threadIdx.x;
+
+    float tmp = 0.0f; // partial sum for thread in warp
+
+    for (int col = tid; col < ncols; col += block_size) {
+        const float xi = a[row*ncols + col] + b[row*ncols + col];
+        tmp += xi * xi;
+        dst_add[row*ncols + col] = xi;
+    }
+
+    // sum up partial sums
+    tmp = warp_reduce_sum(tmp);
+    if (block_size > WARP_SIZE) {
+        __shared__ float s_sum[32];
+        int warp_id = threadIdx.x / WARP_SIZE;
+        int lane_id = threadIdx.x % WARP_SIZE;
+        if (lane_id == 0) {
+            s_sum[warp_id] = tmp;
+        }
+        __syncthreads();
+        tmp = lane_id < block_size/WARP_SIZE ? s_sum[lane_id] : 0.0f;
+        tmp = warp_reduce_sum(tmp);
+    }
+
+    const float mean = tmp / ncols;
+    const float scale = rsqrtf(mean + eps);
+
+    for (int col = tid; col < ncols; col += block_size) {
+        dst[row*ncols + col] = scale * c[col] * dst_add[row*ncols + col];
+    }
+}
+
+
+static void fused_add_rms_norm_f32_cuda(const float * a, const float * b, const float * c, float * dst_add, float * dst,
+        const int ncols, const int nrows, const float eps, cudaStream_t stream) {
+    GGML_ASSERT(ncols % WARP_SIZE == 0);
+    if (ncols < 1024) {
+        const dim3 block_dims(256, 1, 1);
+        fused_add_rms_norm_f32<256><<<nrows, block_dims, 0, stream>>>(a, b, c, dst_add, dst, ncols, eps);
+    } else {
+        const dim3 block_dims(1024, 1, 1);
+        fused_add_rms_norm_f32<1024><<<nrows, block_dims, 0, stream>>>(a, b, c, dst_add, dst, ncols, eps);
+    }
+}
+
+void ggml_cuda_op_fused_add_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * add, ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    //const float * src0_d = (const float *)src0->data;
+    const float * src1_d = (const float *)src1->data;
+    float * dst_d = (float *)dst->data;
+    cudaStream_t stream = ctx.stream();
+
+    GGML_ASSERT(add->data == src0->data);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(add->src[0]));
+    GGML_ASSERT(ggml_is_contiguous(add->src[1]));
+    GGML_ASSERT(ggml_are_same_shape(add->src[0], add->src[1]));
+    GGML_ASSERT(ggml_are_same_shape(add->src[0], src0));
+    GGML_ASSERT(add->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(add->src[1]->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->ne[0] == src1->ne[0]);
+    GGML_ASSERT(ggml_nrows(src1) == 1);
+
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+
+    const int64_t ne00 = src0->ne[0];
+
+    const int64_t nrows = ggml_nrows(src0);
+    fused_add_rms_norm_f32_cuda((const float *)add->src[0]->data, (const float *)add->src[1]->data,
+            src1_d, (float *)add->data, dst_d, ne00, nrows, eps, stream);
+}
+
