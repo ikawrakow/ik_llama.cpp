@@ -297,7 +297,6 @@ static void rms_norm_f32_cuda(const float * x, float * dst, const int ncols, con
 static void rms_norm_f32_nc_cuda(
         const float * x, float * dst, const int ncols, const int nrows, const int nchannels, const int nsamples,
         const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, cudaStream_t stream) {
-    printf("%s: ncols = %d\n", __func__, ncols);
     const dim3 blocks_num(nrows, nchannels, nsamples);
     if (ncols < 1024) {
         const dim3 block_dims(WARP_SIZE, 1, 1);
