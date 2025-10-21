@@ -508,7 +508,7 @@ void cuda_bailingmoev2_experts(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 
     {
         const dim3 block_dims(WARP_SIZE, 1, 1);
-        const dim3 block_nums(1, nrows, 1);
+        const dim3 block_nums(nrows, 1, 1);
         k_apply_mask<<<block_nums, block_dims, 0, ctx.stream()>>>((float *)topk_src->data, discarded_groups.get(), n_discarded_groups, n_per_group, ne00);
         CUDA_CHECK(cudaGetLastError());
     }
