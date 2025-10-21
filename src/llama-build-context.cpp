@@ -7793,6 +7793,7 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
 
         cur = ffn_inp;
         cur = llm_build_norm(ctx0, cur,  hparams, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, cb, il);
+        ggml_build_forward_expand(gf, cur);
         cb(cur, "attn_post_norm", il);
 
         bool use_dup_bias = cur->ne[1] < 32 && model.layers[il].ffn_up_exps_b_dup &&
