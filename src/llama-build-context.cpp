@@ -1287,9 +1287,7 @@ ggml_cgraph * llm_build_context::build_llama() {
             KQ_mask_swa : KQ_mask;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -1352,9 +1350,7 @@ ggml_cgraph * llm_build_context::build_llama() {
         // feed-forward network
         if (model.layers[il].ffn_gate_inp == nullptr) {
             // non-MoE
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -1366,9 +1362,7 @@ ggml_cgraph * llm_build_context::build_llama() {
             cb(cur, "ffn_out", il);
         } else if (model.arch == LLM_ARCH_LLAMA4) {
             // llama4 MoE
-            ggml_tensor * ffn_inp_normed = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            ggml_tensor * ffn_inp_normed = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, ffn_inp_normed,
@@ -1397,9 +1391,7 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         } else {
             // MoE branch
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_moe_ffn(ctx0, lctx, cur,
@@ -1434,9 +1426,7 @@ ggml_cgraph * llm_build_context::build_llama() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -1487,9 +1477,7 @@ ggml_cgraph * llm_build_context::build_deci() {
             cur = inpL;
         } else {
             // norm
-            cur = llm_build_norm(ctx0, inpL, hparams,
-                    model.layers[il].attn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
         }
 
@@ -1551,9 +1539,7 @@ ggml_cgraph * llm_build_context::build_deci() {
 
         // feed-forward network
         if (model.layers[il].ffn_gate_inp == nullptr) {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -1581,9 +1567,7 @@ ggml_cgraph * llm_build_context::build_deci() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -1621,9 +1605,7 @@ ggml_cgraph * llm_build_context::build_baichuan() {
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -1671,9 +1653,7 @@ ggml_cgraph * llm_build_context::build_baichuan() {
 
         // feed-forward network
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -1695,9 +1675,7 @@ ggml_cgraph * llm_build_context::build_baichuan() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -1732,9 +1710,7 @@ ggml_cgraph * llm_build_context::build_xverse() {
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -1772,9 +1748,7 @@ ggml_cgraph * llm_build_context::build_xverse() {
 
         // feed-forward network
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -1830,20 +1804,14 @@ ggml_cgraph * llm_build_context::build_falcon() {
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * attn_norm;
 
-        attn_norm = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        attn_norm = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(attn_norm, "attn_norm", il);
 
         // self-attention
         {
             if (model.layers[il].attn_norm_2) {
                 // Falcon-40B
-                cur = llm_build_norm(ctx0, inpL, hparams,
-                        model.layers[il].attn_norm_2,
-                        model.layers[il].attn_norm_2_b,
-                        LLM_NORM, cb, il);
+                cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm_2, model.layers[il].attn_norm_2_b, LLM_NORM, cb, il);
                 cb(cur, "attn_norm_2", il);
             } else {
                 cur = attn_norm;
@@ -1914,10 +1882,7 @@ ggml_cgraph * llm_build_context::build_falcon() {
     cur = inpL;
 
     // norm
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -1952,9 +1917,7 @@ ggml_cgraph * llm_build_context::build_grok() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
 
@@ -1991,9 +1954,7 @@ ggml_cgraph * llm_build_context::build_grok() {
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
 
-        cur = llm_build_norm(ctx0, cur, hparams,
-                model.layers[il].attn_out_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_out_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_out_norm", il);
 
 
@@ -2001,9 +1962,7 @@ ggml_cgraph * llm_build_context::build_grok() {
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         // MoE branch
@@ -2036,9 +1995,7 @@ ggml_cgraph * llm_build_context::build_grok() {
             cur = moe_out;
         }
 
-        cur = llm_build_norm(ctx0, cur, hparams,
-                model.layers[il].ffn_post_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_post_norm", il);
 
 
@@ -2054,9 +2011,7 @@ ggml_cgraph * llm_build_context::build_grok() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -2104,9 +2059,7 @@ ggml_cgraph * llm_build_context::build_dbrx() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -2161,9 +2114,7 @@ ggml_cgraph * llm_build_context::build_dbrx() {
 
         // feed-forward network
         // MoE branch
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].attn_out_norm, NULL,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].attn_out_norm, NULL, LLM_NORM, cb, il);
         cb(cur, "attn_out_norm", il);
 
         cur = llm_build_moe_ffn(ctx0, lctx, cur,
@@ -2191,9 +2142,7 @@ ggml_cgraph * llm_build_context::build_dbrx() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -2231,10 +2180,7 @@ ggml_cgraph * llm_build_context::build_starcoder() {
     cb(inpL, "inpL", -1);
 
     for (int il = 0; il < n_layer; ++il) {
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -2273,10 +2219,7 @@ ggml_cgraph * llm_build_context::build_starcoder() {
 
         // FF
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm,
-                    model.layers[il].ffn_norm_b,
-                    LLM_NORM, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -2296,10 +2239,7 @@ ggml_cgraph * llm_build_context::build_starcoder() {
         inpL = cur;
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -2327,9 +2267,7 @@ ggml_cgraph * llm_build_context::build_refact() {
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -2361,9 +2299,7 @@ ggml_cgraph * llm_build_context::build_refact() {
 
         // feed-forward network
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -2385,9 +2321,7 @@ ggml_cgraph * llm_build_context::build_refact() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -2447,20 +2381,14 @@ ggml_cgraph * llm_build_context::build_bert() {
             cb(Qcur, "Qcur", il);
 
             if (model.layers[il].attn_q_norm) {
-                Qcur = llm_build_norm(ctx0, Qcur, hparams,
-                        model.layers[il].attn_q_norm,
-                        model.layers[il].attn_q_norm_b,
-                        LLM_NORM, cb, il);
+                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, model.layers[il].attn_q_norm_b, LLM_NORM, cb, il);
             }
 
             Kcur = ggml_add(ctx0, llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur), model.layers[il].bk);
             cb(Kcur, "Kcur", il);
 
             if (model.layers[il].attn_k_norm) {
-                Kcur = llm_build_norm(ctx0, Kcur, hparams,
-                        model.layers[il].attn_k_norm,
-                        model.layers[il].attn_k_norm_b,
-                        LLM_NORM, cb, il);
+                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, model.layers[il].attn_k_norm_b, LLM_NORM, cb, il);
             }
             Vcur = ggml_add(ctx0, llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur), model.layers[il].bv);
             cb(Vcur, "Vcur", il);
@@ -2608,17 +2536,11 @@ ggml_cgraph * llm_build_context::build_bloom() {
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
-    inpL = llm_build_norm(ctx0, inpL, hparams,
-            model.tok_norm,
-            model.tok_norm_b,
-            LLM_NORM, cb, -1);
+    inpL = llm_build_norm(ctx0, inpL, hparams, model.tok_norm, model.tok_norm_b, LLM_NORM, cb, -1);
     cb(inpL, "inp_norm", -1);
 
     for (int il = 0; il < n_layer; ++il) {
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -2657,10 +2579,7 @@ ggml_cgraph * llm_build_context::build_bloom() {
 
         // FF
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm,
-                    model.layers[il].ffn_norm_b,
-                    LLM_NORM, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -2680,10 +2599,7 @@ ggml_cgraph * llm_build_context::build_bloom() {
         inpL = cur;
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -2723,10 +2639,7 @@ ggml_cgraph * llm_build_context::build_mpt() {
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * attn_norm;
 
-        attn_norm = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        attn_norm = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(attn_norm, "attn_norm", il);
 
         // self-attention
@@ -2756,16 +2669,10 @@ ggml_cgraph * llm_build_context::build_mpt() {
 
             // Q/K Layernorm
             if (model.layers[il].attn_q_norm) {
-                Qcur = llm_build_norm(ctx0, Qcur, hparams,
-                        model.layers[il].attn_q_norm,
-                        model.layers[il].attn_q_norm_b,
-                        LLM_NORM, cb, il);
+                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, model.layers[il].attn_q_norm_b, LLM_NORM, cb, il);
                 cb(Qcur, "Qcur", il);
 
-                Kcur = llm_build_norm(ctx0, Kcur, hparams,
-                        model.layers[il].attn_k_norm,
-                        model.layers[il].attn_k_norm_b,
-                        LLM_NORM, cb, il);
+                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, model.layers[il].attn_k_norm_b, LLM_NORM, cb, il);
                 cb(Kcur, "Kcur", il);
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
@@ -2796,10 +2703,7 @@ ggml_cgraph * llm_build_context::build_mpt() {
 
         // feed forward
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm,
-                    model.layers[il].ffn_norm_b,
-                    LLM_NORM, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
             cur = llm_build_ffn(ctx0, lctx, cur,
                     model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
@@ -2820,10 +2724,7 @@ ggml_cgraph * llm_build_context::build_mpt() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -2855,10 +2756,7 @@ ggml_cgraph * llm_build_context::build_stablelm() {
 
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         struct ggml_tensor * inpSA = cur;
@@ -2875,17 +2773,11 @@ ggml_cgraph * llm_build_context::build_stablelm() {
             cb(Kcur, "Kcur", il);
 
             if (model.layers[il].attn_q_norm) {
-                Qcur = llm_build_norm(ctx0, Qcur, hparams,
-                        model.layers[il].attn_q_norm,
-                        NULL,
-                        LLM_NORM, cb, il);
+                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM, cb, il);
                 cb(Qcur, "Qcur", il);
             }
             if (model.layers[il].attn_k_norm) {
-                Kcur = llm_build_norm(ctx0, Kcur, hparams,
-                        model.layers[il].attn_k_norm,
-                        NULL,
-                        LLM_NORM, cb, il);
+                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM, cb, il);
                 cb(Kcur, "Kcur", il);
             }
 
@@ -2923,10 +2815,7 @@ ggml_cgraph * llm_build_context::build_stablelm() {
         // feed-forward network
         {
             if (model.layers[il].ffn_norm) {
-                cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                        model.layers[il].ffn_norm,
-                        model.layers[il].ffn_norm_b,
-                        LLM_NORM, cb, il);
+                cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
                 cb(cur, "ffn_norm", il);
             } else {
                 // parallel residual
@@ -2951,10 +2840,7 @@ ggml_cgraph * llm_build_context::build_stablelm() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -2986,9 +2872,7 @@ ggml_cgraph * llm_build_context::build_qwen() {
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -3040,9 +2924,7 @@ ggml_cgraph * llm_build_context::build_qwen() {
 
         // feed-forward forward
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -3064,9 +2946,7 @@ ggml_cgraph * llm_build_context::build_qwen() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -3100,9 +2980,7 @@ ggml_cgraph * llm_build_context::build_qwen2() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -3141,9 +3019,7 @@ ggml_cgraph * llm_build_context::build_qwen2() {
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur = llm_build_ffn(ctx0, lctx, cur,
@@ -3164,9 +3040,7 @@ ggml_cgraph * llm_build_context::build_qwen2() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -3208,9 +3082,7 @@ ggml_cgraph * llm_build_context::build_qwen2vl() {
         ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -3250,9 +3122,7 @@ ggml_cgraph * llm_build_context::build_qwen2vl() {
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur = llm_build_ffn(ctx0, lctx, cur,
@@ -3273,9 +3143,7 @@ ggml_cgraph * llm_build_context::build_qwen2vl() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -3313,9 +3181,7 @@ ggml_cgraph * llm_build_context::build_qwen2moe() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self_attention
@@ -3355,9 +3221,7 @@ ggml_cgraph * llm_build_context::build_qwen2moe() {
         cb(ffn_inp, "ffn_inp", il);
 
         // MoE branch
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         ggml_tensor * moe_out =
@@ -3410,9 +3274,7 @@ ggml_cgraph * llm_build_context::build_qwen2moe() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -3446,9 +3308,7 @@ ggml_cgraph * llm_build_context::build_qwen3() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -3495,9 +3355,7 @@ ggml_cgraph * llm_build_context::build_qwen3() {
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur = llm_build_ffn(ctx0, lctx, cur,
@@ -3518,9 +3376,7 @@ ggml_cgraph * llm_build_context::build_qwen3() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -3558,9 +3414,7 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self_attention
@@ -3608,9 +3462,7 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
         cb(ffn_inp, "ffn_inp", il);
 
         // MoE branch
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur =
@@ -3637,9 +3489,7 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -3672,10 +3522,7 @@ ggml_cgraph * llm_build_context::build_phi2() {
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
     for (int il = 0; il < n_layer; ++il) {
-        attn_norm_output = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        attn_norm_output = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(attn_norm_output, "attn_norm", il);
 
         // self-attention
@@ -3757,10 +3604,7 @@ ggml_cgraph * llm_build_context::build_phi2() {
         inpL = cur;
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -3798,10 +3642,7 @@ ggml_cgraph * llm_build_context::build_phi3() {
             // rope freq factors for 128k context
             struct ggml_tensor * rope_factors = build_rope_factors(il);
 
-            struct ggml_tensor * attn_norm_output = llm_build_norm(ctx0, inpL, hparams,
-                    model.layers[il].attn_norm,
-                    NULL,
-                    LLM_NORM_RMS, cb, il);
+            struct ggml_tensor * attn_norm_output = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(attn_norm_output, "attn_norm", il);
 
             struct ggml_tensor * Qcur = nullptr;
@@ -3858,9 +3699,7 @@ ggml_cgraph * llm_build_context::build_phi3() {
         cur = ggml_add(ctx0, cur, residual);
         residual = cur;
 
-        cur = llm_build_norm(ctx0, cur, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         // FF
@@ -3884,10 +3723,7 @@ ggml_cgraph * llm_build_context::build_phi3() {
         inpL = cur;
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm,
-            NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -3919,9 +3755,7 @@ ggml_cgraph * llm_build_context::build_plamo() {
     for (int il = 0; il < n_layer; ++il) {
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         struct ggml_tensor * attention_norm = cur;
@@ -3981,9 +3815,7 @@ ggml_cgraph * llm_build_context::build_plamo() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -4021,10 +3853,7 @@ ggml_cgraph * llm_build_context::build_gpt2() {
     cb(inpL, "inpL", -1);
 
     for (int il = 0; il < n_layer; ++il) {
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -4063,10 +3892,7 @@ ggml_cgraph * llm_build_context::build_gpt2() {
 
         // FF
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm,
-                    model.layers[il].ffn_norm_b,
-                    LLM_NORM, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -4086,10 +3912,7 @@ ggml_cgraph * llm_build_context::build_gpt2() {
         inpL = cur;
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -4120,10 +3943,7 @@ ggml_cgraph * llm_build_context::build_codeshell() {
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
     for (int il = 0; il < n_layer; ++il) {
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -4174,10 +3994,7 @@ ggml_cgraph * llm_build_context::build_codeshell() {
 
         // FF
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm,
-                    model.layers[il].ffn_norm_b,
-                    LLM_NORM, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -4197,10 +4014,7 @@ ggml_cgraph * llm_build_context::build_codeshell() {
         inpL = cur;
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -4233,9 +4047,7 @@ ggml_cgraph * llm_build_context::build_orion() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -4273,9 +4085,7 @@ ggml_cgraph * llm_build_context::build_orion() {
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, model.layers[il].ffn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur = llm_build_ffn(ctx0, lctx, cur,
@@ -4296,9 +4106,7 @@ ggml_cgraph * llm_build_context::build_orion() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -4332,9 +4140,7 @@ ggml_cgraph * llm_build_context::build_internlm2() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -4372,9 +4178,7 @@ ggml_cgraph * llm_build_context::build_internlm2() {
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur = llm_build_ffn(ctx0, lctx, cur,
@@ -4395,9 +4199,7 @@ ggml_cgraph * llm_build_context::build_internlm2() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -4444,9 +4246,7 @@ ggml_cgraph * llm_build_context::build_minicpm() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -4491,9 +4291,7 @@ ggml_cgraph * llm_build_context::build_minicpm() {
 
         // feed-forward network
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -4519,9 +4317,7 @@ ggml_cgraph * llm_build_context::build_minicpm() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head scaling
@@ -4559,9 +4355,7 @@ ggml_cgraph * llm_build_context::build_gemma() {
 
     for (int il = 0; il < n_layer; ++il) {
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -4599,9 +4393,7 @@ ggml_cgraph * llm_build_context::build_gemma() {
         struct ggml_tensor * sa_out = ggml_add(ctx0, cur, inpL);
         cb(sa_out, "sa_out", il);
 
-        cur = llm_build_norm(ctx0, sa_out, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, sa_out, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         // feed-forward network
@@ -4625,9 +4417,7 @@ ggml_cgraph * llm_build_context::build_gemma() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -4665,9 +4455,7 @@ ggml_cgraph * llm_build_context::build_gemma2() {
         struct ggml_tensor * KQ_mask_l = (il % 2 == 0) ? KQ_mask_swa : KQ_mask;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -4702,9 +4490,7 @@ ggml_cgraph * llm_build_context::build_gemma2() {
                     KQ_mask_l == KQ_mask_swa ? hparams.n_swa : 0);
         }
 
-        cur = llm_build_norm(ctx0, cur, hparams,
-                model.layers[il].attn_post_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_post_norm", il);
 
         if (il == n_layer - 1) {
@@ -4717,9 +4503,7 @@ ggml_cgraph * llm_build_context::build_gemma2() {
         struct ggml_tensor * sa_out = ggml_add(ctx0, cur, inpL);
         cb(sa_out, "sa_out", il);
 
-        cur = llm_build_norm(ctx0, sa_out, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, sa_out, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         // feed-forward network
@@ -4733,9 +4517,7 @@ ggml_cgraph * llm_build_context::build_gemma2() {
             cb(cur, "ffn_out", il);
         }
 
-        cur = llm_build_norm(ctx0, cur, hparams,
-                model.layers[il].ffn_post_norm, NULL,
-                LLM_NORM_RMS, cb, -1);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, cb, -1);
         cb(cur, "ffn_post_norm", -1);
 
         cur = ggml_add(ctx0, cur, sa_out);
@@ -4748,9 +4530,7 @@ ggml_cgraph * llm_build_context::build_gemma2() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -4907,9 +4687,7 @@ ggml_cgraph * llm_build_context::build_starcoder2() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -4948,9 +4726,7 @@ ggml_cgraph * llm_build_context::build_starcoder2() {
 
         // feed-forward network
 
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, model.layers[il].ffn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur = llm_build_ffn(ctx0, lctx, cur,
@@ -4971,9 +4747,7 @@ ggml_cgraph * llm_build_context::build_starcoder2() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -5023,9 +4797,7 @@ ggml_cgraph * llm_build_context::build_mamba() {
         ssm_states  = ggml_reshape_3d(ctx0,  ssm_states,    d_state, d_inner, n_kv);
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // {n_embd, 2*d_inner} * {n_embd, n_tokens} => {2*d_inner, n_tokens}
@@ -5119,9 +4891,7 @@ ggml_cgraph * llm_build_context::build_mamba() {
     }
 
     // final rmsnorm
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -5155,9 +4925,7 @@ ggml_cgraph * llm_build_context::build_command_r() {
     for (int il = 0; il < n_layer; ++il) {
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
         struct ggml_tensor * ffn_inp = cur;
 
@@ -5179,16 +4947,10 @@ ggml_cgraph * llm_build_context::build_command_r() {
                         0);
                 cb(Kcur, "Kcur", il);
 
-                Qcur = llm_build_norm(ctx0, Qcur, hparams,
-                        model.layers[il].attn_q_norm,
-                        NULL,
-                        LLM_NORM, cb, il);
+                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM, cb, il);
                 cb(Qcur, "Qcur", il);
 
-                Kcur = llm_build_norm(ctx0, Kcur, hparams,
-                        model.layers[il].attn_k_norm,
-                        NULL,
-                        LLM_NORM, cb, il);
+                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM, cb, il);
                 cb(Kcur, "Kcur", il);
             }
 
@@ -5244,9 +5006,7 @@ ggml_cgraph * llm_build_context::build_command_r() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -5295,9 +5055,7 @@ ggml_cgraph * llm_build_context::build_olmo() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                NULL, NULL,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, NULL, NULL, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -5355,9 +5113,7 @@ ggml_cgraph * llm_build_context::build_olmo() {
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                NULL, NULL,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, NULL, NULL, LLM_NORM, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur = llm_build_ffn(ctx0, lctx, cur,
@@ -5380,9 +5136,7 @@ ggml_cgraph * llm_build_context::build_olmo() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            NULL, NULL,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, NULL, NULL, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -5419,9 +5173,7 @@ ggml_cgraph * llm_build_context::build_openelm() {
         struct ggml_tensor * residual = cur;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -5440,14 +5192,10 @@ ggml_cgraph * llm_build_context::build_openelm() {
             struct ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, cur->nb[1], cur->nb[2], cur->nb[1]*(n_head+n_head_kv)));
             cb(Vcur, "Vcur", il);
 
-            Qcur = llm_build_norm(ctx0, Qcur, hparams,
-                    model.layers[il].attn_q_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Qcur, "Qcur", il);
 
-            Kcur = llm_build_norm(ctx0, Kcur, hparams,
-                    model.layers[il].attn_k_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Kcur, "Kcur", il);
 
             Qcur = ggml_rope_ext(
@@ -5482,9 +5230,7 @@ ggml_cgraph * llm_build_context::build_openelm() {
 
         // feed-forward network
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -5506,9 +5252,7 @@ ggml_cgraph * llm_build_context::build_openelm() {
     cur = inpL;
 
     // norm
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -5538,10 +5282,7 @@ ggml_cgraph * llm_build_context::build_gptneox() {
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
     for (int il = 0; il < n_layer; ++il) {
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -5593,10 +5334,7 @@ ggml_cgraph * llm_build_context::build_gptneox() {
 
             struct ggml_tensor * attn_out = cur;
 
-            cur = llm_build_norm(ctx0, inpL, hparams,
-                    model.layers[il].ffn_norm,
-                    model.layers[il].ffn_norm_b,
-                    LLM_NORM, cb, il);
+            cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -5624,10 +5362,7 @@ ggml_cgraph * llm_build_context::build_gptneox() {
             struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
             cb(ffn_inp, "ffn_inp", il);
 
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm,
-                    model.layers[il].ffn_norm_b,
-                    LLM_NORM, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -5647,10 +5382,7 @@ ggml_cgraph * llm_build_context::build_gptneox() {
         }
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -5686,9 +5418,7 @@ ggml_cgraph * llm_build_context::build_arctic() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -5728,9 +5458,7 @@ ggml_cgraph * llm_build_context::build_arctic() {
         cb(ffn_inp, "ffn_inp", il);
 
         // feed-forward network
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur = llm_build_ffn(ctx0, lctx, cur,
@@ -5745,9 +5473,7 @@ ggml_cgraph * llm_build_context::build_arctic() {
         cb(ffn_out, "ffn_out", il);
 
         // MoE
-        cur = llm_build_norm(ctx0, inpSA, hparams,
-                model.layers[il].ffn_norm_exps, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpSA, hparams, model.layers[il].ffn_norm_exps, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm_exps", il);
 
         cur = llm_build_moe_ffn(ctx0, lctx, cur,
@@ -5775,9 +5501,7 @@ ggml_cgraph * llm_build_context::build_arctic() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -5832,9 +5556,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self_attention
@@ -5845,9 +5567,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                 q = ggml_mul_mat(ctx0, model.layers[il].wq_a, cur);
                 cb(q, "q", il);
 
-                q = llm_build_norm(ctx0, q, hparams,
-                        model.layers[il].attn_q_a_norm, NULL,
-                        LLM_NORM_RMS, cb, il);
+                q = llm_build_norm(ctx0, q, hparams, model.layers[il].attn_q_a_norm, NULL, LLM_NORM_RMS, cb, il);
                 cb(q, "q", il);
 
                 // {q_lora_rank, n_head * hparams.n_embd_head_k} * {q_lora_rank, n_tokens} -> {n_head * hparams.n_embd_head_k, n_tokens}
@@ -5904,9 +5624,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                     0);
             cb(kv_compressed, "kv_compressed", il);
 
-            kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams,
-                    model.layers[il].attn_kv_a_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams, model.layers[il].attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(kv_compressed, "kv_compressed", il);
 
             if (lctx.cparams.mla_attn) {
@@ -6223,9 +5941,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
 
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
@@ -6277,9 +5993,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -6322,9 +6036,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         struct ggml_tensor * inpSA = inpL;
 
         // Pre-attention norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -6340,15 +6052,11 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
 
             // Apply Q/K norm if available (GLM-4.5 355B variant)
             if (model.layers[il].attn_q_norm) {
-                Qcur = llm_build_norm(ctx0, Qcur, hparams,
-                        model.layers[il].attn_q_norm, NULL,
-                        LLM_NORM_RMS, cb, il);
+                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
                 cb(Qcur, "Qcur_normed", il);
             }
             if (model.layers[il].attn_k_norm) {
-                Kcur = llm_build_norm(ctx0, Kcur, hparams,
-                        model.layers[il].attn_k_norm, NULL,
-                        LLM_NORM_RMS, cb, il);
+                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
                 cb(Kcur, "Kcur_normed", il);
             }
 
@@ -6384,9 +6092,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         cb(ffn_inp, "ffn_inp", il);
 
         // Post-attention norm
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].attn_post_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "post_attn_norm", il);
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
@@ -6439,9 +6145,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
     cur = inpL;
 
     // final norm
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm head
@@ -6472,9 +6176,7 @@ ggml_cgraph * llm_build_context::build_bitnet() {
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -6530,9 +6232,7 @@ ggml_cgraph * llm_build_context::build_bitnet() {
                     nullptr, nullptr,
                     Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
 
-            cur_attn = llm_build_norm(ctx0, cur_attn, hparams,
-                    model.layers[il].attn_sub_norm, NULL,
-                    LLM_NORM_RMS, cb, il, 1/(v_scale*v_scale));
+            cur_attn = llm_build_norm(ctx0, cur_attn, hparams, model.layers[il].attn_sub_norm, NULL, LLM_NORM_RMS, cb, il, 1/(v_scale*v_scale));
             cb(cur_attn, "attn_sub_norm", il);
 
             ggml_build_forward_expand(gf, cur_attn);
@@ -6556,9 +6256,7 @@ ggml_cgraph * llm_build_context::build_bitnet() {
 
         // feed-forward forward
         if (model.layers[il].ffn_gate_inp == nullptr) {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             struct ggml_tensor *tmp = ggml_mul_mat(ctx0, model.layers[il].ffn_up, cur);
@@ -6575,9 +6273,7 @@ ggml_cgraph * llm_build_context::build_bitnet() {
             cur = ggml_fused_mul_unary(ctx0, cur, tmp, GGML_UNARY_OP_SILU);
             cb(cur, "ffn_gate_par", il);
 
-            cur = llm_build_norm(ctx0, cur, hparams,
-                    model.layers[il].ffn_sub_norm, NULL,
-                    LLM_NORM_RMS, cb, il, 1/(ffn_up_scale*ffn_up_scale));
+            cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_sub_norm, NULL, LLM_NORM_RMS, cb, il, 1/(ffn_up_scale*ffn_up_scale));
             cb(cur, "ffn_sub_norm", il);
 
             cur = ggml_mul_mat(ctx0, model.layers[il].ffn_down, cur);
@@ -6594,9 +6290,7 @@ ggml_cgraph * llm_build_context::build_bitnet() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -6632,9 +6326,7 @@ ggml_cgraph * llm_build_context::build_bitnet_158() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -6664,9 +6356,7 @@ ggml_cgraph * llm_build_context::build_bitnet_158() {
                     NULL, NULL,
                     Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
 
-            cur = llm_build_norm(ctx0, cur, hparams,
-                    model.layers[il].attn_sub_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_sub_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_sub_norm", il);
 
             cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
@@ -6690,9 +6380,7 @@ ggml_cgraph * llm_build_context::build_bitnet_158() {
         struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
 
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         cur = llm_build_ffn(ctx0, lctx, cur,
@@ -6703,9 +6391,7 @@ ggml_cgraph * llm_build_context::build_bitnet_158() {
                 LLM_FFN_RELU_SQR, LLM_FFN_PAR, cb, il);
         cb(cur, "ffn_out", il);
 
-        cur = llm_build_norm(ctx0, cur, hparams,
-                model.layers[il].ffn_sub_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].ffn_sub_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_sub_norm", il);
 
         cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].ffn_down, cur);
@@ -6723,9 +6409,7 @@ ggml_cgraph * llm_build_context::build_bitnet_158() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -6877,9 +6561,7 @@ ggml_cgraph * llm_build_context::build_t5_encoder() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm_enc, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm_enc, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -6936,9 +6618,7 @@ ggml_cgraph * llm_build_context::build_t5_encoder() {
 
         // feed-forward network
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm_enc, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm_enc, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             // T5 uses relu, flan-T5 uses gelu-gated
@@ -6969,9 +6649,7 @@ ggml_cgraph * llm_build_context::build_t5_encoder() {
     cur = inpL;
     cb(cur, "result_embd", -1);
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm_enc, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm_enc, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     ggml_build_forward_expand(gf, cur);
@@ -7007,9 +6685,7 @@ ggml_cgraph * llm_build_context::build_t5_decoder() {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -7072,9 +6748,7 @@ ggml_cgraph * llm_build_context::build_t5_decoder() {
         struct ggml_tensor * inpCA = cur;
 
         // norm
-        cur = llm_build_norm(ctx0, cur, hparams,
-                model.layers[il].attn_norm_cross, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, cur, hparams, model.layers[il].attn_norm_cross, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm_cross", il);
 
         // cross-attention
@@ -7132,9 +6806,7 @@ ggml_cgraph * llm_build_context::build_t5_decoder() {
 
         // feed-forward network
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             // T5 uses relu, flan-T5 uses gelu-gated
@@ -7165,9 +6837,7 @@ ggml_cgraph * llm_build_context::build_t5_decoder() {
     cur = inpL;
     cb(cur, "result_embd", -1);
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     // lm_head
@@ -7195,10 +6865,7 @@ ggml_cgraph * llm_build_context::build_jais() {
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
     for (int il = 0; il < n_layer; ++il) {
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                model.layers[il].attn_norm_b,
-                LLM_NORM, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -7237,10 +6904,7 @@ ggml_cgraph * llm_build_context::build_jais() {
 
         // FF
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm,
-                    model.layers[il].ffn_norm_b,
-                    LLM_NORM, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -7256,10 +6920,7 @@ ggml_cgraph * llm_build_context::build_jais() {
         cb(inpL, "l_out", il);
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm,
-            model.output_norm_b,
-            LLM_NORM, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, model.output_norm_b, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -7292,10 +6953,7 @@ ggml_cgraph * llm_build_context::build_chatglm() {
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm,
-                NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -7351,10 +7009,7 @@ ggml_cgraph * llm_build_context::build_chatglm() {
 
         // FF
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm,
-                    NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -7371,10 +7026,7 @@ ggml_cgraph * llm_build_context::build_chatglm() {
         cb(inpL, "l_out", il);
     }
 
-    cur = llm_build_norm(ctx0, inpL, hparams,
-            model.output_norm,
-            NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, inpL, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
     cb(cur, "result_norm", -1);
 
     cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
@@ -7541,9 +7193,7 @@ ggml_cgraph * llm_build_context::build_dots1() {
         ggml_tensor * inpSA = inpL;
 
         // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self_attention
@@ -7599,9 +7249,7 @@ ggml_cgraph * llm_build_context::build_dots1() {
         cb(ffn_inp, "ffn_inp", il);
 
         // MoE branch
-        cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                model.layers[il].ffn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "ffn_norm", il);
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
@@ -7651,9 +7299,7 @@ ggml_cgraph * llm_build_context::build_dots1() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb,  -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb,  -1);
 
     cb(cur, "result_norm", -1);
 
@@ -7689,9 +7335,7 @@ ggml_cgraph * llm_build_context::build_ernie4_5() {
         ggml_tensor * inpSA = inpL;
         // norm
         // Pre-attention norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -7754,9 +7398,7 @@ ggml_cgraph * llm_build_context::build_ernie4_5() {
 
         // feed-forward network
         {
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -7779,9 +7421,7 @@ ggml_cgraph * llm_build_context::build_ernie4_5() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
 
     cb(cur, "result_norm", -1);
     // lm_head
@@ -7817,9 +7457,7 @@ ggml_cgraph * llm_build_context::build_ernie4_5_moe() {
         ggml_tensor * inpSA = inpL;
         // norm
         // Pre-attention norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
 
         // self-attention
@@ -7887,9 +7525,7 @@ ggml_cgraph * llm_build_context::build_ernie4_5_moe() {
         bool is_moe_layer = static_cast<uint32_t>(il) >= hparams.n_layer_dense_lead && (il + 1) % hparams.n_moe_layer_step == 0;
 
         if (!is_moe_layer) {
-            cur = llm_build_norm(ctx0, ffn_inp,hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp,hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             cur = llm_build_ffn(ctx0, lctx, cur,
@@ -7902,9 +7538,7 @@ ggml_cgraph * llm_build_context::build_ernie4_5_moe() {
         }
         else {
             // MoE branch
-            cur = llm_build_norm(ctx0, ffn_inp, hparams,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, cb, il);
+            cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
             ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, cur,
@@ -7950,9 +7584,7 @@ ggml_cgraph * llm_build_context::build_ernie4_5_moe() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
+    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
 
     cb(cur, "result_norm", -1);
     // lm_head
