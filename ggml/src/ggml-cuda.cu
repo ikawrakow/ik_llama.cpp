@@ -3143,7 +3143,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_fused_add_add_rms_norm(ctx, dst, cgraph->nodes[i+1], cgraph->nodes[i+2]);
                 i += 2;
             }
-            else if (i + 1 < cgraph->n_nodes &&
+            else if (false && i + 1 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_FUSED_RMS_NORM &&
                 ggml_is_contiguous(dst->src[0]) &&
                 ggml_is_contiguous(dst->src[1]) &&
@@ -3154,7 +3154,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             } else {
                 ggml_cuda_op_add(ctx, dst);
             }
-            //ggml_cuda_op_add(ctx, dst);
             break;
         case GGML_OP_ADD_ID:
             ggml_cuda_op_add_id(ctx, dst);
