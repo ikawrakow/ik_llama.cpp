@@ -474,9 +474,25 @@ void ggml_cuda_op_grouped_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
 }
 
 void cuda_bailingmoev2_experts(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * topk) {
+    if (!topk || !dst) {
+        if (!topk) printf("topk is null!\n");
+        if (!dst ) printf("dst  is null!\n");
+        GGML_ABORT("null topk/dst in cuda_bailingmoev2_experts\n");
+    }
     auto topk_src = topk->src[0];
+    if (!topk_src) {
+        printf("null topk_src in cuda_bailingmoev2_experts: topk=%s,%s dst=%s,%s\n", topk->name, ggml_op_name(topk->op),
+                dst->name, ggml_op_name(dst->op));
+        GGML_ABORT("null topk_src in cuda_bailingmoev2_experts\n");
+    }
     auto probs    = topk_src->src[0]->src[0];
     auto bias     = topk_src->src[1];
+    if (!probs || !bias) {
+        if (!probs) printf("null probs in cuda_bailingmoev2_experts\n");
+        if (!bias ) printf("null bias  in cuda_bailingmoev2_experts\n");
+        printf("top_src is %s, %s  dst is %s, %s\n", topk_src->name, ggml_op_name(topk_src->op), dst->name, ggml_op_name(dst->op));
+        GGML_ABORT("null probs/bias in cuda_bailingmoev2_experts\n");
+    }
 
     auto nrows = ggml_nrows(probs);
 
