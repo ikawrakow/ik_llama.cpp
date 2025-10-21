@@ -3187,7 +3187,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                         cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                         cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&
                         cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS) {
-                        cuda_bailingmoev2_experts(ctx, cgraph->nodes[i+4], cgraph->nodes[i+4]);
+                        cuda_bailingmoev2_experts(ctx, cgraph->nodes[i+4], cgraph->nodes[i+3]);
                         i += 4;
                     } else {
                         ggml_cuda_op_sigmoid(ctx, dst);
