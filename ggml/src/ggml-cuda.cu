@@ -3094,11 +3094,27 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
 }
 
+static inline bool ops_are_same_device(const ggml_cgraph * cgraph, int first, int last) {
+    if (last <= first) return true;
+    int device = ((const ggml_backend_cuda_buffer_context *)cgraph->nodes[first]->buffer->context)->device;
+    for (int i = first; i <= last; ++i) {
+        auto node = cgraph->nodes[i];
+        if (((const ggml_backend_cuda_buffer_context *)node->buffer->context)->device != device) return false;
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            if (!node->src[j] || !node->src[j]->buffer) continue;
+            if (((const ggml_backend_cuda_buffer_context *)node->src[j]->buffer->context)->device != device) return false;
+        }
+    }
+    return true;
+}
+
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst, const ggml_cgraph * cgraph, int & i) {
     // why is this here instead of mul_mat?
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_cuda_split(dst->src[0]->buffer)) {
         ggml_cuda_set_peer_access(dst->src[1]->ne[1], ctx.device);
     }
+
+#define ENABLE_FUSION true
 
 #if IK_PRINT_TIMING
     int64_t tim1 = ggml_time_us();
@@ -3129,17 +3145,32 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_dup(ctx, dst);
             break;
         case GGML_OP_ADD:
-            if (i + 1 < cgraph->n_nodes &&
+            if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_ADD &&
+                cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
+                ggml_is_contiguous(dst->src[0]) &&
+                ggml_is_contiguous(dst->src[1]) &&
+                ggml_are_same_shape(dst->src[0], dst->src[1]) &&
+                dst == cgraph->nodes[i+1]->src[0] &&
+                ggml_is_contiguous(cgraph->nodes[i+1]->src[1]) &&
+                ggml_are_same_shape(dst, cgraph->nodes[i+1]->src[1]) &&
+                cgraph->nodes[i+1] == cgraph->nodes[i+2]->src[0] &&
+                ops_are_same_device(cgraph, i, i+2)) {
+                //printf("Fusing add->add->fused_rms of %s, %s, %s\n", dst->name, cgraph->nodes[i+1]->name, cgraph->nodes[i+2]->name);
+                ggml_cuda_op_fused_add_add_rms_norm(ctx, dst, cgraph->nodes[i+1], cgraph->nodes[i+2]);
+                i += 2;
+            }
+            else if (ENABLE_FUSION && i + 1 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_FUSED_RMS_NORM &&
                 ggml_is_contiguous(dst->src[0]) &&
                 ggml_is_contiguous(dst->src[1]) &&
-                ggml_are_same_shape(dst->src[0], dst->src[1])) {
+                ggml_are_same_shape(dst->src[0], dst->src[1]) &&
+                dst == cgraph->nodes[i+1]->src[0] && ops_are_same_device(cgraph, i, i+1)) {
                 ggml_cuda_op_fused_add_rms_norm(ctx, dst, cgraph->nodes[i+1]);
                 ++i;
             } else {
                 ggml_cuda_op_add(ctx, dst);
             }
-            //ggml_cuda_op_add(ctx, dst);
             break;
         case GGML_OP_ADD_ID:
             ggml_cuda_op_add_id(ctx, dst);
@@ -3183,22 +3214,27 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     ggml_cuda_op_relu(ctx, dst);
                     break;
                 case GGML_UNARY_OP_SIGMOID:
-                    if (i + 5 < cgraph->n_nodes &&
+                    if (ENABLE_FUSION && i + 5 < cgraph->n_nodes &&
                         cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                         cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                         cgraph->nodes[i+3]->op == GGML_OP_ARGSORT &&
                         cgraph->nodes[i+4]->op == GGML_OP_VIEW &&
-                        cgraph->nodes[i+5]->op == GGML_OP_GET_ROWS) {
+                        cgraph->nodes[i+5]->op == GGML_OP_GET_ROWS && ops_are_same_device(cgraph, i, i+5)) {
                         cuda_glm45moe_experts(ctx, cgraph->nodes[i+5], cgraph->nodes[i+4]);
                         i += 5;
                     }
-                    else if (i + 4 < cgraph->n_nodes &&
+                    else if (ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
                         cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                         cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                         cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&
-                        cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS) {
+                        cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS && ops_are_same_device(cgraph, i, i+4)) {
                         cuda_bailingmoev2_experts(ctx, cgraph->nodes[i+4], cgraph->nodes[i+3]);
                         i += 4;
+                    } else if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
+                        cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
+                        cgraph->nodes[i+2]->op == GGML_OP_ADD && ops_are_same_device(cgraph, i, i+2)) {
+                        ggml_cuda_op_biased_sigmoid(ctx, cgraph->nodes[i+2]);
+                        i += 2;
                     } else {
                         ggml_cuda_op_sigmoid(ctx, dst);
                     }
@@ -3309,12 +3345,13 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_diag_mask_inf(ctx, dst);
             break;
         case GGML_OP_SOFT_MAX:
-            if (i + 4 < cgraph->n_nodes &&
+            if (ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_RESHAPE  &&
                 cgraph->nodes[i+2]->op == GGML_OP_ARGSORT  &&
                 cgraph->nodes[i+3]->op == GGML_OP_VIEW     &&
                 cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS &&
-                ggml_cuda_should_use_topk_moe(cgraph->nodes[i], cgraph->nodes[i+4])) {
+                ggml_cuda_should_use_topk_moe(cgraph->nodes[i], cgraph->nodes[i+4]) &&
+                ops_are_same_device(cgraph, i, i+4)) {
                 ggml_cuda_op_topk_moe(ctx, cgraph->nodes[i], cgraph->nodes[i+4], cgraph->nodes[i+3]);
                 i += 4;
             } else {
@@ -3343,10 +3380,19 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_pool2d(ctx, dst);
             break;
         case GGML_OP_SUM_ROWS:
-            if (i + 1 < cgraph->n_nodes &&
+            if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_SCALE &&
+                cgraph->nodes[i+2]->op == GGML_OP_DIV &&
+                cgraph->nodes[i+1]->src[0] == dst &&
+                cgraph->nodes[i+2]->src[1] == cgraph->nodes[i+1] &&
+                cgraph->nodes[i+2]->src[0] == dst->src[0] && ops_are_same_device(cgraph, i, i+2)) {
+                ggml_cuda_op_sum_rows_div(ctx, cgraph->nodes[i+2]);
+                i += 2;
+            }
+            else if (ENABLE_FUSION && i + 1 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_DIV &&
                 cgraph->nodes[i+1]->src[1] == dst &&
-                cgraph->nodes[i+1]->src[0] == dst->src[0]) {
+                cgraph->nodes[i+1]->src[0] == dst->src[0] && ops_are_same_device(cgraph, i, i+1)) {
                 ggml_cuda_op_sum_rows_div(ctx, cgraph->nodes[i+1]);
                 ++i;
             } else {
@@ -3354,12 +3400,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             }
             break;
         case GGML_OP_ARGSORT:
-            if (i + 5 < cgraph->n_nodes &&
+            if (ENABLE_FUSION && i + 5 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_GET_ROWS &&
                 cgraph->nodes[i+3]->op == GGML_OP_RESHAPE &&
                 cgraph->nodes[i+4]->op == GGML_OP_SOFT_MAX &&
-                cgraph->nodes[i+5]->op == GGML_OP_RESHAPE) {
+                cgraph->nodes[i+5]->op == GGML_OP_RESHAPE && ops_are_same_device(cgraph, i, i+4)) {
                 cuda_openai_experts(ctx, dst, cgraph->nodes[i+4]);
                 i += 5;
             } else {
@@ -3389,6 +3435,8 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
     int64_t tim2 = ggml_time_us();
     printf("%s(%s): %d us\n", ggml_op_name(dst->op), dst->name, (int)(tim2 - tim1));
 #endif
+
+#undef ENABLE_FUSION
 
     return true;
 }
