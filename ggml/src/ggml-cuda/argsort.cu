@@ -59,7 +59,7 @@ static __global__ void k_argsort_f32_T(const float * x, dst_t * dst, const int n
 //        int min_experts, float thresh_experts) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -101,7 +101,7 @@ static __global__ void k_argsort_f32_f32_i32(const float * x_biased, const float
         size_t nb_ids) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -129,7 +129,7 @@ static __global__ void k_argsort_biased_f32_f32_i32(const float * x, const float
         size_t nb_ids) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -158,7 +158,7 @@ static __global__ void k_openai_f32_f32_i32(const float * x, float * weights, in
         size_t nb_ids) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -204,7 +204,7 @@ template<ggml_sort_order order>
 static __global__ void k_topk_sum(const float * x, const float * bias, float * x_p, float * dst, const int ncols, int ncols_pad, int n_top_k) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -275,7 +275,7 @@ static void argsort_f32_T_cuda(const float * x, dst_t * dst, const int ncols, co
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = ncols_pad * sizeof(int);
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
@@ -306,7 +306,7 @@ static void argsort_f32_f32_i32_cuda(const float * x_biased, const float * x, fl
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = ncols_pad * sizeof(int);
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
@@ -329,7 +329,7 @@ static void argsort_biased_f32_f32_i32_cuda(const float * x, const float * bias,
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = ncols_pad * (sizeof(int) + sizeof(float));
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
@@ -352,7 +352,7 @@ static void argsort_openai_f32_f32_i32_cuda(const float * x, float * weights, in
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = (ncols_pad + ncols_pad > WARP_SIZE ? WARP_SIZE : 0) * sizeof(int);
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
@@ -415,7 +415,7 @@ static void ggml_cuda_op_topk_sum(ggml_backend_cuda_context & ctx, const float *
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = (ncols_pad + WARP_SIZE) * sizeof(int);
     GGML_ASSERT(shared_mem <= ggml_cuda_info().devices[ggml_cuda_get_device()].smpb);
 
