@@ -59,7 +59,7 @@ static __global__ void k_argsort_f32_T(const float * x, dst_t * dst, const int n
 //        int min_experts, float thresh_experts) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -97,21 +97,47 @@ static __global__ void k_argsort_f32_T(const float * x, dst_t * dst, const int n
 }
 
 template<ggml_sort_order order>
-static __global__ void k_argsort_f32_f32_i32(const float * x_biased, const float * x, float * weights, int * ids, const int ncols, int ncols_pad, int ntop,
-        size_t nb_ids) {
+static __global__ void k_argsort_f32_u8(const float * x, uint8_t * dst, const int ncols, int ncols_pad, int ntop) {
+//        int min_experts, float thresh_experts) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
     }
 
-    const float * x_row = x_biased + row * ncols;
+    const float * x_row = x + row * ncols;
     extern __shared__ int dst_row[];
 
     // initialize indices
     dst_row[col] = col;
+
+    __syncthreads();
+
+    sort<order>(ncols_pad, ncols, col, x_row, dst_row);
+
+    if (col < ncols) dst[row*ncols + dst_row[col]] = col < ntop ? 1 : 0;
+}
+
+template<ggml_sort_order order>
+static __global__ void k_argsort_f32_f32_i32(const float * x_biased, const float * x, const uint8_t * group_mask,
+        float * weights, int * ids, const int ncols, int ncols_pad, int ntop, size_t nb_ids, int n_per_group, int n_groups) {
+    // bitonic sort
+    int col = threadIdx.x;
+    int row = blockIdx.x;
+
+    if (col >= ncols_pad) {
+        return;
+    }
+
+    extern __shared__ int dst_row[];
+    auto x_row = (float *)(dst_row + ncols_pad);
+
+    // initialize indices
+    dst_row[col] = col;
+    int ig = col / n_per_group;
+    x_row[col] = ig < n_groups && group_mask[row*n_groups + ig] ? x_biased[row * ncols + col] : -INFINITY;
 
     __syncthreads();
 
@@ -129,7 +155,7 @@ static __global__ void k_argsort_biased_f32_f32_i32(const float * x, const float
         size_t nb_ids) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -158,7 +184,7 @@ static __global__ void k_openai_f32_f32_i32(const float * x, float * weights, in
         size_t nb_ids) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -201,10 +227,11 @@ static __global__ void k_openai_f32_f32_i32(const float * x, float * weights, in
 }
 
 template<ggml_sort_order order>
-static __global__ void k_topk_sum(const float * x, const float * bias, float * x_p, float * dst, const int ncols, int ncols_pad, int n_top_k) {
+static __global__ void k_topk_sum(const float * x, const float * bias, float * x_p, float * dst,
+        const int ne00, const int ncols, int ncols_pad, int n_top_k) {
     // bitonic sort
     int col = threadIdx.x;
-    int row = blockIdx.y;
+    int row = blockIdx.x;
 
     if (col >= ncols_pad) {
         return;
@@ -218,7 +245,7 @@ static __global__ void k_topk_sum(const float * x, const float * bias, float * x
     if (bias && x_p) {
         float * x_p_row = x_p + row * ncols;
         if (col < ncols) {
-            x_p_row[col] = 1/(1 + expf(-x_row[col])) + bias[col];
+            x_p_row[col] = 1/(1 + expf(-x_row[col])) + bias[(row * ncols + col)%ne00];
         }
         x_row = x_p_row;
     }
@@ -227,6 +254,10 @@ static __global__ void k_topk_sum(const float * x, const float * bias, float * x
 
     sort<order>(ncols_pad, ncols, col, x_row, dst_row);
 
+    if (n_top_k == 2) {
+        float val = x_row[dst_row[0]] + x_row[dst_row[1]];
+        if (col == 0) dst[row] = val;
+    } else {
     float val = col < n_top_k ? x_row[dst_row[col]] : 0;
     val = warp_reduce_sum(val);
     if (blockDim.x > WARP_SIZE) {
@@ -247,6 +278,7 @@ static __global__ void k_topk_sum(const float * x, const float * bias, float * x
 
     if (col == 0) {
         dst[row] = val;
+    }
     }
 }
 
@@ -275,7 +307,7 @@ static void argsort_f32_T_cuda(const float * x, dst_t * dst, const int ncols, co
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = ncols_pad * sizeof(int);
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
@@ -300,24 +332,46 @@ static void argsort_f32_T_cuda(const float * x, dst_t * dst, const int ncols, co
     }
 }
 
-static void argsort_f32_f32_i32_cuda(const float * x_biased, const float * x, float * weights, int * ids, const int ncols, const int nrows, int ntop,
-        size_t nb_ids, ggml_sort_order order, cudaStream_t stream) {
+static void argsort_f32_u8_cuda(const float * x, uint8_t * dst, const int ncols, const int nrows, int ntop,
+        ggml_sort_order order, cudaStream_t stream) {
     // bitonic sort requires ncols to be power of 2
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = ncols_pad * sizeof(int);
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
     GGML_ASSERT(shared_mem <= ggml_cuda_info().devices[ggml_cuda_get_device()].smpb);
 
     if (order == GGML_SORT_ORDER_ASC) {
-        k_argsort_f32_f32_i32<GGML_SORT_ORDER_ASC><<<block_nums, block_dims, shared_mem, stream>>>(x_biased, x, weights, ids,
-                ncols, ncols_pad, ntop, nb_ids);
+        k_argsort_f32_u8<GGML_SORT_ORDER_ASC><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, ntop);
     } else if (order == GGML_SORT_ORDER_DESC) {
-        k_argsort_f32_f32_i32<GGML_SORT_ORDER_DESC><<<block_nums, block_dims, shared_mem, stream>>>(x_biased, x, weights, ids,
-                ncols, ncols_pad, ntop, nb_ids);
+        k_argsort_f32_u8<GGML_SORT_ORDER_DESC><<<block_nums, block_dims, shared_mem, stream>>>(x, dst, ncols, ncols_pad, ntop);
+    } else {
+        GGML_ABORT("fatal error");
+    }
+}
+
+static void argsort_f32_f32_i32_cuda(const float * x_biased, const float * x, const uint8_t * group_mask,
+        float * weights, int * ids, const int ncols, const int nrows, int ntop,
+        size_t nb_ids, int n_per_group, ggml_sort_order order, cudaStream_t stream) {
+    // bitonic sort requires ncols to be power of 2
+    const int ncols_pad = next_power_of_2(ncols);
+
+    const dim3 block_dims(ncols_pad, 1, 1);
+    const dim3 block_nums(nrows, 1, 1);
+    const size_t shared_mem = ncols_pad * (sizeof(int) + sizeof(float));
+
+    // FIXME: this limit could be raised by ~2-4x on Ampere or newer
+    GGML_ASSERT(shared_mem <= ggml_cuda_info().devices[ggml_cuda_get_device()].smpb);
+
+    if (order == GGML_SORT_ORDER_ASC) {
+        k_argsort_f32_f32_i32<GGML_SORT_ORDER_ASC><<<block_nums, block_dims, shared_mem, stream>>>(x_biased, x, group_mask, weights, ids,
+                ncols, ncols_pad, ntop, nb_ids, n_per_group, ncols/n_per_group);
+    } else if (order == GGML_SORT_ORDER_DESC) {
+        k_argsort_f32_f32_i32<GGML_SORT_ORDER_DESC><<<block_nums, block_dims, shared_mem, stream>>>(x_biased, x, group_mask, weights, ids,
+                ncols, ncols_pad, ntop, nb_ids, n_per_group, ncols/n_per_group);
     } else {
         GGML_ABORT("fatal error");
     }
@@ -329,7 +383,7 @@ static void argsort_biased_f32_f32_i32_cuda(const float * x, const float * bias,
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = ncols_pad * (sizeof(int) + sizeof(float));
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
@@ -352,7 +406,7 @@ static void argsort_openai_f32_f32_i32_cuda(const float * x, float * weights, in
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = (ncols_pad + ncols_pad > WARP_SIZE ? WARP_SIZE : 0) * sizeof(int);
 
     // FIXME: this limit could be raised by ~2-4x on Ampere or newer
@@ -408,18 +462,18 @@ void ggml_cuda_op_argsort_thresh(ggml_backend_cuda_context & ctx, ggml_tensor * 
 }
 
 static void ggml_cuda_op_topk_sum(ggml_backend_cuda_context & ctx, const float * src, const float * bias, float * src_p, float * dst,
-        int ncols, int nrows, int n_top_k) {
+        int ne00, int ncols, int nrows, int n_top_k) {
 
     GGML_ASSERT(n_top_k <= ncols);
 
     const int ncols_pad = next_power_of_2(ncols);
 
     const dim3 block_dims(ncols_pad, 1, 1);
-    const dim3 block_nums(1, nrows, 1);
+    const dim3 block_nums(nrows, 1, 1);
     const size_t shared_mem = (ncols_pad + WARP_SIZE) * sizeof(int);
     GGML_ASSERT(shared_mem <= ggml_cuda_info().devices[ggml_cuda_get_device()].smpb);
 
-    k_topk_sum<GGML_SORT_ORDER_DESC><<<block_nums, block_dims, shared_mem, ctx.stream()>>>(src, bias, src_p, dst, ncols, ncols_pad, n_top_k);
+    k_topk_sum<GGML_SORT_ORDER_DESC><<<block_nums, block_dims, shared_mem, ctx.stream()>>>(src, bias, src_p, dst, ne00, ncols, ncols_pad, n_top_k);
 }
 
 void ggml_cuda_op_grouped_topk(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -453,7 +507,7 @@ void ggml_cuda_op_grouped_topk(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     CUDA_CHECK(cudaGetLastError());
 #else
     ggml_cuda_pool_alloc<float> group_scores(ctx.pool(), nrows*n_groups);
-    ggml_cuda_op_topk_sum(ctx, (float *)src->data, nullptr, nullptr, group_scores.get(), n_per_group, nrows*n_groups, nk);
+    ggml_cuda_op_topk_sum(ctx, (float *)src->data, nullptr, nullptr, group_scores.get(), ne00, n_per_group, nrows*n_groups, nk);
     CUDA_CHECK(cudaGetLastError());
 #endif
 
@@ -495,26 +549,19 @@ void cuda_bailingmoev2_experts(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     int n_per_group = ne00/n_groups;
     GGML_ASSERT(nk <= n_per_group);
     GGML_ASSERT(n_top_groups <= n_groups);
-    int n_discarded_groups = n_groups - n_top_groups;
 
     ggml_cuda_pool_alloc<float> group_scores(ctx.pool(), nrows*n_groups);
     ggml_cuda_op_topk_sum(ctx, (const float *)probs->data, (const float *)bias->data, (float *)topk_src->data, group_scores.get(),
-            n_per_group, nrows*n_groups, nk);
+            ne00, n_per_group, nrows*n_groups, nk);
     CUDA_CHECK(cudaGetLastError());
 
-    ggml_cuda_pool_alloc<int> discarded_groups(ctx.pool(), nrows*n_discarded_groups);
-    argsort_f32_T_cuda(group_scores.get(), discarded_groups.get(), n_groups, nrows, n_discarded_groups, GGML_SORT_ORDER_ASC, -1, 0.0f, ctx.stream());
+    ggml_cuda_pool_alloc<uint8_t> group_mask(ctx.pool(), nrows*n_groups);
+    argsort_f32_u8_cuda(group_scores.get(), group_mask.get(), n_groups, nrows, n_top_groups, GGML_SORT_ORDER_DESC, ctx.stream());
     CUDA_CHECK(cudaGetLastError());
 
-    {
-        const dim3 block_dims(WARP_SIZE, 1, 1);
-        const dim3 block_nums(nrows, 1, 1);
-        k_apply_mask<<<block_nums, block_dims, 0, ctx.stream()>>>((float *)topk_src->data, discarded_groups.get(), n_discarded_groups, n_per_group, ne00);
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    argsort_f32_f32_i32_cuda((const float *)topk_src->data, (const float *)probs->data, (float *)dst->data, (int *)topk->data,
-            ne00, nrows, ne0, topk->nb[1], GGML_SORT_ORDER_DESC, ctx.stream());
+    argsort_f32_f32_i32_cuda((const float *)topk_src->data, (const float *)probs->data, group_mask.get(),
+            (float *)dst->data, (int *)topk->data,
+            ne00, nrows, ne0, topk->nb[1], n_per_group, GGML_SORT_ORDER_DESC, ctx.stream());
 
 }
 
