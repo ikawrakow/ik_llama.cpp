@@ -942,7 +942,7 @@ llm_expert_gating_func_type   gating_op,
 
     if (!weight_before_ffn) {
         experts = ggml_mul(ctx, experts, weights);
-        cb(cur, "ffn_moe_weighted", il);
+        cb(experts, "ffn_moe_weighted", il);
     }
 
     if (n_expert_used == 1) {
