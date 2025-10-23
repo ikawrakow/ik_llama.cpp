@@ -941,8 +941,9 @@ llm_expert_gating_func_type   gating_op,
     }
 
     if (!weight_before_ffn) {
-        experts = ggml_mul(ctx, experts, weights);
+        experts = ggml_mul_multi_add(ctx, experts, weights);
         cb(experts, "ffn_moe_weighted", il);
+        return experts;
     }
 
     if (n_expert_used == 1) {

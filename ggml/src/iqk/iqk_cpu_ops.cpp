@@ -12,6 +12,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace {
 // Playing around with group scores: use sum of probabilities in the group
@@ -407,5 +408,43 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
         GGML_ASSERT(sum > 0);
         float norm = 1/sum;
         for (int j = 0; j < ne0; ++j) weights[j] *= norm;
+    }
+}
+
+void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth) {
+    auto src0 = dst->src[0];
+    auto src1 = dst->src[1];
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->ne[0] ==  dst->ne[0]);
+    GGML_ASSERT(src0->ne[2] ==  dst->ne[1]);
+    GGML_ASSERT(src0->ne[1] == src1->ne[1]);
+    GGML_ASSERT(src0->ne[2] == src1->ne[2]);
+    GGML_ASSERT(src0->ne[3] == src1->ne[3]);
+    GGML_ASSERT(src0->ne[3] == 1);
+    GGML_ASSERT(src1->ne[0] == 1);
+
+    int nrows = dst->ne[1];
+    int npt   = (nrows + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = std::min(nrows, first + npt);
+
+    int ne01 = src0->ne[1];
+    int ne00 = src0->ne[0];
+
+    for (int ir = first; ir < last; ++ir) {
+        auto c0 = (const char *)src0->data + ir*src0->nb[2];
+        auto c1 = (const char *)src1->data + ir*src1->nb[2];
+        auto cy = (      char *) dst->data + ir* dst->nb[1];
+        std::memset(cy, 0, ne00*sizeof(float));
+        for (int j = 0; j < ne01; ++j) {
+            auto x0 = (const float *)c0;
+            auto x1 = (const float *)c1;
+            auto  y = (      float *)cy;
+            for (int k = 0; k < ne00; ++k) y[k] += x0[k] * x1[0];
+            c0 += src0->nb[1];
+            c1 += src1->nb[1];
+        }
     }
 }
