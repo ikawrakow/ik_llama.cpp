@@ -12,6 +12,9 @@ struct llama_cparams {
     uint32_t n_threads;       // number of threads to use for generation
     uint32_t n_threads_batch; // number of threads to use for batch processing
 
+    std::vector<std::string> devices;
+    std::vector<std::string> devices_draft;
+
     float rope_freq_base;
     float rope_freq_scale;
 

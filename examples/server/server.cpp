@@ -1248,6 +1248,7 @@ struct server_context {
             LOG_INFO("loading draft model", {{"model", params.model_draft}});
 
             gpt_params params_dft;
+            params_dft.devices = params.devices_draft;
             params_dft.model = params.model_draft;
             params_dft.n_ctx = params.n_ctx_draft == 0 ? params.n_ctx / params.n_parallel : params.n_ctx_draft;
             params_dft.n_gpu_layers = params.n_gpu_layers_draft;
@@ -1272,7 +1273,7 @@ struct server_context {
 
             cparams_dft = llama_context_params_from_gpt_params(params_dft);
             cparams_dft.n_batch = n_ctx_dft;
-
+            
             model_draft = llama_init_dft.model;
             ctx_draft = llama_init_dft.context;
         }
