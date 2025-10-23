@@ -80,6 +80,7 @@ struct llm_build_context {
     const bool fused_moe_up_gate;
     const bool grouped_expert_routing;
     const bool fused_up_gate;
+    const bool fused_mmad;
     const int  min_experts;
     const float thresh_experts;
 
