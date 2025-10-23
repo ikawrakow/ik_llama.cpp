@@ -1,4 +1,4 @@
-### 📝 [#285](https://github.com/ikawrakow/ik_llama.cpp/issues/285) - llama-perplexity giving all NaNs on unsloth Q8_0 quant
+## 📌 [Issue #285](https://github.com/ikawrakow/ik_llama.cpp/issues/285) - llama-perplexity giving all NaNs on unsloth Q8_0 quant
 
 | **Author** | `ubergarm` |
 | :--- | :--- |
@@ -8,9 +8,9 @@
 
 ---
 
-#### Description
+## 📄 Description
 
-Moving this into its own ticket from [#271](https://github.com/ikawrakow/ik_llama.cpp/issues/271#issuecomment-2740969252).
+Moving this into its own ticket from [[#271](https://github.com/ikawrakow/ik_llama.cpp/issues/271)](https://github.com/ikawrakow/ik_llama.cpp/issues/271#issuecomment-2740969252).
 
 Basically, I was able to run a clean `llama-perplexity` on [unsloth/DeepSeek-R1-Q8_0](https://huggingface.co/unsloth/DeepSeek-R1-GGUF/tree/main/DeepSeek-R1-Q8_0) with mainline llama.cpp, but when I tried with this fork it was throwing all NaNs.
 
@@ -796,9 +796,9 @@ Computed blk.60.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-03-25** at **07:28:41**:<br>
+👤 **ikawrakow** commented on **2025-03-25** at **07:28:41**
 
 Not sure how to solve this one. As you are using `Q8_0` for the attention tensors in other models, and not getting NaNs, the issue must be somehow in the expert tensors. To help debug the problem, I would appreciate if you could do a run with the model producing NaNs with vanilla configuration, i.e.,
 ```
@@ -807,7 +807,7 @@ Not sure how to solve this one. As you are using `Q8_0` for the attention tensor
 
 ---
 
-👤 **ubergarm** commented the **2025-03-25** at **17:33:14**:<br>
+👤 **ubergarm** commented on **2025-03-25** at **17:33:14**
 
 Okay, coming back around to this one after seeing some NaNs running [llama-perplexity](https://github.com/ikawrakow/ik_llama.cpp/discussions/286#discussioncomment-12618097)
 
@@ -1035,235 +1035,7 @@ perplexity: 5.62 seconds per pass - ETA 52.57 minutes
 
 ---
 
-👤 **ubergarm** commented the **2025-03-25** at **17:33:14**:<br>
-
-Okay, coming back around to this one after seeing some NaNs running [llama-perplexity]()
-
-<details>
-
-<summary>llama-perplexity `main@98a264a2` Logs</summary>
-
-```bash
-$ git rev-parse --short HEAD
-98a264a2
-
-# running on CPU 1 as CPU 0 is busy with benchmarks...
-$ numactl -N 1 -m 1 \
-./build/bin/llama-perplexity \
-    -m /mnt/ai/models/unsloth/repack/DeepSeek-R1-Q8_0_R8.gguf \
-    -f wiki.test.raw \
-    -t 128 \
-    -b 512 \
-    --numa numactl
-
-main: build = 3608 (98a264a2)
-main: built with cc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0 for x86_64-linux-gnu
-main: seed  = 1742922529
-llama_model_loader: loaded meta data with 45 key-value pairs and 1025 tensors from /mnt/ai/models/unsloth/repack/DeepSeek-R1-Q8_0_R8.gguf (version GGUF V3 (latest))
-llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
-llama_model_loader: - kv   0:                       general.architecture str              = deepseek2
-llama_model_loader: - kv   1:                               general.type str              = model
-llama_model_loader: - kv   2:                               general.name str              = DeepSeek R1 BF16
-llama_model_loader: - kv   3:                       general.quantized_by str              = Unsloth
-llama_model_loader: - kv   4:                         general.size_label str              = 256x20B
-llama_model_loader: - kv   5:                           general.repo_url str              = https://huggingface.co/unsloth
-llama_model_loader: - kv   6:                      deepseek2.block_count u32              = 61
-llama_model_loader: - kv   7:                   deepseek2.context_length u32              = 163840
-llama_model_loader: - kv   8:                 deepseek2.embedding_length u32              = 7168
-llama_model_loader: - kv   9:              deepseek2.feed_forward_length u32              = 18432
-llama_model_loader: - kv  10:             deepseek2.attention.head_count u32              = 128
-llama_model_loader: - kv  11:          deepseek2.attention.head_count_kv u32              = 128
-llama_model_loader: - kv  12:                   deepseek2.rope.freq_base f32              = 10000.000000
-llama_model_loader: - kv  13: deepseek2.attention.layer_norm_rms_epsilon f32              = 0.000001
-llama_model_loader: - kv  14:                deepseek2.expert_used_count u32              = 8
-llama_model_loader: - kv  15:                          general.file_type u32              = 207
-llama_model_loader: - kv  16:        deepseek2.leading_dense_block_count u32              = 3
-llama_model_loader: - kv  17:                       deepseek2.vocab_size u32              = 129280
-llama_model_loader: - kv  18:            deepseek2.attention.q_lora_rank u32              = 1536
-llama_model_loader: - kv  19:           deepseek2.attention.kv_lora_rank u32              = 512
-llama_model_loader: - kv  20:             deepseek2.attention.key_length u32              = 192
-llama_model_loader: - kv  21:           deepseek2.attention.value_length u32              = 128
-llama_model_loader: - kv  22:       deepseek2.expert_feed_forward_length u32              = 2048
-llama_model_loader: - kv  23:                     deepseek2.expert_count u32              = 256
-llama_model_loader: - kv  24:              deepseek2.expert_shared_count u32              = 1
-llama_model_loader: - kv  25:             deepseek2.expert_weights_scale f32              = 2.500000
-llama_model_loader: - kv  26:              deepseek2.expert_weights_norm bool             = true
-llama_model_loader: - kv  27:               deepseek2.expert_gating_func u32              = 2
-llama_model_loader: - kv  28:             deepseek2.rope.dimension_count u32              = 64
-llama_model_loader: - kv  29:                deepseek2.rope.scaling.type str              = yarn
-llama_model_loader: - kv  30:              deepseek2.rope.scaling.factor f32              = 40.000000
-llama_model_loader: - kv  31: deepseek2.rope.scaling.original_context_length u32              = 4096
-llama_model_loader: - kv  32: deepseek2.rope.scaling.yarn_log_multiplier f32              = 0.100000
-llama_model_loader: - kv  33:                       tokenizer.ggml.model str              = gpt2
-llama_model_loader: - kv  34:                         tokenizer.ggml.pre str              = deepseek-v3
-llama_model_loader: - kv  35:                      tokenizer.ggml.tokens arr[str,129280]  = ["<｜begin▁of▁sentence｜>", "<...
-llama_model_loader: - kv  36:                  tokenizer.ggml.token_type arr[i32,129280]  = [3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
-llama_model_loader: - kv  37:                      tokenizer.ggml.merges arr[str,127741]  = ["Ġ t", "Ġ a", "i n", "Ġ Ġ", "h e...
-llama_model_loader: - kv  38:                tokenizer.ggml.bos_token_id u32              = 0
-llama_model_loader: - kv  39:                tokenizer.ggml.eos_token_id u32              = 1
-llama_model_loader: - kv  40:            tokenizer.ggml.padding_token_id u32              = 128815
-llama_model_loader: - kv  41:               tokenizer.ggml.add_bos_token bool             = true
-llama_model_loader: - kv  42:               tokenizer.ggml.add_eos_token bool             = false
-llama_model_loader: - kv  43:                    tokenizer.chat_template str              = {% if not add_generation_prompt is de...
-llama_model_loader: - kv  44:               general.quantization_version u32              = 2
-llama_model_loader: - type  f32:  361 tensors
-llama_model_loader: - type q8_0:    1 tensors
-llama_model_loader: - type q8_0_r8:  663 tensors
-llm_load_vocab: special tokens cache size = 819
-llm_load_vocab: token to piece cache size = 0.8223 MB
-llm_load_print_meta: format           = GGUF V3 (latest)
-llm_load_print_meta: arch             = deepseek2
-llm_load_print_meta: vocab type       = BPE
-llm_load_print_meta: n_vocab          = 129280
-llm_load_print_meta: n_merges         = 127741
-llm_load_print_meta: vocab_only       = 0
-llm_load_print_meta: n_ctx_train      = 163840
-llm_load_print_meta: n_embd           = 7168
-llm_load_print_meta: n_layer          = 61
-llm_load_print_meta: n_head           = 128
-llm_load_print_meta: n_head_kv        = 128
-llm_load_print_meta: n_rot            = 64
-llm_load_print_meta: n_swa            = 0
-llm_load_print_meta: n_embd_head_k    = 192
-llm_load_print_meta: n_embd_head_v    = 128
-llm_load_print_meta: n_gqa            = 1
-llm_load_print_meta: n_embd_k_gqa     = 24576
-llm_load_print_meta: n_embd_v_gqa     = 16384
-llm_load_print_meta: f_norm_eps       = 0.0e+00
-llm_load_print_meta: f_norm_rms_eps   = 1.0e-06
-llm_load_print_meta: f_clamp_kqv      = 0.0e+00
-llm_load_print_meta: f_max_alibi_bias = 0.0e+00
-llm_load_print_meta: f_logit_scale    = 0.0e+00
-llm_load_print_meta: n_ff             = 18432
-llm_load_print_meta: n_expert         = 256
-llm_load_print_meta: n_expert_used    = 8
-llm_load_print_meta: causal attn      = 1
-llm_load_print_meta: pooling type     = 0
-llm_load_print_meta: rope type        = 0
-llm_load_print_meta: rope scaling     = yarn
-llm_load_print_meta: freq_base_train  = 10000.0
-llm_load_print_meta: freq_scale_train = 0.025
-llm_load_print_meta: n_ctx_orig_yarn  = 4096
-llm_load_print_meta: rope_finetuned   = unknown
-llm_load_print_meta: ssm_d_conv       = 0
-llm_load_print_meta: ssm_d_inner      = 0
-llm_load_print_meta: ssm_d_state      = 0
-llm_load_print_meta: ssm_dt_rank      = 0
-llm_load_print_meta: model type       = 671B
-llm_load_print_meta: model ftype      = Q8_0_R8 - 8.5 bpw
-llm_load_print_meta: model params     = 671.026 B
-llm_load_print_meta: model size       = 664.295 GiB (8.504 BPW)
-llm_load_print_meta: repeating layers = 662.461 GiB (8.504 BPW, 669.173 B parameters)
-llm_load_print_meta: general.name     = DeepSeek R1 BF16
-llm_load_print_meta: BOS token        = 0 '<｜begin▁of▁sentence｜>'
-llm_load_print_meta: EOS token        = 1 '<｜end▁of▁sentence｜>'
-llm_load_print_meta: PAD token        = 128815 '<｜PAD▁TOKEN｜>'
-llm_load_print_meta: LF token         = 131 'Ä'
-llm_load_print_meta: max token length = 256
-llm_load_print_meta: n_layer_dense_lead   = 3
-llm_load_print_meta: n_lora_q             = 1536
-llm_load_print_meta: n_lora_kv            = 512
-llm_load_print_meta: n_ff_exp             = 2048
-llm_load_print_meta: n_expert_shared      = 1
-llm_load_print_meta: expert_weights_scale = 2.5
-llm_load_print_meta: expert_weights_norm  = 1
-llm_load_print_meta: expert_gating_func   = sigmoid
-llm_load_print_meta: rope_yarn_log_mul    = 0.1000
-llm_load_tensors: ggml ctx size =    0.42 MiB
-llm_load_tensors:        CPU buffer size = 680237.97 MiB
-....................................................................................................
-============ llm_load_tensors: need to compute 61 wk_b tensors
-Computed blk.0.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.1.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.2.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.3.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.4.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.5.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.6.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.7.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.8.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.9.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.10.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.11.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.12.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.13.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.14.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.15.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.16.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.17.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.18.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.19.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.20.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.21.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.22.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.23.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.24.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.25.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.26.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.27.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.28.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.29.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.30.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.31.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.32.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.33.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.34.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.35.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.36.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.37.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.38.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.39.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.40.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.41.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.42.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.43.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.44.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.45.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.46.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.47.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.48.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.49.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.50.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.51.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.52.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.53.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.54.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.55.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.56.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.57.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.58.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.59.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-Computed blk.60.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
-llama_new_context_with_model: n_ctx      = 512
-llama_new_context_with_model: n_batch    = 512
-llama_new_context_with_model: n_ubatch   = 512
-llama_new_context_with_model: flash_attn = 0
-llama_new_context_with_model: mla_attn   = 0
-llama_new_context_with_model: attn_max_b = 0
-llama_new_context_with_model: fused_moe  = 0
-llama_new_context_with_model: ser        = -1, 0
-llama_new_context_with_model: freq_base  = 10000.0
-llama_new_context_with_model: freq_scale = 0.025
-llama_kv_cache_init:        CPU KV buffer size =  2440.00 MiB
-llama_new_context_with_model: KV self size  = 2440.00 MiB, K (f16): 1464.00 MiB, V (f16):  976.00 MiB
-llama_new_context_with_model:        CPU  output buffer size =     0.49 MiB
-llama_new_context_with_model:        CPU compute buffer size =   283.01 MiB
-llama_new_context_with_model: graph nodes  = 3724
-llama_new_context_with_model: graph splits = 1
-
-system_info: n_threads = 128 / 512 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | AVX512 = 1 | AVX512_VBMI = 1 | AVX512_VNNI = 1 | AVX512_BF16 = 1 | FMA = 1 | NEON = 0 | SVE = 0 | ARM_FMA = 0 | F16C = 1 | FP16_VA = 0 | WASM_SIMD = 0 | BLAS = 0 | SSE3 = 1 | SSSE3 = 1 | VSX = 0 | MATMUL_INT8 = 0 | LLAMAFILE = 1 |
-perplexity: tokenizing the input ..
-perplexity: tokenization took 1055.81 ms
-perplexity: calculating perplexity over 561 chunks, n_ctx=512, batch_size=512, n_seq=1
-perplexity: 5.62 seconds per pass - ETA 52.57 minutes
-[1]nan,[2]nan,[3]nan,[4]nan,[5]nan,[6]nan,[7]nan,[8]nan,[9]nan,[10]nan,[11]nan,[12]nan,[13]nan,[14]nan,[15]nan,[16]nan,[17]nan,[18]nan,[19]nan,[20]nan,[21]nan,[22]nan,[23]nan,[24]nan,[25]nan,[26]nan,[27]nan,[28]nan,[29]nan,[30]nan,[31]nan,[32]nan,[33]nan,[34]nan,[35]nan,[36]nan,[37]nan,[38]nan,[39]nan,[40]nan,[41]nan,[42]nan,[43]nan,[44]nan,[45]nan,[46]nan,[47]nan,[48]nan,[49]nan,[50]nan,[51]nan,[52]nan,[53]nan,[54]nan,[55]nan,[56]nan,[57]nan,[58]nan,[59]nan,[60]nan,[61]nan,[62]nan,[63]nan,[64]nan,[65]nan,[66]nan,[67]nan,[68]nan,[69]nan,[70]nan,[71]nan,[72]nan,[73]nan,[74]nan,[75]nan,[76]nan,[77]nan,[78]nan,[79]nan,[80]nan,[81]nan,[82]nan,[83]nan,[84]nan,[85]nan,[86]nan,^C^C
-```
-
-</details>
-
----
-
-👤 **ubergarm** commented the **2025-03-25** at **20:24:54**:<br>
+👤 **ubergarm** commented on **2025-03-25** at **20:24:54**
 
 Ahh, tried another more simple `q8_0` everything quant for `llama-imatrix` and still got `nan` eventually:
 
@@ -1271,10 +1043,10 @@ https://github.com/ikawrakow/ik_llama.cpp/discussions/286#discussioncomment-1262
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-26** at **06:39:01**:<br>
+👤 **ikawrakow** commented on **2025-03-26** at **06:39:01**
 
 So, my current hypothesis is that the NaNs are caused by an overflow of the `Q8_1` block sum, which is stored as `fp16`.
 
 @ubergarm 
 
-Can you test if #291 eliminates the NaNs for `Q8_0` and/or `Q8_0_R8`? Thanks.
+Can you test if [#291](https://github.com/ikawrakow/ik_llama.cpp/issues/291) eliminates the NaNs for `Q8_0` and/or `Q8_0_R8`? Thanks.

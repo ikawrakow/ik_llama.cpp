@@ -1,16 +1,19 @@
-### 🔀 [#169](https://github.com/ikawrakow/ik_llama.cpp/pull/169) - Be able to re-quantize MS BitNet I2_S models
+## 🔀 [Pull Request #169](https://github.com/ikawrakow/ik_llama.cpp/pull/169) - Be able to re-quantize MS BitNet I2_S models
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/convert_i2s` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-10 |
 | **Updated** | 2025-01-10 |
+| **Merged** | 2025-01-10 |
 
 ---
 
-#### Description
+## 📄 Description
 
-Closes #167 
+Closes [#167](https://github.com/ikawrakow/ik_llama.cpp/issues/167) 
 
 I also saw requests for `Falcon3-10B-1.58b` being made in the mainline `llama.cpp` and `llamafile` repositories, so decided to add the ability to use this model with `ik_llama.cpp`.
 

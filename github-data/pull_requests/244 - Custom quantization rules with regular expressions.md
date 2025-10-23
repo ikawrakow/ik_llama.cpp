@@ -1,14 +1,17 @@
-### 🔀 [#244](https://github.com/ikawrakow/ik_llama.cpp/pull/244) - Custom quantization rules with regular expressions
+## 🔀 [Pull Request #244](https://github.com/ikawrakow/ik_llama.cpp/pull/244) - Custom quantization rules with regular expressions
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/custom_q_rules` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-06 |
 | **Updated** | 2025-03-07 |
+| **Merged** | 2025-03-07 |
 
 ---
 
-#### Description
+## 📄 Description
 
 For DeepSeekV3/R1 it is handy to be able to define custom rules for picking quantization types for the various tensors. Well, this is useful in general, but particularly useful for very large models where one wants to squeeze the last bit of quantized model quality for the smallest possible model size.
 
@@ -32,8 +35,8 @@ To summarize how the quantization type is determined:
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **davidsyoung** commented the **2025-03-06** at **17:58:36**:<br>
+👤 **davidsyoung** commented on **2025-03-06** at **17:58:36**
 
 This is awesome. It’ll come in really useful!

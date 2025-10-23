@@ -1,16 +1,19 @@
-### 🔀 [#278](https://github.com/ikawrakow/ik_llama.cpp/pull/278) - Test transparent huge pages on Linux
+## 🔀 [Pull Request #278](https://github.com/ikawrakow/ik_llama.cpp/pull/278) - Test transparent huge pages on Linux
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/test_thp` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-22 |
 | **Updated** | 2025-03-25 |
+| **Merged** | 2025-03-23 |
 
 ---
 
-#### Description
+## 📄 Description
 
-In #267 @orca-zhang observes significant performance gains using 1 GiB huge pages, so I decided to see if I can reproduce. 
+In [#267](https://github.com/ikawrakow/ik_llama.cpp/issues/267) @orca-zhang observes significant performance gains using 1 GiB huge pages, so I decided to see if I can reproduce. 
 
 This PR adds the option to use transparent huge pages (THP) on Linux. To use it, just add `-thp` to the command line (but note that it is only invoked if also `mmap` is being used).
 
@@ -57,9 +60,9 @@ where `N` is how many 1 GiB huge pages you want reserved.
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ubergarm** commented the **2025-03-22** at **17:20:30**:<br>
+👤 **ubergarm** commented on **2025-03-22** at **17:20:30**
 
 Testing THP Feature
 ===
@@ -67,7 +70,7 @@ Testing manually allocated huge pages via `-thp` flag.
 
 ## Initial Results with 2MiB Huge Pages
 
-My quick methodology was to throw a medium length <4k `Prompt 1` at `llama-server` followed up with a very short `Prompt 2` question about the response. Only ran two repitions but seems like some speed boost with 2MiB huge pages pre-allocated and enabled.
+My quick methodology was to throw a medium length <4k `Prompt 1` at `llama-server` followed up with a very short `Prompt 2` question about the response. Only ran two repetitions for each case, but seems like there *is* some speed boost with 2MiB huge pages pre-allocated and enabled on this single NUMA node CPU only intel xeon 6980P rig test case.
 
 | Prompt | `-thp` |  pp   | tg   |
 | ------ | ------ |  ---  | ---  |
@@ -87,6 +90,7 @@ My quick methodology was to throw a medium length <4k `Prompt 1` at `llama-serve
 3. You need enough huge pages pre-allocated on a single NUMA node to fit entire model (can't run partially off disk).
 4. Using even standard 2MiB huge pages seems to give ~12% speed boost for token generation in this CPU only single NUMA node test case.
 5. I had trouble allocating 1GiB huge pages on a different test rig, and didn't want to reboot it with GRUB stuff either.
+6. Upon control+c exiting `llama-server -thp` it throws a warning `warning: munmap failed: Invalid argument`
 
 ## Conclusion
 
@@ -145,7 +149,7 @@ $ cat /boot/config-6.8.0-55-generic | grep THP_FOR_FS
 
 ## Test Case
 ```bash
-## start benchmark without `-thp`
+## start benchmark with new `-thp` feature enabled
 numactl -N 0 -m 0 \
 ./build/bin/llama-server \
     -thp \
@@ -404,7 +408,7 @@ Hugetlb:               0 kB
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-22** at **17:41:25**:<br>
+👤 **ikawrakow** commented on **2025-03-22** at **17:41:25**
 
 > Seems like llama-bench doesn't support -thp 1, only llama-server
 
@@ -412,7 +416,7 @@ It will work in any of the executables that use `common` (`llama-server, llama-c
 
 > This seems to be for manually pre-allocated huge pages, not for "transparent" "Anon" huge pages (THPs).
 
-No, these are THP. The way it works, you ask the kernel to give you `N` huge pages (e.g., with `mmap(..., MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETL))`. It will do it only if possible (enough huge pages are available), else the system call will fail. It won't on its own reshuffle virtual pages to free up space for you. Hence, if you want to make sure that getting the necessary number of huge pages will always succeed, it is better to pre-allocate them. At least that's my understanding of it.   Either way, what I do in this PR is exactly what XuanWuLab did in the quoted post in #267. 
+No, these are THP. The way it works, you ask the kernel to give you `N` huge pages (e.g., with `mmap(..., MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETL))`. It will do it only if possible (enough huge pages are available), else the system call will fail. It won't on its own reshuffle virtual pages to free up space for you. Hence, if you want to make sure that getting the necessary number of huge pages will always succeed, it is better to pre-allocate them. At least that's my understanding of it.   Either way, what I do in this PR is exactly what XuanWuLab did in the post quoted in [#267](https://github.com/ikawrakow/ik_llama.cpp/issues/267). 
 
 > Upon control+c exiting llama-server -thp it throws a warning warning: munmap failed: Invalid argument
 
@@ -420,19 +424,21 @@ I had that too and I thought I had fixed it. I no longer get this warning on my 
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-22** at **18:02:11**:<br>
+👤 **ikawrakow** commented on **2025-03-22** at **18:02:11**
 
 So, `llama-bench` has `-thp` with the last commit. As changing `-thp` needs a model reload, it cannot be used to run `thp=0` and `thp=1` in the same run (same as `-rtr`).
 
 ---
 
-👤 **ubergarm** commented the **2025-03-22** at **21:40:24**:<br>
+👤 **ubergarm** commented on **2025-03-22** at **21:40:24**
 
-Benchmarking Explicit Huge Pages
+Benchmarking Huge Pages
 ===
 CPU only inference using single socket of dual Intel Xeon 6980P with offline-repacked unsloth/`DeepSeek-R1-Q4_K_R4` 671B @ 376.65GB file size.
 
 ## tl;dr;
+
+Manually allocating enough 2MiB Huge Pages to fit the entire model improved `tg` just over 12% of baseline and improved `pp` around 5%.
 
 | thp |          test |              t/s |
 | --: | ------------: | ---------------: |
@@ -464,7 +470,9 @@ Thanks for adding the CLI argument to `llama-bench`. It does seem to provide som
 
 Yes, regarding *Transparent* vs *Explicit* Huge Pages name, the important thing is as you mention it is the same strategy as XuanWuLab.
 
-I did a [little experiment](https://github.com/ubergarm/ik_llama.cpp/pull/1) and explanation of the difference on my local system with what I am calling *THP*, and enabling it seemed to actually hurt performance. Not enough RAM to test manually allocating Explicit Huge Pages on my local rig unfortunately.
+I did a [little experiment](https://github.com/ubergarm/ik_llama.cpp/pull/1) and explanation of the difference on my local system with what I am calling *THP*, and enabling that seemed to actually hurt performance.
+
+Not enough RAM to test your PR manually allocating Explicit Huge Pages on my local rig unfortunately.
 
 Thanks!
 
@@ -729,13 +737,13 @@ Hugetlb:               0 kB
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-23** at **06:24:32**:<br>
+👤 **ikawrakow** commented on **2025-03-23** at **06:24:32**
 
 It looks like this can be useful, so I'll merge it.
 
 ---
 
-👤 **ubergarm** commented the **2025-03-23** at **19:32:09**:<br>
+👤 **ubergarm** commented on **2025-03-23** at **19:32:09**
 
 Okay, I think I kind of understand things better now and have some interesting benchmark results.
 
@@ -743,6 +751,8 @@ Okay, I think I kind of understand things better now and have some interesting b
 Some systems will likely benefit from using Huge Pages. You can use either Explicit Huge Pages or Transparent Huge Pages and confirm they are in use to see similar benefits in inferencing performance.
 
 There are some differences and depending on your exact requirements you may choose to use one or the other. For example, Explicit Huge Pages may support 1GiB sizes whereas THPs may not. THPs don't consume RAM when the model is not loaded as they are not manually pre-allocated.
+
+Both methods seem to require enough RAM to fit the entire model weights.
 
 ## Explicit Huge Pages
 Explicit huge pages are configured manually at boot time or before loading the model weights. These huge pages will consume RAM even when not in use and require special code changes contained in this PR.
@@ -758,16 +768,16 @@ $ grep Huge /proc/meminfo
 AnonHugePages:   1857536 kB  # <--- random other small stuff is using THPs
 ShmemHugePages:        0 kB
 FileHugePages:         0 kB
-HugePages_Total:   400000  # <--- I allocated twice as much given 2x NUMA nodes
-HugePages_Free:    207154 # <--- model is loaded into Explicit Huge Pages
+HugePages_Total:   400000    # <--- I allocated twice as much given 2x NUMA nodes
+HugePages_Free:    207154    # <--- model is loaded into Explicit Huge Pages
 HugePages_Rsvd:        0
 HugePages_Surp:        0
-Hugepagesize:       2048 kB # <--- standard 2MiB Hugepagesize, feel free to try 1Gib and report back!
+Hugepagesize:       2048 kB  # <--- standard 2MiB Hugepagesize, feel free to try 1Gib and report back!
 Hugetlb:        819200000 kB
 ```
 
 ## Transparent Huge Pages
-If you want to use Transparent Huge Pages (THPs), you can enable them system wide before starting the application. This is simple enough and does not require any special `MADV_HUGEPAGE` code changes. It does not require any special code changes. It does probably require you use `--mmap 0` though which means you need enough RAM to hold the entire model weights.
+If you want to use Transparent Huge Pages (THPs), you can enable them system wide before starting the application. This is simple enough and does not require any special `MADV_HUGEPAGE` code change. It does seem to require you use `--mmap 0` though which means you need enough RAM to hold the entire model weights.
 
 ```bash
 ## set to always so code does not require `MADV_HUGEPAGE`
@@ -796,8 +806,8 @@ HugePages_Total:       0
 HugePages_Free:        0
 HugePages_Rsvd:        0
 HugePages_Surp:        0
-Hugepagesize:       2048 kB # <--- doesn't matter as THPs are maybe always 2MiB regardless?
-Hugetlb:               0 kB   # <--- no need for Explicit Huge Pages
+Hugepagesize:       2048 kB    # <--- doesn't matter as THPs are maybe always 2MiB regardless?
+Hugetlb:               0 kB    # <--- no need for Explicit Huge Pages
 
 ```
 
@@ -835,22 +845,22 @@ This excellent PR gives you the flexibility to use whatever makes sense for your
 |     128 |   -  |   1 |    tg64@pp512 |      9.10 ± 0.00 |
 |     128 |   -  |   1 |   tg64@pp8192 |      7.75 ± 0.00 |
 | Transparent Huge pages |      |     |               |                  |
-|      64 |    0 |   1 |         pp512 |     96.76 ± 4.34 |
-|      64 |    0 |   1 |        pp8192 |     65.51 ± 0.30 |
-|      64 |    0 |   1 |    tg64@pp512 |      9.53 ± 0.00 |
-|      64 |    0 |   1 |   tg64@pp8192 |      7.67 ± 0.02 |
-|      96 |    0 |   1 |         pp512 |    117.02 ± 0.07 |
-|      96 |    0 |   1 |        pp8192 |     83.29 ± 0.65 |
-|      96 |    0 |   1 |    tg64@pp512 |      9.32 ± 0.00 |
-|      96 |    0 |   1 |   tg64@pp8192 |      8.17 ± 0.01 |
-|     128 |    0 |   1 |         pp512 |    143.88 ± 6.28 |
-|     128 |    0 |   1 |        pp8192 |    101.05 ± 0.02 |
-|     128 |    0 |   1 |    tg64@pp512 |      9.26 ± 0.00 |
-|     128 |    0 |   1 |   tg64@pp8192 |      7.85 ± 0.01 |
+|      64 |    0 |   0 |         pp512 |     96.76 ± 4.34 |
+|      64 |    0 |   0 |        pp8192 |     65.51 ± 0.30 |
+|      64 |    0 |   0 |    tg64@pp512 |      9.53 ± 0.00 |
+|      64 |    0 |   0 |   tg64@pp8192 |      7.67 ± 0.02 |
+|      96 |    0 |   0 |         pp512 |    117.02 ± 0.07 |
+|      96 |    0 |   0 |        pp8192 |     83.29 ± 0.65 |
+|      96 |    0 |   0 |    tg64@pp512 |      9.32 ± 0.00 |
+|      96 |    0 |   0 |   tg64@pp8192 |      8.17 ± 0.01 |
+|     128 |    0 |   0 |         pp512 |    143.88 ± 6.28 |
+|     128 |    0 |   0 |        pp8192 |    101.05 ± 0.02 |
+|     128 |    0 |   0 |    tg64@pp512 |      9.26 ± 0.00 |
+|     128 |    0 |   0 |   tg64@pp8192 |      7.85 ± 0.01 |
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-24** at **08:32:27**:<br>
+👤 **ikawrakow** commented on **2025-03-24** at **08:32:27**
 
 @ubergarm Thank you for this.
 
@@ -885,7 +895,36 @@ So, as you say, some systems will benefit from THP or "Explicit huge pages". Thi
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-24** at **16:38:10**:<br>
+👤 **ubergarm** commented on **2025-03-24** at **14:37:51**
+
+Thanks for giving it a try. Interesting results, and similar to my own experience on the 7965WX 24-Core with 256GB RAM (BIOS=NPS1) where it wouldn't allocate enough THP for the entire model and performance seemed worse as well.
+
+> some systems will benefit from THP or "Explicit huge pages"
+
+Yeah, I've seen some big database vendors suggest disable THP completely. It really depends on the workload and system configuration. The best advise I heard in some technical youtube talks is "benchmark benchmark benchmark" to decide if it helps or not lol...
+
+The one system it does help is that big dual socket intel xeon 6980P which has 1.5TB RAM. So possibly 2MiB hugepages (transparent or explicit) reduces the insane number of 4k pages down to something more manageable. Or possibly related to NUMA stuff, hard to say.
+
+> after running the THP experiment, performance without THP dropped to THP levels
+
+Wow, I guess memory fragmentation or something? I don't know enough of the low level kernel TLB virtual memory system to fully understand. 
+
+Glad you got it back up to baseline. You can turn that stuff back off afterwards e.g.
+
+```
+## drop all caches
+$ sync && echo 3 | sudo tee /proc/sys/vm/drop_caches
+
+## put thp back to whatever system defaults you prefer (or simply reboot)
+$ echo madvise | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
+$ echo madvise | sudo tee /sys/kernel/mm/transparent_hugepage/defrag
+```
+
+Anyway, this fork has all the options someone needs to benchmark their setup for best performance which is great!
+
+---
+
+👤 **ikawrakow** commented on **2025-03-24** at **16:38:10**
 
 > You can turn that stuff back off afterwards e.g.
 
@@ -895,7 +934,7 @@ I don't really know what happens in the kernel, but my guess is that due to cach
 
 ---
 
-👤 **saood06** commented the **2025-03-25** at **11:48:08**:<br>
+👤 **saood06** commented on **2025-03-25** at **11:48:08**
 
 > To enable 1 GiB huge pages, you need to add
 > 
@@ -914,3 +953,5 @@ I don't really know what happens in the kernel, but my guess is that due to cach
 The instructions differ if you do not have GRUB, as is the case for example on clear linux, where to enable it follow [this](https://www.clearlinux.org/clear-linux-documentation/guides/maintenance/configure-hugepages.html) guide.
 
 I didn't test 2 MB pages, as it failed with `llama_mmap: mmap with huge page size 2 MiB failed (Cannot allocate memory)` and hugeadm was not trivially available (not in clear linux's package manager) and I didn't bother installing [libhugetlbfs](https://github.com/libhugetlbfs/libhugetlbfs) from source.
+
+It's still a bit disappointing that the 1 GiB huge pages led to much worse performance, maybe 2 MiB would be better, may test later.

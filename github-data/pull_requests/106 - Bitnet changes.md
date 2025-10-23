@@ -1,14 +1,17 @@
-### 🔀 [#106](https://github.com/ikawrakow/ik_llama.cpp/pull/106) - Bitnet changes
+## 🔀 [Pull Request #106](https://github.com/ikawrakow/ik_llama.cpp/pull/106) - Bitnet changes
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/adapt_iq1_iq2_bn` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-24 |
 | **Updated** | 2024-10-25 |
+| **Merged** | 2024-10-25 |
 
 ---
 
-#### Description
+## 📄 Description
 
 * Change `IQ1_BN` and `IQ2_BN` to have per row scales. In that way we can handle Bitnet models with and without separate tensor scales
 * Remove `IQ1_TN` and `IQ2_TN`. With the above change these are now redundant. `IQ1_BN` and `IQ2_BN` are also faster, so no reason to keep these around
@@ -20,6 +23,6 @@ On CUDA (RTX-4080) we now get 368 t/s for TG-128 with the 3.3B Bitnet model (`IQ
 
 **Update**
 
-I wasted quite some time trying to figure out why the Bitnet changes don't work on Metal. At the end it turned out that it is PR #98 that breaks the Metal back-end. So, this PR reverts #98.
+I wasted quite some time trying to figure out why the Bitnet changes don't work on Metal. At the end it turned out that it is PR [#98](https://github.com/ikawrakow/ik_llama.cpp/issues/98) that breaks the Metal back-end. So, this PR reverts [#98](https://github.com/ikawrakow/ik_llama.cpp/issues/98).
 
-@agray3 Do you have the ability to investigate why #98 breaks the Metal back-end?
+@agray3 Do you have the ability to investigate why [#98](https://github.com/ikawrakow/ik_llama.cpp/issues/98) breaks the Metal back-end?
