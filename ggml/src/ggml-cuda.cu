@@ -46,6 +46,7 @@
 #include "ggml-cuda/conv2d-dw.cuh"
 #include "ggml-cuda/set-rows.cuh"
 #include "ggml-cuda/argmax.cuh"
+#include "ggml-cuda/multiadd.cuh"
 
 #include <algorithm>
 #include <array>
@@ -3178,6 +3179,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_MULTI_ADD:
             ggml_cuda_op_multi_add(ctx, dst);
             break;
+        case GGML_OP_MUL_MULTI_ADD:
+            ggml_cuda_op_mul_multi_add(ctx, dst);
+            break;
         case GGML_OP_ACC:
             ggml_cuda_op_acc(ctx, dst);
             break;
@@ -4408,6 +4412,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_ADD:
         case GGML_OP_ADD_ID:
         case GGML_OP_MULTI_ADD:
+        case GGML_OP_MUL_MULTI_ADD:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
         case GGML_OP_FUSED_RMS_NORM:
