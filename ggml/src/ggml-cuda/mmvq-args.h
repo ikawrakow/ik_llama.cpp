@@ -5,6 +5,8 @@
 struct mmvq_args {
     const void * vx_u;
     const void * vx_g;
+    const void * bias_u;
+    const void * bias_g;
     const void * vy;
     float      * dst;
     const char * ids_data;
@@ -18,6 +20,7 @@ struct mmvq_args {
     const uint64_t nb12;
     const uint64_t nb2;
     const uint64_t ids_nb0;
+    const uint64_t bias_nb1;
     ggml_unary_op  unary_op;
 };
 
