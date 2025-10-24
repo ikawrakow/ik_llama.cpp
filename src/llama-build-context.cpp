@@ -1342,6 +1342,8 @@ ggml_cgraph * llm_build_context::build_llama() {
             n_tokens = n_outputs;
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cb(cur, "last_attn", il);
+            cb(inpSA, "last_ffn_inp", il);
         }
 
         // For Granite architecture
@@ -5942,6 +5944,8 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             n_tokens = n_outputs;
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cb(cur, "last_attn", il);
+            cb(inpSA, "last_ffn_inp", il);
         }
 
         struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
@@ -8040,7 +8044,20 @@ ggml_cgraph * llm_build_context::llama_build_graph(
     // this callback allows us to apply custom logic to each tensor (e.g. ggml-alloc, offloading, etc.)
     llm_build_cb cb = [&](struct ggml_tensor * cur, const char * name, int il) {
         if (il >= 0) {
-            ggml_format_name(cur, "%s-%d", name, il);
+            int j = 0;
+            for (; j < GGML_MAX_NAME - 1; ++j) {
+                cur->name[j] = name[j];
+                if (!name[j]) break;
+            }
+            if (j < GGML_MAX_NAME - 3) {
+                cur->name[j++] = '-';
+                auto sil = std::to_string(il);
+                for (int k = 0; k < (int)sil.size() && j < GGML_MAX_NAME - 1; ++k) {
+                    cur->name[j++] = sil[k];
+                }
+            }
+            cur->name[j] = 0;
+            //ggml_format_name(cur, "%s-%d", name, il);
         } else {
             ggml_set_name(cur, name);
         }
