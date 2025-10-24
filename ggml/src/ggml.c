@@ -4222,6 +4222,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OUT_PROD",
     "FUSED_UP_GATE",
     "MOE_FUSED_UP_GATE",
+    "MUL_MULTI_ADD",
 
     "SCALE",
     "SET",
@@ -4289,7 +4290,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
+static_assert(GGML_OP_COUNT == 89, "GGML_OP_COUNT != 89");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4326,6 +4327,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "X*Y",
     "X*Y1&X*Y2",
     "X*Y1&X*Y2",
+    "x1*y1+x2*y2+...",
 
     "x*v",
     "y-\\>view(x)",
@@ -4393,7 +4395,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x),"
 };
 
-static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
+static_assert(GGML_OP_COUNT == 89, "GGML_OP_COUNT != 89");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6099,6 +6101,31 @@ struct ggml_tensor * ggml_multi_add(
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = a;
     result->op_params[0] = n_experts;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_mul_multi_add(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+
+    bool is_node = false;
+
+    GGML_ASSERT(a->ne[1] == b->ne[1]);
+    GGML_ASSERT(a->ne[2] == b->ne[2]);
+    GGML_ASSERT(a->ne[3] == b->ne[3]);
+    GGML_ASSERT(a->ne[3] == 1);
+    GGML_ASSERT(b->ne[0] == 1);
+
+    int64_t ne[GGML_MAX_DIMS] = { a->ne[0], a->ne[2], 1, 1 };
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, ne);
+
+    result->op   = GGML_OP_MUL_MULTI_ADD;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = b;
 
     return result;
 }
@@ -22319,6 +22346,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_multi_add(params, tensor);
             } break;
+        case GGML_OP_MUL_MULTI_ADD:
+            {
+                iqk_mul_multi_add(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_ACC:
             {
                 ggml_compute_forward_acc(params, tensor);
@@ -23154,6 +23185,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 GGML_ABORT("fatal error"); // TODO: implement
             }
         case GGML_OP_MULTI_ADD:
+            {
+                GGML_ABORT("fatal error"); // TODO: implement
+            }
+        case GGML_OP_MUL_MULTI_ADD:
             {
                 GGML_ABORT("fatal error"); // TODO: implement
             }
@@ -24241,6 +24276,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ADD1:
         case GGML_OP_ACC:
         case GGML_OP_MULTI_ADD:
+        case GGML_OP_MUL_MULTI_ADD:
             {
                 n_tasks = n_threads;
             } break;

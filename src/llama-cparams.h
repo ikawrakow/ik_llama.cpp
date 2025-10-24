@@ -33,6 +33,7 @@ struct llama_cparams {
     bool fused_moe_up_gate;
     bool grouped_expert_routing;
     bool fused_up_gate;
+    bool fused_mmad;
     int  min_experts;
     float thresh_experts;
 
