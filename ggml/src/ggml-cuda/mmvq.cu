@@ -231,12 +231,12 @@ static __device__ void fused_mul_mat_vec_q(
             switch (unary_op) {
                 case GGML_UNARY_OP_SILU: r = u*g/(1 + expf(-g)); break;
                 case GGML_UNARY_OP_RELU: r = fmaxf(g, 0.0f) * u; break;
-                // we assume that the supported ops have been checked by the caller
                 case GGML_UNARY_OP_GELU: {
                     constexpr float GELU_COEF_A    = 0.044715f;
                     constexpr float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
                     r = 0.5f*g*u*(1.0f + tanhf(SQRT_2_OVER_PI*g*(1.0f + GELU_COEF_A*g*g)));
                 } break;
+                // we assume that the supported ops have been checked by the caller
                 default: {
                   constexpr float alpha = 1.702f;
                   constexpr float limit = 7.0f;
