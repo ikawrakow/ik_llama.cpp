@@ -251,7 +251,7 @@ __global__ void iqk_fused_mul_mat_vec_q(
     const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, ggml_unary_op unary_op) {
 
     int i2 = blockIdx.y;
-    int i02 = *(const int *)(ids_data + i2*ids_nb0);
+    int i02 = ids_data ? *(const int *)(ids_data + i2*ids_nb0) : i2;
     if (i02 < 0) return;
     const char * cx_u = (const char *)vx_u + i02*nb02;
     const char * cx_g = (const char *)vx_g + i02*nb02;
@@ -305,12 +305,7 @@ void iqk_mul_mat_vec_q_cuda(const mmvq_args & args, cudaStream_t stream) {
 
     const int64_t row_size = ggml_row_size(type, args.ncols_x);
 
-    //const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst, const char * __restrict__ ids_data,
-    //const void * __restrict__ bias_u, const void * __restrict__ bias_g, const uint64_t bias_nb1,
-    //const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst, const int64_t row_size,
-    //const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, ggml_unary_op unary_op) {
-
-    if (args.vx_u && args.vx_g && args.ids_data && args.unary_op != GGML_UNARY_OP_COUNT) {
+    if (args.vx_u && args.vx_g && args.unary_op != GGML_UNARY_OP_COUNT) {
     switch (args.ncols_y) {
         case 1:
             iqk_fused_mul_mat_vec_q<type, vdr, vec_dot_q_cuda, 1, n_interleaved><<<block_nums, block_dims, 0, stream>>>(
