@@ -2644,6 +2644,27 @@ static bool ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_te
                 local_src1.nb[1] = src_1_ddq_size;
             }
 
+            bool fuse_next = next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
+                ggml_backend_buffer_is_cuda(next->src[0]->buffer) &&
+               !ggml_backend_buffer_is_cuda_split(next->src[0]->buffer) &&
+                ((ggml_backend_cuda_buffer_context *)next->src[0]->buffer->context)->device == device_id &&
+                ggml_backend_buffer_is_cuda(next->buffer) &&
+                ((ggml_backend_cuda_buffer_context *)next->buffer->context)->device == device_id;
+
+            if (!dst->src[4] && !dst->src[5]) {
+                local_dst.data = dst_gate_contiguous.get();
+                auto the_destination = fuse_next ? &local_dst : dst;
+                auto unary_op = (ggml_unary_op)dst->op_params[0];
+                ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, src0_1, &local_src1, ids, the_destination,
+                        (const char *)src0_1->data, (const char *)src0_2->data, (const float *)src1->data, src1_quantized.get(),
+                        (float *)dst_gate_contiguous.get(),
+                        0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, stream);
+                CUDA_CHECK(cudaGetLastError());
+
+                if (!fuse_next) return false;
+            }
+            else {
+
             local_dst.data = dst_up_contiguous.get();
             ggml_cuda_op_mul_mat_vec_q_id(ctx, src0_1, &local_src1, ids, &local_dst,
                 (const char *)src0_1->data, (const float *)src1->data, src1_quantized.get(), (float *)dst_up_contiguous.get(),
@@ -2669,24 +2690,16 @@ static bool ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_te
                         local_dst.ne[0], local_dst.ne[2], local_dst.ne[1], local_dst.ne[0], local_dst.ne[2],
                         local_dst.nb[1], local_dst.nb[2], dst->src[5]->nb[1], ids->nb[2], stream);
             }
+            }
 
-            if (next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
-                ggml_backend_buffer_is_cuda(next->src[0]->buffer) &&
-               !ggml_backend_buffer_is_cuda_split(next->src[0]->buffer) &&
-                ((ggml_backend_cuda_buffer_context *)next->src[0]->buffer->context)->device == device_id &&
-                ggml_backend_buffer_is_cuda(next->buffer) &&
-                ((ggml_backend_cuda_buffer_context *)next->buffer->context)->device == device_id) {
+            if (fuse_next) {
 
                 auto unary_op = (ggml_unary_op)dst->op_params[0];
                 if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
                     ggml_swiglu_oai_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
                             (float *)dst_gate_contiguous.get(), dst->ne[0]*n_ids, dst->ne[0], dst->ne[0], dst->ne[0], 1.702f, 7.0f, stream);
-                } else {
-                    ggml_fused_mul_unary(ctx, unary_op, dst->ne[0]*n_ids,
-                            (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
-                            (float *)dst_gate_contiguous.get());
+                    CUDA_CHECK(cudaGetLastError());
                 }
-                CUDA_CHECK(cudaGetLastError());
 
                 const int64_t dst_padded_col_size = GGML_PAD(dst->ne[0], MATRIX_ROW_PADDING);
                 GGML_ASSERT(dst->ne[0] % QK8_1 == 0);
