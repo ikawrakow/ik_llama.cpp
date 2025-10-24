@@ -4222,6 +4222,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OUT_PROD",
     "FUSED_UP_GATE",
     "MOE_FUSED_UP_GATE",
+    "MUL_MULTI_ADD",
 
     "SCALE",
     "SET",
@@ -4289,7 +4290,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
+static_assert(GGML_OP_COUNT == 89, "GGML_OP_COUNT != 89");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4326,6 +4327,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "X*Y",
     "X*Y1&X*Y2",
     "X*Y1&X*Y2",
+    "x1*y1+x2*y2+...",
 
     "x*v",
     "y-\\>view(x)",
@@ -4393,7 +4395,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x),"
 };
 
-static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
+static_assert(GGML_OP_COUNT == 89, "GGML_OP_COUNT != 89");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5939,11 +5941,24 @@ struct ggml_tensor * ggml_format_name(struct ggml_tensor * tensor, const char * 
     return tensor;
 }
 
+static inline void ggml_format_name_fast(const char * name, const char * suffix, int suffix_len, char * new_name) {
+    int j = 0;
+    for (; j < GGML_MAX_NAME-1; ++j) {
+        new_name[j] = name[j];
+        if (!name[j]) break;
+    }
+    for (int k = 0; k < suffix_len && j < GGML_MAX_NAME-1; ++k) {
+        new_name[j++] = suffix[k];
+    }
+    new_name[j] = 0;
+}
+
 struct ggml_tensor * ggml_view_tensor(
         struct ggml_context * ctx,
         struct ggml_tensor  * src) {
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, src->type, GGML_MAX_DIMS, src->ne, src, 0);
-    ggml_format_name(result, "%s (view)", src->name);
+    //ggml_format_name(result, "%s (view)", src->name);
+    ggml_format_name_fast(src->name, " (view)", 7, result->name);
 
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         result->nb[i] = src->nb[i];
@@ -6099,6 +6114,31 @@ struct ggml_tensor * ggml_multi_add(
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = a;
     result->op_params[0] = n_experts;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_mul_multi_add(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+
+    bool is_node = false;
+
+    GGML_ASSERT(a->ne[1] == b->ne[1]);
+    GGML_ASSERT(a->ne[2] == b->ne[2]);
+    GGML_ASSERT(a->ne[3] == b->ne[3]);
+    GGML_ASSERT(a->ne[3] == 1);
+    GGML_ASSERT(b->ne[0] == 1);
+
+    int64_t ne[GGML_MAX_DIMS] = { a->ne[0], a->ne[2], 1, 1 };
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, ne);
+
+    result->op   = GGML_OP_MUL_MULTI_ADD;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = b;
 
     return result;
 }
@@ -7867,7 +7907,8 @@ static struct ggml_tensor * ggml_cpy_impl(
     if (strlen(b->name) > 0) {
         ggml_format_name(result, "%s (copy of %s)", b->name, a->name);
     } else {
-        ggml_format_name(result, "%s (copy)", a->name);
+        //ggml_format_name(result, "%s (copy)", a->name);
+        ggml_format_name_fast(a->name, " (copy)", 7, result->name);
     }
 
     result->op   = GGML_OP_CPY;
@@ -7892,7 +7933,8 @@ struct ggml_tensor * ggml_cast(
     bool is_node = false;
 
     struct ggml_tensor * result = ggml_new_tensor(ctx, type, GGML_MAX_DIMS, a->ne);
-    ggml_format_name(result, "%s (copy)", a->name);
+    //ggml_format_name(result, "%s (copy)", a->name);
+    ggml_format_name_fast(a->name, " (copy)", 7, result->name);
 
     result->op   = GGML_OP_CPY;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -7914,7 +7956,8 @@ static struct ggml_tensor * ggml_cont_impl(
     }
 
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
-    ggml_format_name(result, "%s (cont)", a->name);
+    //ggml_format_name(result, "%s (cont)", a->name);
+    ggml_format_name_fast(a->name, " (cont)", 7, result->name);
 
     result->op   = GGML_OP_CONT;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -7966,7 +8009,8 @@ struct ggml_tensor * ggml_cont_4d(
     bool is_node = false;
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ne0, ne1, ne2, ne3);
-    ggml_format_name(result, "%s (cont)", a->name);
+    //ggml_format_name(result, "%s (cont)", a->name);
+    ggml_format_name_fast(a->name, " (cont)", 7, result->name);
 
     result->op   = GGML_OP_CONT;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -7997,7 +8041,8 @@ struct ggml_tensor * ggml_reshape(
     }
 
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, GGML_MAX_DIMS, b->ne, a, 0);
-    ggml_format_name(result, "%s (reshaped)", a->name);
+    //ggml_format_name(result, "%s (reshaped)", a->name);
+    ggml_format_name_fast(a->name, " (reshaped)", 11, result->name);
 
     result->op   = GGML_OP_RESHAPE;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -8021,7 +8066,8 @@ struct ggml_tensor * ggml_reshape_1d(
 
     const int64_t ne[1] = { ne0 };
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 1, ne, a, 0);
-    ggml_format_name(result, "%s (reshaped)", a->name);
+    //ggml_format_name(result, "%s (reshaped)", a->name);
+    ggml_format_name_fast(a->name, " (reshaped)", 11, result->name);
 
     result->op   = GGML_OP_RESHAPE;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -8046,7 +8092,8 @@ struct ggml_tensor * ggml_reshape_2d(
 
     const int64_t ne[2] = { ne0, ne1 };
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 2, ne, a, 0);
-    ggml_format_name(result, "%s (reshaped)", a->name);
+    //ggml_format_name(result, "%s (reshaped)", a->name);
+    ggml_format_name_fast(a->name, " (reshaped)", 11, result->name);
 
     result->op   = GGML_OP_RESHAPE;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -8072,7 +8119,8 @@ struct ggml_tensor * ggml_reshape_3d(
 
     const int64_t ne[3] = { ne0, ne1, ne2 };
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 3, ne, a, 0);
-    ggml_format_name(result, "%s (reshaped)", a->name);
+    //ggml_format_name(result, "%s (reshaped)", a->name);
+    ggml_format_name_fast(a->name, " (reshaped)", 11, result->name);
 
     result->op   = GGML_OP_RESHAPE;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -8099,7 +8147,8 @@ struct ggml_tensor * ggml_reshape_4d(
 
     const int64_t ne[4] = { ne0, ne1, ne2, ne3 };
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 4, ne, a, 0);
-    ggml_format_name(result, "%s (reshaped)", a->name);
+    //ggml_format_name(result, "%s (reshaped)", a->name);
+    ggml_format_name_fast(a->name, " (reshaped)", 11, result->name);
 
     result->op   = GGML_OP_RESHAPE;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -8122,7 +8171,8 @@ static struct ggml_tensor * ggml_view_impl(
     }
 
     struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, n_dims, ne, a, offset);
-    ggml_format_name(result, "%s (view)", a->name);
+    //ggml_format_name(result, "%s (view)", a->name);
+    ggml_format_name_fast(a->name, " (view)", 7, result->name);
 
     ggml_set_op_params(result, &offset, sizeof(offset));
 
@@ -8243,7 +8293,8 @@ struct ggml_tensor * ggml_permute(
     }
 
     struct ggml_tensor * result = ggml_view_tensor(ctx, a);
-    ggml_format_name(result, "%s (permuted)", a->name);
+    //ggml_format_name(result, "%s (permuted)", a->name);
+    ggml_format_name_fast(a->name, " (permuted)", 11, result->name);
 
     int ne[GGML_MAX_DIMS];
     int nb[GGML_MAX_DIMS];
@@ -8290,7 +8341,8 @@ struct ggml_tensor * ggml_transpose(
     }
 
     struct ggml_tensor * result = ggml_view_tensor(ctx, a);
-    ggml_format_name(result, "%s (transposed)", a->name);
+    //ggml_format_name(result, "%s (transposed)", a->name);
+    ggml_format_name_fast(a->name, " (transposed)", 13, result->name);
 
     result->ne[0] = a->ne[1];
     result->ne[1] = a->ne[0];
@@ -9483,6 +9535,7 @@ struct ggml_tensor * ggml_top_k(
     GGML_ASSERT(a->ne[0] >= k);
 
     struct ggml_tensor * result = ggml_argsort(ctx, a, GGML_SORT_ORDER_DESC);
+    ggml_format_name_fast(a->name, " (sort)", 7, result->name);
     ggml_set_op_params_i32(result, 1, k);
 
     result = ggml_view_4d(ctx, result,
@@ -10412,7 +10465,8 @@ void ggml_set_param(
 
     GGML_ASSERT(tensor->grad == NULL);
     tensor->grad = ggml_dup_tensor(ctx, tensor);
-    ggml_format_name(tensor->grad, "%s (grad)", tensor->name);
+    //ggml_format_name(tensor->grad, "%s (grad)", tensor->name);
+    ggml_format_name_fast(tensor->name, " (grad)", 7, tensor->grad->name);
 }
 
 // ggml_compute_forward_dup
@@ -22319,6 +22373,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_multi_add(params, tensor);
             } break;
+        case GGML_OP_MUL_MULTI_ADD:
+            {
+                iqk_mul_multi_add(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_ACC:
             {
                 ggml_compute_forward_acc(params, tensor);
@@ -23154,6 +23212,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 GGML_ABORT("fatal error"); // TODO: implement
             }
         case GGML_OP_MULTI_ADD:
+            {
+                GGML_ABORT("fatal error"); // TODO: implement
+            }
+        case GGML_OP_MUL_MULTI_ADD:
             {
                 GGML_ABORT("fatal error"); // TODO: implement
             }
@@ -24241,6 +24303,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ADD1:
         case GGML_OP_ACC:
         case GGML_OP_MULTI_ADD:
+        case GGML_OP_MUL_MULTI_ADD:
             {
                 n_tasks = n_threads;
             } break;

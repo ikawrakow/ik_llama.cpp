@@ -619,6 +619,7 @@ extern "C" {
         GGML_OP_OUT_PROD,
         GGML_OP_FUSED_UP_GATE,
         GGML_OP_MOE_FUSED_UP_GATE,
+        GGML_OP_MUL_MULTI_ADD,
 
         GGML_OP_SCALE,
         GGML_OP_SET,
@@ -1082,6 +1083,11 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int n_experts);
+
+    GGML_API struct ggml_tensor * ggml_mul_multi_add(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b
