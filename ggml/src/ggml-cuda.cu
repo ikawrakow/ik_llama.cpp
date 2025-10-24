@@ -3034,6 +3034,15 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 src0_1->type, stream);
         CUDA_CHECK(cudaGetLastError());
 
+        if (src1->ne[1] == 1 && src0_1->type == src0_2->type) {
+            ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, src0_1, src1, nullptr, dst,
+                    dst->src[4], dst->src[5],
+                    (const char *)src0_1->data, (const char *)src0_2->data, (const float *)src1->data, src1_quantized.get(),
+                    (float *)dst->data, 0, src0_1->ne[1], 1, ne10_padded,
+                    (ggml_unary_op)dst->op_params[0], stream);
+            return;
+        }
+
         ggml_cuda_op_mul_mat_vec_q(ctx, src0_1, src1, dst, (const char *)src0_1->data, nullptr, src1_quantized.get(), dst_up.get(),
                 0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
         CUDA_CHECK(cudaGetLastError());
