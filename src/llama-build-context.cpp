@@ -50,6 +50,7 @@ llm_build_context::llm_build_context(
         fused_moe_up_gate(cparams.fused_moe_up_gate),
         grouped_expert_routing(cparams.grouped_expert_routing),
         fused_up_gate    (cparams.fused_up_gate),
+        fused_mmad       (cparams.fused_mmad),
         min_experts      (cparams.min_experts),
         thresh_experts   (cparams.thresh_experts),
         pooling_type     (cparams.pooling_type),
@@ -941,6 +942,11 @@ llm_expert_gating_func_type   gating_op,
     }
 
     if (!weight_before_ffn) {
+        if (lctx.cparams.fused_mmad) {
+            experts = ggml_mul_multi_add(ctx, experts, weights);
+            cb(experts, "ffn_moe_weighted", il);
+            return experts;
+        }
         experts = ggml_mul(ctx, experts, weights);
         cb(experts, "ffn_moe_weighted", il);
     }
