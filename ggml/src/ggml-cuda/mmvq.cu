@@ -145,7 +145,9 @@ static __device__ void mul_mat_vec_q(
 
 template <ggml_type type, int ncols_y, int nwarps>
 static __device__ void fused_mul_mat_vec_q(
-    const void * __restrict__ vup, const void * __restrict__ vgate, const void * __restrict__ vy, float * __restrict__ dst,
+    const void * __restrict__ vup, const void * __restrict__ vgate,
+    const float * __restrict__ bias_u, const float * __restrict__ bias_g,
+    const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst, ggml_unary_op unary_op) {
 
     constexpr int qk  = ggml_cuda_type_traits<type>::qk;
@@ -230,10 +232,19 @@ static __device__ void fused_mul_mat_vec_q(
                 case GGML_UNARY_OP_SILU: r = u*g/(1 + expf(-g)); break;
                 case GGML_UNARY_OP_RELU: r = fmaxf(g, 0.0f) * u; break;
                 // we assume that the supported ops have been checked by the caller
-                default: {
+                case GGML_UNARY_OP_GELU: {
                     constexpr float GELU_COEF_A    = 0.044715f;
                     constexpr float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
                     r = 0.5f*g*u*(1.0f + tanhf(SQRT_2_OVER_PI*g*(1.0f + GELU_COEF_A*g*g)));
+                } break;
+                default: {
+                  constexpr float alpha = 1.702f;
+                  constexpr float limit = 7.0f;
+                  g += bias_g[j*nrows_dst + row0 + threadIdx.x];
+                  u += bias_u[j*nrows_dst + row0 + threadIdx.x];
+                  g = fminf(g, limit);
+                  u = fmaxf(fminf(u, limit), -limit);
+                  r = g / (1.0f + expf(-g * alpha)) * (1.0f + u);
                 } break;
             }
             dst[j*nrows_dst + row0 + threadIdx.x] = r;
@@ -270,6 +281,7 @@ __launch_bounds__(nwarps*WARP_SIZE, 1)
 static __global__ void fused_mul_mat_vec_q(
     const void * __restrict__ vup, const void * __restrict__ vgate,
     const void * __restrict__ vy, float * __restrict__ dst, const char * __restrict__ ids_data,
+    const void * __restrict__ bias_u, const void * __restrict__ bias_g, const uint64_t bias_nb1,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst,
     const uint64_t nb02, const uint64_t nb12, const uint64_t nb2, const int64_t ids_nb0, ggml_unary_op unary_op) {
 
@@ -281,8 +293,10 @@ static __global__ void fused_mul_mat_vec_q(
     }
     const char * cx_u = (const char *)vup   + i02*nb02;
     const char * cx_g = (const char *)vgate + i02*nb02;
+    const float * cx_u_b = bias_u ? (const float *)((const char *)bias_u + i02*bias_nb1) : nullptr;
+    const float * cx_g_b = bias_g ? (const float *)((const char *)bias_g + i02*bias_nb1) : nullptr;
     const char * cy = (const char *)vy + i2*nb12;
-    fused_mul_mat_vec_q<type, ncols_y, nwarps>(cx_u, cx_g, cy, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst, unary_op);
+    fused_mul_mat_vec_q<type, ncols_y, nwarps>(cx_u, cx_g, cx_u_b, cx_g_b, cy, (float *)cdst, ncols_x, nrows_x, nrows_y, nrows_dst, unary_op);
 }
 
 template <ggml_type type, int nwarps>
@@ -304,42 +318,42 @@ static void mul_mat_vec_q_cuda_T(const mmvq_args & args, cudaStream_t stream) {
     switch (args.ncols_y) {
         case 1:
             fused_mul_mat_vec_q<type, 1, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data,
+                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.unary_op);
             break;
         case 2:
             fused_mul_mat_vec_q<type, 2, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data,
+                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.unary_op);
             break;
         case 3:
             fused_mul_mat_vec_q<type, 3, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data,
+                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.unary_op);
             break;
         case 4:
             fused_mul_mat_vec_q<type, 4, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data,
+                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.unary_op);
             break;
         case 5:
             fused_mul_mat_vec_q<type, 5, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data,
+                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.unary_op);
             break;
         case 6:
             fused_mul_mat_vec_q<type, 6, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data,
+                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.unary_op);
             break;
         case 7:
             fused_mul_mat_vec_q<type, 7, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data,
+                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.unary_op);
             break;
         case 8:
             fused_mul_mat_vec_q<type, 8, nwarps><<<block_nums, block_dims, 0, stream>>>(args.vx_u, args.vx_g, args.vy,
-                    args.dst, args.ids_data,
+                    args.dst, args.ids_data, args.bias_u, args.bias_g, args.bias_nb1,
                     args.ncols_x, args.nrows_x, args.nrows_y, args.nrows_dst, args.nb02, args.nb12, args.nb2, args.ids_nb0, args.unary_op);
             break;
         default:
@@ -492,8 +506,9 @@ static void mul_mat_vec_iq3_s_q8_1_cuda(const mmvq_args & args, cudaStream_t str
 
 static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggml_type type,
         const int64_t ne00, const int64_t ne0, const int64_t ne2,
-        const int64_t nb02, const int64_t nb12, const int64_t nb2, const int64_t ids_nb0,
+        const int64_t nb02, const int64_t nb12, const int64_t nb2, const int64_t ids_nb0, const int64_t bias_nb1,
         const char * src0_dd_u, const char * src0_dd_g, const char * src1_ddq_i, float * dst_dd_i, const char * ids_data,
+        const void * bias_u, const void * bias_g,
         const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
         const int64_t src1_padded_row_size, ggml_unary_op unary_op, cudaStream_t stream) {
 
@@ -524,6 +539,8 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
 //};
     mmvq_args args{/* vx_u     */ src0_dd_u,
                    /* vx_g     */ src0_dd_g,
+                   /* bias_u   */ bias_u,
+                   /* bias_g   */ bias_g,
                    /* vy       */ src1_ddq_i,
                    /* dst      */ dst_dd_i,
                    /* ids_data */ ids_data,
@@ -537,6 +554,7 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
                    /* nb12     */ uint64_t(nb12),
                    /* nb2      */ uint64_t(nb2),
                    /* ids_nb0  */ uint64_t(ids_nb0),
+                   /* bias_nb1 */ uint64_t(bias_nb1),
                    /* unary_op */ unary_op
     };
 
@@ -656,8 +674,8 @@ void ggml_cuda_op_mul_mat_vec_q_3D(
 
     ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
         ne00, ne0, dst->ne[2],
-        src0->nb[2], src1_row_size, dst->nb[2], 0,
-        src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, nullptr,
+        src0->nb[2], src1_row_size, dst->nb[2], 0, 0,
+        src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, nullptr, nullptr, nullptr,
         row_low, row_high, src1_ncols,
         src1_padded_row_size, GGML_UNARY_OP_COUNT, stream);
 
@@ -677,8 +695,8 @@ void ggml_cuda_op_mul_mat_vec_q(
     const int64_t ne0 = dst->ne[0];
 
     ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
-        ne00, ne0, 1, 0, 0, 0, 0,
-        src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, nullptr,
+        ne00, ne0, 1, 0, 0, 0, 0, 0,
+        src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, nullptr, nullptr, nullptr,
         row_low, row_high, src1_ncols,
         src1_padded_row_size, GGML_UNARY_OP_COUNT, stream);
 
@@ -703,8 +721,8 @@ void ggml_cuda_op_mul_mat_vec_q_id(
 
     ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
         ne00, ne0, dst->ne[2],
-        src0->nb[2], src1->nb[2], dst->nb[2], ids->nb[0],
-        src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, (const char *)ids->data,
+        src0->nb[2], src1->nb[2], dst->nb[2], ids->nb[0], 0,
+        src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, (const char *)ids->data, nullptr, nullptr,
         row_low, row_high, src1_ncols,
         src1_padded_row_size, GGML_UNARY_OP_COUNT, stream);
 
@@ -713,13 +731,23 @@ void ggml_cuda_op_mul_mat_vec_q_id(
 
 void ggml_cuda_op_fused_mul_mat_vec_q_id(ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+    const ggml_tensor * bias_u, const ggml_tensor * bias_g,
     const char * src0_dd_u, const char * src0_dd_g, const float * src1_ddf_i,
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
     const int64_t src1_padded_row_size, ggml_unary_op unary_op, cudaStream_t stream) {
 
-    GGML_ASSERT(unary_op == GGML_UNARY_OP_SILU ||
-                unary_op == GGML_UNARY_OP_RELU ||
-                unary_op == GGML_UNARY_OP_GELU);
+    if (!bias_u && !bias_g) {
+        GGML_ASSERT(unary_op == GGML_UNARY_OP_SILU ||
+                    unary_op == GGML_UNARY_OP_RELU ||
+                    unary_op == GGML_UNARY_OP_GELU);
+    } else {
+        GGML_ASSERT(unary_op == GGML_UNARY_OP_SWIGLU_OAI);
+        GGML_ASSERT(bias_u && bias_g);
+        GGML_ASSERT(bias_u->data && bias_g->data);
+        GGML_ASSERT(bias_u->nb[1] == bias_g->nb[1]);
+        GGML_ASSERT(bias_u->ne[0] == dst->ne[0]);
+        GGML_ASSERT(bias_g->ne[0] == dst->ne[0]);
+    }
     GGML_ASSERT(src0_dd_u && src0_dd_g && ids && ids->data);
 
     const int64_t ne00 = src0->ne[0];
@@ -733,8 +761,9 @@ void ggml_cuda_op_fused_mul_mat_vec_q_id(ggml_backend_cuda_context & ctx,
 
     ggml_cuda_op_mul_mat_vec_q_impl(ctx, src0->type,
         ne00, ne0, dst->ne[2],
-        src0->nb[2], src1->nb[2], dst->nb[2], ids->nb[0],
+        src0->nb[2], src1->nb[2], dst->nb[2], ids->nb[0], bias_u ? bias_u->nb[1] : 0,
         src0_dd_u, src0_dd_g, src1_ddq_i, dst_dd_i, (const char *)ids->data,
+        bias_u ? bias_u->data : nullptr, bias_g ? bias_g->data : nullptr,
         row_low, row_high, src1_ncols,
         src1_padded_row_size, unary_op, stream);
 
