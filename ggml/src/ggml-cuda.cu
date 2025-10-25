@@ -2660,7 +2660,7 @@ static bool ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_te
             ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, src0_1, &local_src1, ids, the_destination,
                     dst->src[4], dst->src[5],
                     (const char *)src0_1->data, (const char *)src0_2->data, (const float *)src1->data, src1_quantized.get(),
-                    (float *)dst_gate_contiguous.get(),
+                    (float *)local_dst.data,
                     0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, stream);
             CUDA_CHECK(cudaGetLastError());
 
