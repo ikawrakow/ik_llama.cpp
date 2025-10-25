@@ -230,10 +230,10 @@ struct gpt_params {
     bool multiline_input   = false; // reverse the usage of `\`
     bool simple_io         = false; // improves compatibility with subprocesses and limited consoles
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
-    bool flash_attn        = false; // flash attention
+    bool flash_attn        = true;  // flash attention
     int  mla_attn          = 0;     // MLA 0: standard attention, 1: MLA with K and transposed V cache, 2: MLA with just K cache
     int  attn_max_batch    = 0;     // Max batch size to use when computing attention (only applicable if flash_attn = false)
-    bool fused_moe_up_gate = false; // fused up*unary(gate) op for MoE models
+    bool fused_moe_up_gate = true;  // fused up*unary(gate) op for MoE models
     bool fused_up_gate     = true;  // fused up*unary(gate) op
     bool fused_mmad        = true;  // fused mul+multi_add op
     bool grouped_expert_routing = false; // if to use grouped expert routing (BailingMoeV2 arch)
