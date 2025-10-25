@@ -264,6 +264,7 @@ struct llama_model {
     int n_gpu_layers;
 
     std::vector<std::string> rpc_servers;
+    std::vector<int32_t> devices;
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
