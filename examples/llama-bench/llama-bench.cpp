@@ -260,7 +260,7 @@ struct cmd_params {
     bool verbose;
     bool warmup;
     bool repack = false;
-    bool fmoe = false;
+    bool fmoe = true;
     bool ger = false;     // ger = Grouped Expert Routing
     bool no_fug = false;
     bool use_thp = false;
@@ -298,7 +298,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* warmup               */ true,
     /* repack               */ false,
-    /* fmoe                 */ false,
+    /* fmoe                 */ true,
     /* ger                  */ false,
     /* no_fug               */ false,
     /* use_thp              */ false,
@@ -846,7 +846,7 @@ struct cmd_params_instance {
     bool use_mmap;
     bool embeddings;
     bool repack = false;
-    bool fmoe = false;
+    bool fmoe = true;
     bool ger = false;
     bool no_fug = false;
     bool use_thp = false;
