@@ -3753,7 +3753,7 @@ struct llama_context_params llama_context_default_params() {
         /*.flash_attn                  =*/ false,
         /*.mla_attn                    =*/ 0,
         /*.attn_max_batch              =*/ 0,
-        /*.fused_moe_up_gate           =*/ false,
+        /*.fused_moe_up_gate           =*/ true,
         /*.grouped_expert_routing      =*/ false,
         /*.fused_up_gate               =*/ true,
         /*.fused_mmad                  =*/ true,
