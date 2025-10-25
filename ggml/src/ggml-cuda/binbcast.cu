@@ -313,7 +313,25 @@ void ggml_cuda_op_repeat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(&aux_dst, &aux_src, &aux_dst, nullptr, dst->src[0]->data, dst->data, ctx.stream());
 }
 
+static __global__ void k_fast_add(int64_t ne0, int64_t nelem, const float * x, const float * y, float * z) {
+    int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    z[i] = x[i] + y[i % ne0];
+}
+
 void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    if (ggml_nrows(dst->src[1]) == 1 && dst->src[0]->ne[0] == dst->src[1]->ne[0] &&
+        dst->type == GGML_TYPE_F32 && dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_F32 &&
+        ggml_are_same_shape(dst, dst->src[0]) && ggml_is_contiguous(dst)) {
+        constexpr int kBlockSize = 256;
+        auto nelem = ggml_nelements(dst);
+        int nblocks = (nelem + kBlockSize - 1)/kBlockSize;
+        k_fast_add<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
+        return;
+    }
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_add>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());
 }
 

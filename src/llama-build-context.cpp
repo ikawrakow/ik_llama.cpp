@@ -1240,14 +1240,17 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
     if (bq) {
         Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
         cb(Qcur, "Qcur", il);
+        ggml_build_forward_expand(gf, Qcur);
     }
     if (bk) {
         Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
         cb(Kcur, "Kcur", il);
+        ggml_build_forward_expand(gf, Kcur);
     }
     if (bv) {
         Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
         cb(Vcur, "Vcur", il);
+        ggml_build_forward_expand(gf, Vcur);
     }
     return {Qcur, Kcur, Vcur};
 }
