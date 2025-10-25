@@ -285,7 +285,7 @@ static const cmd_params cmd_params_defaults = {
     /* split_mode           */ {LLAMA_SPLIT_MODE_LAYER},
     /* main_gpu             */ {0},
     /* no_kv_offload        */ {false},
-    /* flash_attn           */ {false},
+    /* flash_attn           */ {true},
     /* mla_attn             */ {0},
     /* attn_max_batch       */ {0},
     /* ser                  */ {{-1,0.0f}},
