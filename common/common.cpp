@@ -214,21 +214,11 @@ static std::string read_file(const std::string& fname) {
     return content;
 }
 
-static std::vector<std::string> parse_device_list(const std::string& value) {
-    std::vector<std::string> devices;
-    auto dev_names = string_split<std::string>(value, ',');
-    if (dev_names.empty()) {
+static std::string parse_device_list(std::string& value) {
+    if (value=="") {
         throw std::invalid_argument("no devices specified");
     }
-    if (dev_names.size() == 1 && dev_names[0] == "none") {
-        devices.push_back("none");
-    }
-    else {
-        for (const auto& device : dev_names) {
-            devices.push_back(device);
-        }
-    }
-    return devices;
+    return value;
 }
 
 //
@@ -2705,12 +2695,8 @@ void llama_lora_adapters_apply(struct llama_context * ctx, std::vector<llama_lor
 
 struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & params) {
     auto mparams = llama_model_default_params();
-    if (!params.devices.empty()) {
-        std::string devices = string_join(params.devices, ",");
-        mparams.devices = strdup(devices.c_str());
-    } else {
-        mparams.devices = "";
-    }
+    mparams.devices = params.devices.c_str(); 
+
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
     }

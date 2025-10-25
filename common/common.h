@@ -118,8 +118,8 @@ struct model_paths {
 };
 
 struct gpt_params {
-    std::vector<std::string> devices;
-    std::vector<std::string> devices_draft;
+    std::string devices;
+    std::string devices_draft;
 
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 

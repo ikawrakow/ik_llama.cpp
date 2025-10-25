@@ -1554,14 +1554,13 @@ ggml_backend_t llama_context::ggml_backend_by_name(const char* name) {
     return nullptr;
 }
 
-static bool item_in_list(std::vector<std::string> devices, const char* name) {
-    bool found = false;
-    for (auto device : devices) {
+static bool item_in_list(const std::vector<std::string>& devices, const char* name) {
+    for (auto& device : devices) {
         if (striequals(device.c_str(), name)) {
-            found = true;
+            return true;
         }
     }
-    return found;
+    return false;
 }
 
 static void ggml_backend_add_from_device(llama_context* ctx, ggml_backend_t backend) {
@@ -3935,7 +3934,7 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
-static int32_t find_device_idx(std::string str) {
+static int32_t find_device_idx(const std::string& str) {
     std::regex pattern(R"((\d+)$)");  // Match digits at the end
     std::smatch matches;
     int number = -1;
