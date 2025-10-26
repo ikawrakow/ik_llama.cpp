@@ -214,7 +214,7 @@ static std::string read_file(const std::string& fname) {
     return content;
 }
 
-static std::string parse_device_list(std::string& value) {
+static std::string parse_device_list(const std::string& value) {
     if (value==" " || value.find("-")!= std::string::npos) {
         throw std::invalid_argument("no devices specified");
     }
