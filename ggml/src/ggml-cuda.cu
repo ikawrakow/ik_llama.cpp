@@ -2064,25 +2064,7 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
 static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
         const ggml_cgraph * cgraph, int node_n, bool is_gemv) {
 
-    //if (cgraph && node_n + 6 < cgraph->n_nodes) {
-    //    printf("=== %s\n", __func__);
-    //    for (int i = 0; i <= 6; ++i) printf("%d: %s(%s)\n", i, ggml_op_name(cgraph->nodes[node_n+i]->op), cgraph->nodes[node_n+i]->name);
-    //}
     auto stream = ctx.stream();
-
-    //if (cgraph && node_n + 5 < cgraph->n_nodes &&
-    //    cgraph->nodes[node_n+1]->op == GGML_OP_MUL_MAT &&
-    //    cgraph->nodes[node_n+2]->op == GGML_OP_MUL_MAT &&
-    //    cgraph->nodes[node_n+3]->op == GGML_OP_ADD &&
-    //    cgraph->nodes[node_n+4]->op == GGML_OP_ADD &&
-    //    cgraph->nodes[node_n+5]->op == GGML_OP_ADD &&
-    //    cgraph->nodes[node_n+0] == cgraph->nodes[node_n+3]->src[0] &&
-    //    cgraph->nodes[node_n+1] == cgraph->nodes[node_n+4]->src[0] &&
-    //    cgraph->nodes[node_n+2] == cgraph->nodes[node_n+5]->src[0]) {
-    //    printf("Could process mulmat(%s) + mulmat(%s) + mulmat(%s) + add(%s) + add(%s) + add(%s)\n",
-    //            cgraph->nodes[node_n+0]->name, cgraph->nodes[node_n+1]->name, cgraph->nodes[node_n+2]->name,
-    //            cgraph->nodes[node_n+3]->name, cgraph->nodes[node_n+4]->name, cgraph->nodes[node_n+5]->name);
-    //}
 
     auto ne10_padded = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
     auto nb10_padded = ne10_padded*sizeof(block_q8_1)/QK8_1;
@@ -2096,6 +2078,8 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                 src0->type, stream);
         CUDA_CHECK(cudaGetLastError());
 
+        // The code below handles the case when Q, K, V have a bias applied after the resepctive matrix multiplication.
+        // In that case the graph contains mul_mat(Q) -> mul_mat(K) -> mul_mat(V) -> add(Q) -> add(K) -> add(V)
         if (cgraph && node_n + 5 < cgraph->n_nodes &&
             cgraph->nodes[node_n+1]->op == GGML_OP_MUL_MAT &&
             cgraph->nodes[node_n+2]->op == GGML_OP_MUL_MAT &&
@@ -2107,19 +2091,24 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
             cgraph->nodes[node_n+0] == cgraph->nodes[node_n+3]->src[0] &&
             cgraph->nodes[node_n+1] == cgraph->nodes[node_n+4]->src[0] &&
             cgraph->nodes[node_n+2] == cgraph->nodes[node_n+5]->src[0]) {
-            //printf("Processing mulmat(%s) + mulmat(%s) + mulmat(%s) + add(%s) + add(%s) + add(%s)\n",
-            //        cgraph->nodes[node_n+0]->name, cgraph->nodes[node_n+1]->name, cgraph->nodes[node_n+2]->name,
-            //        cgraph->nodes[node_n+3]->name, cgraph->nodes[node_n+4]->name, cgraph->nodes[node_n+5]->name);
             for (int i = 0; i < 3; ++i) {
                 auto src0_i = cgraph->nodes[node_n+i]->src[0];
-                //printf("  using %s(%s) with %s, %s\n", ggml_op_name(cgraph->nodes[node_n+i+3]->op), cgraph->nodes[node_n+i+3]->name,
-                //        cgraph->nodes[node_n+i+3]->src[0]->name, cgraph->nodes[node_n+i+3]->src[1]->name);
                 ggml_cuda_op_mul_mat_vec_q_biased(ctx, src0_i, src1, cgraph->nodes[node_n+i], cgraph->nodes[node_n+i+3]->src[1],
                         (const char *)src0_i->data, nullptr, src1_quantized.get(), (float *)cgraph->nodes[node_n+i]->data,
                         0, src0_i->ne[1], src1->ne[1], ne10_padded, stream);
                 CUDA_CHECK(cudaGetLastError());
             }
             node_n += 5;
+        } else if (cgraph && node_n + 1 < cgraph->n_nodes &&
+                   cgraph->nodes[node_n+1]->op == GGML_OP_ADD &&
+                   dst == cgraph->nodes[node_n+1]->src[0] &&
+                   dst->ne[0] == cgraph->nodes[node_n+1]->src[1]->ne[0] &&
+                   cgraph->nodes[node_n+1]->src[1]->type == GGML_TYPE_F32) {
+            // We have a bias applied after the matrix multiplication and we can fuse it
+            ggml_cuda_op_mul_mat_vec_q_biased(ctx, dst->src[0], src1, cgraph->nodes[node_n+1], cgraph->nodes[node_n+1]->src[1],
+                 (const char *)dst->src[0]->data, nullptr, src1_quantized.get(), (float *)cgraph->nodes[node_n+1]->data,
+                 0, dst->src[0]->ne[1], src1->ne[1], ne10_padded, stream);
+            ++node_n;
         } else {
             ggml_cuda_op_mul_mat_vec_q(ctx, src0, src1, dst, (const char *)src0->data, nullptr, src1_quantized.get(), (float *)dst->data,
                     0, src0->ne[1], src1->ne[1], ne10_padded, stream);
@@ -2145,8 +2134,20 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
         if (dst->op != GGML_OP_MUL_MAT || dst->src[1] != src1 || !ggml_is_quantized(dst->src[0]->type)) break;
         if (!is_gemv && mmq_get_q8_1_ds_layout(src0->type) != mmq_get_q8_1_ds_layout(dst->src[0]->type)) break;
         if (is_gemv) {
-            ggml_cuda_op_mul_mat_vec_q(ctx, dst->src[0], src1, dst, (const char *)dst->src[0]->data, nullptr, src1_quantized.get(),
-                    (float *)dst->data, 0, dst->src[0]->ne[1], src1->ne[1], ne10_padded, stream);
+            if (node_n + 1 < cgraph->n_nodes &&
+                cgraph->nodes[node_n+1]->op == GGML_OP_ADD &&
+                dst == cgraph->nodes[node_n+1]->src[0] &&
+                dst->ne[0] == cgraph->nodes[node_n+1]->src[1]->ne[0] &&
+                cgraph->nodes[node_n+1]->src[1]->type == GGML_TYPE_F32) {
+                // We have a bias applied after the matrix multiplication and we can fuse it
+                ggml_cuda_op_mul_mat_vec_q_biased(ctx, dst->src[0], src1, cgraph->nodes[node_n+1], cgraph->nodes[node_n+1]->src[1],
+                        (const char *)dst->src[0]->data, nullptr, src1_quantized.get(), (float *)cgraph->nodes[node_n+1]->data,
+                        0, dst->src[0]->ne[1], src1->ne[1], ne10_padded, stream);
+                ++node_n;
+            } else {
+                ggml_cuda_op_mul_mat_vec_q(ctx, dst->src[0], src1, dst, (const char *)dst->src[0]->data, nullptr, src1_quantized.get(),
+                        (float *)dst->data, 0, dst->src[0]->ne[1], src1->ne[1], ne10_padded, stream);
+            }
         } else {
             ggml_cuda_op_mul_mat_q(ctx, dst->src[0], src1, dst, (const char *)dst->src[0]->data, nullptr, src1_quantized.get(),
                     (float *)dst->data, 0, dst->src[0]->ne[1], src1->ne[1], ne10_padded, stream);
