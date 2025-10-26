@@ -2565,19 +2565,11 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 ggml_backend_buffer_is_cuda(next->buffer) &&
                 ((ggml_backend_cuda_buffer_context *)next->buffer->context)->device == device_id;
 
-            auto the_destination = dst;
-            ggml_cuda_pool_alloc<char> dst_gate_contiguous(ctx.pool());
-            if (fuse_next) {
-                dst_gate_contiguous.alloc(sizeof(float)*dst->ne[0]*n_ids);
-                local_dst.data = dst_gate_contiguous.get();
-                the_destination = &local_dst;
-            }
             auto unary_op = (ggml_unary_op)dst->op_params[0];
-            ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, src0_1, &local_src1, ids, the_destination,
+            ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, src0_1, &local_src1, ids, &local_dst,
                     dst->src[4], dst->src[5],
                     (const char *)src0_1->data, (const char *)src0_2->data, (const float *)src1->data, src1_quantized.get(),
-                    (float *)dst_gate_contiguous.get(),
-                    0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, stream);
+                    (float *)local_dst.data, 0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, stream);
             CUDA_CHECK(cudaGetLastError());
 
             if (!fuse_next) return i;
@@ -2587,7 +2579,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             auto dst_row_size = dst_padded_col_size*sizeof(block_q8_1)/QK8_1;
             auto dst_ddq_size = n_ids*dst_row_size;
             ggml_cuda_pool_alloc<char> dst_quantized(ctx.pool(), dst_ddq_size);
-            quantize_row_q8_1_cuda((const float *)dst_gate_contiguous.get(), (void *)dst_quantized.get(), dst->ne[0], n_ids, 1,
+            quantize_row_q8_1_cuda((const float *)local_dst.data, (void *)dst_quantized.get(), dst->ne[0], n_ids, 1,
                     dst_padded_col_size, next->src[0]->type, stream);
             CUDA_CHECK(cudaGetLastError());
 
@@ -2611,9 +2603,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 graph->nodes[i+2]->op == GGML_OP_ADD_ID &&
                 graph->nodes[i+2]->src[0] == next &&
                 graph->nodes[i+2]->src[2] == ids) {
-                //auto bias = graph->nodes[i+2]->src[1];
-                //printf("Fusing bias: ids: %ld x %ld x %ld x %ld, bias: %ld x %ld x %ld x %ld\n",
-                //        ids->ne[0], ids->ne[2], ids->ne[2], ids->ne[3], bias->ne[0], bias->ne[1], bias->ne[2], bias->ne[3]);
                 ggml_cuda_op_mul_mat_vec_q_id(ctx, &local_src0, &local_src1, ids, &local_next, graph->nodes[i+2]->src[1],
                         (const char *)next->src[0]->data, nullptr, dst_quantized.get(), (float *)graph->nodes[i+2]->data,
                         0, next->src[0]->ne[1], 1, dst_padded_col_size, stream);
