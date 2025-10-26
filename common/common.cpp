@@ -994,8 +994,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cont_batching = false;
         return true;
     }
-    if (arg == "-fa" || arg == "--flash-attn") {
-        params.flash_attn = true;
+    if (arg == "-no-fa" || arg == "--no-flash-attn") {
+        params.flash_attn = false;
         return true;
     }
     if (arg == "-mla" || arg == "--mla-use") {
@@ -1008,8 +1008,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.attn_max_batch = std::stoi(argv[i]);
         return true;
     }
-    if (arg == "-fmoe" || arg == "--fused-moe") {
-        params.fused_moe_up_gate = true;
+    if (arg == "-no-fmoe" || arg == "--no-fused-moe") {
+        params.fused_moe_up_gate = false;
         return true;
     }
     if (arg == "-ger" || arg == "--grouped-expert-routing") {
@@ -1804,10 +1804,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-ub,   --ubatch-size N",        "physical maximum batch size (default: %d)", params.n_ubatch });
     options.push_back({ "*",           "       --keep N",               "number of tokens to keep from the initial prompt (default: %d, -1 = all)", params.n_keep });
     options.push_back({ "*",           "       --chunks N",             "max number of chunks to process (default: %d, -1 = all)", params.n_chunks });
-    options.push_back({ "*",           "-fa,   --flash-attn",           "enable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-fa, --no-flash-attn",       "disable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
-    options.push_back({ "*",           "-fmoe, --fused-moe",            "enable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-ger,  --grouped-expert-routing", "enable grouped expert routing (default: %s)", params.grouped_expert_routing ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disaable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disaable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
