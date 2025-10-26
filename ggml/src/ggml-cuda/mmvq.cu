@@ -167,13 +167,6 @@ void ggml_cuda_op_mul_mat_vec_q_3D(
 
     GGML_UNUSED(src1_ddf_i);
 }
-//static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggml_type type,
-//        const int64_t ne00, const int64_t ne0, const int64_t ne2,
-//        const int64_t nb02, const int64_t nb12, const int64_t nb2, const int64_t ids_nb0, const int64_t bias_nb1,
-//        const char * src0_dd_u, const char * src0_dd_g, const char * src1_ddq_i, float * dst_dd_i, const char * ids_data,
-//        const void * bias_u, const void * bias_g,
-//        const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
-//        const int64_t src1_padded_row_size, ggml_unary_op unary_op, cudaStream_t stream) {
 
 void ggml_cuda_op_mul_mat_vec_q_biased(
     ggml_backend_cuda_context & ctx,
