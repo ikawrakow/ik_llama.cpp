@@ -126,6 +126,9 @@ struct model_paths {
 };
 
 struct gpt_params {
+    std::string devices;
+    std::string devices_draft;
+
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 
     int32_t n_threads             = cpu_get_num_math();
@@ -192,6 +195,7 @@ struct gpt_params {
     std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding
     std::string logits_file          = ""; // file for saving *all* logits
     std::string rpc_servers          = ""; // comma separated list of RPC servers
+
 
     std::vector<std::string> in_files;   // all input files
     std::vector<std::string> antiprompt; // strings upon which more user input is prompted (a.k.a. reverse prompts)
@@ -439,6 +443,7 @@ bool fs_create_directory_with_parents(const std::string & path);
 
 std::string fs_get_cache_directory();
 std::string fs_get_cache_file(const std::string & filename);
+
 
 //
 // Model utils

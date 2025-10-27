@@ -71,6 +71,7 @@ int main(int argc, char ** argv) {
     ctx_tgt = llama_init_tgt.context;
 
     // load the draft model
+    params.devices = params.devices_draft;
     params.model = params.model_draft;
     params.n_gpu_layers = params.n_gpu_layers_draft;
     if (params.n_threads_draft > 0) {
