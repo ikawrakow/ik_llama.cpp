@@ -109,6 +109,14 @@ enum common_reasoning_format {
     COMMON_REASONING_FORMAT_DEEPSEEK,        // Extract thinking tag contents and return as `message.reasoning_content`, including in streaming deltas.
 };
 
+enum common_webui {
+    COMMON_WEBUI_NONE,
+    COMMON_WEBUI_AUTO,
+    COMMON_WEBUI_LLAMACPP,  
+};
+
+common_webui common_webui_from_name(const std::string& format);
+
 struct model_paths {
     std::string path        = ""; // model local path                                       // NOLINT
     std::string url         = ""; // model url to download                                  // NOLINT
@@ -288,7 +296,7 @@ struct gpt_params {
     bool use_jinja = false;                                                                                 // NOLINT
     std::string system_prompt = "";
     bool enable_chat_template = true;
-    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int reasoning_budget = -1;
     bool prefill_assistant = true;
 
@@ -300,8 +308,8 @@ struct gpt_params {
     std::map<std::string, std::string> default_template_kwargs;
 
     // "advanced" endpoints are disabled by default for better security
-    bool webui            = true;
-    bool endpoint_slots   = false;
+    common_webui webui = COMMON_WEBUI_AUTO;
+    bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
 
