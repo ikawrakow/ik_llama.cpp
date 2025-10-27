@@ -1146,6 +1146,7 @@ struct server_context {
 
     bool clean_kv_cache = true;
     bool add_bos_token  = true;
+    bool has_eos_token  = false;
 
     // For speculative decoding
     llama_model * model_draft = nullptr;
@@ -1232,7 +1233,7 @@ struct server_context {
         n_ctx = llama_n_ctx(ctx);
 
         add_bos_token = llama_should_add_bos_token(model);
-        GGML_ASSERT(llama_add_eos_token(model) != 1);
+        has_eos_token = llama_add_eos_token(model) != 1;
 
         chat_templates = common_chat_templates_init(model, params.chat_template);
         try {
@@ -1349,13 +1350,13 @@ struct server_context {
         default_generation_settings_for_props = get_formated_generation(slots.front());
         default_generation_settings_for_props["seed"] = -1;
 
-        // the update_slots() logic will always submit a maximum of n_batch tokens
+        // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
         // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
         {
             const int32_t n_batch = llama_n_batch(ctx);
 
             // only a single seq_id per token is needed
-            batch = llama_batch_init(n_batch, 0, 1);
+            batch = llama_batch_init(std::max(n_batch, params.n_parallel), 0, 1);
         }
 
         metrics.init();
@@ -1783,7 +1784,7 @@ struct server_context {
         {
             slot.sparams.logit_bias.clear();
 
-            if (json_value(data, "ignore_eos", false)) {
+            if (json_value(data, "ignore_eos", false) && has_eos_token) {
                 slot.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
             }
 
@@ -1888,28 +1889,19 @@ struct server_context {
         if (!system_prompt.empty()) {
             system_tokens = ::llama_tokenize(ctx, system_prompt, true);
 
-            llama_batch_clear(batch);
-
-            for (int i = 0; i < (int)system_tokens.size(); ++i) {
-                llama_batch_add(batch, system_tokens[i], i, { 0 }, false);
-            }
-
             const int32_t n_batch = llama_n_batch(ctx);
+            const int32_t n_tokens_prompt = system_tokens.size();
 
-            for (int32_t i = 0; i < batch.n_tokens; i += n_batch) {
-                const int32_t n_tokens = std::min(params.n_batch, batch.n_tokens - i);
-                llama_batch batch_view = {
-                    n_tokens,
-                    batch.token    + i,
-                    nullptr,
-                    batch.pos      + i,
-                    batch.n_seq_id + i,
-                    batch.seq_id   + i,
-                    batch.logits   + i,
-                    0, 0, 0, // unused
-                };
+            for (int32_t i = 0; i < n_tokens_prompt; i += n_batch) {
+                const int32_t n_tokens = std::min(n_batch, n_tokens_prompt - i);
 
-                if (llama_decode(ctx, batch_view) != 0) {
+                llama_batch_clear(batch);
+
+                for (int32_t j = 0; j < n_tokens; ++j) {
+                    llama_batch_add(batch, system_tokens[i + j], i + j, { 0 }, false);
+                }
+
+                if (llama_decode(ctx, batch) != 0) {
                     LOG_ERROR("llama_decode() failed", {});
                     return;
                 }
@@ -2113,7 +2105,7 @@ struct server_context {
 
         return json {
             {"n_ctx",                     slot.n_ctx},
-            {"n_predict",                 slot.n_predict},
+            {"n_predict",                 slot.n_predict},     // Server configured n_predict
             {"model",                     params.model_alias},
             {"seed",                      slot.sparams.seed},
             {"temperature",               slot.sparams.temp},
@@ -2140,7 +2132,7 @@ struct server_context {
             {"mirostat_eta",              slot.sparams.mirostat_eta},
             {"penalize_nl",               slot.sparams.penalize_nl},
             {"stop",                      slot.params.antiprompt},
-            {"n_predict",                 slot.params.n_predict}, // TODO: fix duplicate key n_predict
+            {"max_tokens",                slot.params.n_predict}, // User configured n_predict
             {"n_keep",                    slot.params.n_keep},
             {"n_discard",                 slot.params.n_discard},
             {"ignore_eos",                ignore_eos},
@@ -2672,6 +2664,8 @@ struct server_context {
                     llama_lora_adapters_apply(ctx, lora_adapters);
                     server_task_result result;
                     result.id = task.id;
+                    result.stop = true;
+                    result.error = false;
                     result.data = json{{ "success", true }};
                     queue_results.send(result);
                 } break;
@@ -3617,6 +3611,9 @@ int main(int argc, char ** argv) {
         gpt_params_print_usage(argc, argv, params);
         return 1;
     }
+
+    // parse arguments from environment variables
+    gpt_params_parse_from_env(params);
 
     // TODO: not great to use extern vars
     server_log_json = params.log_json;
