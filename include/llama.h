@@ -342,6 +342,9 @@ extern "C" {
     };
 
     struct llama_model_params {
+        // comma separated list of devices to use for offloading
+        const char* devices;
+
         int32_t n_gpu_layers; // number of layers to store in VRAM
         int32_t mla;          // MLA implementation to use (only applicable to DeepSeek models at this point)
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
