@@ -203,6 +203,20 @@ int32_t cpu_get_num_math() {
 //
 // Arg utils
 //
+common_webui common_webui_from_name(const std::string& format) {
+    if (format == "none") {
+        return COMMON_WEBUI_NONE;
+    }
+    else if (format == "auto") {
+        return COMMON_WEBUI_AUTO;
+    }
+    else if (format == "llamacpp") {
+        return COMMON_WEBUI_LLAMACPP;
+    }
+    else {
+        return COMMON_WEBUI_AUTO;
+    }
+}
 
 static std::string read_file(const std::string& fname) {
     std::ifstream file(fname);
@@ -1440,6 +1454,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.public_path = argv[i];
         return true;
     }
+    if (arg == "--webui") {
+        CHECK_ARG
+        params.webui = common_webui_from_name(std::string(argv[i]));
+        return true;
+    }
     if (arg == "--api-key") {
         CHECK_ARG
         params.api_keys.push_back(argv[i]);
@@ -1911,6 +1930,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                  "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
                         "- none: leaves thoughts unparsed in `message.content`\n"
                         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
+                        "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
                         "(default: none)", });
     options.push_back({ "main",      "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
     options.push_back({ "main",      "       --reasoning-budget N",  "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)" });
@@ -2075,6 +2095,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "server",      "       --port PORT",            "port to listen (default: %d)", params.port });
     options.push_back({ "server",      "       --path PATH",            "path to serve static files from (default: %s)", params.public_path.c_str() });
     options.push_back({ "server",      "       --embedding(s)",         "restrict to only support embedding use case; use only with dedicated embedding models (default: %s)", params.embedding ? "enabled" : "disabled" });
+    options.push_back({ "server",        "       --webui NAME",
+                                                             "controls which webui to server:\n"
+                                                            "- none: disable webui\n"
+                                                            "- auto: default webui \n"
+                                                            "- llamacpp: llamacpp webui \n"
+                                                            "(default: auto)", });
     options.push_back({ "server",      "       --api-key KEY",          "API key to use for authentication (default: none)" });
     options.push_back({ "server",      "       --api-key-file FNAME",   "path to file containing API keys (default: none)" });
     options.push_back({ "server",      "       --ssl-key-file FNAME",   "path to file a PEM-encoded SSL private key" });
