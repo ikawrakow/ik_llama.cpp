@@ -2103,7 +2103,8 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                    cgraph->nodes[node_n+1]->op == GGML_OP_ADD &&
                    dst == cgraph->nodes[node_n+1]->src[0] &&
                    dst->ne[0] == cgraph->nodes[node_n+1]->src[1]->ne[0] &&
-                   cgraph->nodes[node_n+1]->src[1]->type == GGML_TYPE_F32) {
+                   cgraph->nodes[node_n+1]->src[1]->type == GGML_TYPE_F32 &&
+                   ggml_nrows(cgraph->nodes[node_n+1]->src[1]) == 1) {
             // We have a bias applied after the matrix multiplication and we can fuse it
             ggml_cuda_op_mul_mat_vec_q_biased(ctx, dst->src[0], src1, cgraph->nodes[node_n+1], cgraph->nodes[node_n+1]->src[1],
                  (const char *)dst->src[0]->data, nullptr, src1_quantized.get(), (float *)cgraph->nodes[node_n+1]->data,
@@ -2138,7 +2139,8 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                 cgraph->nodes[node_n+1]->op == GGML_OP_ADD &&
                 dst == cgraph->nodes[node_n+1]->src[0] &&
                 dst->ne[0] == cgraph->nodes[node_n+1]->src[1]->ne[0] &&
-                cgraph->nodes[node_n+1]->src[1]->type == GGML_TYPE_F32) {
+                cgraph->nodes[node_n+1]->src[1]->type == GGML_TYPE_F32 &&
+                ggml_nrows(cgraph->nodes[node_n+1]->src[1]) == 1) {
                 // We have a bias applied after the matrix multiplication and we can fuse it
                 ggml_cuda_op_mul_mat_vec_q_biased(ctx, dst->src[0], src1, cgraph->nodes[node_n+1], cgraph->nodes[node_n+1]->src[1],
                         (const char *)dst->src[0]->data, nullptr, src1_quantized.get(), (float *)cgraph->nodes[node_n+1]->data,
