@@ -3558,7 +3558,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 #endif
         }
 
-        if (node->op == GGML_OP_CPY) {
+        if (false && node->op == GGML_OP_CPY) {
 
             // Store the pointers which are updated for each token, such that these can be sent
             // to the device and accessed using indirection from CUDA graph
@@ -3602,7 +3602,7 @@ static void set_ggml_graph_node_properties(ggml_tensor * node, ggml_graph_node_p
 
 static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_graph_node_properties * graph_node_properties) {
     if (node->data != graph_node_properties->node_address &&
-          node->op != GGML_OP_CPY &&
+          //node->op != GGML_OP_CPY &&
           node->op != GGML_OP_VIEW) {
         return false;
     }
@@ -3623,7 +3623,7 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (node->src[i] &&
             node->src[i]->data != graph_node_properties->src_address[i] &&
-            node->op != GGML_OP_CPY &&
+            //node->op != GGML_OP_CPY &&
             node->op != GGML_OP_VIEW
         ) {
             return false;
