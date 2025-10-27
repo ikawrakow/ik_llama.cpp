@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 #include <set>
 
@@ -528,6 +529,16 @@ GGML_CALL void ggml_backend_register(const char * name, ggml_backend_init_fn ini
     ggml_backend_registry_count++;
 }
 
+// Backend (reg) enumeration
+static bool striequals(const char* a, const char* b) {
+    for (; *a && *b; a++, b++) {
+        if (std::tolower(*a) != std::tolower(*b)) {
+            return false;
+        }
+    }
+    return *a == *b;
+}
+
 size_t ggml_backend_reg_get_count(void) {
     ggml_backend_registry_init();
 
@@ -539,7 +550,7 @@ size_t ggml_backend_reg_find_by_name(const char * name) {
 
     for (size_t i = 0; i < ggml_backend_registry_count; i++) {
         // TODO: case insensitive in a portable way
-        if (strcmp(ggml_backend_registry[i].name, name) == 0) {
+        if (striequals(ggml_backend_registry[i].name, name)) {
             return i;
         }
     }

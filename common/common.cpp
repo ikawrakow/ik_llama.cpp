@@ -200,6 +200,9 @@ int32_t cpu_get_num_math() {
     return cpu_get_num_physical_cores();
 }
 
+//
+// Arg utils
+//
 common_webui common_webui_from_name(const std::string& format) {
     if (format == "none") {
         return COMMON_WEBUI_NONE;
@@ -224,6 +227,14 @@ static std::string read_file(const std::string& fname) {
     file.close();
     return content;
 }
+
+static std::string parse_device_list(const std::string& value) {
+    if (value==" " || value.find("-")!= std::string::npos) {
+        throw std::invalid_argument("no devices specified");
+    }
+    return value;
+}
+
 //
 // CLI argument parsing
 //
@@ -1066,7 +1077,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
-    if (arg == "-ngld" || arg == "--gpu-layers-draft" || arg == "--gpu-layers-draft") {
+    if (arg == "-ngld" || arg == "--gpu-layers-draft" || arg == "--n-gpu-layers-draft") {
         CHECK_ARG
         params.n_gpu_layers_draft = std::stoi(argv[i]);
         if (!llama_supports_gpu_offload()) {
@@ -1211,6 +1222,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         else if (value == "isolate") { params.numa = GGML_NUMA_STRATEGY_ISOLATE; }
         else if (value == "numactl") { params.numa = GGML_NUMA_STRATEGY_NUMACTL; }
         else { invalid_param = true; }
+        return true;
+    }
+    if (arg == "-dev" || arg == "--device") {
+        CHECK_ARG
+        std::string value(argv[i]);
+        params.devices = parse_device_list(value);
+        return true;
+    }
+    if (arg == "-devd" || arg == "--device-draft") {
+        CHECK_ARG
+        std::string value(argv[i]);
+        params.devices_draft = parse_device_list(value);
         return true;
     }
     if (arg == "-v" || arg == "--verbose") {
@@ -2002,6 +2025,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "  - row: split rows across GPUs" });
         options.push_back({ "*",           "-ts,   --tensor-split SPLIT",
                                                                         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1" });
+        options.push_back({ "*",           "-dev,   --device dev1,dev2",
+                                                                         "comma-separated list of devices to use for offloading (none = don't offload)\n"
+                                                                         "Example: CUDA0,CUDA1,RPC[192.168.0.1:8080]\n" });
+        options.push_back({ "*",           "-devd,   --device-draft dev1,dev2",
+                                                                         "comma-separated list of devices to use for offloading for the draft model (none = don't offload)\n"
+                                                                         "Example: CUDA0,CUDA1,RPC[192.168.0.1:8080]\n" });
         options.push_back({ "*",           "-mg,   --main-gpu i",       "the GPU to use for the model (with split-mode = none),\n"
                                                                         "or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu });
     }
@@ -2575,7 +2604,7 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     } else {
         model = llama_load_model_from_file(params.model.c_str(), mparams);
     }
-
+    
     if (model == NULL) {
         fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params.model.c_str());
         return iparams;
@@ -2692,6 +2721,7 @@ void llama_lora_adapters_apply(struct llama_context * ctx, std::vector<llama_lor
 
 struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & params) {
     auto mparams = llama_model_default_params();
+    mparams.devices = params.devices.c_str(); 
 
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
