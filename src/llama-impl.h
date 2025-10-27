@@ -37,7 +37,6 @@ void llama_log_internal        (ggml_log_level level, const char * format, ...);
 void llama_log_callback_default(ggml_log_level level, const char * text, void * user_data);
 
 #define LLAMA_LOG_INFO(...)  llama_log_internal(GGML_LOG_LEVEL_INFO , __VA_ARGS__)
-#define LLAMA_LOG_DEBUG(...)  llama_log_internal(GGML_LOG_LEVEL_DEBUG , __VA_ARGS__)
 #ifdef NDEBUG
 // Release mode - make LLAMA_LOG_DEBUG a no-op
 #define LLAMA_LOG_DEBUG(...) ((void)0)
