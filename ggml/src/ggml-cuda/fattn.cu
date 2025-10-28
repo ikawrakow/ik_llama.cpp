@@ -176,5 +176,9 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
         return V->ne[0] == 512;
     }
 
+    if (!new_mma_available(cc) || K->ne[0] != V->ne[0]) {
+        return ggml_cuda_fattn_wmma_f16_is_supported(ctx, dst);
+    }
+
     return ggml_cuda_fattn_mma_f16_is_supported(ctx, dst);
 }
