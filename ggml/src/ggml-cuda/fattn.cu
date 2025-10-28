@@ -91,12 +91,8 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     //const bool mma_faster_for_bs1 = new_mma_available(cc) && gqa_opt_applies && cc < CC_ADA_LOVELACE && !mma_needs_data_conversion;
     const bool mma_faster_for_bs1 = new_mma_available(cc) && gqa_opt_applies && !(Q->ne[1] == 1 && n_swa > 0);
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % (2*WARP_SIZE) == 0;
-    if (Q->ne[1] == 1 && can_use_vector_kernel && !mma_faster_for_bs1) {
-        //if (precision == GGML_PREC_DEFAULT) {
-        //    ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
-        //} else {
-            ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
-        //}
+    if (Q->ne[1] == 1 && can_use_vector_kernel && !mma_faster_for_bs1 && !ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
+        ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
         return;
     }
 
