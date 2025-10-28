@@ -353,3 +353,10 @@ void ggml_cuda_flash_attn_ext_tile_f16(ggml_backend_cuda_context & ctx, ggml_ten
         launch_fattn_tile_f16_64_128<cols_per_block, parallel_blocks, false>(ctx, dst);
     }
 }
+
+bool ggml_cuda_fattn_tile_f16_is_supported([[maybe_unused]] ggml_backend_cuda_context & ctx, const ggml_tensor * dst) {
+    auto K = dst->src[1];
+    auto V = dst->src[2];
+    if (K->ne[0] != V->ne[0]) return false;
+    return K->ne[0] == 64 || K->ne[0] == 128;
+}
