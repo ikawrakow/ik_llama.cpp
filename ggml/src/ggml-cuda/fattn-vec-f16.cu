@@ -110,7 +110,6 @@ bool ggml_cuda_fattn_vec_f16_is_supported([[maybe_unused]] ggml_backend_cuda_con
         if (K->type != V->type) return false;
         return K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0;
     }
-    bool supported = false;
 #ifdef GGML_CUDA_FA_ALL_QUANTS
     if (K->ne[0] == 64) {
         return K->type == GGML_TYPE_F16 &&
