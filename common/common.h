@@ -369,7 +369,7 @@ struct gpt_params {
     bool sweep_bench_output_jsonl = false;
 };
 
-void gpt_params_handle_hf_token(gpt_params & params);
+void gpt_params_parse_from_env(gpt_params & params);
 void gpt_params_handle_model_default(gpt_params & params);
 
 bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);
