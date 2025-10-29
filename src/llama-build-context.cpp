@@ -1357,22 +1357,41 @@ ggml_cgraph * llm_build_context::build_llama() {
             // rope freq factors for llama3; may return nullptr for llama2 and other models
             struct ggml_tensor * rope_factors = build_rope_factors(il);
 
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, model.layers[il].bq,
+            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
+                    model.layers[il].wqkv, model.layers[il].bqkv,
+                    model.layers[il].wq, model.layers[il].bq,
                     model.layers[il].wk, model.layers[il].bk,
                     model.layers[il].wv, model.layers[il].bv,
-                    hparams.f_attention_scale, il);
+                    nullptr, nullptr, hparams.f_attention_scale, il);
 
             if (use_rope) {
-                Qcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_pos, rope_factors,
+                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow);
 
-                Kcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens), inp_pos, rope_factors,
+                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow);
             } else if (inp_attn_scale) {
                 Qcur = ggml_mul(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_attn_scale);
             }
+
+            //auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, model.layers[il].bq,
+            //        model.layers[il].wk, model.layers[il].bk,
+            //        model.layers[il].wv, model.layers[il].bv,
+            //        hparams.f_attention_scale, il);
+
+            //if (use_rope) {
+            //    Qcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_pos, rope_factors,
+            //            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            //            ext_factor, attn_factor, beta_fast, beta_slow);
+
+            //    Kcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens), inp_pos, rope_factors,
+            //            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            //            ext_factor, attn_factor, beta_fast, beta_slow);
+            //} else if (inp_attn_scale) {
+            //    Qcur = ggml_mul(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_attn_scale);
+            //}
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
