@@ -1044,9 +1044,33 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
+        auto wq_name = tn(LLM_TENSOR_ATTN_Q, "weight", i);
+        auto wk_name = tn(LLM_TENSOR_ATTN_K, "weight", i);
+        auto wv_name = tn(LLM_TENSOR_ATTN_V, "weight", i);
+        auto wq = ml.require_tensor_meta(wq_name.c_str());
+        auto wk = ml.require_tensor_meta(wk_name.c_str());
+        auto wv = ml.require_tensor_meta(wv_name.c_str());
+
+        bool fused_qkv = false;
+        if (wq->type == wk->type && wq->type == wv->type) {
+            GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_rot);
+            GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_head_kv * n_rot);
+            GGML_ASSERT(wv->ne[0] == n_embd && wv->ne[1] == n_head_kv * n_rot);
+            layer.wqkv = ggml_new_tensor_2d(ctx_split, wq->type, n_embd, n_rot * (n_head + n_head_kv + n_head_kv));
+            ggml_set_name(layer.wqkv, tn(LLM_TENSOR_ATTN_QKV, "weight", i).c_str());
+            layer.wq = ml.create_tensor_as_view(ctx_split, layer.wqkv, wq_name.c_str(), { wq->ne[0], wq->ne[1] }, 0);
+            layer.wk = ml.create_tensor_as_view(ctx_split, layer.wqkv, wk_name.c_str(), { wk->ne[0], wk->ne[1] }, wq->ne[1]*wq->nb[1]);
+            layer.wv = ml.create_tensor_as_view(ctx_split, layer.wqkv, wv_name.c_str(), { wv->ne[0], wv->ne[1] }, wq->ne[1]*wq->nb[1] + wk->ne[1]*wk->nb[1] );
+            fused_qkv = true;
+            use_mmap_buffer = false;
+            printf("Created fused qkv %s\n", layer.wqkv->name);
+        }
+
+        if (!fused_qkv) {
+            layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head});
+            layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
+            layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
+        }
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd});
 
         layer.attn_k_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
