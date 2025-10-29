@@ -1684,7 +1684,7 @@ static bool llm_load_tensors(
         throw std::runtime_error("model has expert layers but no expert layers are used");
     }
 
-    cth->create_tensors();
+    use_mmap_buffer = cth->create_tensors();
 
     ml.done_getting_tensors();
 
