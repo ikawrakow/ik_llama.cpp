@@ -2425,7 +2425,6 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
     const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa();
     const int64_t n_embd_head_k = hparams.n_embd_head_k;
     const int64_t n_embd_gqa    = n_embd_v_gqa;
-    const int64_t n_rot         = hparams.n_rot;
 
     ggml_context * ctx_layer = ctx_for_layer(i);
     ggml_context * ctx_split = ctx_for_layer_split(i);
@@ -2445,7 +2444,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
         GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
         GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
         GGML_ASSERT(wv->ne[0] == n_embd && wv->ne[1] == n_embd_gqa);
-        layer.wqkv = ggml_new_tensor_2d(ctx_split, wq->type, n_embd, n_rot * (n_head + n_head_kv + n_head_kv));
+        layer.wqkv = ggml_new_tensor_2d(ctx_split, wq->type, n_embd, n_embd_head_k * (n_head + n_head_kv + n_head_kv));
         snprintf(layer.wqkv->name, GGML_MAX_NAME, "blk.%d.attn_qkv.weight", i);
         // This does not work. If we are doing this merge manually, it basically means that the arch does not have
         // an LLM_TENSOR_ATTN_QKV entry, so we will get __missing__ as the tensor name.
@@ -2454,7 +2453,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
         layer.wk = ml.create_tensor_as_view(ctx_split, layer.wqkv, wk_name.c_str(), { wk->ne[0], wk->ne[1] }, wq->ne[1]*wq->nb[1]);
         layer.wv = ml.create_tensor_as_view(ctx_split, layer.wqkv, wv_name.c_str(), { wv->ne[0], wv->ne[1] }, wq->ne[1]*wq->nb[1] + wk->ne[1]*wk->nb[1] );
         fused_qkv = true;
-        printf("Created merged qkv %s\n", layer.wqkv->name);
+        printf("================================== Created merged qkv %s\n", layer.wqkv->name);
         if (bias) {
             auto bq_name = tn(LLM_TENSOR_ATTN_Q, "bias", i);
             auto bk_name = tn(LLM_TENSOR_ATTN_K, "bias", i);
@@ -2472,7 +2471,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
                 GGML_ASSERT(ggml_nrows(bq) == 1 && bq->ne[0] == wq->ne[1]);
                 GGML_ASSERT(ggml_nrows(bk) == 1 && bk->ne[0] == wk->ne[1]);
                 GGML_ASSERT(ggml_nrows(bv) == 1 && bv->ne[0] == wv->ne[1]);
-                layer.bqkv = ggml_new_tensor_1d(ctx_layer, bq->type, n_rot * (n_head + n_head_kv + n_head_kv));
+                layer.bqkv = ggml_new_tensor_1d(ctx_layer, bq->type, n_embd_head_k * (n_head + n_head_kv + n_head_kv));
                 snprintf(layer.bqkv->name, GGML_MAX_NAME, "blk.%d.attn_qkv.bias", i);
                 layer.bq = ml.create_tensor_as_view(ctx_layer, layer.bqkv, bq_name.c_str(), { bq->ne[0] }, 0);
                 layer.bk = ml.create_tensor_as_view(ctx_layer, layer.bqkv, bk_name.c_str(), { bk->ne[0] }, bq->ne[0]*bq->nb[0]);
@@ -2482,6 +2481,10 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
     }
 
     if (!fused_qkv) {
+        if (ml.merge_qkv) {
+            printf("%s: did not merge Q, K, V in layer %d because %d, %d, %d\n", __func__, i,
+                    wq->type == wk->type, wq->type == wv->type, hparams.f_attention_scale == 0.0f);
+        }
         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head});
         layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
