@@ -269,6 +269,7 @@ struct gpt_params {
     bool use_thp           = false; // use transparent huge pages (linux only)
     bool validate_quants   = false; // if true, check for NaNs while loading the model
     bool only_active_exps  = true;  // if true, offload only active experts (relevant only for hybrid CPU/GPU)
+    bool merge_qkv         = false; // if true, merge separate Q, K, V tensors into a single, contiguous tensor
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V

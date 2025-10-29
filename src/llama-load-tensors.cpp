@@ -2441,7 +2441,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
     GGML_ASSERT(wq && wk && wv);
 
     bool fused_qkv = false;
-    if (wq->type == wk->type && wq->type == wv->type && hparams.f_attention_scale == 0.0f) {
+    if (ml.merge_qkv && wq->type == wk->type && wq->type == wv->type && hparams.f_attention_scale == 0.0f) {
         GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
         GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
         GGML_ASSERT(wv->ne[0] == n_embd && wv->ne[1] == n_embd_gqa);
@@ -2454,7 +2454,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
         layer.wk = ml.create_tensor_as_view(ctx_split, layer.wqkv, wk_name.c_str(), { wk->ne[0], wk->ne[1] }, wq->ne[1]*wq->nb[1]);
         layer.wv = ml.create_tensor_as_view(ctx_split, layer.wqkv, wv_name.c_str(), { wv->ne[0], wv->ne[1] }, wq->ne[1]*wq->nb[1] + wk->ne[1]*wk->nb[1] );
         fused_qkv = true;
-        printf("Created fused qkv %s\n", layer.wqkv->name);
+        printf("Created merged qkv %s\n", layer.wqkv->name);
         if (bias) {
             auto bq_name = tn(LLM_TENSOR_ATTN_Q, "bias", i);
             auto bk_name = tn(LLM_TENSOR_ATTN_K, "bias", i);
