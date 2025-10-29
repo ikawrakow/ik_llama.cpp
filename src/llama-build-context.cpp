@@ -3379,30 +3379,21 @@ ggml_cgraph * llm_build_context::build_qwen3() {
 
         // self-attention
         {
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, nullptr,
+            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
+                    model.layers[il].wqkv, nullptr,
+                    model.layers[il].wq, nullptr,
                     model.layers[il].wk, nullptr,
-                    model.layers[il].wv, nullptr, 0, il);
+                    model.layers[il].wv, nullptr,
+                    model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0, il);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
-            cb(Qcur, "Qcur_normed", il);
-
-            Qcur = ggml_rope_ext(
-                    ctx0, Qcur, inp_pos, nullptr,
+            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+                    ext_factor, attn_factor, beta_fast, beta_slow);
             cb(Qcur, "Qcur", il);
 
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
-            cb(Kcur, "Kcur_normed", il);
-
-            Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, nullptr,
+            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+                    ext_factor, attn_factor, beta_fast, beta_slow);
             cb(Kcur, "Kcur", il);
 
             cur = llm_build_kv(ctx0, lctx, kv_self, gf,
