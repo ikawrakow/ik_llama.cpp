@@ -1238,20 +1238,73 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
         cb(Qcur, "Qcur", il);
     }
     if (bq) {
-        Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+        Qcur = ggml_add(ctx0, Qcur, bq);
         cb(Qcur, "Qcur", il);
         ggml_build_forward_expand(gf, Qcur);
     }
     if (bk) {
-        Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+        Kcur = ggml_add(ctx0, Kcur, bk);
         cb(Kcur, "Kcur", il);
         ggml_build_forward_expand(gf, Kcur);
     }
     if (bv) {
-        Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+        Vcur = ggml_add(ctx0, Vcur, bv);
         cb(Vcur, "Vcur", il);
         ggml_build_forward_expand(gf, Vcur);
     }
+    return {Qcur, Kcur, Vcur};
+}
+
+std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_build_mul_mat_qkv(ggml_cgraph * gf, ggml_tensor * cur,
+            ggml_tensor * wqkv, ggml_tensor * bqkv,
+            ggml_tensor * wq, ggml_tensor * bq,
+            ggml_tensor * wk, ggml_tensor * bk,
+            ggml_tensor * wv, ggml_tensor * bv,
+            ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il) {
+    const int64_t n_embd_head = hparams.n_embd_head_v;
+    const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
+    if (wqkv) {
+        auto qkv = llm_build_lora_mm(lctx, ctx0, wqkv, cur);
+        cb(qkv, "qkv", il);
+        if (bqkv) {
+            qkv = ggml_add(ctx0, qkv, bqkv);
+            cb(qkv, "qkv_b", il);
+        }
+        auto Qcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head,    n_tokens, n_embd_head*sizeof(float), qkv->nb[1], 0*sizeof(float)*(n_embd));
+        auto Kcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), qkv->nb[1], 1*sizeof(float)*Qcur->ne[0]*Qcur->ne[1]);
+        auto Vcur = ggml_view_2d(ctx0, qkv, n_embd_gqa, n_tokens, qkv->nb[1], 1*sizeof(float)*(Qcur->ne[0]*Qcur->ne[1] + Kcur->ne[0]*Kcur->ne[1]));
+        cb(Qcur, "Qcur", il);
+        cb(Kcur, "Kcur", il);
+        cb(Vcur, "Vcur", il);
+        if (q_norm) {
+            Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(Qcur, "Qcur_normed", il);
+        }
+        if (k_norm) {
+            Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(Kcur, "Kcur_normed", il);
+        }
+
+        return {Qcur, Kcur, Vcur};
+
+        //ggml_build_forward_expand(gf, Qcur);
+        //ggml_build_forward_expand(gf, Kcur);
+        //ggml_build_forward_expand(gf, Vcur);
+    }
+
+    auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, wq, bq, wk, bk, wv, bv, attention_scale, il);
+    auto Qcur = ggml_reshape_3d(ctx0, Q, n_embd_head, n_head, n_tokens);
+    if (q_norm) {
+        Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(Qcur, "Qcur_normed", il);
+    }
+
+    auto Kcur = ggml_reshape_3d(ctx0, K, n_embd_head, n_head_kv, n_tokens);
+    if (k_norm) {
+        Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
+        cb(Kcur, "Kcur_normed", il);
+    }
+    auto Vcur = V;
     return {Qcur, Kcur, Vcur};
 }
 
@@ -7801,19 +7854,36 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
 
         // self-attention
         {
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, model.layers[il].bq,
-                    model.layers[il].wk, model.layers[il].bk,
-                    model.layers[il].wv, model.layers[il].bv, 0.f, il);
+            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
+                model.layers[il].wqkv, model.layers[il].bqkv,
+                model.layers[il].wq, model.layers[il].bq,
+                model.layers[il].wk, model.layers[il].bk,
+                model.layers[il].wv, model.layers[il].bv,
+                nullptr, nullptr, 0.0f, il);
 
-            Qcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Qcur, n_rot, n_head, n_tokens), inp_pos, nullptr,
+            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
                     beta_fast, beta_slow);
             cb(Qcur, "Qcur", il);
 
-            Kcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Kcur, n_rot, n_head_kv, n_tokens), inp_pos, nullptr,
+            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
                     attn_factor, beta_fast, beta_slow);
             cb(Kcur, "Kcur", il);
+
+            //auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, model.layers[il].bq,
+            //        model.layers[il].wk, model.layers[il].bk,
+            //        model.layers[il].wv, model.layers[il].bv, 0.f, il);
+
+            //Qcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Qcur, n_rot, n_head, n_tokens), inp_pos, nullptr,
+            //        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
+            //        beta_fast, beta_slow);
+            //cb(Qcur, "Qcur", il);
+
+            //Kcur = ggml_rope_ext(ctx0, ggml_reshape_3d(ctx0, Kcur, n_rot, n_head_kv, n_tokens), inp_pos, nullptr,
+            //        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
+            //        attn_factor, beta_fast, beta_slow);
+            //cb(Kcur, "Kcur", il);
 
             cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, model.layers[il].bo,
                     Kcur, Vcur, Qcur, KQ_mask_l, n_tokens, kv_head, n_kv, kq_scale, cb, il, model.layers[il].attn_sinks,
