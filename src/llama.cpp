@@ -3968,7 +3968,7 @@ struct llama_model * llama_load_model_from_file(
             return true;
         };
     }
-
+    model->set_tensor_overrides(params);
     // model->devices hold device indices that are used to offload
     // use model->devices to determine offload device
     // if no device is specified, all device are included
@@ -4478,7 +4478,7 @@ struct llama_context * llama_new_context_with_model(
                 llama_get_device_count(*model) > 1 &&
                 model->n_gpu_layers > (int)model->hparams.n_layer &&
                 model->split_mode == LLAMA_SPLIT_MODE_LAYER &&
-                params.offload_kqv;
+                params.offload_kqv && !model->has_tensor_overrides();
 #ifndef GGML_USE_CUDA
             // pipeline parallelism requires support for async compute and events
             // currently this is only implemented in the CUDA backend
