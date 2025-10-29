@@ -28,7 +28,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     virtual size_t get_ctx_size() const override { return ctx_size; }
 
-    bool merge_qkv(const LLM_TN & tn, int i, bool bias);
+    bool merge_qkv(const LLM_TN & tn, int i, int bias);
 
     bool create_tensors() override;
 
@@ -286,7 +286,7 @@ bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
-        if (merge_qkv(tn, i, false)) use_mmap_buffer = false;
+        if (merge_qkv(tn, i, 1)) use_mmap_buffer = false;
 
         //layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head});
         //layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa});
@@ -1048,7 +1048,7 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
-        if (merge_qkv(tn, i, false)) use_mmap_buffer = false;
+        if (merge_qkv(tn, i, 0)) use_mmap_buffer = false;
 
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd});
 
@@ -2383,7 +2383,7 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
         layer.attn_norm      = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
         layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
 
-        if (merge_qkv(tn, i, true)) use_mmap_buffer = false;
+        if (merge_qkv(tn, i, 2)) use_mmap_buffer = false;
 
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_rot, n_embd}, 0);
         layer.bo = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd}, 0);
@@ -2431,7 +2431,7 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, bool bias) {
+bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
     auto& hparams = model.hparams;
     const int64_t n_head        = hparams.n_head();
     const int64_t n_head_kv     = hparams.n_head_kv();
@@ -2473,19 +2473,25 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, bool bias) {
             auto bq_name = tn(LLM_TENSOR_ATTN_Q, "bias", i);
             auto bk_name = tn(LLM_TENSOR_ATTN_K, "bias", i);
             auto bv_name = tn(LLM_TENSOR_ATTN_V, "bias", i);
-            auto bq = ml.require_tensor_meta(bq_name.c_str());
-            auto bk = ml.require_tensor_meta(bk_name.c_str());
-            auto bv = ml.require_tensor_meta(bv_name.c_str());
-            GGML_ASSERT(bq && bk && bv);
-            GGML_ASSERT(bq->type == GGML_TYPE_F32 && bk->type == GGML_TYPE_F32 && bv->type == GGML_TYPE_F32);
-            GGML_ASSERT(ggml_nrows(bq) == 1 && bq->ne[0] == wq->ne[1]);
-            GGML_ASSERT(ggml_nrows(bk) == 1 && bk->ne[0] == wk->ne[1]);
-            GGML_ASSERT(ggml_nrows(bv) == 1 && bv->ne[0] == wv->ne[1]);
-            layer.bqkv = ggml_new_tensor_1d(ctx_layer, bq->type, n_rot * (n_head + n_head_kv + n_head_kv));
-            snprintf(layer.bqkv->name, GGML_MAX_NAME, "blk.%d.attn_qkv.bias", i);
-            layer.bq = ml.create_tensor_as_view(ctx_layer, layer.bqkv, bq_name.c_str(), { bq->ne[0] }, 0);
-            layer.bk = ml.create_tensor_as_view(ctx_layer, layer.bqkv, bk_name.c_str(), { bk->ne[0] }, bq->ne[0]*bq->nb[0]);
-            layer.bv = ml.create_tensor_as_view(ctx_layer, layer.bqkv, bv_name.c_str(), { bv->ne[0] }, bq->ne[0]*bq->nb[0] + bk->ne[0]*bk->nb[0] );
+            auto bq = ml.get_tensor_meta(bq_name.c_str());
+            auto bk = ml.get_tensor_meta(bk_name.c_str());
+            auto bv = ml.get_tensor_meta(bv_name.c_str());
+            if (bias == 2) {
+                GGML_ASSERT(bq && bk && bv);
+            } else {
+                GGML_ASSERT(!bq && !bk && !bv);
+            }
+            if (bq && bk && bv) {
+                GGML_ASSERT(bq->type == GGML_TYPE_F32 && bk->type == GGML_TYPE_F32 && bv->type == GGML_TYPE_F32);
+                GGML_ASSERT(ggml_nrows(bq) == 1 && bq->ne[0] == wq->ne[1]);
+                GGML_ASSERT(ggml_nrows(bk) == 1 && bk->ne[0] == wk->ne[1]);
+                GGML_ASSERT(ggml_nrows(bv) == 1 && bv->ne[0] == wv->ne[1]);
+                layer.bqkv = ggml_new_tensor_1d(ctx_layer, bq->type, n_rot * (n_head + n_head_kv + n_head_kv));
+                snprintf(layer.bqkv->name, GGML_MAX_NAME, "blk.%d.attn_qkv.bias", i);
+                layer.bq = ml.create_tensor_as_view(ctx_layer, layer.bqkv, bq_name.c_str(), { bq->ne[0] }, 0);
+                layer.bk = ml.create_tensor_as_view(ctx_layer, layer.bqkv, bk_name.c_str(), { bk->ne[0] }, bq->ne[0]*bq->nb[0]);
+                layer.bv = ml.create_tensor_as_view(ctx_layer, layer.bqkv, bv_name.c_str(), { bv->ne[0] }, bq->ne[0]*bq->nb[0] + bk->ne[0]*bk->nb[0] );
+            }
         }
     }
 
@@ -2494,9 +2500,10 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, bool bias) {
         layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
         if (bias) {
-            layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_head * n_rot}, 0);
-            layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_head_kv * n_rot}, 0);
-            layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_head_kv * n_rot}, 0);
+            auto flags = bias == 1 ? llama_model_loader::TENSOR_NOT_REQUIRED : 0;
+            layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_head * n_rot}, flags);
+            layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_head_kv * n_rot}, flags);
+            layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_head_kv * n_rot}, flags);
         }
     }
 
