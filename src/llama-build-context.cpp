@@ -1373,7 +1373,7 @@ ggml_cgraph * llm_build_context::build_llama() {
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow);
             } else if (inp_attn_scale) {
-                Qcur = ggml_mul(ctx0, ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens), inp_attn_scale);
+                Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
             }
 
             cb(Qcur, "Qcur", il);
