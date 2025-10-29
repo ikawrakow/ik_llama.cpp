@@ -3975,7 +3975,7 @@ struct llama_model * llama_load_model_from_file(
     // if device is specified, only those in the devices are included in the model->devices
 
     std::vector<std::string> params_devices = {};
-    if (!striequals(params.devices, "")) {
+    if (params.devices && !striequals(params.devices, "")) {
         params_devices = llama_string_split(params.devices, ",");
         params_devices = extract_ip_from_rpc_device(params_devices);
     }
@@ -4000,7 +4000,6 @@ struct llama_model * llama_load_model_from_file(
             } else {
                 LLAMA_LOG_ERROR("%s backend not available.\n", device.c_str());
             }
-            
         }
     } else {
         // add all backend buffer to device
