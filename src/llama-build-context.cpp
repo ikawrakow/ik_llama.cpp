@@ -3452,7 +3452,6 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
     int32_t n_tokens = this->n_tokens;
 
     const int64_t n_embd_head = hparams.n_embd_head_v;
-    const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
     GGML_ASSERT(n_embd_head == hparams.n_rot);
 
@@ -3477,44 +3476,10 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
 
         // self_attention
         {
-            ggml_tensor *Qcur, *Kcur, *Vcur;
-            if (model.layers[il].wqkv) {
-                auto qkv = llm_build_lora_mm(lctx, ctx0, model.layers[il].wqkv, cur);
-                cb(qkv, "qkv_w", il);
-                //printf("qkv: %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu\n", qkv->ne[0], qkv->ne[1], qkv->ne[2], qkv->ne[3], qkv->nb[0], qkv->nb[1], qkv->nb[2], qkv->nb[3]);
-                Qcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head,    n_tokens, n_embd_head*sizeof(float), qkv->nb[1], 0*sizeof(float)*(n_embd));
-                //printf("  Qcur: %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu\n", Qcur->ne[0], Qcur->ne[1], Qcur->ne[2], Qcur->ne[3], Qcur->nb[0], Qcur->nb[1], Qcur->nb[2], Qcur->nb[3]);
-                Kcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), qkv->nb[1], 1*sizeof(float)*Qcur->ne[0]*Qcur->ne[1]);
-                //printf("  Kcur: %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu at offset %zu\n", Kcur->ne[0], Kcur->ne[1], Kcur->ne[2], Kcur->ne[3], Kcur->nb[0], Kcur->nb[1], Kcur->nb[2], Kcur->nb[3], 1*sizeof(float)*(n_embd));
-                Vcur = ggml_view_2d(ctx0, qkv, n_embd_gqa, n_tokens, qkv->nb[1], 1*sizeof(float)*(Qcur->ne[0]*Qcur->ne[1] + Kcur->ne[0]*Kcur->ne[1]));
-                //printf("  Vcur: %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu at offset %zu\n", Vcur->ne[0], Vcur->ne[1], Vcur->ne[2], Vcur->ne[3], Vcur->nb[0], Vcur->nb[1], Vcur->nb[2], Vcur->nb[3], 1*sizeof(float)*(n_embd + n_embd_gqa));
-                cb(Qcur, "Qcur", il);
-                cb(Kcur, "Kcur", il);
-                cb(Vcur, "Vcur", il);
-                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
-                cb(Qcur, "Qcur_normed", il);
-                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
-                cb(Kcur, "Kcur_normed", il);
-
-                ggml_build_forward_expand(gf, Qcur);
-                ggml_build_forward_expand(gf, Kcur);
-                ggml_build_forward_expand(gf, Vcur);
-
-            } else {
-
-                auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, nullptr,
-                        model.layers[il].wk, nullptr,
-                        model.layers[il].wv, nullptr, 0, il);
-                Qcur = ggml_reshape_3d(ctx0, Q, n_embd_head, n_head, n_tokens);
-                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
-                cb(Qcur, "Qcur_normed", il);
-
-                Kcur = ggml_reshape_3d(ctx0, K, n_embd_head, n_head_kv, n_tokens);
-                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
-                cb(Kcur, "Kcur_normed", il);
-
-                Vcur = V;
-            }
+            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
+                    model.layers[il].wqkv, nullptr,
+                    model.layers[il].wq, nullptr, model.layers[il].wk, nullptr, model.layers[il].wv, nullptr,
+                    model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0, il);
 
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
