@@ -3687,7 +3687,7 @@ int main(int argc, char ** argv) {
     };
 
     auto res_ok = [](httplib::Response& res, const json& data) {
-        res.set_content(data.dump(), "application/json; charset=utf-8");
+        res.set_content(data.dump(), MIMETYPE_JSON);
         res.status = 200;
     };
 
@@ -4190,7 +4190,6 @@ int main(int argc, char ** argv) {
             return;
         }
 
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         auto body = json::parse(req.body);
         json data = oaicompat_chat_params_parse(body);
         const int id_task = ctx_server.queue_tasks.get_new_id();
@@ -4588,7 +4587,6 @@ int main(int argc, char ** argv) {
     };
 
     const auto list_saved_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         json response = json::array();
         namespace fs = std::filesystem;
 
@@ -4649,7 +4647,6 @@ int main(int argc, char ** argv) {
     };
 
     const auto list_slot_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         json response = json::array();
         for (server_slot & slot : ctx_server.slots) {
             response.push_back({
@@ -4663,7 +4660,6 @@ int main(int argc, char ** argv) {
 
 
     const auto delete_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         json response;
         namespace fs = std::filesystem;
 
@@ -4711,7 +4707,6 @@ int main(int argc, char ** argv) {
     };
 
     const auto rename_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         json response;
         namespace fs = std::filesystem;
 
