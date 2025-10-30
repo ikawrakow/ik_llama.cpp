@@ -1684,7 +1684,7 @@ static bool llm_load_tensors(
         throw std::runtime_error("model has expert layers but no expert layers are used");
     }
 
-    cth->create_tensors();
+    use_mmap_buffer = cth->create_tensors();
 
     ml.done_getting_tensors();
 
@@ -1896,7 +1896,7 @@ static bool llm_load_tensors(
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
         llama_model_loader ml(fname, params.use_mmap, params.check_tensors,
-                params.repack_tensors, params.use_thp, params.kv_overrides, params.tensor_buft_overrides);
+                params.repack_tensors, params.use_thp, params.merge_qkv, params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
 
@@ -3788,6 +3788,7 @@ struct llama_model_params llama_model_default_params() {
         /*.repack_tensors              =*/ false,
         /*.use_thp                     =*/ false,
         /*.validate_quants             =*/ false,
+        /*.merge_qkv                   =*/ false,
     };
 
 #ifdef GGML_USE_METAL

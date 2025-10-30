@@ -149,6 +149,13 @@ struct llm_build_context {
             ggml_tensor * wv, ggml_tensor * bv,
             float attention_scale, int il);
 
+    std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_mul_mat_qkv(ggml_cgraph * gf, ggml_tensor * cur,
+            ggml_tensor * wqkv, ggml_tensor * bqkv,
+            ggml_tensor * wq, ggml_tensor * bq,
+            ggml_tensor * wk, ggml_tensor * bk,
+            ggml_tensor * wv, ggml_tensor * bv,
+            ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il);
+
     ggml_cgraph * build_llama();
 
     ggml_cgraph * build_deci();
