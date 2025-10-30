@@ -1272,6 +1272,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.validate_quants = true;
         return true;
     }
+    if (arg == "-mqkv" || arg == "--merge-qkv") {
+        params.merge_qkv = true;
+        return true;
+    }
     if (arg == "--numa") {
         CHECK_ARG
         std::string value(argv[i]);
@@ -1911,6 +1915,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disaable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disaable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction,","experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
+    options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
                                                                         "in conversation mode, this will be used as system prompt\n"
                                                                         "(default: '%s')", params.prompt.c_str() });
@@ -2778,7 +2783,7 @@ void llama_lora_adapters_apply(struct llama_context * ctx, std::vector<llama_lor
 
 struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & params) {
     auto mparams = llama_model_default_params();
-    mparams.devices = params.devices.c_str(); 
+    mparams.devices = params.devices.c_str();
 
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
@@ -2794,6 +2799,7 @@ struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & 
     mparams.repack_tensors  = params.repack_tensors;
     mparams.use_thp         = params.use_thp;
     mparams.validate_quants = params.validate_quants;
+    mparams.merge_qkv       = params.merge_qkv;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -3965,6 +3971,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "repack: %s # default: false\n", params.repack_tensors ? "true" : "false");
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
+    fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
     fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);
