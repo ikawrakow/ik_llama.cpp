@@ -382,6 +382,7 @@ extern "C" {
         bool repack_tensors;// repack if available
         bool use_thp;       // use transparent huge pages (linux only)
         bool validate_quants; // if true, check for NaNs while loading the model
+        bool merge_qkv;     // if true, merge separate Q, K, V tensors into a single, contiguous tensor
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
