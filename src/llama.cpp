@@ -4497,10 +4497,19 @@ struct llama_context * llama_new_context_with_model(
             ggml_cgraph * gf = llm_build_context::llama_build_graph(*ctx, llama_batch_get_one(&token, n_tokens, n_past, 0), true);
 
             // initialize scheduler with the worst-case graph
-            if (!ggml_backend_sched_reserve(ctx->sched, gf)) {
-                LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
-                llama_free(ctx);
-                return nullptr;
+            bool gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
+            if (!gf_success)
+            {
+                if (pipeline_parallel) {
+                    LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
+                    ctx->sched = ggml_backend_sched_new(ctx->backends.data(), backend_buft.data(), ctx->backends.size(), max_nodes, false);
+                    gf_success = ggml_backend_sched_reserve(ctx->sched, gf);
+                }
+                if (!gf_success) {
+                    LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
+                    llama_free(ctx);
+                    return nullptr;
+                }
             }
 
             for (size_t i = 0; i < ctx->backends.size(); i++) {
