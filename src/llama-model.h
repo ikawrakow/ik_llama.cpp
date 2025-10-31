@@ -314,7 +314,7 @@ struct llama_model {
 
     bool has_tensor_overrides() const {
         return tensor_overrides;
-    };
+    }
 
     void set_tensor_overrides(const llama_model_params& params);
 };
