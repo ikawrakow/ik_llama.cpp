@@ -3250,12 +3250,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 dst->ne[2] == 1 && cgraph->nodes[i+2]->ne[2] == 1) {
                 ggml_cuda_op_fused_rms_rms_norm(ctx, dst, cgraph->nodes[i+2]);
                 i += 2;
-                //auto rms1 = dst;
-                //auto rms2 = cgraph->nodes[i+2];
-                //printf("rms1(%s): %ld x %ld x %ld x %ld\n", rms1->name, rms1->ne[0], rms1->ne[1], rms1->ne[2], rms1->ne[3]);
-                //printf("rms2(%s): %ld x %ld x %ld x %ld\n", rms2->name, rms2->ne[0], rms2->ne[1], rms2->ne[2], rms2->ne[3]);
-                ////printf("rms(%s) -> %s(%s) -> %s(%s)\n", dst->name, ggml_op_name(cgraph->nodes[i+1]->op), cgraph->nodes[i+1]->name,
-                ////        ggml_op_name(cgraph->nodes[i+2]->op), cgraph->nodes[i+2]->name);
             } else {
                 ggml_cuda_op_fused_rms_norm(ctx, dst);
             }
