@@ -1050,7 +1050,7 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
     // output
     {
         model.output_norm = create_tensor(ctx_output,       tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {_n_embd});
-        model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_OUTPUT,      "weight"), {_n_embd, n_vocab});
+        model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_OUTPUT,      "weight"), {_n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {_n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
