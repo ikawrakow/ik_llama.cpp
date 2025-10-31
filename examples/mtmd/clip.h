@@ -93,6 +93,7 @@ bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct 
 int clip_is_minicpmv(const struct clip_ctx * ctx);
 bool clip_is_glm(const struct clip_ctx * ctx);
 bool clip_is_qwen2vl(const struct clip_ctx * ctx);
+bool clip_is_qwen3vl(const struct clip_ctx * ctx);
 bool clip_is_llava(const struct clip_ctx * ctx);
 bool clip_is_gemma3(const struct clip_ctx * ctx);
 

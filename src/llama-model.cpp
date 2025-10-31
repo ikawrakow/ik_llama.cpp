@@ -430,6 +430,45 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_QWEN3VL,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
+            { LLM_TENSOR_OUTPUT,          "output" },
+            { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_Q_NORM,     "blk.%d.attn_q_norm" },
+            { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_K_NORM,     "blk.%d.attn_k_norm" },
+            { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,        "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,        "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
+        },
+    },
+    {
+        LLM_ARCH_QWEN3VLMOE,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,         "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,        "output_norm" },
+            { LLM_TENSOR_OUTPUT,             "output" },
+            { LLM_TENSOR_ATTN_NORM,          "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,             "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_Q_NORM,        "blk.%d.attn_q_norm" },
+            { LLM_TENSOR_ATTN_K,             "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_K_NORM,        "blk.%d.attn_k_norm" },
+            { LLM_TENSOR_ATTN_V,             "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,           "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,           "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE_INP,       "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_EXPS,      "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,      "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,        "blk.%d.ffn_up_exps" },
+        },
+    },
+    {
         LLM_ARCH_PHI2,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -1345,21 +1384,39 @@ const char * llama_model_type_name(e_model type) {
         case MODEL_80M:           return "80M";
         case MODEL_109M:          return "109M";
         case MODEL_137M:          return "137M";
+        case MODEL_140M:          return "140M";
         case MODEL_160M:          return "160M";
+        case MODEL_190M:          return "190M";
         case MODEL_220M:          return "220M";
         case MODEL_250M:          return "250M";
+        case MODEL_256M:          return "256M";
         case MODEL_270M:          return "270M";
         case MODEL_335M:          return "335M";
+        case MODEL_350M:          return "350M";
+        case MODEL_360M:          return "360M";
         case MODEL_410M:          return "410M";
         case MODEL_450M:          return "450M";
+        case MODEL_475M:          return "475M";
+        case MODEL_558M:          return "558M";
+        case MODEL_700M:          return "700M";
         case MODEL_770M:          return "770M";
         case MODEL_780M:          return "780M";
+        case MODEL_950M:          return "950M";
+        case MODEL_0_3B:          return "0.3B";
         case MODEL_0_5B:          return "0.5B";
+        case MODEL_0_6B:          return "0.6B";
         case MODEL_1B:            return "1B";
+        case MODEL_1_2B:          return "1.2B";
         case MODEL_1_3B:          return "1.3B";
         case MODEL_1_4B:          return "1.4B";
+        case MODEL_1_5B:          return "1.5B";
+        case MODEL_1_6B:          return "1.6B";
+        case MODEL_1_7B:          return "1.7B";
+        case MODEL_1_8B:          return "1.8B";
         case MODEL_2B:            return "2B";
+        case MODEL_2_6B:          return "2.6B";
         case MODEL_2_8B:          return "2.8B";
+        case MODEL_2_9B:          return "2.9B";
         case MODEL_3B:            return "3B";
         case MODEL_4B:            return "4B";
         case MODEL_6B:            return "6B";
@@ -1374,17 +1431,19 @@ const char * llama_model_type_name(e_model type) {
         case MODEL_15B:           return "15B";
         case MODEL_16B:           return "16B";
         case MODEL_20B:           return "20B";
+        case MODEL_27B:           return "27B";
         case MODEL_30B:           return "30B";
         case MODEL_32B:           return "32B";
         case MODEL_34B:           return "34B";
         case MODEL_35B:           return "35B";
+        case MODEL_36B:           return "36B";
         case MODEL_40B:           return "40B";
         case MODEL_65B:           return "65B";
         case MODEL_70B:           return "70B";
-        case MODEL_106B_A12B:     return "106B.A12B";
+        case MODEL_120B:          return "120B";
         case MODEL_142B:          return "142B";
         case MODEL_236B:          return "236B";
-        case MODEL_355B_A32B:     return "355B.A32B";
+        case MODEL_290B:          return "290B";
         case MODEL_314B:          return "314B";
         case MODEL_405B:          return "405B";
         case MODEL_671B:          return "671B";
@@ -1392,20 +1451,30 @@ const char * llama_model_type_name(e_model type) {
         case MODEL_MEDIUM:        return "0.4B";
         case MODEL_LARGE:         return "0.8B";
         case MODEL_XL:            return "1.5B";
+        case MODEL_A1_7B:         return "A1.7B";
         case MODEL_A2_7B:         return "A2.7B";
         case MODEL_8x7B:          return "8x7B";
         case MODEL_8x22B:         return "8x22B";
         case MODEL_16x12B:        return "16x12B";
+        case MODEL_16x3_8B:       return "16x3.8B";
         case MODEL_10B_128x3_66B: return "10B+128x3.66B";
         case MODEL_57B_A14B:      return "57B.A14B";
-        case MODEL_27B:           return "27B";
         case MODEL_17B_16E:       return "17Bx16E (Scout)";
         case MODEL_17B_128E:      return "17Bx128E (Maverick)";
-        case MODEL_80B_A13B:      return "80B.A13B";
-        case MODEL_21B_A3B:       return "21B.A3B";
-        case MODEL_300B_A47B:     return "300B.A47B";
+        case MODEL_A13B:          return "A13B";
+        case MODEL_7B_A1B:        return "7B.A1B";
+        case MODEL_8B_A1B:        return "8B.A1B";
         case MODEL_16B_A1B:       return "16B.A1B";
+        case MODEL_21B_A3B:       return "21B.A3B";
+        case MODEL_30B_A3B:       return "30B.A3B";
+        case MODEL_80B_A13B:      return "80B.A13B";
         case MODEL_100B_A6B:      return "100B.A6B";
-        default:                  return "?B";
+        case MODEL_106B_A12B:     return "106B.A12B";
+        case MODEL_235B_A22B:     return "235B.A22B";
+        case MODEL_300B_A47B:     return "300B.A47B";
+        case MODEL_355B_A32B:     return "355B.A32B";
+        case MODEL_E2B:           return "E2B";
+        case MODEL_E4B:           return "E4B";
+        default:                     return "?B";
     }
 }
