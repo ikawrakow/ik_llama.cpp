@@ -1000,10 +1000,11 @@ bool create_tensors_helper::create_qwen2_moe_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
+    
     // for model loading, the weights only have the main embd
     // so we need to divide by the number of deepstack layers + 1
     // n_embd is const int so we declare a new variable
-    int64_t n_embd = hparams.n_embd / (hparams.n_deepstack_layers + 1);
+    n_embd = n_embd / (hparams.n_deepstack_layers + 1);
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
     // output
@@ -1039,10 +1040,11 @@ bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
+
     // for model loading, the weights only have the main embd
     // so we need to divide by the number of deepstack layers + 1
     // n_embd is const int so we declare a new variable
-    int64_t n_embd = hparams.n_embd / (hparams.n_deepstack_layers + 1);
+    n_embd = n_embd / (hparams.n_deepstack_layers + 1);
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
     // output
