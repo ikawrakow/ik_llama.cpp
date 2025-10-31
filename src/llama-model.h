@@ -305,10 +305,18 @@ struct llama_model {
     // keep track of loaded lora adapters
     std::set<llama_lora_adapter *> lora_adapters;
 
+    bool tensor_overrides;
+
     ~llama_model();
 
     // Not actually needed, but left in place for now
     size_t max_nodes() const { return 65536; }
+
+    bool has_tensor_overrides() const {
+        return tensor_overrides;
+    }
+
+    void set_tensor_overrides(const llama_model_params& params);
 };
 
 struct llama_lora_weight {
