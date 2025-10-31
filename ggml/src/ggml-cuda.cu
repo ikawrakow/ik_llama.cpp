@@ -3244,7 +3244,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_rms_norm(ctx, dst);
             break;
         case GGML_OP_FUSED_RMS_NORM:
-            ggml_cuda_op_fused_rms_norm(ctx, dst);
+            if (i + 2 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
+                cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
+                dst->ne[2] == 1 && cgraph->nodes[i+2]->ne[2] == 1) {
+                ggml_cuda_op_fused_rms_rms_norm(ctx, dst, cgraph->nodes[i+2]);
+                i += 2;
+            } else {
+                ggml_cuda_op_fused_rms_norm(ctx, dst);
+            }
             break;
         case GGML_OP_MUL_MAT:
             if (dst->src[0]->ne[3] != dst->src[1]->ne[3]) {

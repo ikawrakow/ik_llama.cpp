@@ -1279,10 +1279,12 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
         if (q_norm) {
             Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Qcur, "Qcur_normed", il);
+            ggml_build_forward_expand(gf, Qcur);
         }
         if (k_norm) {
             Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Kcur, "Kcur_normed", il);
+            ggml_build_forward_expand(gf, Kcur);
         }
 
         return {Qcur, Kcur, Vcur};
