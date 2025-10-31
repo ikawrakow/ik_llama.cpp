@@ -2746,11 +2746,17 @@ struct clip_model_loader {
         model.layers.resize(hparams.n_layer);
         for (int il = 0; il < hparams.n_layer; ++il) {
             auto & layer = model.layers[il];
-            layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"), false);
-            layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"), false);
-            layer.v_w    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "weight"), false);
+            // try combined qkv weight first; if absent, require separate k/q/v weights
+            layer.qkv_w = get_tensor(string_format(TN_ATTN_QKV, prefix, il, "weight"), false);
+            if (!layer.qkv_w) {
+                // combined not present => require separate tensors (no 'false' argument because tensors always required)
+                layer.k_w = get_tensor(string_format(TN_ATTN_K, prefix, il, "weight"));
+                layer.q_w = get_tensor(string_format(TN_ATTN_Q, prefix, il, "weight"));
+                layer.v_w = get_tensor(string_format(TN_ATTN_V, prefix, il, "weight"));
+            }
+
+            // other attention tensors (output / norms / ln) left as-is
             layer.o_w    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"));
-            layer.qkv_w  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
             layer.k_norm = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "weight"), false);
             layer.q_norm = get_tensor(string_format(TN_ATTN_Q_NORM, prefix, il, "weight"), false);
             layer.ln_1_w = get_tensor(string_format(TN_LN_1,        prefix, il, "weight"), false);
@@ -2758,11 +2764,17 @@ struct clip_model_loader {
             layer.ls_1_w = get_tensor(string_format(TN_LS_1,        prefix, il, "weight"), false); // no bias
             layer.ls_2_w = get_tensor(string_format(TN_LS_2,        prefix, il, "weight"), false); // no bias
 
-            layer.k_b    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "bias"), false);
-            layer.q_b    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "bias"), false);
-            layer.v_b    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "bias"), false);
+            // try combined qkv bias first; if absent, require separate k/q/v biases
+            layer.qkv_b = get_tensor(string_format(TN_ATTN_QKV, prefix, il, "bias"), false);
+            if (!layer.qkv_b) {
+                // combined not present => require separate biases ('false' because tensors not required)
+                layer.k_b = get_tensor(string_format(TN_ATTN_K, prefix, il, "bias"), false);
+                layer.q_b = get_tensor(string_format(TN_ATTN_Q, prefix, il, "bias"), false);
+                layer.v_b = get_tensor(string_format(TN_ATTN_V, prefix, il, "bias"), false);
+            }
+
+            // keep other optional biases as before
             layer.o_b    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"), false);
-            layer.qkv_b  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "bias"), false);
             layer.ln_1_b = get_tensor(string_format(TN_LN_1,        prefix, il, "bias"), false);
             layer.ln_2_b = get_tensor(string_format(TN_LN_2,        prefix, il, "bias"), false);
 
