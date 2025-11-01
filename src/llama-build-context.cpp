@@ -6088,6 +6088,9 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
     // output token IDs (for last layer cropping)
     struct ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+    auto rope_cache = ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow);
+
     // Only process up to last layer (skip final NextN layer)
     // Final layer tensors are loaded but not processed in forward pass
     const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
@@ -6108,12 +6111,14 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                     model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0.f, il);
 
             // apply RoPE
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
+            Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
+            //Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
+            //        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            //        ext_factor, attn_factor, beta_fast, beta_slow);
+            //Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
+            //        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            //        ext_factor, attn_factor, beta_fast, beta_slow);
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
