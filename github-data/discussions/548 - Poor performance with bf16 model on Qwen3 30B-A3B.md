@@ -1,13 +1,14 @@
-### 🗣️ [#548](https://github.com/ikawrakow/ik_llama.cpp/discussions/548) - Poor performance with bf16 model on Qwen3 30B-A3B
+## 🗣️ [Discussion #548](https://github.com/ikawrakow/ik_llama.cpp/discussions/548) - Poor performance with bf16 model on Qwen3 30B-A3B
 
 | **Author** | `Gaolingx` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-06-22 |
 | **Updated** | 2025-07-02 |
 
 ---
 
-#### Description
+## 📄 Description
 
 ## Introduction
 I tried to run model [Qwen3-30B-A3B-GGUF](https://hf-mirror.com/unsloth/Qwen3-30B-A3B-GGUF) with ik_llama.cpp. Because I have a nvidia GPU(RTX 4060Ti) with 8G VRAM on my PC, so I compiled ik_llama.cpp with the cuda backend, and run with `-ot exps=CPU` to offload experts(ffn_down_exps, ffn_up_exps, gate_exps) to CPU.
@@ -145,26 +146,31 @@ main: n_kv_max = 16384, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **ikawrakow** replied the **2025-06-22** at **15:16:00**:<br>
+👤 **ikawrakow** commented on **2025-06-22** at **15:16:00**
 
 Don't use `-rtr` for the `bf16` model.
 
-> 👤 **Gaolingx** replied the **2025-06-22** at **15:31:07**:<br>
+> 👤 **Gaolingx** replied on **2025-06-22** at **15:31:07**
+> 
 > wow, thanks a lot for your suggestion, the speed is normal now, I got ~65 PP speed and ~11.8 TG speed, but the cpu+cuda(`-ot exps=CPU`) speed doesn't seem to be much faster than the pure cpu, although it is a moe model. maybe I should do a more detailed benchmark.
+
+> 👤 **ikawrakow** replied on **2025-06-22** at **15:35:13**
 > 
-> 👤 **ikawrakow** replied the **2025-06-22** at **15:35:13**:<br>
 > You need larger u-batch size for better PP performance. The experts are in RAM and need to be offloaded to the GPU, which takes a while. If you run `llama-sweep-bench` with `-ub 2048` you will see much better PP performance.
+
+> 👤 **Gaolingx** replied on **2025-07-02** at **10:54:41**
 > 
-> 👤 **Gaolingx** replied the **2025-07-02** at **10:54:41**:<br>
 > Hi, we all know that runtime repack(`-rtr`) is good to use with hybrid GPU + CPU, according to my research in the last few days, if we don't add the '-rtr' parameter, when we input long prompts, the cuda device needs to spend a long time on copying (and you can see in the task manager that the usage of 'Copy1' is quite high, but the usage of `CPU` and `CUDA` is insufficient), and the processing speed of prompt words is also significantly lower than the performance with the '-rtr' parameter, or even worse than the cpu only, what is the reason for this?
 > ![09f30b1c-8174-43f0-8b7e-113ec8bbe4dd](https://github.com/user-attachments/assets/ac09c33d-f102-4e89-8c9f-b541d562a902)
+
+> 👤 **ikawrakow** replied on **2025-07-02** at **12:14:25**
 > 
-> 👤 **ikawrakow** replied the **2025-07-02** at **12:14:25**:<br>
 > I'm not sure I understand what could be the issue from the description. Can you tell us what is the model you are using and post your command line?
+
+> 👤 **Gaolingx** replied on **2025-07-02** at **14:23:58**
 > 
-> 👤 **Gaolingx** replied the **2025-07-02** at **14:23:58**:<br>
 > > I'm not sure I understand what could be the issue from the description. Can you tell us what is the model you are using and post your command line?
 > 
 > Ok. I ran llama-sweep-bench again and tested the 16k context length data of three sets of qwen3 30ba3b models. They are that the q8_0 model with `-rtr` parameter, the q8_0 model without `-rtr` parameter, and the bf16 model without `-rtr` parameter. To control the variables, in the test group without the -rtr parameter, I added the `--no-mmap` parameter. The rest of the startup parameters remained the same. The  llama-sweep-bench startup parameters and test results are as follows.
@@ -305,6 +311,7 @@ Don't use `-rtr` for the `bf16` model.
 > |   512 |    128 |  15872 |   17.971 |    28.49 |    9.336 |    13.71 |
 > 
 > </details>
+
+> 👤 **ikawrakow** replied on **2025-07-02** at **14:40:43**
 > 
-> 👤 **ikawrakow** replied the **2025-07-02** at **14:40:43**:<br>
 > When you use `-rtr`, the tensors not offloaded to the GPU get repacked to a row-interleaved version. `Q8_0` becomes `Q8_0_R8`, and `BF16` becomes `BF16_R16`. `Q8_0_R8` and `BF16_R16` are not supported by the CUDA backend, so matrix multiplications with these tensors are done on the CPU. When you do not use `-rtr`, there is no repacking, CUDA supports `Q8_0` and `BF16`, so the tensors stored in RAM get copied to the GPU to do matrix multiplications. If the model is large, and your PCI-E is not very fast, the copying to VRAM takes a long time, so your PP performance becomes low. You can improve the performance by using larger u-batches because more work is done per copy to the GPU (tensors are copied once, but multiply 2048 tokens with `-ub 2048`. To accomplish the same with the u-batch of 512 you are using, tensors need to get copied 4 times). If you don't want to repack, and don't want to use larger u-batches, you can prevent copying to the GPU using `-op 26,0,27,0,29,0`. In that case `bf16` performance will be slightly lower than with `-rtr`, but `Q8_0` performance will be somewhere in the middle between `-rtr` and no `-rtr`.

@@ -1,14 +1,17 @@
-### 🐛 [#400](https://github.com/ikawrakow/ik_llama.cpp/pull/400) - Fix CUDA DeepSeek FlashMLA-3 with quantized KV cache
+## 🔀 [Pull Request #400](https://github.com/ikawrakow/ik_llama.cpp/pull/400) - Fix CUDA DeepSeek FlashMLA-3 with quantized KV cache
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_fix_quantized_flash_mla3` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-09 |
 | **Updated** | 2025-05-09 |
+| **Merged** | 2025-05-09 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The implementation was assuming that the K and V cache are contiguous, and was using this assumption to dequantize to `fp16`. This is certainly wrong for the V cache, which is just a view of the K cache with rows of 512 instead of 576 elements.
 
@@ -800,15 +803,15 @@ I.e., only very slightly slower than `fp16` KV cache. The KV cache is quite smal
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **JohannesGaessler** commented the **2025-05-09** at **07:23:38**:<br>
+👤 **JohannesGaessler** commented on **2025-05-09** at **07:23:38**
 
 Thank you for notifying me. I am aware of the defect, on the mainline PR it is currently not manifesting as a bug because the K and V cache are not yet deduplicated and are thus both contiguous in memory. I can't comment on the specific code in this PR since I won't look at it unless you explicitly tell me I'm allowed to do so even without the conflict between you and Georgi first being resolved. The way I would have gone about it would have been not to use the V tensor at all, to dequantize K, and to then calculate the pointer, dimension, and strides for a pseudo V tensor from the K tensor.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-09** at **07:25:52**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **07:25:52**
 
 Forgot to add `-rtr` in the above performance test. Here it is with `-rtr` and `q8_0` KV cache
 
@@ -825,7 +828,7 @@ Forgot to add `-rtr` in the above performance test. Here it is with `-rtr` and `
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-09** at **07:31:04**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **07:31:04**
 
 > on the mainline PR it is currently not manifesting as a bug because the K and V cache are not yet deduplicated and are thus both contiguous in memory.
 
@@ -835,6 +838,6 @@ In any case, the PR in `ik_llama.cpp` is mostly a copy of your mainline PR, so y
 
 ---
 
-👤 **JohannesGaessler** commented the **2025-05-09** at **07:49:51**:<br>
+👤 **JohannesGaessler** commented on **2025-05-09** at **07:49:51**
 
 My concern specifically is whether you would consider any of my work on mainline after looking at your code to be including a "substantial portion" of your work and could thus only be included in conjunction with the copyright notices in ik_llama.cpp. Much like you I am not a lawyer but if you tell me that you will not consider me looking at your work to be a license violation (or that in some specific case you waive the requirement of copyright notices) then there is no need for lawyers in the first place.

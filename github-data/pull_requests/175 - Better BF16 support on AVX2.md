@@ -1,14 +1,17 @@
-### 🔀 [#175](https://github.com/ikawrakow/ik_llama.cpp/pull/175) - Better BF16 support on AVX2
+## 🔀 [Pull Request #175](https://github.com/ikawrakow/ik_llama.cpp/pull/175) - Better BF16 support on AVX2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/avx2_bf16` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-22 |
 | **Updated** | 2025-01-22 |
+| **Merged** | 2025-01-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 On the main branch `bf16` models are computed via `ggml`, which results in a horrible performance. This PR adds much better `GEMM` an `GEMV` for `bf16 x fp32`. The table shows a performance comparison between the main branch and this PR for LLaMA-3.1-8B-Instruct on a Ryzen-5975WX CPU
 

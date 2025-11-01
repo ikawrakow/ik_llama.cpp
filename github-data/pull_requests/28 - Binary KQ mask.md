@@ -1,15 +1,17 @@
-### 🔀 [#28](https://github.com/ikawrakow/ik_llama.cpp/pull/28) - Binary KQ mask
+## 🔀 [Pull Request #28](https://github.com/ikawrakow/ik_llama.cpp/pull/28) - Binary KQ mask
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ✅ **Open** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `ik/kq_mask` |
+| **Target Branch** | `main` |
 | **Created** | 2024-08-28 |
 
 ---
 
-#### Description
+## 📄 Description
 
-This PR is another attempt to improve performance for large contexts, see #25 
+This PR is another attempt to improve performance for large contexts, see [#25](https://github.com/ikawrakow/ik_llama.cpp/issues/25) 
 
 Basically, when we want to process a very long context, the KQ mask, which is stored as `f32` (or `f16`, if using flash attention), becomes quite significant in size. If running on the GPU, the cost for copying the KQ mask to the GPU (the mask is created on the host CPU) becomes non-negligible. If running on a CPU that has limited memory bandwidth (basically all `x86` or `x86_64`), the KQ mask may not fit in the cache, or if it does fit it reduces the cache available for other data by a significant amount, which results in a measurable impact on the performance of the `SOFT_MAX` (or the new fused `SOFT_CAP_MAX`) operation. Hence, it will be desirable to reduce the size of the KQ mask.
 
