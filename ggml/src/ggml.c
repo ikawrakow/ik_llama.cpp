@@ -8762,7 +8762,6 @@ static struct ggml_tensor * ggml_rope_impl(
 
     GGML_ASSERT(ggml_is_vector(b));
     GGML_ASSERT(b->type == GGML_TYPE_I32);
-    printf("%s: b->ne[0] = %ld\n", __func__, b->ne[0]);
 
     bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;
     if (mrope_used) {
