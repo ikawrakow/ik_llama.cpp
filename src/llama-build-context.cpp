@@ -3470,7 +3470,7 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
 
     auto rope_cache = ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
-    ggml_set_input(rope_cache);
+    //ggml_set_input(rope_cache);
 
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
