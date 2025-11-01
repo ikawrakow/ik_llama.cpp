@@ -153,6 +153,37 @@ static __global__ void rope_neox_fast(const float * src0, const float * src1, fl
     dst[idst + n_dims/2] = x0*sin_theta + x1*cos_theta;
 }
 
+static __global__ void rope_norm_fast(const float * src0, const float * src1, float * dst, int ne0, int ne1, int ne2,
+        int s01, int s02, int n_dims) {
+    int i = 2*(blockDim.x*blockIdx.x + threadIdx.x);
+
+    if (i >= ne0*ne1*ne2) {
+        return;
+    }
+
+    int i2 = i / (ne0*ne1); i -= i2*ne0*ne1;
+    int i1 = i / ne0;
+    int i0 = i - i1*ne0;
+
+    const int idst = i2*ne0*ne1 + i1*ne0 + i0;
+    const int ix   = i2*s02 + i1*s01 + i0;
+
+    if (i0 >= n_dims) {
+        dst[idst + 0] = src0[ix + 0];
+        dst[idst + 1] = src0[ix + 1];
+        return;
+    }
+
+    const float x0 = src0[ix + 0];
+    const float x1 = src0[ix + 1];
+
+    const float cos_theta = src1[i2*ne0 + i0 + 0];
+    const float sin_theta = src1[i2*ne0 + i0 + 1];
+
+    dst[idst + 0] = x0*cos_theta - x1*sin_theta;
+    dst[idst + 1] = x0*sin_theta + x1*cos_theta;
+}
+
 template<bool forward, bool has_ff, typename T>
 static __global__ void rope_multi(
         const T * x, T * dst, const int ne0, const int ne1, const int ne2, const int s1, const int s2,
@@ -319,8 +350,7 @@ static void rope_norm_fast_cuda(const float * src0, const float * src1, float * 
     const dim3 block_dims(CUDA_ROPE_BLOCK_SIZE, 1, 1);
     const int n_blocks = (ne00*ne01*ne02 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(n_blocks, 1, 1);
-    // TODO
-    rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne02, s01, s02, n_dims);
+    rope_norm_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne02, s01, s02, n_dims);
 }
 
 static void rope_multi_fast_cuda(const float * src0, const float * src1, float * dst, int ne00, int ne01, int ne02, int s01, int s02,
@@ -655,7 +685,7 @@ void ggml_cuda_op_rope_fast(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
         rope_vision_fast_cuda(
                 (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne00, ne01, s01, s02, n_dims, nr, stream);
     } else {
-        printf("Using norm\n");
+        //printf("Using norm\n");
         rope_norm_fast_cuda(
                 (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne00, ne01, s01, s02, n_dims, nr, stream);
     }
