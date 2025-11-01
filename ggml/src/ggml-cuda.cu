@@ -3062,6 +3062,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
 
     auto next = i < cgraph->n_nodes - 1 ? cgraph->nodes[i+1] : nullptr;
 
+    //printf("%4d %s(%s)\n", i, ggml_op_name(dst->op), dst->name);
     switch (dst->op) {
         case GGML_OP_ARGMAX:
             ggml_cuda_argmax(ctx, dst);
@@ -3317,6 +3318,11 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_ROPE_BACK:
             ggml_cuda_op_rope_back(ctx, dst);
+        case GGML_OP_ROPE_FAST:
+            ggml_cuda_op_rope_fast(ctx, dst);
+            break;
+        case GGML_OP_ROPE_CACHE:
+            ggml_cuda_op_rope_cache(ctx, dst);
             break;
         case GGML_OP_IM2COL:
             ggml_cuda_op_im2col(ctx, dst);
@@ -4377,6 +4383,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_SOFT_CAP_MAX:
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
+        case GGML_OP_ROPE_FAST:
+        case GGML_OP_ROPE_CACHE:
             return true;
         //case GGML_OP_ROPE:
         //    return ggml_is_contiguous(op->src[0]);
