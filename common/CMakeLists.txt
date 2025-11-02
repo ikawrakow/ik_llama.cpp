@@ -57,8 +57,6 @@ add_library(${TARGET} STATIC
     chat-parser.cpp
     chat-parser.h
     common.cpp
-    chat.h
-    chat.cpp
     sampling.h
     sampling.cpp
     console.h

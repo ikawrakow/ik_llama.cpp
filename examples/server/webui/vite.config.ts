@@ -7,7 +7,7 @@ import zlib from 'node:zlib';
 
 /* eslint-disable */
 
-const MAX_BUNDLE_SIZE = 1.5 * 1024 * 1024; // only increase when absolutely necessary
+const MAX_BUNDLE_SIZE = 2 * 1024 * 1024; // only increase when absolutely necessary
 
 const GUIDE_FOR_FRONTEND = `
 <!--

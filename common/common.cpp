@@ -270,6 +270,14 @@ static std::string parse_device_list(const std::string& value) {
     return value;
 }
 
+
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string& url, const common_remote_params&) {
+    if (!url.empty()) {
+        throw std::runtime_error("error: built without CURL, cannot download file from the internet");
+    }
+    return {};
+}
+
 //
 // CLI argument parsing
 //
@@ -1725,6 +1733,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--junk") {
         CHECK_ARG
         params.n_junk = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "--no-context-shift") {
+        CHECK_ARG
+        params.ctx_shift = false;
         return true;
     }
     if (arg == "--pos") {
@@ -3311,6 +3324,29 @@ std::vector<llama_token> llama_tokenize(
     return result;
 }
 
+std::vector<llama_token> llama_tokenize(
+    const struct llama_vocab* vocab,
+    const std::string& text,
+    bool   add_special,
+    bool   parse_special) {
+    // upper limit for the number of tokens
+    int n_tokens = text.length() + 2 * add_special;
+    std::vector<llama_token> result(n_tokens);
+    n_tokens = llama_vocab_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+    if (n_tokens == std::numeric_limits<int32_t>::min()) {
+        throw std::runtime_error("Tokenization failed: input text too large, tokenization result exceeds int32_t limit");
+    }
+    if (n_tokens < 0) {
+        result.resize(-n_tokens);
+        int check = llama_vocab_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+        GGML_ASSERT(check == -n_tokens);
+    }
+    else {
+        result.resize(n_tokens);
+    }
+    return result;
+}
+
 std::string llama_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
     std::string piece;
     piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
@@ -3343,7 +3379,7 @@ std::string llama_token_to_piece(const struct llama_model* model, llama_token to
     return piece;
 }
 
-std::string llama_detokenize(llama_context * ctx, const std::vector<llama_token> & tokens, bool special) {
+std::string llama_detokenize(const llama_context * ctx, const std::vector<llama_token> & tokens, bool special) {
     std::string text;
     text.resize(std::max(text.capacity(), tokens.size()));
     int32_t n_chars = llama_detokenize(llama_get_model(ctx), tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);
@@ -3358,6 +3394,7 @@ std::string llama_detokenize(llama_context * ctx, const std::vector<llama_token>
     // NOTE: the original tokenizer decodes bytes after collecting the pieces.
     return text;
 }
+
 
 bool llama_should_add_bos_token(const llama_model * model) {
     const int add_bos = llama_add_bos_token(model);

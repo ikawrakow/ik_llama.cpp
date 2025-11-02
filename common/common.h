@@ -53,6 +53,8 @@ struct llama_lora_adapter_container : llama_lora_adapter_info {
     struct llama_lora_adapter * adapter;
 };
 
+using llama_tokens = std::vector<llama_token>;
+
 // build info
 extern int LLAMA_BUILD_NUMBER;
 extern char const * LLAMA_COMMIT;
@@ -237,7 +239,7 @@ struct gpt_params {
     bool conversation      = false; // conversation mode (does not print special tokens and suffix/prefix)
     bool prompt_cache_all  = false; // save user input and generations to prompt cache
     bool prompt_cache_ro   = false; // open the prompt cache read-only and do not update it
-
+    bool ctx_shift         = true;
     bool escape            = true;  // escape "\n", "\r", "\t", "\'", "\"", and "\\"
     bool multiline_input   = false; // reverse the usage of `\`
     bool simple_io         = false; // improves compatibility with subprocesses and limited consoles
@@ -371,6 +373,9 @@ struct gpt_params {
     bool sweep_bench_output_jsonl = false;
 };
 
+
+
+void gpt_params_handle_hf_token(gpt_params & params);
 void gpt_params_parse_from_env(gpt_params & params);
 void gpt_params_handle_model_default(gpt_params & params);
 
@@ -380,6 +385,15 @@ bool gpt_params_find_arg   (int argc, char ** argv, const std::string & arg, gpt
 void gpt_params_print_usage(int argc, char ** argv, const gpt_params & params);
 
 std::string gpt_params_get_system_info(const gpt_params & params);
+
+
+struct common_remote_params {
+    std::vector<std::string> headers;
+    long timeout = 0; // CURLOPT_TIMEOUT, in seconds ; 0 means no timeout
+    long max_size = 0; // max size of the response ; unlimited if 0 ; max is 2GB
+};
+// get remote file content, returns <http_code, raw_response_body>
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string& url, const common_remote_params& params);
 
 //
 // String utils
@@ -497,6 +511,12 @@ std::vector<llama_token> llama_tokenize(
                         bool   add_special,
                         bool   parse_special = false);
 
+std::vector<llama_token> llama_tokenize(
+    const struct llama_vocab* vocab,
+    const std::string& text,
+    bool   add_special,
+    bool   parse_special = false);
+
 // tokenizes a token into a piece, optionally renders special/control tokens
 // should work similar to Python's `tokenizer.id_to_piece`
 std::string llama_token_to_piece(
@@ -513,70 +533,16 @@ std::string llama_token_to_piece(
 // should work similar to Python's `tokenizer.decode`
 // optionally renders special/control tokens
 std::string llama_detokenize(
-                         llama_context * ctx,
+        const llama_context * ctx,
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
+
 
 // Uses the value from the model metadata if possible, otherwise
 // defaults to true when model type is SPM, otherwise false.
 bool llama_should_add_bos_token(const llama_model * model);
 
-//
-// Chat template utils
-//
-//struct common_tool_call {
-//    std::string name;
-//    std::string arguments;
-//    std::string id;
-//};
-//
-//// same with llama_chat_message, but uses std::string
-//struct common_chat_msg {
-//    std::string role;
-//    std::string content;
-//    std::vector<common_tool_call> tool_calls;
-//    std::string reasoning_content = "";
-//};
 
-//// Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
-//bool llama_chat_verify_template(const struct llama_model* , const std::string& tmpl, bool use_jinja);
-//
-//namespace minja {
-//    class chat_template;
-//}
-//
-//typedef minja::chat_template common_chat_template;
-//
-//struct common_chat_templates {
-//    bool has_explicit_template; // Model had builtin template or template overridde was specified.
-//    std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
-//    std::unique_ptr<common_chat_template> template_tool_use;
-//};
-//
-//
-//// CPP wrapper for llama_chat_apply_template
-//// If the built-in template is not supported, we default to chatml
-//// If the custom "tmpl" is not supported, we throw an error
-//std::string llama_chat_apply_template(
-//    const struct llama_model* model,
-//    const common_chat_template& tmpl,
-//    const std::vector< common_chat_msg>& chat,
-//    bool add_ass,
-//    bool use_jinja);
-//
-//// Format single message, while taking into account the position of that message in chat history
-//std::string  llama_chat_format_single(const struct llama_model* model,
-//    const common_chat_template& tmpl,
-//    const std::vector< common_chat_msg>& past_msg,
-//    const  common_chat_msg& new_msg,
-//    bool add_ass,
-//    bool use_jinja);
-//
-//// Returns an example of formatted chat
-//std::string  llama_chat_format_example(const struct llama_model* model,
-//    const common_chat_template& tmpl, bool use_jinja);
-//
-//common_chat_templates  llama_chat_templates_from_model(const struct llama_model* model, const std::string& chat_template_override);
 
 
 //
