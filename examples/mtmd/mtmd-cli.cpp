@@ -186,6 +186,7 @@ struct mtmd_cli_context {
         mparams.print_timings = true;
         mparams.n_threads = params.n_threads;
         mparams.verbosity = params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
+        mparams.flash_attn_type = params.flash_attn_type;
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);

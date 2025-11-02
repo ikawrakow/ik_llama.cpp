@@ -1533,6 +1533,7 @@ struct server_context {
             mparams.use_gpu = params.mmproj_use_gpu;
             mparams.print_timings = false;
             mparams.n_threads = params.n_threads;
+            mparams.flash_attn_type = params.flash_attn? LLAMA_FLASH_ATTN_TYPE_ENABLED: LLAMA_FLASH_ATTN_TYPE_DISABLED;
             mparams.verbosity = params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
             mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
             if (mctx == nullptr) {
