@@ -3372,6 +3372,9 @@ ggml_cgraph * llm_build_context::build_qwen3() {
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
+    auto rope_cache = ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow);
+
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
@@ -3388,15 +3391,20 @@ ggml_cgraph * llm_build_context::build_qwen3() {
                     model.layers[il].wv, nullptr,
                     model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0, il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
+            Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
             cb(Qcur, "Qcur", il);
-
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
             cb(Kcur, "Kcur", il);
+
+            //Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
+            //        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            //        ext_factor, attn_factor, beta_fast, beta_slow);
+            //cb(Qcur, "Qcur", il);
+
+            //Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
+            //        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            //        ext_factor, attn_factor, beta_fast, beta_slow);
+            //cb(Kcur, "Kcur", il);
 
             cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                     model.layers[il].wo, model.layers[il].bo,
