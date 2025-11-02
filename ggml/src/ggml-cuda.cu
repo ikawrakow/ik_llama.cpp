@@ -3322,22 +3322,19 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             if (ENABLE_FUSION && i + 3 < cgraph->n_nodes &&
                (cgraph->nodes[i+1]->op == GGML_OP_RESHAPE || cgraph->nodes[i+1]->op == GGML_OP_VIEW) &&
                (cgraph->nodes[i+2]->op == GGML_OP_RESHAPE || cgraph->nodes[i+2]->op == GGML_OP_VIEW) &&
-                cgraph->nodes[i+3]->op == GGML_OP_ROPE_FAST) {
-                //printf("Fusing %s, %s\n", dst->name, cgraph->nodes[i+3]->name);
-                ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+3]);
-                i += 2;
+                cgraph->nodes[i+3]->op == GGML_OP_ROPE_FAST &&
+                ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+3])) {
+                i += 3;
             }
             else if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
                (cgraph->nodes[i+1]->op == GGML_OP_RESHAPE || cgraph->nodes[i+1]->op == GGML_OP_VIEW) &&
-                cgraph->nodes[i+2]->op == GGML_OP_ROPE_FAST) {
-                //printf("Fusing %s, %s\n", dst->name, cgraph->nodes[i+2]->name);
-                ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+2]);
+                cgraph->nodes[i+2]->op == GGML_OP_ROPE_FAST &&
+                ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+2])) {
                 i += 2;
             }
             else if (ENABLE_FUSION && i + 1 < cgraph->n_nodes &&
-                cgraph->nodes[i+1]->op == GGML_OP_ROPE_FAST) {
-                //printf("Fusing %s, %s\n", dst->name, cgraph->nodes[i+1]->name);
-                ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+1]);
+                cgraph->nodes[i+1]->op == GGML_OP_ROPE_FAST   &&
+                ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+1])) {
                 i += 1;
             }
             else {
