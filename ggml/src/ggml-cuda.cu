@@ -3062,6 +3062,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
 
     auto next = i < cgraph->n_nodes - 1 ? cgraph->nodes[i+1] : nullptr;
 
+    //printf("%4d %s(%s)\n", i, ggml_op_name(dst->op), dst->name);
     switch (dst->op) {
         case GGML_OP_ARGMAX:
             ggml_cuda_argmax(ctx, dst);
@@ -3096,7 +3097,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_are_same_shape(dst, cgraph->nodes[i+1]->src[1]) &&
                 cgraph->nodes[i+1] == cgraph->nodes[i+2]->src[0] &&
                 ops_are_same_device(cgraph, i, i+2)) {
-                //printf("Fusing add->add->fused_rms of %s, %s, %s\n", dst->name, cgraph->nodes[i+1]->name, cgraph->nodes[i+2]->name);
                 ggml_cuda_op_fused_add_add_rms_norm(ctx, dst, cgraph->nodes[i+1], cgraph->nodes[i+2]);
                 i += 2;
             }
@@ -3244,7 +3244,27 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_rms_norm(ctx, dst);
             break;
         case GGML_OP_FUSED_RMS_NORM:
-            if (i + 2 < cgraph->n_nodes &&
+            //if (i + 6 < cgraph->n_nodes) {
+            //    printf("=== Fused rms_norm(%s)\n", dst->name);
+            //    for (int j = 1; j <= 6; ++j) printf("    %s(%s)\n", ggml_op_name(cgraph->nodes[i+j]->op), cgraph->nodes[i+j]->name);
+            //}
+            if (ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
+                cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
+                cgraph->nodes[i+3]->op == GGML_OP_ROPE_FAST &&
+                cgraph->nodes[i+4]->op == GGML_OP_ROPE_FAST &&
+                ggml_cuda_op_fused_rms_rope_fast(ctx, cgraph->nodes[i+3], cgraph->nodes[i+4])) {
+                i += 4;
+            }
+            else if (ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_ROPE_FAST &&
+                cgraph->nodes[i+2]->op == GGML_OP_RESHAPE &&
+                cgraph->nodes[i+3]->op == GGML_OP_FUSED_RMS_NORM &&
+                cgraph->nodes[i+4]->op == GGML_OP_ROPE_FAST &&
+                ggml_cuda_op_fused_rms_rope_fast(ctx, cgraph->nodes[i+1], cgraph->nodes[i+4])) {
+                i += 4;
+            }
+            else if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
                 dst->ne[2] == 1 && cgraph->nodes[i+2]->ne[2] == 1) {
@@ -3317,6 +3337,32 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_ROPE_BACK:
             ggml_cuda_op_rope_back(ctx, dst);
+            break;
+        case GGML_OP_ROPE_FAST:
+            if (ENABLE_FUSION && i + 3 < cgraph->n_nodes &&
+               (cgraph->nodes[i+1]->op == GGML_OP_RESHAPE || cgraph->nodes[i+1]->op == GGML_OP_VIEW) &&
+               (cgraph->nodes[i+2]->op == GGML_OP_RESHAPE || cgraph->nodes[i+2]->op == GGML_OP_VIEW) &&
+                cgraph->nodes[i+3]->op == GGML_OP_ROPE_FAST &&
+                ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+3])) {
+                i += 3;
+            }
+            else if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
+               (cgraph->nodes[i+1]->op == GGML_OP_RESHAPE || cgraph->nodes[i+1]->op == GGML_OP_VIEW) &&
+                cgraph->nodes[i+2]->op == GGML_OP_ROPE_FAST &&
+                ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+2])) {
+                i += 2;
+            }
+            else if (ENABLE_FUSION && i + 1 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_ROPE_FAST   &&
+                ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+1])) {
+                i += 1;
+            }
+            else {
+                ggml_cuda_op_rope_fast(ctx, dst);
+            }
+            break;
+        case GGML_OP_ROPE_CACHE:
+            ggml_cuda_op_rope_cache(ctx, dst);
             break;
         case GGML_OP_IM2COL:
             ggml_cuda_op_im2col(ctx, dst);
@@ -4377,6 +4423,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_SOFT_CAP_MAX:
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
+        case GGML_OP_ROPE_FAST:
+        case GGML_OP_ROPE_CACHE:
             return true;
         //case GGML_OP_ROPE:
         //    return ggml_is_contiguous(op->src[0]);
