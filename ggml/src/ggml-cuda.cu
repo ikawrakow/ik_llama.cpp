@@ -3331,6 +3331,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_ROPE_BACK:
             ggml_cuda_op_rope_back(ctx, dst);
+            break;
         case GGML_OP_ROPE_FAST:
             if (ENABLE_FUSION && i + 3 < cgraph->n_nodes &&
                (cgraph->nodes[i+1]->op == GGML_OP_RESHAPE || cgraph->nodes[i+1]->op == GGML_OP_VIEW) &&
