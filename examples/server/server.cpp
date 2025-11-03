@@ -1535,6 +1535,8 @@ struct server_context {
             mparams.n_threads = params.n_threads;
             mparams.flash_attn_type = params.flash_attn? LLAMA_FLASH_ATTN_TYPE_ENABLED: LLAMA_FLASH_ATTN_TYPE_DISABLED;
             mparams.verbosity = params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
+            mparams.image_min_tokens = params.image_min_tokens;
+            mparams.image_max_tokens = params.image_max_tokens;
             mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
             if (mctx == nullptr) {
                 LOG_ERROR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());

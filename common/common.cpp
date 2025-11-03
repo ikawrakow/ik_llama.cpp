@@ -1047,9 +1047,19 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.mmproj_use_gpu = false;
         return true;
     }
-    if (arg == "--image") {
+    if (arg == "--image" || arg == "--audio") {
         CHECK_ARG
         params.image.emplace_back(argv[i]);
+        return true;
+    }
+    if (arg == "--image-min-tokens") {
+        CHECK_ARG
+            params.image_min_tokens = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "--image-max-tokens") {
+        CHECK_ARG
+            params.image_max_tokens = std::stoi(argv[i]);
         return true;
     }
     if (arg == "-i" || arg == "--interactive") {
