@@ -3097,7 +3097,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_are_same_shape(dst, cgraph->nodes[i+1]->src[1]) &&
                 cgraph->nodes[i+1] == cgraph->nodes[i+2]->src[0] &&
                 ops_are_same_device(cgraph, i, i+2)) {
-                printf("Fusing add->add->fused_rms of %s, %s, %s\n", dst->name, cgraph->nodes[i+1]->name, cgraph->nodes[i+2]->name);
                 ggml_cuda_op_fused_add_add_rms_norm(ctx, dst, cgraph->nodes[i+1], cgraph->nodes[i+2]);
                 i += 2;
             }
