@@ -3249,7 +3249,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             //    for (int j = 1; j <= 6; ++j) printf("    %s(%s)\n", ggml_op_name(cgraph->nodes[i+j]->op), cgraph->nodes[i+j]->name);
             //}
             // Disabled because currently there is something wrong in the fused kernel implementation
-            if (false && ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
+            if (ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
                 cgraph->nodes[i+3]->op == GGML_OP_ROPE_FAST &&
