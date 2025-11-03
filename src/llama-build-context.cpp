@@ -3373,7 +3373,7 @@ ggml_cgraph * llm_build_context::build_qwen3() {
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
-    auto rope_cache = cparams.rope_cache ?
+    auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
@@ -3475,7 +3475,7 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
-    auto rope_cache = cparams.rope_cache ?
+    auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
@@ -6091,7 +6091,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
     // output token IDs (for last layer cropping)
     struct ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    auto rope_cache = cparams.rope_cache ?
+    auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
@@ -7804,7 +7804,7 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
 
     const int sliding_window_pattern = 2;
 
-    auto rope_cache = cparams.rope_cache ?
+    auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
@@ -7926,7 +7926,7 @@ ggml_cgraph * llm_build_context::build_bailingmoe2() {
 
     const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
 
-    auto rope_cache = cparams.rope_cache ?
+    auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
