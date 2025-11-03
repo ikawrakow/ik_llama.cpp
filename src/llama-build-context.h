@@ -151,6 +151,7 @@ struct llm_build_context {
 
     std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_mul_mat_qkv(ggml_cgraph * gf, ggml_tensor * cur,
             ggml_tensor * wqkv, ggml_tensor * bqkv,
+            ggml_tensor * wqk, ggml_tensor * bqk,
             ggml_tensor * wq, ggml_tensor * bq,
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
