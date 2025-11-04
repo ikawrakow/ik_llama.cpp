@@ -1303,12 +1303,18 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
             qk = ggml_add(ctx0, qk, bqk);
             cb(qk, "qkv_b", il);
         }
+        auto Vcur = llm_build_lora_mm(lctx, ctx0, wv, cur);
+        cb(Vcur, "Vcur", il);
+        if (bv) {
+            Vcur = ggml_add(ctx0, Vcur, bv);
+            cb(Vcur, "Vcur", il);
+        }
+        ggml_build_forward_expand(gf, qk);
+        ggml_build_forward_expand(gf, Vcur);
         auto Qcur = ggml_view_3d(ctx0, qk, n_embd_head, n_head,    n_tokens, n_embd_head*sizeof(float), qk->nb[1], 0*sizeof(float)*(n_embd));
         auto Kcur = ggml_view_3d(ctx0, qk, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), qk->nb[1], 1*sizeof(float)*Qcur->ne[0]*Qcur->ne[1]);
-        auto Vcur = llm_build_lora_mm(lctx, ctx0, wv, cur);
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
-        cb(Vcur, "Vcur", il);
         if (q_norm) {
             Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Qcur, "Qcur_normed", il);
