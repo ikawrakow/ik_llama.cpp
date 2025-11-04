@@ -224,7 +224,7 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
         [[maybe_unused]] const int64_t n_layer       = hparams.n_layer; \
         [[maybe_unused]] const int64_t n_head        = hparams.n_head(); \
         [[maybe_unused]] const int64_t n_head_kv     = hparams.n_head_kv(); \
-        [[maybe_unused]] const int64_t n_embd        = hparams.n_embd; \
+        [[maybe_unused]] const int64_t n_embd        = hparams.n_embd / (hparams.n_deepstack_layers + 1); /* For Qwen3-VL we need to divide by the number of deepstack layers + 1, for other models n_deepstack_layers value is 0 by default */ \
         [[maybe_unused]] const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa(); \
         [[maybe_unused]] const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa(); \
         [[maybe_unused]] const int64_t n_embd_head_k = hparams.n_embd_head_k; \
@@ -972,8 +972,13 @@ bool create_tensors_helper::create_qwen2_moe_tensors(const LLM_TN & tn) {
 
         layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
 
-        GGML_ASSERT(n_expert      > 0);
-        GGML_ASSERT(n_expert_used > 0);
+        if (n_expert == 0) {
+            throw std::runtime_error("n_expert must be > 0 for QWEN2MOE");
+        }
+        if (n_expert_used == 0) {
+            throw std::runtime_error("n_expert_used must be > 0 for QWEN2MOE");
+        }
+
 
         // MoE branch
         const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
@@ -1030,7 +1035,17 @@ bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    create_embd_output(tn, n_embd, n_vocab);
+    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+
+    // output
+    {
+        model.output_norm = create_tensor(ctx_output,       tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+        model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        // if output is NULL, init from the input tok embed
+        if (model.output == NULL) {
+            model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        }
+    }
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1051,8 +1066,12 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
 
         layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
 
-        GGML_ASSERT(n_expert      > 0);
-        GGML_ASSERT(n_expert_used > 0);
+        if (n_expert == 0) {
+            throw std::runtime_error("n_expert must be > 0 for QWEN3MOE");
+        }
+        if (n_expert_used == 0) {
+            throw std::runtime_error("n_expert_used must be > 0 for QWEN3MOE");
+        }
 
         // MoE branch
         const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
@@ -2419,7 +2438,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
     auto& hparams = model.hparams;
     const int64_t n_head        = hparams.n_head();
     const int64_t n_head_kv     = hparams.n_head_kv();
-    const int64_t n_embd        = hparams.n_embd;
+    const int64_t n_embd        = hparams.n_embd / (hparams.n_deepstack_layers + 1); // For Qwen3-VL we need to divide by the number of deepstack layers + 1, for other models n_deepstack_layers value is 0 by default
     const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa();
     const int64_t n_embd_head_k = hparams.n_embd_head_k;
     const int64_t n_embd_gqa    = n_embd_v_gqa;
@@ -2539,8 +2558,10 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_QWEN2MOE:
             use_mmap_buffer = create_qwen2_moe_tensors(tn); break;
         case LLM_ARCH_QWEN3:
+        case LLM_ARCH_QWEN3VL:
             use_mmap_buffer = create_qwen3_tensors(tn); break;
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN3VLMOE:
             use_mmap_buffer = create_qwen3_moe_tensors(tn); break;
         case LLM_ARCH_PHI2:
             use_mmap_buffer = create_phi2_tensors(tn); break;
