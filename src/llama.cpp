@@ -1165,6 +1165,10 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
         LLAMA_LOG_INFO("%s: freq_scale_train = %g\n",     __func__, hparams.rope_freq_scale_train);
         LLAMA_LOG_INFO("%s: n_ctx_orig_yarn  = %u\n",     __func__, hparams.n_ctx_orig_yarn);
         LLAMA_LOG_INFO("%s: rope_finetuned   = %s\n",     __func__, hparams.rope_finetuned ? "yes" : "unknown");
+        // MRoPE (Multi-axis Rotary Position Embedding) sections
+        if (const auto & s = hparams.rope_sections; s[0] || s[1] || s[2] || s[3]) {
+            LLAMA_LOG_INFO("%s: mrope sections   = [%d, %d, %d, %d]\n", __func__, s[0], s[1], s[2], s[3]);
+        }
         LLAMA_LOG_INFO("%s: ssm_d_conv       = %u\n",     __func__, hparams.ssm_d_conv);
         LLAMA_LOG_INFO("%s: ssm_d_inner      = %u\n",     __func__, hparams.ssm_d_inner);
         LLAMA_LOG_INFO("%s: ssm_d_state      = %u\n",     __func__, hparams.ssm_d_state);
@@ -1230,7 +1234,7 @@ static void llm_load_print_meta(llama_model_loader & ml, llama_model & model) {
         LLAMA_LOG_INFO("%s: n_ff_shexp       = %d\n",     __func__, hparams.n_ff_shexp);
     }
 
-    if (model.arch == LLM_ARCH_QWEN3MOE || model.arch == LLM_ARCH_OPENAI_MOE) {
+    if (model.arch == LLM_ARCH_QWEN3MOE || model.arch == LLM_ARCH_OPENAI_MOE || model.arch == LLM_ARCH_QWEN3VLMOE) {
         LLAMA_LOG_INFO("%s: n_ff_exp         = %d\n",     __func__, hparams.n_ff_exp);
     }
 
@@ -2054,7 +2058,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
         auto tim1 = ggml_time_us();
 #endif
         const int64_t n_tokens = batch.n_tokens;
-        const int n_pos_per_embd =  hparams.rope_type == LLAMA_ROPE_TYPE_MROPE ? 4 : 1;
+        const int n_pos_per_embd =  hparams.rope_type == LLAMA_ROPE_TYPE_MROPE || hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
         if (batch.token && n_pos_per_embd == 4) {
             std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
             for (int i = 0; i < n_tokens; ++i) {
@@ -4667,6 +4671,10 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
 
         case LLM_ARCH_QWEN2VL:
             return LLAMA_ROPE_TYPE_MROPE;
+
+        case LLM_ARCH_QWEN3VL:
+        case LLM_ARCH_QWEN3VLMOE:
+            return LLAMA_ROPE_TYPE_IMROPE;
 
         // all model arches should be listed explicitly here
         case LLM_ARCH_UNKNOWN:

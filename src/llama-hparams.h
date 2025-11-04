@@ -110,7 +110,10 @@ struct llama_hparams {
     uint32_t n_no_rope_layer_step    = 4;
     uint32_t n_attn_temp_floor_scale = 8192;
     float    f_attn_temp_scale       = 0.1;
-
+	
+	// qwen3vl deepstack
+    uint32_t n_deepstack_layers = 0;
+	
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = -1;

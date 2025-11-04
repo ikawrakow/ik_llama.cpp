@@ -36,6 +36,7 @@
 #define KEY_FEATURE_LAYER       "clip.vision.feature_layer"
 #define KEY_PROJ_SCALE_FACTOR   "clip.vision.projector.scale_factor"
 #define KEY_SPATIAL_MERGE_SIZE  "clip.vision.spatial_merge_size"
+#define KEY_IS_DEEPSTACK_LAYERS "clip.vision.is_deepstack_layers"
 
 #define KEY_MM_PATCH_MERGE_TYPE   "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS  "clip.vision.image_grid_pinpoints"
@@ -59,6 +60,7 @@
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backwrad compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
+#define TN_ATTN_QKV        "%s.blk.%d.attn_qkv.%s"
 #define TN_ATTN_K          "%s.blk.%d.attn_k.%s"
 #define TN_ATTN_Q          "%s.blk.%d.attn_q.%s"
 #define TN_ATTN_V          "%s.blk.%d.attn_v.%s"
@@ -89,6 +91,9 @@
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
 #define TN_TOK_GLM_BOI     "adapter.boi"                // glm-edge (these embeddings are not in text model)
 #define TN_TOK_GLM_EOI     "adapter.eoi"                // glm-edge (these embeddings are not in text model)
+#define TN_DEEPSTACK_NORM  "v.deepstack.%d.norm.%s"     // qwen3vl deepstack
+#define TN_DEEPSTACK_FC1   "v.deepstack.%d.fc1.%s"      // qwen3vl deepstack
+#define TN_DEEPSTACK_FC2   "v.deepstack.%d.fc2.%s"      // qwen3vl deepstack
 
 // mimicpmv
 #define TN_MINICPMV_POS_EMBD_K "resampler.pos_embed_k"
@@ -123,6 +128,7 @@ enum projector_type {
     PROJECTOR_TYPE_MINICPMV,
     PROJECTOR_TYPE_GLM_EDGE,
     PROJECTOR_TYPE_QWEN2VL,
+    PROJECTOR_TYPE_QWEN3VL,
     PROJECTOR_TYPE_GEMMA3,
     PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_PIXTRAL,
@@ -146,6 +152,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GLM_EDGE,  "adapter"},
     { PROJECTOR_TYPE_QWEN2VL,   "qwen2vl_merger"},
     { PROJECTOR_TYPE_QWEN25VL,  "qwen2.5vl_merger"},
+    { PROJECTOR_TYPE_QWEN3VL,   "qwen3vl_merger"},
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},

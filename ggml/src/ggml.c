@@ -18417,7 +18417,7 @@ static void ggml_rope_cache_init(
 }
 
 static void ggml_mrope_cache_init(
-     float theta_base_t, float theta_base_h, float theta_base_w, float theta_base_e, int sections[4], bool indep_sects,
+     float theta_base_t, float theta_base_h, float theta_base_w, float theta_base_e, int sections[4], bool is_imrope, bool indep_sects,
      float freq_scale, const float * freq_factors, float corr_dims[2], int64_t ne0, float ext_factor, float mscale,
      float * cache, float sin_sign, float theta_scale) {
     // ref: https://github.com/jquesnelle/yarn/blob/master/scaled_rope/LlamaYaRNScaledRotaryEmbedding.py
@@ -18452,14 +18452,26 @@ static void ggml_mrope_cache_init(
         }
 
         float theta = theta_t;
-        if (sector >= sections[0] && sector < sec_w) {
-            theta = theta_h;
-        }
-        else if (sector >= sec_w && sector < sec_w + sections[2]) {
-            theta = theta_w;
-        }
-        else if (sector >= sec_w + sections[2]) {
-            theta = theta_e;
+        if (is_imrope) { // qwen3vl apply interleaved mrope
+            if (sector % 3 == 1 && sector < 3 * sections[1]) {
+                theta = theta_h;
+            } else if (sector % 3 == 2 && sector < 3 * sections[2]) {
+                theta = theta_w;
+            } else if (sector % 3 == 0 && sector < 3 * sections[0]) {
+                theta = theta_t;
+            } else {
+                theta = theta_e;
+            }
+        } else {
+            if (sector >= sections[0] && sector < sec_w) {
+                theta = theta_h;
+            }
+            else if (sector >= sec_w && sector < sec_w + sections[2]) {
+                theta = theta_w;
+            }
+            else if (sector >= sec_w + sections[2]) {
+                theta = theta_e;
+            }
         }
 
         rope_yarn(
@@ -18510,6 +18522,7 @@ static void ggml_compute_forward_rope_cache_f32(
 
     const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+    const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE; // qwen3vl apply interleaved mrope
 
     if (is_mrope) {
         GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
@@ -18555,7 +18568,7 @@ static void ggml_compute_forward_rope_cache_f32(
             const int64_t p_w = pos[i1 + ne2 * 2];
             const int64_t p_e = pos[i1 + ne2 * 3];
             ggml_mrope_cache_init(
-                    p_t, p_h, p_w, p_e, sections, is_vision,
+                    p_t, p_h, p_w, p_e, sections, is_imrope, is_vision,
                     freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
         }
     }
@@ -18707,6 +18720,7 @@ static void ggml_compute_forward_rope_f32(
 
     const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
+    const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE; // qwen3vl apply interleaved mrope
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
 
     if (is_mrope) {
@@ -18745,7 +18759,7 @@ static void ggml_compute_forward_rope_f32(
                 const int64_t p_w = pos[i2 + ne2 * 2];
                 const int64_t p_e = pos[i2 + ne2 * 3];
                 ggml_mrope_cache_init(
-                    p_t, p_h, p_w, p_e, sections, is_vision,
+                    p_t, p_h, p_w, p_e, sections, is_imrope, is_vision,
                     freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
             }
 
@@ -18893,6 +18907,7 @@ static void ggml_compute_forward_rope_f16(
 
     const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
+    const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
 
     if (is_mrope) {
@@ -18931,7 +18946,7 @@ static void ggml_compute_forward_rope_f16(
                 const int64_t p_w = pos[i2 + ne2 * 2];
                 const int64_t p_e = pos[i2 + ne2 * 3];
                 ggml_mrope_cache_init(
-                    p_t, p_h, p_w, p_e, sections, is_vision,
+                    p_t, p_h, p_w, p_e, sections, is_imrope, is_vision,
                     freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
             }
 
