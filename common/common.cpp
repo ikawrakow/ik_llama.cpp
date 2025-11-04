@@ -1106,8 +1106,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.fused_mmad = false;
         return true;
     }
-    if (arg == "-no-rcache" || arg == "--no-rope-cache") {
-        params.rope_cache = false;
+    if (arg == "-rcache" || arg == "--rope-cache") {
+        params.rope_cache = true;
         return true;
     }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
