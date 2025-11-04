@@ -3244,11 +3244,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_rms_norm(ctx, dst);
             break;
         case GGML_OP_FUSED_RMS_NORM:
-            //if (i + 6 < cgraph->n_nodes) {
-            //    printf("=== Fused rms_norm(%s)\n", dst->name);
-            //    for (int j = 1; j <= 6; ++j) printf("    %s(%s)\n", ggml_op_name(cgraph->nodes[i+j]->op), cgraph->nodes[i+j]->name);
-            //}
-            if (ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
+            if (false && ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
                 cgraph->nodes[i+3]->op == GGML_OP_ROPE_FAST &&
@@ -3256,7 +3252,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_fused_rms_rope_fast(ctx, cgraph->nodes[i+3], cgraph->nodes[i+4])) {
                 i += 4;
             }
-            else if (ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
+            else if (false && ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_ROPE_FAST &&
                 cgraph->nodes[i+2]->op == GGML_OP_RESHAPE &&
                 cgraph->nodes[i+3]->op == GGML_OP_FUSED_RMS_NORM &&

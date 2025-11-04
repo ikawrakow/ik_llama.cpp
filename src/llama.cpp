@@ -3833,7 +3833,7 @@ struct llama_context_params llama_context_default_params() {
         /*.grouped_expert_routing      =*/ false,
         /*.fused_up_gate               =*/ true,
         /*.fused_mmad                  =*/ true,
-        /*.rope_cache                  =*/ true,
+        /*.rope_cache                  =*/ false,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
