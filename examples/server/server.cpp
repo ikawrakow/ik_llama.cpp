@@ -1231,15 +1231,12 @@ struct server_context {
     bool load_model(const gpt_params & params_) {
         params = params_;
 
-        // dedicate one sequence to the system prompt
-        params.n_parallel += 1;
-
         llama_init_result llama_init = llama_init_from_gpt_params(params);
 
         model = llama_init.model;
         ctx = llama_init.context;
         lora_adapters = llama_init.lora_adapters;
-        params.n_parallel -= 1; // but be sneaky about it
+
         if (model == nullptr) {
             LOG_ERROR("unable to load model", {{"model", params.model}});
             return false;
@@ -2355,7 +2352,7 @@ struct server_context {
         std::vector<float> embd_res(n_embd, 0.0f);
 
         for (int i = 0; i < batch.n_tokens; ++i) {
-            if (!batch.logits[i] || batch.seq_id[i][0] != slot.id + 1) {
+            if (!batch.logits[i] || batch.seq_id[i][0] != slot.id) {
                 continue;
             }
 
@@ -2851,8 +2848,8 @@ struct server_context {
                         {"n_cache_tokens",  slot.cache_tokens.size()}
                     });
 
-                    llama_kv_cache_seq_rm (ctx, slot.id + 1, n_keep            , n_keep + n_discard);
-                    llama_kv_cache_seq_add(ctx, slot.id + 1, n_keep + n_discard, system_tokens.size() + slot.n_past, -n_discard);
+                    llama_kv_cache_seq_rm (ctx, slot.id, n_keep            , n_keep + n_discard);
+                    llama_kv_cache_seq_add(ctx, slot.id, n_keep + n_discard, system_tokens.size() + slot.n_past, -n_discard);
 
                     if (slot.params.cache_prompt) {
                         llama_tokens new_tokens = slot.cache_tokens.get_text_tokens(); // copy
@@ -2890,7 +2887,7 @@ struct server_context {
 
             // TODO: we always have to take into account the "system_tokens"
             //       this is not great and needs to be improved somehow
-            llama_batch_add(batch, slot.sampled, system_tokens.size() + slot_npast, { slot.id + 1 }, true);
+            llama_batch_add(batch, slot.sampled, system_tokens.size() + slot_npast, { slot.id }, true);
 
             slot.n_past += 1;
 
@@ -3095,14 +3092,14 @@ struct server_context {
 
                     // keep only the common part
                     int p0 = (int) system_tokens.size() + slot.n_past;
-                    if (!llama_kv_cache_seq_rm(ctx, slot.id + 1, p0, -1)) {
+                    if (!llama_kv_cache_seq_rm(ctx, slot.id, p0, -1)) {
                         // could not partially delete (likely using a non-Transformer model)
-                        llama_kv_cache_seq_rm(ctx, slot.id + 1, -1, -1);
+                        llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
 
                         p0 = (int) system_tokens.size();
                         if (p0 != 0) {
                             // copy over the system prompt when there is one
-                            llama_kv_cache_seq_cp(ctx, 0, slot.id + 1, -1, -1);
+                            llama_kv_cache_seq_cp(ctx, 0, slot.id, -1, -1);
                         }
 
                         // there is no common part left (except for the system prompt)
@@ -3127,7 +3124,7 @@ struct server_context {
                         && slot.prompt_tokens[slot.n_past] == LLAMA_TOKEN_NULL) {
                         // process the image
                         int32_t new_n_past;
-                        int32_t res = slot.prompt_tokens.process_chunk(ctx, mctx, slot.n_past, slot.id+1, new_n_past);
+                        int32_t res = slot.prompt_tokens.process_chunk(ctx, mctx, slot.n_past, slot.id, new_n_past);
                         int32_t n_pos = new_n_past - slot.n_past;
                         if (res != 0) {
                             LLAMA_LOG_ERROR("failed to process image, res = %d\n", res);
@@ -3171,7 +3168,7 @@ struct server_context {
                             }
                         }
 
-                        llama_batch_add(batch, cur_tok, system_tokens.size() + slot_npast, { slot.id + 1 }, false);
+                        llama_batch_add(batch, cur_tok, system_tokens.size() + slot_npast, { slot.id }, false);
                         {
                             slot.cache_tokens.push_back(cur_tok);
                         }
@@ -3254,9 +3251,9 @@ struct server_context {
                         LOG_TEE("div:   [%6d, %6d] / %6d -> [%6d, %6d]\n", slot.ga_i + ib * bd, slot.ga_i + ib * bd + slot.ga_w, slot.ga_n, (slot.ga_i + ib * bd) / slot.ga_n, (slot.ga_i + ib * bd + slot.ga_w) / slot.ga_n);
                         LOG_TEE("shift: [%6d, %6d] + %6d -> [%6d, %6d]\n", slot.ga_i + ib * bd + slot.ga_w, slot.n_past_se + ib * bd, dd, slot.ga_i + ib * bd + slot.ga_w + dd, slot.n_past_se + ib * bd + dd);
 
-                        llama_kv_cache_seq_add(ctx, slot.id + 1, slot.ga_i, slot.n_past_se, ib * bd);
-                        llama_kv_cache_seq_div(ctx, slot.id + 1, slot.ga_i + ib * bd, slot.ga_i + ib * bd + slot.ga_w, slot.ga_n);
-                        llama_kv_cache_seq_add(ctx, slot.id + 1, slot.ga_i + ib * bd + slot.ga_w, slot.n_past_se + ib * bd, dd);
+                        llama_kv_cache_seq_add(ctx, slot.id, slot.ga_i, slot.n_past_se, ib * bd);
+                        llama_kv_cache_seq_div(ctx, slot.id, slot.ga_i + ib * bd, slot.ga_i + ib * bd + slot.ga_w, slot.ga_n);
+                        llama_kv_cache_seq_add(ctx, slot.id, slot.ga_i + ib * bd + slot.ga_w, slot.n_past_se + ib * bd, dd);
 
                         slot.n_past_se -= bd;
 
@@ -3426,10 +3423,10 @@ struct server_context {
 
                 // construct the speculation batch
                 llama_batch_clear(slot.batch_spec);
-                llama_batch_add(slot.batch_spec, id, slot.n_past, { slot.id + 1 }, true);
+                llama_batch_add(slot.batch_spec, id, slot.n_past, { slot.id }, true);
 
                 for (size_t i = 0; i < draft.size(); ++i) {
-                    llama_batch_add(slot.batch_spec, draft[i], slot.n_past + 1 + i, { slot.id + 1 }, true);
+                    llama_batch_add(slot.batch_spec, draft[i], slot.n_past + 1 + i, { slot.id }, true);
                 }
 
                 LOG_VERBOSE("decoding speculative batch", {
@@ -3451,7 +3448,7 @@ struct server_context {
                 slot.cache_tokens.push_back(id);
                 slot.cache_tokens.insert({ ids.begin(), ids.end() - 1 });
 
-                llama_kv_cache_seq_rm(ctx, slot.id + 1, slot.n_past, -1);
+                llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
 
                 for (size_t i = 0; i < ids.size(); ++i) {
                     completion_token_output result;
