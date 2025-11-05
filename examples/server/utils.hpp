@@ -6,6 +6,9 @@
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
+#include "base64.hpp"
+#include "mtmd.h"
+#include "mtmd-helper.h"
 #include "chat.h"
 #include <string>
 #include <vector>
@@ -50,6 +53,8 @@ extern bool server_log_json;
 #define LOG_ERROR(  MSG, ...) server_log("ERR",  __func__, __LINE__, MSG, __VA_ARGS__)
 #define LOG_WARNING(MSG, ...) server_log("WARN", __func__, __LINE__, MSG, __VA_ARGS__)
 #define LOG_INFO(   MSG, ...) server_log("INFO", __func__, __LINE__, MSG, __VA_ARGS__)
+
+using raw_buffer = std::vector<uint8_t>;
 
 static inline void server_log(const char * level, const char * function, int line, const char * message, const json & extra);
 
@@ -469,8 +474,9 @@ struct oaicompat_parser_options {
 // used by /chat/completions endpoint
 static json oaicompat_chat_params_parse(
     const struct llama_model* model,
-    const json& body, /* openai api json semantics */
-    const oaicompat_parser_options& opt)
+    json& body, /* openai api json semantics */
+    const oaicompat_parser_options& opt,
+    std::vector<raw_buffer>& out_files)
 {
     json llama_params;
 
@@ -479,20 +485,6 @@ static json oaicompat_chat_params_parse(
     auto has_tools = tools.is_array() && !tools.empty();
     auto stream = json_value(body, "stream", false);
     auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
-
- /*   if (tools.is_array() && !tools.empty()) {
-        if (stream) {
-            throw std::runtime_error("Cannot use tools with stream");
-        }
-        if (!use_jinja) {
-            throw std::runtime_error("tools param requires --jinja flag");
-        }
-    }
-    if (!use_jinja) {
-        if (body.contains("tool_choice") && !body.at("tool_choice").is_null()) {
-            throw std::runtime_error("Unsupported param: tool_choice");
-        }
-    }*/
 
     if (!opt.use_jinja) {
         if (has_tools) {
@@ -531,8 +523,120 @@ static json oaicompat_chat_params_parse(
             json_schema = json_value(json_schema, "schema", json::object());
         }
     }
+
+    // get input files
+    if (!body.contains("messages")) {
+        throw std::runtime_error("'messages' is required");
+    }
+    json& messages = body.at("messages");
+    if (!messages.is_array()) {
+        throw std::runtime_error("Expected 'messages' to be an array");
+    }
+    for (auto& msg : messages) {
+        std::string role = json_value(msg, "role", std::string());
+        if (role != "assistant" && !msg.contains("content")) {
+            throw std::runtime_error("All non-assistant messages must contain 'content'");
+        }
+        if (role == "assistant") {
+            if (!msg.contains("content") && !msg.contains("tool_calls")) {
+                throw std::runtime_error("Assistant message must contain either 'content' or 'tool_calls'!");
+            }
+            if (!msg.contains("content")) {
+                continue; // avoid errors with no content
+            }
+        }
+        json& content = msg.at("content");
+        if (content.is_string() || content.is_null()) {
+            continue;
+        }
+
+        if (!content.is_array()) {
+            throw std::runtime_error("Expected 'content' to be a string or an array");
+        }
+
+        for (auto& p : content) {
+            std::string type = json_value(p, "type", std::string());
+            if (type == "image_url") {
+                if (!opt.allow_image) {
+                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                }
+
+                json image_url = json_value(p, "image_url", json::object());
+                std::string url = json_value(image_url, "url", std::string());
+                if (string_starts_with(url, "http")) {
+                    // download remote image
+                    // TODO @ngxson : maybe make these params configurable
+                    common_remote_params params;
+                    params.headers.push_back("User-Agent: ik_llama.cpp/");
+                    params.max_size = 1024 * 1024 * 10; // 10MB
+                    params.timeout = 10; // seconds
+                    LOG_INFO("downloading image from '%s'\n", url.c_str());
+                    auto res = common_remote_get_content(url, params);
+                    if (200 <= res.first && res.first < 300) {
+                        LOG_INFO("downloaded %ld bytes\n", res.second.size());
+                        raw_buffer data;
+                        data.insert(data.end(), res.second.begin(), res.second.end());
+                        out_files.push_back(data);
+                    }
+                    else {
+                        throw std::runtime_error("Failed to download image");
+                    }
+
+                }
+                else {
+                    // try to decode base64 image
+                    std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
+                    if (parts.size() != 2) {
+                        throw std::runtime_error("Invalid image_url.url value");
+                    }
+                    else if (!string_starts_with(parts[0], "data:image/")) {
+                        throw std::runtime_error("Invalid image_url.url format: " + parts[0]);
+                    }
+                    else if (!string_ends_with(parts[0], "base64")) {
+                        throw std::runtime_error("image_url.url must be base64 encoded");
+                    }
+                    else {
+                        auto base64_data = parts[1];
+                        auto decoded_data = base64_decode(base64_data);
+                        out_files.push_back(decoded_data);
+                    }
+                }
+
+                // replace this chunk with a marker
+                p["type"] = "text";
+                p["text"] = mtmd_default_marker();
+                p.erase("image_url");
+
+            }
+            else if (type == "input_audio") {
+                if (!opt.allow_audio) {
+                    throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                }
+
+                json input_audio = json_value(p, "input_audio", json::object());
+                std::string data = json_value(input_audio, "data", std::string());
+                std::string format = json_value(input_audio, "format", std::string());
+                // while we also support flac, we don't allow it here so we matches the OAI spec
+                if (format != "wav" && format != "mp3") {
+                    throw std::runtime_error("input_audio.format must be either 'wav' or 'mp3'");
+                }
+                auto decoded_data = base64_decode(data); // expected to be base64 encoded
+                out_files.push_back(decoded_data);
+
+                // replace this chunk with a marker
+                p["type"] = "text";
+                p["text"] = mtmd_default_marker();
+                p.erase("input_audio");
+
+            }
+            else if (type != "text") {
+                throw std::runtime_error("unsupported content[].type");
+            }
+        }
+    }
+
     common_chat_templates_inputs inputs;
-    inputs.messages = common_chat_msgs_parse_oaicompat(body.at("messages"));
+    inputs.messages = common_chat_msgs_parse_oaicompat(messages);
     inputs.tools = common_chat_tools_parse_oaicompat(tools);
     inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(tool_choice);
     inputs.json_schema = json_schema.is_null() ? "" : json_schema.dump();
@@ -608,8 +712,9 @@ static json oaicompat_chat_params_parse(
     llama_params["grammar"] = chat_params.grammar;
     llama_params["grammar_lazy"] = chat_params.grammar_lazy;
     auto grammar_triggers = json::array();
-    for (const auto& trigger : chat_params.grammar_triggers) {
-        grammar_triggers.push_back(trigger.to_json<json>());
+    for (const auto & trigger : chat_params.grammar_triggers) {
+        server_grammar_trigger ct(trigger);
+        grammar_triggers.push_back(ct.to_json());
     }
     llama_params["grammar_triggers"] = grammar_triggers;
     llama_params["preserved_tokens"] = chat_params.preserved_tokens;
@@ -649,6 +754,52 @@ static json oaicompat_chat_params_parse(
     return llama_params;
 }
 
+
+//
+// tokenizer and input processing utils
+//
+
+static bool json_is_array_of_numbers(const json& data) {
+    if (data.is_array()) {
+        for (const auto& e : data) {
+            if (!e.is_number_integer()) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+// is array having BOTH numbers & strings?
+static bool json_is_array_of_mixed_numbers_strings(const json& data) {
+    bool seen_string = false;
+    bool seen_number = false;
+    if (data.is_array()) {
+        for (const auto& e : data) {
+            seen_string |= e.is_string();
+            seen_number |= e.is_number_integer();
+            if (seen_number && seen_string) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// does array have any individual integers/tokens?
+static bool json_is_array_and_contains_numbers(const json& data) {
+    if (data.is_array()) {
+        for (const auto& e : data) {
+            if (e.is_number_integer()) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
 // get value by path(key1 / key2)
 static json json_get_nested_values(const std::vector<std::string>& paths, const json& js) {
     json result = json::object();
@@ -672,6 +823,50 @@ static json json_get_nested_values(const std::vector<std::string>& paths, const 
     return result;
 }
 
+
+/**
+ * this handles 2 cases:
+ * - only string, example: "string"
+ * - mixed string and tokens, example: [12, 34, "string", 56, 78]
+ */
+static std::vector<llama_token> tokenize_mixed(const llama_vocab* vocab, const json& json_prompt, bool add_special, bool parse_special) {
+    // If `add_bos` is true, we only add BOS, when json_prompt is a string,
+    // or the first element of the json_prompt array is a string.
+    std::vector<llama_token> prompt_tokens;
+
+    if (json_prompt.is_array()) {
+        bool first = true;
+        for (const auto& p : json_prompt) {
+            if (p.is_string()) {
+                auto s = p.template get<std::string>();
+
+                std::vector<llama_token> p;
+                if (first) {
+                    p = llama_tokenize(vocab, s, add_special, parse_special);
+                    first = false;
+                }
+                else {
+                    p = llama_tokenize(vocab, s, false, parse_special);
+                }
+
+                prompt_tokens.insert(prompt_tokens.end(), p.begin(), p.end());
+            }
+            else {
+                if (first) {
+                    first = false;
+                }
+
+                prompt_tokens.push_back(p.template get<llama_token>());
+            }
+        }
+    }
+    else {
+        auto s = json_prompt.template get<std::string>();
+        prompt_tokens = llama_tokenize(vocab, s, add_special, parse_special);
+    }
+
+    return prompt_tokens;
+}
 
 static json format_tokenizer_response(const std::vector<llama_token> & tokens) {
     return json {
@@ -763,4 +958,481 @@ static token_probabilities get_token_probabilities(llama_context * ctx, int idx,
     sampled_token_p *= inv_cum_sum;
 
     return {sampled_token_p, cur};
+}
+
+/**
+ * server_tokens is a helper to manage the input tokens and image for the server.
+ * it is made this way to simplify the logic of KV cache management.
+ */
+struct server_tokens {
+    bool has_mtmd = false;
+
+private: // disallow accessing these members directly, risking out-of-sync
+
+    // map a **start** position in tokens to the image chunk
+    std::unordered_map<llama_pos, mtmd::input_chunk_ptr> map_pos_to_media;
+
+    // list of tokens
+    // it can include LLAMA_TOKEN_NULL, which is used to indicate a token that is not a text token
+    // a mtmd_input_chunk can occupy multiple tokens, one llama_token per **position**
+    // important: for models using mrope, an image can contain multiple tokens but will use only one **position**
+    std::vector<llama_token> tokens;
+
+    // for ex. with input of 5 text tokens and 2 images:
+    //      [0] [1] [2] [3] [4] [img0] [img0] [img0] [img1] [img1]
+    // pos  0   1   2   3   4   5      6      7      8      9
+    // map_pos_to_media will contain: {5, img0}, {8, img1}
+
+public:
+    server_tokens() = default;
+    ~server_tokens() = default;
+
+    // Prevent copying
+    server_tokens(const server_tokens&) = delete;
+    server_tokens& operator=(const server_tokens&) = delete;
+
+    // Allow moving (usually implicitly generated if members are movable)
+    server_tokens(server_tokens&&) = default;
+    server_tokens& operator=(server_tokens&&) = default;
+
+    // Allow accessing elements using [] operator
+    llama_token operator[](size_t index) { return tokens[index]; }
+    const llama_token& operator[](size_t index) const { return tokens[index]; }
+
+    server_tokens(mtmd::input_chunks& mtmd_chunks, bool has_mtmd) : has_mtmd(has_mtmd) {
+        for (size_t i = 0; i < mtmd_chunks.size(); ++i) {
+            push_back(mtmd_chunks[i]);
+        }
+    }
+
+    server_tokens(std::vector<llama_token>& tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {}
+
+    llama_pos pos_next() const {
+        if (!has_mtmd) {
+            return tokens.size();
+        }
+
+        llama_pos res = tokens.size();
+
+        for (auto it = map_pos_to_media.begin(); it != map_pos_to_media.end(); ++it) {
+            const auto& chunk = it->second;
+            res += mtmd_input_chunk_get_n_pos(chunk.get()) - mtmd_input_chunk_get_n_tokens(chunk.get());
+        }
+
+        return res;
+    }
+
+    // for debugging
+    std::string str() const {
+        std::ostringstream oss;
+        oss << "tokens: ";
+        for (const auto& t : tokens) {
+            if (t == LLAMA_TOKEN_NULL) {
+                oss << "<embd> ";
+            }
+            else {
+                oss << t << " ";
+            }
+        }
+        oss << "\n";
+        oss << "image pos: ";
+        for (const auto& it : map_pos_to_media) {
+            oss << it.first << ", ";
+        }
+        return oss.str();
+    }
+
+    const mtmd::input_chunk_ptr& find_chunk(llama_pos pos) const {
+        auto it = map_pos_to_media.find(pos);
+        if (it != map_pos_to_media.end()) {
+            return it->second;
+        }
+        else {
+            throw std::runtime_error("Chunk not found");
+        }
+    }
+
+    void push_back(llama_token tok) {
+        if (tok == LLAMA_TOKEN_NULL) {
+            throw std::runtime_error("Invalid token");
+        }
+        tokens.emplace_back(tok);
+    }
+
+    // will create a copy of the chunk if it contains non-text data
+    void push_back(const mtmd_input_chunk* chunk) {
+        auto type = mtmd_input_chunk_get_type(chunk);
+        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+            GGML_ASSERT(has_mtmd);
+            const int n_pos = mtmd_input_chunk_get_n_pos(chunk);
+            fprintf(stdout, "n_pos: %d\n", n_pos);
+            llama_pos start_pos = tokens.size();
+            for (int i = 0; i < n_pos; ++i) {
+                tokens.emplace_back(LLAMA_TOKEN_NULL);
+            }
+            mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
+            map_pos_to_media[start_pos] = std::move(new_chunk);
+        }
+        else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+            size_t n_tokens;
+            auto text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
+            for (size_t i = 0; i < n_tokens; ++i) {
+                push_back(text_tokens[i]);
+            }
+        }
+        else {
+            GGML_ABORT("Invalid chunk type");
+        }
+    }
+
+    // appends server tokens, updates the media map. copies media chunks.
+    void push_back(server_tokens& tokens) {
+        size_t start_pos = size();
+        for (size_t i = 0; i < tokens.size(); i++) {
+            push_back(tokens[i]);
+        }
+        if (tokens.has_mtmd) {
+            // Assert if we are copying MTMD chunks to a server_tokens that does not have mtmd.
+            // We could also just check, but this will prevent silently dropping MTMD data.
+            GGML_ASSERT(has_mtmd);
+            for (auto it = tokens.map_pos_to_media.begin(); it != tokens.map_pos_to_media.end(); ) {
+                auto chunk = tokens.map_pos_to_media[it->first].get();
+                mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
+                map_pos_to_media[start_pos + it->first] = std::move(new_chunk);
+            }
+        }
+    }
+
+    // for compatibility with context shift and prompt truncation
+    void insert(const std::vector<llama_token>& inp_tokens) {
+        GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+        tokens.insert(tokens.end(), inp_tokens.begin(), inp_tokens.end());
+    }
+
+    // for compatibility with context shift and prompt truncation
+    void resize(size_t size) {
+        GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+        tokens.resize(size);
+    }
+
+    llama_token * data() {
+        return tokens.data();
+    }
+
+    llama_tokens::iterator begin() {
+        return tokens.begin();
+    }
+
+    llama_tokens::iterator end() {
+       return tokens.end();
+    }
+
+    llama_tokens::const_iterator cbegin() {
+        return tokens.cbegin();
+    }
+
+    llama_tokens::const_iterator cend() {
+        return tokens.cend();
+    }
+
+    llama_tokens tokens_data() {
+
+        return tokens;
+    }
+
+    // for compatibility with speculative decoding, ctx shift, slot save/load
+    const std::vector<llama_token>& get_text_tokens() const {
+        GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+        return tokens;
+    }
+
+    // for compatibility with speculative decoding
+    void set_token(llama_pos pos, llama_token id) {
+        GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
+        tokens[pos] = id;
+    }
+
+    size_t size() const {
+        return tokens.size();
+    }
+
+    bool empty() const {
+        return tokens.empty();
+    }
+
+    void clear() {
+        tokens.clear();
+    }
+
+    void keep_first(size_t n) {
+        GGML_ASSERT(n <= tokens.size());
+        if (has_mtmd) {
+            if (n == tokens.size()) {
+                return; // nothing to do
+            }
+            // we throw an error if we try to remove a token in the middle of an image
+            // for ex. with input of 5 text tokens and 2 images:
+            //    [0] [1] [2] [3] [4] [img0] [img0] [img0] [img1] [img1]
+            // n  1   2   3   4   5   6      7      8      9      10
+            // allowed to resize      ^                    ^
+            // disallowed to resize          ^      ^             ^
+            if (n > 0) {
+                llama_token last_token = tokens[n - 1];
+                // make sure we never remove tokens in the middle of an image
+                if (last_token == LLAMA_TOKEN_NULL) {
+                    find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
+                }
+            }
+            // remove all image chunks that are not used anymore
+            for (auto it = map_pos_to_media.begin(); it != map_pos_to_media.end(); ) {
+                llama_pos pos = it->first;
+                if (pos >= (llama_pos)n) {
+                    it = map_pos_to_media.erase(it);
+                }
+                else {
+                    ++it;
+                }
+            }
+        }
+        tokens.resize(n);
+    }
+
+    std::string detokenize(const llama_context* ctx, bool special) const {
+        llama_tokens text_tokens;
+        text_tokens.reserve(tokens.size());
+        for (const auto& t : tokens) {
+            if (t != LLAMA_TOKEN_NULL) {
+                text_tokens.push_back(t);
+            }
+        }        
+        return llama_detokenize(ctx, text_tokens, special);
+    }
+
+    size_t get_common_prefix(const server_tokens& b) const {
+        size_t max_idx = std::min(tokens.size(), b.tokens.size());
+        for (size_t i = 0; i < max_idx; ++i) {
+            auto& ai = tokens[i];
+            auto& bi = b.tokens[i];
+
+            if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
+                GGML_ASSERT(has_mtmd);
+                const auto& a_chunk = find_chunk(i);
+                const auto& b_chunk = b.find_chunk(i);
+                GGML_ASSERT(a_chunk && b_chunk);
+                std::string ai_id = mtmd_input_chunk_get_id(a_chunk.get());
+                std::string bi_id = mtmd_input_chunk_get_id(b_chunk.get());
+                size_t a_pos = mtmd_input_chunk_get_n_pos(a_chunk.get());
+                size_t b_pos = mtmd_input_chunk_get_n_pos(b_chunk.get());
+                if (ai_id == bi_id && a_pos == b_pos) {
+                    GGML_ASSERT(a_pos > 0 && "Invalid media chunk"); // should never happen
+                    i += a_pos - 1; // will be +1 by the for loop
+                    continue;
+                }
+                else {
+                    return i;
+                }
+            }
+            else if (ai == bi) {
+                continue;
+            }
+            else {
+                return i;
+            }
+        }
+        return max_idx; // all tokens are equal
+    }
+
+    // make sure all text tokens are within the vocab range
+    bool validate(const struct llama_context* ctx) const {
+        const llama_model* model = llama_get_model(ctx);
+        const llama_vocab* vocab = llama_model_get_vocab(model);
+        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            auto& t = tokens[i];
+            if (t == LLAMA_TOKEN_NULL) {
+                try {
+                    const auto& chunk = find_chunk(i);
+                    size_t n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+                    i += n_pos - 1; // will be +1 by the for loop
+                }
+                catch (const std::exception& e) {
+                    return false;
+                }
+            }
+            else if (t < 0 || t >= n_vocab) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // encode and decode the image chunk
+    int32_t process_chunk(
+        llama_context* ctx,
+        mtmd_context* mctx,
+        llama_pos n_past,
+        int32_t seq_id,
+        llama_pos& n_pos_out) {
+        auto& chunk = find_chunk(n_past);
+        const char* name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
+            ? "image" : "audio";
+        LOG_INFO("processing %s...\n", name);
+        int32_t n_batch = llama_n_batch(ctx);
+        int64_t t0 = ggml_time_ms();
+        llama_pos new_n_past = n_past;
+        int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
+            chunk.get(),
+            n_past,
+            seq_id,
+            n_batch,
+            true, // logits last
+            &new_n_past);
+        LOG_INFO("processed in %" PRId64 " ms\n", ggml_time_ms() - t0);
+        if (result != 0) {
+            LOG_ERROR("mtmd_helper_eval failed with status %d", result);
+            n_pos_out = n_past;
+            return result;
+        }
+        n_pos_out = new_n_past;
+        return 0;
+    }
+};
+
+// Computes FNV-1a hash of the data
+static std::string fnv_hash(const uint8_t* data, size_t len) {
+    const uint64_t fnv_prime = 0x100000001b3ULL;
+    uint64_t hash = 0xcbf29ce484222325ULL;
+
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= data[i];
+        hash *= fnv_prime;
+    }
+    return std::to_string(hash);
+}
+
+static server_tokens process_mtmd_prompt(mtmd_context* mctx, std::string prompt, std::vector<raw_buffer> files) {
+    mtmd::bitmaps bitmaps;
+    for (auto& file : files) {
+        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
+        if (!bmp.ptr) {
+            throw std::runtime_error("Failed to load image or audio file");
+        }
+        // calculate bitmap hash (for KV caching)
+        std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
+        bmp.set_id(hash.c_str());
+        bitmaps.entries.push_back(std::move(bmp));
+    }
+    // process prompt
+    std::vector<server_tokens> inputs;
+    // multimodal
+    mtmd_input_text inp_txt = {
+        prompt.c_str(),
+        /* add_special */   true,
+        /* parse_special */ true,
+    };
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    auto bitmaps_c_ptr = bitmaps.c_ptr();
+    int32_t tokenized = mtmd_tokenize(mctx,
+        chunks.ptr.get(),
+        &inp_txt,
+        bitmaps_c_ptr.data(),
+        bitmaps_c_ptr.size());
+    if (tokenized != 0) {
+        throw std::runtime_error("Failed to tokenize prompt");
+    }
+    auto result = server_tokens(chunks, true);
+    return result;
+}
+
+/**
+ * break the input "prompt" object into multiple prompt if needed, then tokenize them
+ * use tokenize_input_prompts() if the input could be an array.
+ * this supports these cases:
+ * - "prompt": "string"
+ * - "prompt": [12, 34, 56]
+ * - "prompt": [12, 34, "string", 56, 78]
+ * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
+ */
+static server_tokens tokenize_input_subprompt(const llama_vocab* vocab, mtmd_context* mctx, const json& json_prompt, bool add_special, bool parse_special) {
+    constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
+    constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
+    const bool has_mtmd = mctx != nullptr;
+    if (json_prompt.is_string() || json_is_array_of_mixed_numbers_strings(json_prompt)) {
+        // string or mixed
+        std::vector<llama_token> tmp = tokenize_mixed(vocab, json_prompt, add_special, parse_special);
+        return server_tokens(tmp, false);
+    }
+    else if (json_is_array_of_numbers(json_prompt)) {
+        // array of tokens
+        std::vector<llama_token> tmp = json_prompt.get<std::vector<llama_token>>();
+        return server_tokens(tmp, false);
+    }
+    else if (json_prompt.contains(JSON_STRING_PROMPT_KEY)) {
+        // JSON object with prompt key.
+        if (json_prompt.contains(JSON_MTMD_DATA_KEY)) {
+            if (!has_mtmd)
+                throw std::runtime_error("Multimodal data provided, but model does not support multimodal requests.");
+
+            // JSON object with prompt and multimodal key.
+            std::vector<raw_buffer> files;
+            for (const auto& entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
+                files.push_back(base64_decode(entry));
+            }
+            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
+        }
+        else {
+            // Not multimodal, but contains a subobject.
+            std::vector<llama_token> tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
+            return server_tokens(tmp, false);
+        }
+    }
+    else {
+        throw std::runtime_error("\"prompt\" elements must be a string, a list of tokens, a JSON object containing a prompt string, or a list of mixed strings & tokens.");
+    }
+}
+
+/**
+ * break the input "prompt" object into multiple prompt if needed, then tokenize them
+ * this supports these cases:
+ * - "prompt": "string"
+ * - "prompt": [12, 34, 56]
+ * - "prompt": [12, 34, "string", 56, 78]
+ * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
+ * and multiple prompts (multi-tasks):
+ * - "prompt": ["string1", "string2"]
+ * - "prompt": ["string1", [12, 34, 56]]
+ * - "prompt": [[12, 34, 56], [78, 90, 12]]
+ * - "prompt": [[12, 34, "string", 56, 78], [12, 34, 56], { "prompt_string": "string", "multimodal_data": [ "base64" ]}]
+ */
+static std::vector<server_tokens> tokenize_input_prompts(const llama_vocab* vocab, mtmd_context* mctx, const json& json_prompt, bool add_special, bool parse_special) {
+    std::vector<server_tokens> result;
+    if (json_prompt.is_array() && !json_is_array_and_contains_numbers(json_prompt)) {
+        result.reserve(json_prompt.size());
+        for (const auto& p : json_prompt) {
+            result.push_back(tokenize_input_subprompt(vocab, mctx, p, add_special, parse_special));
+        }
+    }
+    else {
+        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special));
+    }
+    if (result.empty()) {
+        throw std::runtime_error("\"prompt\" must not be empty");
+    }
+    return result;
+}
+// Assuming raw_buffer has .data() and .size() members
+inline void printFilesInfo(const std::vector<raw_buffer>& files) {
+    for (size_t i = 0; i < files.size(); ++i) {
+        const auto& file = files[i];
+        std::cout << "File " << i << ": Size = " << file.size() << " bytes\n";
+
+        // Print first 16 bytes in hex
+        std::cout << "First 16 bytes: ";
+        for (size_t j = 0; j < std::min<size_t>(file.size(), 16); ++j) {
+            std::cout << std::hex << std::setw(2) << std::setfill('0')
+                << static_cast<int>(file.data()[j]) << " ";
+        }
+        std::cout << std::dec << "\n\n"; // Reset to decimal
+    }
 }
