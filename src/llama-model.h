@@ -154,6 +154,8 @@ struct llama_layer {
     struct ggml_tensor * wv = nullptr;
     struct ggml_tensor * wo = nullptr;
     struct ggml_tensor * wqkv = nullptr;
+    struct ggml_tensor * wqk  = nullptr;
+    struct ggml_tensor * wkv  = nullptr;
     struct ggml_tensor * wq_a = nullptr;
     struct ggml_tensor * wq_b = nullptr;
     struct ggml_tensor * wkv_a_mqa = nullptr;
@@ -176,6 +178,8 @@ struct llama_layer {
     struct ggml_tensor * bv = nullptr;
     struct ggml_tensor * bo = nullptr;
     struct ggml_tensor * bqkv = nullptr;
+    struct ggml_tensor * bqk  = nullptr;
+    struct ggml_tensor * bkv  = nullptr;
 
     // relative position bias
     struct ggml_tensor * attn_rel_b = nullptr;
