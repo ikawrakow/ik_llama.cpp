@@ -275,6 +275,16 @@ const SETTING_SECTIONS = (
             key,
           }) as SettingFieldInput
       ),
+      {
+        type: SettingInputType.SHORT_INPUT,
+        label: 'Paste length to file',
+        key: 'pasteLongTextToFileLen',
+      },
+      {
+        type: SettingInputType.CHECKBOX,
+        label: 'Parse PDF as image instead of text',
+        key: 'pdfAsImage',
+      },      
     ],
   },
   {
