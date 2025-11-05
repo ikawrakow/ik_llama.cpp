@@ -248,7 +248,8 @@ class MODEL_ARCH(IntEnum):
     ERNIE4_5     = auto()
     ERNIE4_5_MOE = auto()
     BAILINGMOE2  = auto()
-
+    MINIMAXM2    = auto()
+    
 class MODEL_TENSOR(IntEnum):
     TOKEN_EMBD           = auto()
     TOKEN_EMBD_NORM      = auto()
@@ -384,7 +385,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ARCTIC:         "arctic",
     MODEL_ARCH.DEEPSEEK2:      "deepseek2",
     MODEL_ARCH.CHATGLM:        "chatglm",
-    MODEL_ARCH.GLM4_MOE:         "glm4moe",
+    MODEL_ARCH.GLM4_MOE:       "glm4moe",
     MODEL_ARCH.BITNET:         "bitnet",
     MODEL_ARCH.BITNET_25:      "bitnet-25",
     MODEL_ARCH.T5:             "t5",
@@ -394,6 +395,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ERNIE4_5:       "ernie4_5",
     MODEL_ARCH.ERNIE4_5_MOE:   "ernie4_5-moe",
     MODEL_ARCH.BAILINGMOE2:    "bailingmoe2",
+    MODEL_ARCH.MINIMAXM2:      "minimax-m2",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -1323,6 +1325,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
         MODEL_TENSOR.LAYER_OUT_NORM,
+    ],
+    MODEL_ARCH.MINIMAXM2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
     # TODO
 }
