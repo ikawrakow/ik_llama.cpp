@@ -2495,6 +2495,40 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
             }
         }
     }
+    if (!fused_qkv && ml.merge_qkv && wq->type == wk->type && hparams.f_attention_scale == 0.0f) {
+        GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
+        GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
+        layer.wqk = ggml_new_tensor_2d(ctx_split, wq->type, n_embd, n_embd_head_k * (n_head + n_head_kv));
+        snprintf(layer.wqk->name, GGML_MAX_NAME, "blk.%d.attn_qk.weight", i);
+        layer.wq = ml.create_tensor_as_view(ctx_split, layer.wqk, wq_name.c_str(), { wq->ne[0], wq->ne[1] }, 0);
+        layer.wk = ml.create_tensor_as_view(ctx_split, layer.wqk, wk_name.c_str(), { wk->ne[0], wk->ne[1] }, wq->ne[1]*wq->nb[1]);
+        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
+        printf("====================== Merged only Q and K in layer %d because V is of different type\n", i);
+        fused_qkv = true;
+        if (bias) {
+            auto bq_name = tn(LLM_TENSOR_ATTN_Q, "bias", i);
+            auto bk_name = tn(LLM_TENSOR_ATTN_K, "bias", i);
+            auto bv_name = tn(LLM_TENSOR_ATTN_V, "bias", i);
+            auto bq = ml.get_tensor_meta(bq_name.c_str());
+            auto bk = ml.get_tensor_meta(bk_name.c_str());
+            auto bv = ml.get_tensor_meta(bv_name.c_str());
+            if (bias == 2) {
+                GGML_ASSERT(bq && bk && bv);
+            } else {
+                GGML_ASSERT(!bq && !bk && !bv);
+            }
+            if (bq && bk && bv) {
+                GGML_ASSERT(bq->type == GGML_TYPE_F32 && bk->type == GGML_TYPE_F32);
+                GGML_ASSERT(ggml_nrows(bq) == 1 && bq->ne[0] == wq->ne[1]);
+                GGML_ASSERT(ggml_nrows(bk) == 1 && bk->ne[0] == wk->ne[1]);
+                layer.bqk = ggml_new_tensor_1d(ctx_layer, bq->type, n_embd_head_k * (n_head + n_head_kv));
+                snprintf(layer.bqk->name, GGML_MAX_NAME, "blk.%d.attn_qk.bias", i);
+                layer.bq = ml.create_tensor_as_view(ctx_layer, layer.bqk, bq_name.c_str(), { bq->ne[0] }, 0);
+                layer.bk = ml.create_tensor_as_view(ctx_layer, layer.bqk, bk_name.c_str(), { bk->ne[0] }, bq->ne[0]*bq->nb[0]);
+                layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {layer.wv->ne[1]});
+            }
+        }
+    }
 
     if (!fused_qkv) {
         if (ml.merge_qkv) {
