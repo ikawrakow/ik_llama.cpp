@@ -16,6 +16,8 @@ export const CONFIG_DEFAULT = {
   showTokensPerSecond: false,
   showThoughtInProgress: false,
   excludeThoughtOnReq: true,
+  pasteLongTextToFileLen: 2500,
+  pdfAsImage: false,
   reasoning_format: 'auto',
   // make sure these default values are in sync with `common.h`
   samplers: 'dkypmxnt',
@@ -46,6 +48,8 @@ export const CONFIG_INFO: Record<string, string> = {
   reasoning_format : 'Specify how to parse reasoning content. none: reasoning content in content block. auto: reasoning content in reasoning_content. ',
   apiKey: 'Set the API Key if you are using --api-key option for the server.',
   systemMessage: 'The starting message that defines how model should behave.',
+  pasteLongTextToFileLen:
+    'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
   samplers:
     'The order at which samplers are applied, in simplified way. Default is "dkypmxt": dry->top_k->typ_p->top_p->min_p->xtc->top_sigma->temperature',
   temperature:
