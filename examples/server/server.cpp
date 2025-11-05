@@ -3050,7 +3050,7 @@ struct server_context {
                                 GGML_ASSERT(slot.ga_n == 1);
                                 
                                 // reuse any previously computed tokens that are common with the new prompt
-                                slot.n_past = common_part(slot.cache_tokens.tokens_data(), prompt_tokens.tokens_data());
+                                slot.n_past  = slot.cache_tokens.get_common_prefix(prompt_tokens);
 
                                 // push the prompt into the sampling context (do not apply grammar)
                                 for (int i = 0; i < slot.n_past; ++i) {
@@ -3137,7 +3137,6 @@ struct server_context {
                         {
                             const auto& chunk = slot.prompt_tokens.find_chunk(slot.n_past);
                             slot.cache_tokens.push_back(chunk.get()); // copy
-                            fprintf(stdout, slot.cache_tokens.detokenize(ctx, true).c_str());
                         }
 
                         slot.n_past += n_pos;
@@ -4293,14 +4292,15 @@ int main(int argc, char ** argv) {
             }
 
             const auto& prompt = data.at("prompt");
-            fprintf(stdout, prompt.get<std::string>().c_str());
 
             // process prompt
             std::vector<server_tokens> inputs;
 
             if (oaicompat && ctx_server.mctx != nullptr) {
                 // This is the case used by OAI compatible chat path with MTMD. TODO It can be moved to the path below.
-                printFilesInfo(files);
+#ifndef NDEBUG
+                print_files_info(files);
+#endif // !NDEBUG
                 inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
             }
             else {
@@ -4346,31 +4346,26 @@ int main(int argc, char ** argv) {
                         if (!result.error) {
                             result.oaicompat = oaicompat;
                             result.oaicompat_cmpl_id = completion_id;
-                            json result_array;
+                            json res_json;
                             if (oaicompat) {
                                 if (result.final_result) {
-                                    result_array = result.to_json_final();
+                                    res_json = result.to_json_final();
                                 }
                                 else {
-                                    result_array = result.to_json_partial();
+                                    res_json = result.to_json_partial();
                                 }
                             }
                             else {
                                 // legacy completions
-                                result_array = result.data;
+                                res_json = result.data;
                             }
-                            if (result_array.is_array()) {
-                                for (auto it = result_array.begin(); it != result_array.end(); ++it) {
-                                    if (!it->empty()) {
-                                        const std::string str =
-                                            "data: " +
-                                            it->dump(-1, ' ', false, json::error_handler_t::replace) +
-                                            "\n\n";
-                                        LOG_VERBOSE("data stream", { {"to_send", str} });
-                                        if (!sink.write(str.c_str(), str.size())) {
-                                            ctx_server.queue_results.remove_waiting_task_id(id_task);
-                                            return false;
-                                        }
+                            if (res_json.is_array()) {
+                                // chat completions and oai completions
+                                for (const auto& res : res_json) {
+                                    if (!server_sent_event(sink, res)) {
+                                        // sending failed (HTTP connection closed), cancel the generation
+                                        ctx_server.queue_results.remove_waiting_task_id(id_task);
+                                        return false;
                                     }
                                 }
                                 if (result.stop) {
@@ -4378,14 +4373,19 @@ int main(int argc, char ** argv) {
                                     break;
                                 }
                             }
+                            else {
+                                // legacy completions
+                                if (!server_sent_event(sink, res_json)) {
+                                    ctx_server.queue_results.remove_waiting_task_id(id_task);
+                                    return false;
+                                }
+                                if (result.stop) {
+                                    break;
+                                }
+                            }
                         }
                         else {
-                            const std::string str =
-                                "error: " +
-                                result.data.dump(-1, ' ', false, json::error_handler_t::replace) +
-                                "\n\n";
-                            LOG_VERBOSE("data stream", { {"to_send", str} });
-                            if (!sink.write(str.c_str(), str.size())) {
+                            if (!server_sent_event(sink, result.data)) {
                                 ctx_server.queue_results.remove_waiting_task_id(id_task);
                                 return false;
                             }
@@ -4436,7 +4436,7 @@ int main(int argc, char ** argv) {
             data,
             files,
             res,
-            OAICOMPAT_TYPE_CHAT);
+            OAICOMPAT_TYPE_COMPLETION);
     };
 
     const auto handle_models = [&params, &model_meta](const httplib::Request & req, httplib::Response & res) {
