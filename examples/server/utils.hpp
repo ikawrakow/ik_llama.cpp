@@ -14,6 +14,15 @@
 #include <vector>
 #include <sstream>
 #include <random>
+
+// increase max payload length to allow use of larger context size
+#define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
+// increase backlog size to avoid connection resets for >> 1 slots
+#define CPPHTTPLIB_LISTEN_BACKLOG 512
+// increase max URI length to handle longer prompts in query string
+#define CPPHTTPLIB_REQUEST_URI_MAX_LENGTH 32768
+// disable Nagle's algorithm
+#define CPPHTTPLIB_TCP_NODELAY true
 #include "httplib.h"
 
 #define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo-0613"
