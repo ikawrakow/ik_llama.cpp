@@ -99,6 +99,18 @@ ggml_cgraph * llm_build_context::build_k_shift() {
 
     GGML_ASSERT(kv_self.size == n_ctx);
 
+    const auto & rope_type_shift = hparams.rope_type == LLAMA_ROPE_TYPE_MROPE
+        // @ngxson : this is a workaround
+        // for M-RoPE, we want to rotate the whole vector when doing KV shift
+        // a normal RoPE should work, we just need to use the correct ordering
+        // ref: https://github.com/ggml-org/llama.cpp/pull/13870
+        ? LLAMA_ROPE_TYPE_NEOX
+        : hparams.rope_type;
+
+    const float yarn_attn_factor_shift = model.arch == LLM_ARCH_DEEPSEEK2
+        ? 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale))
+        : cparams.yarn_attn_factor;
+
     lctx.inp_K_shift = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_ctx);
     cb(lctx.inp_K_shift, "K_shift", -1);
     ggml_set_input(lctx.inp_K_shift);
@@ -127,15 +139,15 @@ ggml_cgraph * llm_build_context::build_k_shift() {
                 }
             }
             tmp = ggml_rope_ext_inplace(ctx0, tmp,
-                    lctx.inp_K_shift, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+                    lctx.inp_K_shift, rope_factors, n_rot, rope_type_shift, n_ctx_orig, freq_base, freq_scale,
+                    ext_factor, yarn_attn_factor_shift, beta_fast, beta_slow);
             cb(tmp, "K_shifted_f32", il);
             tmp = ggml_cpy(ctx0, tmp, k);
         } else {
             // we rotate only the first n_rot dimensions
             tmp = ggml_rope_ext_inplace(ctx0, k,
-                    lctx.inp_K_shift, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+                    lctx.inp_K_shift, rope_factors, n_rot, rope_type_shift, n_ctx_orig, freq_base, freq_scale,
+                    ext_factor, yarn_attn_factor_shift, beta_fast, beta_slow);
         }
         cb(tmp, "K_shifted", il);
         ggml_build_forward_expand(gf, tmp);
