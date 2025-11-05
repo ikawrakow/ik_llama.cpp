@@ -3054,8 +3054,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         ggml_cuda_set_peer_access(dst->src[1]->ne[1], ctx.device);
     }
 
-#define ENABLE_FUSION true
-
 #if IK_PRINT_TIMING
     int64_t tim1 = ggml_time_us();
 #endif
@@ -3086,7 +3084,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_dup(ctx, dst);
             break;
         case GGML_OP_ADD:
-            if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
+            if (GGML_CUDA_FUSION && i + 2 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_ADD &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
                 ggml_is_contiguous(dst->src[0]) &&
@@ -3100,7 +3098,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_fused_add_add_rms_norm(ctx, dst, cgraph->nodes[i+1], cgraph->nodes[i+2]);
                 i += 2;
             }
-            else if (ENABLE_FUSION && i + 1 < cgraph->n_nodes &&
+            else if (GGML_CUDA_FUSION && i + 1 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_FUSED_RMS_NORM &&
                 ggml_is_contiguous(dst->src[0]) &&
                 ggml_is_contiguous(dst->src[1]) &&
@@ -3157,7 +3155,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     ggml_cuda_op_relu(ctx, dst);
                     break;
                 case GGML_UNARY_OP_SIGMOID:
-                    if (ENABLE_FUSION && i + 5 < cgraph->n_nodes &&
+                    if (GGML_CUDA_FUSION && i + 5 < cgraph->n_nodes &&
                         cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                         cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                         cgraph->nodes[i+3]->op == GGML_OP_ARGSORT &&
@@ -3166,14 +3164,14 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                         cuda_glm45moe_experts(ctx, cgraph->nodes[i+5], cgraph->nodes[i+4]);
                         i += 5;
                     }
-                    else if (ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
+                    else if (GGML_CUDA_FUSION && i + 4 < cgraph->n_nodes &&
                         cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                         cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                         cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&
                         cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS && ops_are_same_device(cgraph, i, i+4)) {
                         cuda_bailingmoev2_experts(ctx, cgraph->nodes[i+4], cgraph->nodes[i+3]);
                         i += 4;
-                    } else if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
+                    } else if (GGML_CUDA_FUSION && i + 2 < cgraph->n_nodes &&
                         cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                         cgraph->nodes[i+2]->op == GGML_OP_ADD && ops_are_same_device(cgraph, i, i+2)) {
                         ggml_cuda_op_biased_sigmoid(ctx, cgraph->nodes[i+2]);
@@ -3244,7 +3242,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_rms_norm(ctx, dst);
             break;
         case GGML_OP_FUSED_RMS_NORM:
-            if (false && ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
+            if (false && GGML_CUDA_FUSION && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
                 cgraph->nodes[i+3]->op == GGML_OP_ROPE_FAST &&
@@ -3252,7 +3250,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_fused_rms_rope_fast(ctx, cgraph->nodes[i+3], cgraph->nodes[i+4])) {
                 i += 4;
             }
-            else if (false && ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
+            else if (false && GGML_CUDA_FUSION && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_ROPE_FAST &&
                 cgraph->nodes[i+2]->op == GGML_OP_RESHAPE &&
                 cgraph->nodes[i+3]->op == GGML_OP_FUSED_RMS_NORM &&
@@ -3260,7 +3258,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_fused_rms_rope_fast(ctx, cgraph->nodes[i+1], cgraph->nodes[i+4])) {
                 i += 4;
             }
-            else if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
+            else if (GGML_CUDA_FUSION && i + 2 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
                 dst->ne[2] == 1 && cgraph->nodes[i+2]->ne[2] == 1) {
@@ -3312,7 +3310,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_diag_mask_inf(ctx, dst);
             break;
         case GGML_OP_SOFT_MAX:
-            if (ENABLE_FUSION && i + 4 < cgraph->n_nodes &&
+            if (GGML_CUDA_FUSION && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_RESHAPE  &&
                 cgraph->nodes[i+2]->op == GGML_OP_ARGSORT  &&
                 cgraph->nodes[i+3]->op == GGML_OP_VIEW     &&
@@ -3335,20 +3333,20 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_rope_back(ctx, dst);
             break;
         case GGML_OP_ROPE_FAST:
-            if (ENABLE_FUSION && i + 3 < cgraph->n_nodes &&
+            if (GGML_CUDA_FUSION && i + 3 < cgraph->n_nodes &&
                (cgraph->nodes[i+1]->op == GGML_OP_RESHAPE || cgraph->nodes[i+1]->op == GGML_OP_VIEW) &&
                (cgraph->nodes[i+2]->op == GGML_OP_RESHAPE || cgraph->nodes[i+2]->op == GGML_OP_VIEW) &&
                 cgraph->nodes[i+3]->op == GGML_OP_ROPE_FAST &&
                 ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+3])) {
                 i += 3;
             }
-            else if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
+            else if (GGML_CUDA_FUSION && i + 2 < cgraph->n_nodes &&
                (cgraph->nodes[i+1]->op == GGML_OP_RESHAPE || cgraph->nodes[i+1]->op == GGML_OP_VIEW) &&
                 cgraph->nodes[i+2]->op == GGML_OP_ROPE_FAST &&
                 ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+2])) {
                 i += 2;
             }
-            else if (ENABLE_FUSION && i + 1 < cgraph->n_nodes &&
+            else if (GGML_CUDA_FUSION && i + 1 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_ROPE_FAST   &&
                 ggml_cuda_op_fused_rope_fast(ctx, dst, cgraph->nodes[i+1])) {
                 i += 1;
@@ -3376,7 +3374,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_pool2d(ctx, dst);
             break;
         case GGML_OP_SUM_ROWS:
-            if (ENABLE_FUSION && i + 2 < cgraph->n_nodes &&
+            if (GGML_CUDA_FUSION && i + 2 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_SCALE &&
                 cgraph->nodes[i+2]->op == GGML_OP_DIV &&
                 cgraph->nodes[i+1]->src[0] == dst &&
@@ -3385,7 +3383,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_sum_rows_div(ctx, cgraph->nodes[i+2]);
                 i += 2;
             }
-            else if (ENABLE_FUSION && i + 1 < cgraph->n_nodes &&
+            else if (GGML_CUDA_FUSION && i + 1 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_DIV &&
                 cgraph->nodes[i+1]->src[1] == dst &&
                 cgraph->nodes[i+1]->src[0] == dst->src[0] && ops_are_same_device(cgraph, i, i+1)) {
@@ -3396,7 +3394,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             }
             break;
         case GGML_OP_ARGSORT:
-            if (ENABLE_FUSION && i + 5 < cgraph->n_nodes &&
+            if (GGML_CUDA_FUSION && i + 5 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
                 cgraph->nodes[i+2]->op == GGML_OP_GET_ROWS &&
                 cgraph->nodes[i+3]->op == GGML_OP_RESHAPE &&
@@ -3431,8 +3429,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
     int64_t tim2 = ggml_time_us();
     printf("%s(%s): %d us\n", ggml_op_name(dst->op), dst->name, (int)(tim2 - tim1));
 #endif
-
-#undef ENABLE_FUSION
 
     return true;
 }
