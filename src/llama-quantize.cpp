@@ -1245,7 +1245,12 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
         // do not quantize expert gating tensors
         // NOTE: can't use LLM_TN here because the layer number is not known
-        quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
+        if (name.find("ffn_gate_inp.weight") != std::string::npos) {
+            if (params->ffn_gate_inp_type == GGML_TYPE_COUNT || params->ffn_gate_inp_type == tensor->type) {
+                quantize = false;
+            }
+        }
+        //quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
 
         // do not quantize positional embeddings and token types (BERT)
         quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");
@@ -1327,6 +1332,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
             }
             if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
                 new_type = params->output_tensor_type;
+            }
+            if (params->ffn_gate_inp_type < GGML_TYPE_COUNT && name.find("ffn_gate_inp.weight") != std::string::npos) {
+                new_type = params->ffn_gate_inp_type;
             }
             if (params->attn_q_type < GGML_TYPE_COUNT && strcmp(tensor->name, "attn_q.weight") == 0) {
                 new_type = params->attn_q_type;

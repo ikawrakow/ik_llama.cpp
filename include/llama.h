@@ -455,6 +455,7 @@ extern "C" {
         enum ggml_type ffn_gate_type;        // feedforward network gate type
         enum ggml_type ffn_down_type;        // feedforward network down type
         enum ggml_type ffn_up_type;          // feedforward network up type
+        enum ggml_type ffn_gate_inp_type;    // routed experts probabilities typy (relevant for MoE models only)
         bool allow_requantize;               // allow quantizing non-f32/f16 tensors
         bool quantize_output_tensor;         // quantize output.weight
         bool only_copy;                      // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored

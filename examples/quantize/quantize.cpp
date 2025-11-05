@@ -151,7 +151,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--keep-split] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--hide-imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--ffn-gate-inp-type] [--attn-q-type] [--attn-k-type] [--attn-v-type] [--attn-qkv-type] [--attn-output-type] [--ffn-gate-type] [--ffn-down-type] [--ffn-up-type] [--keep-split] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -161,6 +161,7 @@ static void usage(const char * executable) {
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor.\n");
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token_embd.weight tensor.\n\n");
+    printf("  --ffn-gate-inp-type ggml_type: use this ggml_type for the ffn_gate_inp tensors.\n\n");
     printf("  --custom-q regex1=type1,regex2=type2...: use this to specify custom quantization type rules.\n\n");
     printf("  --repack Repack all tensors to the corresponding _r4/8 variant if available.\n\n");
     printf("  --repack-pattern Comma separated list of regexs to use for matching tensor names to be repacked.\n\n");
@@ -372,6 +373,12 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[arg_idx], "--token-embedding-type") == 0) {
             if (arg_idx < argc-1) {
                 params.token_embedding_type = parse_ggml_type(argv[++arg_idx]);
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--ffn-gate-inp-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.ffn_gate_inp_type = parse_ggml_type(argv[++arg_idx]);
             } else {
                 usage(argv[0]);
             }
