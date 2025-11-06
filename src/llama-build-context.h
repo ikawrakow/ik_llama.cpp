@@ -268,6 +268,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_bailingmoe2();
 
+    ggml_cgraph * build_minimaxm2();
+
     //
     static ggml_tensor * llm_build_lora_mm(llama_context & lctx, ggml_context * ctx0,
             ggml_tensor * w, ggml_tensor * cur);

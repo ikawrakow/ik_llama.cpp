@@ -1012,6 +1012,17 @@ void llm_load_hparams(
                 // TODO: switch (hparams.n_layer)
 
             } break;
+        case LLM_ARCH_MINIMAX_M2:
+        {
+            ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+            ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+            ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func, false);
+
+            switch (hparams.n_layer) {
+            case 62: model.type = e_model::MODEL_230B_A10B; break;
+            default: model.type = e_model::MODEL_UNKNOWN;
+            }
+        } break;
         default: (void)0;
     }
 

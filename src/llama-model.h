@@ -110,6 +110,7 @@ enum e_model {
     MODEL_80B_A13B,
     MODEL_100B_A6B,
     MODEL_106B_A12B,
+    MODEL_230B_A10B, // Minimax M2
     MODEL_235B_A22B,
     MODEL_300B_A47B, // Ernie MoE big
     MODEL_355B_A32B,
