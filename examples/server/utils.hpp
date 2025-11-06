@@ -1325,7 +1325,7 @@ public:
             n_batch,
             true, // logits last
             &new_n_past);
-        snprintf(buffer, 512, "processed in %d ms", ggml_time_ms() - t0);
+        snprintf(buffer, 512, "processed in %g ms", 1.*(ggml_time_ms() - t0));
         LOG_INFO(buffer, {});
         if (result != 0) {
             snprintf(buffer, 512, "mtmd_helper_eval failed with status %d", result);
