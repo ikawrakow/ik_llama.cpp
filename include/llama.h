@@ -439,6 +439,7 @@ extern "C" {
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
         void *              offload_policy;
+        void *              cuda_params;
     };
 
     // model quantization parameters

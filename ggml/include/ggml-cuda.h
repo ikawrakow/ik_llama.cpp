@@ -21,7 +21,7 @@ extern "C" {
 #define GGML_CUDA_MAX_DEVICES       16
 
 // backend API
-GGML_API GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device);
+GGML_API GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, const void * params);
 
 GGML_API GGML_CALL bool ggml_backend_is_cuda(ggml_backend_t backend);
 

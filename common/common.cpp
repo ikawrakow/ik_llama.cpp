@@ -1249,6 +1249,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "-cuda" || arg == "--cuda-params") {
+        CHECK_ARG
+        params.cuda_params = argv[i];
+        return true;
+    }
     if (arg == "--cpu-moe" || arg == "-cmoe") {
         params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
         return true;
@@ -2076,6 +2081,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --no-context-shift",           "disable context-shift." });
     options.push_back({ "backend" });
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
+    options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
 
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
@@ -2676,7 +2682,7 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     auto mparams = llama_model_params_from_gpt_params(params);
 
     llama_model * model = nullptr;
-    
+
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
         model = llama_load_model_from_hf(params.hf_repo.c_str(), params.hf_file.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
     } else if (!params.model_url.empty()) {
@@ -2684,7 +2690,7 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     } else {
         model = llama_load_model_from_file(params.model.c_str(), mparams);
     }
-    
+
     if (model == NULL) {
         fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params.model.c_str());
         return iparams;
@@ -2914,6 +2920,7 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
 
     if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
+    if (!params.cuda_params.empty()) cparams.cuda_params = (void *)params.cuda_params.data();
 
     return cparams;
 }
