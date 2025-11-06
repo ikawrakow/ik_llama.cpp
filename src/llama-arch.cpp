@@ -66,6 +66,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_HUNYUAN_MOE,     "hunyuan-moe"  },
     { LLM_ARCH_OPENAI_MOE,      "gpt-oss"      },
     { LLM_ARCH_BAILINGMOE2,     "bailingmoe2"  },
+    { LLM_ARCH_MINIMAX_M2,      "minimax-m2"   },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 

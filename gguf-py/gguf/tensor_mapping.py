@@ -267,6 +267,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate.e_score_correction",           # deepseek-v3 dots1
             "model.layers.{bid}.mlp.moe_statics.e_score_correction",    # ernie4.5-moe
             "model.layers.{bid}.mlp.gate.expert_bias",                  # bailingmoe2
+            "model.layers.{bid}.block_sparse_moe.e_score_correction",   # minimax-m2
         ),
 
         # Feed-forward up
