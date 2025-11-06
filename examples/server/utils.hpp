@@ -15,6 +15,16 @@
 #include <sstream>
 #include <random>
 
+// increase max payload length to allow use of larger context size
+#define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
+// increase backlog size to avoid connection resets for >> 1 slots
+#define CPPHTTPLIB_LISTEN_BACKLOG 512
+// increase max URI length to handle longer prompts in query string
+#define CPPHTTPLIB_REQUEST_URI_MAX_LENGTH 32768
+// disable Nagle's algorithm
+#define CPPHTTPLIB_TCP_NODELAY true
+#include "httplib.h"
+
 #define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo-0613"
 
 using json = nlohmann::ordered_json;
@@ -409,6 +419,17 @@ static json probs_vector_to_json(const llama_context * ctx, const std::vector<co
     }
 
     return out;
+}
+
+static bool server_sent_event(httplib::DataSink& sink, const json& data) {
+    const std::string str =
+        "data: " +
+        data.dump(-1, ' ', false, json::error_handler_t::replace) +
+        "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
+
+    LOG_VERBOSE("data stream, to_send: %s", str.c_str());
+
+    return sink.write(str.c_str(), str.size());
 }
 
 //
@@ -1065,7 +1086,6 @@ public:
         if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
             GGML_ASSERT(has_mtmd);
             const int n_pos = mtmd_input_chunk_get_n_pos(chunk);
-            fprintf(stdout, "n_pos: %d\n", n_pos);
             llama_pos start_pos = tokens.size();
             for (int i = 0; i < n_pos; ++i) {
                 tokens.emplace_back(LLAMA_TOKEN_NULL);
@@ -1209,38 +1229,53 @@ public:
     }
 
     size_t get_common_prefix(const server_tokens& b) const {
-        size_t max_idx = std::min(tokens.size(), b.tokens.size());
-        for (size_t i = 0; i < max_idx; ++i) {
-            auto& ai = tokens[i];
-            auto& bi = b.tokens[i];
+        const size_t max_idx = std::min(tokens.size(), b.tokens.size());
 
-            if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
-                GGML_ASSERT(has_mtmd);
-                const auto& a_chunk = find_chunk(i);
-                const auto& b_chunk = b.find_chunk(i);
-                GGML_ASSERT(a_chunk && b_chunk);
-                std::string ai_id = mtmd_input_chunk_get_id(a_chunk.get());
-                std::string bi_id = mtmd_input_chunk_get_id(b_chunk.get());
-                size_t a_pos = mtmd_input_chunk_get_n_pos(a_chunk.get());
-                size_t b_pos = mtmd_input_chunk_get_n_pos(b_chunk.get());
-                if (ai_id == bi_id && a_pos == b_pos) {
-                    GGML_ASSERT(a_pos > 0 && "Invalid media chunk"); // should never happen
-                    i += a_pos - 1; // will be +1 by the for loop
+        if (!has_mtmd) {
+            for (size_t i = 0; i < max_idx; ++i) {
+                if (tokens[i] == b.tokens[i]) {
                     continue;
                 }
-                else {
-                    return i;
-                }
-            }
-            else if (ai == bi) {
-                continue;
-            }
-            else {
                 return i;
             }
+            return max_idx;
         }
+
+        for (size_t i = 0; i < max_idx; ++i) {
+            const llama_token ai = tokens[i];
+            const llama_token bi = b.tokens[i];
+
+            if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {
+                const auto& a_chunk = find_chunk(i);
+                const auto& b_chunk = b.find_chunk(i);
+
+                GGML_ASSERT(a_chunk && b_chunk);
+
+                const std::string id_ai = mtmd_input_chunk_get_id(a_chunk.get());
+                const std::string id_bi = mtmd_input_chunk_get_id(b_chunk.get());
+
+                const size_t pos_a = mtmd_input_chunk_get_n_pos(a_chunk.get());
+                const size_t pos_b = mtmd_input_chunk_get_n_pos(b_chunk.get());
+
+                if (id_ai == id_bi && pos_a == pos_b) {
+                    GGML_ASSERT(pos_a > 0 && "Invalid media chunk"); // should never happen
+                    i += pos_a - 1; // will be +1 by the for loop
+                    continue;
+                }
+
+                return i;
+            }
+
+            if (ai == bi) {
+                continue;
+            }
+
+            return i;
+        }
+
         return max_idx; // all tokens are equal
     }
+
 
     // make sure all text tokens are within the vocab range
     bool validate(const struct llama_context* ctx) const {
@@ -1274,10 +1309,12 @@ public:
         llama_pos n_past,
         int32_t seq_id,
         llama_pos& n_pos_out) {
+        char buffer[512];
         auto& chunk = find_chunk(n_past);
         const char* name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
             ? "image" : "audio";
-        LOG_INFO("processing %s...\n", name);
+        snprintf(buffer, 512, "processing : %s",name);
+        LOG_INFO(buffer, {});
         int32_t n_batch = llama_n_batch(ctx);
         int64_t t0 = ggml_time_ms();
         llama_pos new_n_past = n_past;
@@ -1288,9 +1325,11 @@ public:
             n_batch,
             true, // logits last
             &new_n_past);
-        LOG_INFO("processed in %" PRId64 " ms\n", ggml_time_ms() - t0);
+        snprintf(buffer, 512, "processed in %d ms", ggml_time_ms() - t0);
+        LOG_INFO(buffer, {});
         if (result != 0) {
-            LOG_ERROR("mtmd_helper_eval failed with status %d", result);
+            snprintf(buffer, 512, "mtmd_helper_eval failed with status %d", result);
+            LOG_ERROR(buffer, {});
             n_pos_out = n_past;
             return result;
         }
@@ -1422,7 +1461,7 @@ static std::vector<server_tokens> tokenize_input_prompts(const llama_vocab* voca
     return result;
 }
 // Assuming raw_buffer has .data() and .size() members
-inline void printFilesInfo(const std::vector<raw_buffer>& files) {
+inline void print_files_info(const std::vector<raw_buffer>& files) {
     for (size_t i = 0; i < files.size(); ++i) {
         const auto& file = files[i];
         std::cout << "File " << i << ": Size = " << file.size() << " bytes\n";
