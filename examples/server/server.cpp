@@ -3006,6 +3006,13 @@ struct server_context {
 
                             // if input prompt is too big, truncate it (if group attention self-extend is disabled)
                             if (slot.ga_n == 1 && slot.n_prompt_tokens >= slot.n_ctx) {
+                                if (!params.ctx_shift) {
+                                    // this check is redundant (for good)
+                                    // we should never get here, because generation should already stopped in process_token()
+                                    send_error(slot, "context shift is disabled for prompt processing", ERROR_TYPE_SERVER);
+                                    slot.release();
+                                    continue;
+                                }
                                 const int n_left = slot.n_ctx - slot.params.n_keep;
 
                                 const int n_block_size = n_left / 2;
@@ -3016,7 +3023,7 @@ struct server_context {
                                 for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
                                     new_tokens[i - n_discard] = new_tokens[i];
                                 }
-                                new_tokens.resize(slot.cache_tokens.size() - n_discard);
+                                new_tokens.resize(std::max(0, (int) slot.cache_tokens.size() - n_discard));
                                 prompt_tokens.clear();
                                 prompt_tokens.insert(new_tokens);
                                 slot.truncated = true;
