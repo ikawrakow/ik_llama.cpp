@@ -3844,6 +3844,7 @@ struct llama_context_params llama_context_default_params() {
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
+        /*.cuda_params                 =*/ nullptr,
     };
 
     return result;
@@ -4122,7 +4123,7 @@ struct llama_context * llama_new_context_with_model(
     const auto & hparams = model->hparams;
     auto       & cparams = ctx->cparams;
 
-    
+
     cparams.n_seq_max        = std::max(1u, params.n_seq_max);
     cparams.n_threads        = params.n_threads;
     cparams.n_threads_batch  = params.n_threads_batch;
@@ -4143,6 +4144,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.rope_cache       = params.rope_cache;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
+    cparams.cuda_params      = params.cuda_params;
 
     cparams.pooling_type     = params.pooling_type;
 
@@ -4227,6 +4229,9 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",     __func__, cparams.rope_freq_scale);
+    if (cparams.cuda_params) {
+        LLAMA_LOG_INFO("%s: cuda_params   = %s\n", __func__, (const char *)cparams.cuda_params);
+    }
 
     ctx->abort_callback      = params.abort_callback;
     ctx->abort_callback_data = params.abort_callback_data;
@@ -4266,7 +4271,7 @@ struct llama_context * llama_new_context_with_model(
 #elif defined(GGML_USE_CUDA)
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_ROW) {
             // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_ROW, only the main GPU backend is used
-            ggml_backend_t backend = ggml_backend_cuda_init(model->main_gpu);
+            ggml_backend_t backend = ggml_backend_cuda_init(model->main_gpu, cparams.cuda_params);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, model->main_gpu);
                 llama_free(ctx);
@@ -4277,7 +4282,7 @@ struct llama_context * llama_new_context_with_model(
         } else {
             // LLAMA_SPLIT_MODE_LAYER requires a backend for each GPU
             for (int device = 0; device < ggml_backend_cuda_get_device_count(); ++device) {
-                ggml_backend_t backend = ggml_backend_cuda_init(device);
+                ggml_backend_t backend = ggml_backend_cuda_init(device, cparams.cuda_params);
                 if (backend == nullptr) {
                     LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, device);
                     llama_free(ctx);
@@ -4404,7 +4409,7 @@ struct llama_context * llama_new_context_with_model(
             }
             ctx->backends = std::move(backends);
         }
-        
+
         ctx->backend_cpu = ggml_backend_cpu_init();
         if (ctx->backend_cpu == nullptr) {
             LLAMA_LOG_ERROR("%s: failed to initialize CPU backend\n", __func__);

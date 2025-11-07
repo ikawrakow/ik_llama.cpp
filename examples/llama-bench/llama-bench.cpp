@@ -256,6 +256,7 @@ struct cmd_params {
     std::vector<bool> embeddings;
     std::vector<llama_model_tensor_buft_override> buft_overrides;
     ggml_numa_strategy numa;
+    std::string cuda_params;
     int reps;
     bool verbose;
     bool warmup;
@@ -295,6 +296,7 @@ static const cmd_params cmd_params_defaults = {
     /* embeddings           */ {false},
     /* buft_overrides       */ {},
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
+    /* cuda_params          */ {},
     /* reps                 */ 5,
     /* verbose              */ false,
     /* warmup               */ true,
@@ -344,6 +346,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                       (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
     printf("  -w, --warmup <0|1>                  (default: %s)\n", cmd_params_defaults.warmup ? "1" : "0");
     printf("  -rtr, --run-time-repack <0|1>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
+    printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
     printf("  -mqkv, --merge-qkv                  (default: %s)\n", cmd_params_defaults.mqkv ? "1" : "0");
     printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
     printf("  -ot, --override-tensor pattern      (default: none)\n");
@@ -736,6 +739,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.repack = std::stoi(argv[i]);
+        } else if (arg == "-cuda" || arg == "--cuda-params") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.cuda_params = argv[i];
         } else if (arg == "-mqkv" || arg == "--merge-qkv") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -852,6 +861,7 @@ struct cmd_params_instance {
     int  attn_max_batch;
     Ser  ser;
     std::vector<float> tensor_split;
+    std::string cuda_params;
     bool use_mmap;
     bool embeddings;
     bool repack = false;
@@ -914,6 +924,7 @@ struct cmd_params_instance {
         cparams.min_experts = ser.first;
         cparams.thresh_experts = ser.second;
         cparams.embeddings = embeddings;
+        cparams.cuda_params = (void *)cuda_params.data();
 
         return cparams;
     }
@@ -965,6 +976,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .attn_max_b   = */ amb,
                 /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
+                /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
@@ -1003,6 +1015,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .attn_max_b   = */ amb,
                 /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
+                /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
@@ -1041,6 +1054,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .attn_max_b   = */ amb,
                 /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
+                /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
@@ -1079,6 +1093,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .attn_max_b   = */ amb,
                 /* .ser          = */ ser,
                 /* .tensor_split = */ ts,
+                /* .cuda_params  = */ params.cuda_params,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .repack       = */ params.repack,
@@ -1128,6 +1143,7 @@ struct test {
     int  attn_max_batch;
     Ser  ser;
     std::vector<float> tensor_split;
+    std::string cuda_params;
     bool use_mmap;
     bool embeddings;
     bool repack = false;
@@ -1166,6 +1182,7 @@ struct test {
         attn_max_batch = inst.attn_max_batch;
         ser = inst.ser;
         tensor_split = inst.tensor_split;
+        cuda_params = inst.cuda_params;
         use_mmap = inst.use_mmap;
         embeddings = inst.embeddings;
         repack = inst.repack;
