@@ -907,7 +907,7 @@ bool llama_model_loader::load_all_data(
             for (int i = 0; i < ggml_backend_cuda_get_device_count(); ++i) {
                 auto * cuda_buffer_type = ggml_backend_cuda_buffer_type(i);
                 if (buffer_type == cuda_buffer_type) {
-                    cuda_backend = ggml_backend_cuda_init(i);
+                    cuda_backend = ggml_backend_cuda_init(i, nullptr);
                     break;
                 }
             }
