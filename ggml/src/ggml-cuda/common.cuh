@@ -837,6 +837,10 @@ struct ggml_backend_cuda_context {
 
     std::unique_ptr<ggml_cuda_graph> cuda_graph;
 
+    int  fusion = GGML_CUDA_FUSION;
+    int  offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
+    int  mmq_id_thresh = 32;
+
     explicit ggml_backend_cuda_context(int device);
 
     ~ggml_backend_cuda_context();
