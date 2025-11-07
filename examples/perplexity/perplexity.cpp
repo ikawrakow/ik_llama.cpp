@@ -682,7 +682,7 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     nll2 -= nll * nll;
     if (nll2 > 0) {
         nll2 = sqrt(nll2/(count-1));
-        printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n", n_chunk, n_ctx, ppl, nll2*ppl);	
+        printf("Final estimate: PPL over %d chunks for n_ctx=%d = %.4lf +/- %.5lf\n", n_chunk, n_ctx, ppl, nll2*ppl);
     } else {
         printf("Unexpected negative standard deviation of log(prob)\n");
     }
