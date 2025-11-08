@@ -8,7 +8,6 @@
 #pragma once
 
 #include "common.cuh"
-#include "mmq.cuh"
 
 #include <cstdint>
 

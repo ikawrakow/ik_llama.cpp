@@ -1,6 +1,7 @@
 #include "mmq_id_common.cuh"
 #include "mmq_id.cuh"
 #include "quantize_id.cuh"
+#include "quantize.cuh"
 
 #include <vector>
 #include <climits>
@@ -317,7 +318,7 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
         const ggml_tensor * ids_tensor, ggml_tensor * dst, char * ids_data, char * src1_quantized_data) {
     GGML_ASSERT(       src1->type == GGML_TYPE_F32);
     GGML_ASSERT(       dst->type  == GGML_TYPE_F32);
-    GGML_ASSERT(ids_tensor->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
+    GGML_ASSERT(!ids_tensor || ids_tensor->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
     GGML_TENSOR_BINARY_OP_LOCALS;
 
@@ -331,7 +332,7 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
     //GGML_ASSERT(       nb00       == ts_src0);
     GGML_ASSERT(       nb10       == ts_src1);
     GGML_ASSERT(       nb0        == ts_dst);
-    GGML_ASSERT(ids_tensor->nb[0] == ggml_type_size(ids_tensor->type));
+    GGML_ASSERT(!ids_tensor || ids_tensor->nb[0] == ggml_type_size(ids_tensor->type));
 
     GGML_ASSERT(ne13 == 1);
     GGML_ASSERT(nb12 % nb11 == 0);
@@ -363,6 +364,30 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
 
     const bool use_stream_k = (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA)
                             || GGML_CUDA_CC_IS_CDNA(cc);
+
+    if (!ids_tensor) {
+        const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1 +
+            get_mmq_x_max_host(cc)*sizeof(block_q8_1_mmq);
+        ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
+
+        {
+            quantize_mmq_q8_1_cuda(src1_d, src1_q8_1.get(), ne10, ne11, 1, ne10_padded, src0->type, stream);
+            CUDA_CHECK(cudaGetLastError());
+        }
+
+        const int64_t s12 = ne11*ne10_padded * sizeof(block_q8_1)/(QK8_1*sizeof(int));
+        const int64_t s13 = ne12*s12;
+
+        const mmq_args_id args = {
+            src0_d, src0->type, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d,
+            ne00, ne01, ne1, s01, ne11, s1,
+            ne02, ne12, s02, s12, s2,
+            ne03, ne13, s03, s13, s3,
+            use_stream_k, ne1};
+
+        ggml_cuda_mul_mat_q_switch_type_id(ctx, args, stream);
+        return;
+    }
 
     const int64_t n_expert_used = ids_tensor->ne[0];
     const int64_t ne_get_rows = ne12 * n_expert_used;

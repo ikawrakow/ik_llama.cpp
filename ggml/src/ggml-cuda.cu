@@ -2460,92 +2460,98 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     dst_row.nb[2] = nb1;
     dst_row.nb[3] = nb1;
 
-    if (false && ne12 == 1) {
-        std::vector<char> ids_host(ggml_nbytes(ids));
-        const char * ids_dev = (const char *) ids->data;
-        CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
-        CUDA_CHECK(cudaStreamSynchronize(stream));
-        for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
-            for (int64_t id = 0; id < n_ids; id++) {
-                const int32_t i02 = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
 
-                if (i02 < 0 || i02 >= n_as) continue;
+    ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool());
+    std::vector<int> moe_counts, cum_moe_counts;
+    bool is_ser = prepare_row_mappigs(ctx, n_as, n_ids, ids, moe_counts, cum_moe_counts, dev_row_mapping);
+    if (is_ser) {
+        CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
+    }
 
-                const int64_t i11 = id % ne11;
-                const int64_t i12 = iid1;
+    ggml_cuda_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(src1));
+    ggml_cuda_pool_alloc<char>  dst_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
 
-                const int64_t i1 = id;
-                const int64_t i2 = i12;
+    src1_row.data = src1_contiguous.get();
+    dst_row.data  =  dst_contiguous.get();
 
-                src0_row.data = src0_original + i02*nb02;
-                src1_row.data = src1_original + i11*nb11 + i12*nb12;
-                dst_row.data  =  dst_original + i1*nb1   + i2*nb2;
+    for (int64_t i02 = 0; i02 < n_as; i02++) {
 
-                ggml_cuda_mul_mat(ctx, &src0_row, &src1_row, &dst_row, nullptr, 0);
-            }
-        }
-    } else {
+        int64_t num_src1_rows = moe_counts[i02];
 
-        ggml_cuda_pool_alloc<mmid_row_mapping> dev_row_mapping(ctx.pool());
-        std::vector<int> moe_counts, cum_moe_counts;
-        bool is_ser = prepare_row_mappigs(ctx, n_as, n_ids, ids, moe_counts, cum_moe_counts, dev_row_mapping);
-        if (is_ser) {
-            CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
+        if (num_src1_rows == 0) {
+            continue;
         }
 
-        ggml_cuda_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(src1));
-        ggml_cuda_pool_alloc<char>  dst_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
+        size_t mapping_offset = cum_moe_counts[i02];
 
-        src1_row.data = src1_contiguous.get();
-        dst_row.data  =  dst_contiguous.get();
+        {
+            dim3 block_dims(std::min((unsigned int)ne10, 768u));
+            dim3 grid_dims(num_src1_rows);
+            k_copy_src_to_contiguous<<<grid_dims, block_dims, 0, stream>>>(
+                    src1_original, src1_contiguous.get(), dev_row_mapping.get() + mapping_offset, ne10, ne11, nb11, nb12);
+            CUDA_CHECK(cudaGetLastError());
+        }
 
-        for (int64_t i02 = 0; i02 < n_as; i02++) {
+        src0_row.data = src0_original + i02*nb02;
 
-            int64_t num_src1_rows = moe_counts[i02];
+        GGML_ASSERT(nb11 == sizeof(float)*ne10);
+        GGML_ASSERT(nb1 == sizeof(float)*ne0);
 
-            if (num_src1_rows == 0) {
-                continue;
-            }
+        src1_row.ne[1] = num_src1_rows;
+        src1_row.nb[1] = nb11;
+        src1_row.nb[2] = num_src1_rows*nb11;
+        src1_row.nb[3] = num_src1_rows*nb11;
 
-            size_t mapping_offset = cum_moe_counts[i02];
+        dst_row.ne[1] = num_src1_rows;
+        dst_row.nb[1] = nb1;
+        dst_row.nb[2] = num_src1_rows*nb1;
+        dst_row.nb[3] = num_src1_rows*nb1;
 
-            {
-                dim3 block_dims(std::min((unsigned int)ne10, 768u));
-                dim3 grid_dims(num_src1_rows);
-                k_copy_src_to_contiguous<<<grid_dims, block_dims, 0, stream>>>(
-                        src1_original, src1_contiguous.get(), dev_row_mapping.get() + mapping_offset, ne10, ne11, nb11, nb12);
+        if (ggml_is_quantized(src0->type) &&
+            ggml_cuda_should_use_mmq(src0->type, ggml_cuda_info().devices[ctx.device].cc, num_src1_rows)) {
+            auto src1_padded_num_cols = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
+            auto src1_padded_row_size = src1_padded_num_cols/ggml_blck_size(GGML_TYPE_Q8_1)*ggml_type_size(GGML_TYPE_Q8_1);
+            auto src1_quantized_size  = src1_padded_row_size*num_src1_rows;
+            if (true || num_src1_rows > MMVQ_MAX_BATCH_SIZE) {
+                src1_quantized_size += get_mmq_x_max_host(ggml_cuda_info().devices[ctx.device].cc)*sizeof(block_q8_1_mmq);
+                ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool(), src1_quantized_size);
+                quantize_mmq_q8_1_cuda((const float *)src1_contiguous.get(), src1_quantized.get(), ne00, num_src1_rows, 1,
+                        src1_padded_num_cols, src0->type, stream);
+                src1_row.nb[1] = src1_padded_row_size;
+                src1_row.nb[2] = src1_row.nb[3] = src1_row.nb[1]*num_src1_rows;
+                //ggml_cuda_op_mul_mat_q(ctx, &src0_row, &src1_row, &dst_row, (const char *)src0_row.data, nullptr,
+                //        src1_quantized.get(), (float *)dst_row.data,
+                //        0, src0_row.ne[1], num_src1_rows, src1_padded_num_cols, stream);
+                ggml_cuda_mul_mat_q_id(ctx, &src0_row, &src1_row, nullptr, &dst_row, nullptr, src1_quantized.get());
+
+                CUDA_CHECK(cudaGetLastError());
+            } else {
+                ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool(), src1_quantized_size);
+                quantize_row_q8_1_cuda((const float *)src1_contiguous.get(), src1_quantized.get(), ne00, num_src1_rows, 1,
+                        src1_padded_num_cols, src0->type, stream);
+                src1_row.nb[1] = src1_padded_row_size;
+                src1_row.nb[2] = src1_row.nb[3] = src1_row.nb[1]*num_src1_rows;
+                ggml_cuda_op_mul_mat_vec_q(ctx, &src0_row, &src1_row, &dst_row, (const char *)src0_row.data, nullptr,
+                        src1_quantized.get(), (float *)dst_row.data,
+                        0, src0_row.ne[1], num_src1_rows, src1_padded_num_cols, stream);
                 CUDA_CHECK(cudaGetLastError());
             }
-
-            src0_row.data = src0_original + i02*nb02;
-
-            GGML_ASSERT(nb11 == sizeof(float)*ne10);
-            GGML_ASSERT(nb1 == sizeof(float)*ne0);
-
-            src1_row.ne[1] = num_src1_rows;
-            src1_row.nb[1] = nb11;
-            src1_row.nb[2] = num_src1_rows*nb11;
-            src1_row.nb[3] = num_src1_rows*nb11;
-
-            dst_row.ne[1] = num_src1_rows;
-            dst_row.nb[1] = nb1;
-            dst_row.nb[2] = num_src1_rows*nb1;
-            dst_row.nb[3] = num_src1_rows*nb1;
-
+        } else {
             ggml_cuda_mul_mat(ctx, &src0_row, &src1_row, &dst_row, nullptr, 0);
+        }
 
-            {
-                dim3 block_dims(std::min((unsigned int)ne0, 768u));
-                dim3 grid_dims(num_src1_rows);
-                k_copy_dst_from_contiguous<<<grid_dims, block_dims, 0, stream>>>(
-                        dst_original, dst_contiguous.get(),
-                        dev_row_mapping.get() + mapping_offset,
-                        ne0,
-                        nb1, nb2);
-                CUDA_CHECK(cudaGetLastError());
-            }
+        {
+            dim3 block_dims(std::min((unsigned int)ne0, 768u));
+            dim3 grid_dims(num_src1_rows);
+            k_copy_dst_from_contiguous<<<grid_dims, block_dims, 0, stream>>>(
+                    dst_original, dst_contiguous.get(),
+                    dev_row_mapping.get() + mapping_offset,
+                    ne0,
+                    nb1, nb2);
+            CUDA_CHECK(cudaGetLastError());
         }
     }
+
     return false;
 }
 
