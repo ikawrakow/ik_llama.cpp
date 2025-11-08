@@ -3110,7 +3110,8 @@ struct server_context {
                         && slot.prompt_tokens[slot.n_past] == LLAMA_TOKEN_NULL) {
                         // process the image
                         int32_t new_n_past;
-                        int32_t res = slot.prompt_tokens.process_chunk(ctx, mctx, slot.n_past, slot.id, new_n_past);
+                        size_t new_n_tokens;
+                        int32_t res = slot.prompt_tokens.process_chunk(ctx, mctx, slot.n_past, slot.id, new_n_past, new_n_tokens);
                         int32_t n_pos = new_n_past - slot.n_past;
                         if (res != 0) {
                             LLAMA_LOG_ERROR("failed to process image, res = %d\n", res);
@@ -3126,7 +3127,7 @@ struct server_context {
                         }
 
                         slot.n_past += n_pos;
-                        slot.n_prompt_tokens_processed += n_pos;
+                        slot.n_prompt_tokens_processed += new_n_tokens;
                     }
 
 
