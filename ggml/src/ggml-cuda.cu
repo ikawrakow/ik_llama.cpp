@@ -2357,7 +2357,7 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     CUDA_CHECK(cudaMemsetAsync((char *)dst->data, 0, ggml_nbytes(dst), ctx.stream()));
 
-    if (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
+    if (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE && src1->ne[2] == 1 && src1->ne[3] == 1 &&
         ggml_is_quantized(src0->type) &&
         ggml_backend_buffer_is_cuda(src0->buffer) &&
         ggml_backend_buffer_is_cuda(src1->buffer) &&
@@ -2381,18 +2381,19 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             local_dst.ne[1] = local_dst.ne[3] = 1;
             local_dst.nb[2] = local_dst.nb[1];
 
-            auto local_src1 = *src1;
-            local_src1.nb[2] = local_src1.nb[3] = 0;
-
             const int64_t src1_padded_col_size = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
-            ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool());
             auto src_1_ddq_size = src1_padded_col_size*sizeof(block_q8_1)/QK8_1;
-            local_src1.data = src1_quantized.alloc(src_1_ddq_size);
-            quantize_row_q8_1_cuda((const float *)src1->data, (void *)src1_quantized.get(), src1->ne[0], 1, 1, src1_padded_col_size,
-                        src0->type, stream);
-            CUDA_CHECK(cudaGetLastError());
-
+            auto local_src1 = *src1;
+            local_src1.ne[1] = 1;
             local_src1.nb[1] = src_1_ddq_size;
+            local_src1.nb[2] = src1->ne[1] > 1 ? src_1_ddq_size : 0;
+            local_src1.nb[3] = local_src1.nb[2];
+
+            ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool());
+            local_src1.data = src1_quantized.alloc(src_1_ddq_size*src1->ne[1]);
+            quantize_row_q8_1_cuda((const float *)src1->data, (void *)src1_quantized.get(), src1->ne[0], src1->ne[1], 1,
+                    src1_padded_col_size, src0->type, stream);
+            CUDA_CHECK(cudaGetLastError());
 
             ggml_cuda_op_mul_mat_vec_q_id(ctx, src0, &local_src1, ids, &local_dst, nullptr,
                 (const char *)src0->data, nullptr, src1_quantized.get(), (float *)dst->data,
