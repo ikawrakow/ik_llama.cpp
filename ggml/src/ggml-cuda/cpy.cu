@@ -614,3 +614,75 @@ void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
     }
 }
+
+template <typename src_t, typename dst_t>
+static __global__ void cpy_flt_contiguous(const int ne, const char * cx1, const char * cx2, char * cdst_direct1, char * cdst_direct2,
+                               char ** cdst_indirect, int graph_cpynode_index) {
+    const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= ne) {
+        return;
+    }
+
+    auto dst1 = (cdst_indirect != nullptr) ? (dst_t *)cdst_indirect[graph_cpynode_index+0] : (dst_t *)cdst_direct1;
+    auto dst2 = (cdst_indirect != nullptr) ? (dst_t *)cdst_indirect[graph_cpynode_index+1] : (dst_t *)cdst_direct2;
+    auto src1 = (const src_t *)cx1;
+    auto src2 = (const src_t *)cx2;
+
+    if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
+        dst1[i] = __float2bfloat16(src1[i]);
+        dst2[i] = __float2bfloat16(src2[i]);
+    } else {
+        dst1[i] = (dst_t)src1[i];
+        dst2[i] = (dst_t)src2[i];
+    }
+}
+
+template<typename src_t, typename dst_t>
+static void ggml_cpy_flt_contiguous_cuda_2(
+    const char * cx1, const char * cx2, char * cdst1, char * cdst2, const int ne,
+    cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+
+    const int num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
+    cpy_flt_contiguous<src_t, dst_t><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
+        (ne, cx1, cx2, cdst1, cdst2, cdst_indirect, graph_cpynode_index);
+    graph_cpynode_index += 2;
+}
+
+bool ggml_cuda_cpy_2(ggml_backend_cuda_context & ctx, const ggml_tensor * src1, const ggml_tensor * src2,
+        ggml_tensor * dst1, ggml_tensor * dst2, bool disable_indirection) {
+    if (src1->type != GGML_TYPE_F32 || src2->type != GGML_TYPE_F32) return false;
+    if (dst1->type != GGML_TYPE_F16 && dst1->type != GGML_TYPE_BF16) return false;
+    if (dst2->type != GGML_TYPE_F16 && dst2->type != GGML_TYPE_BF16) return false;
+    bool fast_cpy_1 = ggml_is_contiguous(src1) && ggml_is_contiguous(dst1) && ggml_are_same_shape(src1, dst1);
+    bool fast_cpy_2 = ggml_is_contiguous(src2) && ggml_is_contiguous(dst2) && ggml_are_same_shape(src2, dst2);
+    if (!fast_cpy_1 || !fast_cpy_2) return false;
+    auto nelem = ggml_nelements(dst1);
+    if (ggml_nelements(dst2) != nelem) return false;
+
+    char ** dest_ptrs = nullptr;
+    int graph_cpynode_index = -1;
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+    if(ctx.cuda_graph->use_cpy_indirection && !disable_indirection) {
+        dest_ptrs = ctx.cuda_graph->dest_ptrs_d;
+        graph_cpynode_index = ctx.cuda_graph->graph_cpynode_index;
+    }
+#else
+    GGML_UNUSED(disable_indirection);
+#endif
+
+    if (dst1->type == GGML_TYPE_F16) {
+        ggml_cpy_flt_contiguous_cuda_2<float, half>((const char *)src1->data, (const char *)src2->data,
+                (char *)dst1->data, (char *)dst2->data, nelem, ctx.stream(), dest_ptrs, graph_cpynode_index);
+    } else {
+        ggml_cpy_flt_contiguous_cuda_2<float, nv_bfloat16>((const char *)src1->data, (const char *)src2->data,
+                (char *)dst1->data, (char *)dst2->data, nelem, ctx.stream(), dest_ptrs, graph_cpynode_index);
+    }
+
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+    if(ctx.cuda_graph->use_cpy_indirection && !disable_indirection) {
+        ctx.cuda_graph->graph_cpynode_index = graph_cpynode_index;
+    }
+#endif
+    return true;
+}
