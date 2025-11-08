@@ -1467,11 +1467,11 @@ struct server_context {
         return nullptr;
     }
 
-    server_slot * get_available_slot(const std::string & prompt) {
+    server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
         // find the slot that has at least n% prompt similarity
-        if (ret == nullptr && slot_prompt_similarity != 0.0f && !prompt.empty()) {
+        if (ret == nullptr && slot_prompt_similarity != 0.0f) {
             int max_lcp_len = 0;
             float similarity = 0;
 
@@ -1480,24 +1480,16 @@ struct server_context {
                 if (!slot.available()) {
                     continue;
                 }
-
+                const auto & cache_tokens = slot.cache_tokens;
                 // skip the slot if it does not contains prompt
-                if (!slot.prompt.is_string()) {
+                if (cache_tokens.empty()) {
                     continue;
                 }
 
-                // current slot's prompt
-                std::string slot_prompt = slot.prompt.get<std::string>();
-
-                // length of the current slot's prompt
-                int slot_prompt_len = slot_prompt.size();
-
                 // length of the Longest Common Prefix between the current slot's prompt and the input prompt
-                int lcp_len = common_part(slot_prompt, prompt);
-
+                int lcp_len = cache_tokens.get_common_prefix(task.tokens);
                 // fraction of the common substring length compared to the current slot's prompt length
-                similarity = static_cast<float>(lcp_len) / slot_prompt_len;
-
+                const float similarity = float(lcp_len) / task.tokens.size();
                 // select the current slot if the criteria match
                 if (lcp_len > max_lcp_len && similarity > slot_prompt_similarity) {
                     max_lcp_len = lcp_len;
@@ -2461,12 +2453,7 @@ struct server_context {
                     if (id_slot != -1) {
                         slot = get_slot_by_id(id_slot);
                     } else {
-                        std::string prompt;
-                        if (task.data.contains("prompt") && task.data.at("prompt").is_string()) {
-                            prompt = json_value(task.data, "prompt", std::string());
-                        }
-
-                        slot = get_available_slot(prompt);
+                        slot = get_available_slot(task);
                     }
 
                     if (slot == nullptr) {
@@ -3034,8 +3021,8 @@ struct server_context {
                                     {"n_keep",          slot.params.n_keep},
                                     {"n_left",          n_left},
                                     {"n_prompt_tokens", slot.n_prompt_tokens},
-                                    {"prompt_tokens",   tokens_to_str(ctx, prompt_tokens.cbegin(), prompt_tokens.cend())},
-                                });
+                                    {"prompt_tokens",   prompt_tokens.detokenize(ctx, true)},
+                                    });
 
                                 GGML_ASSERT(slot.n_prompt_tokens < slot.n_ctx);
                             }
@@ -4698,7 +4685,7 @@ int main(int argc, char ** argv) {
             response.push_back({
                 {"slot_id", slot.id},
                 {"token_count", slot.cache_tokens.size()},
-                {"prompt", tokens_to_str(ctx_server.ctx, slot.cache_tokens.cbegin(), slot.cache_tokens.cend())}
+                {"prompt", slot.cache_tokens.detokenize(ctx_server.ctx, true) }
             });
         }
         res.set_content(response.dump(), "application/json; charset=utf-8");
