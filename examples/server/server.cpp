@@ -3776,16 +3776,7 @@ int main(int argc, char ** argv) {
 
     std::atomic<server_state> state{SERVER_STATE_LOADING_MODEL};
 
-    svr->set_default_headers({{"Server", "llama.cpp"}});
-
-    // CORS preflight
-    svr->Options(R"(.*)", [](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin",      req.get_header_value("Origin"));
-        res.set_header("Access-Control-Allow-Credentials", "true");
-        res.set_header("Access-Control-Allow-Methods",     "POST");
-        res.set_header("Access-Control-Allow-Headers",     "*");
-        return res.set_content("", "application/json; charset=utf-8");
-    });
+    svr->set_default_headers({{"Server", "ik_llama.cpp"}});
 
     svr->set_logger(log_server_request);
 
@@ -3938,8 +3929,6 @@ int main(int argc, char ** argv) {
         }
 
         // API key is invalid or not provided
-        // TODO: make another middleware for CORS related logic
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         res_error(res, format_error_response("Invalid API Key", ERROR_TYPE_AUTHENTICATION));
 
         LOG_WARNING("Unauthorized: Invalid API Key", {});
@@ -3947,13 +3936,45 @@ int main(int argc, char ** argv) {
         return false;
     };
 
+    auto middleware_server_state = [&res_error, &state](const httplib::Request& req, httplib::Response& res) {
+        server_state current_state = state.load();
+        if (current_state == SERVER_STATE_LOADING_MODEL) {
+            auto tmp = string_split<std::string>(req.path, '.');
+            if (req.path == "/" || tmp.back() == "html") {
+                res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
+                res.status = 503;
+            }
+            else if (req.path == "/models" || req.path == "/v1/models" || req.path == "/api/tags") {
+                // allow the models endpoint to be accessed during loading
+                return true;
+            }
+            else {
+                res_error(res, format_error_response("Loading model", ERROR_TYPE_UNAVAILABLE));
+            }
+            return false;
+        }
+        return true;
+    };
+
     // register server middlewares
-    svr->set_pre_routing_handler([&middleware_validate_api_key](const httplib::Request & req, httplib::Response & res) {
+    svr->set_pre_routing_handler([&middleware_validate_api_key, &middleware_server_state](const httplib::Request& req, httplib::Response& res) {
+        
+        // If this is OPTIONS request, skip validation because browsers don't include Authorization header
+        if (req.method == "OPTIONS") {
+            res.set_header("Access-Control-Allow-Credentials", "true");
+            res.set_header("Access-Control-Allow-Methods", "GET, POST");
+            res.set_header("Access-Control-Allow-Headers", "*");
+            res.set_content("", "text/html"); // blank response, no data
+            return httplib::Server::HandlerResponse::Handled; // skip further processing
+        }
+        if (!middleware_server_state(req, res)) {
+            return httplib::Server::HandlerResponse::Handled;
+        }
         if (!middleware_validate_api_key(req, res)) {
             return httplib::Server::HandlerResponse::Handled;
         }
         return httplib::Server::HandlerResponse::Unhandled;
-    });
+        });
 
     //
     // Route handlers (or controllers)
@@ -4218,8 +4239,6 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_slots_action = [&res_error, &handle_slots_save, &handle_slots_restore, &handle_slots_erase](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
-
         std::string id_slot_str = req.path_params.at("id_slot");
         int id_slot;
 
@@ -4252,7 +4271,6 @@ int main(int argc, char ** argv) {
                 curr_tmpl = std::string(curr_tmpl_buf.data(), tlen);
             }
         }
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         json data = {
             { "system_prompt",               ctx_server.system_prompt.c_str() },
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
@@ -4441,8 +4459,6 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_models = [&params, &model_meta](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
-
         json models = {
             {"object", "list"},
             {"data", {
@@ -4497,8 +4513,7 @@ int main(int argc, char ** argv) {
             OAICOMPAT_TYPE_NONE); // infill is not OAI compatible
     };
 
-    const auto handle_tokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    const auto handle_tokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {       
         const json body = json::parse(req.body);
 
         std::vector<llama_token> tokens;
@@ -4510,8 +4525,7 @@ int main(int argc, char ** argv) {
         return res.set_content(data.dump(), "application/json; charset=utf-8");
     };
 
-    const auto handle_detokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    const auto handle_detokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {        
         const json body = json::parse(req.body);
 
         std::string content;
@@ -4524,9 +4538,7 @@ int main(int argc, char ** argv) {
         return res.set_content(data.dump(), "application/json; charset=utf-8");
     };
 
-    const auto handle_embeddings = [&ctx_server, &res_error](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
-
+    const auto handle_embeddings = [&ctx_server, &res_error](const httplib::Request & req, httplib::Response & res) {      
         const json body = json::parse(req.body);
         bool is_openai = false;
 
@@ -4576,8 +4588,7 @@ int main(int argc, char ** argv) {
         return res.set_content(root.dump(), "application/json; charset=utf-8");
     };
 
-    const auto handle_lora_adapters_list = [&](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    const auto handle_lora_adapters_list = [&](const httplib::Request & req, httplib::Response & res) {        
         json result = json::array();
         for (size_t i = 0; i < ctx_server.lora_adapters.size(); ++i) {
             auto & la = ctx_server.lora_adapters[i];
@@ -4591,9 +4602,7 @@ int main(int argc, char ** argv) {
         res.status = 200; // HTTP OK
     };
 
-    const auto handle_lora_adapters_apply = [&](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
-
+    const auto handle_lora_adapters_apply = [&](const httplib::Request & req, httplib::Response & res) {       
         const std::vector<json> body = json::parse(req.body);
         int max_idx = ctx_server.lora_adapters.size();
 
@@ -4625,8 +4634,7 @@ int main(int argc, char ** argv) {
         res.status = 200; // HTTP OK
     };
 
-    const auto list_saved_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    const auto list_saved_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {      
         json response = json::array();
         namespace fs = std::filesystem;
 
@@ -4686,8 +4694,7 @@ int main(int argc, char ** argv) {
         res.set_content(response.dump(), "application/json; charset=utf-8");
     };
 
-    const auto list_slot_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    const auto list_slot_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {        
         json response = json::array();
         for (server_slot & slot : ctx_server.slots) {
             response.push_back({
@@ -4700,8 +4707,7 @@ int main(int argc, char ** argv) {
     };
 
 
-    const auto delete_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    const auto delete_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {       
         json response;
         namespace fs = std::filesystem;
 
@@ -4748,8 +4754,7 @@ int main(int argc, char ** argv) {
         res.set_content(response.dump(), "application/json; charset=utf-8");
     };
 
-    const auto rename_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    const auto rename_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {        
         json response;
         namespace fs = std::filesystem;
 
