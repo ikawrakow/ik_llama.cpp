@@ -4499,7 +4499,6 @@ int main(int argc, char ** argv) {
 
     const auto handle_infill = [&ctx_server, &res_error, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         json data = json::parse(req.body);
-
         const int id_task = ctx_server.queue_tasks.get_new_id();
         server_tokens token; // dummy tokens
         ctx_server.queue_results.add_waiting_task_id(id_task);
@@ -4560,8 +4559,9 @@ int main(int argc, char ** argv) {
         {
             const int id_task = ctx_server.queue_tasks.get_new_id();
             ctx_server.queue_results.add_waiting_task_id(id_task);
-            server_tokens token; // dummy token
-            ctx_server.request_completion(id_task, -1, {{"prompt", prompt}}, false, true, std::move(token));
+            std::vector<server_tokens> inputs;
+            inputs = tokenize_input_prompts(llama_get_vocab(ctx_server.ctx), ctx_server.mctx, prompt, true, true);
+            ctx_server.request_completion(id_task, -1, {{"prompt", prompt}}, false, true, std::move(inputs[0]));
 
             // get the result
             server_task_result result = ctx_server.queue_results.recv(id_task);
