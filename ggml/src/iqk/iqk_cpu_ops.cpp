@@ -4,6 +4,8 @@
 // SPDX-License-Identifier: MIT
 //
 
+#define IQK_IMPLEMENT
+
 #include "iqk_cpu_ops.h"
 #include "iqk_utils.h"
 #include "ggml.h"
@@ -13,6 +15,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
 
 namespace {
 // Playing around with group scores: use sum of probabilities in the group
