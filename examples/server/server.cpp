@@ -1977,7 +1977,7 @@ struct server_context {
 
     bool process_token(completion_token_output & result, server_slot & slot) {
         // remember which tokens were sampled - used for repetition penalties during sampling
-        const std::string token_str = llama_token_to_piece(ctx, result.tok, params.special);
+        const std::string token_str = result.text_to_send;
         slot.sampled = result.tok;
 
         // search stop word and delete it
@@ -3447,7 +3447,7 @@ struct server_context {
                     completion_token_output result;
 
                     result.tok = ids[i];
-                    result.text_to_send = llama_token_to_piece(ctx, result.tok, params.special);
+                    result.text_to_send = llama_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
                     result.prob         = 1.0f; // set later
 
                     if (slot.sparams.n_probs > 0) {
