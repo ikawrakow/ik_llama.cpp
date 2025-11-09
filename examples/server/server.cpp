@@ -1369,8 +1369,8 @@ struct server_context {
             // Initialize speculative decoding if a draft model is loaded
             if (ctx_draft) {
                 slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
-
-                slot.ctx_dft = llama_new_context_with_model(model_draft, cparams_dft);
+                // slot.ctx_dft = llama_new_context_with_model(model_draft, cparams_dft); // initialized twice
+                slot.ctx_dft = ctx_draft;
                 if (slot.ctx_dft == nullptr) {
                     LOG_ERROR("failed to create draft context", {});
                     return;

@@ -2133,7 +2133,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "backend" });
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
-
+    options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
