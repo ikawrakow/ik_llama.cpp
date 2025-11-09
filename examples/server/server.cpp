@@ -2958,7 +2958,7 @@ struct server_context {
                             {"n_ctx",           slot.n_ctx},
                             {"n_keep",          slot.params.n_keep},
                             {"n_prompt_tokens", slot.n_prompt_tokens},
-                            {"prompt_tokens",   tokens_to_str(ctx, prompt_tokens.cbegin(), prompt_tokens.cend())},
+                            {"prompt_tokens", prompt_tokens.detokenize(ctx, true)},
                         });
 
                         // empty prompt passed -> release the slot and send empty response
