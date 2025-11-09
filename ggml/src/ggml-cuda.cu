@@ -2138,15 +2138,16 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
         if (dst->op != GGML_OP_MUL_MAT || dst->src[1] != src1 || !ggml_is_quantized(dst->src[0]->type)) break;
         if (!is_gemv && mmq_get_q8_1_ds_layout(src0->type) != mmq_get_q8_1_ds_layout(dst->src[0]->type)) break;
         if (is_gemv) {
-            if (fusion && node_n + 1 < cgraph->n_nodes &&
-                cgraph->nodes[node_n+1]->op == GGML_OP_ADD &&
-                dst == cgraph->nodes[node_n+1]->src[0] &&
-                dst->ne[0] == cgraph->nodes[node_n+1]->src[1]->ne[0] &&
-                cgraph->nodes[node_n+1]->src[1]->type == GGML_TYPE_F32 &&
-                ggml_nrows(cgraph->nodes[node_n+1]->src[1]) == 1) {
+            if (fusion && node_n + 2 < cgraph->n_nodes &&
+                cgraph->nodes[node_n+2]->op == GGML_OP_ADD &&
+                dst == cgraph->nodes[node_n+2]->src[0] &&
+                dst->ne[0] == cgraph->nodes[node_n+2]->src[1]->ne[0] &&
+                cgraph->nodes[node_n+2]->src[1]->type == GGML_TYPE_F32 &&
+                ggml_nrows(cgraph->nodes[node_n+2]->src[1]) == 1) {
                 // We have a bias applied after the matrix multiplication and we can fuse it
-                ggml_cuda_op_mul_mat_vec_q_biased(ctx, dst->src[0], src1, cgraph->nodes[node_n+1], cgraph->nodes[node_n+1]->src[1],
-                        (const char *)dst->src[0]->data, nullptr, src1_quantized.get(), (float *)cgraph->nodes[node_n+1]->data,
+                printf("Fusing %s(%s) and %s(%s)\n", ggml_op_name(dst->op), dst->name, ggml_op_name(cgraph->nodes[node_n+2]->op), cgraph->nodes[node_n+2]->name);
+                ggml_cuda_op_mul_mat_vec_q_biased(ctx, dst->src[0], src1, cgraph->nodes[node_n+2], cgraph->nodes[node_n+2]->src[1],
+                        (const char *)dst->src[0]->data, nullptr, src1_quantized.get(), (float *)cgraph->nodes[node_n+2]->data,
                         0, dst->src[0]->ne[1], src1->ne[1], ne10_padded, stream);
                 ++node_n;
             } else {
