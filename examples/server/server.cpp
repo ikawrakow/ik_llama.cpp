@@ -1293,7 +1293,11 @@ struct server_context {
             params_dft.flash_attn = params.flash_attn;
             if (!params.draft_params.empty()) {
                 auto [argc, argv] = parse_command_line("llama-server "+params.draft_params);
-                gpt_params_parse(argc, argv, params_dft);
+                if (!gpt_params_parse(argc, argv, params_dft)) {
+                    gpt_params_print_usage(argc, argv, params_dft);
+                    free_command_line(argc, argv);
+                    return false;
+                };
                 free_command_line(argc, argv);
             }
             LOG_INFO("", { {"model", params_dft.model} });
