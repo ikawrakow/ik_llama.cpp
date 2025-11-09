@@ -225,7 +225,7 @@ void ggml_cuda_op_mul_mat_vec_q_id(
     const int64_t ne10 = src1->ne[0];
     GGML_ASSERT(ne10 % QK8_1 == 0);
     GGML_ASSERT(src0->ne[3] == 1 && src1->ne[3] == 1 && dst->ne[3] == 1);
-    GGML_ASSERT(src1->ne[1] == 1 && src1->ne[2] == 1);
+    GGML_ASSERT(src1->ne[1] <= MMVQ_MAX_BATCH_SIZE && src1->ne[2] == 1);
     GGML_ASSERT(ids->ne[0] == dst->ne[2]);
 
     const int64_t ne0 = dst->ne[0];

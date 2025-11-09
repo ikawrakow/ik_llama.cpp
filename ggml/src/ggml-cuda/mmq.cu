@@ -178,17 +178,13 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
     bool mmq_supported;
 
     switch (type) {
-        case GGML_TYPE_Q2_K: mmq_supported = ne11 < 384; break;
+        case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_IQ2_XS:
         case GGML_TYPE_IQ2_S:
-            mmq_supported = ne11 < 1536;
-            break;
         case GGML_TYPE_IQ2_K:
         case GGML_TYPE_IQ2_K_R4:
-            mmq_supported = ne11 <= 3072;
-            break;
         case GGML_TYPE_IQ3_K:
         case GGML_TYPE_IQ4_K:
         case GGML_TYPE_IQ5_K:
@@ -196,8 +192,6 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         case GGML_TYPE_IQ3_K_R4:
         case GGML_TYPE_IQ4_K_R4:
         case GGML_TYPE_IQ5_K_R4:
-            mmq_supported = ne11 < 1024;
-            break;
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:

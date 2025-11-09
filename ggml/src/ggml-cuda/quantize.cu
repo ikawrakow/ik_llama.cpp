@@ -6,6 +6,8 @@
 //
 
 #include "quantize.cuh"
+#include "mmq.cuh"
+
 #include <cstdint>
 
 static __global__ void quantize_q8_1(const float * __restrict__ x, void * __restrict__ vy, const int64_t kx, const int64_t kx0_padded) {
