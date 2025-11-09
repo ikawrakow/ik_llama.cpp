@@ -1,13 +1,14 @@
-### 🗣️ [#385](https://github.com/ikawrakow/ik_llama.cpp/discussions/385) - Qwen3 235B performance on Intel Xeon Scalable processor
+## 🗣️ [Discussion #385](https://github.com/ikawrakow/ik_llama.cpp/discussions/385) - Qwen3 235B performance on Intel Xeon Scalable processor
 
 | **Author** | `Gaolingx` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-05-06 |
 | **Updated** | 2025-05-27 |
 
 ---
 
-#### Description
+## 📄 Description
 
 ## Introduction
 
@@ -23,7 +24,7 @@ The Qwen3 models were officially released on 29th, April, 2025. This is a mixtur
 - Number of Activated Experts: 8
 - Context Length: 32,768 natively and 131,072 tokens with YaRN.
 
-The qwen3moe had supported in in PR #355, I tried to run the biggest model [Qwen3-235B-A22B-128K-GGUF](https://hf-mirror.com/unsloth/Qwen3-235B-A22B-128K-GGUF) with ik_llama.cpp on my Workstation, I need better generation quality, an my system has sufficient memory(Total 512G RAM), so I chose the relatively higher quality quantization `Q8_0`.
+The qwen3moe had supported in in PR [#355](https://github.com/ikawrakow/ik_llama.cpp/issues/355), I tried to run the biggest model [Qwen3-235B-A22B-128K-GGUF](https://hf-mirror.com/unsloth/Qwen3-235B-A22B-128K-GGUF) with ik_llama.cpp on my Workstation, I need better generation quality, an my system has sufficient memory(Total 512G RAM), so I chose the relatively higher quality quantization `Q8_0`.
 
 ## System Info
 
@@ -158,9 +159,9 @@ I also use `Intel VTune Profiler 2025.0.1` capture some interesting data when ru
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **ikawrakow** replied the **2025-05-06** at **13:11:51**:<br>
+👤 **ikawrakow** commented on **2025-05-06** at **13:11:51**
 
 Thank you for these results. Quite amazing that it works reasonably well on an almost 8 years old CPU!
 
@@ -172,7 +173,8 @@ This shouldn't take very long, even for the 235B model.
 
 Another note: at least on the CPUs that I have available, one gets better performance using `q8_0` KV cache (add `-ctk q8_0 -ctv q8_0` to the command line). Not so much for short contexts, but quite noticeable for long contexts.
 
-> 👤 **saood06** replied the **2025-05-06** at **20:29:54**:<br>
+> 👤 **saood06** replied on **2025-05-06** at **20:29:54**
+> 
 > > Another note: at least on the CPUs that I have available, one gets better performance using `q8_0` KV cache (add `-ctk q8_0 -ctv q8_0` to the command line). Not so much for short contexts, but quite noticeable for long contexts.
 > 
 > I have seen this https://www.reddit.com/r/LocalLLaMA/comments/1kewkno/qwen_30b_a3b_performance_degradation_with_kv/ where they report using `q8_0` KV cache causes the model to not able to solve a problem with a comment saying:
@@ -180,13 +182,14 @@ Another note: at least on the CPUs that I have available, one gets better perfor
 > KV cache q8_0: 0/5
 > KV cache f16: 2/2
 > ```
+
+> 👤 **Gaolingx** replied on **2025-05-07** at **07:16:13**
 > 
-> 👤 **Gaolingx** replied the **2025-05-07** at **07:16:13**:<br>
 > Ok, Thanks for the info. I found that the memory bandwidth was not filled when I use vtune profiler analysis the memory access, Maybe numa system works in Linux better, I will try to use `numactl` changes the memory policy ([https://github.com/ggml-org/llama.cpp/issues/1437](https://github.com/ggml-org/llama.cpp/issues/1437)), and repack the model with `q8_0_r8`. I will see if I can do better yet however.
 
 ---
 
-👤 **Gaolingx** replied the **2025-05-07** at **18:42:39**:<br>
+👤 **Gaolingx** commented on **2025-05-07** at **18:42:39**
 
 Note: when I run llama-server with `-fa` and `-rtr` parameter, the speed is a little faster than only use `-fa`, the prefill and decode are increased, That is a good beginning!
 
@@ -206,7 +209,7 @@ INFO [           print_timings]           total time =   35864.19 ms | tid="4682
 
 ---
 
-👤 **ikawrakow** replied the **2025-05-08** at **12:59:17**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **12:59:17**
 
 @saood06 
 
@@ -230,7 +233,8 @@ This grabbed my attention as I have never seen any significant difference betwee
 
 Hence, I think that the outcome is largely determined by the quality of the quantized model and by some luck. We know that in a random process (as we have here) slight differences in the computed token probabilities can make the model go on a very different path, even if the same seed was used.
 
-> 👤 **saood06** replied the **2025-05-08** at **22:40:13**:<br>
+> 👤 **saood06** replied on **2025-05-08** at **22:40:13**
+> 
 > >So, being someone who does not take thinks for granted, I tried it myself.
 > 
 > Thank you. Do you mind saying what sampler settings you used?
@@ -247,7 +251,7 @@ Hence, I think that the outcome is largely determined by the quality of the quan
 
 ---
 
-👤 **Gaolingx** replied the **2025-05-13** at **00:52:27**:<br>
+👤 **Gaolingx** commented on **2025-05-13** at **00:52:27**
 
 Note: qwen3moe uses 8 experts by default. I found that we can speed up token generation(2.7 token/s->3.2 token/s) by reducing some experts used (from Top-8 to Top-6), without a significant drop in quality.
 
@@ -260,15 +264,17 @@ INFO [           print_timings] generation eval time =   15317.10 ms /    50 run
 INFO [           print_timings]           total time =   25677.19 ms | tid="71476" timestamp=1747096864 id_slot=0 id_task=9696 t_prompt_processing=10360.092 t_token_generation=15317.103 t_total=25677.195
 ```
 
-> 👤 **saood06** replied the **2025-05-13** at **01:03:32**:<br>
+> 👤 **saood06** replied on **2025-05-13** at **01:03:32**
+> 
 > > Note: qwen3moe uses 8 experts by default. I found that we can speed up token generation(2.7 token/s->3.2 token/s) by reducing some experts used (from Top-8 to Top-6), without a significant drop in quality.
 > 
 > There is this feature: https://github.com/ikawrakow/ik_llama.cpp/pull/239 I personally haven't had much success using it (for Deepseek V3/R1) , but it may work for you on Qwen.
+
+> 👤 **Gaolingx** replied on **2025-05-13** at **01:45:22**
 > 
-> 👤 **Gaolingx** replied the **2025-05-13** at **01:45:22**:<br>
 > > > Note: qwen3moe uses 8 experts by default. I found that we can speed up token generation(2.7 token/s->3.2 token/s) by reducing some experts used (from Top-8 to Top-6), without a significant drop in quality.
 > > 
-> > There is this feature: #239 I personally haven't had much success using it (for Deepseek V3/R1) , but it may work for you on Qwen.
+> > There is this feature: [#239](https://github.com/ikawrakow/ik_llama.cpp/issues/239) I personally haven't had much success using it (for Deepseek V3/R1) , but it may work for you on Qwen.
 > 
 > All right, it seems that `--smart-expert-reduction` not works well on qwen3moe, there are a lot of garbled characters appeared and continuous output appeared.
 > 
@@ -277,14 +283,16 @@ INFO [           print_timings]           total time =   25677.19 ms | tid="7147
 > 
 > `--flash-attn --run-time-repack --smart-expert-reduction 7,1`
 > ![批注 2025-05-13 094242](https://github.com/user-attachments/assets/370fb493-a9c7-42c7-a380-90935df8f23e)
+
+> 👤 **ikawrakow** replied on **2025-05-13** at **12:35:23**
 > 
-> 👤 **ikawrakow** replied the **2025-05-13** at **12:35:23**:<br>
-> Can you both try PR #415 and let me know if it now works? Thanks!
+> Can you both try PR [#415](https://github.com/ikawrakow/ik_llama.cpp/issues/415) and let me know if it now works? Thanks!
+
+> 👤 **Gaolingx** replied on **2025-05-14** at **01:42:24**
 > 
-> 👤 **Gaolingx** replied the **2025-05-14** at **01:42:24**:<br>
-> > Can you both try PR #415 and let me know if it now works? Thanks!
+> > Can you both try PR [#415](https://github.com/ikawrakow/ik_llama.cpp/issues/415) and let me know if it now works? Thanks!
 > 
-> yes, I pulled PR(#415 ), The smart expert reduction works very well on cpu backend, thank you fix it.
+> yes, I pulled PR([#415](https://github.com/ikawrakow/ik_llama.cpp/issues/415) ), The smart expert reduction works very well on cpu backend, thank you fix it.
 > ![批注 2025-05-14 093324](https://github.com/user-attachments/assets/88e0af59-555c-4375-b5f8-78e0fd7789e7)
 > 
 > `--flash-attn --run-time-repack --smart-expert-reduction 6,1`
@@ -297,7 +305,7 @@ INFO [           print_timings]           total time =   25677.19 ms | tid="7147
 
 ---
 
-👤 **VinnyG9** replied the **2025-05-19** at **15:30:30**:<br>
+👤 **VinnyG9** commented on **2025-05-19** at **15:30:30**
 
 you forgot to set -nkvo?
 what snoop mode you're using for numa?
@@ -318,11 +326,12 @@ here's some numbers on the xeon v4 @Q2KL
 
 ---
 
-👤 **ikawrakow** replied the **2025-05-19** at **15:38:58**:<br>
+👤 **ikawrakow** commented on **2025-05-19** at **15:38:58**
 
 You cannot  compare `Q2_K` to `Q8_0` for TG, there is going to be a factor in the range of 3X difference. Her PP is for a short prompt, and we don't know if it was a single prompt of 165 tokens or 10 prompts with 16 tokens each.
 
-> 👤 **VinnyG9** replied the **2025-05-19** at **15:48:34**:<br>
+> 👤 **VinnyG9** replied on **2025-05-19** at **15:48:34**
+> 
 > > You cannot compare `Q2_K` to `Q8_0` for TG, there is going to be a factor in the range of 3X difference. Her PP is for a short prompt, and we don't know if it was a single prompt of 165 tokens or 10 prompts with 16 tokens each.
 > 
 > or 2.5x going by model size :)
@@ -333,7 +342,7 @@ You cannot  compare `Q2_K` to `Q8_0` for TG, there is going to be a factor in th
 
 ---
 
-👤 **Gaolingx** replied the **2025-05-27** at **13:06:54**:<br>
+👤 **Gaolingx** commented on **2025-05-27** at **13:06:54**
 
 Well, I use `-ser 4,1` parameter to improve token generation(TG) performance, now we can get ~4.1 token/s TG(< 4k context size), and the 
 quality not declined too much. all right, I admit this is just my opinion. Others can offer their own opinions on this point...We don't know what will happen in complex tasks...

@@ -1,14 +1,17 @@
-### 🔀 [#259](https://github.com/ikawrakow/ik_llama.cpp/pull/259) - Prepare wk_b tensors of DeepSeek models on the fly
+## 🔀 [Pull Request #259](https://github.com/ikawrakow/ik_llama.cpp/pull/259) - Prepare wk_b tensors of DeepSeek models on the fly
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/prepare_wk_b` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-15 |
 | **Updated** | 2025-03-17 |
+| **Merged** | 2025-03-17 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This enables usage of MLA also for model files that were converted with mainline `llama.cpp` and hence to not contain the tensors required for MLA.
 
@@ -20,9 +23,9 @@ Oh, when `wkv_b` is not quantized, `wk_b` uses the same type as `wkv_b` (`fp16` 
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ubergarm** commented the **2025-03-15** at **16:27:08**:<br>
+👤 **ubergarm** commented on **2025-03-15** at **16:27:08**
 
 Thanks for pushing this branch, I decided to try this first before downloading/generating my own MLA quant.
 
@@ -35,6 +38,13 @@ git pull
 git checkout ik/prepare_wk_b
 cmake -B ./build -DCMAKE_BUILD_TYPE=Debug -DGGML_CUDA=ON -DGGML_BLAS=OFF
 cmake --build ./build --config Debug -j $(nproc)
+
+git rev-parse --short HEAD
+1324de97
+
+./build/bin/llama-server --version
+version: 3594 (1324de97)
+built with cc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0 for x86_64-linux-gnu
 
 # try it with existing non-MLA quant
 CUDA_VISIBLE_DEVICES="0," \
@@ -105,13 +115,13 @@ warning: 44     ./nptl/pthread_kill.c: No such file or directory
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-15** at **16:37:09**:<br>
+👤 **ikawrakow** commented on **2025-03-15** at **16:37:09**
 
 Sorry about that. Hope the fix I just pushed will work.
 
 ---
 
-👤 **ubergarm** commented the **2025-03-15** at **17:11:41**:<br>
+👤 **ubergarm** commented on **2025-03-15** at **17:11:41**
 
 All good, happy to try this out. Great, it does startup okay now!
 
@@ -263,19 +273,41 @@ INFO [            update_slots] all slots are idle | tid="136342914363392" times
 
 ---
 
-👤 **ubergarm** commented the **2025-03-15** at **17:17:59**:<br>
+👤 **ubergarm** commented on **2025-03-15** at **17:17:59**
 
 Confirmed similar wonky generations using `./build/bin/llama-cli` to take my client out of the picture.
 
+Also currently trying some other combinations. This one with `-mla 1` spammed the logs like so:
+
+```
+CUDA_VISIBLE_DEVICES="0," \
+./build/bin/llama-cli \
+    --alias unsloth/DeepSeek-R1-UD-Q2_K_XL \
+    --model /mnt/raid/models/unsloth/DeepSeek-R1-GGUF/DeepSeek-R1-UD-Q2_K_XL/DeepSeek-R1-UD-Q2_K_XL-00001-of-00005.gguf \
+    --ctx-size 8192 \
+    --parallel 1 \
+    -mla 1 -fa \
+    --n-gpu-layers 63 \
+    --override-tensor exps=CPU \
+    --threads 24
+
+Unsupported KV type combination for head_sizes 576 / 512
+Unsupported KV type combination for head_sizes 576 / 512
+Unsupported KV type combination for head_sizes 576 / 512
+Unsupported KV type combination for head_sizes 576 / 512
+```
+
+No pressure to stay up late looking at this, I'm having fun. Enjoy your weekend!
+
 ---
 
-👤 **ikawrakow** commented the **2025-03-15** at **17:41:33**:<br>
+👤 **ikawrakow** commented on **2025-03-15** at **17:41:33**
 
 Yes, I see similar behavior with DeepSeek-Lite. I broke something somewhere and need to investigate. I got confused and tested with options that did not actually trigger the usage of the computed tensors.
 
 ---
 
-👤 **saood06** commented the **2025-03-16** at **00:44:48**:<br>
+👤 **saood06** commented on **2025-03-16** at **00:44:48**
 
 > Also currently trying some other combinations. This one with `-mla 1` spammed the logs like so:
 > 
@@ -301,7 +333,7 @@ I think this is because -mla 1 -fa is currently only supported on the CPU and no
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-16** at **06:25:30**:<br>
+👤 **ikawrakow** commented on **2025-03-16** at **06:25:30**
 
 @ubergarm Thank you for playing with this, it is very helpful. 
 
@@ -313,7 +345,7 @@ I'm surprised by the giant CUDA compute buffer for a context of 65k. This basica
 
 ---
 
-👤 **ubergarm** commented the **2025-03-16** at **14:38:44**:<br>
+👤 **ubergarm** commented on **2025-03-16** at **14:38:44**
 
 @ikawrakow 
 
@@ -329,9 +361,11 @@ Perfect, I'll add a note in my rough guide. I still haven't fully grokk'd the im
 
 ---
 
-👤 **ubergarm** commented the **2025-03-16** at **15:03:50**:<br>
+👤 **ubergarm** commented on **2025-03-16** at **15:03:50**
 
-*WIP*
+Looks good!
+
+The most recent patch seems to work on the unsloth `UD-Q2_K_XL` quant I have been using with `-mla 2 -fa` etc. The output generations look good for a few simple tests including an ~8k prompt with results shown below.
 
 #### Update Branch
 ```bash
@@ -347,7 +381,7 @@ version: 3596 (f2fb15de)
 
 #### Test
 ```bash
-# Uses about 22GiB VRAM @ 32k context
+# Uses about 21GiB VRAM @ 32k context
 CUDA_VISIBLE_DEVICES="0," \
 ./build/bin/llama-server \
     --alias unsloth/DeepSeek-R1-UD-Q2_K_XL \
@@ -372,6 +406,8 @@ Open the details fold for complete logs.
 
 <summary>Collapsed Logs</summary>
 
+#### Server
+Running script containing above command.
 ```bash
 $ ./myscripts/api-server-DeepSeek-R1-UD-Q2_K_XL.sh
 ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
@@ -657,7 +693,16 @@ INFO [      log_server_request] request | tid="137349052751872" timestamp=174213
 INFO [   launch_slot_with_task] slot is processing task | tid="137362671300608" timestamp=1742137148 id_slot=0 id_task=551
 INFO [            update_slots] kv cache rm [p0, end) | tid="137362671300608" timestamp=1742137148 id_slot=0 id_task=551 p0=2
 INFO [            update_slots] kv cache rm [p0, end) | tid="137362671300608" timestamp=1742137179 id_slot=0 id_task=551 p0=2050
-
+INFO [            update_slots] kv cache rm [p0, end) | tid="137362671300608" timestamp=1742137211 id_slot=0 id_task=551 p0=4098
+INFO [            update_slots] kv cache rm [p0, end) | tid="137362671300608" timestamp=1742137247 id_slot=0 id_task=551 p0=6146
+INFO [            update_slots] kv cache rm [p0, end) | tid="137362671300608" timestamp=1742137285 id_slot=0 id_task=551 p0=8194
+INFO [           print_timings] prompt eval time     =  146792.23 ms /  8693 tokens (   16.89 ms per token,    59.22 tokens per second) | tid="137362671300608" timestamp=1742137370 id_slot=0 id_task=551 t_prompt_processing=146792.227 n_prompt_tokens_processed=8693 t_token=16.88625641320603 n_tokens_second=59.2197569153304
+INFO [           print_timings] generation eval time =   75395.69 ms /   907 runs   (   83.13 ms per token,    12.03 tokens per second) | tid="137362671300608" timestamp=1742137370 id_slot=0 id_task=551 t_token_generation=75395.694 n_decoded=907 t_token=83.12645424476295 n_tokens_second=12.029864729410143
+INFO [           print_timings]           total time =  222187.92 ms | tid="137362671300608" timestamp=1742137370 id_slot=0 id_task=551 t_prompt_processing=146792.227 t_token_generation=75395.694 t_total=222187.92100000003
+INFO [            update_slots] slot released | tid="137362671300608" timestamp=1742137370 id_slot=0 id_task=551 n_ctx=32768 n_past=9601 n_system_tokens=0 n_cache_tokens=9601 truncated=false
+INFO [            update_slots] all slots are idle | tid="137362671300608" timestamp=1742137370
+INFO [      log_server_request] request | tid="137349044359168" timestamp=1742137370 remote_addr="127.0.0.1" remote_port=35304 status=200 method="POST" path="/v1/chat/completions" params={}
+INFO [            update_slots] all slots are idle | tid="137362671300608" timestamp=1742137370
 ```
 
 </details>
@@ -665,14 +710,84 @@ INFO [            update_slots] kv cache rm [p0, end) | tid="137362671300608" ti
 
 ---
 
-👤 **ubergarm** commented the **2025-03-16** at **21:49:12**:<br>
+👤 **ubergarm** commented on **2025-03-16** at **15:19:51**
+
+> The KV buffer size is exactly as expected `(576 * n_ctx * 61 * sizeof(f16))`
+
+#### VRAM Usage vs `--ctx-size`
+A few examples running exact command as above and varying only context length. Note I was using `-ctk q8_0 -ctv q8_0`:
+```
+#####
+## --ctx-size 65536
+30410MiB
+
+llm_load_tensors: offloading 61 repeating layers to GPU
+llm_load_tensors: offloading non-repeating layers to GPU
+llm_load_tensors: offloaded 62/62 layers to GPU
+llm_load_tensors:        CPU buffer size = 205716.00 MiB
+llm_load_tensors:        CPU buffer size =   497.11 MiB
+llm_load_tensors:      CUDA0 buffer size =  9885.95 MiB
+...
+llama_kv_cache_init:      CUDA0 KV buffer size =  2333.28 MiB
+llama_new_context_with_model: KV self size  = 2333.25 MiB, c^KV (q8_0): 2333.25 MiB, kv^T: not used
+llama_new_context_with_model:  CUDA_Host  output buffer size =     0.99 MiB
+llama_new_context_with_model:      CUDA0 compute buffer size = 16785.00 MiB
+llama_new_context_with_model:  CUDA_Host compute buffer size =   142.01 MiB
+llama_new_context_with_model: graph nodes  = 3548
+llama_new_context_with_model: graph splits = 118
+
+#####
+## --ctx-size 32768
+20930MiB
+
+llm_load_tensors: offloading 61 repeating layers to GPU
+llm_load_tensors: offloading non-repeating layers to GPU
+llm_load_tensors: offloaded 62/62 layers to GPU
+llm_load_tensors:        CPU buffer size = 205716.00 MiB
+llm_load_tensors:        CPU buffer size =   497.11 MiB
+llm_load_tensors:      CUDA0 buffer size =  9885.95 MiB
+...
+llama_kv_cache_init:      CUDA0 KV buffer size =  1166.65 MiB
+llama_new_context_with_model: KV self size  = 1166.62 MiB, c^KV (q8_0): 1166.62 MiB, kv^T: not used
+llama_new_context_with_model:  CUDA_Host  output buffer size =     0.99 MiB
+llama_new_context_with_model:      CUDA0 compute buffer size =  8470.00 MiB
+llama_new_context_with_model:  CUDA_Host compute buffer size =    78.01 MiB
+llama_new_context_with_model: graph nodes  = 3548
+llama_new_context_with_model: graph splits = 118
+
+#####
+## --ctx-size 16384
+16146MiB VRAM
+
+llm_load_tensors: offloading 61 repeating layers to GPU
+llm_load_tensors: offloading non-repeating layers to GPU
+llm_load_tensors: offloaded 62/62 layers to GPU
+llm_load_tensors:        CPU buffer size = 205716.00 MiB
+llm_load_tensors:        CPU buffer size =   497.11 MiB
+llm_load_tensors:      CUDA0 buffer size =  9885.95 MiB
+...
+llama_kv_cache_init:      CUDA0 KV buffer size =   583.34 MiB
+llama_new_context_with_model: KV self size  =  583.31 MiB, c^KV (q8_0):  583.31 MiB, kv^T: not used
+llama_new_context_with_model:  CUDA_Host  output buffer size =     0.99 MiB
+llama_new_context_with_model:      CUDA0 compute buffer size =  4270.00 MiB
+llama_new_context_with_model:  CUDA_Host compute buffer size =    64.01 MiB
+llama_new_context_with_model: graph nodes  = 3548
+llama_new_context_with_model: graph splits = 118
+```
+
+---
+
+👤 **ubergarm** commented on **2025-03-16** at **21:49:12**
 
 Confirmed it is working with three different unsloth quants on that intel6980P. Fastest CPU only speeds I've been able to achieve with this rig!
 
+#### Benchmarks
+🪄✨👇
 <details>
 
-<summary> Benchmarks </summary>
+<summary> Dual Socket Intel Xeon 6980P </summary>
 
+## Single Socket
 ```
 $ git rev-parse --short HEAD
 f2fb15de
@@ -728,5 +843,172 @@ numactl -N 0 -m 0 \
 | deepseek2 671B Q2_K - Medium   | 211.03 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      9.94 ± 0.00 |
 | deepseek2 671B Q2_K - Medium   | 211.03 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    113.38 ± 0.68 |
 | deepseek2 671B Q2_K - Medium   | 211.03 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      8.78 ± 0.00 |
+
+
+#### Compre `-mla 1,2`
+
+```
+numactl -N 0 -m 0 \
+./build/bin/llama-bench \
+    --model /mnt/ai/models/unsloth/DeepSeek-R1-GGUF/DeepSeek-R1-Q4_K_M/DeepSeek-R1-Q4_K_M-00001-of-00009.gguf \
+    -rtr 1 \
+    -ctk f16 -ctv f16 \
+    -mla 2,1 -fa 1 \
+    -amb 2048 \
+    -fmoe 1 \
+    --numa numactl \
+    --threads 43,64,86,128
+
+Computed blk.0.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
+.
+.
+.
+Computed blk.60.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
+============ Repacked 663 tensors
+```
+
+| model                          |       size |     params | backend    | threads | fa | mla |   amb | rtr | fmoe |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -: | --: | ----: | --: | ---: | ------------: | ---------------: |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      43 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     70.20 ± 0.22 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      43 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      8.52 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     92.37 ± 0.21 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      9.75 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    115.09 ± 0.45 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      9.32 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    143.12 ± 7.15 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      8.97 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      43 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     70.20 ± 0.22 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      43 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      8.52 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     92.37 ± 0.21 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      9.75 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    115.09 ± 0.45 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      9.32 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    143.12 ± 7.15 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      8.97 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      43 |  1 |   1 |  2048 |   1 |    1 |         pp512 |     51.82 ± 0.07 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      43 |  1 |   1 |  2048 |   1 |    1 |         tg128 |      4.44 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   1 |  2048 |   1 |    1 |         pp512 |     83.13 ± 2.56 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   1 |  2048 |   1 |    1 |         tg128 |     10.26 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   1 |  2048 |   1 |    1 |         pp512 |     79.87 ± 0.08 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   1 |  2048 |   1 |    1 |         tg128 |      6.08 ± 0.02 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   1 |  2048 |   1 |    1 |         pp512 |    125.96 ± 7.73 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   1 |  2048 |   1 |    1 |         tg128 |      9.66 ± 0.00 |
+
+
+## Dual Socket
+#### Test One
+```
+sudo powerprofilesctl set performance
+# *this time try with and without setting numa_balancing*
+$ echo 1 | sudo tee /proc/sys/kernel/numa_balancing
+$ cat /sys/kernel/mm/transparent_hugepage/enabled
+[always] madvise never
+
+./build/bin/llama-bench \
+    --model /mnt/ai/models/unsloth/DeepSeek-R1-GGUF/DeepSeek-R1-Q4_K_M/DeepSeek-R1-Q4_K_M-00001-of-00009.gguf \
+    -rtr 1 \
+    -ctk f16 -ctv f16 \
+    -mla 2,1 -fa 1 \
+    -amb 2048 \
+    -fmoe 1 \
+    --numa distribute \
+    --threads 64,86,128,172,256
+
+Computed blk.0.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
+.
+.
+.
+Computed blk.60.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
+============ Repacked 663 tensors
+```
+**Without NUMA Balancing**
+| model                          |       size |     params | backend    | threads | fa | mla |   amb | rtr | fmoe |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -: | --: | ----: | --: | ---: | ------------: | ---------------: |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     84.75 ± 0.68 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.84 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     99.78 ± 0.31 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      7.00 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    135.28 ± 0.43 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.99 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    129.16 ± 3.46 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.22 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    166.44 ± 5.03 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      5.02 ± 0.02 |
+
+** With NUMA Balancing**
+| model                          |       size |     params | backend    | threads | fa | mla |   amb | rtr | fmoe |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -: | --: | ----: | --: | ---: | ------------: | ---------------: |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     84.70 ± 1.59 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.99 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    100.58 ± 0.10 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.98 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    135.53 ± 0.37 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.82 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    136.60 ± 2.23 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.02 ± 0.12 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   2 |  2048 |   1 |    1 |         pp512 |   160.48 ± 12.80 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      5.08 ± 0.03 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   1 |  2048 |   1 |    1 |         pp512 |     74.27 ± 4.43 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   1 |  2048 |   1 |    1 |         tg128 |      7.43 ± 0.11 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   1 |  2048 |   1 |    1 |         pp512 |     72.91 ± 1.65 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   1 |  2048 |   1 |    1 |         tg128 |      5.38 ± 0.22 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   1 |  2048 |   1 |    1 |         pp512 |    106.80 ± 5.28 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   1 |  2048 |   1 |    1 |         tg128 |      7.24 ± 0.36 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   1 |  2048 |   1 |    1 |         pp512 |    106.76 ± 2.56 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   1 |  2048 |   1 |    1 |         tg128 |      5.69 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   1 |  2048 |   1 |    1 |         pp512 |   144.27 ± 14.69 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   1 |  2048 |   1 |    1 |         tg128 |      5.34 ± 0.37 |
+
+## Test Two
+Try `numactl --interleave`
+```bash
+Current power profile is: performance
+Set numa balancing to be:
+0
+
+Computed blk.0.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
+.
+.
+.
+Computed blk.60.attn_v_b.weight as 128 x 512 x 128 and stored in buffer CPU
+============ Repacked 663 tensors
+
+build: f2fb15de (3596)
+```
+
+| model                          |       size |     params | backend    | threads | fa | mla |   amb | rtr | fmoe |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -: | --: | ----: | --: | ---: | ------------: | ---------------: 
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      42 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     56.47 ± 0.09 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      42 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.71 ± 0.02 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     93.50 ± 0.21 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      8.09 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    109.02 ± 0.15 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      8.04 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    149.25 ± 0.50 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      7.66 ± 0.03 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    152.62 ± 0.34 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.93 ± 0.00 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    182.26 ± 8.22 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      5.74 ± 0.00 |
+
+Now exactly the same with:
+```
+Set numa balancing to be:
+0
+```
+| model                          |       size |     params | backend    | threads | fa | mla |   amb | rtr | fmoe |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | -: | --: | ----: | --: | ---: | ------------: | ---------------: |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      42 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     56.00 ± 0.21 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      42 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.60 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         pp512 |     92.35 ± 0.21 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      64 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      7.83 ± 0.04 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    104.96 ± 0.35 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |      86 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      7.82 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    141.52 ± 0.78 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     128 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      7.52 ± 0.04 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    147.92 ± 0.38 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     172 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      6.75 ± 0.01 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   2 |  2048 |   1 |    1 |         pp512 |    182.15 ± 8.15 |
+| deepseek2 671B Q4_K - Medium   | 376.65 GiB |   671.03 B | CPU        |     256 |  1 |   2 |  2048 |   1 |    1 |         tg128 |      5.58 ± 0.00 |
 
 </details>

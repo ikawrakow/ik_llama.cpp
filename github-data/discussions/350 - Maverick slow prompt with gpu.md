@@ -1,13 +1,14 @@
-### 🗣️ [#350](https://github.com/ikawrakow/ik_llama.cpp/discussions/350) - Maverick slow prompt with gpu
+## 🗣️ [Discussion #350](https://github.com/ikawrakow/ik_llama.cpp/discussions/350) - Maverick slow prompt with gpu
 
 | **Author** | `justinjja` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-04-27 |
 | **Updated** | 2025-04-27 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Any idea what the deal is with prompt speeds on Maverick?
 
@@ -23,15 +24,15 @@ Is it possible to leave prompt processing on the CPU and still use the GPU for g
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **saood06** replied the **2025-04-27** at **04:22:52**:<br>
+👤 **saood06** commented on **2025-04-27** at **04:22:52**
 
 Do you mind providing the exact commands used to get those numbers (and any details about the quant used)?
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-27** at **06:45:38**:<br>
+👤 **ikawrakow** commented on **2025-04-27** at **06:45:38**
 
 Please tell us your command line parameters.
 
@@ -57,7 +58,7 @@ The above command puts all attention tensors, shared experts, and the first 10 l
 
 ---
 
-👤 **justinjja** replied the **2025-04-27** at **16:51:53**:<br>
+👤 **justinjja** commented on **2025-04-27** at **16:51:53**
 
 Nice, thank you!
 My command must have been bad.

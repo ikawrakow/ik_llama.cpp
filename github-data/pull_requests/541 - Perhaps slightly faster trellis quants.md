@@ -1,14 +1,17 @@
-### 🔀 [#541](https://github.com/ikawrakow/ik_llama.cpp/pull/541) - Perhaps slightly faster trellis quants
+## 🔀 [Pull Request #541](https://github.com/ikawrakow/ik_llama.cpp/pull/541) - Perhaps slightly faster trellis quants
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/trellis_opt` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-19 |
 | **Updated** | 2025-06-21 |
+| **Merged** | 2025-06-21 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The PR adds some optimizations to the GEMV implementation of the `IQ2_KT, IQ3_KT, IQ4_KT` quants.
 
@@ -44,9 +47,9 @@ In your performance testing on the 6980P system `iqX_kt` quants were very far fr
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ubergarm** commented the **2025-06-19** at **20:04:52**:<br>
+👤 **ubergarm** commented on **2025-06-19** at **20:04:52**
 
 My usual library spot was closed today so sitting outside in the sun trying to grab some quick llama-sweep-bench numbers:
 
@@ -110,7 +113,21 @@ I'll try to get some numbers on the big 6980P pure-CPU soon!
 
 ---
 
-👤 **ubergarm** commented the **2025-06-20** at **02:04:52**:<br>
+👤 **ubergarm** commented on **2025-06-19** at **20:12:52**
+
+Super quick, on the 6980P, using my [numbers from yesterday](https://github.com/ikawrakow/ik_llama.cpp/pull/534#issuecomment-2986064811) for the `Kimi-Dev-72B-IQ3_KT` (which has to use `iq4_nl` for `ffn_down` as previously discussed). CPU-only.
+
+* Before: 3.76 TG tok/sec
+* PR541: 5.28 TG tok/sec
+* 1.404x Speed-Up
+
+I have to juggle files to get that R1-0528-IQ3_KT onto the big rig, and will give more results when I find some time.
+
+tl;dr; Definitely looking better already! Great job!
+
+---
+
+👤 **ubergarm** commented on **2025-06-20** at **02:04:52**
 
 Okay, back at a desk with my laptop for a little while. Here is a quick comparison for a mixed R1-0528-IQ3_KT quant.
 
@@ -128,7 +145,7 @@ Okay, back at a desk with my laptop for a little while. Here is a quick comparis
 
 | TG tok/sec `main@144ee1c4` | TG tok/sec `PR541@93209939` | speed-up |
 | --- | --- | --- |
-| 6.29 | 8.22 | 1.309x |
+| 6.28 | 8.22 | 1.309x |
 
 Given not every tensor is `kt` type, actual speed-ups are likely higher. I don't have a good set of pure `kt`'s to test easily like you did above, but my limited testing suggests a big improvement in TG for all three `kt` quant types in both MoE and dense models.
 
@@ -231,7 +248,7 @@ Thanks!
 
 ---
 
-👤 **Nexesenex** commented the **2025-06-20** at **02:48:36**:<br>
+👤 **Nexesenex** commented on **2025-06-20** at **02:48:36**
 
 Confirmed for me for IQ3_KT.
 
@@ -243,13 +260,13 @@ llama_model_loader: - type iq4_ks_r4:   32 tensors (attn_k)
 llama_model_loader: - type iq5_ks_r4:   33 tensors (attn_v, output)
 
 Before patch : TG 3.27 t/s.
-After patch : TG 4.79 t/s.
+After patch (commit 9320993927bb1dcf7c8a22ed79e2a06ed8578ba4) : TG 4.79 t/s.
 
-Rig : Ryzen 5700G, AVX2, 4*8GB DDR4 2666mhz.
+Rig : Ryzen 5700G, AVX2, 4*8GB DDR4 2666mhz, on 8 threads, BBS 128, prompt 1024 tokens, then 100 tokens generated.
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-20** at **04:44:01**:<br>
+👤 **ikawrakow** commented on **2025-06-20** at **04:44:01**
 
 Thank you for testing!
 
@@ -259,7 +276,174 @@ This is not supposed to happen. It is a mixture of experts, so the new path can 
 
 ---
 
-👤 **ubergarm** commented the **2025-06-20** at **21:43:10**:<br>
+👤 **ubergarm** commented on **2025-06-20** at **18:56:25**
+
+## tl;dr;
+Okay, just tried out the latest commit. Looks like PP is stable as compared to main now, while TG is 1.6x faster running CPU-only on the Intel Xeon 6980P! I'm aslo running some perplexity comparisons between CUDA and CPU implementation on the 24 core thread ripper pro and will check in later when that is done.
+
+## Details
+This time I made a set of 3 "pure" `iqN_kt` quants for 2,3,4 sizes. Using Qwen3-14B as the base model as it has better tensor dimensions than Qwen2.5-72B.
+
+## Quant Collection
+All "pure" except for token_embd is q4_K and the final output is q6_K.
+
+* IQ2_KT 4.280 GiB (2.489 BPW)
+* IQ3_KT 5.818 GiB (3.384 BPW
+* IQ4_KT 7.164 GiB (4.167 BPW)
+
+## sweep-bench
+
+![sweep-bench-pr541-qwen3-14b](https://github.com/user-attachments/assets/ba4d5220-6021-498b-95a4-a10d96b94b58)
+
+<details>
+
+<summary>👈 sweep-bench command and data</summary>
+
+```bash
+numactl -N 0 -m 0 \
+    ./build/bin/llama-sweep-bench \
+        --model "$model" \
+        --ctx-size 8704 \
+        -ctk q8_0 -ctv q8_0 \
+        -fa \
+        --no-mmap \
+        --warmup-batch \
+        --threads 128 \
+        --threads-batch 128 \
+        --numa numactl
+```
+
+## IQ4_KT PR541@5b677c3c
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    0.956 |   535.28 |    5.203 |    24.60 |
+|   512 |    128 |    512 |    0.976 |   524.84 |    5.416 |    23.63 |
+|   512 |    128 |   1024 |    0.993 |   515.57 |    5.473 |    23.39 |
+|   512 |    128 |   1536 |    1.013 |   505.38 |    5.579 |    22.94 |
+|   512 |    128 |   2048 |    1.030 |   497.30 |    5.555 |    23.04 |
+|   512 |    128 |   2560 |    1.053 |   486.34 |    5.522 |    23.18 |
+|   512 |    128 |   3072 |    1.155 |   443.24 |    5.634 |    22.72 |
+|   512 |    128 |   3584 |    1.090 |   469.56 |    5.771 |    22.18 |
+|   512 |    128 |   4096 |    1.111 |   460.73 |    5.581 |    22.94 |
+|   512 |    128 |   4608 |    1.124 |   455.60 |    5.553 |    23.05 |
+|   512 |    128 |   5120 |    1.145 |   447.36 |    5.566 |    23.00 |
+|   512 |    128 |   5632 |    1.166 |   439.09 |    5.580 |    22.94 |
+|   512 |    128 |   6144 |    1.184 |   432.30 |    5.525 |    23.17 |
+|   512 |    128 |   6656 |    1.204 |   425.35 |    5.559 |    23.03 |
+|   512 |    128 |   7168 |    1.257 |   407.20 |    5.597 |    22.87 |
+|   512 |    128 |   7680 |    1.245 |   411.30 |    5.886 |    21.75 |
+|   512 |    128 |   8192 |    1.263 |   405.33 |    5.660 |    22.61 |
+
+## IQ3_KT PR541@5b677c3c
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    1.114 |   459.50 |    5.190 |    24.67 |
+|   512 |    128 |    512 |    0.965 |   530.66 |    5.094 |    25.13 |
+|   512 |    128 |   1024 |    0.984 |   520.16 |    5.087 |    25.16 |
+|   512 |    128 |   1536 |    0.996 |   513.97 |    5.132 |    24.94 |
+|   512 |    128 |   2048 |    1.020 |   501.90 |    5.086 |    25.17 |
+|   512 |    128 |   2560 |    1.038 |   493.21 |    5.126 |    24.97 |
+|   512 |    128 |   3072 |    1.215 |   421.35 |    5.160 |    24.81 |
+|   512 |    128 |   3584 |    1.073 |   477.14 |    5.221 |    24.52 |
+|   512 |    128 |   4096 |    1.100 |   465.40 |    5.167 |    24.77 |
+|   512 |    128 |   4608 |    1.118 |   458.03 |    5.210 |    24.57 |
+|   512 |    128 |   5120 |    1.133 |   452.07 |    5.251 |    24.37 |
+|   512 |    128 |   5632 |    1.156 |   442.79 |    5.295 |    24.17 |
+|   512 |    128 |   6144 |    1.174 |   436.15 |    5.320 |    24.06 |
+|   512 |    128 |   6656 |    1.193 |   429.09 |    5.376 |    23.81 |
+|   512 |    128 |   7168 |    1.211 |   422.78 |    5.419 |    23.62 |
+|   512 |    128 |   7680 |    1.327 |   385.81 |    5.489 |    23.32 |
+|   512 |    128 |   8192 |    1.248 |   410.40 |    5.555 |    23.04 |
+
+## IQ2_KT PR541@5b677c3c
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    0.910 |   562.52 |    4.992 |    25.64 |
+|   512 |    128 |    512 |    0.924 |   554.02 |    4.803 |    26.65 |
+|   512 |    128 |   1024 |    0.960 |   533.18 |    4.805 |    26.64 |
+|   512 |    128 |   1536 |    0.979 |   522.87 |    4.876 |    26.25 |
+|   512 |    128 |   2048 |    1.011 |   506.41 |    4.835 |    26.48 |
+|   512 |    128 |   2560 |    1.031 |   496.38 |    4.887 |    26.19 |
+|   512 |    128 |   3072 |    1.056 |   485.07 |    4.923 |    26.00 |
+|   512 |    128 |   3584 |    1.076 |   475.90 |    5.002 |    25.59 |
+|   512 |    128 |   4096 |    1.099 |   465.67 |    4.951 |    25.85 |
+|   512 |    128 |   4608 |    1.113 |   459.83 |    4.994 |    25.63 |
+|   512 |    128 |   5120 |    1.129 |   453.48 |    5.021 |    25.49 |
+|   512 |    128 |   5632 |    1.150 |   445.27 |    5.147 |    24.87 |
+|   512 |    128 |   6144 |    1.165 |   439.67 |    5.285 |    24.22 |
+|   512 |    128 |   6656 |    1.195 |   428.48 |    5.409 |    23.66 |
+|   512 |    128 |   7168 |    1.203 |   425.53 |    5.511 |    23.23 |
+|   512 |    128 |   7680 |    1.222 |   418.83 |    5.583 |    22.93 |
+|   512 |    128 |   8192 |    1.245 |   411.24 |    5.537 |    23.12 |
+
+## IQ4_KT main@1843ed22
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    0.953 |   537.33 |    9.251 |    13.84 |
+|   512 |    128 |    512 |    0.971 |   527.35 |    9.055 |    14.14 |
+|   512 |    128 |   1024 |    0.991 |   516.84 |    9.119 |    14.04 |
+|   512 |    128 |   1536 |    1.009 |   507.53 |    9.188 |    13.93 |
+|   512 |    128 |   2048 |    1.032 |   496.11 |    9.195 |    13.92 |
+|   512 |    128 |   2560 |    1.053 |   486.43 |    9.248 |    13.84 |
+|   512 |    128 |   3072 |    1.074 |   476.86 |    9.306 |    13.75 |
+|   512 |    128 |   3584 |    1.092 |   468.86 |    9.362 |    13.67 |
+|   512 |    128 |   4096 |    1.116 |   458.73 |    9.320 |    13.73 |
+|   512 |    128 |   4608 |    1.139 |   449.40 |    9.371 |    13.66 |
+|   512 |    128 |   5120 |    1.152 |   444.28 |    9.393 |    13.63 |
+|   512 |    128 |   5632 |    1.175 |   435.78 |    9.481 |    13.50 |
+|   512 |    128 |   6144 |    1.208 |   423.93 |    9.590 |    13.35 |
+|   512 |    128 |   6656 |    1.218 |   420.20 |    9.819 |    13.04 |
+|   512 |    128 |   7168 |    1.239 |   413.20 |    9.815 |    13.04 |
+|   512 |    128 |   7680 |    1.259 |   406.59 |    9.893 |    12.94 |
+|   512 |    128 |   8192 |    1.279 |   400.28 |    9.745 |    13.14 |
+
+## IQ3_KT main@1843ed22
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    1.025 |   499.67 |    9.065 |    14.12 |
+|   512 |    128 |    512 |    0.971 |   527.55 |    8.851 |    14.46 |
+|   512 |    128 |   1024 |    0.973 |   526.26 |    8.981 |    14.25 |
+|   512 |    128 |   1536 |    0.994 |   514.90 |    8.936 |    14.32 |
+|   512 |    128 |   2048 |    1.007 |   508.34 |    8.906 |    14.37 |
+|   512 |    128 |   2560 |    1.025 |   499.29 |    8.964 |    14.28 |
+|   512 |    128 |   3072 |    1.051 |   487.01 |    9.007 |    14.21 |
+|   512 |    128 |   3584 |    1.066 |   480.25 |    9.053 |    14.14 |
+|   512 |    128 |   4096 |    1.087 |   470.84 |    9.040 |    14.16 |
+|   512 |    128 |   4608 |    1.107 |   462.37 |    9.085 |    14.09 |
+|   512 |    128 |   5120 |    1.119 |   457.53 |    9.100 |    14.07 |
+|   512 |    128 |   5632 |    1.142 |   448.41 |    9.172 |    13.96 |
+|   512 |    128 |   6144 |    1.157 |   442.43 |    9.247 |    13.84 |
+|   512 |    128 |   6656 |    1.174 |   435.94 |    9.304 |    13.76 |
+|   512 |    128 |   7168 |    1.195 |   428.28 |    9.375 |    13.65 |
+|   512 |    128 |   7680 |    1.223 |   418.53 |    9.543 |    13.41 |
+|   512 |    128 |   8192 |    1.230 |   416.22 |    9.453 |    13.54 |
+
+## IQ2_KT main@1843ed22
+|    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
+|-------|--------|--------|----------|----------|----------|----------|
+|   512 |    128 |      0 |    0.886 |   577.57 |    8.677 |    14.75 |
+|   512 |    128 |    512 |    0.918 |   557.71 |    8.473 |    15.11 |
+|   512 |    128 |   1024 |    0.956 |   535.52 |    8.512 |    15.04 |
+|   512 |    128 |   1536 |    1.132 |   452.14 |    8.586 |    14.91 |
+|   512 |    128 |   2048 |    0.997 |   513.67 |    8.590 |    14.90 |
+|   512 |    128 |   2560 |    1.018 |   502.72 |    8.449 |    15.15 |
+|   512 |    128 |   3072 |    1.040 |   492.11 |    8.499 |    15.06 |
+|   512 |    128 |   3584 |    1.058 |   484.04 |    8.549 |    14.97 |
+|   512 |    128 |   4096 |    1.080 |   474.13 |    8.451 |    15.15 |
+|   512 |    128 |   4608 |    1.096 |   467.17 |    8.506 |    15.05 |
+|   512 |    128 |   5120 |    1.109 |   461.72 |    8.529 |    15.01 |
+|   512 |    128 |   5632 |    1.131 |   452.71 |    8.628 |    14.84 |
+|   512 |    128 |   6144 |    1.154 |   443.62 |    8.717 |    14.68 |
+|   512 |    128 |   6656 |    1.168 |   438.32 |    8.808 |    14.53 |
+|   512 |    128 |   7168 |    1.192 |   429.39 |    8.907 |    14.37 |
+|   512 |    128 |   7680 |    1.200 |   426.64 |    8.998 |    14.23 |
+|   512 |    128 |   8192 |    1.221 |   419.30 |    8.973 |    14.27 |
+
+</details>
+
+---
+
+👤 **ubergarm** commented on **2025-06-20** at **21:43:10**
 
 Okay, here are the perplexities as run on the thread ripper pro. I ran all the Qwen3-14B quants on a single RTX A6000 to use the CUDA implementation, and then the three `KT` quant again compiled CPU-only to confirm things line up as expected. All tests run on PR541@5b677c3c
 
@@ -320,13 +504,13 @@ CUDA_VISIBLE_DEVICES="0" \
 
 Overall PR looks like a great speed improvement for token generation of KT quants. Given they still seem CPU bottle-necked at least in this specific test, I'd likely choose the 4bpw version over the smaller sizes when targeting tensors destined for CPU/RAM; because it generates about as fast while keeping more quality.
 
-Makes me wonder when a 5bpw or 6bpw version would begin to be RAM bandwidth bottle-necked again, but probably heavily dependent on the specific model and hardware. An iq6_kt might be equally RAM / CPU bottlenecked and achieve ~25 tok/sec TG on the ~512GB/s 6980P. 512 / (27.509 * (6/8))
+Makes me wonder when a 5bpw or 6bpw version would begin to be RAM bandwidth bottle-necked again, but probably heavily dependent on the specific model and hardware. An iq6_kt probably still would not hit that equivalent RAM / CPU bottleneck cross-over point on the ~512GB/s 6980P... 512 / (27.509 * (6/16)) = ~50 tok/sec theoretical max. To be fair that rig is not hitting theoretical max on the more simple quants, possibly NUMA related but not really sure.
 
 Anyway, very cool stuff! Thanks!
 
 ---
 
-👤 **ubergarm** commented the **2025-06-20** at **23:32:59**:<br>
+👤 **ubergarm** commented on **2025-06-20** at **23:32:59**
 
 I was too curious to see how it it performed on the AMD Thread Ripper Pro.. Interestingly, there was more variability in the generation speed than with the Xeon 6980P. So I take back my conclusion above about always reaching for the 4bpw... lol...
 
@@ -479,15 +663,15 @@ Here is the graph and numbers below. Cheers!
 
 ---
 
-👤 **ubergarm** commented the **2025-06-21** at **00:37:44**:<br>
+👤 **ubergarm** commented on **2025-06-21** at **00:37:44**
 
-I'm happy enough with the performance now to release the `R1-0528-IQ3_KT` on hugging face as *experimental* with the warning that there could potentially still be breaking changes. But a few others folks would be able to test as well. It lines up nicely in terms of perplexity and size, has a tight KLD max delta P, and now generates comparable to the slightly larger `IQ3_K_R4` as [shown in this discussion benchmark on huggingface](https://huggingface.co/ubergarm/DeepSeek-R1-0528-GGUF/discussions/7)
+I'm happy enough with the performance now to release the `R1-0528-IQ3_KT` on hugging face as *experimental* with the warning that there could potentially still be breaking changes. But a few others folks would be able to test as well. It lines up nicely in terms of perplexity and size, has a tight KLD max delta P, and now token generation speeds comparable to the slightly larger `IQ3_K_R4` as [shown in this discussion benchmark on huggingface](https://huggingface.co/ubergarm/DeepSeek-R1-0528-GGUF/discussions/7#6855fdc29c7d3d10883a53ab)
 
 over and out!
 
 ---
 
-👤 **ikawrakow** commented the **2025-06-21** at **14:32:10**:<br>
+👤 **ikawrakow** commented on **2025-06-21** at **14:32:10**
 
 @ubergarm Thank you for the extensive testing!
 

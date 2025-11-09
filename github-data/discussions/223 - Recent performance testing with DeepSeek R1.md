@@ -1,13 +1,14 @@
-### 🗣️ [#223](https://github.com/ikawrakow/ik_llama.cpp/discussions/223) - Recent performance testing with DeepSeek R1
+## 🗣️ [Discussion #223](https://github.com/ikawrakow/ik_llama.cpp/discussions/223) - Recent performance testing with DeepSeek R1
 
 | **Author** | `bitbottrap` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2025-02-22 |
 | **Updated** | 2025-03-14 |
 
 ---
 
-#### Description
+## 📄 Description
 
 I'm open to a more rigorous set of tests using accepted benchmark files. Just point me to them. I can run this periodically if it's scripted. Available are 2x24GB GPUs and 1TB of RAM on an Epyc CPU. 
 
@@ -52,9 +53,9 @@ standard |   | X | 8192 |   | 126521 | 21.5 | 4.68 |
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **saood06** replied the **2025-02-23** at **01:03:00**:<br>
+👤 **saood06** commented on **2025-02-23** at **01:03:00**
 
 Thank you so much for these results.
 
@@ -73,14 +74,15 @@ in each ubatch-sized window. Only a single token sequence is used.
 >The purpose of the benchmark is to visualize how the performance changes with
 the context size without averaging the metrics values over the whole context.
 
-> 👤 **bitbottrap** replied the **2025-02-23** at **01:18:38**:<br>
+> 👤 **bitbottrap** replied on **2025-02-23** at **01:18:38**
+> 
 > 500 token prompt, 300 token output.
 > 
 > If it's scripted and the results get written to a log that I can easily post I can do this periodically while this project is relevant. I did this by hand and it was the wrong way of doing it. And I'm not sure what parameters would be most beneficial to change especially when new features are being developed / tested.
 
 ---
 
-👤 **saood06** replied the **2025-02-23** at **01:36:47**:<br>
+👤 **saood06** commented on **2025-02-23** at **01:36:47**
 
 The fairydreaming benchmark includes a script that contains a python script that generates a graph that would display multiple configurations against each other here are two examples of it's output from fairydreaming ( [1](https://preview.redd.it/o2uxzg63x3he1.png?width=989&format=png&auto=webp&s=dc2743353f3d5a86258aa51efc7e18853e3911a0) and [2](https://www.reddit.com/r/LocalLLaMA/comments/1igpwzl/paradigm_shift/mawmoq0/) )
 
@@ -88,13 +90,15 @@ We could tell you what configs to run and then you just pass all the jsonl outpu
 
 Edit: Fixed image link to show PP instead of TG graph
 
-> 👤 **bitbottrap** replied the **2025-02-23** at **02:49:14**:<br>
-> I'm primarily motivated by DeepSeek R1/V3 improvements right now. Being that the model is so large and the most value would probably be pushing limits of context tests take a while. I use this system during the day so I definitely can't afford to create such detailed graphs regularly. But if there were a smaller number of runs, say up to 30ish that's reasonable to run overnight by request.
+> 👤 **bitbottrap** replied on **2025-02-23** at **02:49:14**
 > 
-> 👤 **saood06** replied the **2025-02-23** at **04:59:50**:<br>
+> I'm primarily motivated by DeepSeek R1/V3 improvements right now. Being that the model is so large and the most value would probably be pushing limits of context tests take a while. I use this system during the day so I definitely can't afford to create such detailed graphs regularly. But if there were a smaller number of runs, say up to 30ish that's reasonable to run overnight by request.
+
+> 👤 **saood06** replied on **2025-02-23** at **04:59:50**
+> 
 > >Being that the model is so large and the most value would probably be pushing limits of context tests take a while.
 > 
-> I understand my system is far weaker than yours (the highest PP I've seen is 11), and I've done overnight benchmarks so I do appreciate you doing this. I just created #225 for an easy to use but thorough benchmark, that will output nice graphs.
+> I understand my system is far weaker than yours (the highest PP I've seen is 11), and I've done overnight benchmarks so I do appreciate you doing this. I just created [#225](https://github.com/ikawrakow/ik_llama.cpp/issues/225) for an easy to use but thorough benchmark, that will output nice graphs.
 > 
 > >But if there were a smaller number of runs, say up to 30ish that's reasonable to run overnight by request.
 > 
@@ -102,7 +106,7 @@ Edit: Fixed image link to show PP instead of TG graph
 
 ---
 
-👤 **ikawrakow** replied the **2025-02-23** at **05:57:41**:<br>
+👤 **ikawrakow** commented on **2025-02-23** at **05:57:41**
 
 Thank you for this!
 
@@ -120,7 +124,7 @@ Run time repacking seems to be adding 2-3 minutes to the load time. This is bett
 
 ---
 
-👤 **bitbottrap** replied the **2025-02-23** at **15:30:00**:<br>
+👤 **bitbottrap** commented on **2025-02-23** at **15:30:00**
 
 Epyc 7773X (64 cores, 128 threads), one socket, 8x128GB RAM
 
@@ -147,7 +151,7 @@ threads | std | flash | mla
 
 ---
 
-👤 **ikawrakow** replied the **2025-02-23** at **16:08:15**:<br>
+👤 **ikawrakow** commented on **2025-02-23** at **16:08:15**
 
 Thanks!
 
@@ -165,7 +169,8 @@ Run-time-repacking (rtr) does not change the mix of quantization types. `Q4_K_M`
 
 OK, so this is Zen3, so using vanilla AVX2 implementation. If the information I find on the Internet is correct, it should have ~200 GB/s memory bandwidth. We have 37B active parameters at about 4.8 bpw for `Q4_K_M`, so about 22 GB of model weights are active, so we should be getting in the range of 8-9 t/s for TG. I wonder where is the bottleneck. I'm able to 100% saturate the memory bandwidth on a Ryzen-7950X (Zen4 core), Ryzen-5975WX (Zen3 core) and M2-Max with the models I can run.
 
-> 👤 **bitbottrap** replied the **2025-02-24** at **01:12:31**:<br>
+> 👤 **bitbottrap** replied on **2025-02-24** at **01:12:31**
+> 
 > Good eye and thank you for challenging my assumptions. I had benchmarked mla and found that 63 threads was just fine. No large drop like flash attention. Here are the per-thread-count results for flash attention. Yes, there's a huge drop for 63:
 > 
 > | Thread Count | Prompt Eval Time (tokens/s) | Eval Time (tokens/s) |
@@ -205,11 +210,12 @@ OK, so this is Zen3, so using vanilla AVX2 implementation. If the information I 
 
 ---
 
-👤 **ikawrakow** replied the **2025-02-24** at **14:35:34**:<br>
+👤 **ikawrakow** commented on **2025-02-24** at **14:35:34**
 
-Really curious to see what happens with PR #232.
+Really curious to see what happens with PR [#232](https://github.com/ikawrakow/ik_llama.cpp/issues/232).
 
-> 👤 **bitbottrap** replied the **2025-02-26** at **01:30:24**:<br>
+> 👤 **bitbottrap** replied on **2025-02-26** at **01:30:24**
+> 
 > Well I see the PR is in main. If you've got a command line that works with 1 or 2 24GB GPUs I'll start it up. I'd like to fit maximum possible context in there.
 > 
 > I see that mla with rtr is working together. Did a hand run and it sped things up. I also generated Q4_K_R4 and Q8_0_R8 quants and they also appear to speed things up. All working together too.
@@ -228,7 +234,7 @@ Really curious to see what happens with PR #232.
 
 ---
 
-👤 **ikawrakow** replied the **2025-02-26** at **13:08:06**:<br>
+👤 **ikawrakow** commented on **2025-02-26** at **13:08:06**
 
 > If you've got a command line that works with 1 or 2 24GB GPUs I'll start it up
 
@@ -242,15 +248,17 @@ On KV cache size: To match KTransformers, `ik_llama.cpp` must be able to handle 
 
 Of note: MLA is ~20% slower than standard attention for less than a few hundred tokens in the cache. It becomes competitive performance wise only beyond 16k tokens. With MLA there are two matrix multiplications that are extremely slow on CUDA. I'm trying to improve that but no luck so far.
 
-> 👤 **ikawrakow** replied the **2025-02-26** at **17:29:07**:<br>
-> PR #234 does speed MLA, but only with a single GPU involved.
+> 👤 **ikawrakow** replied on **2025-02-26** at **17:29:07**
 > 
-> 👤 **ikawrakow** replied the **2025-02-26** at **17:33:19**:<br>
+> PR [#234](https://github.com/ikawrakow/ik_llama.cpp/issues/234) does speed MLA, but only with a single GPU involved.
+
+> 👤 **ikawrakow** replied on **2025-02-26** at **17:33:19**
+> 
 > Oh, and adding `-fmoe` (or `-fmoe 1` with `llama-bench`) is useful too. This fuses the MoE matrix multiplications. Speedup is not dramatic, but we do get a few percent speedup for prefill and 1-2% for TG.
 
 ---
 
-👤 **bitbottrap** replied the **2025-03-14** at **14:54:37**:<br>
+👤 **bitbottrap** commented on **2025-03-14** at **14:54:37**
 
 So I was going to try and get a bunch of benchmarks with recent code and I encountered a problem using any GPU offloading. This was a feature that was working, but poorly, last time I did some hand testing.
 

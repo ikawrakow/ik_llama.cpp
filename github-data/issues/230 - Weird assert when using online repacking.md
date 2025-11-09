@@ -1,4 +1,4 @@
-### 📝 [#230](https://github.com/ikawrakow/ik_llama.cpp/issues/230) - Weird assert when using online repacking
+## 📌 [Issue #230](https://github.com/ikawrakow/ik_llama.cpp/issues/230) - Weird assert when using online repacking
 
 | **Author** | `pt13762104` |
 | :--- | :--- |
@@ -8,7 +8,7 @@
 
 ---
 
-#### Description
+## 📄 Description
 
 ### What happened?
 
@@ -216,15 +216,15 @@ Aborted (core dumped)
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-02-24** at **06:16:16**:<br>
+👤 **ikawrakow** commented on **2025-02-24** at **06:16:16**
 
-Dose #231 fix it?
+Dose [#231](https://github.com/ikawrakow/ik_llama.cpp/issues/231) fix it?
 
 ---
 
-👤 **pt13762104** commented the **2025-02-24** at **07:20:49**:<br>
+👤 **pt13762104** commented on **2025-02-24** at **07:20:49**
 
 It's working now, thank you!
 ```
@@ -245,38 +245,12 @@ build: 4f2cfd6e (3572)
 
 ---
 
-👤 **pt13762104** commented the **2025-02-24** at **07:20:49**:<br>
-
-It's working now, thank you!
-```
-| model                          |       size |     params | backend    | threads |          test |              t/s |
-| ------------------------------ | ---------: | ---------: | ---------- | ------: | ------------: | ---------------: |
-| deepseek2 16B Q4_K - Medium    |   9.65 GiB |    15.71 B | CPU        |      48 |         pp512 |   303.36 ± 29.58 |
-| deepseek2 16B Q4_K - Medium    |   9.65 GiB |    15.71 B | CPU        |      48 |         tg128 |     19.92 ± 0.07 |
-
-build: 4f2cfd6e (3572)
-| model                          |       size |     params | backend    | threads | rtr |          test |              t/s |
-| ------------------------------ | ---------: | ---------: | ---------- | ------: | --: | ------------: | ---------------: |
-============ Repacked 268 tensors
-| deepseek2 16B Q4_K - Medium    |   9.65 GiB |    15.71 B | CPU        |      48 |   1 |         pp512 |   393.53 ± 52.69 |
-| deepseek2 16B Q4_K - Medium    |   9.65 GiB |    15.71 B | CPU        |      48 |   1 |         tg128 |     21.71 ± 0.16 |
-
-build: 4f2cfd6e (3572)```
-
----
-
-👤 **ikawrakow** commented the **2025-02-24** at **07:29:39**:<br>
+👤 **ikawrakow** commented on **2025-02-24** at **07:29:39**
 
 What is the CPU for these benchmarks? Have you tried running TG with fewer threads?
 
 ---
 
-👤 **pt13762104** commented the **2025-02-24** at **08:15:13**:<br>
+👤 **pt13762104** commented on **2025-02-24** at **08:15:13**
 
 No, I didn't try. Also it's 2x Xeon 24-core (unknown model name) from Kaggle.
-
----
-
-👤 **pt13762104** commented the **2025-02-24** at **08:15:13**:<br>
-
-No, I didn't try. Also it's 2x Xeon (unknown model name) from Kaggle.

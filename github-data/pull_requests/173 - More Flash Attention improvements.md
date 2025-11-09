@@ -1,20 +1,23 @@
-### 🔀 [#173](https://github.com/ikawrakow/ik_llama.cpp/pull/173) - More Flash Attention improvements
+## 🔀 [Pull Request #173](https://github.com/ikawrakow/ik_llama.cpp/pull/173) - More Flash Attention improvements
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fattn_kqv` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-19 |
 | **Updated** | 2025-01-20 |
+| **Merged** | 2025-01-20 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR further improves the Flash Attention implementation as follows:
 * Slightly faster `V * softmax(K * Q)` implementation. This benefits all V-cache types
 * Faster implementation when the K-cache is quantized with `Q8_0` via run-time-repacking to `Q8_0_R4`.
 
-The following graph shows prompt processing speed as a function of prompt length for LLaMA-3.1-8B quantized with `IQ4_XS` on a Ryzem-7950X CPU. The PR results are shown with black (`BF16` KV-cache) and red (`Q8_0` KV-cache) triangles, circles are used for the main branch.  I have reused the graph from the last post in #25 by just adding the results for this PR, so mainline `llama.cpp` performance is shown as well. I'm particularly pleased with the fact that `Q8_0` KV-cache is now on per or even slightly better than the natively supported 16-bit float type as `Q8_0` quantized KV-cache is basically lossless while reducing required memory by 2X.
+The following graph shows prompt processing speed as a function of prompt length for LLaMA-3.1-8B quantized with `IQ4_XS` on a Ryzem-7950X CPU. The PR results are shown with black (`BF16` KV-cache) and red (`Q8_0` KV-cache) triangles, circles are used for the main branch.  I have reused the graph from the last post in [#25](https://github.com/ikawrakow/ik_llama.cpp/issues/25) by just adding the results for this PR, so mainline `llama.cpp` performance is shown as well. I'm particularly pleased with the fact that `Q8_0` KV-cache is now on per or even slightly better than the natively supported 16-bit float type as `Q8_0` quantized KV-cache is basically lossless while reducing required memory by 2X.
 
 For reference, with a `Q8_K_R8`-quantized model we achieve 380 t/s for 512 tokens, and 150 t/s for 32k tokens.   
 
@@ -22,9 +25,9 @@ For reference, with a `Q8_K_R8`-quantized model we achieve 380 t/s for 512 token
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-01-20** at **06:57:27**:<br>
+👤 **ikawrakow** commented on **2025-01-20** at **06:57:27**
 
 Here is the performance relative to a GPU (RTX-4080) for the above graph
 

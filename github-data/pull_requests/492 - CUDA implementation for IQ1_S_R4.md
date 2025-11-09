@@ -1,18 +1,21 @@
-### 🔀 [#492](https://github.com/ikawrakow/ik_llama.cpp/pull/492) - CUDA implementation for IQ1_S_R4
+## 🔀 [Pull Request #492](https://github.com/ikawrakow/ik_llama.cpp/pull/492) - CUDA implementation for IQ1_S_R4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_iq1_s_r4` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-04 |
 | **Updated** | 2025-06-05 |
+| **Merged** | 2025-06-05 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Apparently there are people who would like to use `IQ1_S` or `IQ1_S_R4` quantized models. This PR adds CUDA implementation for `IQ1_S_R4`.
 
-It seems there has been some confusion about which of these quants is supported where (see discussions in #477)
+It seems there has been some confusion about which of these quants is supported where (see discussions in [#477](https://github.com/ikawrakow/ik_llama.cpp/issues/477))
 
 To clarify:
 * `IQ1_S` and `IQ1_S_R4` have both fast GEMM and GEMV on the CPU, but `IQ1_S_R4` is faster for prompt processing due to row interleaving
@@ -63,9 +66,34 @@ Here is the performance with dequantize+cuBLAS that I had originally:
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ubergarm** commented the **2025-06-04** at **22:53:11**:<br>
+👤 **ubergarm** commented on **2025-06-04** at **21:06:38**
+
+Haha yes... Thanks a lot for this one! I realize I made a lot of confusion releasing that `IQ1_S_R4` so also uploaded the equivalent `IQ1_S`. I'll let folks know they can use the `_R4` with GPU offload now and likely increase their TG numbers!
+
+>  these two quants are not 100% equivalent. IQ1_S uses float scales per super-blocks of 256 weights, while IQ1_S_R4 uses a single float scale for an entire tensor row (and is therefore slightly smaller with exactly 1.5 bpw, while IQ1_S is 1.5625 bpw).
+
+Appreciate the explanation, I was a little worried at first when the model size increased by a few GiB, but everything worked out and folks can still barely squeeze it onto 128GiB RAM + 24GB VRAM rigs by offloading layers. Makes sense now.
+
+I'll run a quick test of this PR and post some llama-sweep-bench results soon.
+
+---
+
+👤 **ubergarm** commented on **2025-06-04** at **22:53:11**
+
+*EDIT*;
+
+Oops, it just hit me after going for a long walk. My quant also uses `IQ1_M_R4`
+```
+- type iq1_s_r4:  116 tensors `ffn_(gate|up)_exps`
+- type iq1_m_r4:   58 tensors `ffn_down_exps`
+```
+
+So *ignore the rest of this* haha... I might try to roll an all exps at `iq1_s_r4` though and break the world record for the smallest R1-0528 quant. again. lol..,.
+
+*EDIT2*: Yeah it works, posted new comment below with llama-sweep-bench results.
+---
 
 Well shucks, I tried this PR, but I'm not able to get the R1-0528-IQ1_S_R4 to run with GPU offload. I tried a few compilation options with and without `-DGGML_CUDA_IQK_FORCE_BF16=1` and the IQ1_S runs fine with the exact same llama-sweep-bench command.
 
@@ -73,7 +101,7 @@ This is on the 7965WX 256GB RAM + Dual RTX A6000 (96GB VRAM total) rig.
 
 Watching `nvitop` the GPUs use low power even at 100% utilization as if it is just copying data perhaps and not actually running computations still like on main. I tried a single visible CUDA device as well but same behavior. I tried the earlier GEMV commit of `33ced81c` but same behavior.
 
-## PR496@fb6a0d01 IQ1_S
+## PR492@fb6a0d01 IQ1_S
 `main: n_kv_max = 16384, n_batch = 4096, n_ubatch = 4096, flash_attn = 1, n_gpu_layers = 99, n_threads = 24, n_threads_batch = 24`
 |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
 |-------|--------|--------|----------|----------|----------|----------|
@@ -82,7 +110,7 @@ Watching `nvitop` the GPUs use low power even at 100% utilization as if it is ju
 |  4096 |   1024 |   8192 |   15.014 |   272.81 |   71.013 |    14.42 |
 |  4096 |   1024 |  12288 |   17.540 |   233.52 |   73.294 |    13.97 |
 
-## PR496@fb6a0d01 IQ1_S_R4
+## PR492@fb6a0d01 IQ1_S_R4
 `main: n_kv_max = 16384, n_batch = 512, n_ubatch = 512, flash_attn = 1, n_gpu_layers = 99, n_threads = 24, n_threads_batch = 24`
 |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
 |-------|--------|--------|----------|----------|----------|----------|
@@ -655,13 +683,23 @@ main: n_kv_max = 16384, n_batch = 512, n_ubatch = 512, flash_attn = 1, n_gpu_lay
 
 ---
 
-👤 **ubergarm** commented the **2025-06-05** at **04:19:52**:<br>
+👤 **ubergarm** commented on **2025-06-05** at **04:19:52**
 
 Okay, it works after removing the iq1_m_r4 layers! I rolled a new `IQ1_S_R4-smol` which is `iq1_s_r4` for all `exps` but I bumped up attn/token_embd/shexp to `iq5_ks`. 
 
 ![thud-sweep-R1-0528-IQ1_S_R4-smol](https://github.com/user-attachments/assets/2e7ef8c1-1fa9-4dfc-85da-12dddddc060a)
 
-You can see how both GPUs are offloaded and with some utilization along with decent power usage:
+You can see how both GPUs are offloaded and with some utilization along with decent power usage. Without this PR on `main@f6d5fbdc` it gets less than 1 tok/sec generation with the same command.
 ![sweep-bench-screenshot-R1-0528-IQ1_S_R4-smol](https://github.com/user-attachments/assets/e3d7635a-8ca2-4f9f-834e-003cbc5f92a6)
 
 I'll go test perplexity on this little guy and see how it looks. Thanks!
+
+---
+
+👤 **ikawrakow** commented on **2025-06-05** at **04:24:18**
+
+> Oops, it just hit me after going for a long walk. My quant also uses IQ1_M_R4
+
+Yes, `IQ1_M_R4` has no CUDA support. I'll add it soon to support your quest for the world's smallest model.
+
+`ffn_down` also with `IQ1_S_R4` is likely to cripple the model.

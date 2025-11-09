@@ -1,16 +1,19 @@
-### 🔀 [#298](https://github.com/ikawrakow/ik_llama.cpp/pull/298) - Update gguf-py constants
+## 🔀 [Pull Request #298](https://github.com/ikawrakow/ik_llama.cpp/pull/298) - Update gguf-py constants
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `s6/fix_python` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-31 |
 | **Updated** | 2025-04-24 |
+| **Merged** | 2025-04-24 |
 
 ---
 
-#### Description
+## 📄 Description
 
-As reported in #297 the constants.py file needs to be updated. 
+As reported in [#297](https://github.com/ikawrakow/ik_llama.cpp/issues/297) the constants.py file needs to be updated. 
 
 Testing the command that errored it now gets further.
 
@@ -42,9 +45,9 @@ This is because GGML_QUANT_SIZES ([code](https://github.com/ikawrakow/ik_llama.c
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-03-31** at **08:03:08**:<br>
+👤 **ikawrakow** commented on **2025-03-31** at **08:03:08**
 
 > could you give me a hint at how to update this?
 
@@ -54,7 +57,7 @@ The python stuff is in desperate need of sync with mainline. But the difference 
 
 ---
 
-👤 **saood06** commented the **2025-03-31** at **09:07:46**:<br>
+👤 **saood06** commented on **2025-03-31** at **09:07:46**
 
 > > could you give me a hint at how to update this?
 > 
@@ -69,7 +72,7 @@ I'm still testing the performance implications of that on my system, it seems li
 
 ---
 
-👤 **saood06** commented the **2025-03-31** at **09:10:53**:<br>
+👤 **saood06** commented on **2025-03-31** at **09:10:53**
 
 >The python stuff is in desperate need of sync with mainline.
 
@@ -79,7 +82,7 @@ This GGML_QUANT_SIZES is the only thing I know that is missing besides the Gemma
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-31** at **09:15:43**:<br>
+👤 **ikawrakow** commented on **2025-03-31** at **09:15:43**
 
 > What went wrong with the Gemma changes
 
@@ -87,7 +90,7 @@ It wasn't working. I copy-pasted the Gemma3 portion, but it started throwing exc
 
 ---
 
-👤 **saood06** commented the **2025-04-24** at **04:23:34**:<br>
+👤 **saood06** commented on **2025-04-24** at **04:23:34**
 
 @ikawrakow 
 
@@ -98,6 +101,36 @@ Running `python gguf-py/scripts/gguf_dump.py --markdown /mnt/sda/DeepSeek-V3-032
 
 [gguf_dump1.md](https://github.com/user-attachments/files/19884332/gguf_dump1.md)
 
+Edit: Something seems wrong with I2_S, trying to use dump the model it runs into this error.
+
+```
+  File "/home/saood06/ik_main/ik_llama.cpp/gguf-py/gguf/gguf_reader.py", line 130, in __init__
+    self._build_tensors(offs, tensors_fields)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/saood06/ik_main/ik_llama.cpp/gguf-py/gguf/gguf_reader.py", line 325, in _build_tensors
+    data = self._get(data_offs, item_type, item_count).reshape(np_dims),
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+ValueError: cannot reshape array of size 17425632 into shape (2560,6912)
+```
+
+I added a print statement to see which tensor it was hitting and all it's values:
+
+```
+Processing tensor: blk.9.ffn_down.weight
+  dims: [6912, 2560]
+  raw_dtype: [36]
+  ggml_type: I2_S
+  n_elems: 17694720
+  np_dims: (2560, 6912)
+  block_size: 1, type_size: 1
+  n_bytes: 17694720
+  data_offs: 1827046400
+  item_count: 17694720
+  item_type: <class 'numpy.uint8'>
+```
+
+Interestingly enough  the `iq2_bn_r4` and `iq2_bn` converted version does not error and I can gguf-dump them.
+
 ---
 
-👤 **ikawrakow** submitted a review the **2025-04-24** at **05:33:08**: ✅ `APPROVED`
+👤 **ikawrakow** approved this pull request ✅ on **2025-04-24** at **05:33:08**

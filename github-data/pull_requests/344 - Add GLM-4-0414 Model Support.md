@@ -1,16 +1,19 @@
-### 🔀 [#344](https://github.com/ikawrakow/ik_llama.cpp/pull/344) - Add GLM-4-0414 Model Support
+## 🔀 [Pull Request #344](https://github.com/ikawrakow/ik_llama.cpp/pull/344) - Add GLM-4-0414 Model Support
 
 | **Author** | `ubergarm` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ug/add-GLM-4-0414` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-24 |
 | **Updated** | 2025-05-08 |
+| **Merged** | 2025-04-26 |
 
 ---
 
-#### Description
+## 📄 Description
 
-This is my second attempt which still has some issues. Original attempt was #333. This one is based on https://github.com/ggml-org/llama.cpp/pull/12867 . However, this PR does not bring over any of the python stuff.
+This is my second attempt which still has some issues. Original attempt was [#333](https://github.com/ikawrakow/ik_llama.cpp/issues/333). This one is based on https://github.com/ggml-org/llama.cpp/pull/12867 . However, this PR does not bring over any of the python stuff.
 
 In limited testing with of [bartowski/THUDM_GLM-Z1-32B-0414-GGUF](https://huggingface.co/bartowski/THUDM_GLM-Z1-32B-0414-GGUF/blob/main/THUDM_GLM-Z1-32B-0414-IQ4_XS.gguf) on CPU only and CUDA backends it seems to work as long as:
 
@@ -44,9 +47,9 @@ So I'll mark this as draft for now and see how things are looking soon.
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-04-25** at **07:29:50**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **07:29:50**
 
 > If I increase --n-gpu-layers 60 or higher, it outputs GGGGGGGGGGGGGGG.
 
@@ -54,7 +57,7 @@ Does it also happen when you use `-ctk q8_0 -ctv q8_0`? There is [this PR](https
 
 ---
 
-👤 **ubergarm** commented the **2025-04-25** at **14:37:32**:<br>
+👤 **ubergarm** commented on **2025-04-25** at **14:37:32**
 
 Hrrm, unfortunately no using `-ctk q8_0 -ctv q8_0` with `-ngl 60` (or higher) still throws `GGGGGGGG`... 
 
@@ -91,31 +94,31 @@ Could be that I made a mistake in the `build_glm4()` the attention cgraph? Inter
     --port 8080
 ```
 
-Last observations are that mainline seems to work fine with or without `-fa` and also mainline is *much slower* even fully offloaded e.g. 20 tok/sec PP and 5 tok/s TG. Compared to `ik_llama.cp` getting 163 tok/sec PP and 17 tok/sec TG with `-ot attn=CPU -nkvo` and even faster at 271 tok/sec PP and 25 tok/sec TG with `-ngl 59`...
+*EDIT*: mainline was compiled for CPU only so this is to be expected: Last observations are that mainline seems to work fine with or without `-fa` and also mainline is *much slower* even ~fully offloaded~ e.g. 20 tok/sec PP and 5 tok/s TG. Compared to `ik_llama.cpp` getting 163 tok/sec PP and 17 tok/sec TG with `-ot attn=CPU -nkvo` and even faster at 271 tok/sec PP and 25 tok/sec TG with `-ngl 59`...
 
-Not sure what to try next other than dig in deeper to how `build_inp_KQ_mask()` and `llm_build_kv` have changed with mainline refactors or something...
+Not sure what to try next other than dig in deeper to how `build_inp_KQ_mask()` and `llm_build_kv()` have changed with mainline refactors or something...
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **14:43:20**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **14:43:20**
 
 > Could be that I made a mistake in the build_glm4() the attention cgraph? Interestingly this invocation seems to works fine too:
 
-If you make a mistake with building the graph, this invocation wouldn't be working. If it works for all layers offloaded to the GPU except attention tensors and KV cache, it means there is a precision issue in the attention calculation on CUDA (on the CPU everything is computed with `fp32` precision).
+If you made a mistake with building the graph, this invocation wouldn't be working. If it works for all layers offloaded to the GPU except attention tensors and KV cache, it means there is a precision issue in the attention calculation on CUDA (on the CPU everything is computed with `fp32` precision).
 
 ---
 
-👤 **ubergarm** commented the **2025-04-25** at **14:48:42**:<br>
+👤 **ubergarm** commented on **2025-04-25** at **14:48:42**
 
-I just noticed one more odd thing trying `-ot attn=CPU -ot .*=CUDA0` on `ik_llama.cpp` it prints this out on startup then crashes. There are two `__missing__` types per layer it seems... 
+I just noticed one more odd thing trying `-ot attn=CPU -ot \.*=CUDA0` on `ik_llama.cpp` it prints this out on startup then crashes. There are two `__missing__` types per layer it seems... 
 
 ```
-Tensor token_embd.weight buffer type overriden to CPU
-Tensor output_norm.weight buffer type overriden to CPU
-Tensor output.weight buffer type overriden to CPU
+Tensor token_embd.weight buffer type overriden to CUDA0
+Tensor output_norm.weight buffer type overriden to CUDA0
+Tensor output.weight buffer type overriden to CUDA0
 Tensor blk.0.attn_norm.weight buffer type overriden to CPU
-Tensor __missing__ buffer type overriden to CPU
-Tensor __missing__ buffer type overriden to CPU
+Tensor __missing__ buffer type overriden to CUDA0
+Tensor __missing__ buffer type overriden to CUDA0
 Tensor blk.0.attn_q.weight buffer type overriden to CPU
 Tensor blk.0.attn_k.weight buffer type overriden to CPU
 Tensor blk.0.attn_v.weight buffer type overriden to CPU
@@ -123,16 +126,34 @@ Tensor blk.0.attn_q.bias buffer type overriden to CPU
 Tensor blk.0.attn_k.bias buffer type overriden to CPU
 Tensor blk.0.attn_v.bias buffer type overriden to CPU
 Tensor blk.0.attn_output.weight buffer type overriden to CPU
-Tensor blk.0.post_attention_norm.weight buffer type overriden to CPU
-Tensor blk.0.ffn_norm.weight buffer type overriden to CPU
-Tensor blk.0.ffn_down.weight buffer type overriden to CPU
-Tensor blk.0.ffn_up.weight buffer type overriden to CPU
-Tensor blk.0.post_ffw_norm.weight buffer type overriden to CPU
+Tensor blk.0.post_attention_norm.weight buffer type overriden to CUDA0
+Tensor blk.0.ffn_norm.weight buffer type overriden to CUDA0
+Tensor blk.0.ffn_down.weight buffer type overriden to CUDA0
+Tensor blk.0.ffn_up.weight buffer type overriden to CUDA0
+Tensor blk.0.post_ffw_norm.weight buffer type overriden to CUDA0
+```
+
+Running mainline with `-ot \.*=CPU` shows this:
+
+```
+tensor token_embd.weight buffer type overriden to CPU
+tensor output_norm.weight buffer type overriden to CPU
+tensor output.weight buffer type overriden to CPU
+tensor blk.0.attn_norm.weight buffer type overriden to CPU
+tensor blk.0.attn_q.weight buffer type overriden to CPU
+tensor blk.0.attn_k.weight buffer type overriden to CPU
+tensor blk.0.attn_v.weight buffer type overriden to CPU
+tensor blk.0.attn_output.weight buffer type overriden to CPU
+tensor blk.0.post_attention_norm.weight buffer type overriden to CPU
+tensor blk.0.ffn_norm.weight buffer type overriden to CPU
+tensor blk.0.ffn_down.weight buffer type overriden to CPU
+tensor blk.0.ffn_up.weight buffer type overriden to CPU
+tensor blk.0.post_ffw_norm.weight buffer type overriden to CPU
 ```
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **14:50:36**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **14:50:36**
 
 Try this: in the function `llm_build_kqv()`, on all lines that have
 ```
@@ -144,9 +165,9 @@ This will set the precision of the `K*Q` calculation to `fp32`, and hopefully fi
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **14:57:27**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **14:57:27**
 
-I see in mainline `llama.cpp` they have become tired of setting the `K*Q` calculation for `fp32` precision for specific models, and now have this
+I see in mainline `llama.cpp` they have become tired of setting the `K*Q` calculation to `fp32` precision for specific models, and now have this
 ```c++
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
 
@@ -159,7 +180,7 @@ This is why mainline may be working for this model. I still refuse to set that g
 
 ---
 
-👤 **ubergarm** commented the **2025-04-25** at **15:01:49**:<br>
+👤 **ubergarm** commented on **2025-04-25** at **15:01:49**
 
 > add || model.arch == LLM_ARCH_GLM4
 
@@ -182,27 +203,43 @@ I'll push this up.
 
 Remaining questions:
 * Is it okay that it does *not* work without `-fa` ?
-* I didn't test on other hardware nor include the latest mainline patch `ggml_mul_mat_set_prec(cur, GGML_PREC_F32);`.
+* I didn't test on other hardware nor include the latest mainline patch to set `ggml_mul_mat_set_prec(cur, GGML_PREC_F32);` for `llm_build_ffn()` `down` as well which might be important on some GPUs.
 
 ---
 
-👤 **ubergarm** commented the **2025-04-25** at **15:35:45**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **15:10:02**
+
+You have only enabled `fp32` with FA. There are 2 more checks further down where you need to add the same, then it should also work without FA.
+
+You don't need the latest PR in mainline that sets `fp32` generically for the entire model. That has huge performance impact if you are not running a quantized model.
+
+---
+
+👤 **ubergarm** commented on **2025-04-25** at **15:35:45**
 
 Okay, so now without `-fa` it no longer produces `GGGGGGG` but it is back to this kinda stuff:
-
+ 
 ```
 arsTab�.^rellsúng pacirc Pepper九龙每:室hlt一层avit学isi� cé个义项PMC\":列为� friAZalyrátolpanies�formanceInvoke9不足 Cornel Naz/Rkoz�koz�INFedomaidaporaidariantchartôaid
 ```
 
 I'll look for a reference, I thought I've seen others mentioning this kinda output before.
 
+Here is a reference where they [suggest using different batch size](https://huggingface.co/bartowski/THUDM_GLM-4-32B-0414-GGUF/discussions/5#68096886119a3e5577391a52) e.g. `-b 16 -ub 16` which I'll try now. Did *not* fix it.
+
+Another [reference here](https://github.com/ggml-org/llama.cpp/issues/12946#issuecomment-2804066978) which seems to suggest a recent python conversion update [here](https://github.com/ggml-org/llama.cpp/pull/13021).
+
+So maybe I'll double check my existing GGUF or try to convert my own GGUF using the most recent patch that updates some special tokens and sets
+```
+self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5)))
+```
+
+Seems like bartowski used a version of mainline to convert that did include this PR hrmm..
+![llama-mainline-github-logs-pr](https://github.com/user-attachments/assets/c6859854-862e-406e-a0d1-fae0cddd4e8e)
+
 ---
 
-👤 **ikawrakow** submitted a review the **2025-04-25** at **16:58:38**: 💬 `COMMENTED`
-
----
-
-👤 **ikawrakow** commented during a code review the **2025-04-25** at **16:58:38** on `src/llama.cpp`:<br>
+👤 **ikawrakow** started a conversation on `src/llama.cpp` on **2025-04-25** at **16:58:38**
 
 Add
 ```c++
@@ -214,11 +251,7 @@ after line 9515
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-04-25** at **17:01:07**: 💬 `COMMENTED`
-
----
-
-👤 **ikawrakow** commented during a code review the **2025-04-25** at **17:01:07** on `src/llama.cpp`:<br>
+👤 **ikawrakow** started a conversation on `src/llama.cpp` on **2025-04-25** at **17:01:07**
 
 Add
 ```c++
@@ -230,7 +263,7 @@ after line 9475
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-25** at **17:07:32**:<br>
+👤 **ikawrakow** commented on **2025-04-25** at **17:07:32**
 
 I don't think any of the suggestions you are finding around the Internet are going to help. Just think about it:
 * It works on the CPU (calculation done with `fp32`)
@@ -241,7 +274,7 @@ The only logical conclusion from these 3 observations is that you also need to s
 
 ---
 
-👤 **ubergarm** commented the **2025-04-25** at **18:31:20**:<br>
+👤 **ubergarm** commented on **2025-04-25** at **18:31:20**
 
 Thanks, I appreciate you helping me learn on this.
 
@@ -252,6 +285,7 @@ I tried setting precision to fp32 as you describe, but still get the same gibber
 
 <summary>The patch you suggested above.</summary>
 I went ahead and tried this and it seems to be taking the `kqv` path and not the `kqv_i` but still giving same gibberish.
+
 ```
 --- a/src/llama.cpp
 +++ b/src/llama.cpp
@@ -276,13 +310,14 @@ I went ahead and tried this and it seems to be taking the `kqv` path and not the
                      kqv = kqv_i;
                  } else {
 ```
+
 </details>
 
 I'll dig into the differences between mainline non flash attention and this forks non flash attention path more to see if anything else sticks out to me.
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-26** at **06:02:40**:<br>
+👤 **ikawrakow** commented on **2025-04-26** at **06:02:40**
 
 > Just to be clear I'm getting the gibberish output without -fa on both CPU only as well as CUDA backend.
 
@@ -297,7 +332,7 @@ In mainline they have reorganized how attention is built. Reshaping `V` to 3D at
 
 ---
 
-👤 **ikawrakow** commented the **2025-04-26** at **07:19:17**:<br>
+👤 **ikawrakow** commented on **2025-04-26** at **07:19:17**
 
 Here a quick CPU only `sweep-bench` performance comparison to mainline for the [bartowski/THUDM_GLM-Z1-32B-0414-GGUF](https://huggingface.co/bartowski/THUDM_GLM-Z1-32B-0414-GGUF/blob/main/THUDM_GLM-Z1-32B-0414-IQ4_XS.gguf) model you are using
 
@@ -331,7 +366,7 @@ Here a quick CPU only `sweep-bench` performance comparison to mainline for the [
 ```
 ./bin/llama-sweep-bench -m THUDM_GLM-Z1-32B-0414-IQ4_XS.gguf -c 8192 -t 32 -fa -ctk q8_0 -ctv q8_0 -rtr
 ```
-(but I needed the changes in PR #349 to make FA work on the CPU).
+(but I needed the changes in PR [#349](https://github.com/ikawrakow/ik_llama.cpp/issues/349) to make FA work on the CPU).
 
 |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
 |-------|--------|--------|----------|----------|----------|----------|
@@ -354,7 +389,7 @@ Here a quick CPU only `sweep-bench` performance comparison to mainline for the [
 
 ---
 
-👤 **ubergarm** commented the **2025-04-26** at **14:53:00**:<br>
+👤 **ubergarm** commented on **2025-04-26** at **14:53:00**
 
 Sweeet that fixes up the non-flash-attention case! This model is quite efficient, I just ran it with 128k context and only using `21194MiB` VRAM ?? Looking forward to some testing and benchmarking soon.
 
@@ -364,23 +399,33 @@ Thanks again really appreciate your time looking at this! Cheers!
 
 ---
 
-👤 **ubergarm** commented the **2025-04-26** at **15:23:46**:<br>
+👤 **ikawrakow** commented on **2025-04-26** at **15:00:17**
+
+> This model is quite efficient, I just ran it with 128k context and only using 21194MiB VRAM ??
+
+Yes, it has a very high GQA factor of 24, so the KV entries per token are very small. This makes the attention portion very efficient, so the decline of TG speed with context in the KV cache is very slow (less than 10% when going from 0 to 8k tokens as per above table). So, it is a model worth having.
+
+Please make it ready and let's merge it.
+
+---
+
+👤 **ubergarm** commented on **2025-04-26** at **15:23:46**
 
 Okay got it rebased, gonna force push it up after quick final test!!!
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-04-26** at **15:33:46**: ✅ `APPROVED`
+👤 **ikawrakow** approved this pull request ✅ on **2025-04-26** at **15:33:46**
 
 ---
 
-👤 **ubergarm** commented the **2025-04-26** at **15:41:12**:<br>
+👤 **ubergarm** commented on **2025-04-26** at **15:41:12**
 
 Yaay!! Feels good to finally get that model working haha... Thanks again for your patience and guidance! Have a g'night!
 
 ---
 
-👤 **ubergarm** commented the **2025-04-26** at **20:04:37**:<br>
+👤 **ubergarm** commented on **2025-04-26** at **20:04:37**
 
 > Here a quick CPU only sweep-bench performance comparison to mainline for the [bartowski/THUDM_GLM-Z1-32B-0414-GGUF](https://huggingface.co/bartowski/THUDM_GLM-Z1-32B-0414-GGUF/blob/main/THUDM_GLM-Z1-32B-0414-IQ4_XS.gguf) model you are using
 
@@ -396,7 +441,7 @@ I followed your lead and ran some `llama-sweep-bench` comparisons too. My CPU-on
 
 <details>
 
-<summary>Logs</summary>
+<summary>👈 Logs</summary>
 
 ## `llama.cpp@558a76`
 Plus github.com/ubergarm/llama.cpp `ug/port-sweep-bench` branch.
@@ -683,7 +728,7 @@ llama_new_context_with_model: graph splits = 1
 main: n_kv_max = 5120, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_layers = -1, n_threads = 16, n_threads_batch = 16
 
 ============ Repacked 367 tensors
-```
+
 |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
 |-------|--------|--------|----------|----------|----------|----------|
 |   512 |    128 |      0 |    6.188 |    82.74 |   25.659 |     4.99 |
@@ -696,16 +741,19 @@ main: n_kv_max = 5120, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_lay
 |   512 |    128 |   3584 |    6.815 |    75.12 |   26.110 |     4.90 |
 |   512 |    128 |   4096 |    6.902 |    74.18 |   26.160 |     4.89 |
 |   512 |    128 |   4608 |    7.007 |    73.07 |   26.232 |     4.88 |
+```
 
 </details>
 
 ## my CUDA GPU test
 
+This is *with* flash attention enabled.
+
 ![thud-sweep-02-GPU](https://github.com/user-attachments/assets/c9207bfb-bf41-439d-acf2-0e5e75c40890)
 
 <details>
 
-<summary>Logs</summary>
+<summary>👈 Logs</summary>
 
 ## `llama.cpp@558a76`
 Plus github.com/ubergarm/llama.cpp `ug/port-sweep-bench` branch.
@@ -1063,7 +1111,6 @@ llama_new_context_with_model: graph nodes  = 1592
 llama_new_context_with_model: graph splits = 2
 
 main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_layers = 99, n_threads = 16, n_threads_batch = 16
-```
 
 |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
 |-------|--------|--------|----------|----------|----------|----------|
@@ -1131,24 +1178,30 @@ main: n_kv_max = 32768, n_batch = 2048, n_ubatch = 512, flash_attn = 1, n_gpu_la
 |   512 |    128 |  31232 |    0.951 |   538.41 |    6.633 |    19.30 |
 |   512 |    128 |  31744 |    0.961 |   532.89 |    6.693 |    19.12 |
 |   512 |    128 |  32256 |    0.970 |   527.77 |    6.744 |    18.98 |
-
+```
 
 </details>
 
-I didn't yet try comparing running with non-flash-attention.
+## my CUDA GPU no fa
+
+This is *without* flash attention.
+
+![thud-sweep-04-GPU-no-flash-attention](https://github.com/user-attachments/assets/efd7248e-88eb-411e-9a77-8ac9003153c5)
+
+Didn't grab the logs as it was a quick sanity check basically. If you want them let me know and I can do a longer run etc.
 
 ---
 
-👤 **saood06** commented the **2025-04-27** at **08:48:11**:<br>
+👤 **saood06** commented on **2025-04-27** at **08:48:11**
 
 > > This model is quite efficient, I just ran it with 128k context and only using 21194MiB VRAM ??
 > 
 > Yes, it has a very high GQA factor of 24
 
-This caught my eye, and was glad they had a prior work dedicated to long context training of LLMs, that they referenced in the GQA part of their technical report, [LongAlign: A Recipe for Long Context Alignment of Large Language Models](https://arxiv.org/abs/2401.18058)
+This caught my eye, and looked into it and found they had a prior work dedicated to long context training of LLMs that they say "(Cf [LongAlign: A Recipe for Long Context Alignment of Large Language Models](https://arxiv.org/abs/2401.18058) for technical details)" in the GQA part of their technical report
 
 ---
 
-👤 **saood06** commented the **2025-05-08** at **22:44:40**:<br>
+👤 **saood06** commented on **2025-05-08** at **22:44:40**
 
 I found [this](https://adamniederer.com/blog/llm-context-benchmarks.html) where someone uses NoLiMa to test the long context performance and they did notice lower performance (which I believe is because of the very high GQA factor).

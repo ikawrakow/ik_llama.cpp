@@ -1,14 +1,17 @@
-### 🔀 [#181](https://github.com/ikawrakow/ik_llama.cpp/pull/181) - Various
+## 🔀 [Pull Request #181](https://github.com/ikawrakow/ik_llama.cpp/pull/181) - Various
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/bench_gp` |
+| **Target Branch** | `main` |
 | **Created** | 2025-01-29 |
 | **Updated** | 2025-01-29 |
+| **Merged** | 2025-01-29 |
 
 ---
 
-#### Description
+## 📄 Description
 
 PR started by me adding the `-gp` option to `llama-bench` as per https://github.com/ggerganov/llama.cpp/pull/11126 because I wanted to test TG performance after a long prompt to be able to compare to the MLA attention implementation in  https://github.com/ggerganov/llama.cpp/pull/11446.
 

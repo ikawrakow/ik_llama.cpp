@@ -1,16 +1,19 @@
-### 🔀 [#394](https://github.com/ikawrakow/ik_llama.cpp/pull/394) - Handle incompatible DeepSeek GGUFs
+## 🔀 [Pull Request #394](https://github.com/ikawrakow/ik_llama.cpp/pull/394) - Handle incompatible DeepSeek GGUFs
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/handle_incompatible_deepseek_ggufs` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-07 |
 | **Updated** | 2025-05-10 |
+| **Merged** | 2025-05-09 |
 
 ---
 
-#### Description
+## 📄 Description
 
-Mainline `llama.cpp` [PR 12801](https://github.com/ggml-org/llama.cpp/pull/12801), which added MLA support for DeepSeek models 2.5 months after MLA was available here, broke backwards compatibility. As a result, the new DeepSeek GGUFs that started appearing on HF are not compatible with `ik_llama.cpp`, resulting in issues #373 and #383.
+Mainline `llama.cpp` [PR 12801](https://github.com/ggml-org/llama.cpp/pull/12801), which added MLA support for DeepSeek models 2.5 months after MLA was available here, broke backwards compatibility. As a result, the new DeepSeek GGUFs that started appearing on HF are not compatible with `ik_llama.cpp`, resulting in issues [#373](https://github.com/ikawrakow/ik_llama.cpp/issues/373) and [#383](https://github.com/ikawrakow/ik_llama.cpp/issues/383).
 
 My initial reaction was to not support the new DeepSeek GGUFs, as there was no real reason to introduce the backwards incompatibility (and have people re-download the giant DeepSeek-R1/V3 models). The two new tensors (per layer) required for MLA can be easily created on-the-fly when loading the model as it is done here.
 
@@ -24,9 +27,9 @@ I have tested with DeepSeek-Lite, which uses the exact same attention architectu
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **whatever1983** commented the **2025-05-09** at **05:36:06**:<br>
+👤 **whatever1983** commented on **2025-05-09** at **05:36:06**
 
 python convert_hf_to_gguf.py --outfile /mydata/Downloads/DeepSeek-V3-0324-Pruned-Coder-411B-q8_0-ik.gguf --outtype q8_0 /mydata/Downloads/DeepSeek-V3-0324-Pruned-Coder-411B/
 
@@ -43,15 +46,15 @@ I would rather have convert_hf_to_gguf.py from the ik_llama.cpp repo work.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-09** at **05:47:47**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **05:47:47**
 
 > WARNING:gguf.vocab:Adding merges requested but no merges found, output may be non-functional.
 
-Yes, the `convert_hf_to_gguf.py` script currently on master does not handle merges well. There is a fix in PR #377, but I haven't merged because for some reason it misses the `rope_scaling` tensor, and we have not understood why.
+Yes, the `convert_hf_to_gguf.py` script currently on master does not handle merges well. There is a fix in PR [#377](https://github.com/ikawrakow/ik_llama.cpp/issues/377), but I haven't merged because for some reason it misses the `rope_scaling` tensor, and we have not understood why.
 
 ---
 
-👤 **Panchovix** commented the **2025-05-09** at **17:24:31**:<br>
+👤 **Panchovix** commented on **2025-05-09** at **17:24:31**
 
 I'm testing now! With DeepSeekV3 0324 Q2_K_XL latest quant, on 128GB VRAM (5090+4090x2+A6000) and 192GB RAM (6000Mhz 7800X3D). But first I just noticed this
 
@@ -142,7 +145,7 @@ So I can confirm latest quants with MLA works on ik llamacpp.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-09** at **19:00:28**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **19:00:28**
 
 @Panchovix Thanks for testing!
 
@@ -152,7 +155,7 @@ If you post your `llama.cpp` command here, perhaps we can give you suggestions h
 
 ---
 
-👤 **Panchovix** commented the **2025-05-09** at **19:11:22**:<br>
+👤 **Panchovix** commented on **2025-05-09** at **19:11:22**
 
 > @Panchovix Thanks for testing!
 > 
@@ -160,7 +163,7 @@ If you post your `llama.cpp` command here, perhaps we can give you suggestions h
 > 
 > If you post your `llama.cpp` command here, perhaps we can give you suggestions how you can improve it for `ik_llama.cpp`.
 
-Had to modify it as I use -fa on main llamacpp and I think this PR was done before fa + mla was possible on main. The compute buffers on FA were 3.7 GB and then 400mb each, while here it was 4.5GB each buffer (which is near 1 tensor per GPU)
+Had to modify it as I use -fa on main llamacpp and I think this PR was done before fa + mla was possible on main. The compute buffers on FA were 3.7 GB and then 400mb each on main llamacpp, while here on ik llamacpp it was 4.5GB each buffer (which is near 1 tensor per GPU) without fa.
 
 My command on main is
 
@@ -173,9 +176,9 @@ Sometimes it tries to load on CPU first, but I cancel and start it again until i
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-09** at **19:24:18**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **19:24:18**
 
-I have merged this PR. If you take the current main main branch and try
+I have merged this PR. If you take the current `ik_llama.cpp` main branch and try
 ```
 ./llama-server -m '/GGUFs/DeepSeek-V3-0324-UD-Q2_K_XL-merged.gguf' -c 16384 --no-mmap --no-warmup -v -ngl 99 
     --override-tensor 'blk\.([0-7])\..*_exps\.=CUDA0'
@@ -192,7 +195,7 @@ As `llama.cpp` still stores a V cache, your should have some extra space to perh
 
 ---
 
-👤 **Panchovix** commented the **2025-05-09** at **19:47:23**:<br>
+👤 **Panchovix** commented on **2025-05-09** at **19:47:23**
 
 Thanks! I went ahead and test, this is the output
 
@@ -584,7 +587,7 @@ llm_load_tensors:      CUDA3 buffer size = 42786.36 MiB
 
 It starts loading from CPU buffer size instead of CUDA 0. Also this seems to make the CPU to stutter a bit while loading. I haven't tested with mmap yet.
 
-RX/TX looks like this on PP
+RX/TX looks like this on ik llamacpp
 
 ![image](https://github.com/user-attachments/assets/1ac4afc1-4959-4dd6-843e-7035d3a63b64)
 
@@ -601,7 +604,7 @@ prompt eval time =   35950.29 ms /  3218 tokens (   11.17 ms per token,    89.51
        eval time =   44338.15 ms /   380 tokens (  116.68 ms per token,     8.57 tokens per second)
 ```
 
-ikllamacpp with the command above + rtr (ub 1536)
+ikllamacpp with the command above (ub 512)
 
 ```
 INFO [           print_timings] prompt eval time     =  104442.50 ms /  3218 tokens (   32.46 ms per token,    30.81 tokens per second) | tid="139803965288448" timestamp=1746819713 id_slot=0 id_task=0 t_prompt_processing=104442.501 n_prompt_tokens_processed=3218 t_token=32.45571814791796 n_tokens_second=30.811211615853587
@@ -779,6 +782,243 @@ print_info: FIM MID token    = 128802 '<｜fim▁end｜>'
 print_info: EOG token        = 1 '<｜end▁of▁sentence｜>'
 print_info: max token length = 256
 load_tensors: loading model tensors, this can take a while... (mmap = false)
+load_tensors: layer   0 assigned to device CUDA0, is_swa = 0
+load_tensors: layer   1 assigned to device CUDA0, is_swa = 0
+load_tensors: layer   2 assigned to device CUDA0, is_swa = 0
+load_tensors: layer   3 assigned to device CUDA0, is_swa = 0
+load_tensors: layer   4 assigned to device CUDA0, is_swa = 0
+load_tensors: layer   5 assigned to device CUDA0, is_swa = 0
+load_tensors: layer   6 assigned to device CUDA0, is_swa = 0
+load_tensors: layer   7 assigned to device CUDA0, is_swa = 0
+load_tensors: layer   8 assigned to device CUDA0, is_swa = 0
+load_tensors: layer   9 assigned to device CUDA0, is_swa = 0
+load_tensors: layer  10 assigned to device CUDA0, is_swa = 0
+load_tensors: layer  11 assigned to device CUDA0, is_swa = 0
+load_tensors: layer  12 assigned to device CUDA0, is_swa = 0
+load_tensors: layer  13 assigned to device CUDA0, is_swa = 0
+load_tensors: layer  14 assigned to device CUDA0, is_swa = 0
+load_tensors: layer  15 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  16 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  17 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  18 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  19 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  20 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  21 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  22 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  23 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  24 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  25 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  26 assigned to device CUDA1, is_swa = 0
+load_tensors: layer  27 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  28 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  29 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  30 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  31 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  32 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  33 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  34 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  35 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  36 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  37 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  38 assigned to device CUDA2, is_swa = 0
+load_tensors: layer  39 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  40 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  41 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  42 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  43 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  44 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  45 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  46 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  47 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  48 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  49 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  50 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  51 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  52 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  53 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  54 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  55 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  56 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  57 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  58 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  59 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  60 assigned to device CUDA3, is_swa = 0
+load_tensors: layer  61 assigned to device CUDA3, is_swa = 0
+tensor blk.3.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.3.ffn_down_exps.weight (2016 MiB q4_K) buffer type overridden to CUDA0
+tensor blk.3.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.4.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.4.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA0
+tensor blk.4.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.5.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.5.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA0
+tensor blk.5.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.6.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.6.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA0
+tensor blk.6.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.7.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.7.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA0
+tensor blk.7.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA0
+tensor blk.8.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA1
+tensor blk.8.ffn_down_exps.weight (2016 MiB q4_K) buffer type overridden to CUDA1
+tensor blk.8.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA1
+tensor blk.9.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA1
+tensor blk.9.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA1
+tensor blk.9.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA1
+tensor blk.10.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA1
+tensor blk.10.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA1
+tensor blk.10.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA1
+tensor blk.11.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA1
+tensor blk.11.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA1
+tensor blk.11.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA1
+tensor blk.12.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.12.ffn_down_exps.weight (2016 MiB q4_K) buffer type overridden to CUDA2
+tensor blk.12.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.13.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.13.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA2
+tensor blk.13.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.14.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.14.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA2
+tensor blk.14.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.15.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.15.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA2
+tensor blk.15.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.16.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.16.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA2
+tensor blk.16.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA2
+tensor blk.17.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.17.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.17.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.18.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.18.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.18.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.19.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.19.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.19.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.20.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.20.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.20.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.21.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.21.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.21.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.22.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.22.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.22.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.23.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.23.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.23.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.24.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.24.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.24.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.25.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.25.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.25.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.26.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.26.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CUDA3
+tensor blk.26.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CUDA3
+tensor blk.27.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.27.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.27.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.28.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.28.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.28.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.29.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.29.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.29.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.30.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.30.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.30.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.31.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.31.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.31.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.32.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.32.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.32.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.33.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.33.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.33.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.34.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.34.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.34.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.35.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.35.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.35.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.36.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.36.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.36.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.37.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.37.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.37.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.38.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.38.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.38.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.39.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.39.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.39.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.40.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.40.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.40.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.41.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.41.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.41.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.42.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.42.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.42.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.43.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.43.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.43.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.44.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.44.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.44.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.45.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.45.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.45.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.46.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.46.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.46.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.47.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.47.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.47.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.48.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.48.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.48.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.49.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.49.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.49.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.50.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.50.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.50.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.51.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.51.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.51.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.52.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.52.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.52.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.53.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.53.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.53.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.54.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.54.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.54.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.55.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.55.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.55.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.56.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.56.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.56.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.57.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.57.ffn_down_exps.weight (2016 MiB q4_K) buffer type overridden to CPU
+tensor blk.57.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.58.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.58.ffn_down_exps.weight (1540 MiB q3_K) buffer type overridden to CPU
+tensor blk.58.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.59.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.59.ffn_down_exps.weight (2016 MiB q4_K) buffer type overridden to CPU
+tensor blk.59.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.60.ffn_gate_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+tensor blk.60.ffn_down_exps.weight (2016 MiB q4_K) buffer type overridden to CPU
+tensor blk.60.ffn_up_exps.weight (1176 MiB q2_K) buffer type overridden to CPU
+load_tensors: tensor 'token_embd.weight' (q4_K) (and 159 others) cannot be used with preferred buffer type CUDA_Host, using CPU instead
 load_tensors: offloading 61 repeating layers to GPU
 load_tensors: offloading output layer to GPU
 load_tensors: offloaded 62/62 layers to GPU
@@ -819,7 +1059,7 @@ I can add more info if needed!
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-10** at **10:13:53**:<br>
+👤 **ikawrakow** commented on **2025-05-10** at **10:13:53**
 
 @Panchovix 
 
@@ -833,12 +1073,12 @@ There is a PR in mainline `llama.cpp` to allow disabling offload to the GPU, see
 
 ---
 
-👤 **Panchovix** commented the **2025-05-10** at **17:08:54**:<br>
+👤 **Panchovix** commented on **2025-05-10** at **17:08:54**
 
 @ikawrakow ohh I see! If it's possible to do add the reverse feature it would be great! As I think ik llamacpp with it's optimizations would be faster than llamacpp for PP t/s if we could do the matrix multiplication in the GPU.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-10** at **17:15:44**:<br>
+👤 **ikawrakow** commented on **2025-05-10** at **17:15:44**
 
-There is PR #405 now. You can try it with as high u-batch size as you can go. Don't use '-rtr' as this will disable the GPU offload of the experts.
+There is PR [#405](https://github.com/ikawrakow/ik_llama.cpp/issues/405) now. You can try it with as high u-batch size as you can go. Don't use '-rtr' as this will disable the GPU offload of the experts.

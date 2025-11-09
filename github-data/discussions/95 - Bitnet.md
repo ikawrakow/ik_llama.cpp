@@ -1,13 +1,14 @@
-### 🗣️ [#95](https://github.com/ikawrakow/ik_llama.cpp/discussions/95) - Bitnet
+## 🗣️ [Discussion #95](https://github.com/ikawrakow/ik_llama.cpp/discussions/95) - Bitnet
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-10-19 |
 | **Updated** | 2025-04-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 A Microsoft team has released [CPU inference code](https://github.com/microsoft/BitNet) for 1.58-bit Bitnets. The repo, based 100% on `llama.cpp`, and only adding Bitnet CPU kernels (`ARM_NEON, AVX2`)  has 2.1k stars as of this writing. As per @Dampfinchen ["this is just insanity"](https://github.com/ggerganov/llama.cpp/discussions/9945).
 
@@ -30,9 +31,9 @@ The prompt is very short (9 tokens), but it is still worth noting that Microsoft
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **ikawrakow** replied the **2024-10-19** at **08:44:58**:<br>
+👤 **ikawrakow** commented on **2024-10-19** at **08:44:58**
 
 I was curious to see Microsoft's Bitnet performance on `X86_64`. So, cloned their repo and followed the setup instructions. The setup script  downloaded the `fp32` Bitnet-1.58-3B version, so 13.2 GB instead of 6.6. It also demands `clang-18`, so I had to install that first (even though `llama.cpp` definitely does not require `clang`, and even less `clang-18` to be built, and at a quick glance neither do the added ternary kernels). Their "end-to-end" test script `e2e_benchmark.py` does not do much more than just run the familiar `llama-bench`. Here is what I get on my Ryzen-7950X CPU
 
@@ -135,7 +136,7 @@ Running `llama-cli` gives much better performance - 52 t/s - but still gibberish
 
 ---
 
-👤 **ikawrakow** replied the **2024-10-19** at **15:19:26**:<br>
+👤 **ikawrakow** commented on **2024-10-19** at **15:19:26**
 
 OK, here is apples-to-apples performance comparison on my M2-Max laptop between Microsoft's `I2_S` and `IQ2_BN` here. I used their `generate-dummy-bitnet-model.py` tool to generate fake Bitnet models of different sizes and ran `llama-bench`. Did not go beyond 30B because generating the 30B model almost exhausted my patience. Their code crashes with segmentation fault on PP-512 tests, so just TG-128.
 
@@ -153,18 +154,22 @@ OK, here is apples-to-apples performance comparison on my M2-Max laptop between 
 
 The difference in performance decreases with model size, but that's just a matter of memory bandwidth saturation for `IQ2_BN`. The 30B model is 7.45 GiB, so at 13.6 t/s this is 101 GiB/s to fetch the model weights from RAM, which is basically as good as it gets on the M2-Max CPU.
 
-> 👤 **saood06** replied the **2025-04-22** at **08:05:03**:<br>
+> 👤 **saood06** replied on **2025-04-22** at **08:05:03**
+> 
 > Interesting to see the TG number here for 2.7B (115.52 t/s)  is double the performance you got for bitnet2b_2501 (62.33 t/s) which is 2.741 B parameters. Do you know what makes the different architecture twice as slow?
+
+> 👤 **ikawrakow** replied on **2025-04-22** at **08:19:46**
 > 
-> 👤 **ikawrakow** replied the **2025-04-22** at **08:19:46**:<br>
 > This is running on my M2-Max laptop. The M2 has 400 GB/s memory bandwidth. Unfortunately only about 100 GB/s are given to the CPU, the other 300 GB/s are reserved for the GPU (but there are model/quant combinations where I can get up to 110-115 GB/s running CPU-only). As a result the M2-Max has a much better TG performance than a consumer level `x86_64` CPU - nearly twice the TG performance of the Ryzen-7950X. Another interesting thing about the M2-Max is that the silicon spent on the GPU is basically a waste. If it had been spent to double the number of CPU cores, and all of the 400 GB/s had been given to the CPU, that hypothetical CPU would be wiping the floor with the Apple GPU (well, at least for TG, PP would be still 2X lower than the GPU).
+
+> 👤 **saood06** replied on **2025-04-22** at **08:31:01**
 > 
-> 👤 **saood06** replied the **2025-04-22** at **08:31:01**:<br>
 > >This is running on my M2-Max laptop. 
 > 
 > Sorry, I skipped over that when looking back at this thread.
+
+> 👤 **saood06** replied on **2025-04-22** at **08:42:18**
 > 
-> 👤 **saood06** replied the **2025-04-22** at **08:42:18**:<br>
 > > This is running on my M2-Max laptop. The M2 has 400 GB/s memory bandwidth. Unfortunately only about 100 GB/s are given to the CPU, the other 300 GB/s are reserved for the GPU (but there are model/quant combinations where I can get up to 110-115 GB/s running CPU-only). As a result the M2-Max has a much better TG performance than a consumer level `x86_64` CPU - nearly twice the TG performance of the Ryzen-7950X. Another interesting thing about the M2-Max is that the silicon spent on the GPU is basically a waste. If it had been spent to double the number of CPU cores, and all of the 400 GB/s had been given to the CPU, that hypothetical CPU would be wiping the floor with the Apple GPU (well, at least for TG, PP would be still 2X lower than the GPU).
 > 
 > Hmm, I know this is for the M1-Max but this https://www.anandtech.com/show/17024/apple-m1-max-performance-review/2 goes over the memory bandwith situation in a lot of depth.
@@ -172,11 +177,13 @@ The difference in performance decreases with model size, but that's just a matte
 > I'm surprised you tap out at 115 GB/s given what is shown in the linked article.
 > 
 > The silicon design of the Apple chips has always been interesting to me, I've been following it since the early designs from the iPhone.
+
+> 👤 **ikawrakow** replied on **2025-04-22** at **09:24:20**
 > 
-> 👤 **ikawrakow** replied the **2025-04-22** at **09:24:20**:<br>
 > The article is about the M1 chips? Yes, I have seen benchmarks such as this article. But we are not interested in shoving some data from here to there (which the benchmark does). We are interested in getting some data to the CPU and actually doing something with it.  Here the M2-Max CPU maxes out at 110-115 GB/s, being around 100 GB/s most of the time. For PP I get about 2 TFLOPS out of the M2-Max CPU, so that's 250 GB/s of multiply-add processing power (fused multiply-add counting as 2 ops and needing 4 bytes of data per op), so processing power is not what limit us to ~100 GB/s in TG.
+
+> 👤 **saood06** replied on **2025-04-22** at **09:38:31**
 > 
-> 👤 **saood06** replied the **2025-04-22** at **09:38:31**:<br>
 > >Here the M2-Max CPU maxes out at 110-115 GB/s, being around 100 GB/s most of the time.
 > 
 > This shows something similar.
@@ -188,11 +195,13 @@ The difference in performance decreases with model size, but that's just a matte
 > ![cf2abde5-a4cc-4638-8380-f45cf13c2bc7_1005x497](https://github.com/user-attachments/assets/df0857d8-cbc0-4cc1-9564-9cf4e35eefbb)
 > 
 > It is a rather impressive chip.
+
+> 👤 **ikawrakow** replied on **2025-04-22** at **10:35:47**
 > 
-> 👤 **ikawrakow** replied the **2025-04-22** at **10:35:47**:<br>
 > Yes, it is. I wish AMD/Intel would finally follow suit, and would give their consumer level chips more memory bandwidth.
+
+> 👤 **saood06** replied on **2025-04-22** at **10:53:44**
 > 
-> 👤 **saood06** replied the **2025-04-22** at **10:53:44**:<br>
 > The cores are also a lot wider, Intel/AMD were stuck on 4-wide for so long, and look at Apple at 9-wide.
 > 
 > ![image](https://github.com/user-attachments/assets/fa2b157a-365f-4cc7-9ab3-226f65f4c6fb)
@@ -203,15 +212,18 @@ The difference in performance decreases with model size, but that's just a matte
 
 ---
 
-👤 **saood06** replied the **2025-04-15** at **14:27:18**:<br>
+👤 **saood06** commented on **2025-04-15** at **14:27:18**
 
 They updated the repo with the first Official model (all previous models were just supported models, and had far less training) https://huggingface.co/microsoft/bitnet-b1.58-2B-4T it looks competitive at it's size as it was trained with 4T tokens.
 
-> 👤 **ikawrakow** replied the **2025-04-15** at **15:22:22**:<br>
+> 👤 **ikawrakow** replied on **2025-04-15** at **15:22:22**
+> 
 > Good to know. But has something changed since the preliminary models were published (i.e., do I need to make changes to the Bitnet implementation)?
+
+> 👤 **saood06** replied on **2025-04-15** at **15:27:41**
 > 
-> 👤 **saood06** replied the **2025-04-15** at **15:27:41**:<br>
-> I don't think so, they published the i2_s GGUF [here](https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/tree/main) which you already did the work supporting converting to a type from this repo in #169.
+> I don't think so, they published the i2_s GGUF [here](https://huggingface.co/microsoft/bitnet-b1.58-2B-4T-gguf/tree/main) which you already did the work supporting converting to a type from this repo in [#169](https://github.com/ikawrakow/ik_llama.cpp/issues/169).
+
+> 👤 **saood06** replied on **2025-04-20** at **14:24:15**
 > 
-> 👤 **saood06** replied the **2025-04-20** at **14:24:15**:<br>
 > I think I was wrong, [this](https://github.com/microsoft/BitNet/pull/167) adds the new architecture, seems simple enough to port though (might be interesting to test on Android).

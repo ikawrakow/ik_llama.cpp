@@ -1,16 +1,19 @@
-### 🔀 [#341](https://github.com/ikawrakow/ik_llama.cpp/pull/341) - Add support for Cohere2
+## 🔀 [Pull Request #341](https://github.com/ikawrakow/ik_llama.cpp/pull/341) - Add support for Cohere2
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cohere2` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-23 |
 | **Updated** | 2025-04-26 |
+| **Merged** | 2025-04-26 |
 
 ---
 
-#### Description
+## 📄 Description
 
-Closes #340
+Closes [#340](https://github.com/ikawrakow/ik_llama.cpp/issues/340)
 
 Rudimentary tests with [this model](https://huggingface.co/dranger003/c4ai-command-r7b-12-2024-GGUF/blob/main/ggml-c4ai-command-r7b-12-2024-q4_k.gguf), appears to work fine.
 

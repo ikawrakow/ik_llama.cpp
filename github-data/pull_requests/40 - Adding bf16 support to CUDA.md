@@ -1,14 +1,17 @@
-### 🔀 [#40](https://github.com/ikawrakow/ik_llama.cpp/pull/40) - Adding bf16 support to CUDA
+## 🔀 [Pull Request #40](https://github.com/ikawrakow/ik_llama.cpp/pull/40) - Adding bf16 support to CUDA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_bf16` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-05 |
 | **Updated** | 2024-09-14 |
+| **Merged** | 2024-09-14 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Haha, `llama.cpp` seems to not support `bf16` on CUDA?
 

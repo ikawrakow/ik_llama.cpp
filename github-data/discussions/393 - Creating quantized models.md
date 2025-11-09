@@ -1,13 +1,14 @@
-### 🗣️ [#393](https://github.com/ikawrakow/ik_llama.cpp/discussions/393) - Creating quantized models
+## 🗣️ [Discussion #393](https://github.com/ikawrakow/ik_llama.cpp/discussions/393) - Creating quantized models
 
 | **Author** | `nux` |
 | :--- | :--- |
+| **State** | ❌ **Closed** |
 | **Created** | 2025-05-07 |
 | **Updated** | 2025-05-29 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Hello,  
 

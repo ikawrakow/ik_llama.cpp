@@ -1,14 +1,17 @@
-### 🔀 [#441](https://github.com/ikawrakow/ik_llama.cpp/pull/441) - Trellis quants with CPU inference
+## 🔀 [Pull Request #441](https://github.com/ikawrakow/ik_llama.cpp/pull/441) - Trellis quants with CPU inference
 
 | **Author** | `andrewkchan` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `andrewkchan/try_trellis` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-20 |
 | **Updated** | 2025-05-23 |
+| **Merged** | 2025-05-23 |
 
 ---
 
-#### Description
+## 📄 Description
 
 As requested a while ago, takes (https://github.com/ikawrakow/ik_llama.cpp/pull/113) and adds CPU implementations of the quantized matmuls (via iqk_mul_mat) for inference. AVX2 and F16C support are required.
 
@@ -24,9 +27,9 @@ I am not sure of the PR practices - if you'd like me to merge into https://githu
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-05-21** at **07:13:48**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **07:13:48**
 
 > For Llama-3.1-8B-Instruct, I get 0.3t/s with IQ2_KT compared to >1.0t/s with F16 on AMD EPYC 7R32 (32 cores)
 
@@ -34,7 +37,7 @@ Is this in debug mode? I'm getting 10.4 t/s for `IQ2_KT` on my 16-core Ryzen-795
 
 ---
 
-👤 **andrewkchan** commented the **2025-05-21** at **07:17:47**:<br>
+👤 **andrewkchan** commented on **2025-05-21** at **07:17:47**
 
 I'm compiling with `cmake --build ./build --config Release -j $(nproc)`. I might need to tweak the number of threads; I've found this greatly impacts performance on my test machine in the past for llama.cpp.
 
@@ -50,7 +53,7 @@ Should I be using llama-bench or some other tool?
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **07:24:07**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **07:24:07**
 
 I also tried `llama-cli` to make sure the output is coherent, and also get in the range of 10 t/s. To measure performance I now tend to use `llama-sweep-bench`. For instance, the table below was generated using
 ```
@@ -69,13 +72,13 @@ We get PP and TG performance as a function of the number of tokens in the KV cac
 
 ---
 
-👤 **andrewkchan** commented the **2025-05-21** at **07:30:16**:<br>
+👤 **andrewkchan** commented on **2025-05-21** at **07:30:16**
 
 Ok, well it's great to know the CPU inference performance is not totally unusable and that it's probably just my setup! I will try to figure this out on my own. Might email you some more questions to not pollute this PR discussion. Thanks also for the pointer on benchmarking.
 
 ---
 
-👤 **andrewkchan** commented the **2025-05-21** at **08:11:09**:<br>
+👤 **andrewkchan** commented on **2025-05-21** at **08:11:09**
 
 I purged my build directory + recompiled and performance is a lot better, and I no longer see the weird `ggml_backend_sched_alloc_splits: failed to allocate graph` messages from (https://github.com/ggml-org/llama.cpp/discussions/8088). Possibly the build cache was using some artifacts from a previous debug build. 
 
@@ -83,7 +86,7 @@ Now F16 gets almost 4x faster at 4.59 generation t/s, and IQ2_KT now beats F16 a
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-21** at **14:35:39**:<br>
+👤 **ikawrakow** commented on **2025-05-21** at **14:35:39**
 
 I did speed up `IQ2_KT` slightly, see [this branch](https://github.com/ikawrakow/ik_llama.cpp/tree/ik/andrew_trellis). Here is what I get now on the Ryzen-7950X
 
@@ -95,16 +98,16 @@ I did speed up `IQ2_KT` slightly, see [this branch](https://github.com/ikawrakow
 |   512 |    128 |   1536 |    8.453 |    60.57 |   10.704 |    11.96 |
 |   512 |    128 |   2048 |    8.488 |    60.32 |   10.798 |    11.85 |
 
-Overall it looks good to me, so we can think about merging. But there is also PR #435, where I have completely refactored `iqk_mul_mat.cpp`. Do you want to look into adding the changes on that branch?
+Overall it looks good to me, so we can think about merging. But there is also PR [#435](https://github.com/ikawrakow/ik_llama.cpp/issues/435), where I have completely refactored `iqk_mul_mat.cpp`. Do you want to look into adding the changes on that branch?
 
 ---
 
-👤 **andrewkchan** commented the **2025-05-22** at **04:32:39**:<br>
+👤 **andrewkchan** commented on **2025-05-22** at **04:32:39**
 
 Terrific, this gets my test machine to 5.59t/s. I saw the LCG ops in next8 taking up lots of time but wasn't sure what to do about it, this is a cool trick - I assume having the constants as locals keeps them in registers or otherwise ensures they remain hot in cache?
 
-Re: https://github.com/ikawrakow/ik_llama.cpp/pull/435 - it looks not too difficult to me to reconcile my new kernels with the refactor. If you're done with your refactor already, you could merge your PR and then I can fix the conflicts accordingly - maybe that's the cleanest way to do this?
+Re: https://github.com/ikawrakow/ik_llama.cpp/pull/435 - it looks not too difficult to me to reconcile my new kernels with the refactor. If you're done with your refactor already, you could merge your PR and then I can fix the resulting conflicts on this PR - maybe that's the cleanest way to do this? Since this branch is already conflicting with a file on main anyway. Otherwise happy to merge this first, then work on your branch.
 
 ---
 
-👤 **ikawrakow** submitted a review the **2025-05-23** at **06:17:15**: ✅ `APPROVED`
+👤 **ikawrakow** approved this pull request ✅ on **2025-05-23** at **06:17:15**

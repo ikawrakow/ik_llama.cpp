@@ -1,16 +1,19 @@
-### 🐛 [#342](https://github.com/ikawrakow/ik_llama.cpp/pull/342) - Fix LLaMA-4 attention
+## 🔀 [Pull Request #342](https://github.com/ikawrakow/ik_llama.cpp/pull/342) - Fix LLaMA-4 attention
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_llama4_attention` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-24 |
 | **Updated** | 2025-04-25 |
+| **Merged** | 2025-04-25 |
 
 ---
 
-#### Description
+## 📄 Description
 
-Closes #335 
+Closes [#335](https://github.com/ikawrakow/ik_llama.cpp/issues/335) 
 
 I had missed the SWA part. As SWA only has a real impact past 8k tokens, and as the impact of not using SWA is relatively small for the next 8k tokens, the model appeared coherent up to 16k tokens.
 

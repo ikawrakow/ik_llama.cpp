@@ -1,14 +1,17 @@
-### 🔀 [#49](https://github.com/ikawrakow/ik_llama.cpp/pull/49) - ARM_NEON Flash Attention
+## 🔀 [Pull Request #49](https://github.com/ikawrakow/ik_llama.cpp/pull/49) - ARM_NEON Flash Attention
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/neon_flash_attention_2` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-11 |
 | **Updated** | 2024-09-11 |
+| **Merged** | 2024-09-11 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR adds Flash Attention for `ARM_NEON`. The `Zen4/AVX2` implementation is reused with a few platform specific additions for `ARM_NEON`. As with `AVX2`, it is just for `fp16` kv-cache for now.
 

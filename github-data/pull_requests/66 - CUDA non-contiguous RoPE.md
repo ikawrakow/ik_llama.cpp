@@ -1,18 +1,21 @@
-### 🔀 [#66](https://github.com/ikawrakow/ik_llama.cpp/pull/66) - CUDA non-contiguous RoPE
+## 🔀 [Pull Request #66](https://github.com/ikawrakow/ik_llama.cpp/pull/66) - CUDA non-contiguous RoPE
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/non_contiguous_rope` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-28 |
 | **Updated** | 2024-09-28 |
+| **Merged** | 2024-09-28 |
 
 ---
 
-#### Description
+## 📄 Description
 
-In this way we can avoid the Q, K, V copies being made after multiplication with the QKV tensor in, e.g., Phi-3.5-mini (see #65 for details). This results in a 6-7% speedup of PP-512(Phi-3.5-mini) on CUDA (RTX-4080). There is also a 2-3% gain on Metal (M2-Max GPU).
+In this way we can avoid the Q, K, V copies being made after multiplication with the QKV tensor in, e.g., Phi-3.5-mini (see [#65](https://github.com/ikawrakow/ik_llama.cpp/issues/65) for details). This results in a 6-7% speedup of PP-512(Phi-3.5-mini) on CUDA (RTX-4080). There is also a 2-3% gain on Metal (M2-Max GPU).
 
-Here is the combined effect of this PR and PR #65 on CUDA (RTX-4080) and Metal (M2-Max 30-core GPU) for Phi-3.5-mini:
+Here is the combined effect of this PR and PR [#65](https://github.com/ikawrakow/ik_llama.cpp/issues/65) on CUDA (RTX-4080) and Metal (M2-Max 30-core GPU) for Phi-3.5-mini:
 
 | model        | backend    | ngl | threads |          test |   t/s (llama.cpp)    |  t/s (this PR)   |  Speedup |
 | -------------| ---------- | --: | ------: | ------------: | -------------------: | ---------------: | -------: |
@@ -23,9 +26,9 @@ Here is the combined effect of this PR and PR #65 on CUDA (RTX-4080) and Metal (
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2024-09-28** at **12:42:05**:<br>
+👤 **ikawrakow** commented on **2024-09-28** at **12:42:05**
 
 So, I see that there are a lot of models that can potentially benefit from this PR as the pattern
 ```

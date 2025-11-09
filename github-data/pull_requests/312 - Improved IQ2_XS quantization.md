@@ -1,14 +1,17 @@
-### 🔀 [#312](https://github.com/ikawrakow/ik_llama.cpp/pull/312) - Improved IQ2_XS quantization
+## 🔀 [Pull Request #312](https://github.com/ikawrakow/ik_llama.cpp/pull/312) - Improved IQ2_XS quantization
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/improve_iq2_xs` |
+| **Target Branch** | `main` |
 | **Created** | 2025-04-05 |
 | **Updated** | 2025-04-07 |
+| **Merged** | 2025-04-07 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The table shows PPL comparisons between the main branch and this PR for LLaMA-v1-7B<sup>1</sup>(L1-7B in the table), LLaMA-v2-7B<sup>1</sup> (L2-7B), Mistral-7B<sup>1</sup> (M-7B), LLaMA-3.1-8B-Instruct (L3-8B), and DeepSeek-V2-Lite (DSL). Context is always 512 tokens. Also given are the quantization times (Q-time for short in the table) in seconds on a Ryzen-7950X CPU. Tested is "pure" quantization (i.e., using the `--pure` option of `llama-quantize`) with token embeddings and output tensor set to `Q8_0`. The quantization command line is
 ```

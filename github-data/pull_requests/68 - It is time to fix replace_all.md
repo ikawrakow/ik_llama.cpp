@@ -1,14 +1,17 @@
-### 🐛 [#68](https://github.com/ikawrakow/ik_llama.cpp/pull/68) - It is time to fix replace_all
+## 🔀 [Pull Request #68](https://github.com/ikawrakow/ik_llama.cpp/pull/68) - It is time to fix replace_all
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_replace_all` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-28 |
 | **Updated** | 2024-09-28 |
+| **Merged** | 2024-09-28 |
 
 ---
 
-#### Description
+## 📄 Description
 
 I have been annoyed by having to wait for close to 2 seconds for the perplexity calculation to start because that's how long tokenization took when using Phi-3.5-mini (not to mention the close to 20 seconds wait when running an imatrix calculation with `wiki.train.raw`). Today my patience got exhausted and I decided to investigate. Turns out I inherited this gem when I last synced with mainline `llama.cpp` (in `src/llama-impl.h`):
 ```

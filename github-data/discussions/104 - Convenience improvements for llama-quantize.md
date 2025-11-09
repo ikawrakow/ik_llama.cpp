@@ -1,13 +1,14 @@
-### 🗣️ [#104](https://github.com/ikawrakow/ik_llama.cpp/discussions/104) - Convenience improvements for llama-quantize
+## 🗣️ [Discussion #104](https://github.com/ikawrakow/ik_llama.cpp/discussions/104) - Convenience improvements for llama-quantize
 
 | **Author** | `Nexesenex` |
 | :--- | :--- |
+| **State** | ✅ **Open** |
 | **Created** | 2024-10-23 |
 | **Updated** | 2024-10-23 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Hey IK.
 

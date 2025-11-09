@@ -1,14 +1,17 @@
-### 🔀 [#235](https://github.com/ikawrakow/ik_llama.cpp/pull/235) - Option to use MLA without a transposed cache
+## 🔀 [Pull Request #235](https://github.com/ikawrakow/ik_llama.cpp/pull/235) - Option to use MLA without a transposed cache
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/mla_no_transposed_cache` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-27 |
 | **Updated** | 2025-02-28 |
+| **Merged** | 2025-02-27 |
 
 ---
 
-#### Description
+## 📄 Description
 
 The `-mla` (or `--mla-use`) command line option turns from previously a boolean value to an integer:
 * `mla = 0`: use standard attention
@@ -84,11 +87,11 @@ Here `mla = 2` is much slower than `mla = 1` for long contexts, and about on par
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **davidsyoung** commented the **2025-02-27** at **15:08:55**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **15:08:55**
 
-Hey, thank you for your work on this. Trying to run with -mla 2, but still getting a 8900MB allocation per card. I'm not sure if this is correct, or am I doing something wrong with my run commands (I'm aware the layers are poorly balanced atm, but just wondering if this is as expected:
+Hey, thank you for your work on this. Trying to run with -mla 2, but still getting a 8900MB allocation per card I believe for the compute buffer. I'm not sure if this is correct, or am I doing something wrong with my run commands (I'm aware the layers are poorly balanced atm, but just wondering if this is as expected:
 
 Command:
 ```
@@ -365,11 +368,11 @@ Would really appreciate your help to see if I'm doing something wrong. Thank you
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-27** at **16:35:08**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **16:35:08**
 
 @ikawrakow 
 
-Was able to run this with 24K ctx, but not sure if this amount of compute buffer is still correct:
+Was able to run this with 20K ctx, but not sure if this amount of compute buffer is still correct:
 
 ```
 INFO [                    main] build info | tid="22970858381312" timestamp=1740670359 build=0 commit="unknown"
@@ -642,15 +645,17 @@ INFO [            update_slots] all slots are idle | tid="22970858381312" timest
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-27** at **16:50:48**:<br>
+👤 **ikawrakow** commented on **2025-02-27** at **16:50:48**
 
 So, when I wrote the PR description I had forgotten that it is not yet possible to transpose quantized cache, which would be needed if we wanted to use `mla = 2` with quantized cache. I realized my mistake and added a comment, but I guess it is easy to miss. So, at this point `mla = 2` uses `fp16` for the cache, which means about 69 kB per token for DeepSeek-R1, so 1.58 GiB for 24k context, so about 100 MiB per card in your 15 GPU setup (wow!). This is also what we see reported. 
 
 I haven't looked in detail into the compute buffers on CUDA. I wouldn't have expected 5.7 GiB per GPU, this seems way too much. But I also don't have access to a multi-GPU box, so have never played with that. It looks like each GPU is allocating the same compute buffer as if the computation was running on a single GPU.
 
+Oh, I'm working on transposed matrix multiplications. Hope to be done in a day or two. It will then be possible to fully quantize the cache with `mla = 2`.
+
 ---
 
-👤 **davidsyoung** commented the **2025-02-27** at **17:12:01**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **17:12:01**
 
 Incredible, that makes sense. The cache using fp16 isn't a huge problem, to be honest. Also, yes, the 15 gpu build (trying to find a 16th for TP!) has been a lot of pain, so to see the speed increase on this, and longer context, is really promising. So thank you for all of your hard work.
 
@@ -658,13 +663,21 @@ For these compute buffers, is there anything I can do to reduce it to the expect
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-27** at **17:14:38**:<br>
+👤 **ikawrakow** commented on **2025-02-27** at **17:14:38**
 
-@davidsyoung Have you tried using `-fmoe` (`--fused-moe` from PR #229? This fuses several MoE operations. In my testing withDeepSeek-Lite it resulted in a significant boost in prefill performance (~30%) and a small gain in TG as well.
+@davidsyoung Have you tried using `-fmoe` (`--fused-moe` from PR [#229](https://github.com/ikawrakow/ik_llama.cpp/issues/229)? This fuses several MoE operations. In my testing withDeepSeek-Lite it resulted in a significant boost in prefill performance (~30%) and a small gain in TG as well.
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-27** at **17:21:10**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **17:19:41**
+
+> @davidsyoung Have you tried using `-fmoe` (`--fused-moe` from PR [#229](https://github.com/ikawrakow/ik_llama.cpp/issues/229)? This fuses several MoE operations. In my testing withDeepSeek-Lite it resulted in a significant boost in prefill performance (~30%) and a small gain in TG as well.
+
+I realised that actually, and briefly tried it, but didn't try a long prefill, and now I'm back to trying to figure out this compute buffer first. As the model is so large, it takes quite some time to load it! I will try the fmoe and report back!
+
+---
+
+👤 **ikawrakow** commented on **2025-02-27** at **17:21:10**
 
 > For these compute buffers, is there anything I can do to reduce it to the expected amount?
 
@@ -672,7 +685,7 @@ I need to look into this. Have you tried  `--split-mode row` and if yes, does it
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-27** at **17:27:39**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **17:27:39**
 
 So I tried to change the following:
 
@@ -702,19 +715,29 @@ I will try `--split-mode row` now.
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-27** at **17:35:18**:<br>
+👤 **ikawrakow** commented on **2025-02-27** at **17:35:18**
 
 Yes, the compute buffer size is proportional to the micro batch (ub) size. Typically performance first increases with increasing `ub` and then starts declining as `ub` increases. The default size is set based on the experience with much smaller models. I haven't seen people reporting performance values as a function of batch size or u-batch size for DeepSeek-R1.  You can try using `-b 512 -ub 256` and see what happens. This should decrease compute buffer size, but the question is how much performance penalty (if any) one gets from that.
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-27** at **17:48:10**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **17:42:05**
+
+> Yes, the compute buffer size is proportional to the micro batch (ub) size. Typically performance first increases with increasing `ub` and then starts declining as `ub` increases. The default size is set based on the experience with much smaller models. I haven't seen people reporting performance values as a function of batch size or u-batch size for DeepSeek-R1. You can try using `-b 512 -ub 256` and see what happens. This should decrease compute buffer size, but the question is how much performance penalty (if any) one gets from that.
+
+That makes sense, will try playing with micro batch size and batch size. Also waiting to see if split mode row makes a difference. It might seem to more evenly split the layers across the cards which would be useful as sometimes it doesn't divide evenly into the gpu's, and as a result it limits the kvcache (previously at least), and some cards would have a few GB remaining but without much you could do as some GPUs were right at the limit.
+
+If this does work, and with the new MLA implementation, do you think there's a sweeet spot for type of quant to use for R1 in terms of quality etc.
+
+---
+
+👤 **ikawrakow** commented on **2025-02-27** at **17:48:10**
 
 Just tried with DeepSeek-Lite. For a context of 32k tokens the CUDA compute buffer size is 1172 MiB with default batch/u-batch size. If I use `-b 512 -ub 256` it goes down to 972 MiB. With `-b 256 -ub 256` it becomes 603 MiB.
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-27** at **17:50:52**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **17:50:52**
 
 > Just tried with DeepSeek-Lite. For a context of 32k tokens the CUDA compute buffer size is 1172 MiB with default batch/u-batch size. If I use `-b 512 -ub 256` it goes down to 972 MiB. With `-b 256 -ub 256` it becomes 603 MiB.
 
@@ -722,7 +745,7 @@ Is that behaving as expected for you when you see that? I can't tell if I should
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-27** at **17:53:21**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **17:53:21**
 
 ``--split-mode row`` run:
 
@@ -951,7 +974,7 @@ ggml/src/ggml-cuda.cu:731: GGML_ASSERT(tensor->view_src == nullptr) failed
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-27** at **17:58:24**:<br>
+👤 **ikawrakow** commented on **2025-02-27** at **17:58:24**
 
 > do you think there's a sweeet spot for type of quant to use for R1 in terms of quality etc.
 
@@ -961,7 +984,7 @@ But all of this are just guesses as I have never tried DeepSeekV3/R1 myself.
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-27** at **18:01:58**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **18:01:58**
 
 > > do you think there's a sweeet spot for type of quant to use for R1 in terms of quality etc.
 > 
@@ -975,7 +998,7 @@ Thank you for all of your help/work, it's massively appreciated.
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-27** at **19:13:10**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **19:13:10**
 
 Doing some testing with different batch sizes, micro-batch sizes and context.
 
@@ -1045,11 +1068,11 @@ Definitely seems a magnitude out, but I'm also really not sure what I'm taking a
 
 ---
 
-👤 **saood06** commented the **2025-02-27** at **20:52:40**:<br>
+👤 **saood06** commented on **2025-02-27** at **20:52:40**
 
 >For DeepSeek it seems it is important to use more bits for the attention tensors and the shared experts. As most of the size is in the MoE experts this does not lead to a very significant increase in model size.
 
-The model size might not go up significantly but the performance does noticeably go down if you do that strategy as those weights are always used unlike the expert weights, this may not matter as much with them being on CUDA but from another user's reports on llama.cpp who was offloading those to CUDA they still had a performance hit. For me IQ4_K_R4 (V2) is slower than V1 with 2.63 t/s for V2 vs 3.22 t/s V1.
+The model size might not go up significantly but the performance does noticeably go down if you do that strategy as those weights are always used unlike the expert weights, this may not matter as much with them being on CUDA but from another user's reports on llama.cpp who was offloading those to CUDA they still had a performance hit. For me on CPU only inference IQ4_K_R4 V2 is slower than V1 with 2.63 t/s for V2 vs 3.22 t/s V1.
 
 Here's a table of early perplexity values I've collected for various quants of Deepseek.
 
@@ -1090,9 +1113,9 @@ UD-IQ1_S  | 3.8939  |4.7189 | 3.7812 | 3.6799 | 3.6215 | 3.6922 | 3.6442|  3.747
     else
     // ###
 
-My V1/V2/V3, I employ the strategy described above, slightly increasing the size of the model but IMO the performance difference was not worth it (that might change with hybrid/full offload). All tensors for mine were imatrixed with mradermacher imatrix except for the new split tensor.
+My V1/V2/V3, I employ a strategy similar to the one above but FAR less aggresive, slightly increasing the size of the model but IMO the performance difference was not worth it (that might change with hybrid/full offload). All tensors for mine were imatrixed with mradermacher imatrix except for the new split tensor.
 
-Also for reference here is some compute buffer sizes I've seen:
+Also for reference here is some compute buffer sizes I've seen (with an earlier build and default ubatch size):
 
 n_ctx = 128000
 CPU compute buffer size = 64468.01 MiB
@@ -1101,7 +1124,7 @@ CPU compute buffer size = 32343.01 MiB
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-27** at **22:29:43**:<br>
+👤 **davidsyoung** commented on **2025-02-27** at **22:29:43**
 
 I may have to start experimenting with quants myself, this is really useful. 
 
@@ -1111,7 +1134,7 @@ I’m getting a total of 67GB for 32k context. It would be nice if I could claw 
 
 ---
 
-👤 **saood06** commented the **2025-02-27** at **23:08:14**:<br>
+👤 **saood06** commented on **2025-02-27** at **23:08:14**
 
 > I may have to start experimenting with quants myself, this is really useful.
 
@@ -1130,7 +1153,29 @@ For now I'm still stuck on CPU only, I did work a bit on porting the RPC updates
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-28** at **09:32:23**:<br>
+👤 **ikawrakow** commented on **2025-02-28** at **07:38:58**
+
+So, based on this discussion, reducing compute buffer size is by far more important than reducing KV cache size. I'll see if I can do something about that.
+
+> So I'm not too sure what's up with the compute buffer. Maybe this is just the size of it given the size of the model. But allocating 42.8GB per gpu, across 15 gpu's would be 642GB VRAM just for compute buffer.
+
+Don't think about the fact that there are 15 GPUs.  With per layer model split, each GPU needs to compute a full layer, so each GPU needs the exact same compute buffer as if the entire model was running on it (I.e., if you had a single GPU with enough VRAM to fit the entire model, the compute buffer will still be 42.8 GB and not 15 x 42.8 GB). 
+
+Why does the compute buffer become 42.8 GB for 160k context? There is the `K*Q` tensor that needs to materialize. It is of size `n_ctx x n_head x n_ubatch x sizeof(float)`  (all compute buffers are `fp32` in `llama.cpp/ggml`). DeepSeek-R1 has 128 heads, so for 160k tokens this tensor alone is 41.9 GB for the default `u_batch` size of 512. It is needed on each GPU because each GPU needs to compute it for the layers stored on it. Your best bet for reducing compute buffer size is to use a smaller `n_ubatch`, but even with `-ub 128` you will not be able to run the full 163k token context. Still, I would be very curious to know how performance with `-ub 128` compares to the default (for a context length that fits in VRAM).
+
+If you use flash attention (`-fa`), the `K*Q` tensor never materializes, so compute buffers are much smaller. But then the KV cache is much larger. I have been trying to make flash attention work with MLA, but have not been successful so far. Oops, CUDA flash attention does not work for DeepSeek, so that's only useful on the CPU.
+
+---
+
+👤 **saood06** commented on **2025-02-28** at **08:48:42**
+
+>Apparently many people are interested in using the maximum context length of long context models. For DeepSeekV3/R1, the rage of the day, it is 163k tokens. 
+
+The model was only trained to supports a context length of 128k (131,072). The huggingface and github page both list 128k as the context length as well, so I'm not sure why the original Deepseek V3/R1 config.json (that the GGUF pulls the metadata from) says 160k (163,840).
+
+---
+
+👤 **davidsyoung** commented on **2025-02-28** at **09:32:23**
 
 > So, based on this discussion, reducing compute buffer size is by far more important than reducing KV cache size. I'll see if I can do something about that.
 > 
@@ -1195,7 +1240,7 @@ Would there be any other optimisation that I could use that would improve the pr
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-28** at **10:12:51**:<br>
+👤 **ikawrakow** commented on **2025-02-28** at **10:12:51**
 
 > Would there be any other optimisation that I could use that would improve the prefill time? 
 
@@ -1213,7 +1258,7 @@ in `ggml-cuda.cu`, rebuild, and run `llama-bench -m model -n 0 -p 512 -t 1 -w 0 
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-28** at **14:25:11**:<br>
+👤 **davidsyoung** commented on **2025-02-28** at **14:25:11**
 
 I'm attempting to run llama-bench but it's trying to allocate the full model to device zero, even though I've set tensor splits.
 
@@ -1377,11 +1422,11 @@ main: error: failed to load model '/models/gghfez_DeepSeek-R1-11446-Q2_K/DeepSee
 
 ---
 
-👤 **ikawrakow** commented the **2025-02-28** at **15:51:58**:<br>
+👤 **ikawrakow** commented on **2025-02-28** at **15:51:58**
 
 Well, not sure why `llama-bench` doesn't do the right thing.
 
-But I think you will like PR #237 very much. Simply add
+But I think you will like PR [#237](https://github.com/ikawrakow/ik_llama.cpp/issues/237) very much. Simply add
 ```
 -amb 2048
 ```
@@ -1389,6 +1434,6 @@ to your command line, and the compute buffers should be no more than 3 GiB even 
 
 ---
 
-👤 **davidsyoung** commented the **2025-02-28** at **16:33:15**:<br>
+👤 **davidsyoung** commented on **2025-02-28** at **16:33:15**
 
 Holy shit. Will report back!

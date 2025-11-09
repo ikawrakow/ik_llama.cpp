@@ -1,14 +1,17 @@
-### 🔀 [#279](https://github.com/ikawrakow/ik_llama.cpp/pull/279) - Fighting with cmake
+## 🔀 [Pull Request #279](https://github.com/ikawrakow/ik_llama.cpp/pull/279) - Fighting with cmake
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/fix_again_cmake` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-22 |
 | **Updated** | 2025-03-22 |
+| **Merged** | 2025-03-22 |
 
 ---
 
-#### Description
+## 📄 Description
 
 `cmake` has the unpleasant habit of using "response" files to put stuff such as list of include directories. But that confuses `vim` (or at least it does the way I have set it up) when I edit CUDA files. I had tricked `cmake` into not using "response" files, but instead adding all `nvcc` command line options into `compile_commands.json`. But at some point that stopped working, I guess after a system update. I hate it, so this PR restores the desired behavior. I had to add 
 ```

@@ -1,14 +1,16 @@
-### 🔀 [#558](https://github.com/ikawrakow/ik_llama.cpp/pull/558) - Add mikupad to ik_llama as an alternative WebUI
+## 🔀 [Pull Request #558](https://github.com/ikawrakow/ik_llama.cpp/pull/558) - Add mikupad to ik_llama as an alternative WebUI
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ✅ **Open** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `s6/mikupad` |
+| **Target Branch** | `main` |
 | **Created** | 2025-06-26 |
-| **Updated** | 2025-07-13 |
+| **Updated** | 2025-07-25 |
 
 ---
 
-#### Description
+## 📄 Description
 
 This PR adds [mikupad](https://github.com/lmg-anon/mikupad) (and new endpoints to `server.cpp` that mikupad uses to manage its sql database).
 
@@ -42,7 +44,7 @@ To-do:
 - [x] Remove `selectedSessionId` from the database and have it be handled via URL fragment instead
 - [x] Add export all button
 - [x] Implement endpoints to create, maintain, and get config info for compression (and `VACUUM` to reduce file size).
-- [ ] Finalize or Implement UI (for export all button, compression, KV cache manipulation)
+- [ ] Finalize or Implement UI (for export all button, compression, KV cache manipulation) see [this](https://github.com/ikawrakow/ik_llama.cpp/pull/558#issuecomment-3115444257) comment for an update
 - [ ] Update license (including a potential new AUTHORS file for mikupad)
 - [ ] Documentation
 - [ ] I think compile will fail if it can't find sqlite so fix that if that is the case
@@ -52,7 +54,7 @@ Potential roadmap items:
 - [ ] Add a mode that creates new sessions on branching or prediction
 - [ ] Remove `nextSessionId` from the database. This would allow the sessions table to have a standard `INTEGER PRIMARY KEY` as that is currently how the TEXT key is being used besides `nextSessionId` (and the now removed `selectedSessionId`). As nice as this is, I'm not sure it is worth the database migration.
 - [ ] SQLite Wasm option
-- [ ] Allow for slot saves to be in the database. This would allow for it to be compressed (similar to prompts there can often be a lot of redundancy between saves).
+- [ ] Allow for slot saves to be in the database. This would allow for it to be compressed (similar to prompts there can often be a lot of redundancy between saves). Edit: This may not be as useful as expected.
 - [ ] Add a new pure black version of Monospace dark (for OLED screens).
 - [ ] Add the ability to mask tokens from being processed (for use with think tokens as they are supposed to be removed once the response is finished).
 - [ ] max content length should be obtained from server (based on `n_ctx`) and not from user input, and also changing or even removing the usage of that variable (or just from the UI). It is used for setting maximums for Penalty Range for some samplers (useful but could be frustrating if set wrong as knowing that is not very clear), and to truncate it seems in some situation (not useful in my view).
@@ -64,15 +66,15 @@ An image of the new resizable sessions section (`All` group is always on top, an
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **saood06** commented the **2025-06-28** at **01:46:03**:<br>
+👤 **saood06** commented on **2025-06-28** at **01:46:03**
 
 Now that I have removed the hardcoded extension loading, I do think this is in a state where it can be used by others (and potentially provide feedback), but I will still be working on completing things from the "To-do" list above until it is ready for review (and will update the post above).
 
 ---
 
-👤 **ubergarm** commented the **2025-06-30** at **14:34:30**:<br>
+👤 **ubergarm** commented on **2025-06-30** at **14:34:30**
 
 Heya @saood06 I had some time this morning to kick the tires on this PR.
 
@@ -82,7 +84,7 @@ I don't typically use the built-in web interface, but I did by mest to try it ou
 
 <details>
 
-<summary>logs</summary>
+<summary>👈logs and screenshots</summary>
 
 ```bash
 # get setup
@@ -168,7 +170,15 @@ INFO [      log_server_request] request | tid="140145873375232" timestamp=175129
 
 ---
 
-👤 **saood06** commented the **2025-06-30** at **18:30:02**:<br>
+👤 **Downtown-Case** commented on **2025-06-30** at **15:42:14**
+
+I am interested in this.
+
+Mikupad is *excellent* for testing prompt formatting and sampling, with how it shows logprobs over generated tokens. It's also quite fast with big blocks of text.
+
+---
+
+👤 **saood06** commented on **2025-06-30** at **18:30:02**
 
 > I am interested in this.
 > 
@@ -186,8 +196,83 @@ You are doing the correct steps, I was able to reproduce the issue of not workin
 
 ---
 
-👤 **ubergarm** commented the **2025-06-30** at **19:41:28**:<br>
+👤 **ubergarm** commented on **2025-06-30** at **19:41:28**
 
 > You are doing the correct steps, I was able to reproduce the issue of not working with a fresh sql file (so far my testing was done with backup databases with existing data). Thanks for testing, I'll let you know when it works so that you can test it again if you so choose.
 
 Thanks for confirming, correct I didn't have a `.sql` file already in place but just made up that name. Happy to try again whenever u are ready!
+
+---
+
+👤 **saood06** commented on **2025-06-30** at **19:54:11**
+
+> Thanks for confirming, correct I didn't have a `.sql` file already in place but just made up that name. Happy to try again whenever u are ready!
+
+Just pushed a fix. ( The issue was with something that is on my to-do list to refactor and potentially remove but for now a quick fix for the code as is).
+
+Edit: The fix is in the html only so no compile or even relaunch needed just a reload should fix it
+
+---
+
+👤 **ubergarm** commented on **2025-06-30** at **22:34:56**
+
+@saood06 
+
+Aye! It fired right up this time and I was able to play with it a little and have a successful generation. It is cool how it I can mouse over the tokens to see the probabilities!
+
+![mikupad-testing-works](https://github.com/user-attachments/assets/5dfee61a-6915-45ba-abe2-652163c9a67a)
+
+---
+
+👤 **saood06** commented on **2025-06-30** at **22:40:08**
+
+> Aye! It fired right up this time and I was able to play with it a little and have a successful generation. 
+
+Nice.
+
+>It is cool how it I can mouse over the tokens to see the probabilities!
+
+Yes, I like to turn on the "Color by probability" to be able to see low probability tokens at a glance.
+
+It might also be useful to you for benchmarking quants or models (saving and cloning prompts).
+
+---
+
+👤 **ikawrakow** commented on **2025-07-02** at **08:09:57**
+
+This is getting surprisingly little testing. Nevertheless we can merge whenever @saood06 feels it is ready and removes the "draft" label.
+
+---
+
+👤 **saood06** commented on **2025-07-25** at **00:55:21**
+
+I am looking to get some feedback on the UI I added for the new features. 
+
+I have yet to push a commit with it because although most things are functional, there are still bugs and some missing functionality.
+
+Managing prompts from disk cache:
+<img width="1881" height="306" alt="image" src="https://github.com/user-attachments/assets/343c8954-265f-4dbc-bba2-f14c8ffd82c3" />
+
+The left panel is adjustable in width, and the entire thing is adjustable in height. (Note: total width is fixed, but total height is adjustable).
+
+The save slots tab (which was meant to manage prompts from the slots/memory as opposed to disk) is yet to be implemented (and may be pushed to the roadmap as restoring from disk does not update the `/slots` endpoint and not sure how difficult it will be to fix that bug).
+
+Renaming the saves is also planned but not currently implemented.
+
+The icons for sorting are in order: name, token count, file size, and modified date. I hope the icons make that clear but they also say what they do on hover:
+
+<img width="135" height="62" alt="image" src="https://github.com/user-attachments/assets/27e37def-ebb9-487c-8ee0-a58f117aa379" />
+
+The sidebar which includes the button to open what is shown above alongside Database compression management:
+
+<img width="675" height="341" alt="image" src="https://github.com/user-attachments/assets/7ce869f0-f836-4d6f-9d95-230ce4a576eb" />
+
+The enable button will swap to an update button once you enable compression, but that has yet to be implemented (in either the front or back end).
+
+Custom button when clicked shows this:
+
+<img width="676" height="93" alt="image" src="https://github.com/user-attachments/assets/a866b33d-a496-4693-84f8-d286e69c8230" />
+
+
+
+@Downtown-Case would you mind giving me your opinion?

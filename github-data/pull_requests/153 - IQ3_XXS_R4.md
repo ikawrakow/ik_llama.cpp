@@ -1,14 +1,17 @@
-### 🔀 [#153](https://github.com/ikawrakow/ik_llama.cpp/pull/153) - IQ3_XXS_R4
+## 🔀 [Pull Request #153](https://github.com/ikawrakow/ik_llama.cpp/pull/153) - IQ3_XXS_R4
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq3_xxs_r4_v2` |
+| **Target Branch** | `main` |
 | **Created** | 2024-12-20 |
 | **Updated** | 2024-12-20 |
+| **Merged** | 2024-12-20 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Sub-4 bpw i-quants have a terrible CPU performance, so I was curious to see if we can improve by interleaving rows.
 

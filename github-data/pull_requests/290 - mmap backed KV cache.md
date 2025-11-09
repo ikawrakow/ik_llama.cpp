@@ -1,14 +1,16 @@
-### 🔀 [#290](https://github.com/ikawrakow/ik_llama.cpp/pull/290) - mmap backed KV cache
+## 🔀 [Pull Request #290](https://github.com/ikawrakow/ik_llama.cpp/pull/290) - mmap backed KV cache
 
 | **Author** | `saood06` |
 | :--- | :--- |
-| **State** | ✅ **Open** |
+| **State** | 📝 **Draft** |
+| **Source Branch** | `s6/numa_KV` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-25 |
 | **Updated** | 2025-03-27 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Port of https://github.com/ggml-org/llama.cpp/pull/11580
 
@@ -30,9 +32,9 @@ This also might have the benefit of letting you allocate the full context size o
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **ikawrakow** commented the **2025-03-27** at **05:14:15**:<br>
+👤 **ikawrakow** commented on **2025-03-27** at **05:14:15**
 
 I think it needs to be ifdef'ed so the code will still build on Windows.
 
@@ -42,7 +44,7 @@ Concerning NUMA advantage: yes, it will spread the KV cache more evenly between 
 
 ---
 
-👤 **saood06** commented the **2025-03-27** at **05:31:58**:<br>
+👤 **saood06** commented on **2025-03-27** at **05:31:58**
 
 > I think it needs to be ifdef'ed so the code will still build on Windows.
 > 
@@ -52,7 +54,7 @@ Yes I agree on the needed changes if this is to be merged in, I mainly just reme
 
 >It would be also useful of @ubergarm tested performance implications.
 
-I'd be interested to know if it affected performance for him, since it doesn't hurt or help my performance anymore.
+I'd be interested to know if it affects performance for him, since it doesn't hurt or help my performance anymore.
 
 > Concerning NUMA advantage: yes, it will spread the KV cache more evenly between NUMA nodes. But aren't we concerned it may result in each NUMA node having to fetch KV cache data from another NUMA node. The KV cache grows as generation progresses, so in each new evaluation threads access different portions of the KV cache, so the strategy of evenly spreading the cache across NUMA nodes will be only meaningful if we also had something in place that would make threads always process the same portions of the KV cache.
 

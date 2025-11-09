@@ -1,14 +1,17 @@
-### 🔀 [#64](https://github.com/ikawrakow/ik_llama.cpp/pull/64) - Better sub-3-bit quantization mixes with a qkv tensor
+## 🔀 [Pull Request #64](https://github.com/ikawrakow/ik_llama.cpp/pull/64) - Better sub-3-bit quantization mixes with a qkv tensor
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/phi3.5_tweaks` |
+| **Target Branch** | `main` |
 | **Created** | 2024-09-28 |
 | **Updated** | 2024-09-28 |
+| **Merged** | 2024-09-28 |
 
 ---
 
-#### Description
+## 📄 Description
 
 Phi3.5-mini uses a combined `QKV` tensor. As a result, the quantization mix strategies used for sub-3-bit quants fail. This PR fixes it, and here is what we get as quantization error using wiki text perplexity
 

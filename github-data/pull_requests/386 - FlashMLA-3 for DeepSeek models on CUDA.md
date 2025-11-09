@@ -1,14 +1,17 @@
-### 🔀 [#386](https://github.com/ikawrakow/ik_llama.cpp/pull/386) - FlashMLA-3 for DeepSeek models on CUDA
+## 🔀 [Pull Request #386](https://github.com/ikawrakow/ik_llama.cpp/pull/386) - FlashMLA-3 for DeepSeek models on CUDA
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/cuda_flash_mla3` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-06 |
 | **Updated** | 2025-05-10 |
+| **Merged** | 2025-05-07 |
 
 ---
 
-#### Description
+## 📄 Description
 
 [This PR](https://github.com/ggml-org/llama.cpp/pull/13306) in mainline `llama.cpp` is a CUDA flash attention (FA) implementation that also works with K head size of 576 and V head size of 512 as required for DeepSeek models with MLA enabled. **Caveat: it only works on Ampere or newer Nvidia GPUs**.
 
@@ -75,15 +78,15 @@ Testing with DeepSeek-V3/R1 will be greatly appreciated. Very few can run these 
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **infy-infy** commented the **2025-05-07** at **14:31:37**:<br>
+👤 **infy-infy** commented on **2025-05-07** at **14:31:37**
 
 Will `-mla 3 -fa` work in mixed cpu+multigpu setup with Amperes and Pascals? Or it would be better to continue use `-mla 2 -fa`? I mean, maybe `-mla 3 -fa` will use some fallback for old cards and it would still be better than `-mla 2 -fa`
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-07** at **14:36:26**:<br>
+👤 **ikawrakow** commented on **2025-05-07** at **14:36:26**
 
 > Will -mla 3 -fa work in mixed cpu+multigpu setup with Amperes and Pascals?
 
@@ -92,7 +95,7 @@ There is no fallback, and I'm not sure if I have put enough checks to prevent ev
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-07** at **18:38:22**:<br>
+👤 **Ph0rk0z** commented on **2025-05-07** at **18:38:22**
 
 MLA 3 has faster sweep bench speeds for me but unfortunately deepseek 2.5 goes aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
@@ -100,7 +103,7 @@ MLA 2 works.
 
 ---
 
-👤 **ubergarm** commented the **2025-05-08** at **02:09:57**:<br>
+👤 **ubergarm** commented on **2025-05-08** at **02:09:57**
 
 I gave this a very quick try though the model doesn't fit in VRAM+RAM so pulls almost 6GB/s paging of a Gen5 PCIe NVME drive. This is a 3090TI FE 24GB VRAM GPU.
 
@@ -174,7 +177,7 @@ We can see that the string is 8, 8, 2, , 0, 0, 0, 0, 8, 7, 1, 1, 0,0, 0, ^C
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-08** at **04:34:09**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **04:34:09**
 
 OK, thanks for testing. Here is what I get with DeepSeek-Lite for @ubergarm's quantions:
 ```
@@ -208,7 +211,7 @@ The difference is that Lite has 16 heads, while the big models have 128. So, I g
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-08** at **07:29:24**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **07:29:24**
 
 To be honest, I don't understand the failure.
 
@@ -233,19 +236,31 @@ So, based on observations, when we use 192,128 CUDA kernel for PP and 576,512 CU
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-08** at **12:05:17**:<br>
+👤 **Ph0rk0z** commented on **2025-05-08** at **12:05:17**
 
 How many heads does 2.5 have? Maybe there is some difference. It's easier to run and more like qwen in size. I will have to check the MLA 1 output, could be bug in FA. Also had some crash in MLA 2 after using it a while but haven't reproduced yet.
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-08** at **14:22:22**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **12:48:38**
+
+> How many heads does 2.5 have? Maybe there is some difference.
+
+Should be the same as V3 with 128 heads.
+
+> It's easier to run and more like qwen in size. 
+
+I know. But the DeepSeek models are the only MLA models around. I have verified it works with DeepSeek-Lite (16B parameters, 16 heads). The next step up with MLA are the giant DeepSeek models that I cannot run myself.
+
+---
+
+👤 **Ph0rk0z** commented on **2025-05-08** at **14:22:22**
 
 Looks like my theory was correct. On my system MLA 1 also produces issues, probably as soon as FA kicks in. May start out coherent for the first bit of tokens and then descends intooooooooooooooooooosddkkkkkkkkasd
 
 ---
 
-👤 **Panchovix** commented the **2025-05-08** at **14:39:38**:<br>
+👤 **Panchovix** commented on **2025-05-08** at **14:39:38**
 
 I can test on ikllamacpp in some hours if I can replicate on deepseek v3 0324 (I'm not home right now)
 
@@ -253,15 +268,21 @@ On main llamacpp I tested up to 64K CTX and it was working fine with the PR. If 
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-08** at **14:50:33**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **14:50:33**
 
 > On main llamacpp I tested up to 64K CTX and it was working fine with the PR. If I understand correctly I have to use the latest quants and then use -mla 3 -fa? Main llamacpp uses -mla 2 -fa equivalent?
 
-The mainline `llama.cpp` MLA implementation corresponds to `-mla 1` here. With this it wasn't possible to use flash attention on CUDA in the past, and it became possible with this PR and PR 13306 in mainline. If you use the latest quants that enable MLA in mainline, you require the not yet merged PR #394 that enables support for these incompatible models. Otherwise, you need to use an older model that does not allow MLA in mainline `llama.cpp`.
+The mainline `llama.cpp` MLA implementation corresponds to `-mla 1` here. With this it wasn't possible to use flash attention on CUDA in the past, and it became possible with this PR and PR 13306 in mainline. If you use the latest quants that enable MLA in mainline, you require the not yet merged PR [#394](https://github.com/ikawrakow/ik_llama.cpp/issues/394) that enables support for these incompatible models. Otherwise, you need to use an older model that does not allow MLA in mainline `llama.cpp`.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-08** at **14:54:39**:<br>
+👤 **Ph0rk0z** commented on **2025-05-08** at **14:53:50**
+
+I have no v3/r1 quants yet so it may very well work there but not in 2.5.
+
+---
+
+👤 **ikawrakow** commented on **2025-05-08** at **14:54:39**
 
 > Looks like my theory was correct. On my system MLA 1 also produces issues, probably as soon as FA kicks in. May start out coherent for the first bit of tokens and then descends intooooooooooooooooooosddkkkkkkkkasd
 
@@ -271,13 +292,19 @@ Then the conclusion would be that I introduced a bug when porting the mainline P
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-08** at **15:11:44**:<br>
+👤 **Ph0rk0z** commented on **2025-05-08** at **15:03:00**
+
+I can probably download deepseek lite since it's small. This is what I'm running: https://huggingface.co/bartowski/DeepSeek-V2.5-1210-GGUF/tree/main/DeepSeek-V2.5-1210-IQ4_XS
+
+---
+
+👤 **ikawrakow** commented on **2025-05-08** at **15:11:44**
 
 That would work as a test.
 
 ---
 
-👤 **Panchovix** commented the **2025-05-08** at **18:19:57**:<br>
+👤 **Panchovix** commented on **2025-05-08** at **18:19:57**
 
 I just tried to load DeepSeek V3 Q2_K_XL but I get an issue on latest commit. This happens with both -mla 2 -fa and -mla 3 -fa. Not sure if I'm setting a parameter wrongly.
 
@@ -443,19 +470,19 @@ Segmentation fault (core dumped)
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-08** at **19:08:29**:<br>
+👤 **ikawrakow** commented on **2025-05-08** at **19:08:29**
 
-@Panchovix You are using a GGUF made for mainline llama.cpp MLA. As I wrote above, you need PR #394, which is an attempt to fix the incompatibility.
+@Panchovix You are using a GGUF made for mainline llama.cpp MLA. As I wrote above, you need PR [#394](https://github.com/ikawrakow/ik_llama.cpp/issues/394), which is an attempt to fix the incompatibility.
 
 ---
 
-👤 **Panchovix** commented the **2025-05-08** at **19:09:38**:<br>
+👤 **Panchovix** commented on **2025-05-08** at **19:09:38**
 
 @ikawrakow ah I'm dumb, thanks! Haha gonna try the PR.
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-08** at **23:53:02**:<br>
+👤 **Ph0rk0z** commented on **2025-05-08** at **23:53:02**
 
 Ok.. baby deepseek v2.0-chat, the ~16b one, right? Sort of inconclusive results.
 
@@ -466,9 +493,11 @@ MLA 2/3 + FP16 cache do not exhibit too many issues from a quick test.
 
 These quants are months and months old so I'm not sure if anything is wrong with them, I also used IQ4_XS
 
+re-ran v2.5 without 8bit cache and mla3 works now.
+
 ---
 
-👤 **ikawrakow** commented the **2025-05-09** at **05:41:54**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **05:41:54**
 
 I just tested [this model](https://huggingface.co/bartowski/DeepSeek-V2.5-1210-GGUF/tree/main/DeepSeek-V2.5-1210-IQ3_XXS), which is near the maximum size I can go. Seems to work perfectly fine with `fp16` KV cache:
 ```
@@ -1154,15 +1183,15 @@ But yes, `q8_0` KV cache is broken. I'll investigate.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-09** at **07:05:34**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **07:05:34**
 
-OK, PR #400 should fix quantized KV cache.
+OK, PR [#400](https://github.com/ikawrakow/ik_llama.cpp/issues/400) should fix quantized KV cache.
 
 ---
 
-👤 **ubergarm** commented the **2025-05-09** at **16:11:48**:<br>
+👤 **ubergarm** commented on **2025-05-09** at **16:11:48**
 
-> OK, PR #400 should fix quantized KV cache.
+> OK, PR [#400](https://github.com/ikawrakow/ik_llama.cpp/issues/400) should fix quantized KV cache.
 
 Yes this seems to work in my quick testing of big DeepSeek-R1-IQ2_K_R4 hybrid CPU+GPU on my local rig for both `-mla 2` and `-mla 3` e.g.
 ```
@@ -1180,7 +1209,7 @@ Thanks for working through all the combinations!
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-09** at **16:19:29**:<br>
+👤 **ikawrakow** commented on **2025-05-09** at **16:19:29**
 
 Thanks for testing.
 
@@ -1188,7 +1217,7 @@ I'm not sure if the `DDDDDD` is an actual bug. It is a low bit quantization, and
 
 ---
 
-👤 **saood06** commented the **2025-05-09** at **19:28:45**:<br>
+👤 **saood06** commented on **2025-05-09** at **19:28:45**
 
 > However, I noticed for both `-mla 2` and `-mla 3` in combination with `-ser 6,1`, it seems to work okay for short prompts like `Count from 1 to 10 in French`, but for longer ~600 token prompts it will throw `DDDDDDDD` again. Not a priority, I only use `-ser` if I'm desperate and can't access a remote rig!
 
@@ -1196,24 +1225,24 @@ I've never gotten `-ser` to work for me when loading a long context session (but
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-10** at **09:13:51**:<br>
+👤 **ikawrakow** commented on **2025-05-10** at **09:13:51**
 
 > > However, I noticed for both `-mla 2` and `-mla 3` in combination with `-ser 6,1`, it seems to work okay for short prompts like `Count from 1 to 10 in French`, but for longer ~600 token prompts it will throw `DDDDDDDD` again. Not a priority, I only use `-ser` if I'm desperate and can't access a remote rig!
 > 
 > I've never gotten `-ser` to work for me when loading a long context session (but I haven't really tried it in any other situation). I've never opened an issue as I've never taken the time to produce a minimally reproducible example.
 
-SER should hopefully work correctly now, see PR #404
+SER should hopefully work correctly now, see PR [#404](https://github.com/ikawrakow/ik_llama.cpp/issues/404)
 
 ---
 
-👤 **ubergarm** commented the **2025-05-10** at **16:19:20**:<br>
+👤 **ubergarm** commented on **2025-05-10** at **16:19:20**
 
 > > > However, I noticed for both `-mla 2` and `-mla 3` in combination with `-ser 6,1`, it seems to work okay for short prompts like `Count from 1 to 10 in French`, but for longer ~600 token prompts it will throw `DDDDDDDD` again. Not a priority, I only use `-ser` if I'm desperate and can't access a remote rig!
 > > 
 > > 
 > > I've never gotten `-ser` to work for me when loading a long context session (but I haven't really tried it in any other situation). I've never opened an issue as I've never taken the time to produce a minimally reproducible example.
 > 
-> SER should hopefully work correctly now, see PR #404
+> SER should hopefully work correctly now, see PR [#404](https://github.com/ikawrakow/ik_llama.cpp/issues/404)
 
 I just tried out PR404 which is now `main@a2d24c97`, but still seeing it reply `DDDDD` for longer contexts when using `-ser 6,1`.
 
@@ -1296,21 +1325,24 @@ No stack.
 The program is not being run.
 ```
 
-<details>
+</details>
 
-It could be this model is too small, all attention layers are Q8_0` for GPU, and for CPU ffn_down is IQ3_K_R4, ffn_(gate|up) are IQ2_K_R4.
+It could be this model is too small, all attention layers are Q8_0 for GPU, and for CPU ffn_down is IQ3_K_R4, ffn_(gate|up) are IQ2_K_R4.
 
 Still works okay without `-ser 6,1`. I also tried removing `-fa` when testing ser and also threw DDDD.
 
+*EDIT*
+I did a couple more tests and `-ser 6,1` seems to work with about ~200 token prompt, but it breaks and replies with DDDDDDD at ~300 tokens context prompt.
+
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-10** at **16:43:00**:<br>
+👤 **Ph0rk0z** commented on **2025-05-10** at **16:43:00**
 
 Deepseek 2.5 seems to work with q_8, tg/pp is slightly faster than F16. Unfortunately sometimes a GPU gets stuck at 100% in task manager and the bench or server halts then sits. GPU power draw not consistent with 100% usage of course. It could be due to my undervolting or something else? F16 sweep completes successfully and is definitely "heavier" on resources so I'm not sure anymore.
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-10** at **18:26:05**:<br>
+👤 **ikawrakow** commented on **2025-05-10** at **18:26:05**
 
 > Still works okay without -ser 6,1. I also tried removing -fa when testing ser and also threw DDDD.
 
@@ -1318,7 +1350,7 @@ OK, thanks. The PR fixes things for me, but it seems there is still a bug lurkin
 
 ---
 
-👤 **ikawrakow** commented the **2025-05-10** at **18:31:16**:<br>
+👤 **ikawrakow** commented on **2025-05-10** at **18:31:16**
 
 > Unfortunately sometimes a GPU gets stuck at 100% in task manager and the bench or server halts then sits.
 
@@ -1326,7 +1358,7 @@ There have been reports about problems with FA also in mainline. As I took the D
 
 ---
 
-👤 **Ph0rk0z** commented the **2025-05-10** at **21:14:52**:<br>
+👤 **Ph0rk0z** commented on **2025-05-10** at **21:14:52**
 
 Now that you mention it, that's the kind of error I'd get on llama-server. It would eventually fail and segfault there with synchronization listed as the fault. I assumed it was due to me undervolting. Setting lower max gpu clock along with the clock offset (only way to do it on linux) caused it to happen less often. 
 

@@ -1,14 +1,17 @@
-### 🔀 [#107](https://github.com/ikawrakow/ik_llama.cpp/pull/107) - Faster IQ1_BN Metal implementation
+## 🔀 [Pull Request #107](https://github.com/ikawrakow/ik_llama.cpp/pull/107) - Faster IQ1_BN Metal implementation
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/iq1bn_metal` |
+| **Target Branch** | `main` |
 | **Created** | 2024-10-26 |
 | **Updated** | 2024-10-26 |
+| **Merged** | 2024-10-26 |
 
 ---
 
-#### Description
+## 📄 Description
 
 On my 30-core M2-Max TG-128 for Bitnet-1.58b-3.3B improves from 82 t/s to 94.7 t/s.
 PP-512 goes from 686 t/s to 702 t/s.

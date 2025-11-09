@@ -1,14 +1,17 @@
-### 🔀 [#295](https://github.com/ikawrakow/ik_llama.cpp/pull/295) - Quantization improvements
+## 🔀 [Pull Request #295](https://github.com/ikawrakow/ik_llama.cpp/pull/295) - Quantization improvements
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/make_qx_quants` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-28 |
 | **Updated** | 2025-03-30 |
+| **Merged** | 2025-03-29 |
 
 ---
 
-#### Description
+## 📄 Description
 
 It is now more than a year since I added the imatrix to `llama.cpp`.  I think we can say that imatrix based quantization is now the standard. Hence, I believe it is no longer necessary to make quantization robust against failure modes that can be triggered when quantizing without an imatrix.
 
@@ -63,7 +66,7 @@ ___
 
 <sup>3</sup> This quantization type is not available in mainline `llama.cpp`.
 
-<sup>4</sup> Some of the tensor row size are not divisible by the k- and i-quants super-block size of 256. In mainline `llama.cpp` the quantization fails in that case when using `--pure`. I have changed `ik_llama.cpp` to use the fallback quantization type in that case in PR #294.
+<sup>4</sup> Some of the tensor row size are not divisible by the k- and i-quants super-block size of 256. In mainline `llama.cpp` the quantization fails in that case when using `--pure`. I have changed `ik_llama.cpp` to use the fallback quantization type in that case in PR [#294](https://github.com/ikawrakow/ik_llama.cpp/issues/294).
 
 <sup>5</sup> PR 12557 does not change `Q6_K` quantization. 
 
@@ -89,9 +92,9 @@ Extending the above algorithm to the non-linear quants `IQ4_XS` and `IQ4_NL` is 
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **compilade** commented the **2025-03-28** at **15:35:37**:<br>
+👤 **compilade** commented on **2025-03-28** at **15:35:37**
 
 Nice! It seems like your improved `make_qx_quants` is extremely similar to `make_qkxh_quants` when starting the search from `MIN(abs(nmin), abs(nmax)) - 1` instead of `MIN(abs(nmin), abs(nmax)) / 2` (when comparing the equirectangular projections). This would also make `make_qkxh_quants` faster (though I don't know by how much).
 
@@ -99,26 +102,37 @@ Here's your improved `make_qx_quants` with settings from `Q4_0`:
 
 ![equirectangular-tmp-2048](https://github.com/user-attachments/assets/3b0c3d0e-92c7-43f9-b498-2bb3adf4143c)
 
+```
+np.min(cos)=0.9962519378012932
+np.mean(cos)=0.9994353889532565
+np.max(cos)=1.0
+```
+
 And your improved `quantize_row_iq4_nl_impl` looks like this:
 
 ![equirectangular-tmp2-2048](https://github.com/user-attachments/assets/855d814b-15bd-46b8-8546-42ed2f71f4b5)
 
+```
+np.min(cos)=0.9978821632073399
+np.mean(cos)=0.9994873576857634
+np.max(cos)=0.9999999996961985
+```
 
 Very interesting approach with the gradient.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-28** at **19:44:43**:<br>
+👤 **ikawrakow** commented on **2025-03-28** at **19:44:43**
 
 To be honest I don't understand these plots. I know yellow is good and blue is bad, and there is a lot of blue, so they must be pretty bad?
 
 ---
 
-👤 **compilade** commented the **2025-03-28** at **19:59:47**:<br>
+👤 **compilade** commented on **2025-03-28** at **19:59:47**
 
 > To be honest I don't understand these plots. I know yellow is good and blue is bad, and there is a lot of blue, so they must be pretty bad? 
 
-No, the plots of your algorithms are not bad. Blue is simply the color of the max error. I did also include the min mean and max cosine similarities of the plots.
+No, the plots of your algorithms are not bad. Blue is simply the color of the max error. I did also include the values for the min mean and max cosine similarities of the plots.
 
 If an algorithm had a very big error in one spot, everything else would be yellow. This means the colors can't really be compared directly.
 
@@ -128,7 +142,7 @@ In this case, the modifications you propose here **do improve** how the plots lo
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-28** at **20:03:32**:<br>
+👤 **ikawrakow** commented on **2025-03-28** at **20:03:32**
 
 And what are the two coordinates of the plot? I understand it is a projection, but what is it that is being projected?
 
@@ -138,7 +152,7 @@ That would be the standard way to approach an optimization problem, no?
 
 ---
 
-👤 **compilade** commented the **2025-03-28** at **20:55:13**:<br>
+👤 **compilade** commented on **2025-03-28** at **20:55:13**
 
 > And what are the two coordinates of the plot? I understand it is a projection, but what is it that is being projected?
 
@@ -164,13 +178,13 @@ I will compare the speed and perplexity of narrower cumulative search with this 
 
 ---
 
-👤 **saood06** commented the **2025-03-28** at **23:16:13**:<br>
+👤 **saood06** commented on **2025-03-28** at **23:16:13**
 
 >Tested is "pure" quantization (i.e., using the `--pure` option of `llama-quantize`) with token embeddings and output tensor set to `Q8_0`. 
 
 Was this needed for some quants of DSL to function? As I ran into issues with a pure iq4_k_r4 quant for the new Deepseek V3 0324 (as my first mix of this finetune was noticeably slower than my first and fastest mix of R1).
 
-The pure ran at about the same speed as that R1 mix (I think it should have been a bit faster than it is and the speed loss may be from #259 since for this model I did not convert it myself and grabbed a conversion that was done with mainline), but it was not functional (I forgot to test perplexity before unloading it), either giving a few incomprehensible tokens or just straight to an EOS token from my brief usage.
+The pure ran at about the same speed as that R1 mix (I think it should have been a bit faster than it is and the speed loss may be from [#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259) since for this model I did not convert it myself and grabbed a conversion that was done with mainline), but it was not functional (I forgot to test perplexity before unloading it), either giving a few incomprehensible tokens or just straight to an EOS token from my brief usage.
 
 Comparing the quant logs for both, the only different tensors of the functional R1 mix were the following 5:
 
@@ -229,15 +243,15 @@ llm_load_print_meta: model params     = 671.026 B //this is lower because of MLA
 
 Do you think that setting output.weight to iq6_k and leaving the rest completely pure would work? 
 
-When I do make this next quant I might end up converting the model myself to see if #259 was costing me performance (even if I won't be comparing the exact same mix, I think it would still answer that question).
+When I do make this next quant I might end up converting the model myself to see if [#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259) was costing me performance (even if I won't be comparing the exact same mix, I think it would still answer that question).
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-29** at **06:53:18**:<br>
+👤 **ikawrakow** commented on **2025-03-29** at **06:53:18**
 
 > When I do make this next quant I might end up converting the model myself to see if https://github.com/ikawrakow/ik_llama.cpp/pull/259 was costing me performance
 
-#259 creates `attn_k_b` and `attn_v_b` as `Q8_0`, so this can have impact on TG performance compared to a model where these tensors were created with lower bpw. Apart from this, your system seems to be extremely sensitive to how things are laid out in memory, and creating `attn_k_b` and `attn_v_b` on the fly will lead to a different memory layout.
+[#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259) creates `attn_k_b` and `attn_v_b` as `Q8_0`, so this can have impact on TG performance compared to a model where these tensors were created with lower bpw. Apart from this, your system seems to be extremely sensitive to how things are laid out in memory, and creating `attn_k_b` and `attn_v_b` on the fly will lead to a different memory layout.
 
  >  but it was not functional (I forgot to test perplexity before unloading it), either giving a few incomprehensible tokens or just straight to an EOS token from my brief usage.
 
@@ -245,28 +259,28 @@ Not sure about this one.
 
 ---
 
-👤 **saood06** commented the **2025-03-29** at **07:36:32**:<br>
+👤 **saood06** commented on **2025-03-29** at **07:36:32**
 
-> > When I do make this next quant I might end up converting the model myself to see if #259 was costing me performance
+> > When I do make this next quant I might end up converting the model myself to see if [#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259) was costing me performance
 > 
-> #259 creates `attn_k_b` and `attn_v_b` as `Q8_0`, so this can have impact on TG performance compared to a model where these tensors were created with lower bpw.
+> [#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259) creates `attn_k_b` and `attn_v_b` as `Q8_0`, so this can have impact on TG performance compared to a model where these tensors were created with lower bpw.
 
 Yes I experimented with some quant mixes with those at Q8_0 before to see how much impact they had on PPL (but never isolated effects as the change in PPL was too minor and the TG impact too large for my preferences).
 
 >Apart from this, your system seems to be extremely sensitive to how things are laid out in memory, and creating `attn_k_b` and `attn_v_b` on the fly will lead to a different memory layout.
 
-Yes it is unfortunately very sensitive to that, I even considered #259 before I downloaded this preconverted model but decided to try it anyway.
+Yes it is unfortunately very sensitive to that, I even considered [#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259) before I downloaded this preconverted model but decided to try it anyway.
 
 > > but it was not functional (I forgot to test perplexity before unloading it), either giving a few incomprehensible tokens or just straight to an EOS token from my brief usage.
 > 
 > Not sure about this one.
 
-I'll test attn_output.weight set to iq6_k and report back when I get a chance (will first have to download and convert the model so that I can also test #259 ).
+I'll test attn_output.weight set to iq6_k and report back when I get a chance (will first have to download and convert the model so that I can also test [#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259) ).
 
 ---
 
-👤 **saood06** commented the **2025-03-30** at **08:44:47**:<br>
+👤 **saood06** commented on **2025-03-30** at **08:44:47**
 
-> I'll test attn_output.weight set to iq6_k and report back when I get a chance (will first have to download and convert the model so that I can also test #259 ).
+> I'll test attn_output.weight set to iq6_k and report back when I get a chance (will first have to download and convert the model so that I can also test [#259](https://github.com/ikawrakow/ik_llama.cpp/issues/259) ).
 
-This was also outputting gibberish.
+This was also outputting gibberish. It seems both are important.

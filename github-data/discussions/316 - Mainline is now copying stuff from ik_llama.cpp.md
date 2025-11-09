@@ -1,13 +1,14 @@
-### 🗣️ [#316](https://github.com/ikawrakow/ik_llama.cpp/discussions/316) - Mainline is now copying stuff from ik_llama.cpp
+## 🗣️ [Discussion #316](https://github.com/ikawrakow/ik_llama.cpp/discussions/316) - Mainline is now copying stuff from ik_llama.cpp
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
+| **State** | ❌ **Closed** |
 | **Created** | 2025-04-06 |
 | **Updated** | 2025-04-29 |
 
 ---
 
-#### Description
+## 📄 Description
 
 We have [this merged PR](https://github.com/ggml-org/ggml/pull/1174) and [this pending PR](https://github.com/ggml-org/ggml/pull/1179) in the [ggml repository](https://github.com/ggml-org/ggml) copying code from `ik_llama.cpp`. It is an interesting choice of venue. [ggml](https://github.com/ggml-org/ggml) is well known, but much lower profile than [llama.cpp](https://github.com/ggml-org/llama.cpp). We know that changes added to `ggml` quietly make their way into `llama.cpp` with "sync: ggml" PRs such as [this one](https://github.com/ggml-org/llama.cpp/pull/12670).
 
@@ -29,9 +30,9 @@ But, hey, IANAL, so it is maybe better to focus on the moral side of things. Whe
 
 ---
 
-#### 🗣️ Discussion
+## 💬 Discussion
 
-👤 **CISC** replied the **2025-04-06** at **13:12:04**:<br>
+👤 **CISC** commented on **2025-04-06** at **13:12:04**
 
 Uh, I was not aware of any wish for your work to be removed, in fact, I made the PRs solely based on your comment here: https://github.com/ikawrakow/ik_llama.cpp/discussions/256#discussioncomment-12496828
 
@@ -39,7 +40,7 @@ I chose to submit these to `ggml` not for some nefarious reason, but simply beca
 
 ---
 
-👤 **CISC** replied the **2025-04-06** at **13:33:21**:<br>
+👤 **CISC** commented on **2025-04-06** at **13:33:21**
 
 > Hmm. The PRs are definitely not a copy of `ik_llama.cpp`, but are they a "substantial portion" of it? How is "substantial" being measured? By LOCs? By utility? By some other measure?
 
@@ -51,18 +52,19 @@ Please don't blame anyone else than me, I do not represent `ggml` nor `llama.cpp
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-06** at **13:50:50**:<br>
+👤 **ikawrakow** commented on **2025-04-06** at **13:50:50**
 
 @CISC
 
 I'm sorry if this came across as a critique/attack on you. That was not the intent, and it has nothing to do with you. It is between ggerganov and me. Given the history, and there is 15 years of it even before `llama.cpp` came to be, I would have expected a different reaction from ggerganov to your PRs.
 
-> 👤 **JohannesGaessler** replied the **2025-04-06** at **14:06:02**:<br>
+> 👤 **JohannesGaessler** replied on **2025-04-06** at **14:06:02**
+> 
 > In the end I am the one who is responsible for reviewing and merging the PR in question. I had interpreted [this post](https://github.com/ikawrakow/ik_llama.cpp/discussions/256#discussioncomment-12496828) as permission to do so without preconditions. I'm sorry for acting against your wishes.
 
 ---
 
-👤 **CISC** replied the **2025-04-06** at **14:08:38**:<br>
+👤 **CISC** commented on **2025-04-06** at **14:08:38**
 
 This puts me in a bind though, my intention was to upstream what I could (with the hardware I have available to test) as it seemed you were suggesting that this should be done (but not willing to do yourself).
 
@@ -70,16 +72,17 @@ You have made a great number of awesome contributions here, and I still wish for
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-06** at **14:37:07**:<br>
+👤 **ikawrakow** commented on **2025-04-06** at **14:37:07**
 
-@CISC @JohannesGaessler As you both refer to what I wrote in #256, here it is:
+@CISC @JohannesGaessler As you both refer to what I wrote in [#256](https://github.com/ikawrakow/ik_llama.cpp/issues/256), here it is:
 
 > upstream is free to take from here whatever they find useful
 
 Meaning there is nothing I can do to prevent that from happening as I'm publishing under a MIT license. I don't think I said that I do not expect upstream to abide by the terms of the license.
 
-> 👤 **CISC** replied the **2025-04-06** at **14:38:40**:<br>
-> > @CISC @JohannesGaessler As you both refer to what I wrote in #256, here it is:
+> 👤 **CISC** replied on **2025-04-06** at **14:38:40**
+> 
+> > @CISC @JohannesGaessler As you both refer to what I wrote in [#256](https://github.com/ikawrakow/ik_llama.cpp/issues/256), here it is:
 > > 
 > > > upstream is free to take from here whatever they find useful
 > > 
@@ -89,7 +92,7 @@ Meaning there is nothing I can do to prevent that from happening as I'm publishi
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-07** at **06:30:56**:<br>
+👤 **ikawrakow** commented on **2025-04-07** at **06:30:56**
 
 So, this is becoming interesting. Here is what @ggerganov has to say about my copyright notice being included in the file(s) where stuff was copied from my work:
 
@@ -103,11 +106,12 @@ The [discussion 6934](https://github.com/ggml-org/llama.cpp/discussions/6394) wa
 
 ---
 
-👤 **JohannesGaessler** replied the **2025-04-07** at **07:59:15**:<br>
+👤 **JohannesGaessler** commented on **2025-04-07** at **07:59:15**
 
 For the record: Do you find it acceptable for people to read your code and to then submit a PR to llama.cpp/ggml with the same functionality?
 
-> 👤 **ikawrakow** replied the **2025-04-07** at **09:10:21**:<br>
+> 👤 **ikawrakow** replied on **2025-04-07** at **09:10:21**
+> 
 > > For the record: Do you find it acceptable for people to read your code and to then submit a PR to llama.cpp/ggml with the same functionality?
 > 
 > I addressed that above. But here it is again my perhaps wrong concept of how it should be:
@@ -115,11 +119,13 @@ For the record: Do you find it acceptable for people to read your code and to th
 > * If you reimplement what I have done here in your own way, you don't need to mention me or this repository. But if you were nice, you would still mention the original source/idea. Just like in many places in the ggml/llama.cpp code there are references to papers and/or other repositories. 
 > 
 > Now, also for the record, it isn't so that there aren't copyright notices in `ggml` "sprinkled around the code" as @ggerganov puts it. See for instance [this](https://github.com/ggml-org/ggml/blob/ab9ed73d40965d7e4b25a4adf2230b9a19bffbf9/src/ggml-cpu/ops.cpp#L4996) (and same notices in all other backends). I have this line in my fork as well in a completely [different place](https://github.com/ikawrakow/ik_llama.cpp/blob/a051f08b8f059fa10dd089d231b975291c122e9d/ggml/src/ggml.c#L16726), so it has been preserved over multiple code reorganizations (so, maintaining copyright notices in the source code as things are moved around is not quite as painful as claimed). You don't wonder why a Kawrakow copyright notice is so different from a Jeffrey Quesnelle and Bowen Peng copyright notice?
+
+> 👤 **JohannesGaessler** replied on **2025-04-07** at **10:41:05**
 > 
-> 👤 **JohannesGaessler** replied the **2025-04-07** at **10:41:05**:<br>
 > Thank you for your input. My perspective is that I don't have the ability to resolve a conflict between you and Georgi especially because I'm ignorant of your prior history. My previous policy was that I would simply not look at any of your code and that is what I will go back to.
+
+> 👤 **bartowski1182** replied on **2025-04-13** at **15:47:29**
 > 
-> 👤 **bartowski1182** replied the **2025-04-13** at **15:47:29**:<br>
 > As another outsider without a horse in this race (besides wanting everyone to benefit as much as possible by all the best work), I don't think a simple code comment referencing either the original PR from this repo, or lacking the ability to find one simply, a quick mention of this repo, world detract much if anything from the overall code experience
 > 
 > In fact, recently when making changes, I've seen code with a comment referencing a PR from other repos, or from llamacpp itself, and these help immensely for tracking down motivations and any potential discussions that went on at the time
@@ -130,7 +136,7 @@ For the record: Do you find it acceptable for people to read your code and to th
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-07** at **11:07:50**:<br>
+👤 **ikawrakow** commented on **2025-04-07** at **11:07:50**
 
 > My previous policy was that I would simply not look at any of your code and that is what I will go back to.
 
@@ -138,40 +144,48 @@ Yes, of course, as predicted.
 
 ---
 
-👤 **jano403** replied the **2025-04-07** at **11:16:19**:<br>
+👤 **jano403** commented on **2025-04-07** at **11:16:19**
 
 A based thing to do would be to license your repository under AGPL3.0, solves all problems.
 
-> 👤 **ikawrakow** replied the **2025-04-07** at **11:23:15**:<br>
+> 👤 **ikawrakow** replied on **2025-04-07** at **11:23:15**
+> 
 > > A based thing to do would be to license your repository under AGPL3.0, solves all problems.
 > 
 > Yes, I agree, it would have been better. But I didn't feel like juggling two different licenses, so just went with the original MIT license.
 > 
 > On the other hand, the final outcome would not have been any different. Mainline will independently discover and implement the improvement I have made here without looking at my changes, not even once. I think this was made very clear by @JohannesGaessler's last comment.
+
+> 👤 **jano403** replied on **2025-04-07** at **11:29:07**
 > 
-> 👤 **jano403** replied the **2025-04-07** at **11:29:07**:<br>
 > Never too late to change it if You ever feel like it.
 > Btw, appreciate all the hard work You're doing for quants and speed improvements!
+
+> 👤 **ikawrakow** replied on **2025-04-07** at **11:40:33**
 > 
-> 👤 **ikawrakow** replied the **2025-04-07** at **11:40:33**:<br>
 > I would need to read up on what is the correct way of mixing MIT licensed code with (A)GPL licensed code. Or can you point me to a simple to follow set of instructions?
+
+> 👤 **CISC** replied on **2025-04-07** at **12:00:19**
 > 
-> 👤 **CISC** replied the **2025-04-07** at **12:00:19**:<br>
 > I'm not sure what "problems" that is supposed to fix though? Was the license really the problem?
+
+> 👤 **ikawrakow** replied on **2025-04-07** at **12:06:07**
 > 
-> 👤 **ikawrakow** replied the **2025-04-07** at **12:06:07**:<br>
 > It would have avoided ggerganov talking about the Berne Convention and implying that no copyright notices are required, or putting contributors such as yourself into the difficult position of having to choose between doing the right thing or following his rules.
+
+> 👤 **CISC** replied on **2025-04-07** at **12:15:28**
 > 
-> 👤 **CISC** replied the **2025-04-07** at **12:15:28**:<br>
 > It would have avoided me even considering upstreaming, that's all, the rest is unrelated fallout.
+
+> 👤 **jano403** replied on **2025-04-07** at **12:34:09**
 > 
-> 👤 **jano403** replied the **2025-04-07** at **12:34:09**:<br>
 > > I would need to read up on what is the correct way of mixing MIT licensed code with (A)GPL licensed code. Or can you point me to a simple to follow set of instructions?
 > 
 > I believe the MIT license is compatible with GPL/AGPL, take a look at https://github.com/LostRuins/koboldcpp for example. The original code would still be MIT licensed but the project as a whole, including Your modifications would be GPL/AGPL licensed.
 > ![image](https://github.com/user-attachments/assets/58b0011f-6f53-4cfe-a57f-89101946b1b7)
+
+> 👤 **jano403** replied on **2025-04-07** at **12:35:47**
 > 
-> 👤 **jano403** replied the **2025-04-07** at **12:35:47**:<br>
 > https://www.gnu.org/licenses/license-list.en.html#GPLCompatibleLicenses
 > ![image](https://github.com/user-attachments/assets/8d7b887c-fd6d-48e6-a5b8-325110cf1ef5)
 > ![image](https://github.com/user-attachments/assets/6ebd73b4-e7f6-4dbe-a75b-d29dc2d05d68)
@@ -184,21 +198,23 @@ A based thing to do would be to license your repository under AGPL3.0, solves al
 >  //
 > ```
 > or similar when You make new changes.
+
+> 👤 **ikawrakow** replied on **2025-04-07** at **12:48:51**
 > 
-> 👤 **ikawrakow** replied the **2025-04-07** at **12:48:51**:<br>
 > > It would have avoided me even considering upstreaming, that's all, the rest is unrelated fallout.
 > 
 > Well, also that. Which have resulted in you having a much less interesting weekend 😄
 
 ---
 
-👤 **ikawrakow** replied the **2025-04-07** at **11:24:52**:<br>
+👤 **ikawrakow** commented on **2025-04-07** at **11:24:52**
 
 @CISC 
 
 I'm sorry you ended up in the middle of this. I hope this has not damaged your relation with, and your ability to contribute to, the `ggml` and `llama.cpp` projects.
 
-> 👤 **CISC** replied the **2025-04-07** at **11:58:00**:<br>
+> 👤 **CISC** replied on **2025-04-07** at **11:58:00**
+> 
 > > I'm sorry you ended up in the middle of this. I hope this has not damaged your relation with, and your ability to contribute to, the `ggml` and `llama.cpp` projects.
 > 
 > Let's just say this weekend was more interesting than I would have liked. :(

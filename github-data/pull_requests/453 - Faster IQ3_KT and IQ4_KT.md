@@ -1,16 +1,19 @@
-### 🔀 [#453](https://github.com/ikawrakow/ik_llama.cpp/pull/453) - Faster IQ3_KT and IQ4_KT
+## 🔀 [Pull Request #453](https://github.com/ikawrakow/ik_llama.cpp/pull/453) - Faster IQ3_KT and IQ4_KT
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/opt_kt_quants` |
+| **Target Branch** | `main` |
 | **Created** | 2025-05-24 |
 | **Updated** | 2025-05-24 |
+| **Merged** | 2025-05-24 |
 
 ---
 
-#### Description
+## 📄 Description
 
-The PR improves `AVX2` performance for the trellis quants `IQ3_KT`  and `IQ4_KT` recently added in PR #441.
+The PR improves `AVX2` performance for the trellis quants `IQ3_KT`  and `IQ4_KT` recently added in PR [#441](https://github.com/ikawrakow/ik_llama.cpp/issues/441).
 The results below are for LLaMA-3.1-8B on a Ryzen-5975WX CPU.
 
 ### IQ3_KT

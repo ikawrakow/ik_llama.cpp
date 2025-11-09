@@ -1,16 +1,19 @@
-### 🔀 [#237](https://github.com/ikawrakow/ik_llama.cpp/pull/237) - Reduce size of compute buffers
+## 🔀 [Pull Request #237](https://github.com/ikawrakow/ik_llama.cpp/pull/237) - Reduce size of compute buffers
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/reduce_compute_buffers` |
+| **Target Branch** | `main` |
 | **Created** | 2025-02-28 |
 | **Updated** | 2025-03-01 |
+| **Merged** | 2025-03-01 |
 
 ---
 
-#### Description
+## 📄 Description
 
-I have been focusing on reducing the KV cache size, but as per the lengthy exchange in #235 the actual issue for using a very long context is the size of the compute buffers. E.g., if one attempted to run DeepSeekV3/R1 with the claimed 163k tokens maximum context length, one would need over 40 GB of CUDA compute buffer **per GPU**. But even if running on the CPU, 40 GB is nothing to sneeze at.
+I have been focusing on reducing the KV cache size, but as per the lengthy exchange in [#235](https://github.com/ikawrakow/ik_llama.cpp/issues/235) the actual issue for using a very long context is the size of the compute buffers. E.g., if one attempted to run DeepSeekV3/R1 with the claimed 163k tokens maximum context length, one would need over 40 GB of CUDA compute buffer **per GPU**. But even if running on the CPU, 40 GB is nothing to sneeze at.
 
 This PR solves the problem. For GPU and CPU inference.
 
@@ -36,9 +39,65 @@ As another side note: I wasted at least another two hours fighting with the `ggm
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **davidsyoung** commented the **2025-03-01** at **00:26:54**:<br>
+👤 **ikawrakow** commented on **2025-02-28** at **16:46:30**
+
+Here some example usage. My GPU is RTX-4080 and I'm running `IQ4_NL` quantized DeepSeek-Lite (model is 8.47 GiB). Let's benchmark prompt processing speed for 16k tokens using standard attention.
+```
+./bin/llama-bench -m $model -p 16384 -n 0 -t 1 -ngl 100 -fmoe 1
+```
+We get this:
+
+| model                | backend    | ngl | threads | fmoe |          test |              t/s |
+| -------------------- | ---------- | --: | ------: | ---: | ------------: | ---------------: |
+| deepseek2 16B IQ4_NL | CUDA       | 100 |       1 |    1 |       pp16384 |  2584.69 ± 17.96 |
+
+Let's now run it with the option added in this PR, but increase `u_batch` to 2048
+```
+./bin/llama-bench -m $model -p 16384 -n 0 -t 1 -ngl 100 -fmoe 1 -amb 64,128,256,512 -ub 2048
+```
+We get this
+
+| model                 | ngl | threads | n_ubatch |   amb | fmoe |          test |              t/s |
+| --------------------- | --: | ------: | -------: | ----: | ---: | ------------: | ---------------: |
+| deepseek2 16B IQ4_NL  | 100 |       1 |     2048 |    64 |    1 |       pp16384 |  3304.30 ± 15.21 | 
+| deepseek2 16B IQ4_NL  | 100 |       1 |     2048 |   128 |    1 |       pp16384 |  3305.02 ± 12.81 | 
+| deepseek2 16B IQ4_NL  | 100 |       1 |     2048 |   256 |    1 |       pp16384 |   3295.94 ± 7.23 | 
+| deepseek2 16B IQ4_NL  | 100 |       1 |     2048 |   512 |    1 |       pp16384 |   3276.55 ± 5.72 | 
+
+Limiting the size of the compute buffer via `-amb` and increasing `u_batch` size to 2048 tokens improves performance by almost 30!
+
+Can we not do the same without `-amb`? Let's try
+```
+./bin/llama-bench -m ../ncuda/junk3.bin -p 16384 -n 0 -t 1 -ngl 100 -fmoe 1 -r 5 -ub 2048
+ggml_cuda_init: GGML_CUDA_FORCE_MMQ:    no
+ggml_cuda_init: GGML_CUDA_FORCE_CUBLAS: no
+ggml_cuda_init: found 1 CUDA devices:
+  Device 0: NVIDIA GeForce RTX 4080, compute capability 8.9, VMM: yes
+| model                          |       size |     params | backend    | ngl | threads | n_ubatch | fmoe |          test |              t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | ------: | -------: | ---: | ------------: | ---------------: |
+ggml_gallocr_reserve_n: failed to allocate CUDA0 buffer of size 2382381056
+main: error: failed to create context with model '$model'
+```
+Clearly no.
+
+Let's look at compute buffer sizes for this context of 16k tokens and `u_batch = 2048`. I'll use MLA, else I'm running out of memory for `amb = 0` (PR changes not used)
+
+|  amb  |  compute buffer size |
+| ------: | ---: |
+| 0  | 2393 MiB |
+| 64 | 816 MiB |
+| 128 | 816 MiB |
+| 256 | 816 MiB |
+| 512 | 880 MiB |
+| 1024 | 1369 MiV |
+
+Why is the `u_batch = 2048` performance better than `u_batch = 512` (once we limit `K*Q` size via `-amb`)? DeepSeek-Lite has 64 experts and uses 6 activated experts, so for `u_batch = 512` we have `512 x 6 / 64 = 48` tokens per expert on average. A matrix multiplication with 48 rows in the right matrix is much slower compared to 512 as we would have with a dense model. When we go to `u_batch = 2048`, we have 192 tokens per expert on average, so we get a better performance!
+
+---
+
+👤 **davidsyoung** commented on **2025-03-01** at **00:26:54**
 
 This has been an incredible PR. Hugely beneficial in multiple ways. The compute buffer is drastically lower, and now can run context at max context, no issues.
 
@@ -365,7 +424,7 @@ Excellent work on this.
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-01** at **00:55:02**:<br>
+👤 **davidsyoung** commented on **2025-03-01** at **00:55:02**
 
 Also, gave the [84853b9](https://github.com/ikawrakow/ik_llama.cpp/pull/237/commits/84853b9a9bb2c71b80c704d2b0d0675cb132a539) commit a test run and it seems to be producing different outcomes each time on regeneration with a fixed seed. 
 
@@ -373,7 +432,7 @@ Not sure if it’s something I’m doing wrong on my end.
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-01** at **06:25:19**:<br>
+👤 **ikawrakow** commented on **2025-03-01** at **06:25:19**
 
 > Also, gave the [84853b9](https://github.com/ikawrakow/ik_llama.cpp/pull/237/commits/84853b9a9bb2c71b80c704d2b0d0675cb132a539) commit a test run and it seems to be producing different outcomes each time on regeneration with a fixed seed.
 > 
@@ -383,7 +442,7 @@ I wouldn't know why that could affect your results. The change in 84853b9a9bb2c7
 
 ---
 
-👤 **davidsyoung** commented the **2025-03-01** at **07:57:12**:<br>
+👤 **davidsyoung** commented on **2025-03-01** at **07:57:12**
 
 > > Also, gave the [84853b9](https://github.com/ikawrakow/ik_llama.cpp/pull/237/commits/84853b9a9bb2c71b80c704d2b0d0675cb132a539) commit a test run and it seems to be producing different outcomes each time on regeneration with a fixed seed.
 > > Not sure if it’s something I’m doing wrong on my end.

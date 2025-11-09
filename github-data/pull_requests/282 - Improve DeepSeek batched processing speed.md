@@ -1,14 +1,17 @@
-### 🔀 [#282](https://github.com/ikawrakow/ik_llama.cpp/pull/282) - Improve DeepSeek batched processing speed
+## 🔀 [Pull Request #282](https://github.com/ikawrakow/ik_llama.cpp/pull/282) - Improve DeepSeek batched processing speed
 
 | **Author** | `ikawrakow` |
 | :--- | :--- |
-| **State** | ❌ **Closed** |
+| **State** | 🔀 **Merged** |
+| **Source Branch** | `ik/better_batched_processing` |
+| **Target Branch** | `main` |
 | **Created** | 2025-03-23 |
 | **Updated** | 2025-03-23 |
+| **Merged** | 2025-03-23 |
 
 ---
 
-#### Description
+## 📄 Description
 
 I was looking into the batched processing performance dips observed by @saood06 [here](https://github.com/ikawrakow/ik_llama.cpp/pull/277#issuecomment-2745952185) and I saw this for DeepSeek-Lite:
 
@@ -34,13 +37,13 @@ Concerning DeepSeek-R1, there is a small change in this PR that I hope will redu
 
 ---
 
-#### 💬 Conversation
+## 💬 Conversation
 
-👤 **saood06** commented the **2025-03-23** at **11:32:00**:<br>
+👤 **saood06** commented on **2025-03-23** at **11:32:00**
 
 >Concerning DeepSeek-R1, there is a small change in this PR that I hope will reduce the performance dips observed by @saood06
 
-Running sweep bench and will post full results with graph when they finish, but right now but early results look promising showing
+Running sweep bench and will post full results with graph when they finish, but right now but early results look promising, table with early values below
 
 |    PP |     TG |   N_KV |   T_PP s | S_PP t/s |   T_TG s | S_TG t/s |
 |-------|--------|--------|----------|----------|----------|----------|
@@ -62,7 +65,7 @@ I see you pushed another commit, should I stop this test and recompile and run t
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-23** at **11:34:40**:<br>
+👤 **ikawrakow** commented on **2025-03-23** at **11:34:40**
 
 > I see you pushed another commit, should I stop this test and recompile and run the new commit?
 
@@ -70,7 +73,7 @@ This will only affect results for `B > 128`, so beyond the range where you are t
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-23** at **11:51:34**:<br>
+👤 **ikawrakow** commented on **2025-03-23** at **11:51:34**
 
 What would be very interesting is to run PP benchmarks with DeepSeek-V3/R1 with `./bin/llama-bench -mla 3 -fa 1 -fmoe 1 -p 32,64,128,192,256,320,384,448,512,576,640,704,768` with
 * [This line](https://github.com/ikawrakow/ik_llama.cpp/blob/5a4855e61c05b0c54ecad3f4155074d8f344b6f6/src/llama.cpp#L13899) changed to `pp_opt = true`;
@@ -80,7 +83,7 @@ This will help understand if the crossover between "TG optimized" and "PP optimi
 
 ---
 
-👤 **saood06** commented the **2025-03-23** at **13:28:00**:<br>
+👤 **saood06** commented on **2025-03-23** at **13:28:00**
 
 > What would be very interesting is to run PP benchmarks with DeepSeek-V3/R1 with `./bin/llama-bench -mla 3 -fa 1 -fmoe 1 -p 32,64,128,192,256,320,384,448,512,576,640,704,768` with
 > 
@@ -91,11 +94,11 @@ This will help understand if the crossover between "TG optimized" and "PP optimi
 > 
 > This will help understand if the crossover between "TG optimized" and "PP optimized" is somehow dependent on the number of heads, or if it is just a (perhaps somewhat computer dependent) constant. I can see arguments for both options, so the only way to understand is to just test.
 
-Running now, each config is going to take ~50 minutes.
+Running now, each config is going to take at least 50 minutes (based on my estimation from the beginning of the first run), I may not be around to post it till later.
 
 ---
 
-👤 **saood06** commented the **2025-03-23** at **16:56:44**:<br>
+👤 **saood06** commented on **2025-03-23** at **16:56:44**
 
 @ikawrakow Here's the benchmark you asked for:
 
@@ -161,6 +164,6 @@ I'm going to reboot my machine now to enable 1GB hugepages and mitigations=off a
 
 ---
 
-👤 **ikawrakow** commented the **2025-03-23** at **17:10:32**:<br>
+👤 **ikawrakow** commented on **2025-03-23** at **17:10:32**
 
 Thanks, this is great! It looks like a threshold of 128 tokens is not a bad choice for DeepSeek-R1 as well.
