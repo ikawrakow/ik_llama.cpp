@@ -1304,11 +1304,12 @@ public:
 
     // encode and decode the image chunk
     int32_t process_chunk(
-        llama_context* ctx,
-        mtmd_context* mctx,
+        llama_context * ctx,
+        mtmd_context * mctx,
         llama_pos n_past,
         int32_t seq_id,
-        llama_pos& n_pos_out) {
+        llama_pos & n_pos_out,
+        size_t & n_tokens_out) {
         char buffer[512];
         auto& chunk = find_chunk(n_past);
         const char* name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
@@ -1325,21 +1326,25 @@ public:
             n_batch,
             true, // logits last
             &new_n_past);
+        // get number of tokens in the image
+        const size_t new_n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
         snprintf(buffer, 512, "processed in %g ms", 1.*(ggml_time_ms() - t0));
         LOG_INFO(buffer, {});
         if (result != 0) {
             snprintf(buffer, 512, "mtmd_helper_eval failed with status %d", result);
             LOG_ERROR(buffer, {});
             n_pos_out = n_past;
+            n_tokens_out = 0;
             return result;
         }
         n_pos_out = new_n_past;
+        n_tokens_out = new_n_tokens;
         return 0;
     }
 };
 
 // Computes FNV-1a hash of the data
-static std::string fnv_hash(const uint8_t* data, size_t len) {
+static std::string fnv_hash(const uint8_t * data, size_t len) {
     const uint64_t fnv_prime = 0x100000001b3ULL;
     uint64_t hash = 0xcbf29ce484222325ULL;
 
@@ -1350,7 +1355,7 @@ static std::string fnv_hash(const uint8_t* data, size_t len) {
     return std::to_string(hash);
 }
 
-static server_tokens process_mtmd_prompt(mtmd_context* mctx, std::string prompt, std::vector<raw_buffer> files) {
+static server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
     mtmd::bitmaps bitmaps;
     for (auto& file : files) {
         mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));

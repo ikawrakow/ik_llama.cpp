@@ -1741,7 +1741,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "--no-context-shift") {
-        CHECK_ARG
         params.ctx_shift = false;
         return true;
     }
