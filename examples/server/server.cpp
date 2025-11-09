@@ -1250,6 +1250,7 @@ struct server_context {
             chat_templates = common_chat_templates_init(model, "chatml");
         }
 
+        bool has_draft_model = !params.model_draft.empty() || !params.draft_params.empty();
         std::string & mmproj_path = params.mmproj.path;
         if (!mmproj_path.empty()) {
             mtmd_context_params mparams = mtmd_context_params_default();
@@ -1274,14 +1275,14 @@ struct server_context {
             //    SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             //}
 
-            if (!params.model_draft.empty()) {
+            if (has_draft_model) {
                 LOG_ERROR("%s\n", "err: speculative decode is not supported by multimodal");
                 return false;
             }
         }
         // Load draft model for speculative decoding if specified
-        if (!params.model_draft.empty() || !params.draft_params.empty()) {
-            LOG_INFO("loading draft model", {{"model", params.model_draft}});
+        if (has_draft_model) {
+            LLAMA_LOG_INFO("\n\n==================================loading DRAFT model==================================\n\n"); 
 
             gpt_params params_dft;
             params_dft.devices = params.devices_draft;
@@ -1295,6 +1296,7 @@ struct server_context {
                 gpt_params_parse(argc, argv, params_dft);
                 free_command_line(argc, argv);
             }
+            LOG_INFO("", { {"model", params_dft.model} });
             if (params_dft.n_ctx == 0) {
                 params_dft.n_ctx = params.n_ctx_draft;
             }
