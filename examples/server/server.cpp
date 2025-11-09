@@ -1280,18 +1280,26 @@ struct server_context {
             }
         }
         // Load draft model for speculative decoding if specified
-        if (!params.model_draft.empty()) {
+        if (!params.model_draft.empty() || !params.draft_params.empty()) {
             LOG_INFO("loading draft model", {{"model", params.model_draft}});
 
             gpt_params params_dft;
             params_dft.devices = params.devices_draft;
             params_dft.model = params.model_draft;
-            params_dft.n_ctx = params.n_ctx_draft == 0 ? params.n_ctx / params.n_parallel : params.n_ctx_draft;
             params_dft.n_gpu_layers = params.n_gpu_layers_draft;
-            params_dft.n_parallel = 1;
             params_dft.cache_type_k = params.cache_type_k_draft.empty() ? params.cache_type_k : params.cache_type_k_draft;
             params_dft.cache_type_v = params.cache_type_v_draft.empty() ? params.cache_type_v : params.cache_type_v_draft;
             params_dft.flash_attn = params.flash_attn;
+            if (!params.draft_params.empty()) {
+                auto [argc, argv] = parse_command_line("llama-server "+params.draft_params);
+                gpt_params_parse(argc, argv, params_dft);
+                free_command_line(argc, argv);
+            }
+            if (params_dft.n_ctx == 0) {
+                params_dft.n_ctx = params.n_ctx_draft;
+            }
+            params_dft.n_ctx = params_dft.n_ctx == 0 ? params.n_ctx / params.n_parallel : params_dft.n_ctx;
+            params_dft.n_parallel = 1;
 
             llama_init_result llama_init_dft = llama_init_from_gpt_params(params_dft);
 
@@ -3010,7 +3018,7 @@ struct server_context {
                                 for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
                                     new_tokens[i - n_discard] = new_tokens[i];
                                 }
-                                new_tokens.resize((int) prompt_tokens.size() - n_discard);
+                                new_tokens.resize(prompt_tokens.size() - n_discard);
                                 prompt_tokens.clear();
                                 prompt_tokens.insert(new_tokens);
                                 slot.truncated = true;
