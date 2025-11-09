@@ -2067,6 +2067,8 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
 
     auto stream = ctx.stream();
 
+    auto fusion = ctx.fusion;
+
     auto ne10_padded = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
     auto nb10_padded = ne10_padded*sizeof(block_q8_1)/QK8_1;
     auto quantized_size = nb10_padded*ggml_nrows(src1);
@@ -2081,7 +2083,7 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
 
         // The code below handles the case when Q, K, V have a bias applied after the resepctive matrix multiplication.
         // In that case the graph contains mul_mat(Q) -> mul_mat(K) -> mul_mat(V) -> add(Q) -> add(K) -> add(V)
-        if (cgraph && node_n + 5 < cgraph->n_nodes &&
+        if (fusion && cgraph && node_n + 5 < cgraph->n_nodes &&
             cgraph->nodes[node_n+1]->op == GGML_OP_MUL_MAT &&
             cgraph->nodes[node_n+2]->op == GGML_OP_MUL_MAT &&
             ggml_is_quantized(cgraph->nodes[node_n+1]->src[0]->type) &&
@@ -2100,7 +2102,7 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
                 CUDA_CHECK(cudaGetLastError());
             }
             node_n += 5;
-        } else if (cgraph && node_n + 1 < cgraph->n_nodes &&
+        } else if (fusion && cgraph && node_n + 1 < cgraph->n_nodes &&
                    cgraph->nodes[node_n+1]->op == GGML_OP_ADD &&
                    dst == cgraph->nodes[node_n+1]->src[0] &&
                    dst->ne[0] == cgraph->nodes[node_n+1]->src[1]->ne[0] &&
@@ -2136,7 +2138,7 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
         if (dst->op != GGML_OP_MUL_MAT || dst->src[1] != src1 || !ggml_is_quantized(dst->src[0]->type)) break;
         if (!is_gemv && mmq_get_q8_1_ds_layout(src0->type) != mmq_get_q8_1_ds_layout(dst->src[0]->type)) break;
         if (is_gemv) {
-            if (node_n + 1 < cgraph->n_nodes &&
+            if (fusion && node_n + 1 < cgraph->n_nodes &&
                 cgraph->nodes[node_n+1]->op == GGML_OP_ADD &&
                 dst == cgraph->nodes[node_n+1]->src[0] &&
                 dst->ne[0] == cgraph->nodes[node_n+1]->src[1]->ne[0] &&
