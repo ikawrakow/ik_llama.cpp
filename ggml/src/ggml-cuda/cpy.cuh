@@ -12,3 +12,6 @@ void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_des
 
 bool ggml_cuda_cpy_2(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
         ggml_tensor * dst1, ggml_tensor * dst2, bool disable_indirection = false);
+
+bool ggml_cuda_concat_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * concat, const ggml_tensor * dst,
+        bool disable_indirection = false);
