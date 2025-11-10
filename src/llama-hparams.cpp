@@ -1013,16 +1013,26 @@ void llm_load_hparams(
 
             } break;
         case LLM_ARCH_MINIMAX_M2:
-        {
-            ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-            ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
-            ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func, false);
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func, false);
 
-            switch (hparams.n_layer) {
-            case 62: model.type = e_model::MODEL_230B_A10B; break;
-            default: model.type = e_model::MODEL_UNKNOWN;
-            }
-        } break;
+                switch (hparams.n_layer) {
+                    case 62: model.type = e_model::MODEL_230B_A10B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_SMOLLM3:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                hparams.n_no_rope_layer_step = 4;
+
+                switch (hparams.n_layer) {
+                    case 36: model.type = e_model::MODEL_3B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
         default: (void)0;
     }
 
