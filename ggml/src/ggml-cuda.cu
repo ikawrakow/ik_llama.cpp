@@ -2067,7 +2067,7 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
 
     auto stream = ctx.stream();
 
-    auto fusion = ctx.fusion;
+    auto fusion = ctx.fusion && src1->ne[1] == 1;
 
     auto ne10_padded = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
     auto nb10_padded = ne10_padded*sizeof(block_q8_1)/QK8_1;
