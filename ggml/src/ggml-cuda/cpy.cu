@@ -686,3 +686,65 @@ bool ggml_cuda_cpy_2(ggml_backend_cuda_context & ctx, const ggml_tensor * src1, 
 #endif
     return true;
 }
+
+template <typename src_t, typename dst_t>
+static __global__ void concat_cpy(const char * csrc1, const char * csrc2, char * cdst, int ne1, int ne,
+        char ** dest_ptrs, int copy_index) {
+
+    auto dst = (dst_t *)(dest_ptrs ? dest_ptrs[copy_index] : cdst);
+    auto src1 = (const src_t *)csrc1;
+    auto src2 = (const src_t *)csrc2;
+
+    for (int i = threadIdx.x; i < ne; i += blockDim.x) {
+        if constexpr (std::is_same_v<dst_t, nv_bfloat16>) {
+            dst[i] = __float2bfloat16(i < ne1 ? src1[i] : src2[i - ne1]);
+        } else {
+            dst[i] = (dst_t)(i < ne1 ? src1[i] : src2[i - ne1]);
+        }
+    }
+}
+
+template <typename src_t, typename dst_t>
+static void ggml_concat_cpy_cuda(const char * src1, const char * src2, char * dst, int ne1, int ne, cudaStream_t stream,
+        char ** dest_ptrs, int& copy_index) {
+
+    int block_dim = std::min(ne, 768);
+    concat_cpy<src_t, dst_t><<<1, block_dim, 0, stream>>>(src1, src2, dst, ne1, ne, dest_ptrs, copy_index);
+    ++copy_index;
+}
+
+bool ggml_cuda_concat_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * concat, const ggml_tensor * dst,
+        [[maybe_unused]] bool disable_indirection) {
+
+    if (dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_BF16) return false;
+    //if (ggml_nrows(dst) > 1) return false;
+    if (dst->src[0] != concat) return false;
+    if (ggml_nrows(concat->src[0]) != 1 || ggml_nrows(concat->src[1]) != 1) return false;
+    if (concat->src[0]->type != GGML_TYPE_F32 || concat->src[1]->type != GGML_TYPE_F32) return false;
+    if (dst->ne[0] != concat->src[0]->ne[0] + concat->src[1]->ne[0]) return false;
+
+    char ** dest_ptrs = nullptr;
+    int graph_cpynode_index = -1;
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+    if(ctx.cuda_graph->use_cpy_indirection && !disable_indirection) {
+        dest_ptrs = ctx.cuda_graph->dest_ptrs_d;
+        graph_cpynode_index = ctx.cuda_graph->graph_cpynode_index;
+    }
+#endif
+
+    if (dst->type == GGML_TYPE_F16) {
+        ggml_concat_cpy_cuda<float, half>((const char *)concat->src[0]->data, (const char *)concat->src[1]->data,
+                (char *)dst->data, concat->src[0]->ne[0], dst->ne[0], ctx.stream(), dest_ptrs, graph_cpynode_index);
+    } else {
+        ggml_concat_cpy_cuda<float, nv_bfloat16>((const char *)concat->src[0]->data, (const char *)concat->src[1]->data,
+                (char *)dst->data, concat->src[0]->ne[0], dst->ne[0], ctx.stream(), dest_ptrs, graph_cpynode_index);
+    }
+
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
+    if(ctx.cuda_graph->use_cpy_indirection && !disable_indirection) {
+        ctx.cuda_graph->graph_cpynode_index = graph_cpynode_index;
+    }
+#endif
+    return true;
+
+}

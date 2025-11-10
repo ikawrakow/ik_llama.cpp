@@ -3224,7 +3224,14 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_group_norm(ctx, dst);
             break;
         case GGML_OP_CONCAT:
-            ggml_cuda_op_concat(ctx, dst);
+            if (fusion && i + 2 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
+                cgraph->nodes[i+2]->op == GGML_OP_CPY &&
+                ggml_cuda_concat_cpy(ctx, dst, cgraph->nodes[i+2])) {
+                i += 2;
+            } else {
+                ggml_cuda_op_concat(ctx, dst);
+            }
             break;
         case GGML_OP_UPSCALE:
             ggml_cuda_op_upscale(ctx, dst);
