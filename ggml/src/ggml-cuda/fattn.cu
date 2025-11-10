@@ -102,7 +102,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     // Hence, we use it only for DeepSeek with MLA enabled, where head sizes are 576, 512,
     // so no other implementation works.
     //
-    if (new_mma_available(cc) && Q->ne[0] == 576) {
+    if (new_mma_available(cc) && ((K->ne[0] == 576 && V->ne[0] == 512) || (K->ne[0] == 192 && V->ne[0] == 128))) {
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
         return;
     }
@@ -172,8 +172,8 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
         return ggml_cuda_fattn_tile_f32_is_supported(ctx, dst);
     }
 
-    if (new_mma_available(cc) && Q->ne[0] == 576) {
-        return V->ne[0] == 512;
+    if (new_mma_available(cc) && (Q->ne[0] == 576 || (K->ne[0] == 192 && V->ne[0] == 128))) {
+        return true;
     }
 
     if (!new_mma_available(cc) || K->ne[0] != V->ne[0]) {
