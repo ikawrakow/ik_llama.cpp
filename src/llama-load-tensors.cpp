@@ -130,6 +130,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_minimaxm2_tensors(const LLM_TN & tn);
 
+    bool create_smollm3_tensors(const LLM_TN & tn);
+
     llama_model_loader & ml;
     llama_model        & model;
 
@@ -2466,6 +2468,28 @@ bool create_tensors_helper::create_minimaxm2_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
+bool create_tensors_helper::create_smollm3_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    create_embd_output(tn, n_embd, n_vocab);
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context* ctx_layer = ctx_for_layer(i);
+        ggml_context* ctx_split = ctx_for_layer_split(i);
+        auto & layer = model.layers[i];
+
+        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+
+        use_mmap_buffer &= !merge_qkv(tn, i, 0);
+
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
+
+        layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+    }
+    return use_mmap_buffer;
+}
+
 bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
     auto& hparams = model.hparams;
     const int64_t n_head        = hparams.n_head();
@@ -2699,6 +2723,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_bailingmoe2_tensors(tn); break;
         case LLM_ARCH_MINIMAX_M2:
             use_mmap_buffer = create_minimaxm2_tensors(tn); break;
+        case LLM_ARCH_SMOLLM3:
+            use_mmap_buffer = create_smollm3_tensors(tn); break;
         default:
             throw std::runtime_error("unknown architecture");
     }
