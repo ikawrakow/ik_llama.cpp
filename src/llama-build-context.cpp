@@ -6474,7 +6474,6 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         // crop output on last layer
         if (il == n_transformer_layers - 1 && inp_out_ids) {
             // skip computing output for unused tokens
-            ggml_tensor * inp_out_ids = build_inp_out_ids();
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -7776,7 +7775,6 @@ ggml_cgraph * llm_build_context::build_ernie4_5() {
         }
 
         if (il == n_layer - 1 && inp_out_ids) {
-            ggml_tensor * inp_out_ids = build_inp_out_ids();
             cur = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
