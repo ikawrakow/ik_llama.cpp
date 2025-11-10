@@ -130,6 +130,7 @@ struct model_paths {
 struct gpt_params {
     std::string devices;
     std::string devices_draft;
+    std::string draft_params;
 
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 
@@ -375,6 +376,8 @@ struct gpt_params {
 };
 
 
+std::pair<int, char**> parse_command_line(const std::string& commandLine);
+void free_command_line(int argc, char** argv);
 
 void gpt_params_handle_hf_token(gpt_params & params);
 void gpt_params_parse_from_env(gpt_params & params);

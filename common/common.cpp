@@ -282,6 +282,53 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string& 
 // CLI argument parsing
 //
 
+std::pair<int, char**> parse_command_line(const std::string& commandLine) {
+    std::vector<std::string> tokens;
+    std::string current;
+    bool inQuotes = false;
+
+    for (size_t i = 0; i < commandLine.length(); i++) {
+        char c = commandLine[i];
+
+        if (c == '\"') {
+            inQuotes = !inQuotes;
+        }
+        else if (c == ' ' && !inQuotes) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+        }
+        else {
+            current += c;
+        }
+    }
+
+    if (!current.empty()) {
+        tokens.push_back(current);
+    }
+
+    int argc = static_cast<int>(tokens.size());
+    char** argv = new char* [static_cast<size_t>(argc) + 1];
+
+    for (int i = 0; i < argc; i++) {
+        argv[i] = new char[tokens[i].length() + 1];
+        std::strcpy(argv[i], tokens[i].c_str());
+    }
+    argv[argc] = nullptr;
+    return { argc, argv };
+}
+
+void free_command_line(int argc, char** argv) {
+    if (argv == nullptr) return;
+
+    for (int i = 0; i < argc; i++) {
+        delete[] argv[i];
+    }
+    delete[] argv;
+}
+
+
 void gpt_params_handle_model_default(gpt_params & params) {
     if (!params.hf_repo.empty()) {
         // short-hand to avoid specifying --hf-file -> default it to --model
@@ -1254,6 +1301,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cuda_params = argv[i];
         return true;
     }
+    if (arg == "-draft" || arg == "--draft-params") {
+        CHECK_ARG
+        params.draft_params = argv[i];
+        return true;
+    }
     if (arg == "--cpu-moe" || arg == "-cmoe") {
         params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate)_exps\\.weight"), ggml_backend_cpu_buffer_type()});
         return true;
@@ -2081,7 +2133,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "backend" });
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
-
+    options.push_back({ "*",           "-draft, --draft-params",        "comma separate list of draft model parameters" });
     if (llama_supports_mlock()) {
         options.push_back({ "*",           "       --mlock",                "force system to keep model in RAM rather than swapping or compressing" });
     }
