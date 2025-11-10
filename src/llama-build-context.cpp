@@ -6268,11 +6268,13 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                     kqv = ggml_mul_mat(ctx0, wv_b, kqv_compressed);
                     cb(kqv, "kqv", il);
 
-                    kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
-                    cb(kqv, "kqv_perm", il);
-
-                    cur = ggml_view_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens, ggml_row_size(kqv->type, n_embd_head_v*n_head), 0);
+                    if (n_tokens > 1) {
+                        kqv = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));
+                        cb(kqv, "kqv_perm", il);
+                    }
+                    cur = ggml_reshape_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens);
                     cb(cur, "kqv_2d", il);
+
                 }
 
                 ggml_build_forward_expand(gf, cur);
