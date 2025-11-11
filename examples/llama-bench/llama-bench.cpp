@@ -283,7 +283,7 @@ static const cmd_params cmd_params_defaults = {
     /* type_k               */ {GGML_TYPE_F16},
     /* type_v               */ {GGML_TYPE_F16},
     /* n_threads            */ {{cpu_get_num_math(), cpu_get_num_math()}},
-    /* n_gpu_layers         */ {99},
+    /* n_gpu_layers         */ {999},
     /* rpc_servers          */ {""},
     /* split_mode           */ {LLAMA_SPLIT_MODE_LAYER},
     /* main_gpu             */ {0},
@@ -330,6 +330,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -t, --threads <n>                   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -tgb, --threads-gen-batch <n1,n2>   (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
+    printf("  --n-cpu-moe <n>                     (default: none)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
     printf("  -sm, --split-mode <none|layer|row>  (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
@@ -428,6 +429,19 @@ bool parse_buft_overrides(const std::string& value, std::vector<llama_model_tens
     }
     return true;
 }
+bool add_cpu_buft_overrides(const char * arg, std::vector<llama_model_tensor_buft_override>& overrides) {
+    int n_layers = std::stoi(arg);
+    if (n_layers < 0) {
+        fprintf(stderr, "error: Invalid value for --n-cpu-moe: %s\n", arg);
+        return false;
+    }
+    for (int32_t l = 0; l < n_layers; ++l) {
+        std::string pattern = "blk\\." + std::to_string(l) + "\\.(ffn_(up|down|gate)_exps\\.weight)";
+        overrides.push_back({strdup(pattern.c_str()), ggml_backend_cpu_buffer_type()});
+    }
+    return true;
+}
+
 template<class T1, class T2>
 std::vector<std::pair<T1,T2>> string_split_pairs(const std::string & str, char delim) {
     std::vector<std::pair<T1,T2>> values;
@@ -797,6 +811,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             if (!parse_buft_overrides(std::string{argv[i]}, params.buft_overrides)) {
                 fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
+                invalid_param = true;
+                break;
+            }
+        } else if (arg == "--n-cpu-moe") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            if (!add_cpu_buft_overrides(argv[i], params.buft_overrides)) {
                 invalid_param = true;
                 break;
             }
