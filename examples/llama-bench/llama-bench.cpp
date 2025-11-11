@@ -267,6 +267,7 @@ struct cmd_params {
     bool use_thp = false;
     bool no_ooae = false;
     bool mqkv = false;
+    bool rcache = false;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -307,6 +308,7 @@ static const cmd_params cmd_params_defaults = {
     /* use_thp              */ false,
     /* no_ooae              */ false,
     /* mqkv                 */ false,
+    /* rcache               */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -348,6 +350,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -rtr, --run-time-repack <0|1>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
     printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
     printf("  -mqkv, --merge-qkv                  (default: %s)\n", cmd_params_defaults.mqkv ? "1" : "0");
+    printf("  -rcache, --rope-cache               (default: %s)\n", cmd_params_defaults.rcache ? "1" : "0");
     printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
     printf("  -ot, --override-tensor pattern      (default: none)\n");
     printf("  -fmoe, --fused-moe <0|1>            (default: %s)\n", cmd_params_defaults.fmoe? "1" : "0");
@@ -751,6 +754,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.mqkv = std::stoi(argv[i]);
+        } else if (arg == "-rcache" || arg == "--rope-cache") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.rcache = std::stoi(argv[i]);
         } else if (arg == "-thp" || arg == "--transparent-huge-pages") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -871,6 +880,7 @@ struct cmd_params_instance {
     bool use_thp = false;
     bool no_ooae = false;
     bool mqkv = false;
+    bool rcache = false;
     const llama_model_tensor_buft_override* buft_overrides;
 
     llama_model_params to_llama_mparams() const {
@@ -919,6 +929,7 @@ struct cmd_params_instance {
         cparams.attn_max_batch = attn_max_batch;
         cparams.fused_moe_up_gate = fmoe;
         cparams.grouped_expert_routing = ger;
+        cparams.rope_cache = rcache;
         cparams.fused_up_gate = !no_fug;
         cparams.only_active_experts = !no_ooae;
         cparams.min_experts = ser.first;
@@ -986,6 +997,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_thp      = */ params.use_thp,
                 /* .no_ooae      = */ params.no_ooae,
                 /* .mqkv         = */ params.mqkv,
+                /* .rcache       = */ params.rcache,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1025,6 +1037,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_thp      = */ params.use_thp,
                 /* .no_ooae      = */ params.no_ooae,
                 /* .mqkv         = */ params.mqkv,
+                /* .rcache       = */ params.rcache,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1064,6 +1077,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_thp      = */ params.use_thp,
                 /* .no_ooae      = */ params.no_ooae,
                 /* .mqkv         = */ params.mqkv,
+                /* .rcache       = */ params.rcache,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1103,6 +1117,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_thp      = */ params.use_thp,
                 /* .no_ooae      = */ params.no_ooae,
                 /* .mqkv         = */ params.mqkv,
+                /* .rcache       = */ params.rcache,
                 /* .buft_overrides=*/ params.buft_overrides.data(),
             };
             instances.push_back(instance);
@@ -1153,6 +1168,7 @@ struct test {
     bool use_thp = false;
     bool no_ooae = false;
     bool mqkv = false;
+    bool rcache = false;
     int n_prompt;
     int n_gen;
     std::string test_time;
@@ -1189,6 +1205,7 @@ struct test {
         mqkv = inst.mqkv;
         fmoe = inst.fmoe;
         ger = inst.ger;
+        rcache = inst.rcache;
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         no_ooae = inst.no_ooae;
@@ -1282,7 +1299,8 @@ struct test {
             "n_threads", "type_k", "type_v",
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser",
-            "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "fused_moe", "grouped_er", "fused_up_gate", "use_thp", "ooae",
+            "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "fused_moe", "grouped_er",
+            "fused_up_gate", "use_thp", "ooae", "rcache",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1304,7 +1322,8 @@ struct test {
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" ||field == "f16_kv" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
-            field == "fused_moe" || field == "grouped_er" || field == "fused_up_gate" || field == "ooae" || field == "mqkv") {
+            field == "fused_moe" || field == "grouped_er" || field == "fused_up_gate" || field == "ooae" || field == "mqkv" ||
+            field == "rcache") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1347,7 +1366,7 @@ struct test {
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser),
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
-            std::to_string(repack), std::to_string(fmoe), std::to_string(ger),
+            std::to_string(repack), std::to_string(fmoe), std::to_string(ger), std::to_string(rcache),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(mqkv),
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
@@ -1538,6 +1557,9 @@ struct markdown_printer : public printer {
         if (field == "grouped_er") {
             return 3;
         }
+        if (field == "rcache") {
+            return 6;
+        }
         if (field == "fused_up_gate") {
             return 6;
         }
@@ -1599,8 +1621,8 @@ struct markdown_printer : public printer {
         if (field == "grouped_er") {
             return "ger";
         }
-        if (field == "grouped_er") {
-            return "ger";
+        if (field == "rcache") {
+            return "rcache";
         }
         if (field == "fused_up_gate") {
             return "no-fug";
@@ -1686,6 +1708,9 @@ struct markdown_printer : public printer {
         }
         if (params.ger != cmd_params_defaults.ger) {
             fields.emplace_back("grouped_er");
+        }
+        if (params.rcache != cmd_params_defaults.rcache) {
+            fields.emplace_back("rcache");
         }
         if (params.no_fug != cmd_params_defaults.no_fug) {
             fields.emplace_back("fused_up_gate");
