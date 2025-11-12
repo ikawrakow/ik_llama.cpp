@@ -38,6 +38,7 @@ struct llama_cparams {
     bool fused_up_gate;
     bool fused_mmad;
     bool rope_cache;
+    bool graph_reuse;
     int  min_experts;
     float thresh_experts;
 

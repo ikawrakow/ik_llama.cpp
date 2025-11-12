@@ -254,6 +254,7 @@ struct gpt_params {
     bool fused_mmad        = true;  // fused mul+multi_add op
     bool grouped_expert_routing = false; // if to use grouped expert routing (BailingMoeV2 arch)
     bool rope_cache        = false; // if to use RoPE cache (for supported models)
+    bool graph_reuse       = false; // if to reuse compute graphs
     int  min_experts       = -1;
     float thresh_experts   = 0;
 

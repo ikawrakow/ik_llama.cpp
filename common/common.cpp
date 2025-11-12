@@ -1180,6 +1180,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.rope_cache = true;
         return true;
     }
+    if (arg == "-reuse" || arg == "--graph-reuse") {
+        params.graph_reuse = true;
+        return true;
+    }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
         CHECK_ARG
         auto values = string_split_pairs<int,float>(argv[i], ',');
@@ -2004,6 +2008,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disaable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disaable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
     options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-reuse, --graph-reuse",         "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction,","experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
@@ -2979,6 +2984,7 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.fused_up_gate     = params.fused_up_gate;
     cparams.fused_mmad        = params.fused_mmad;
     cparams.rope_cache        = params.rope_cache;
+    cparams.graph_reuse       = params.graph_reuse;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
     cparams.only_active_experts = params.only_active_exps;
@@ -4123,7 +4129,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "grouped_expert_routing: %s # default: false\n", params.grouped_expert_routing ? "true" : "false");
     fprintf(stream, "fused_up_gate: %s # default: true\n", params.fused_up_gate ? "true" : "false");
     fprintf(stream, "fused_mmad: %s # default: true\n", params.fused_mmad ? "true" : "false");
-    fprintf(stream, "rope_cache: %s # default: true\n", params.rope_cache ? "true" : "false");
+    fprintf(stream, "rope_cache: %s # default: false\n", params.rope_cache ? "true" : "false");
+    fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 
