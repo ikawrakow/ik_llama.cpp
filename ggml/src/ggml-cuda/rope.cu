@@ -508,7 +508,7 @@ static void rope_neox_fast_cuda(const float * src0, const float * src1, float * 
     const dim3 block_dims(CUDA_ROPE_BLOCK_SIZE, 1, 1);
     const int n_blocks = (ne00*ne01*ne02 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(n_blocks, 1, 1);
-    rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne01*ne02*ne02, s01, s02, n_dims);
+    rope_neox_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne00*ne01*ne02, s01, s02, n_dims);
 }
 
 static void fused_rope_neox_fast_cuda(const float * src0_1, const float * src0_2, const float * src1,
@@ -557,7 +557,7 @@ static void rope_norm_fast_cuda(const float * src0, const float * src1, float * 
     const dim3 block_dims(CUDA_ROPE_BLOCK_SIZE, 1, 1);
     const int n_blocks = (ne00*ne01*ne02 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
     const dim3 block_nums(n_blocks, 1, 1);
-    rope_norm_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne01*ne02*ne02, s01, s02, n_dims);
+    rope_norm_fast<<<block_nums, block_dims, 0, stream>>>(src0, src1, dst, ne00, ne01, ne00*ne01*ne02, s01, s02, n_dims);
 }
 
 static void rope_multi_fast_cuda(const float * src0, const float * src1, float * dst, int ne00, int ne01, int ne02, int s01, int s02,
