@@ -535,21 +535,9 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     GGML_UNUSED(model);
     GGML_UNUSED(device);
 }
-        //llama_batch u_batch = {
-        //    /* .n_tokens   = */ (int32_t) n_tokens,
-        //    /* .token      = */ batch_all.token     ? batch_all.token    + cur_token        : nullptr,
-        //    /* .embd       = */ batch_all.embd      ? batch_all.embd     + cur_token*n_embd : nullptr,
-        //    /* .pos        = */ batch_all.pos       ? batch_all.pos      + cur_token        : nullptr,
-        //    /* .n_seq_id   = */ batch_all.n_seq_id  ? batch_all.n_seq_id + cur_token        : nullptr,
-        //    /* .seq_id     = */ batch_all.seq_id    ? batch_all.seq_id   + cur_token        : nullptr,
-        //    /* .logits     = */ batch_all.logits    ? batch_all.logits   + cur_token        : nullptr,
-        //    /* .all_pos_0  = */ batch_all.all_pos_0 + (llama_pos) cur_token*batch_all.all_pos_1,
-        //    /* .all_pos_1  = */ batch_all.all_pos_1,
-        //    /* .all_seq_id = */ batch_all.all_seq_id,
-        //};
 
 struct llama_context::Prev {
-    int all_pos_0, all_pos_1, all_seq_id;
+    int all_seq_id;
     int n_outputs;
     int n_kv;
     ggml_cgraph * graph;
@@ -565,9 +553,8 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) const {
     if (u_batch.n_tokens > 1) return false;
     if (u_batch.embd) return false;
     if (!cparams.graph_reuse) return false;
-    return u_batch.all_pos_0 == prev->all_pos_0 &&
-           u_batch.all_pos_1 == prev->all_pos_1 &&
-           u_batch.all_seq_id == prev->all_seq_id &&
+    return u_batch.all_seq_id == prev->all_seq_id &&
+           kv_self.head > 0 &&
            kv_self.n == prev->n_kv &&
            n_outputs == prev->n_outputs;
 }
@@ -2950,16 +2937,9 @@ static int llama_decode_internal(
             tim2 = ggml_time_us();
             printf("sched_alloc_graph(...): %d us\n", int(tim2-tim1));
 #endif
-//struct llama_context::Prev {
-//    int all_pos_0, all_pos_1, all_seq_id;
-//    int n_outputs;
-//    int n_kv;
-//    ggml_cgraph * graph;
-//};
             if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
                 lctx.prev = std::make_unique<llama_context::Prev>(llama_context::Prev{
-                        (int)u_batch.all_pos_0, (int)u_batch.all_pos_1, (int)u_batch.all_seq_id,
-                        (int)lctx.n_outputs, (int)lctx.kv_self.n, gf});
+                        (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n, gf});
             }
         } else {
             //printf("Reusing graph\n");
