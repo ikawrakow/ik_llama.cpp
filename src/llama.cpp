@@ -1820,7 +1820,9 @@ static bool llm_load_tensors(
         }
     }
 
-    llm_prepare_mla(model, mla_attn);
+    if (model.arch == LLM_ARCH_DEEPSEEK2) {
+        llm_prepare_mla(model, mla_attn);
+    }
 
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
@@ -3831,7 +3833,7 @@ struct llama_context_params llama_context_default_params() {
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ true,
-        /*.mla_attn                    =*/ 0,
+        /*.mla_attn                    =*/ 3,
         /*.attn_max_batch              =*/ 0,
         /*.fused_moe_up_gate           =*/ true,
         /*.grouped_expert_routing      =*/ false,
@@ -4208,10 +4210,10 @@ struct llama_context * llama_new_context_with_model(
         params.seed = time(NULL);
     }
 
-    if (model->arch != LLM_ARCH_DEEPSEEK2 && cparams.mla_attn > 0) {
-        LLAMA_LOG_WARN("=====================================================================\n");
-        LLAMA_LOG_WARN(" MLA is only available for LLM_ARCH_DEEPSEEK2 -> turning off MLA\n");
-        LLAMA_LOG_WARN("=====================================================================\n");
+    if (model->arch != LLM_ARCH_DEEPSEEK2 && cparams.mla_attn != 0) {
+        //LLAMA_LOG_WARN("=====================================================================\n");
+        //LLAMA_LOG_WARN(" MLA is only available for LLM_ARCH_DEEPSEEK2 -> turning off MLA\n");
+        //LLAMA_LOG_WARN("=====================================================================\n");
         cparams.mla_attn = 0;
     }
 
@@ -4219,7 +4221,9 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: n_batch       = %u\n",     __func__, cparams.n_batch);
     LLAMA_LOG_INFO("%s: n_ubatch      = %u\n",     __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: flash_attn    = %d\n",     __func__, cparams.flash_attn);
+    if (model->arch == LLM_ARCH_DEEPSEEK2) {
     LLAMA_LOG_INFO("%s: mla_attn      = %d\n",     __func__, cparams.mla_attn);
+    }
     LLAMA_LOG_INFO("%s: attn_max_b    = %d\n",     __func__, cparams.attn_max_batch);
     LLAMA_LOG_INFO("%s: fused_moe     = %d\n",     __func__, cparams.fused_moe_up_gate);
     LLAMA_LOG_INFO("%s: grouped er    = %d\n",     __func__, cparams.grouped_expert_routing);
@@ -4451,7 +4455,7 @@ struct llama_context * llama_new_context_with_model(
                             (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
                             ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                             ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
-		}
+                }
             }
         }
 
