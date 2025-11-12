@@ -1811,6 +1811,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ctx_shift = false;
         return true;
     }
+    if (arg == "-cram" || arg == "--cache-ram") {
+        CHECK_ARG
+        params.cache_ram_mib = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "-crs" || arg == "--cache-ram-similarity") {
+        CHECK_ARG
+        params.cache_ram_similarity = std::stof(argv[i]);
+        return true;
+    }
+    if (arg == "-cram-keep" || arg == "--cache-ram-keep") {
+        CHECK_ARG
+        params.cache_ram_n_min = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--pos") {
         CHECK_ARG
         params.i_pos = std::stoi(argv[i]);
@@ -2002,7 +2017,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-ger,  --grouped-expert-routing", "enable grouped expert routing (default: %s)", params.grouped_expert_routing ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disaable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
-    options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disaable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
     options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction,","experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
