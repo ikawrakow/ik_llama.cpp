@@ -1100,7 +1100,7 @@ static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
         return;
     }
     GGML_ASSERT(nrc_x%16 == 0);
-    Q8<nrc_y, block_q8_1_x4> q8(info);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
     auto m4 = _mm512_set1_epi8(0xf);
     int nb = n / QK4_NL;
     __m512  acc[2*nrc_y] = {};
@@ -1158,10 +1158,10 @@ static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto qy = (const block_q8_1 *)q8.y[iy];
                 auto sumi = dot(qy[ib].qs);
-                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
-                auto dy = _mm512_set1_ps(GGML_BF16_TO_FP32(d));
+                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto dy = _mm512_set1_ps(d8);
                 acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(GGML_BF16_TO_FP32(s)), acc[2*iy+1]);
+                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(m8), acc[2*iy+1]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
