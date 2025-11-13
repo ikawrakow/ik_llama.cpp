@@ -1,9 +1,11 @@
 #include "iqk_gemm_legacy_quants.h"
+
 #include <type_traits>
 
 #ifdef IQK_IMPLEMENT
 
 #include "ggml-impl.h"
+#include "iqk_utils.h"
 
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
