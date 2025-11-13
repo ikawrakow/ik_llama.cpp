@@ -341,7 +341,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -mla, --mla-attn <0|1|2>            (default: %s)\n", join(cmd_params_defaults.mla_attn, ",").c_str());
     printf("  -amb, --attn-max-batch <i>          (default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
     printf("  -ser, --smart-expert-reduction <i,f>(default: %s)\n", join(cmd_params_defaults.attn_max_batch, ",").c_str());
-    printf("  -reuse, --graph-reuse <0|1>         (default: %s)\n", join(cmd_params_defaults.reuse, ",").c_str());
+    printf("  -gr, --graph-reuse <0|1>            (default: %s)\n", join(cmd_params_defaults.reuse, ",").c_str());
     printf("  -mmp, --mmap <0|1>                  (default: %s)\n", join(cmd_params_defaults.use_mmap, ",").c_str());
     printf("  --numa <distribute|isolate|numactl> (default: disabled)\n");
     printf("  -embd, --embeddings <0|1>           (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
@@ -684,7 +684,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             auto p = string_split<int>(argv[i], split_delim);
             params.attn_max_batch.insert(params.attn_max_batch.end(), p.begin(), p.end());
-        } else if (arg == "-reuse" || arg == "--graph-reuse") {
+        } else if (arg == "-gr" || arg == "--graph-reuse") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
@@ -1580,7 +1580,7 @@ struct markdown_printer : public printer {
             return 5;
         }
         if (field == "reuse") {
-            return 6;
+            return 2;
         }
         if (field == "ser") {
             return 10;
@@ -1647,7 +1647,7 @@ struct markdown_printer : public printer {
             return "amb";
         }
         if (field == "reuse") {
-            return "reuse";
+            return "gr";
         }
         if (field == "ser") {
             return "ser";
