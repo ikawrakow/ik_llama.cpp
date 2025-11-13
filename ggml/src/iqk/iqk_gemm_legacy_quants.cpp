@@ -1003,11 +1003,10 @@ inline __m256i accum_q4_0_quants(const __m256i * v, const int8_t * qs) {
 template <int nrc_y>
 static void mul_mat_q4_0_r8_q8_2_avx2(int n, const void * vx, size_t bx, const DataInfo& info, int nrc_x) {
     GGML_ASSERT(nrc_x%8 == 0);
-    Q8<nrc_y, block_q8_1_x4> q8(info);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
     auto m4 = _mm256_set1_epi8(0xf);
     int nb = n / QK4_NL;
     __m256i v[8];
-    GGML_ASSERT(nb%4 == 0);
     if constexpr (nrc_y == 1) {
         union { __m256 vec; float val[8]; } helper;
         for (int ix = 0; ix < nrc_x; ix += 8) {
@@ -1026,14 +1025,14 @@ static void mul_mat_q4_0_r8_q8_2_avx2(int n, const void * vx, size_t bx, const D
                 }
             }
             for (int ib = 4*(nb/4); ib < nb; ++ib) {
-                auto qy = (const block_q8_1 *)q8.y[0];
+                auto qy = (const block_q8_2 *)q8.y[0];
                 auto scales = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)iq4[ib].d));
                 prepare_q4_0_quants_avx2(iq4[ib].qs, v, m4);
                 auto sumi = accum_q4_0_quants(v, qy[ib].qs);
-                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
-                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(d)));
+                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
                 acc1 = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc1);
-                acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(s)), acc2);
+                acc2 = _mm256_fmadd_ps(scales, _mm256_set1_ps(m8), acc2);
             }
             acc1 = _mm256_fmadd_ps(acc2, _mm256_set1_ps(-8.f), acc1);
             info.store(ix, 0, acc1);
@@ -1077,12 +1076,12 @@ static void mul_mat_q4_0_r8_q8_2_avx2(int n, const void * vx, size_t bx, const D
             auto scales_m = _mm256_mul_ps(scales, _mm256_set1_ps(-8.f));
             prepare_q4_0_quants_avx2(iq4[ib].qs, v, m4);
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto qy = (const block_q8_1 *)q8.y[iy];
+                auto qy = (const block_q8_2 *)q8.y[iy];
                 auto sumi = accum_q4_0_quants(v, qy[ib].qs);
-                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
-                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(d)));
+                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
                 acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
-                acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(GGML_BF16_TO_FP32(s)), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(scales_m, _mm256_set1_ps(m8), acc[iy]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
@@ -1101,7 +1100,7 @@ static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
         return;
     }
     GGML_ASSERT(nrc_x%16 == 0);
-    Q8<nrc_y, block_q8_1_x4> q8(info);
+    Q8<nrc_y, block_q8_2_x4> q8(info);
     auto m4 = _mm512_set1_epi8(0xf);
     int nb = n / QK4_NL;
     __m512  acc[2*nrc_y] = {};
@@ -1159,10 +1158,10 @@ static void mul_mat_q4_0_r8_q8_2(int n, const void * vx, size_t bx, const DataIn
             for (int iy = 0; iy < nrc_y; ++iy) {
                 auto qy = (const block_q8_1 *)q8.y[iy];
                 auto sumi = dot(qy[ib].qs);
-                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
-                auto dy = _mm512_set1_ps(GGML_BF16_TO_FP32(d));
+                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto dy = _mm512_set1_ps(d8);
                 acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(GGML_BF16_TO_FP32(s)), acc[2*iy+1]);
+                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(m8), acc[2*iy+1]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
@@ -1245,12 +1244,12 @@ static void mul_mat_q5_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
         for (int ib = 4*(nb/4); ib < nb; ++ib) {
             auto scales = prepare(iq5[ib]);
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto qy = (const block_q8_1 *)q8.y[iy];
+                auto qy = (const block_q8_2 *)q8.y[iy];
                 auto sumi = dot(_mm256_loadu_si256((const __m256i*)qy[ib].qs));
-                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
-                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(d)));
+                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
                 acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
-                acc[iy] = _mm256_fmadd_ps(scales, _mm256_set1_ps(-8.f*GGML_BF16_TO_FP32(s)), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(scales, _mm256_set1_ps(-8.f*m8), acc[iy]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
@@ -1325,12 +1324,12 @@ static void mul_mat_q5_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
         for (int ib = 4*(nb/4); ib < nb; ++ib) {
             auto scales = prepare(iq5l[ib], iq5h[ib]);
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto qy = (const block_q8_1 *)q8.y[iy];
+                auto qy = (const block_q8_2 *)q8.y[iy];
                 auto sumi = dot(_mm256_loadu_si256((const __m256i*)qy[ib].qs));
-                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
-                auto dy = _mm512_set1_ps(GGML_BF16_TO_FP32(d));
+                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto dy = _mm512_set1_ps(d8);
                 acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(GGML_BF16_TO_FP32(s)), acc[2*iy+1]);
+                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(m8), acc[2*iy+1]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
@@ -1415,12 +1414,12 @@ static void mul_mat_q6_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
         for (int ib = 4*(nb/4); ib < nb; ++ib) {
             auto scales = prepare(iq6[ib]);
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto qy = (const block_q8_1 *)q8.y[iy];
+                auto qy = (const block_q8_2 *)q8.y[iy];
                 auto sumi = dot(_mm256_loadu_si256((const __m256i*)qy[ib].qs));
-                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
-                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(d)));
+                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
                 acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
-                acc[iy] = _mm256_fmadd_ps(scales, _mm256_set1_ps(-16.f*GGML_BF16_TO_FP32(s)), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(scales, _mm256_set1_ps(-16.f*m8), acc[iy]);
             }
         }
 
@@ -1495,12 +1494,12 @@ static void mul_mat_q6_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
         for (int ib = 4*(nb/4); ib < nb; ++ib) {
             auto scales = prepare(iq6l[ib], iq6h[ib]);
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto qy = (const block_q8_1 *)q8.y[iy];
+                auto qy = (const block_q8_2 *)q8.y[iy];
                 auto sumi = dot(_mm256_loadu_si256((const __m256i*)qy[ib].qs));
-                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
-                auto dy = _mm512_set1_ps(GGML_BF16_TO_FP32(d));
+                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto dy = _mm512_set1_ps(d8);
                 acc[2*iy+0] = _mm512_fmadd_ps(_mm512_mul_ps(scales, dy), _mm512_cvtepi32_ps(sumi), acc[2*iy+0]);
-                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(GGML_BF16_TO_FP32(s)), acc[2*iy+1]);
+                acc[2*iy+1] = _mm512_fmadd_ps(scales, _mm512_set1_ps(m8), acc[2*iy+1]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {

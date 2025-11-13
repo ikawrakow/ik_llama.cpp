@@ -1135,7 +1135,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.flash_attn = false;
         return true;
     }
-    if (arg == "-fa" || arg == "--flash-attention") {
+
+    if (arg == "-fa" || arg == "--flash-attn") {
         CHECK_ARG
         std::string next_arg{argv[i]};
         for (auto& c : next_arg) c = std::tolower(c);
