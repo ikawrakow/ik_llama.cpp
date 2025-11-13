@@ -289,7 +289,7 @@ static const cmd_params cmd_params_defaults = {
     /* main_gpu             */ {0},
     /* no_kv_offload        */ {false},
     /* flash_attn           */ {true},
-    /* mla_attn             */ {0},
+    /* mla_attn             */ {3},
     /* attn_max_batch       */ {0},
     /* ser                  */ {{-1,0.0f}},
     /* tensor_split         */ {std::vector<float>(llama_max_devices(), 0.0f)},
