@@ -79,6 +79,37 @@ static __global__ void rope_norm(
     dst[idst + 1] = x0*sin_theta + x1*cos_theta;
 }
 
+static __global__ void rope_norm_fast(const float * src0, const float * src1, float * dst, int ne0, int ne1, int nelem,
+        int s01, int s02, int n_dims) {
+    int i = 2*(blockDim.x*blockIdx.x + threadIdx.x);
+
+    if (i >= nelem) {
+        return;
+    }
+
+    int i2 = i / (ne0*ne1); i -= i2*ne0*ne1;
+    int i1 = i / ne0;
+    int i0 = i - i1*ne0;
+
+    const int idst = i2*ne0*ne1 + i1*ne0 + i0;
+    const int ix   = i2*s02 + i1*s01 + i0;
+
+    if (i0 >= n_dims) {
+        dst[idst + 0] = src0[ix + 0];
+        dst[idst + 1] = src0[ix + 1];
+        return;
+    }
+
+    const float x0 = src0[ix + 0];
+    const float x1 = src0[ix + 1];
+
+    const float cos_theta = src1[i2*ne0 + i0 + 0];
+    const float sin_theta = src1[i2*ne0 + i0 + 1];
+
+    dst[idst + 0] = x0*cos_theta - x1*sin_theta;
+    dst[idst + 1] = x0*sin_theta + x1*cos_theta;
+}
+
 template<bool forward, bool has_ff, typename T>
 static __global__ void rope_neox(
         const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims,
@@ -259,37 +290,6 @@ static __global__ void fused_rms_rope_neox_fast(const float * src0_1, const floa
     dst[i0/2 + 0]        = x0*cos_theta - x1*sin_theta;
     dst[i0/2 + n_dims/2] = x0*sin_theta + x1*cos_theta;
 
-}
-
-static __global__ void rope_norm_fast(const float * src0, const float * src1, float * dst, int ne0, int ne1, int nelem,
-        int s01, int s02, int n_dims) {
-    int i = 2*(blockDim.x*blockIdx.x + threadIdx.x);
-
-    if (i >= nelem) {
-        return;
-    }
-
-    int i2 = i / (ne0*ne1); i -= i2*ne0*ne1;
-    int i1 = i / ne0;
-    int i0 = i - i1*ne0;
-
-    const int idst = i2*ne0*ne1 + i1*ne0 + i0;
-    const int ix   = i2*s02 + i1*s01 + i0;
-
-    if (i0 >= n_dims) {
-        dst[idst + 0] = src0[ix + 0];
-        dst[idst + 1] = src0[ix + 1];
-        return;
-    }
-
-    const float x0 = src0[ix + 0];
-    const float x1 = src0[ix + 1];
-
-    const float cos_theta = src1[i2*ne0 + i0 + 0];
-    const float sin_theta = src1[i2*ne0 + i0 + 1];
-
-    dst[idst + 0] = x0*cos_theta - x1*sin_theta;
-    dst[idst + 1] = x0*sin_theta + x1*cos_theta;
 }
 
 static __global__ void fused_rope_norm_fast(const float * src0_1, const float * src0_2, const float * src1,
@@ -864,7 +864,6 @@ void ggml_cuda_op_rope_fast(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int64_t ne00 = src0->ne[0]; // head dims
     const int64_t ne01 = src0->ne[1]; // num heads
     const int64_t ne02 = src0->ne[2]; // num heads
-    const int64_t nr = ggml_nrows(src0);
 
     const size_t s01 = src0->nb[1] / ggml_type_size(src0->type);
     const size_t s02 = src0->nb[2] / ggml_type_size(src0->type);
@@ -888,10 +887,10 @@ void ggml_cuda_op_rope_fast(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
                 (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne00, ne01, ne02, s01, s02, n_dims, stream);
     } else if (is_mrope && !is_vision) {
         rope_multi_fast_cuda(
-                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne00, ne01, s01, s02, n_dims, nr, stream);
+                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne00, ne01, ne02, s01, s02, n_dims, stream);
     } else if (is_vision) {
         rope_vision_fast_cuda(
-                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne00, ne01, s01, s02, n_dims, nr, stream);
+                (const float *)src0->data, (const float *)src1->data, (float *)dst->data, ne00, ne01, ne02, s01, s02, n_dims, stream);
     } else {
         //printf("Using norm\n");
         rope_norm_fast_cuda(
