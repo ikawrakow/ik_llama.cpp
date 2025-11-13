@@ -559,8 +559,35 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) const {
            n_outputs == prev->n_outputs;
 }
 
+void llama_context::update_cache_copies() {
+    int n_layer = cache_copies.size()/2;
+    GGML_ASSERT((int)kv_self.k_l.size() == n_layer);
+    GGML_ASSERT(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer);
+    //printf("%s: head = %d\n", __func__, kv_self.head);
+    for (int il = 0; il < n_layer; ++il) {
+        auto& c = cache_copies[2*il+0];
+        GGML_ASSERT(c.cpy->op == GGML_OP_CPY);
+        GGML_ASSERT(c.cpy->view_src == kv_self.k_l[il]);
+        c.cpy->view_offs = kv_self.head*c.step;
+        c.cpy->src[1]->data = (char *)kv_self.k_l[il]->data + c.cpy->view_offs;
+        c.cpy->data = c.cpy->src[1]->data;
+    }
+    if (kv_self.v_l.empty()) return;
+    for (int il = 0; il < n_layer; ++il) {
+        auto& c = cache_copies[2*il+1];
+        GGML_ASSERT(c.cpy->op == GGML_OP_CPY);
+        GGML_ASSERT(c.cpy->view_src == kv_self.v_l[il]);
+        c.cpy->view_offs = kv_self.head*c.step;
+        c.cpy->src[1]->data = (char *)kv_self.v_l[il]->data + c.cpy->view_offs;
+        c.cpy->data = c.cpy->src[1]->data;
+    }
+}
+
 llama_context::llama_context(const llama_model & model)
-    : model(model) , sampling(llama_n_vocab(&model)) , t_start_us(model.t_start_us) , t_load_us(model.t_load_us) {}
+    : model(model) , sampling(llama_n_vocab(&model)) , t_start_us(model.t_start_us) , t_load_us(model.t_load_us) {
+    const auto & hparams = model.hparams;
+    cache_copies.resize(2*hparams.n_layer);
+}
 
 llama_context::~llama_context() {
     ggml_backend_sched_free(sched);
@@ -2944,6 +2971,7 @@ static int llama_decode_internal(
         } else {
             //printf("Reusing graph\n");
             gf = lctx.prev->graph;
+            lctx.update_cache_copies();
         }
 
         // the output is always the last tensor in the graph

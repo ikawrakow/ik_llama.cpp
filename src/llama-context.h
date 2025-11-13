@@ -212,4 +212,12 @@ struct llama_context {
     void reset_scheduler();
     bool can_reuse_graph(const llama_batch & u_batch) const;
 
+    struct CacheCopy {
+        ggml_tensor * cpy = nullptr;
+        size_t        step = 0;
+    };
+    std::vector<CacheCopy> cache_copies;
+
+    void update_cache_copies();
+
 };
