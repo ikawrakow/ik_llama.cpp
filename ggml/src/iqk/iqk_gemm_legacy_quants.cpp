@@ -1245,12 +1245,12 @@ static void mul_mat_q5_0_r4_q8_2_avx2(int n, const void * vx, size_t bx, const D
         for (int ib = 4*(nb/4); ib < nb; ++ib) {
             auto scales = prepare(iq5[ib]);
             for (int iy = 0; iy < nrc_y; ++iy) {
-                auto qy = (const block_q8_1 *)q8.y[iy];
+                auto qy = (const block_q8_2 *)q8.y[iy];
                 auto sumi = dot(_mm256_loadu_si256((const __m256i*)qy[ib].qs));
-                ggml_bf16_t d{qy[ib].d}, s{qy[ib].s};
-                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(GGML_BF16_TO_FP32(d)));
+                auto [d8, m8] = ScaleHelperQ8_2::prepare1(qy + ib);
+                auto d4d8 = _mm256_mul_ps(scales, _mm256_set1_ps(d8));
                 acc[iy] = _mm256_fmadd_ps(d4d8, _mm256_cvtepi32_ps(sumi), acc[iy]);
-                acc[iy] = _mm256_fmadd_ps(scales, _mm256_set1_ps(-8.f*GGML_BF16_TO_FP32(s)), acc[iy]);
+                acc[iy] = _mm256_fmadd_ps(scales, _mm256_set1_ps(-8.f*m8), acc[iy]);
             }
         }
         for (int iy = 0; iy < nrc_y; ++iy) {
