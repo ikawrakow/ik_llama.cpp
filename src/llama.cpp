@@ -548,7 +548,7 @@ void llama_context::reset_scheduler() {
     prev.reset();
 }
 
-bool llama_context::can_reuse_graph(const llama_batch & u_batch) const {
+bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
     if (!prev || !prev->graph) return false;
     if (u_batch.n_tokens > 1) return false;
     if (u_batch.embd) return false;
@@ -556,31 +556,30 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) const {
     return u_batch.all_seq_id == prev->all_seq_id &&
            kv_self.head > 0 &&
            kv_self.n == prev->n_kv &&
-           n_outputs == prev->n_outputs;
+           n_outputs == prev->n_outputs &&
+           update_cache_copies();
 }
 
-void llama_context::update_cache_copies() {
+bool llama_context::update_cache_copies() {
     int n_layer = cache_copies.size()/2;
-    GGML_ASSERT((int)kv_self.k_l.size() == n_layer);
-    GGML_ASSERT(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer);
-    //printf("%s: head = %d\n", __func__, kv_self.head);
+    if ((int)kv_self.k_l.size() != n_layer) return false;
+    if (!(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer)) return false;
     for (int il = 0; il < n_layer; ++il) {
         auto& c = cache_copies[2*il+0];
-        GGML_ASSERT(c.cpy->op == GGML_OP_CPY);
-        GGML_ASSERT(c.cpy->view_src == kv_self.k_l[il]);
+        if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) return false;
         c.cpy->view_offs = kv_self.head*c.step;
         c.cpy->src[1]->data = (char *)kv_self.k_l[il]->data + c.cpy->view_offs;
         c.cpy->data = c.cpy->src[1]->data;
     }
-    if (kv_self.v_l.empty()) return;
+    if (kv_self.v_l.empty()) return true;
     for (int il = 0; il < n_layer; ++il) {
         auto& c = cache_copies[2*il+1];
-        GGML_ASSERT(c.cpy->op == GGML_OP_CPY);
-        GGML_ASSERT(c.cpy->view_src == kv_self.v_l[il]);
+        if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[il]) return false;
         c.cpy->view_offs = kv_self.head*c.step;
         c.cpy->src[1]->data = (char *)kv_self.v_l[il]->data + c.cpy->view_offs;
         c.cpy->data = c.cpy->src[1]->data;
     }
+    return true;
 }
 
 llama_context::llama_context(const llama_model & model)
@@ -2971,7 +2970,6 @@ static int llama_decode_internal(
         } else {
             //printf("Reusing graph\n");
             gf = lctx.prev->graph;
-            lctx.update_cache_copies();
         }
 
         // the output is always the last tensor in the graph

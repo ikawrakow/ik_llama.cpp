@@ -210,7 +210,7 @@ struct llama_context {
     std::unique_ptr<Prev> prev;
 
     void reset_scheduler();
-    bool can_reuse_graph(const llama_batch & u_batch) const;
+    bool can_reuse_graph(const llama_batch & u_batch);
 
     struct CacheCopy {
         ggml_tensor * cpy = nullptr;
@@ -218,6 +218,6 @@ struct llama_context {
     };
     std::vector<CacheCopy> cache_copies;
 
-    void update_cache_copies();
+    bool update_cache_copies();
 
 };
