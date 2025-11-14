@@ -219,7 +219,7 @@ static ggml_backend_t create_backend(const rpc_server_params& params) {
     ggml_backend_t backend = NULL;
 #ifdef GGML_USE_CUDA
     fprintf(stderr, "%s: using CUDA backend\n", __func__);
-    backend = ggml_backend_cuda_init(0); // init device 0
+    backend = ggml_backend_cuda_init(0, nullptr); // init device 0
     if (!backend) {
         fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
     }
