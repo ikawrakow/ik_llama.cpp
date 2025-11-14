@@ -5935,6 +5935,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
     const uint32_t n_embd_head_qk_rope = hparams.n_rot;
     const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
     const uint32_t kv_lora_rank = hparams.n_lora_kv;
+    const uint32_t q_lora_rank  = hparams.n_lora_q;
 
     struct ggml_tensor * cur;
     struct ggml_tensor * inpL;
@@ -5961,68 +5962,96 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
 
         // self_attention
         {
-            struct ggml_tensor * q = NULL;
-            if (!is_lite) {
-                // {n_embd, q_lora_rank} * {n_embd, n_tokens} -> {q_lora_rank, n_tokens}
-                q = ggml_mul_mat(ctx0, model.layers[il].wq_a, cur);
-                cb(q, "q", il);
-
-                q = llm_build_norm(ctx0, q, hparams, model.layers[il].attn_q_a_norm, NULL, LLM_NORM_RMS, cb, il);
-                cb(q, "q", il);
-
-                // {q_lora_rank, n_head * hparams.n_embd_head_k} * {q_lora_rank, n_tokens} -> {n_head * hparams.n_embd_head_k, n_tokens}
-                q = ggml_mul_mat(ctx0, model.layers[il].wq_b, q);
-                cb(q, "q", il);
-            } else {
-                q = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
-                cb(q, "q", il);
+            ggml_tensor * q = nullptr;
+            ggml_tensor * kv_rope_compressed = nullptr;
+            ggml_tensor * q_rope;
+            ggml_tensor * q_nope;
+            ggml_tensor * k_rope;
+            ggml_tensor * kv_compressed;
+            if (model.layers[il].wkq_a_mqa) {
+                auto mqa = ggml_mul_mat(ctx0, model.layers[il].wkq_a_mqa, cur);
+                cb(mqa, "mqa", il);
+                size_t qnb1;
+                if (!is_lite) {
+                    q = ggml_view_2d(ctx0, mqa, q_lora_rank, n_tokens, mqa->nb[1], 0);
+                    q = llm_build_norm(ctx0, q, hparams, model.layers[il].attn_q_a_norm, NULL, LLM_NORM_RMS, cb, il);
+                    q = ggml_mul_mat(ctx0, model.layers[il].wq_b, q);
+                    qnb1 = q->nb[1];
+                    cb(q, "q", il);
+                    kv_rope_compressed = ggml_view_2d(ctx0, mqa, kv_lora_rank + n_embd_head_qk_rope, n_tokens, mqa->nb[1],
+                            q_lora_rank*ggml_element_size(mqa));
+                } else {
+                    q = ggml_view_2d(ctx0, mqa, n_embd_k_gqa, n_tokens, mqa->nb[1], 0);
+                    kv_rope_compressed = ggml_view_2d(ctx0, mqa, kv_lora_rank + n_embd_head_qk_rope, n_tokens, mqa->nb[1],
+                            n_embd_k_gqa*ggml_element_size(mqa));
+                    qnb1 = mqa->nb[1];
+                }
+                q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
+                    ggml_row_size(q->type, hparams.n_embd_head_k), qnb1, 0);
+                q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
+                    ggml_row_size(q->type, hparams.n_embd_head_k), qnb1, ggml_row_size(q->type, n_embd_head_qk_nope));
+                k_rope = ggml_view_3d(ctx0, kv_rope_compressed, n_embd_head_qk_rope, 1, n_tokens,
+                        mqa->nb[1], mqa->nb[1], ggml_row_size(kv_rope_compressed->type, kv_lora_rank));
+                kv_compressed = ggml_view_2d(ctx0, kv_rope_compressed, kv_lora_rank, n_tokens, mqa->nb[1], 0);
             }
+            else {
+                if (!is_lite) {
+                    q = ggml_mul_mat(ctx0, model.layers[il].wq_a, cur);
+                    cb(q, "q", il);
 
-            // split into {n_head * n_embd_head_qk_nope, n_tokens}
-            struct ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k),
-                    ggml_row_size(q->type, hparams.n_embd_head_k * n_head),
-                    0);
+                    kv_rope_compressed = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
+                    cb(kv_rope_compressed, "kv_rope_compressed", il);
+
+                    ggml_build_forward_expand(gf, q);
+                    ggml_build_forward_expand(gf, kv_rope_compressed);
+
+                    q = llm_build_norm(ctx0, q, hparams, model.layers[il].attn_q_a_norm, NULL, LLM_NORM_RMS, cb, il);
+                    cb(q, "q", il);
+
+                    q = ggml_mul_mat(ctx0, model.layers[il].wq_b, q);
+                    cb(q, "q", il);
+                } else {
+                    q = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
+                    cb(q, "q", il);
+
+                    kv_rope_compressed = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
+                    cb(kv_rope_compressed, "kv_rope_compressed", il);
+
+                    ggml_build_forward_expand(gf, q);
+                    ggml_build_forward_expand(gf, kv_rope_compressed);
+                }
+
+                q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
+                        ggml_row_size(q->type, hparams.n_embd_head_k),
+                        ggml_row_size(q->type, hparams.n_embd_head_k * n_head), 0);
+
+                q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
+                        ggml_row_size(q->type, hparams.n_embd_head_k),
+                        ggml_row_size(q->type, hparams.n_embd_head_k * n_head),
+                        ggml_row_size(q->type, n_embd_head_qk_nope));
+
+                k_rope = ggml_view_3d(ctx0, kv_rope_compressed, n_embd_head_qk_rope, 1, n_tokens,
+                        kv_rope_compressed->nb[1],
+                        kv_rope_compressed->nb[1],
+                        ggml_row_size(kv_rope_compressed->type, kv_lora_rank));
+
+                kv_compressed = ggml_view_2d(ctx0, kv_rope_compressed, kv_lora_rank, n_tokens,
+                        kv_rope_compressed->nb[1], 0);
+            }
             cb(q_nope, "q_nope", il);
-
-            // and {n_head * n_embd_head_qk_rope, n_tokens}
-            struct ggml_tensor * q_rope = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-                    ggml_row_size(q->type, hparams.n_embd_head_k),
-                    ggml_row_size(q->type, hparams.n_embd_head_k * n_head),
-                    ggml_row_size(q->type, n_embd_head_qk_nope));
             cb(q_rope, "q_rope", il);
-
-            q_rope = ggml_rope_ext(
-                    ctx0, q_rope, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow
-                    );
-            cb(q_rope, "q_rope", il);
-
-            // {n_embd, kv_lora_rank + n_embd_head_qk_rope} * {n_embd, n_tokens} -> {kv_lora_rank + n_embd_head_qk_rope, n_tokens}
-            struct ggml_tensor * kv_rope_compresseed = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
-            cb(kv_rope_compresseed, "kv_rope_compresseed", il);
-
-            // and {n_embd_head_qk_rope, n_tokens}
-            struct ggml_tensor * k_rope = ggml_view_3d(ctx0, kv_rope_compresseed, n_embd_head_qk_rope, 1, n_tokens,
-                    kv_rope_compresseed->nb[1],
-                    kv_rope_compresseed->nb[1],
-                    ggml_row_size(kv_rope_compresseed->type, kv_lora_rank));
             cb(k_rope, "k_rope", il);
-
-            // shared RoPE key
-            k_rope = ggml_rope_ext(
-                    ctx0, k_rope, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow
-                    );
-            cb(k_rope, "k_rope", il);
-
-            // split into {kv_lora_rank, n_tokens}
-            struct ggml_tensor * kv_compressed = ggml_view_2d(ctx0, kv_rope_compresseed, kv_lora_rank, n_tokens,
-                    kv_rope_compresseed->nb[1],
-                    0);
             cb(kv_compressed, "kv_compressed", il);
+
+            q_rope = ggml_rope_ext(ctx0, q_rope, inp_pos, nullptr,
+                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                    ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+            cb(q_rope, "q_rope", il);
+
+            k_rope = ggml_rope_ext(ctx0, k_rope, inp_pos, nullptr,
+                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                    ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+            cb(k_rope, "k_rope", il);
 
             kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams, model.layers[il].attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(kv_compressed, "kv_compressed", il);
