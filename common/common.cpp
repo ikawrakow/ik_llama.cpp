@@ -2084,6 +2084,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
+    options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
+                                                                        "load jinja template for chat from the file\n" });
     options.push_back({ "main",        "       --reasoning-format FORMAT",
                                                                  "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
                         "- none: leaves thoughts unparsed in `message.content`\n"
