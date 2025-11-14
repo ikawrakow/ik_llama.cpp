@@ -652,28 +652,22 @@ struct server_prompt_cache {
         return res;
     }
 
-    server_prompt* alloc(const server_prompt& prompt, size_t state_size) {
-        // first check if the current state is contained fully in the cache
-        for (auto it = states.begin(); it != states.end(); ++it) {
-            const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
+    server_prompt* alloc(const server_prompt& prompt, size_t state_size) {     
+        for (auto it = states.begin(); it != states.end();) {
+            const size_t len = it->tokens.get_common_prefix(prompt.tokens);
 
-            if (cur_lcp_len == (int)prompt.tokens.size()) {
+            // first check if the current state is contained fully in the cache
+            if (len == prompt.tokens.size()) {
                 LLAMA_LOG_INFO("%s", " - prompt is already in the cache, skipping\n");
                 return nullptr;
             }
-        }
-
-        // next, remove any cached prompts that are fully contained in the current prompt
-        for (auto it = states.begin(); it != states.end();) {
-            const int len = it->tokens.get_common_prefix(prompt.tokens);
-
-            if (len == (int)it->tokens.size()) {
+            // next, remove any cached prompts that are fully contained in the current prompt
+            else if(len == it->tokens.size()) {
                 LLAMA_LOG_INFO(" - removing obsolete cached prompt with length %d\n", len);
-
                 it = states.erase(it);
             }
             else {
-                ++it;
+            	++it;
             }
         }
 
@@ -1675,7 +1669,8 @@ struct server_context {
                 LLAMA_LOG_INFO("prompt cache is enabled, size limit: %d MiB\n", params.cache_ram_mib);
             }
             LLAMA_LOG_INFO("%s", "use `--cache-ram 0` to disable the prompt cache\n");
-            prompt_cache = std::make_unique<server_prompt_cache>(params.cache_ram_mib, n_ctx);
+            int32_t ctx_slot = n_ctx / params.n_parallel;
+            prompt_cache = std::make_unique<server_prompt_cache>(params.cache_ram_mib, ctx_slot);
         }
         else {
             LLAMA_LOG_INFO("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
@@ -1774,7 +1769,7 @@ struct server_context {
                 // fraction of the Longest Common Prefix length with respect to the input prompt and cached prompt length
                 const float sim_cur = get_slot_similarity(lcp_len, task.tokens.size(), cache_tokens.size());
                 // select the current slot if the criteria match
-                if (sim_cur > sim_best && sim_best > slot_prompt_similarity) {
+                if (sim_cur > sim_best && sim_cur > slot_prompt_similarity) {
                     sim_best = sim_cur;
                     max_lcp_len = lcp_len;
                     ret = &slot;
