@@ -292,7 +292,7 @@ struct llm_build_context {
          llm_norm_type   type,
          const llm_build_cb & cb, int il, float scale_eps = 1);
 
-    static void llm_build_kv_store(ggml_context * ctx, const llama_hparams & hparams,
+    static void llm_build_kv_store(llama_context & lctx, ggml_context * ctx, const llama_hparams & hparams,
         const llama_cparams & cparams,
        const llama_kv_cache & kv,
          ggml_cgraph * graph,

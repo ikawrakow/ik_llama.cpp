@@ -429,6 +429,7 @@ extern "C" {
         bool fused_up_gate;     // whether to use fused up/gate op [EXPERIMENTAL]
         bool fused_mmad;        // whether to use fused mul+multi_add op [EXPERIMENTAL]
         bool rope_cache;        // whether to use RoPE cache [EXPERIMENTAL]
+        bool graph_reuse;       // whether to reuse graphs when possible [EXPERIMENTAL]
         int  min_experts;
         float thresh_experts;
         bool only_active_experts;

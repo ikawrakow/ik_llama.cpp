@@ -9,6 +9,7 @@ struct llama_model;
 #include <vector>
 #include <map>
 #include <set>
+#include <memory>
 
 struct llama_kv_cell {
     llama_pos pos   = -1;
@@ -204,5 +205,19 @@ struct llama_context {
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
 
     ggml_backend_t ggml_backend_by_name(const char * name);
+
+    struct Prev;
+    std::unique_ptr<Prev> prev;
+
+    void reset_scheduler();
+    bool can_reuse_graph(const llama_batch & u_batch);
+
+    struct CacheCopy {
+        ggml_tensor * cpy = nullptr;
+        size_t        step = 0;
+    };
+    std::vector<CacheCopy> cache_copies;
+
+    bool update_cache_copies();
 
 };
