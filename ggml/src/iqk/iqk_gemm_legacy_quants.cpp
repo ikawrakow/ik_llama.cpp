@@ -1460,10 +1460,10 @@ static void mul_mat_q6_0_r4_q8_2(int n, const void * vx, size_t bx, const DataIn
         auto hbits1 = _mm256_loadu_si256((const __m256i *)iq6l.qh);
         auto hbits2 = _mm256_loadu_si256((const __m256i *)iq6h.qh);
         auto hb = _mm512_inserti32x8(_mm512_castsi256_si512(hbits1), hbits2, 1);
-        qx[0] = _mm512_and_si512(bits1, m4) | _mm512_and_si512(_mm512_slli_epi16(hb, 4), m6);
-        qx[1] = _mm512_and_si512(bits2, m4) | _mm512_and_si512(_mm512_slli_epi16(hb, 2), m6);;
-        qx[2] = _mm512_and_si512(_mm512_srli_epi16(bits1, 4), m4) | _mm512_and_si512(hb, m6);
-        qx[3] = _mm512_and_si512(_mm512_srli_epi16(bits2, 4), m4) | _mm512_and_si512(_mm512_srli_epi16(hb, 2), m6);
+        qx[0] = (const __m512i&)_mm512_and_si512(bits1, m4) | (const __m512i&)_mm512_and_si512(_mm512_slli_epi16(hb, 4), m6);
+        qx[1] = (const __m512i&)_mm512_and_si512(bits2, m4) | (const __m512i&)_mm512_and_si512(_mm512_slli_epi16(hb, 2), m6);;
+        qx[2] = (const __m512i&)_mm512_and_si512(_mm512_srli_epi16(bits1, 4), m4) | (const __m512i&)_mm512_and_si512(hb, m6);
+        qx[3] = (const __m512i&)_mm512_and_si512(_mm512_srli_epi16(bits2, 4), m4) | (const __m512i&)_mm512_and_si512(_mm512_srli_epi16(hb, 2), m6);
         return scales;
     };
     auto dot = [&qx] (__m256i y8) {
