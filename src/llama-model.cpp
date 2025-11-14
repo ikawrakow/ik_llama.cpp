@@ -805,6 +805,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
             { LLM_TENSOR_ATTN_Q_A,           "blk.%d.attn_q_a" },
             { LLM_TENSOR_ATTN_Q_B,           "blk.%d.attn_q_b" },
             { LLM_TENSOR_ATTN_KV_A_MQA,      "blk.%d.attn_kv_a_mqa" },
+            { LLM_TENSOR_ATTN_KQ_A_MQA,      "blk.%d.attn_kq_a_mqa" },
             { LLM_TENSOR_ATTN_KV_B,          "blk.%d.attn_kv_b" },
             { LLM_TENSOR_ATTN_K_B,           "blk.%d.attn_k_b" },
             { LLM_TENSOR_ATTN_V_B,           "blk.%d.attn_v_b" },
