@@ -1615,6 +1615,10 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         "<|im_middle|>",
     };
 
+    data.additional_stops.insert(data.additional_stops.end(), {
+        "<|im_end|>",
+        "<|im_middle|>"
+    });
     // build grammar for tool call
     static const xml_tool_call_format form = ([]() {
         xml_tool_call_format form {};
