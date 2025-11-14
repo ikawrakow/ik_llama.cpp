@@ -469,6 +469,7 @@ ggml_tensor * llm_build_context::llm_build_inp_embd(
 }
 
 void llm_build_context::llm_build_kv_store(
+       struct llama_context & lctx,
         struct ggml_context * ctx,
         const llama_hparams & hparams,
         const llama_cparams & cparams,
@@ -494,29 +495,36 @@ void llm_build_context::llm_build_kv_store(
     //        (ggml_row_size(kv.k_l[il]->type, n_embd_k_gqa))*kv_head);
     //cb(k_cache_view, "k_cache_view", il);
 
+    GGML_ASSERT(2*il+1 < (int)lctx.cache_copies.size());
     auto k_row_size = ggml_row_size(kv.k_l[il]->type, n_embd_head_k);
     ggml_tensor * k_cache_view = ggml_view_2d(ctx, kv.k_l[il], n_embd_head_k, n_tokens*n_head_kv,
             k_row_size, k_row_size*n_head_kv*kv_head);
 
+    lctx.cache_copies[2*il+0].cpy  = ggml_cpy(ctx, k_cur, k_cache_view);
+    lctx.cache_copies[2*il+0].step = k_row_size*n_head_kv;
+
     // note: storing RoPE-ed version of K in the KV cache
-    ggml_build_forward_expand(graph, ggml_cpy(ctx, k_cur, k_cache_view));
+    ggml_build_forward_expand(graph, lctx.cache_copies[2*il+0].cpy);
 
     struct ggml_tensor * v_cache_view = nullptr;
 
     if (cparams.flash_attn) {
         v_cache_view = ggml_view_1d(ctx, kv.v_l[il], n_tokens*n_embd_v_gqa,
                 (kv_head)*ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa));
+        lctx.cache_copies[2*il+1].step = ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa);
     } else {
         // note: the V cache is transposed when not using flash attention
         v_cache_view = ggml_view_2d(ctx, kv.v_l[il], n_tokens, n_embd_v_gqa,
                 (  n_ctx)*ggml_element_size(kv.v_l[il]),
                 (kv_head)*ggml_element_size(kv.v_l[il]));
+        lctx.cache_copies[2*il+1].step = ggml_element_size(kv.v_l[il]);
 
         v_cur = ggml_transpose(ctx, v_cur);
     }
     cb(v_cache_view, "v_cache_view", il);
 
-    ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur, v_cache_view));
+    lctx.cache_copies[2*il+1].cpy  = ggml_cpy(ctx, v_cur, v_cache_view);
+    ggml_build_forward_expand(graph, lctx.cache_copies[2*il+1].cpy);
 }
 
 ggml_tensor * llm_build_context::llm_build_lora_mm(
@@ -1205,7 +1213,7 @@ ggml_tensor * llm_build_context::llm_build_kv(
     ggml_build_forward_expand(graph, k_cur);
     ggml_build_forward_expand(graph, v_cur);
 
-    llm_build_kv_store(ctx, hparams, cparams, kv, graph, k_cur, v_cur, n_tokens, kv_head, cb, il);
+    llm_build_kv_store(lctx, ctx, hparams, cparams, kv, graph, k_cur, v_cur, n_tokens, kv_head, cb, il);
 
     struct ggml_tensor * cur;
 
@@ -6045,7 +6053,9 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                 auto row_size = ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope);
                 ggml_tensor * kv_cache_view = ggml_view_2d(ctx0, kv_self.k_l[il], kv_self.k_l[il]->ne[0], n_tokens,
                         row_size, row_size*kv_head);
-                ggml_build_forward_expand(gf, ggml_cpy(ctx0, kvr, kv_cache_view));
+                lctx.cache_copies[2*il+0].cpy = ggml_cpy(ctx0, kvr, kv_cache_view);
+                lctx.cache_copies[2*il+0].step = row_size;
+                ggml_build_forward_expand(gf, lctx.cache_copies[2*il+0].cpy);
                 ggml_tensor * kv_cache = ggml_view_2d(ctx0, kv_self.k_l[il],
                         kv_lora_rank + n_embd_head_qk_rope, n_kv,
                         ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope), 0);
@@ -7082,7 +7092,7 @@ ggml_cgraph * llm_build_context::build_t5_decoder() {
                     model.layers[il].wk, nullptr,
                     model.layers[il].wv, nullptr, 0, il);
 
-            llm_build_kv_store(ctx0, hparams, cparams, kv_self, gf, Kcur, Vcur, n_tokens, kv_head, cb, il);
+            llm_build_kv_store(lctx, ctx0, hparams, cparams, kv_self, gf, Kcur, Vcur, n_tokens, kv_head, cb, il);
 
             struct ggml_tensor * k =
                 ggml_view_3d(ctx0, kv_self.k_l[il],
