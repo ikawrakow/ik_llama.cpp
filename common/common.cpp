@@ -1135,7 +1135,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.flash_attn = false;
         return true;
     }
-    if (arg == "-fa" || arg == "--flash-attention") {
+
+    if (arg == "-fa" || arg == "--flash-attn") {
         CHECK_ARG
         std::string next_arg{argv[i]};
         for (auto& c : next_arg) c = std::tolower(c);
@@ -1178,6 +1179,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-rcache" || arg == "--rope-cache") {
         params.rope_cache = true;
+        return true;
+    }
+    if (arg == "-gr" || arg == "--graph-reuse") {
+        params.graph_reuse = true;
         return true;
     }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
@@ -1811,6 +1816,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ctx_shift = false;
         return true;
     }
+    if (arg == "-cram" || arg == "--cache-ram") {
+        CHECK_ARG
+        params.cache_ram_mib = std::stoi(argv[i]);
+        return true;
+    }
+    if (arg == "-crs" || arg == "--cache-ram-similarity") {
+        CHECK_ARG
+        params.cache_ram_similarity = std::stof(argv[i]);
+        return true;
+    }
+    if (arg == "-cram-n-min" || arg == "--cache-ram-n-min") {
+        CHECK_ARG
+        params.cache_ram_n_min = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--pos") {
         CHECK_ARG
         params.i_pos = std::stoi(argv[i]);
@@ -1990,6 +2010,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
 
     options.push_back({ "*",           "-c,    --ctx-size N",           "size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx });
     options.push_back({ "*",           "-cd,   --ctx-size-draft N",     "size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.n_ctx_draft });
+    options.push_back({ "*",           "-cram, --cache-ram N",           "set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)",params.cache_ram_mib });
+    options.push_back({ "*",           "-crs,  --cache-ram-similarity N",           "max of similarity of prompt tokens to cache tokens that triggers prompt cache (default: %.2f).",params.cache_ram_similarity });
+    options.push_back({ "*",           "-cram-n-min --cache-ram-n-min N",           "minimum number of the cached tokens that triggers prompt cache (default: %d).", params.cache_ram_n_min });
     options.push_back({ "*",           "-n,    --predict N",            "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)", params.n_predict });
     options.push_back({ "*",           "-b,    --batch-size N",         "logical maximum batch size (default: %d)", params.n_batch });
     options.push_back({ "*",           "-ub,   --ubatch-size N",        "physical maximum batch size (default: %d)", params.n_ubatch });
@@ -2002,8 +2025,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
     options.push_back({ "*",           "-ger,  --grouped-expert-routing", "enable grouped expert routing (default: %s)", params.grouped_expert_routing ? "enabled" : "disabled" });
     options.push_back({ "*",           "-no-fug, --no-fused-up-gate",   "disaable fused up-gate (default: %s)", params.fused_up_gate ? "enabled" : "disabled" });
-    options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disaable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
     options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-gr, --graph-reuse",            "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction,","experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
@@ -2078,6 +2102,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
     options.push_back({ "main",        "       --chat-template JINJA_TEMPLATE",
                                                                         "use jinja template for chat (default: disabled)\n" });
+    options.push_back({ "main",        "       --chat-template-file file_with_JINJA_TEMPLATE",
+                                                                        "load jinja template for chat from the file\n" });
     options.push_back({ "main",        "       --reasoning-format FORMAT",
                                                                  "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
                         "- none: leaves thoughts unparsed in `message.content`\n"
@@ -2979,6 +3005,7 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.fused_up_gate     = params.fused_up_gate;
     cparams.fused_mmad        = params.fused_mmad;
     cparams.rope_cache        = params.rope_cache;
+    cparams.graph_reuse       = params.graph_reuse;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
     cparams.only_active_experts = params.only_active_exps;
@@ -4123,7 +4150,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "grouped_expert_routing: %s # default: false\n", params.grouped_expert_routing ? "true" : "false");
     fprintf(stream, "fused_up_gate: %s # default: true\n", params.fused_up_gate ? "true" : "false");
     fprintf(stream, "fused_mmad: %s # default: true\n", params.fused_mmad ? "true" : "false");
-    fprintf(stream, "rope_cache: %s # default: true\n", params.rope_cache ? "true" : "false");
+    fprintf(stream, "rope_cache: %s # default: false\n", params.rope_cache ? "true" : "false");
+    fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 

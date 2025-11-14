@@ -254,6 +254,7 @@ struct gpt_params {
     bool fused_mmad        = true;  // fused mul+multi_add op
     bool grouped_expert_routing = false; // if to use grouped expert routing (BailingMoeV2 arch)
     bool rope_cache        = false; // if to use RoPE cache (for supported models)
+    bool graph_reuse       = false; // if to reuse compute graphs
     int  min_experts       = -1;
     float thresh_experts   = 0;
 
@@ -329,7 +330,10 @@ struct gpt_params {
     std::string sql_save_file;
     std::string sqlite_zstd_ext_file;
 
-    float slot_prompt_similarity = 0.5f;
+    float slot_prompt_similarity = 0.1f;
+    int32_t cache_ram_mib = 8192;   // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
+    int32_t cache_ram_n_min = 0;     // min number of tokens required to save in the ram
+    float cache_ram_similarity = 0.5f; // similarity of tokens to cached tokens
 
     // batched-bench params
     bool is_pp_shared = false;

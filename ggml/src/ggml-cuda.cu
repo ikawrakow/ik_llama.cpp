@@ -3010,16 +3010,25 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                 0, src0_2->ne[1], src1->ne[1], ne10_padded, stream);
         CUDA_CHECK(cudaGetLastError());
     } else {
-        quantize_mmq_q8_1_cuda((const float *)src1->data, src1_quantized.get(), src1->ne[0], src1->ne[1], 1, ne10_padded, src0_1->type, stream);
-        CUDA_CHECK(cudaGetLastError());
 
-        ggml_cuda_op_mul_mat_q(ctx, src0_1, src1, dst, (const char *)src0_1->data, nullptr, src1_quantized.get(), dst_up.get(),
-                0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
-        CUDA_CHECK(cudaGetLastError());
+        if (ggml_cuda_should_use_mmq(src0_1->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[1])) {
+            quantize_mmq_q8_1_cuda((const float *)src1->data, src1_quantized.get(), src1->ne[0], src1->ne[1], 1,
+                    ne10_padded, src0_1->type, stream);
+            CUDA_CHECK(cudaGetLastError());
 
-        ggml_cuda_op_mul_mat_q(ctx, src0_2, src1, dst, (const char *)src0_2->data, nullptr, src1_quantized.get(), (float *)dst->data,
-                0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
-        CUDA_CHECK(cudaGetLastError());
+            ggml_cuda_op_mul_mat_q(ctx, src0_1, src1, dst, (const char *)src0_1->data, nullptr, src1_quantized.get(), dst_up.get(),
+                    0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
+            CUDA_CHECK(cudaGetLastError());
+
+            ggml_cuda_op_mul_mat_q(ctx, src0_2, src1, dst, (const char *)src0_2->data, nullptr, src1_quantized.get(), (float *)dst->data,
+                    0, src0_1->ne[1], src1->ne[1], ne10_padded, stream);
+            CUDA_CHECK(cudaGetLastError());
+        } else {
+            auto local_dst = *dst;
+            local_dst.data = dst_up.get();
+            ggml_cuda_mul_mat(ctx, src0_1, src1, &local_dst, nullptr, 0);
+            ggml_cuda_mul_mat(ctx, src0_2, src1, dst, nullptr, 0);
+        }
     }
 
     ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
