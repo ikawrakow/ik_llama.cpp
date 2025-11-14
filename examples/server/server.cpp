@@ -1669,8 +1669,8 @@ struct server_context {
                 LLAMA_LOG_INFO("prompt cache is enabled, size limit: %d MiB\n", params.cache_ram_mib);
             }
             LLAMA_LOG_INFO("%s", "use `--cache-ram 0` to disable the prompt cache\n");
-            int32_t ctx_slot = n_ctx / params.n_parallel;
-            prompt_cache = std::make_unique<server_prompt_cache>(params.cache_ram_mib, ctx_slot);
+            // only apply ram size limit. No token limit for now. 
+            prompt_cache = std::make_unique<server_prompt_cache>(params.cache_ram_mib, 0);
         }
         else {
             LLAMA_LOG_INFO("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
