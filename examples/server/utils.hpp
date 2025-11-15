@@ -255,6 +255,10 @@ static std::string gen_tool_call_id() {
 //
 // other common utils
 //
+static float get_slot_similarity(size_t lcp, size_t prompt_length, size_t cache_length) {
+    float sim = float(lcp) * 2 / (prompt_length + cache_length);
+    return sim;
+}
 
 static size_t common_part(const std::vector<llama_token> & a, const std::vector<llama_token> & b) {
     size_t i;
@@ -1026,7 +1030,7 @@ public:
         }
     }
 
-    server_tokens(std::vector<llama_token>& tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {}
+    server_tokens(const std::vector<llama_token>& tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {}
 
     llama_pos pos_next() const {
         if (!has_mtmd) {
@@ -1068,9 +1072,7 @@ public:
         if (it != map_pos_to_media.end()) {
             return it->second;
         }
-        else {
-            throw std::runtime_error("Chunk not found");
-        }
+        throw std::runtime_error("Chunk not found");
     }
 
     void push_back(llama_token tok) {
