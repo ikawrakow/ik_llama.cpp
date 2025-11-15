@@ -775,21 +775,18 @@ static_assert(sizeof(block_iq5_ks_r4) == 4*sizeof(block_iq5_ks), "wrong iq5_ks_r
 #ifndef GGML_SIMD_OPERATORS_DEFINED
 #define GGML_SIMD_OPERATORS_DEFINED
 
-// Ensure these operator overloads always have C++ linkage even if this header
-// is included inside an extern "C" { ... } region in some other header.
-extern "C++" {
-
-// AVX-512 integer bitwise operators (by-value to match MSVC intrinsics)
+// AVX-512 integer bitwise operators
+// --- by-value overloads (match MSVC/intrinsic signatures, fixes ambiguity) ---
 inline __m512i operator|(__m512i a, __m512i b) { return _mm512_or_si512(a, b); }
 inline __m512i operator&(__m512i a, __m512i b) { return _mm512_and_si512(a, b); }
 inline __m512i operator^(__m512i a, __m512i b) { return _mm512_xor_si512(a, b); }
 
-// optional const-ref overloads (harmless; by-value handles rvalues)
+// --- const-ref overloads (optional, kept for convenience) ---
 inline __m512i operator|(const __m512i& a, const __m512i& b) { return _mm512_or_si512(a, b); }
 inline __m512i operator&(const __m512i& a, const __m512i& b) { return _mm512_and_si512(a, b); }
 inline __m512i operator^(const __m512i& a, const __m512i& b) { return _mm512_xor_si512(a, b); }
 
-// AVX2 integer bitwise operators (by-value)
+// AVX2 integer bitwise operators
 inline __m256i operator|(__m256i a, __m256i b) { return _mm256_or_si256(a, b); }
 inline __m256i operator&(__m256i a, __m256i b) { return _mm256_and_si256(a, b); }
 inline __m256i operator^(__m256i a, __m256i b) { return _mm256_xor_si256(a, b); }
@@ -798,7 +795,7 @@ inline __m256i operator|(const __m256i& a, const __m256i& b) { return _mm256_or_
 inline __m256i operator&(const __m256i& a, const __m256i& b) { return _mm256_and_si256(a, b); }
 inline __m256i operator^(const __m256i& a, const __m256i& b) { return _mm256_xor_si256(a, b); }
 
-// SSE / 128-bit integer bitwise operators (by-value)
+// SSE / 128-bit integer bitwise operators
 inline __m128i operator|(__m128i a, __m128i b) { return _mm_or_si128(a, b); }
 inline __m128i operator&(__m128i a, __m128i b) { return _mm_and_si128(a, b); }
 inline __m128i operator^(__m128i a, __m128i b) { return _mm_xor_si128(a, b); }
@@ -807,9 +804,7 @@ inline __m128i operator|(const __m128i& a, const __m128i& b) { return _mm_or_si1
 inline __m128i operator&(const __m128i& a, const __m128i& b) { return _mm_and_si128(a, b); }
 inline __m128i operator^(const __m128i& a, const __m128i& b) { return _mm_xor_si128(a, b); }
 
-} // extern "C++"
-
-// NEON (ARM) — keep by-value forms (they already had C++ linkage and by-value)
+// NEON (ARM) — these already used by-value signatures; keep them
 #ifdef __ARM_NEON
 #include <arm_neon.h>
 inline uint8x16_t operator|(uint8x16_t a, uint8x16_t b) { return vorrq_u8(a, b); }
