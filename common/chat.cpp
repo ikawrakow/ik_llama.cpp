@@ -638,6 +638,12 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
         case COMMON_CHAT_FORMAT_GRANITE: return "Granite";
         case COMMON_CHAT_FORMAT_GPT_OSS: return "GPT-OSS";
+        case COMMON_CHAT_FORMAT_MINIMAX_M2: return "MiniMax-M2";
+        case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
+        case COMMON_CHAT_FORMAT_KIMI_K2: return "Kimi K2";
+        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
+        case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
+        case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1483,6 +1489,278 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
     }
 }
 
+
+static common_chat_params common_chat_params_init_minimax_m2(const common_chat_template & tmpl, const struct templates_params & params) {
+    common_chat_params data;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    data.prompt = apply(tmpl, params);
+    data.format = COMMON_CHAT_FORMAT_MINIMAX_M2;
+
+    // Handle thinking tags based on prompt ending
+    if (string_ends_with(data.prompt, "<think>\n")) {
+        if (!params.enable_thinking) {
+            // Close the thinking tag immediately if thinking is disabled
+            data.prompt += "</think>\n\n";
+        } else {
+            // Mark thinking as forced open (template started with <think>)
+            data.thinking_forced_open = true;
+        }
+    }
+
+    // Preserve MiniMax-M2 special tokens
+    data.preserved_tokens = {
+        "<think>",
+        "</think>",
+        "<minimax:tool_call>",
+        "</minimax:tool_call>",
+    };
+
+    // build grammar for tool call
+    static const xml_tool_call_format form {
+        /* form.scope_start = */ "<minimax:tool_call>\n",
+        /* form.tool_start  = */ "<invoke name=\"",
+        /* form.tool_sep    = */ "\">\n",
+        /* form.key_start   = */ "<parameter name=\"",
+        /* form.key_val_sep = */ "\">",
+        /* form.val_end     = */ "</parameter>\n",
+        /* form.tool_end    = */ "</invoke>\n",
+        /* form.scope_end   = */ "</minimax:tool_call>",
+    };
+    build_grammar_xml_tool_call(data, params.tools, form);
+
+    return data;
+}
+
+static void common_chat_parse_minimax_m2(common_chat_msg_parser & builder) {
+    static const xml_tool_call_format form {
+        /* form.scope_start = */ "<minimax:tool_call>",
+        /* form.tool_start  = */ "<invoke name=\"",
+        /* form.tool_sep    = */ "\">",
+        /* form.key_start   = */ "<parameter name=\"",
+        /* form.key_val_sep = */ "\">",
+        /* form.val_end     = */ "</parameter>",
+        /* form.tool_end    = */ "</invoke>",
+        /* form.scope_end   = */ "</minimax:tool_call>",
+    };
+    builder.consume_reasoning_with_xml_tool_calls(form, "<think>", "</think>");
+}
+
+static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & params) {
+    common_chat_params data;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    data.prompt = apply(tmpl, params);
+    data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
+
+    data.preserved_tokens = {
+        "<tool_call>",
+        "</tool_call>",
+        "<function=",
+        "</function>",
+        "<parameter=",
+        "</parameter>",
+    };
+
+    // build grammar for tool call
+    static const xml_tool_call_format form {
+        /* form.scope_start = */ "<tool_call>\n",
+        /* form.tool_start  = */ "<function=",
+        /* form.tool_sep    = */ ">\n",
+        /* form.key_start   = */ "<parameter=",
+        /* form.key_val_sep = */ ">\n",
+        /* form.val_end     = */ "\n</parameter>\n",
+        /* form.tool_end    = */ "</function>\n",
+        /* form.scope_end   = */ "</tool_call>",
+    };
+    build_grammar_xml_tool_call(data, params.tools, form);
+
+    return data;
+}
+
+static void common_chat_parse_qwen3_coder_xml(common_chat_msg_parser & builder) {
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "<tool_call>";
+        form.tool_start  = "<function=";
+        form.tool_sep    = ">";
+        form.key_start   = "<parameter=";
+        form.key_val_sep = ">";
+        form.val_end     = "</parameter>";
+        form.tool_end    = "</function>";
+        form.scope_end   = "</tool_call>";
+        form.trim_raw_argval = true;
+        return form;
+    })();
+    builder.consume_reasoning_with_xml_tool_calls(form);
+}
+
+static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
+    common_chat_params data;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    data.prompt = apply(tmpl, params);
+    data.format = COMMON_CHAT_FORMAT_KIMI_K2;
+
+    data.preserved_tokens = {
+        "<think>",
+        "</think>",
+        "<|tool_calls_section_begin|>",
+        "<|tool_call_begin|>",
+        "<|tool_call_argument_begin|>",
+        "<|tool_call_end|>",
+        "<|tool_calls_section_end|>",
+        "<|im_end|>",
+        "<|im_system|>",
+        "<|im_middle|>",
+    };
+
+    data.additional_stops.insert(data.additional_stops.end(), {
+        "<|im_end|>",
+        "<|im_middle|>"
+    });
+    // build grammar for tool call
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "<|tool_calls_section_begin|>";
+        form.tool_start  = "<|tool_call_begin|>";
+        form.tool_sep    = "<|tool_call_argument_begin|>{";
+        form.key_start   = "\"";
+        form.key_val_sep = "\": ";
+        form.val_end     = ", ";
+        form.tool_end    = "}<|tool_call_end|>";
+        form.scope_end   = "<|tool_calls_section_end|>";
+        form.raw_argval  = false;
+        form.last_val_end = "";
+        return form;
+    })();
+    build_grammar_xml_tool_call(data, params.tools, form);
+
+    return data;
+}
+
+static void common_chat_parse_kimi_k2(common_chat_msg_parser & builder) {
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "<|tool_calls_section_begin|>";
+        form.tool_start  = "<|tool_call_begin|>";
+        form.tool_sep    = "<|tool_call_argument_begin|>{";
+        form.key_start   = "\"";
+        form.key_val_sep = "\": ";
+        form.val_end     = ", ";
+        form.tool_end    = "}<|tool_call_end|>";
+        form.scope_end   = "<|tool_calls_section_end|>";
+        form.raw_argval  = false;
+        form.last_val_end = "";
+        return form;
+    })();
+    builder.consume_reasoning_with_xml_tool_calls(form, "<think>", "</think>");
+}
+
+static common_chat_params common_chat_params_init_apriel_1_5(const common_chat_template & tmpl, const struct templates_params & params) {
+    common_chat_params data;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    data.prompt = apply(tmpl, params);
+    data.format = COMMON_CHAT_FORMAT_APRIEL_1_5;
+
+    data.preserved_tokens = {
+        "<thinking>",
+        "</thinking>",
+        "<tool_calls>",
+        "</tool_calls>",
+    };
+
+    // build grammar for tool call
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "<tool_calls>[";
+        form.tool_start  = "{\"name\": \"";
+        form.tool_sep    = "\", \"arguments\": {";
+        form.key_start   = "\"";
+        form.key_val_sep = "\": ";
+        form.val_end     = ", ";
+        form.tool_end    = "}, ";
+        form.scope_end   = "]</tool_calls>";
+        form.raw_argval  = false;
+        form.last_val_end = "";
+        form.last_tool_end = "}";
+        return form;
+    })();
+    build_grammar_xml_tool_call(data, params.tools, form);
+
+    return data;
+}
+
+static void common_chat_parse_apriel_1_5(common_chat_msg_parser & builder) {
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "<tool_calls>[";
+        form.tool_start  = "{\"name\": \"";
+        form.tool_sep    = "\", \"arguments\": {";
+        form.key_start   = "\"";
+        form.key_val_sep = "\": ";
+        form.val_end     = ", ";
+        form.tool_end    = "}, ";
+        form.scope_end   = "]</tool_calls>";
+        form.raw_argval  = false;
+        form.last_val_end = "";
+        form.last_tool_end = "}";
+        return form;
+    })();
+    builder.consume_reasoning_with_xml_tool_calls(form, "<thinking>", "</thinking>");
+}
+
+static common_chat_params common_chat_params_init_xiaomi_mimo(const common_chat_template & tmpl, const struct templates_params & params) {
+    common_chat_params data;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    data.prompt = apply(tmpl, params);
+    data.format = COMMON_CHAT_FORMAT_XIAOMI_MIMO;
+
+    data.preserved_tokens = {
+        "<tool_call>",
+        "</tool_call>",
+    };
+
+    // build grammar for tool call
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "\n";
+        form.tool_start  = "<tool_call>\n{\"name\": \"";
+        form.tool_sep    = "\", \"arguments\": {";
+        form.key_start   = "\"";
+        form.key_val_sep = "\": ";
+        form.val_end     = ", ";
+        form.tool_end    = "}\n</tool_call>";
+        form.scope_end   = "";
+        form.raw_argval  = false;
+        form.last_val_end = "";
+        return form;
+    })();
+    build_grammar_xml_tool_call(data, params.tools, form);
+
+    return data;
+}
+
+static void common_chat_parse_xiaomi_mimo(common_chat_msg_parser & builder) {
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "";
+        form.tool_start  = "<tool_call>\n{\"name\": \"";
+        form.tool_sep    = "\", \"arguments\": {";
+        form.key_start   = "\"";
+        form.key_val_sep = "\": ";
+        form.val_end     = ", ";
+        form.tool_end    = "}\n</tool_call>";
+        form.scope_end   = "";
+        form.raw_argval  = false;
+        form.last_val_end = "";
+        return form;
+    })();
+    builder.consume_reasoning_with_xml_tool_calls(form);
+}
+
 static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
     auto prompt = apply(tmpl, inputs);
@@ -1560,17 +1838,36 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 );
             });
 
-            auto recipient_in_role = builder.add_rule("recipient_in_role",
-                "\"<|start|>assistant\"? \" to=functions.\" ( " +
-                string_join(tool_rules_recipient_in_role, " | ") + " )"
-            );
-
             auto recipient_in_channel = builder.add_rule("recipient_in_channel",
                 channel + " \" to=functions.\" ( " +
                 string_join(tool_rules_recipient_in_channel, " | ") + " )"
             );
 
-            builder.add_rule("root", recipient_in_role + " | " + recipient_in_channel);
+            if (data.grammar_lazy) {
+                auto recipient_in_role = builder.add_rule("recipient_in_role",
+                    "\"<|start|>assistant\"? \" to=functions.\" ( " +
+                    string_join(tool_rules_recipient_in_role, " | ") + " )"
+                );
+
+                builder.add_rule("root", recipient_in_role + " | " + recipient_in_channel);
+            } else {
+                auto not_end = builder.add_rule("not-end",
+                    "[^<] | \"<\" [^|] | \"<|\" [^e] | \"<|e\" [^n] | \"<|en\" [^d] | \"<|end\" [^|] | \"<|end|\" [^>]");
+                auto analysis = builder.add_rule("analysis",
+                    "\"<|channel|>analysis<|message|>\" ( " + not_end + " )* \"<|end|>\"");
+                auto commentary = builder.add_rule("commentary",
+                    "\"<|channel|>commentary<|message|>\" ( " + not_end + " )* \"<|end|>\"");
+
+                auto recipient_in_role = builder.add_rule("recipient_in_role",
+                    "\" to=functions.\" ( " + string_join(tool_rules_recipient_in_role, " | ") + " )"
+                );
+
+                builder.add_rule("root",
+                    "( " + analysis + " \"<|start|>assistant\" )? " +
+                    "( " + commentary + " \"<|start|>assistant\" )? " +
+                    "( " + recipient_in_role + " | " + recipient_in_channel + " )"
+                );
+            }
 
             // Trigger on tool calls that appear in the commentary channel
             data.grammar_triggers.push_back({
@@ -1680,6 +1977,100 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     if (!remaining.empty()) {
         LOG("%s: content after last message: %s\n", __func__, remaining.c_str());
     }
+}
+
+static common_chat_params common_chat_params_init_glm_4_5(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    data.grammar_lazy = inputs.tools.is_array() && !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    std::string prompt = apply(tmpl, inputs);
+
+    // match the existing trimming behavior
+    if (inputs.add_bos && string_starts_with(prompt, tmpl.bos_token())) {
+        prompt.erase(0, tmpl.bos_token().size());
+    }
+    if (inputs.add_eos && string_ends_with(prompt, tmpl.eos_token())) {
+        prompt.erase(prompt.size() - tmpl.eos_token().size());
+    }
+    if (string_ends_with(prompt, "<think>")) {
+        if (!inputs.enable_thinking) {
+            prompt += "</think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
+
+    // add GLM preserved tokens
+    data.preserved_tokens = {
+        "<|endoftext|>",
+        "[MASK]",
+        "[gMASK]",
+        "[sMASK]",
+        "<sop>",
+        "<eop>",
+        "<|system|>",
+        "<|user|>",
+        "<|assistant|>",
+        "<|observation|>",
+        "<|begin_of_image|>",
+        "<|end_of_image|>",
+        "<|begin_of_video|>",
+        "<|end_of_video|>",
+        "<|begin_of_audio|>",
+        "<|end_of_audio|>",
+        "<|begin_of_transcription|>",
+        "<|end_of_transcription|>",
+        "<|code_prefix|>",
+        "<|code_middle|>",
+        "<|code_suffix|>",
+        "/nothink",
+        "<think>",
+        "</think>",
+        "<tool_call>",
+        "</tool_call>",
+        "<arg_key>",
+        "</arg_key>",
+        "<arg_value>",
+        "</arg_value>"
+    };
+
+    // extra GLM 4.5 stop word
+    data.additional_stops.insert(data.additional_stops.end(), {
+        "<|user|>",
+        "<|observation|>"
+    });
+
+    // build grammar for tool call
+    static const xml_tool_call_format form {
+        /* form.scope_start = */ "",
+        /* form.tool_start  = */ "\n<tool_call>",
+        /* form.tool_sep    = */ "\n",
+        /* form.key_start   = */ "<arg_key>",
+        /* form.key_val_sep = */ "</arg_key>\n<arg_value>",
+        /* form.val_end     = */ "</arg_value>\n",
+        /* form.tool_end    = */ "</tool_call>\n",
+        /* form.scope_end   = */ "",
+    };
+    build_grammar_xml_tool_call(data, inputs.tools, form);
+
+    data.prompt = prompt;
+    data.format = COMMON_CHAT_FORMAT_GLM_4_5;
+    return data;
+}
+
+static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
+    static const xml_tool_call_format form {
+        /* form.scope_start  = */ "",
+        /* form.tool_start   = */ "<tool_call>",
+        /* form.tool_sep     = */ "",
+        /* form.key_start    = */ "<arg_key>",
+        /* form.key_val_sep  = */ "</arg_key>",
+        /* form.val_end      = */ "</arg_value>",
+        /* form.tool_end     = */ "</tool_call>",
+        /* form.scope_end    = */ "",
+        /* form.key_val_sep2 = */ "<arg_value>",
+    };
+    builder.consume_reasoning_with_xml_tool_calls(form, "<think>", "</think>");
 }
 
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
@@ -2174,15 +2565,28 @@ static common_chat_params common_chat_params_init_granite(const common_chat_temp
 
 static void common_chat_parse_granite(common_chat_msg_parser & builder) {
     // Parse thinking tags
+    static const common_regex start_think_regex(regex_escape("<think>"));
+    static const common_regex end_think_regex(regex_escape("</think>"));
+    // Granite models output partial tokens such as "<" and "<think".
+    // By leveraging try_consume_regex()/try_find_regex() throwing
+    // common_chat_msg_partial_exception for these partial tokens,
+    // processing is interrupted and the tokens are not passed to add_content().
+    if (auto res = builder.try_consume_regex(start_think_regex)) {
+        // Restore position for try_parse_reasoning()
+        builder.move_to(res->groups[0].begin);
+        builder.try_find_regex(end_think_regex, std::string::npos, false);
+        // Restore position for try_parse_reasoning()
+        builder.move_to(res->groups[0].begin);
+    }
     builder.try_parse_reasoning("<think>", "</think>");
 
-    // Parse response tags using regex
-    static const common_regex response_regex("<response>([\\s\\S]*?)</response>");
-    if (auto res = builder.try_find_regex(response_regex)) {
-        // Extract the content between the tags (capture group 1)
-        auto content = builder.str(res->groups[1]);
-        builder.add_content(content);
-        builder.move_to(res->groups[0].end);
+    // Parse response tags
+    static const common_regex start_response_regex(regex_escape("<response>"));
+    static const common_regex end_response_regex(regex_escape("</response>"));
+    // Granite models output partial tokens such as "<" and "<response".
+    // Same hack as reasoning parsing.
+    if (builder.try_consume_regex(start_response_regex)) {
+        builder.try_find_regex(end_response_regex);
     }
 
     if (!builder.syntax().parse_tool_calls) {
@@ -2196,13 +2600,10 @@ static void common_chat_parse_granite(common_chat_msg_parser & builder) {
         builder.move_to(res->groups[0].end);
 
         // Expect JSON array of tool calls
-        auto tool_calls_data = builder.consume_json();
-        if (tool_calls_data.json.is_array()) {
-            if (!builder.add_tool_calls(tool_calls_data.json)) {
-                builder.add_content("<|tool_call|>" + tool_calls_data.json.dump());
+        if (auto tool_call = builder.try_consume_json_with_dumped_args({{{"arguments"}}})) {
+            if (!builder.add_tool_calls(tool_call->value) || tool_call->is_partial) {
+                throw common_chat_msg_partial_exception("incomplete tool call");
             }
-        } else {
-            builder.add_content("<|tool_call|>" + tool_calls_data.json.dump());
         }
     } else {
         builder.add_content(builder.consume_rest());
@@ -2291,6 +2692,35 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_granite(tmpl, params);
     }
 
+    // GLM 4.5: detect by <arg_key> and <arg_value> tags (check before Hermes since both use <tool_call>)
+    if (src.find("[gMASK]<sop>") != std::string::npos &&
+        src.find("<arg_key>") != std::string::npos &&
+        src.find("<arg_value>") != std::string::npos &&
+        params.json_schema.is_null()) {
+        return common_chat_params_init_glm_4_5(tmpl, params);
+    }
+
+    // Qwen3-Coder XML format detection (must come before Hermes 2 Pro)
+    // Detect via explicit XML markers unique to Qwen3-Coder to avoid false positives in other templates.
+    // Require presence of <tool_call>, <function=...>, and <parameter=...> blocks.
+    if (src.find("<tool_call>") != std::string::npos &&
+        src.find("<function>") != std::string::npos &&
+        src.find("<function=") != std::string::npos &&
+        src.find("<parameters>") != std::string::npos &&
+        src.find("<parameter=") != std::string::npos) {
+        return common_chat_params_init_qwen3_coder_xml(tmpl, params);
+    }
+
+    // Xiaomi MiMo format detection (must come before Hermes 2 Pro)
+    if (src.find("<tools>") != std::string::npos &&
+        src.find("# Tools") != std::string::npos &&
+        src.find("</tools>") != std::string::npos &&
+        src.find("<tool_calls>") != std::string::npos &&
+        src.find("</tool_calls>") != std::string::npos &&
+        src.find("<tool_response>") != std::string::npos) {
+        return common_chat_params_init_xiaomi_mimo(tmpl, params);
+    }
+
     // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)
     if (src.find("<tool_call>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_hermes_2_pro(tmpl, params);
@@ -2299,6 +2729,29 @@ static common_chat_params common_chat_templates_apply_jinja(
     // GPT-OSS
     if (src.find("<|channel|>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_gpt_oss(tmpl, params);
+    }
+
+    // MiniMax-M2 format detection
+    if (src.find("]~!b[") != std::string::npos && src.find("]~b]") != std::string::npos) {
+        return common_chat_params_init_minimax_m2(tmpl, params);
+    }
+
+    // Kimi K2 format detection
+    if (src.find("<|im_system|>tool_declare<|im_middle|>") != std::string::npos &&
+        src.find("<|tool_calls_section_begin|>") != std::string::npos &&
+        src.find("## Return of") != std::string::npos) {
+        return common_chat_params_init_kimi_k2(tmpl, params);
+    }
+
+    // Apriel 1.5 format detection
+    if (src.find("<thinking>") != std::string::npos &&
+        src.find("</thinking>") != std::string::npos &&
+        src.find("<available_tools>") != std::string::npos &&
+        src.find("<|assistant|>") != std::string::npos &&
+        src.find("<|tool_result|>") != std::string::npos &&
+        src.find("<tool_calls>[") != std::string::npos &&
+        src.find("]</tool_calls>") != std::string::npos) {
+        return common_chat_params_init_apriel_1_5(tmpl, params);
     }
 
     // Use generic handler when mixing tools + JSON schema.
@@ -2462,6 +2915,24 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_GPT_OSS:
             common_chat_parse_gpt_oss(builder);
+            break;
+        case COMMON_CHAT_FORMAT_MINIMAX_M2:
+            common_chat_parse_minimax_m2(builder);
+            break;
+        case COMMON_CHAT_FORMAT_GLM_4_5:
+            common_chat_parse_glm_4_5(builder);
+            break;
+        case COMMON_CHAT_FORMAT_KIMI_K2:
+            common_chat_parse_kimi_k2(builder);
+            break;
+        case COMMON_CHAT_FORMAT_QWEN3_CODER_XML:
+            common_chat_parse_qwen3_coder_xml(builder);
+            break;
+        case COMMON_CHAT_FORMAT_APRIEL_1_5:
+            common_chat_parse_apriel_1_5(builder);
+            break;
+        case COMMON_CHAT_FORMAT_XIAOMI_MIMO:
+            common_chat_parse_xiaomi_mimo(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
