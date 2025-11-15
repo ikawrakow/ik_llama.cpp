@@ -581,7 +581,7 @@ struct slot_params {
     std::string           oaicompat_model;
     std::string           oaicompat_cmpl_id;
     common_chat_syntax           oaicompat_chat_syntax;
-    
+
 };
 
 
@@ -652,7 +652,7 @@ struct server_prompt_cache {
         return res;
     }
 
-    server_prompt* alloc(const server_prompt& prompt, size_t state_size) {     
+    server_prompt* alloc(const server_prompt& prompt, size_t state_size) {
         for (auto it = states.begin(); it != states.end();) {
             const size_t len = it->tokens.get_common_prefix(prompt.tokens);
 
@@ -663,11 +663,11 @@ struct server_prompt_cache {
             }
             // next, remove any cached prompts that are fully contained in the current prompt
             else if(len == it->tokens.size()) {
-                LLAMA_LOG_INFO(" - removing obsolete cached prompt with length %d\n", len);
+                LLAMA_LOG_INFO(" - removing obsolete cached prompt with length %d\n", (int)len);
                 it = states.erase(it);
             }
             else {
-            	++it;
+                ++it;
             }
         }
 
@@ -755,7 +755,7 @@ struct server_prompt_cache {
 
                 LLAMA_LOG_INFO(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
 
-                states.pop_front(); 
+                states.pop_front();
             }
         }
 
@@ -766,7 +766,7 @@ struct server_prompt_cache {
         const size_t limit_tokens_cur = limit_size > 0 ? std::max<size_t>(limit_tokens, limit_size / size_per_token) : limit_tokens;
 
         //if (limit_tokens > 0) {
-        //    
+        //
         //    while (states.size() > 1 && n_tokens() > limit_tokens_cur) {
         //        if (states.empty()) {
         //            break;
@@ -1009,7 +1009,7 @@ struct server_slot {
     }
 
     const common_chat_msg& update_chat_msg(std::vector<common_chat_msg_diff>& diffs) {
-        auto previous_msg = chat_msg;      
+        auto previous_msg = chat_msg;
         auto new_msg = common_chat_parse(
             generated_text,
             /* is_partial= */ stop != STOP_TYPE_EOS,
@@ -1428,8 +1428,8 @@ struct server_context {
     oaicompat_parser_options  oai_parser_opt;
     // Necessary similarity of prompt for slot selection
     float slot_prompt_similarity = 0.0f;
-    int32_t cache_ram_n_min = 0;       
-    float cache_ram_similarity = 0.5f; 
+    int32_t cache_ram_n_min = 0;
+    float cache_ram_similarity = 0.5f;
 
     ~server_context() {
         if (ctx) {
@@ -1530,7 +1530,7 @@ struct server_context {
         }
         // Load draft model for speculative decoding if specified
         if (has_draft_model) {
-            LLAMA_LOG_INFO("\n\n==================================loading DRAFT model==================================\n\n"); 
+            LLAMA_LOG_INFO("\n\n==================================loading DRAFT model==================================\n\n");
 
             gpt_params params_dft;
             params_dft.devices = params.devices_draft;
@@ -1571,7 +1571,7 @@ struct server_context {
 
             cparams_dft = llama_context_params_from_gpt_params(params_dft);
             cparams_dft.n_batch = n_ctx_dft;
-            
+
             model_draft = llama_init_dft.model;
             ctx_draft = llama_init_dft.context;
         }
@@ -1669,7 +1669,7 @@ struct server_context {
                 LLAMA_LOG_INFO("prompt cache is enabled, size limit: %d MiB\n", params.cache_ram_mib);
             }
             LLAMA_LOG_INFO("%s", "use `--cache-ram 0` to disable the prompt cache\n");
-            // only apply ram size limit. No token limit for now. 
+            // only apply ram size limit. No token limit for now.
             prompt_cache = std::make_unique<server_prompt_cache>(params.cache_ram_mib, 0);
         }
         else {
@@ -1828,7 +1828,7 @@ struct server_context {
             update_cache = update_cache && (ret->mctx == nullptr);
 
             LLAMA_LOG_INFO("prompt cache: cache size: %d, cache_ram_n_min: %d, f_keep: %.2f, cache_ram_similarity: %.2f\n",
-                tokens.size(), cache_ram_n_min, f_keep, cache_ram_similarity);
+                (int)tokens.size(), cache_ram_n_min, f_keep, cache_ram_similarity);
             if (update_cache) {
                 const int64_t t_start = ggml_time_us();
                 LLAMA_LOG_INFO("updating prompt cache\n");
@@ -1836,10 +1836,10 @@ struct server_context {
                 ret->prompt_save(*prompt_cache);
                 LLAMA_LOG_INFO("prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
-            // has prompts saved earlier to load          
+            // has prompts saved earlier to load
             if (!prompt_cache->states.empty()) {
                 const int64_t t_start = ggml_time_us();
-                ret->server_cached_prompt.tokens = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens                
+                ret->server_cached_prompt.tokens = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens
                 ret->prompt_load(*prompt_cache, task.tokens);
                 prompt_cache->update();
                 ret->cache_tokens = server_tokens(ret->server_cached_prompt.tokens.get_text_tokens(), false); // recover cache tokens
@@ -2007,7 +2007,7 @@ struct server_context {
             }
             slot.prompt_tokens = std::move(task.tokens);
         }
-     
+
         // penalize user-provided tokens
         {
             slot.sparams.penalty_prompt_tokens.clear();
@@ -2072,7 +2072,7 @@ struct server_context {
             slot.params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
         }
         {
-           
+
             const auto preserved_tokens = data.find("preserved_tokens");
             if (preserved_tokens != data.end()) {
                 for (const auto& t : *preserved_tokens) {
@@ -2126,7 +2126,7 @@ struct server_context {
                     }
                 }
             }
-   
+
             if (slot.sparams.grammar_lazy && slot.sparams.grammar_triggers.empty()) {
                 throw std::runtime_error("Error: no triggers set for lazy grammar!");
             }
@@ -2314,7 +2314,7 @@ struct server_context {
                 pos = std::min(slot.n_sent_text, slot.generated_text.size());
             }
             else if (slot.has_next_token && !llama_token_is_eog(model, result.tok)) {
-                stop_pos = slot.find_stopping_strings(str_test, token_str.size(), false);         
+                stop_pos = slot.find_stopping_strings(str_test, token_str.size(), false);
                 send_text = stop_pos == std::string::npos;
             }
 
@@ -3312,7 +3312,7 @@ struct server_context {
                             if (slot.n_prompt_tokens >= slot.n_ctx) {
                                 send_error(slot, "the request exceeds the available context size, try increasing it", ERROR_TYPE_SERVER);
                                 slot.release();
-                                continue;                              
+                                continue;
                             }
 
                             llama_sampling_reset(llama_get_model_vocab(model), slot.ctx_sampling);
@@ -3322,7 +3322,7 @@ struct server_context {
                                 slot.ga_i      = 0;
                             } else {
                                 GGML_ASSERT(slot.ga_n == 1);
-                                
+
                                 // reuse any previously computed tokens that are common with the new prompt
                                 slot.n_past  = slot.cache_tokens.get_common_prefix(prompt_tokens);
 
@@ -3909,11 +3909,11 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
         {"model",   modelname},
         {"object",  "chat.completion.chunk"}
     };
-    
+
     if (task_result.timings.prompt_n != -1) {
         ret.push_back({ "timings", task_result.timings.to_json() });
     }
-    
+
     //
     if (!finish_reason.empty()) {
         int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
@@ -4605,7 +4605,7 @@ int main(int argc, char ** argv) {
             { "n_ctx",                       ctx_server.n_ctx }
 
         };
-       
+
         if (ctx_server.params.use_jinja) {
             if (auto tool_use_src = common_chat_templates_source(ctx_server.chat_templates.get(), "tool_use")) {
                 data["chat_template_tool_use"] = tool_use_src;
@@ -4831,7 +4831,7 @@ int main(int argc, char ** argv) {
             OAICOMPAT_TYPE_NONE); // infill is not OAI compatible
     };
 
-    const auto handle_tokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {       
+    const auto handle_tokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
         const json body = json::parse(req.body);
 
         std::vector<llama_token> tokens;
@@ -4843,7 +4843,7 @@ int main(int argc, char ** argv) {
         return res.set_content(data.dump(), "application/json; charset=utf-8");
     };
 
-    const auto handle_detokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {        
+    const auto handle_detokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
         const json body = json::parse(req.body);
 
         std::string content;
@@ -4857,7 +4857,7 @@ int main(int argc, char ** argv) {
     };
 
 
-    const auto handle_embeddings = [&ctx_server, &res_error](const httplib::Request & req, httplib::Response & res) {      
+    const auto handle_embeddings = [&ctx_server, &res_error](const httplib::Request & req, httplib::Response & res) {
         const json body = json::parse(req.body);
         bool is_openai = false;
 
@@ -4908,7 +4908,7 @@ int main(int argc, char ** argv) {
         return res.set_content(root.dump(), "application/json; charset=utf-8");
     };
 
-    const auto handle_lora_adapters_list = [&](const httplib::Request & req, httplib::Response & res) {        
+    const auto handle_lora_adapters_list = [&](const httplib::Request & req, httplib::Response & res) {
         json result = json::array();
         for (size_t i = 0; i < ctx_server.lora_adapters.size(); ++i) {
             auto & la = ctx_server.lora_adapters[i];
@@ -4922,7 +4922,7 @@ int main(int argc, char ** argv) {
         res.status = 200; // HTTP OK
     };
 
-    const auto handle_lora_adapters_apply = [&](const httplib::Request & req, httplib::Response & res) {       
+    const auto handle_lora_adapters_apply = [&](const httplib::Request & req, httplib::Response & res) {
         const std::vector<json> body = json::parse(req.body);
         int max_idx = ctx_server.lora_adapters.size();
 
@@ -4954,7 +4954,7 @@ int main(int argc, char ** argv) {
         res.status = 200; // HTTP OK
     };
 
-    const auto list_saved_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {      
+    const auto list_saved_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
         json response = json::array();
         namespace fs = std::filesystem;
 
@@ -5014,7 +5014,7 @@ int main(int argc, char ** argv) {
         res.set_content(response.dump(), "application/json; charset=utf-8");
     };
 
-    const auto list_slot_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {        
+    const auto list_slot_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
         json response = json::array();
         for (server_slot & slot : ctx_server.slots) {
             response.push_back({
@@ -5027,7 +5027,7 @@ int main(int argc, char ** argv) {
     };
 
 
-    const auto delete_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {       
+    const auto delete_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
         json response;
         namespace fs = std::filesystem;
 
@@ -5074,7 +5074,7 @@ int main(int argc, char ** argv) {
         res.set_content(response.dump(), "application/json; charset=utf-8");
     };
 
-    const auto rename_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {        
+    const auto rename_saved_prompt = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res)-> void {
         json response;
         namespace fs = std::filesystem;
 
