@@ -115,6 +115,7 @@ option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"               
 option(GGML_IQK_MUL_MAT                     "ggml: use optimized iqk matrix multiplications"  ON)
 
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
+option(GGML_CUDA_LTO                        "ggml: use CUDA LTO"                              OFF)
 option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
 option(GGML_CUDA_FORCE_DMMV                 "ggml: use dmmv instead of mmvq CUDA kernels"     OFF)
 option(GGML_CUDA_FORCE_MMQ                  "ggml: use mmq kernels instead of cuBLAS"         OFF)
