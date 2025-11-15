@@ -80,14 +80,6 @@ static inline float32x4_t v_gelu(float32x4_t x, float32x4_t c1, float32x4_t c2) 
 
 #endif // __ARN_NEON
 
-#if defined(__AVX512F__) && defined(_MSC_VER)
-#include <immintrin.h>
-
-static inline __m512i operator|(__m512i a, __m512i b) { return _mm512_or_si512(a, b); }
-static inline __m512i operator&(__m512i a, __m512i b) { return _mm512_and_si512(a, b); }
-static inline __m512i operator^(__m512i a, __m512i b) { return _mm512_xor_si512(a, b); }
-#endif
-
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
 
 // copy-pasted from Justine Tunney's contribution to llama.cpp
