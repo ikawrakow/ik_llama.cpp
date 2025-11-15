@@ -1837,7 +1837,7 @@ struct server_context {
                 LLAMA_LOG_INFO("prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
             // has prompts saved earlier to load
-            if (!prompt_cache->states.empty()) {
+            if (prompt_cache && !prompt_cache->states.empty()) {
                 const int64_t t_start = ggml_time_us();
                 ret->server_cached_prompt.tokens = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens
                 ret->prompt_load(*prompt_cache, task.tokens);
