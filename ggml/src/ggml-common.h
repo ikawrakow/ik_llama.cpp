@@ -775,62 +775,47 @@ static_assert(sizeof(block_iq5_ks_r4) == 4*sizeof(block_iq5_ks), "wrong iq5_ks_r
 #ifndef GGML_SIMD_OPERATORS_DEFINED
 #define GGML_SIMD_OPERATORS_DEFINED
 
-// Use static inline to give these functions internal linkage so they
-// cannot conflict with other declarations in other translation units.
-// Provide by-value overloads (match MSVC/intrinsic signatures) and
-// also provide const-ref and mixed overloads to remove any remaining
-// ambiguity for lvalue/rvalue combinations.
+// Ensure these operator overloads always have C++ linkage even if this header
+// is included inside an extern "C" { ... } region in some other header.
+extern "C++" {
 
-// Helper macro to declare the six overload permutations for a given type T
-// (value,value), (const&,const&), (value,const&), (const&,value)
-#define GGML_SIMD_BINARY_BITWISE(T, OP, INTRIN)                             \
-static inline T operator|(T a, T b)                 { return INTRIN(a, b); } \
-static inline T operator&(T a, T b)                 { return INTRIN(a, b); } \
-static inline T operator^(T a, T b)                 { return INTRIN(a, b); } \
-static inline T operator|(const T &a, const T &b)   { return INTRIN(a, b); } \
-static inline T operator&(const T &a, const T &b)   { return INTRIN(a, b); } \
-static inline T operator^(const T &a, const T &b)   { return INTRIN(a, b); } \
-static inline T operator|(T a, const T &b)          { return INTRIN(a, b); } \
-static inline T operator&(T a, const T &b)          { return INTRIN(a, b); } \
-static inline T operator^(T a, const T &b)          { return INTRIN(a, b); } \
-static inline T operator|(const T &a, T b)          { return INTRIN(a, b); } \
-static inline T operator&(const T &a, T b)          { return INTRIN(a, b); } \
-static inline T operator^(const T &a, T b)          { return INTRIN(a, b); }
+// AVX-512 integer bitwise operators (by-value to match MSVC intrinsics)
+inline __m512i operator|(__m512i a, __m512i b) { return _mm512_or_si512(a, b); }
+inline __m512i operator&(__m512i a, __m512i b) { return _mm512_and_si512(a, b); }
+inline __m512i operator^(__m512i a, __m512i b) { return _mm512_xor_si512(a, b); }
 
-// AVX-512 (__m512i)
-GGML_SIMD_BINARY_BITWISE(__m512i, |, _mm512_or_si512)
-GGML_SIMD_BINARY_BITWISE(__m512i, &, _mm512_and_si512)
-GGML_SIMD_BINARY_BITWISE(__m512i, ^, _mm512_xor_si512)
+// optional const-ref overloads (harmless; by-value handles rvalues)
+inline __m512i operator|(const __m512i& a, const __m512i& b) { return _mm512_or_si512(a, b); }
+inline __m512i operator&(const __m512i& a, const __m512i& b) { return _mm512_and_si512(a, b); }
+inline __m512i operator^(const __m512i& a, const __m512i& b) { return _mm512_xor_si512(a, b); }
 
-// AVX2 (__m256i)
-GGML_SIMD_BINARY_BITWISE(__m256i, |, _mm256_or_si256)
-GGML_SIMD_BINARY_BITWISE(__m256i, &, _mm256_and_si256)
-GGML_SIMD_BINARY_BITWISE(__m256i, ^, _mm256_xor_si256)
+// AVX2 integer bitwise operators (by-value)
+inline __m256i operator|(__m256i a, __m256i b) { return _mm256_or_si256(a, b); }
+inline __m256i operator&(__m256i a, __m256i b) { return _mm256_and_si256(a, b); }
+inline __m256i operator^(__m256i a, __m256i b) { return _mm256_xor_si256(a, b); }
 
-// SSE / 128-bit (__m128i)
-GGML_SIMD_BINARY_BITWISE(__m128i, |, _mm_or_si128)
-GGML_SIMD_BINARY_BITWISE(__m128i, &, _mm_and_si128)
-GGML_SIMD_BINARY_BITWISE(__m128i, ^, _mm_xor_si128)
+inline __m256i operator|(const __m256i& a, const __m256i& b) { return _mm256_or_si256(a, b); }
+inline __m256i operator&(const __m256i& a, const __m256i& b) { return _mm256_and_si256(a, b); }
+inline __m256i operator^(const __m256i& a, const __m256i& b) { return _mm256_xor_si256(a, b); }
 
-#undef GGML_SIMD_BINARY_BITWISE
+// SSE / 128-bit integer bitwise operators (by-value)
+inline __m128i operator|(__m128i a, __m128i b) { return _mm_or_si128(a, b); }
+inline __m128i operator&(__m128i a, __m128i b) { return _mm_and_si128(a, b); }
+inline __m128i operator^(__m128i a, __m128i b) { return _mm_xor_si128(a, b); }
 
-// NEON (ARM) — keep by-value and add lvalue-friendly overloads similarly
+inline __m128i operator|(const __m128i& a, const __m128i& b) { return _mm_or_si128(a, b); }
+inline __m128i operator&(const __m128i& a, const __m128i& b) { return _mm_and_si128(a, b); }
+inline __m128i operator^(const __m128i& a, const __m128i& b) { return _mm_xor_si128(a, b); }
+
+} // extern "C++"
+
+// NEON (ARM) — keep by-value forms (they already had C++ linkage and by-value)
 #ifdef __ARM_NEON
 #include <arm_neon.h>
-static inline uint8x16_t operator|(uint8x16_t a, uint8x16_t b) { return vorrq_u8(a, b); }
-static inline uint8x16_t operator&(uint8x16_t a, uint8x16_t b) { return vandq_u8(a, b); }
-static inline uint8x16_t operator|(const uint8x16_t &a, const uint8x16_t &b) { return vorrq_u8(a, b); }
-static inline uint8x16_t operator&(const uint8x16_t &a, const uint8x16_t &b) { return vandq_u8(a, b); }
-static inline uint8x16_t operator|(uint8x16_t a, const uint8x16_t &b) { return vorrq_u8(a, b); }
-static inline uint8x16_t operator&(uint8x16_t a, const uint8x16_t &b) { return vandq_u8(a, b); }
-static inline uint8x16_t operator|(const uint8x16_t &a, uint8x16_t b) { return vorrq_u8(a, b); }
-static inline uint8x16_t operator&(const uint8x16_t &a, uint8x16_t b) { return vandq_u8(a, b); }
-
-// Signed variants for int8x16_t if you want them too
-static inline int8x16_t operator|(int8x16_t a, int8x16_t b) { return vreinterpretq_s8_u8(vorrq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
-static inline int8x16_t operator&(int8x16_t a, int8x16_t b) { return vreinterpretq_s8_u8(vandq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
-static inline int8x16_t operator|(const int8x16_t &a, const int8x16_t &b) { return vreinterpretq_s8_u8(vorrq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
-static inline int8x16_t operator&(const int8x16_t &a, const int8x16_t &b) { return vreinterpretq_s8_u8(vandq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
+inline uint8x16_t operator|(uint8x16_t a, uint8x16_t b) { return vorrq_u8(a, b); }
+inline uint8x16_t operator&(uint8x16_t a, uint8x16_t b) { return vandq_u8(a, b); }
+inline int8x16_t  operator|(int8x16_t a, int8x16_t b)  { return vreinterpretq_s8_u8(vorrq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
+inline int8x16_t  operator&(int8x16_t a, int8x16_t b)  { return vreinterpretq_s8_u8(vandq_u8(vreinterpretq_u8_s8(a), vreinterpretq_u8_s8(b))); }
 #endif // __ARM_NEON
 
 #endif // GGML_SIMD_OPERATORS_DEFINED
