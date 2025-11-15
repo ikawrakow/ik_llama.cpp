@@ -842,17 +842,17 @@ struct server_slot {
     std::string stopping_word;
     stop_type stop;
 
-    server_prompt server_prompt;
+    server_prompt server_cached_prompt;
 
     void prompt_save(server_prompt_cache & prompt_cache) const {
-        assert(server_prompt.data.size() == 0);
+        assert(server_cached_prompt.data.size() == 0);
 
         const size_t cur_size = llama_state_seq_get_size(ctx, id);
 
         LLAMA_LOG_INFO(" - saving prompt with length %d, total state size = %.3f MiB\n",
-            (int)server_prompt.tokens.size(), cur_size / (1024.0 * 1024.0));
+            (int)server_cached_prompt.tokens.size(), cur_size / (1024.0 * 1024.0));
 
-        auto* cur = prompt_cache.alloc(server_prompt, cur_size);
+        auto* cur = prompt_cache.alloc(server_cached_prompt, cur_size);
         if (cur == nullptr) {
             return;
         }
@@ -861,7 +861,7 @@ struct server_slot {
     }
 
     void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens) {
-        bool res = prompt_cache.load(server_prompt, tokens, ctx, id);
+        bool res = prompt_cache.load(server_cached_prompt, tokens, ctx, id);
         if (!res) {
             LLAMA_LOG_INFO("failed to load prompt from cache\n");
         }
@@ -1832,17 +1832,17 @@ struct server_context {
             if (update_cache) {
                 const int64_t t_start = ggml_time_us();
                 LLAMA_LOG_INFO("updating prompt cache\n");
-                ret->server_prompt.tokens = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens
+                ret->server_cached_prompt.tokens = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens
                 ret->prompt_save(*prompt_cache);
                 LLAMA_LOG_INFO("prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
             // has prompts saved earlier to load          
             if (!prompt_cache->states.empty()) {
                 const int64_t t_start = ggml_time_us();
-                ret->server_prompt.tokens = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens                
+                ret->server_cached_prompt.tokens = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens                
                 ret->prompt_load(*prompt_cache, task.tokens);
                 prompt_cache->update();
-                ret->cache_tokens = server_tokens(ret->server_prompt.tokens.get_text_tokens(), false); // recover cache tokens
+                ret->cache_tokens = server_tokens(ret->server_cached_prompt.tokens.get_text_tokens(), false); // recover cache tokens
                 LLAMA_LOG_INFO("prompt cache load took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
         }
