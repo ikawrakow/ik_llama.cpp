@@ -5286,7 +5286,7 @@ struct llama_data_write {
         //          1 -> transposed V cache
         //          2 -> no V cache (as it may be the case with MLA)
         const uint32_t v_state = kv_self.v_l.empty() ? 2 : kv_self.v_trans ? 1 : 0;
-        const uint32_t n_layer = hparams.n_layer;
+        const uint32_t n_layer = kv_self.k_l.size();
 
         write(&v_state, sizeof(v_state));
         write(&n_layer, sizeof(n_layer));
@@ -5591,7 +5591,7 @@ struct llama_data_read {
         read_to(&v_state, sizeof(v_state));
         read_to(&n_layer, sizeof(n_layer));
 
-        if (n_layer != hparams.n_layer) {
+        if (n_layer != kv_self.k_l.size()) {
             LLAMA_LOG_ERROR("%s: mismatched layer count (%u instead of %u)\n", __func__, n_layer, hparams.n_layer);
             return false;
         }
