@@ -1907,9 +1907,9 @@ static bool llm_load_tensors(
         for (auto& it : model.tensors_by_name) {
             if (ggml_backend_buffer_is_host(it.second->buffer)) {
                 auto orig_type = it.second->type;
+                if (it.second->view_src) continue;
                 iqk_repack_tensor(it.second);
                 if (it.second->type != orig_type) ++n_repacked;
-                //printf("Repacking tensor %s\n", it.first.c_str());
             }
         }
         if (n_repacked > 0) printf("============ Repacked %d tensors\n", n_repacked);
