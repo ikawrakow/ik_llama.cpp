@@ -28,7 +28,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     virtual size_t get_ctx_size() const override { return ctx_size; }
 
-    bool merge_qkv(const LLM_TN & tn, int i, int bias);
+    bool merge_qkv(const LLM_TN & tn, int i, int bias, bool ignore_attn_scale = false);
 
     bool create_tensors() override;
 
@@ -1313,9 +1313,8 @@ bool create_tensors_helper::create_gemma_tensors(const LLM_TN & tn, int version)
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
-        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head});
-        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa});
-        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa});
+        use_mmap_buffer &= !merge_qkv(tn, i, 0, true);
+
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd});
         if (version > 1) {
             layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd});
@@ -2524,7 +2523,7 @@ bool create_tensors_helper::create_smollm3_tensors(const LLM_TN & tn) {
     return use_mmap_buffer;
 }
 
-bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
+bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool ignore_attn_scale) {
     auto& hparams = model.hparams;
     const int64_t n_head        = hparams.n_head();
     const int64_t n_head_kv     = hparams.n_head_kv();
@@ -2547,7 +2546,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
     GGML_ASSERT(wq && wk && wv);
 
     bool fused_qkv = false;
-    if (ml.merge_qkv && wq->type == wk->type && wq->type == wv->type && hparams.f_attention_scale == 0.0f) {
+    if (ml.merge_qkv && wq->type == wk->type && wq->type == wv->type && (ignore_attn_scale || hparams.f_attention_scale == 0.0f)) {
         GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
         GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
         GGML_ASSERT(wv->ne[0] == n_embd && wv->ne[1] == n_embd_gqa);
@@ -2585,7 +2584,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
             }
         }
     }
-    if (!fused_qkv && ml.merge_qkv && wq->type == wk->type && hparams.f_attention_scale == 0.0f) {
+    if (!fused_qkv && ml.merge_qkv && wq->type == wk->type && (ignore_attn_scale || hparams.f_attention_scale == 0.0f)) {
         GGML_ASSERT(wq->ne[0] == n_embd && wq->ne[1] == n_head * n_embd_head_k);
         GGML_ASSERT(wk->ne[0] == n_embd && wk->ne[1] == n_embd_gqa);
         layer.wqk = ggml_new_tensor_2d(ctx_split, wq->type, n_embd, n_embd_head_k * (n_head + n_head_kv));
@@ -2623,7 +2622,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias) {
     if (!fused_qkv) {
         if (ml.merge_qkv) {
             printf("%s: did not merge Q, K, V in layer %d because %d, %d, %d\n", __func__, i,
-                    wq->type == wk->type, wq->type == wv->type, hparams.f_attention_scale == 0.0f);
+                    wq->type == wk->type, wq->type == wv->type, (ignore_attn_scale || hparams.f_attention_scale == 0.0f));
         }
         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head});
         layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
