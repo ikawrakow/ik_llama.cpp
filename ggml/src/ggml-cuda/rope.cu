@@ -868,9 +868,8 @@ void ggml_cuda_op_rope_fast(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const size_t s01 = src0->nb[1] / ggml_type_size(src0->type);
     const size_t s02 = src0->nb[2] / ggml_type_size(src0->type);
 
-    //const int n_past     = ((int32_t *) dst->op_params)[0];
-    const int n_dims     = ((const int32_t *) src1->op_params)[1];
-    const int mode       = ((const int32_t *) src1->op_params)[2];
+    const int n_dims     = ((const int32_t *) dst->op_params)[0];
+    const int mode       = ((const int32_t *) dst->op_params)[1];
 
     const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
@@ -916,8 +915,10 @@ bool ggml_cuda_op_fused_rope_fast(ggml_backend_cuda_context & ctx, ggml_tensor *
     if (src0_1->ne[2] != src0_2->ne[2]) return false;
     if (src0_1->ne[3] != src0_2->ne[3]) return false;
 
-    const int n_dims     = ((const int32_t *) src1->op_params)[1];
-    const int mode       = ((const int32_t *) src1->op_params)[2];
+    const int n_dims     = ((const int32_t *) dst1->op_params)[0];
+    const int mode       = ((const int32_t *) dst1->op_params)[1];
+
+    if (n_dims != dst2->op_params[0] || mode != dst2->op_params[1]) return false;
 
     const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope  = mode & GGML_ROPE_TYPE_MROPE;
@@ -986,8 +987,10 @@ bool ggml_cuda_op_fused_rms_rope_fast(ggml_backend_cuda_context & ctx, ggml_tens
     GGML_ASSERT(c_1->ne[0] == src0_1->ne[0]);
     GGML_ASSERT(c_2->ne[0] == src0_2->ne[0]);
 
-    const int n_dims     = ((const int32_t *) src1->op_params)[1];
-    const int mode       = ((const int32_t *) src1->op_params)[2];
+    const int n_dims     = ((const int32_t *) dst1->op_params)[0];
+    const int mode       = ((const int32_t *) dst1->op_params)[1];
+
+    if (n_dims != dst2->op_params[0] || mode != dst2->op_params[1]) return false;
 
     const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope  = mode & GGML_ROPE_TYPE_MROPE;
