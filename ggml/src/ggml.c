@@ -8735,6 +8735,9 @@ struct ggml_tensor * ggml_rope_fast(
 
     struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
 
+    result->op_params[0] = b->op_params[1];
+    result->op_params[1] = b->op_params[2];
+
     result->op     = GGML_OP_ROPE_FAST;
     result->src[0] = a;
     result->src[1] = b;
@@ -18586,8 +18589,8 @@ static void ggml_compute_forward_rope_fast_f32(
     GGML_ASSERT(src0->ne[0] <= src1->ne[0]);
     GGML_ASSERT(src0->ne[2] <= src1->ne[1]);
 
-    const int n_dims     = ((const int32_t *) src1->op_params)[1];
-    const int mode       = ((const int32_t *) src1->op_params)[2];
+    const int n_dims     = dst->op_params[0];
+    const int mode       = dst->op_params[1];
 
     const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope  = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
