@@ -4952,8 +4952,6 @@ ggml_cgraph * llm_build_context::build_gemma2() {
 ggml_cgraph * llm_build_context::build_gemma3() {
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model), false);
 
-    const int64_t n_embd_head_k = hparams.n_embd_head_k;
-
     struct ggml_tensor * cur;
     struct ggml_tensor * inpL;
 
@@ -4977,6 +4975,15 @@ ggml_cgraph * llm_build_context::build_gemma3() {
     // 5 layers of local attention followed by 1 layer of global attention
     static const int sliding_window_pattern = 6;
 
+    ggml_tensor * rope_cache   = nullptr;
+    ggml_tensor * rope_cache_l = nullptr;
+    if (cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM)) {
+        rope_cache = ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow);
+        rope_cache_l = ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, rope_type, n_ctx_orig, 10000.0f, 1.0f,
+            ext_factor, attn_factor, beta_fast, beta_slow);
+    }
+
     for (int il = 0; il < n_layer; ++il) {
         const bool is_sliding          = (il + 1) % sliding_window_pattern;
         const float freq_base_l        = is_sliding ? 10000.0f    : freq_base;
@@ -4989,24 +4996,24 @@ ggml_cgraph * llm_build_context::build_gemma3() {
 
         // self-attention
         {
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, nullptr,
-                    model.layers[il].wk, nullptr,
-                    model.layers[il].wv, nullptr, 0, il);
+            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
+                    model.layers[il].wqkv, nullptr,
+                    model.layers[il].wqk, nullptr,
+                    model.layers[il].wq, nullptr, model.layers[il].wk, nullptr, model.layers[il].wv, nullptr,
+                    model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0, il);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head,    n_tokens);
-            Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
-            cb(Qcur, "Qcur_normed", il);
+            if (rope_cache) {
+                auto rcache = is_sliding ? rope_cache_l : rope_cache;
+                Qcur = ggml_rope_fast(ctx0, Qcur, rcache);
+                Kcur = ggml_rope_fast(ctx0, Kcur, rcache);
+            } else {
+                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                        ext_factor, attn_factor, beta_fast, beta_slow);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
+                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                        ext_factor, attn_factor, beta_fast, beta_slow);
+            }
             cb(Qcur, "Qcur", il);
-
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv, n_tokens);
-            Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
-            cb(Kcur, "Kcur_normed", il);
-
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                    ext_factor, attn_factor, beta_fast, beta_slow);
             cb(Kcur, "Kcur", il);
 
             cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, NULL,
@@ -5953,6 +5960,10 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
     // n_tokens is higher during prompt processing, this allows to optimize for this case
     bool pp_opt = n_tokens >= 128; // Is it a fixed constant or is it somehow relared to n_head? original: n_tokens > n_head;
 
+    auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
+        ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
+
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
@@ -6043,14 +6054,17 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             cb(k_rope, "k_rope", il);
             cb(kv_compressed, "kv_compressed", il);
 
-            q_rope = ggml_rope_ext(ctx0, q_rope, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow);
-            cb(q_rope, "q_rope", il);
+            if (rope_cache) {
+                q_rope = ggml_rope_fast(ctx0, q_rope, rope_cache);
+                k_rope = ggml_rope_fast(ctx0, k_rope, rope_cache);
+            } else {
+                q_rope = ggml_rope_ext(ctx0, q_rope, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor_scaled, beta_fast, beta_slow);
 
-            k_rope = ggml_rope_ext(ctx0, k_rope, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+                k_rope = ggml_rope_ext(ctx0, k_rope, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+            }
+            cb(q_rope, "q_rope", il);
             cb(k_rope, "k_rope", il);
 
             kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams, model.layers[il].attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
