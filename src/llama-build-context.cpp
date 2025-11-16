@@ -5953,6 +5953,10 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
     // n_tokens is higher during prompt processing, this allows to optimize for this case
     bool pp_opt = n_tokens >= 128; // Is it a fixed constant or is it somehow relared to n_head? original: n_tokens > n_head;
 
+    auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
+        ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
+
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
@@ -6043,14 +6047,17 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             cb(k_rope, "k_rope", il);
             cb(kv_compressed, "kv_compressed", il);
 
-            q_rope = ggml_rope_ext(ctx0, q_rope, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow);
-            cb(q_rope, "q_rope", il);
+            if (rope_cache) {
+                q_rope = ggml_rope_fast(ctx0, q_rope, rope_cache);
+                k_rope = ggml_rope_fast(ctx0, k_rope, rope_cache);
+            } else {
+                q_rope = ggml_rope_ext(ctx0, q_rope, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor_scaled, beta_fast, beta_slow);
 
-            k_rope = ggml_rope_ext(ctx0, k_rope, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+                k_rope = ggml_rope_ext(ctx0, k_rope, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor_scaled, beta_fast, beta_slow);
+            }
+            cb(q_rope, "q_rope", il);
             cb(k_rope, "k_rope", il);
 
             kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams, model.layers[il].attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
