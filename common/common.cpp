@@ -1816,6 +1816,21 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.ctx_shift = false;
         return true;
     }
+    if (arg == "--context-shift") {
+        CHECK_ARG
+        std::string next_arg{ argv[i] };
+        for (auto& c : next_arg) c = std::tolower(c);
+        if (next_arg == "auto" || next_arg == "1" || next_arg == "on") {
+            params.ctx_shift = true;
+        }
+        else if (next_arg == "off" || next_arg == "0") {
+            params.ctx_shift = false;
+        }
+        else {
+            invalid_param = true;
+        }
+        return true;
+    }
     if (arg == "-cram" || arg == "--cache-ram") {
         CHECK_ARG
         params.cache_ram_mib = std::stoi(argv[i]);
@@ -2173,6 +2188,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --mmproj FILE",          "path to a multimodal projector file for LLaVA. see examples/llava/README.md" });
     options.push_back({ "*",           "       --image FILE",           "path to an image file. use with multimodal models. Specify multiple times for batching" });
     options.push_back({ "*",           "       --no-context-shift",           "disable context-shift." });
+    options.push_back({ "*",           "--context-shift (auto|on|off|0|1)", "set context-shift (default: %s)", params.ctx_shift ? "on" : "off" });
     options.push_back({ "backend" });
     options.push_back({ "*",           "       --rpc SERVERS",          "comma separated list of RPC servers" });
     options.push_back({ "*",           "-cuda, --cuda-params",          "comma separate list of cuda parameters" });
