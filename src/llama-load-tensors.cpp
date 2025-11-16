@@ -1298,7 +1298,12 @@ bool create_tensors_helper::create_gemma_tensors(const LLM_TN & tn, int version)
 
     // output
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-    model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED); // same as tok_embd, duplicated to allow offloading
+    model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab},
+            llama_model_loader::TENSOR_NOT_REQUIRED);
+    if (!model.output) {
+        model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab},
+                llama_model_loader::TENSOR_DUPLICATED);
+    }
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
