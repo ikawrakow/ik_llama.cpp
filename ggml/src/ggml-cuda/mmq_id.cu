@@ -472,7 +472,7 @@ void ggml_cuda_mul_mat_q_id(ggml_backend_cuda_context & ctx, const ggml_tensor *
 
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
-        const int64_t s13 = src1->nb[2] / ts_src1;
+        const int64_t s13 = src1->nb[3] / ts_src1;
         quantize_mmq_q8_1_cuda_id(src1_d, ids_src1, src1_q8_1, src0->type,
             ne10, s11, s12, s13, ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
         CUDA_CHECK(cudaGetLastError());
