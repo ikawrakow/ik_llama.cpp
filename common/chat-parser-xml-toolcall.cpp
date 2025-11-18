@@ -266,7 +266,7 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                 if (data.format == COMMON_CHAT_FORMAT_KIMI_K2) {
                     quoted_name = "\"functions.\" " + quoted_name + " \":\" [0-9]+";
                 }
-                tool_rules.push_back(builder.add_rule(name + "-call", 
+                tool_rules.push_back(builder.add_rule(name + "-call",
                         gbnf_format_literal(form.tool_start) + " " +
                         quoted_name + " " +
                         gbnf_format_literal(form.tool_sep) + " " +
@@ -545,15 +545,12 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                 }
                 builder.move_to(json_end);
                 auto [val_end_size, tc] = try_find_val_end();
-                if (tc && value_json->healing_marker.marker.empty()) {
+                if (tc && all_space(tc->prelude) && value_json->healing_marker.marker.empty()) {
                     if (tc->groups[0].end - tc->groups[0].begin != val_end_size) {
                         gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
                         LOG("Possible terminated JSON arg_value: %s\n", value_json->json.dump().c_str());
                         throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.val_end) + (form.last_val_end ? gbnf_format_literal(*form.last_val_end) : ""));
-                    }
-                    if (all_space(tc->prelude)) {
-                        arguments[key] = value_json->json;
-                    }
+                    } else arguments[key] = value_json->json;
                 } else builder.move_to(val_start);
             }
 
