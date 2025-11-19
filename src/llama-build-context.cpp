@@ -865,10 +865,6 @@ llm_expert_gating_func_type   gating_op,
         cb(weights, "ffn_moe_weights_softmax", il);
     }
 
-    if (graph) {
-        ggml_build_forward_expand(graph, weights);
-    }
-
     if (norm_w) {
         weights = ggml_reshape_2d(ctx, weights, n_expert_used, n_tokens);
 
@@ -888,6 +884,10 @@ llm_expert_gating_func_type   gating_op,
     if (scale_w && std::abs(w_scale-1) > 1e-5f) {
         weights = ggml_scale(ctx, weights, w_scale);
         cb(weights, "ffn_moe_weights_scaled", il);
+    }
+
+    if (graph) {
+        ggml_build_forward_expand(graph, weights);
     }
 
     cur = ggml_reshape_3d(ctx, cur, n_embd, 1, n_tokens);
