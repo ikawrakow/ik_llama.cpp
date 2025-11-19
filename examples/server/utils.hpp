@@ -1346,18 +1346,19 @@ public:
 
     // Keep the first n_keep and remove n_discard tokens from tokens
     void discard_n_tokens(int32_t n_keep, int32_t n_discard) {
+        if (n_discard <= 0 || n_keep + n_discard >= size()) {
+            return;
+        }
+
         llama_tokens new_tokens = get_text_tokens(); // copy
-		bool discard = false;
         for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
             new_tokens[i - n_discard] = new_tokens[i];
-			discard = true;
         }
         int32_t token_size = (int32_t) size();
-        if (discard) {
-            new_tokens.resize(token_size - n_discard);
-            clear();
-            insert(new_tokens);
-        }
+        new_tokens.resize(token_size - n_discard);
+        clear();
+        insert(new_tokens);
+
     }
 
     // Similarity between prompt and cached

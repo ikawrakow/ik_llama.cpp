@@ -814,6 +814,7 @@ struct server_slot {
     int32_t n_decoded   = 0;
     int32_t n_remaining = -1;
     int32_t n_discarded =  0;
+    int32_t n_kept      =  0;
     int32_t i_batch     = -1;
     int32_t n_predict   = -1; // TODO: disambiguate from params.n_predict
 
@@ -1774,7 +1775,7 @@ struct server_context {
                 float sim_cur = cache_tokens.get_tokens_similarity(task.tokens, 0, 0);
                 // handle context shift
                 if (slot.ga_n == 1 && slot.n_discarded > 0 && task.tokens.size()>=slot.n_ctx) {
-                    float sim_cur_ctx_shift  = cache_tokens.get_tokens_similarity(task.tokens, slot.params.n_keep + add_bos_token, slot.n_discarded);
+                    float sim_cur_ctx_shift  = cache_tokens.get_tokens_similarity(task.tokens, slot.n_kept, slot.n_discarded);
                     if (sim_cur_ctx_shift > sim_cur) {
                         sim_cur = sim_cur_ctx_shift;
                     }
@@ -1844,13 +1845,13 @@ struct server_context {
             update_cache = update_cache && (ret->mctx == nullptr);
 
             LLAMA_LOG_INFO("prompt cache: cache size: %d, n_keep: %d, n_discarded: %d, cache_ram_n_min: %d, f_keep: %.2f, cache_ram_similarity: %.2f\n",
-                (int)tokens.size(), ret->params.n_keep, ret->n_discarded, cache_ram_n_min, f_keep, cache_ram_similarity);
+                (int)tokens.size(), ret->n_kept, ret->n_discarded, cache_ram_n_min, f_keep, cache_ram_similarity);
             if (update_cache) {
                 const int64_t t_start = ggml_time_us();
                 LLAMA_LOG_INFO("updating prompt cache\n");
                 ret->server_cached_prompt.tokens = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens
                 ret->server_cached_prompt.n_discarded = ret->n_discarded;
-                ret->server_cached_prompt.n_keep = ret->params.n_keep+add_bos_token;
+                ret->server_cached_prompt.n_keep = ret->n_kept;
                 
                 ret->prompt_save(*prompt_cache);
                 LLAMA_LOG_INFO("prompt cache save took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
@@ -1860,14 +1861,14 @@ struct server_context {
                 const int64_t t_start = ggml_time_us();
                 ret->server_cached_prompt.tokens = server_tokens(tokens.get_text_tokens(), false); // copy cache tokens
                 ret->server_cached_prompt.n_discarded = ret->n_discarded;
-                ret->server_cached_prompt.n_keep = ret->params.n_keep + add_bos_token;
+                ret->server_cached_prompt.n_keep = ret->n_kept;
 
                 ret->prompt_load(*prompt_cache, task.tokens);
                 prompt_cache->update();
 
                 ret->cache_tokens = server_tokens(ret->server_cached_prompt.tokens.get_text_tokens(), false); // recover cache tokens
                 ret->n_discarded = ret->server_cached_prompt.n_discarded;
-                ret->params.n_keep = ret->server_cached_prompt.n_keep - add_bos_token;
+                ret->n_kept = ret->server_cached_prompt.n_keep;
 
                 LLAMA_LOG_INFO("prompt cache load took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
             }
@@ -3170,7 +3171,12 @@ struct server_context {
                         GGML_ABORT("not supported by multimodal");
                     }
                     // Shift context
-                    const int n_keep    = slot.params.n_keep + add_bos_token;
+                    int n_keep = slot.params.n_keep < 0 ? slot.prompt_tokens.size() : slot.params.n_keep;
+                    if (add_bos_token) {
+                        n_keep += 1;
+                    }
+                    n_keep = std::min(slot.n_ctx - 4, n_keep);
+
                     const int n_left    = (int) system_tokens.size() + slot.n_past - n_keep;
                     const int n_discard = slot.params.n_discard ? slot.params.n_discard : (n_left / 2);
 
@@ -3186,6 +3192,7 @@ struct server_context {
                         {"n_cache_tokens",  slot.cache_tokens.size()}
                     });
                     slot.n_discarded = slot.n_discarded + n_discard;
+                    slot.n_kept = n_keep;
                     discard_n_kv_and_cache_tokens(ctx, slot, n_keep, n_discard);
                     slot.n_past -= n_discard;
                     slot.truncated = true;
@@ -3338,7 +3345,7 @@ struct server_context {
                                     slot.release();
                                     continue;
                                 }
-                                int n_keep = slot.params.n_keep + add_bos_token;
+                                int n_keep = std::max(0, slot.params.n_keep + add_bos_token);
                                 const int n_left = slot.n_ctx - n_keep;
                                 int n_discard = slot.params.n_discard ? slot.params.n_discard : (n_left / 2);
                                 int n_discard_cache = 0;
@@ -3355,6 +3362,7 @@ struct server_context {
                                 }
                                 // discard extra tokens from prompts
                                 n_discard = slot.n_discarded;
+                                slot.n_kept = n_keep;
                                 prompt_tokens.discard_n_tokens(n_keep, n_discard);
                                 slot.truncated = true;
                                 slot.n_prompt_tokens = prompt_tokens.size();
