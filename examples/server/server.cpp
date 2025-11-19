@@ -3222,7 +3222,7 @@ struct server_context {
 
             // TODO: we always have to take into account the "system_tokens"
             //       this is not great and needs to be improved somehow
-            llama_batch_add(batch, slot.sampled, system_tokens.size() + slot_npast, { slot.id }, true);
+            llama_batch_add(batch, slot.sampled, system_tokens.size() + slot.cache_tokens.pos_next(), { slot.id }, true);
 
             slot.n_past += 1;
 
@@ -3437,6 +3437,7 @@ struct server_context {
 
                     // keep only the common part
                     int p0 = (int) system_tokens.size() + slot.n_past;
+                    p0 = system_tokens.size() + slot.cache_tokens.pos_next();
                     if (!llama_kv_cache_seq_rm(ctx, slot.id, p0, -1)) {
                         // could not partially delete (likely using a non-Transformer model)
                         llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
@@ -3451,12 +3452,13 @@ struct server_context {
                         slot.n_past = 0;
                         slot.n_past_se = 0;
                         slot.ga_i = 0;
+                        //slot.cache_tokens.clear();
                         // TODO: is the system prompt ever in the sampling context?
                         llama_sampling_reset(llama_get_model_vocab(model), slot.ctx_sampling);
                     }
 
                     // remove the non-common part from the cache
-                    slot.cache_tokens.keep_first(slot.n_past);
+                    // slot.cache_tokens.keep_first(slot.n_past);
 
                     LOG_INFO("kv cache rm [p0, end)", {
                         { "id_slot", slot.id },
@@ -3468,10 +3470,8 @@ struct server_context {
                     if (slot.n_past < slot.n_prompt_tokens
                         && slot.prompt_tokens[slot.n_past] == LLAMA_TOKEN_NULL) {
                         // process the image
-                        int32_t new_n_past;
-                        size_t new_n_tokens;
-                        int32_t res = slot.prompt_tokens.process_chunk(ctx, mctx, slot.n_past, slot.id, new_n_past, new_n_tokens);
-                        int32_t n_pos = new_n_past - slot.n_past;
+                        size_t n_tokens_out = 0;
+                        int32_t res = slot.prompt_tokens.process_chunk(ctx, mctx, slot.n_past, slot.cache_tokens.pos_next(), slot.id, n_tokens_out);
                         if (res != 0) {
                             LLAMA_LOG_ERROR("failed to process image, res = %d\n", res);
                             slot.release();
@@ -3485,8 +3485,9 @@ struct server_context {
                             slot.cache_tokens.push_back(chunk.get()); // copy
                         }
 
-                        slot.n_past += n_pos;
-                        slot.n_prompt_tokens_processed += new_n_tokens;
+                        slot.n_past += n_tokens_out;
+                        slot.n_prompt_tokens_processed += n_tokens_out;
+
                     }
 
 
@@ -3513,10 +3514,11 @@ struct server_context {
                             }
                         }
 
-                        llama_batch_add(batch, cur_tok, system_tokens.size() + slot_npast, { slot.id }, false);
-                        {
-                            slot.cache_tokens.push_back(cur_tok);
-                        }
+						int p0=system_tokens.size() + slot.cache_tokens.pos_next();
+                        llama_batch_add(batch, cur_tok, p0, { slot.id }, false);
+                        
+                        slot.cache_tokens.push_back(cur_tok);
+                        
 
                         slot.n_prompt_tokens_processed++;
                         slot_npast++;
@@ -3768,10 +3770,10 @@ struct server_context {
 
                 // construct the speculation batch
                 llama_batch_clear(slot.batch_spec);
-                llama_batch_add(slot.batch_spec, id, slot.n_past, { slot.id }, true);
+                llama_batch_add(slot.batch_spec, id, slot.cache_tokens.pos_next(), { slot.id }, true);
 
                 for (size_t i = 0; i < draft.size(); ++i) {
-                    llama_batch_add(slot.batch_spec, draft[i], slot.n_past + 1 + i, { slot.id }, true);
+                    llama_batch_add(slot.batch_spec, draft[i], slot.cache_tokens.pos_next() + 1 + i, { slot.id }, true);
                 }
 
                 LOG_VERBOSE("decoding speculative batch", {
