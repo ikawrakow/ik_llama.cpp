@@ -3346,7 +3346,19 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_soft_cap_max(ctx, dst);
             break;
         case GGML_OP_ROPE:
-            ggml_cuda_op_rope(ctx, dst);
+            if (fusion && i + 2 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
+                cgraph->nodes[i+2]->op == GGML_OP_ROPE &&
+                ggml_cuda_op_rope_rope(ctx, dst, cgraph->nodes[i+2])) {
+                i += 2;
+            }
+            else if (fusion && i + 1 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_ROPE &&
+                ggml_cuda_op_rope_rope(ctx, dst, cgraph->nodes[i+1])) {
+                i += 1;
+            } else {
+                ggml_cuda_op_rope(ctx, dst);
+            }
             break;
         case GGML_OP_ROPE_BACK:
             ggml_cuda_op_rope_back(ctx, dst);
