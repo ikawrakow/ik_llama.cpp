@@ -334,7 +334,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ngl, --n-gpu-layers <n>            (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  --n-cpu-moe <n>                     (default: none)\n");
     printf("  -rpc, --rpc <rpc_servers>           (default: %s)\n", join(cmd_params_defaults.rpc_servers, ",").c_str());
-    printf("  -sm, --split-mode <none|layer|row>  (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
+    printf("  -sm, --split-mode <none|layer>      (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                 (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>        (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <0|1>             (default: %s)\n", join(cmd_params_defaults.flash_attn, ",").c_str());
@@ -631,7 +631,11 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 } else if (m == "layer") {
                     mode = LLAMA_SPLIT_MODE_LAYER;
                 } else if (m == "row") {
-                    mode = LLAMA_SPLIT_MODE_ROW;
+                    fprintf(stderr, "\n\n=======================================================================\n");
+                    fprintf(stderr, "Split mode 'row' is no longer supported\n");
+                    fprintf(stderr, "=======================================================================\n\n\n");
+                    invalid_param = true;
+                    break;
                 } else {
                     invalid_param = true;
                     break;
