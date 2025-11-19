@@ -4770,6 +4770,10 @@ int32_t llama_n_embd(const struct llama_model * model) {
     return model->hparams.n_embd;
 }
 
+int32_t llama_model_n_embd_inp(const llama_model* model) {
+    return model->hparams.n_embd_inp();
+}
+
 int32_t llama_n_layer(const struct llama_model * model) {
     return model->hparams.n_layer;
 }
