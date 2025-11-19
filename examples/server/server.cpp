@@ -3418,6 +3418,7 @@ struct server_context {
                         }
 
                         slot.n_prompt_tokens_processed = 0;
+                        slot.cache_tokens.keep_first(slot.n_past);
                     }
 
                     if (slot.embedding) {
@@ -3436,8 +3437,7 @@ struct server_context {
                     }
 
                     // keep only the common part
-                    int p0 = (int) system_tokens.size() + slot.n_past;
-                    p0 = system_tokens.size() + slot.cache_tokens.pos_next();
+                    int p0 = system_tokens.size() + slot.cache_tokens.pos_next();
                     if (!llama_kv_cache_seq_rm(ctx, slot.id, p0, -1)) {
                         // could not partially delete (likely using a non-Transformer model)
                         llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
@@ -3452,7 +3452,7 @@ struct server_context {
                         slot.n_past = 0;
                         slot.n_past_se = 0;
                         slot.ga_i = 0;
-                        //slot.cache_tokens.clear();
+                        slot.cache_tokens.clear();
                         // TODO: is the system prompt ever in the sampling context?
                         llama_sampling_reset(llama_get_model_vocab(model), slot.ctx_sampling);
                     }
