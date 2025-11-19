@@ -6054,6 +6054,8 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             cb(k_rope, "k_rope", il);
             cb(kv_compressed, "kv_compressed", il);
 
+            ggml_build_forward_expand(gf, q_rope);
+            ggml_build_forward_expand(gf, k_rope);
             if (rope_cache) {
                 q_rope = ggml_rope_fast(ctx0, q_rope, rope_cache);
                 k_rope = ggml_rope_fast(ctx0, k_rope, rope_cache);
@@ -6066,6 +6068,8 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             }
             cb(q_rope, "q_rope", il);
             cb(k_rope, "k_rope", il);
+            ggml_build_forward_expand(gf, q_rope);
+            ggml_build_forward_expand(gf, k_rope);
 
             kv_compressed = llm_build_norm(ctx0, kv_compressed, hparams, model.layers[il].attn_kv_a_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(kv_compressed, "kv_compressed", il);
