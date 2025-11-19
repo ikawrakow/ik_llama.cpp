@@ -3336,8 +3336,16 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 cgraph->nodes[i+4]->op == GGML_OP_GET_ROWS &&
                 ggml_cuda_should_use_topk_moe(cgraph->nodes[i], cgraph->nodes[i+4]) &&
                 ops_are_same_device(cgraph, i, i+4)) {
-                ggml_cuda_op_topk_moe(ctx, cgraph->nodes[i], cgraph->nodes[i+4], cgraph->nodes[i+3]);
-                i += 4;
+                if (i + 7 < cgraph->n_nodes &&
+                    cgraph->nodes[i+5]->op == GGML_OP_RESHAPE  &&
+                    cgraph->nodes[i+6]->op == GGML_OP_SUM_ROWS &&
+                    cgraph->nodes[i+7]->op == GGML_OP_DIV) {
+                    ggml_cuda_op_topk_moe(ctx, cgraph->nodes[i], cgraph->nodes[i+7], cgraph->nodes[i+3]);
+                    i += 7;
+                } else {
+                    ggml_cuda_op_topk_moe(ctx, cgraph->nodes[i], cgraph->nodes[i+4], cgraph->nodes[i+3]);
+                    i += 4;
+                }
             } else {
                 ggml_cuda_op_soft_max(ctx, dst);
             }
