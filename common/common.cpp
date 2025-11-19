@@ -1240,10 +1240,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.split_mode = LLAMA_SPLIT_MODE_LAYER;
         }
         else if (arg_next == "row") {
-#ifdef GGML_USE_SYCL
-            fprintf(stderr, "warning: The split mode value:[row] is not supported by llama.cpp with SYCL. It's developing.\nExit!\n");
-            exit(1);
-#endif // GGML_USE_SYCL
+            fprintf(stderr, "\n\n=====================================================================================\n");
+            fprintf(stderr, " Split mode row is no longer supported\n");
+            fprintf(stderr, "=====================================================================================\n\n\n");
+            GGML_ABORT("fatal error");
             params.split_mode = LLAMA_SPLIT_MODE_ROW;
         }
         else {
@@ -2217,8 +2217,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "-sm,   --split-mode SPLIT_MODE",
                                                                         "how to split the model across multiple GPUs, one of:\n"
                                                                         "  - none: use one GPU only\n"
-                                                                        "  - layer (default): split layers and KV across GPUs\n"
-                                                                        "  - row: split rows across GPUs" });
+                                                                        "  - layer (default): split layers and KV across GPUs\n" });
         options.push_back({ "*",           "-ts,   --tensor-split SPLIT",
                                                                         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1" });
         options.push_back({ "*",           "-dev,   --device dev1,dev2",
