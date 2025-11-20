@@ -2574,6 +2574,12 @@ extern "C" {
     GGML_API size_t ggml_graph_overhead(void);
     GGML_API size_t ggml_graph_overhead_custom(size_t size, bool grads);
 
+    GGML_API int                   ggml_graph_size(struct ggml_cgraph* cgraph);
+    GGML_API struct ggml_tensor* ggml_graph_node(struct ggml_cgraph* cgraph, int i); // if i < 0, returns nodes[n_nodes + i]
+    GGML_API struct ggml_tensor** ggml_graph_nodes(struct ggml_cgraph* cgraph);
+    GGML_API int                   ggml_graph_n_nodes(struct ggml_cgraph* cgraph);
+
+
     // ggml_graph_plan() has to be called before ggml_graph_compute()
     // when plan.work_size > 0, caller must allocate memory for plan.work_data
     GGML_API struct ggml_cplan ggml_graph_plan   (const struct ggml_cgraph * cgraph, int n_threads /*= GGML_DEFAULT_N_THREADS*/);

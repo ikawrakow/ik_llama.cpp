@@ -29,7 +29,9 @@
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
 
 // vision-specific
+#define KEY_VISION_PROJ_TYPE    "clip.vision.projector_type" // for models with mixed modalities
 #define KEY_IMAGE_SIZE          "clip.vision.image_size"
+#define KEY_PREPROC_IMAGE_SIZE  "clip.vision.preproc_image_size"
 #define KEY_PATCH_SIZE          "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN          "clip.vision.image_mean"
 #define KEY_IMAGE_STD           "clip.vision.image_std"
@@ -47,6 +49,7 @@
 #define KEY_MINICPMV_QUERY_NUM    "clip.minicpmv_query_num"
 
 // audio-specific
+#define KEY_AUDIO_PROJ_TYPE     "clip.audio.projector_type" // for models with mixed modalities
 #define KEY_A_NUM_MEL_BINS      "clip.audio.num_mel_bins"
 #define KEY_A_PROJ_STACK_FACTOR "clip.audio.projector.stack_factor"
 
@@ -117,6 +120,14 @@
 #define TN_MM_NORM_PRE  "mm.a.norm_pre.%s"
 #define TN_MM_NORM_MID  "mm.a.norm_mid.%s"
 
+// cogvlm
+#define TN_MM_POST_FC_NORM "mm.post_fc_norm.%s"
+#define TN_MM_H_TO_4H      "mm.up.%s"
+#define TN_MM_GATE         "mm.gate.%s"
+#define TN_MM_4H_TO_H      "mm.down.%s"
+#define TN_TOK_BOI         "v.boi"
+#define TN_TOK_EOI         "v.eoi"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
@@ -141,6 +152,9 @@ enum projector_type {
     PROJECTOR_TYPE_VOXTRAL,
     PROJECTOR_TYPE_LFM2,
     PROJECTOR_TYPE_KIMIVL,
+    PROJECTOR_TYPE_LIGHTONOCR,
+    PROJECTOR_TYPE_COGVLM,
+    PROJECTOR_TYPE_JANUS_PRO,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -164,6 +178,9 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_VOXTRAL,   "voxtral"},
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
+    { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
+    { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
+    { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
