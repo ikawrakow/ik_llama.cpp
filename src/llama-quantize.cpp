@@ -66,6 +66,44 @@ struct quantize_state_internal {
         {}
 };
 
+static std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
+    static std::unordered_map<ggml_type, std::pair<ggml_type, int>> k_map = {
+        { GGML_TYPE_Q4_0_4_4,    { GGML_TYPE_Q4_0, 4} },
+        { GGML_TYPE_Q4_0_4_8,    { GGML_TYPE_Q4_0, 4} },
+        { GGML_TYPE_Q4_0_8_8,    { GGML_TYPE_Q4_0, 8} },
+        { GGML_TYPE_Q4_0_R8,     { GGML_TYPE_Q4_0, 8} },
+        { GGML_TYPE_Q5_0_R4,     { GGML_TYPE_Q5_0, 4} },
+        { GGML_TYPE_Q6_0_R4,     { GGML_TYPE_Q6_0, 4} },
+        { GGML_TYPE_Q8_0_R8,     { GGML_TYPE_Q8_0, 8} },
+        { GGML_TYPE_Q2_K_R4,     { GGML_TYPE_Q2_K, 4} },
+        { GGML_TYPE_Q3_K_R4,     { GGML_TYPE_Q3_K, 4} },
+        { GGML_TYPE_Q4_K_R4,     { GGML_TYPE_Q4_K, 4} },
+        { GGML_TYPE_Q5_K_R4,     { GGML_TYPE_Q5_K, 4} },
+        { GGML_TYPE_Q6_K_R4,     { GGML_TYPE_Q6_K, 4} },
+        { GGML_TYPE_IQ2_XXS_R4,  { GGML_TYPE_IQ2_XXS, 4} },
+        { GGML_TYPE_IQ2_XS_R4,   { GGML_TYPE_IQ2_XS, 4} },
+        { GGML_TYPE_IQ2_S_R4,    { GGML_TYPE_IQ2_S, 4} },
+        { GGML_TYPE_IQ3_XXS_R4,  { GGML_TYPE_IQ3_XXS, 4} },
+        { GGML_TYPE_IQ3_S_R4,    { GGML_TYPE_IQ3_S, 4} },
+        { GGML_TYPE_IQ4_XS_R8,   { GGML_TYPE_IQ4_XS, 8} },
+        { GGML_TYPE_IQ4_NL_R4,   { GGML_TYPE_IQ4_NL, 4} },
+        { GGML_TYPE_IQ1_S_R4,    { GGML_TYPE_IQ1_S, 4} },
+        { GGML_TYPE_IQ1_M_R4,    { GGML_TYPE_IQ1_M, 4} },
+        { GGML_TYPE_IQ2_BN_R4,   { GGML_TYPE_IQ2_BN, 4} },
+        { GGML_TYPE_IQ2_K_R4,    { GGML_TYPE_IQ2_K, 4} },
+        { GGML_TYPE_IQ3_K_R4,    { GGML_TYPE_IQ3_K, 4} },
+        { GGML_TYPE_IQ4_K_R4,    { GGML_TYPE_IQ4_K, 4} },
+        { GGML_TYPE_IQ4_KS_R4,   { GGML_TYPE_IQ4_KS, 4} },
+        { GGML_TYPE_IQ5_KS_R4,   { GGML_TYPE_IQ5_KS, 4} },
+        { GGML_TYPE_IQ5_K_R4,    { GGML_TYPE_IQ5_K, 4} },
+        { GGML_TYPE_Q8_KV_R8,    { GGML_TYPE_Q8_KV, 8} },
+        { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_0, 8} },
+        { GGML_TYPE_BF16_R16,    { GGML_TYPE_BF16, 16} },
+    };
+    if (auto it = k_map.find(type); it != k_map.end()) return it->second;
+    return {type, 1};
+}
+
 static void llama_tensor_dequantize_internal(
     struct ggml_tensor * tensor, std::vector<no_init<float>> & output, std::vector<std::thread> & workers,
     const size_t nelements, const int nthread
@@ -101,10 +139,11 @@ static void llama_tensor_dequantize_internal(
             auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
             int nrows = ggml_nrows(tensor);
             auto qsrc = (const char *)tensor->data;
-            for (int row = 0; row < nrows; ++row) {
-                qtype.to_float(qsrc, f32_output, tensor->ne[0]);
-                qsrc += row_size;
-                f32_output += tensor->ne[0];
+            auto num_rows = interleaved_properties(tensor->type).second;
+            for (int row = 0; row < nrows; row += num_rows) {
+                qtype.to_float(qsrc, f32_output, num_rows*tensor->ne[0]);
+                qsrc += num_rows*row_size;
+                f32_output += num_rows*tensor->ne[0];
             }
         } else {
             GGML_ABORT("fatal error"); // unreachable
@@ -233,44 +272,6 @@ static ggml_type change_type_if_necessary(ggml_type new_type, int nx, int ny) {
         LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
     }
     return new_type;
-}
-
-static std::pair<ggml_type, int> interleaved_properties(ggml_type type) {
-    static std::unordered_map<ggml_type, std::pair<ggml_type, int>> k_map = {
-        { GGML_TYPE_Q4_0_4_4,    { GGML_TYPE_Q4_0, 4} },
-        { GGML_TYPE_Q4_0_4_8,    { GGML_TYPE_Q4_0, 4} },
-        { GGML_TYPE_Q4_0_8_8,    { GGML_TYPE_Q4_0, 8} },
-        { GGML_TYPE_Q4_0_R8,     { GGML_TYPE_Q4_0, 8} },
-        { GGML_TYPE_Q5_0_R4,     { GGML_TYPE_Q5_0, 4} },
-        { GGML_TYPE_Q6_0_R4,     { GGML_TYPE_Q6_0, 4} },
-        { GGML_TYPE_Q8_0_R8,     { GGML_TYPE_Q8_0, 8} },
-        { GGML_TYPE_Q2_K_R4,     { GGML_TYPE_Q2_K, 4} },
-        { GGML_TYPE_Q3_K_R4,     { GGML_TYPE_Q3_K, 4} },
-        { GGML_TYPE_Q4_K_R4,     { GGML_TYPE_Q4_K, 4} },
-        { GGML_TYPE_Q5_K_R4,     { GGML_TYPE_Q5_K, 4} },
-        { GGML_TYPE_Q6_K_R4,     { GGML_TYPE_Q6_K, 4} },
-        { GGML_TYPE_IQ2_XXS_R4,  { GGML_TYPE_IQ2_XXS, 4} },
-        { GGML_TYPE_IQ2_XS_R4,   { GGML_TYPE_IQ2_XS, 4} },
-        { GGML_TYPE_IQ2_S_R4,    { GGML_TYPE_IQ2_S, 4} },
-        { GGML_TYPE_IQ3_XXS_R4,  { GGML_TYPE_IQ3_XXS, 4} },
-        { GGML_TYPE_IQ3_S_R4,    { GGML_TYPE_IQ3_S, 4} },
-        { GGML_TYPE_IQ4_XS_R8,   { GGML_TYPE_IQ4_XS, 8} },
-        { GGML_TYPE_IQ4_NL_R4,   { GGML_TYPE_IQ4_NL, 4} },
-        { GGML_TYPE_IQ1_S_R4,    { GGML_TYPE_IQ1_S, 4} },
-        { GGML_TYPE_IQ1_M_R4,    { GGML_TYPE_IQ1_M, 4} },
-        { GGML_TYPE_IQ2_BN_R4,   { GGML_TYPE_IQ2_BN, 4} },
-        { GGML_TYPE_IQ2_K_R4,    { GGML_TYPE_IQ2_K, 4} },
-        { GGML_TYPE_IQ3_K_R4,    { GGML_TYPE_IQ3_K, 4} },
-        { GGML_TYPE_IQ4_K_R4,    { GGML_TYPE_IQ4_K, 4} },
-        { GGML_TYPE_IQ4_KS_R4,   { GGML_TYPE_IQ4_KS, 4} },
-        { GGML_TYPE_IQ5_KS_R4,   { GGML_TYPE_IQ5_KS, 4} },
-        { GGML_TYPE_IQ5_K_R4,    { GGML_TYPE_IQ5_K, 4} },
-        { GGML_TYPE_Q8_KV_R8,    { GGML_TYPE_Q8_KV, 8} },
-        { GGML_TYPE_Q8_K_R8,     { GGML_TYPE_Q8_0, 8} },
-        { GGML_TYPE_BF16_R16,    { GGML_TYPE_BF16, 16} },
-    };
-    if (auto it = k_map.find(type); it != k_map.end()) return it->second;
-    return {type, 1};
 }
 
 static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype) {
