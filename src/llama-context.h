@@ -10,6 +10,7 @@ struct llama_model;
 #include <map>
 #include <set>
 #include <memory>
+#include <unordered_map>
 
 struct llama_kv_cell {
     llama_pos pos   = -1;
@@ -120,7 +121,7 @@ struct llama_context {
     const struct llama_model & model;
 
     struct llama_cparams        cparams;
-    struct llama_sampling       sampling;
+    //struct llama_sampling       sampling;
     struct llama_kv_cache       kv_self;
     struct llama_control_vector cvec;
 
