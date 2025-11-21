@@ -2235,6 +2235,7 @@ inline bool iqk_flash_helper_T(ggml_type type_k, ggml_type type_v,
 
 IQK_FA_CASE(iqk_fa_576_512);
 IQK_FA_CASE(iqk_fa_192_128);
+IQK_FA_CASE(iqk_fa_192_192);
 IQK_FA_CASE(iqk_fa_256_256);
 IQK_FA_CASE(iqk_fa_128_128);
 IQK_FA_CASE(iqk_fa_96_96);

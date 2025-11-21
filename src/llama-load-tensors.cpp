@@ -1617,7 +1617,7 @@ bool create_tensors_helper::create_arctix_tensors(const LLM_TN & tn) {
 bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
 
-    const bool is_lite = (hparams.n_layer == 27);
+    const bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
 
     const int64_t n_embd_head_qk_rope = hparams.n_rot;
     const int64_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;

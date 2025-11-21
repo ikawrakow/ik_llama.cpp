@@ -1349,6 +1349,11 @@ bool iqk_flash_attn_impl(int int_type_k,         // type of k
                 q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
     }
 
+    if (Dk == 192 && Dv == 192) {
+        return iqk_fa_192_192(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
+                q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
+    }
+
     if (Dk == 256 && Dv == 256) {
         return iqk_fa_256_256(int_type_k, int_type_v, nq1, nk1, stride_q, stride_k, stride_v, stride_m, stride_qkv,
                 q, k, v, mask, scale, softcap, qkv, sinksf, M, S);
