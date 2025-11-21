@@ -185,6 +185,13 @@ int32_t mtmd_helper_decode_image_chunk(
     int n_mmproj_embd = llama_model_n_embd(model);
     int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;
 
+    // ensure we don't exceed n_ubatch, otherwise llama_decode will try to split the batch
+    // which will break M-RoPE positional embeddings
+    int32_t n_ubatch = llama_n_ubatch(lctx);
+    if (n_batch > n_ubatch) {
+        n_batch = n_ubatch;
+    }
+
     int32_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
     int32_t i_batch = 0;
     int32_t n_img_batches = GGML_PAD(n_tokens, n_batch) / n_batch;
