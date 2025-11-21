@@ -5931,7 +5931,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
     // mutable variable, needed during the last layer of the computation to skip unused tokens
     int32_t n_tokens = this->n_tokens;
 
-    bool is_lite = (hparams.n_layer == 27);
+    bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
 
     // We have to pre-scale kq_scale and attn_factor to make the YaRN RoPE work correctly.
     // See https://github.com/ggerganov/llama.cpp/discussions/7416 for detailed explanation.
