@@ -2646,18 +2646,9 @@ struct server_context {
 
         // populate res.probs_output
         if (slot.sparams.n_probs > 0) {
-            if (!slot.params.stream && slot.stopped_word) {
-                const std::vector<llama_token> stop_word_toks = llama_tokenize(ctx, slot.stopping_word, false);
-
-                size_t safe_offset = std::min(slot.generated_token_probs.size(), stop_word_toks.size());
-                res.probs_output = std::vector<completion_token_output>(
-                        slot.generated_token_probs.begin(),
-                        slot.generated_token_probs.end() - safe_offset);
-            } else {
-                res.probs_output = std::vector<completion_token_output>(
-                        slot.generated_token_probs.begin(),
-                        slot.generated_token_probs.end());
-            }
+            res.probs_output = std::vector<completion_token_output>(
+                    slot.generated_token_probs.begin(),
+                    slot.generated_token_probs.end());
             res.data["completion_probabilities"] = probs_vector_to_json(ctx, res.probs_output);
         }
 
