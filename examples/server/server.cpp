@@ -5432,6 +5432,7 @@ int main(int argc, char ** argv) {
     svr->Post("/v1/embeddings",       handle_embeddings);
     svr->Post("/tokenize",            handle_tokenize);
     svr->Post("/detokenize",          handle_detokenize);
+    svr->Post("/apply-template",      handle_apply_template);
     // LoRA adapters hotswap
     svr->Get ("/lora-adapters",       handle_lora_adapters_list);
     svr->Post("/lora-adapters",       handle_lora_adapters_apply);
