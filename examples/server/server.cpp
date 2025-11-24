@@ -1867,7 +1867,7 @@ struct server_context {
             // TODO: mtmd does not support prompt cache
             update_cache = update_cache && (ret->mctx == nullptr);
 
-            LLAMA_LOG_INFO("prompt cache: cache size: %d, n_keep: %d, n_discarded_prompt: %d, cache_ram_n_min: %d, f_keep: %.2f, cache_ram_similarity: %.2f\n",
+            LLAMA_LOG_INFO("======== Prompt cache: cache size: %d, n_keep: %d, n_discarded_prompt: %d, cache_ram_n_min: %d, f_keep: %.2f, cache_ram_similarity: %.2f\n",
                 (int)tokens.size(), ret->n_kept_prompt, ret->n_discarded_prompt, cache_ram_n_min, f_keep, cache_ram_similarity);
             if (update_cache) {
                 const int64_t t_start = ggml_time_us();
@@ -3118,16 +3118,12 @@ struct server_context {
     // convert keep first few and discard next tokens in a to b
     void context_shift_find_n_tokens(llama_context* ctx, const server_tokens& a, const server_tokens& b, int32_t n_keep,
         int32_t n_discard, int32_t& n_kept, int32_t& n_discarded, bool exact = false) {
-        //n_discarded = n_discard;
-        //n_kept = n_keep;
 
         common_prefix ctx_keep_prefix = a.get_common_prefix_first_n(ctx, b, n_keep, exact);
         common_prefix ctx_total_discard_prefix = a.get_common_prefix_first_n(ctx, b, n_discard + n_keep, exact);
         // only if there is enough common token
         int32_t discard_offset = ctx_total_discard_prefix.first - (n_discard + n_keep);
         int32_t keep_offset = ctx_keep_prefix.first - n_keep;
-        //if (ctx_keep_prefix.first == n_keep && ctx_total_discard_prefix.first == n_discard + n_keep)
-        //{
         n_kept = ctx_keep_prefix.second - keep_offset;
         n_discarded = ctx_total_discard_prefix.second - ctx_keep_prefix.second - discard_offset;
         if (n_kept < 0) {
@@ -3136,7 +3132,6 @@ struct server_context {
         if (n_discarded < 0) {
             n_discarded = n_discard;
         }
-        //}
     }
 
     void context_shift_prompt(llama_context* ctx, server_slot& slot, bool exact = false) {
@@ -3160,13 +3155,6 @@ struct server_context {
         if (n_discard_prompt > 0) {
             context_shift_find_n_tokens(ctx, slot.prompt_tokens, slot.cache_tokens, n_keep,
                  n_discard,  n_kept, n_discard_cache, exact);
-            //common_prefix ctx_keep_prefix = slot.prompt_tokens.get_common_prefix_first_n(ctx, slot.cache_tokens, n_keep, false);
-            //common_prefix ctx_total_discard_prefix = slot.prompt_tokens.get_common_prefix_first_n(ctx, slot.cache_tokens, n_discard_prompt + n_keep, false);
-
-            //if (ctx_keep_prefix.first == n_keep && ctx_total_discard_prefix.first == n_discard_prompt + n_keep) {
-            //    n_kept = ctx_keep_prefix.second;
-            //    n_discard_cache = ctx_total_discard_prefix.second - ctx_keep_prefix.second;
-            //}
         }
 
         int n_discard_cache_max = std::max((int32_t)slot.cache_tokens.size() - n_kept, 0);
@@ -3266,25 +3254,27 @@ struct server_context {
                     const int n_discard = slot.params.n_discard ? slot.params.n_discard : (n_left / 2);
                     int32_t n_kept;
                     int32_t n_discard_cache;
-                    context_shift_find_n_tokens(ctx, slot.prompt_tokens, slot.cache_tokens, n_keep,
-                        n_discard, n_kept, n_discard_cache);
+                    if (n_discard > 0) {
+                        context_shift_find_n_tokens(ctx, slot.prompt_tokens, slot.cache_tokens, n_keep,
+                            n_discard, n_kept, n_discard_cache);
+                        LOG_INFO("slot context shift", {
+                                             {"id_slot",         slot.id},
+                                             {"id_task",         slot.id_task},
+                                             {"n_keep",          n_keep},
+                                             {"n_left",          n_left},
+                                             {"n_discard",       n_discard},
+                                             {"n_ctx",           n_ctx},
+                                             {"n_past",          slot.n_past},
+                                             {"n_system_tokens", system_tokens.size()},
+                                             {"n_cache_tokens",  slot.cache_tokens.size()}
+                            });
+                        slot.n_discarded_prompt = slot.n_discarded_prompt + n_discard;
+                        slot.n_kept_prompt = n_keep;
+                        discard_n_kv_and_cache_tokens(ctx, slot, n_kept, n_discard_cache);
+                        slot.n_past -= n_discard_cache;
+                        slot.truncated = true;
+                    }
 
-                    LOG_INFO("slot context shift", {
-                        {"id_slot",         slot.id},
-                        {"id_task",         slot.id_task},
-                        {"n_keep",          n_keep},
-                        {"n_left",          n_left},
-                        {"n_discard",       n_discard},
-                        {"n_ctx",           n_ctx},
-                        {"n_past",          slot.n_past},
-                        {"n_system_tokens", system_tokens.size()},
-                        {"n_cache_tokens",  slot.cache_tokens.size()}
-                    });
-                    slot.n_discarded_prompt = slot.n_discarded_prompt + n_discard;
-                    slot.n_kept_prompt = n_keep;
-                    discard_n_kv_and_cache_tokens(ctx, slot, n_kept, n_discard_cache);
-                    slot.n_past -= n_discard_cache;
-                    slot.truncated = true;
                 }
             }
         }
@@ -3477,24 +3467,21 @@ struct server_context {
                                 GGML_ASSERT(slot.ga_n == 1);
 
                                 // reuse any previously computed tokens that are common with the new prompt
-                                common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, true);
+                                common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, true); // string level match
                                 common_prefix prefix_nonexact = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, false);
-                                auto n_past0 = slot.cache_tokens.get_common_prefix_exact(prompt_tokens);
-                                LLAMA_LOG_INFO("Cache: cache_size = %ld, n_past0 =  %ld, n_past1 =  %ld, n_past_prompt1 = %ld,  n_past2 =  %ld, n_past_prompt2 =  %ld\n", (int32_t) slot.cache_tokens.size(), (int32_t) n_past0, (int32_t) prefix.first, prefix.second, (int32_t) prefix_nonexact.first, (int32_t) prefix_nonexact.second);
-                                if (prefix.first + 20 < prefix_nonexact.first) {
+                                auto n_past0 = slot.cache_tokens.get_common_prefix_exact(prompt_tokens); // token level match
+                                LLAMA_LOG_INFO("======== Cache: cache_size = %ld, n_past0 =  %ld, n_past1 =  %ld, n_past_prompt1 = %ld,  n_past2 =  %ld, n_past_prompt2 =  %ld\n", (int32_t) slot.cache_tokens.size(), (int32_t) n_past0, (int32_t) prefix.first, prefix.second, (int32_t) prefix_nonexact.first, (int32_t) prefix_nonexact.second);
+                                int32_t size_threshold = 20;
+                                if (prefix.first + size_threshold < prefix_nonexact.first) {
                                     LLAMA_LOG_WARN("Common part contains missing or extra space and new line\n");
                                     prefix = prefix_nonexact;
                                 }
                                 slot.n_past = prefix.first;
                                 slot.n_past_prompt = prefix.second;
-                                GGML_ASSERT(slot.n_past <= slot.cache_tokens.size() && "n_past cannot be larger than size");
-
-                                bool cache_equal = prompt_cache_equal(ctx, slot.cache_tokens,
-                                    slot.prompt_tokens,  0, prefix);
                                 if (slot.n_past != slot.n_past_prompt) {
                                     LLAMA_LOG_INFO("Mistokenization found and handled successfully.\n");
                                 }
-                                if ((slot.n_past + 20 <=slot.cache_tokens.size() || !cache_equal))
+                                if ((slot.n_past + size_threshold < slot.cache_tokens.size()))
                                 {
                                     LLAMA_LOG_WARN("Common part does not match fully\n");
                                     int32_t back = 4;

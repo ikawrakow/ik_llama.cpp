@@ -15,6 +15,7 @@
 #include <vector>
 #include <sstream>
 #include <random>
+#include <set>
 
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
@@ -346,7 +347,7 @@ common_prefix common_prefix_add(const common_prefix& a, const common_prefix& b) 
     return prefix;
 }
 
-common_prefix find_common_string_prefix(const std::string & a_str, const std::string & b_str) {
+common_prefix find_common_string_prefix(const std::string & a_str, const std::string & b_str, const std::set<char>& ignore_set) {
     size_t i = 0;
     size_t j = 0;
     while (i < a_str.size() && j < b_str.size()) {
@@ -356,14 +357,14 @@ common_prefix find_common_string_prefix(const std::string & a_str, const std::st
             ++i;
             ++j;
         }
-        else if ((a_chr == ' ' || a_chr == '\n') && (b_chr == ' ' || b_chr == '\n')) {
+        else if (ignore_set.count(a_chr) && ignore_set.count(b_chr)) {
             ++i;
             ++j;
         }
-        else if (a_chr == ' ' || a_chr == '\n') {
+        else if (ignore_set.count(a_chr)) {
             ++i;
         }
-        else if (b_chr == ' ' || b_chr == '\n') {
+        else if (ignore_set.count(b_chr)) {
             ++j;
         }
         else {
@@ -375,8 +376,6 @@ common_prefix find_common_string_prefix(const std::string & a_str, const std::st
     string_prefix.second = j;
     return string_prefix;
 }
-
-
 
 size_t find_n_tokens_from_string(const llama_context* ctx, const llama_tokens& a, const size_t max_size, size_t start,
     std::vector<size_t> & map) {
@@ -397,12 +396,78 @@ size_t find_n_tokens_from_string(const llama_context* ctx, const llama_tokens& a
     return map.size();
 }
 
+std::string remove_with_set(std::string str, const std::set<char>& chars_to_remove) {
+    str.erase(std::remove_if(str.begin(), str.end(),
+        [&chars_to_remove](char c) { return chars_to_remove.find(c) != chars_to_remove.end(); }),
+        str.end());
+    return str;
+}
+
+common_prefix find_largest_common_number(const std::vector<size_t>& a_list, const std::vector<size_t>& b_list) {
+    common_prefix token_prefix;
+    token_prefix.first = 0;
+    token_prefix.second = 0;
+    int i = a_list.size() - 1; // start from end of a
+    int j = b_list.size() - 1; // start from end of b
+    if (i < 0 || j < 0) {
+        return token_prefix;
+    }
+    while (i >= 0 && j >= 0) {
+        if (a_list[i] == b_list[j]) {
+            // found largest common value
+            token_prefix.first = (size_t)i + 1;
+            token_prefix.second = (size_t)j + 1;
+            break;
+        }
+        else if (a_list[i] > b_list[j]) {
+            --i;
+        }
+        else {
+            --j;
+        }
+    }
+    if (a_list[i] != b_list[j]) {
+        return token_prefix;
+    }
+    return token_prefix;
+}
+
+size_t find_n_tokens_from_string_with_ignore(const llama_context* ctx, const llama_tokens& a, const size_t max_size, size_t start, const std::set<char> & ignore_set,
+    std::vector<size_t>& map) {
+    bool use_ignore = ignore_set.size()>0;
+    size_t n = 0;
+    size_t string_len = 0;
+    size_t string_len_ignore = 0;
+    std::string str;
+    std::string str_ignore;
+    auto model = llama_get_model(ctx);
+    for (n = start; n < a.size(); ++n) {
+        str = llama_token_to_piece(model, a[n], true);
+        string_len = string_len + str.size();
+        if (use_ignore) {
+            str_ignore = remove_with_set(str, ignore_set);
+        }
+        else {
+            str_ignore = str;
+        }
+        string_len_ignore = string_len_ignore + str_ignore.size();
+        if (string_len <= max_size) {
+            map.push_back(string_len_ignore);
+        }
+        else {
+            break;
+        }
+    }
+    return map.size();
+}
+
 common_prefix find_common_text_token_prefix(const llama_context * ctx, const llama_tokens & a, const llama_tokens& b,
     size_t start, bool exact) {
     common_prefix token_prefix;
     if (a.size()<= start && b.size()<= start) {
         return token_prefix;
     }
+    std::set<char> ignore_set = { ' ', '\n' ,'\r'};
 
     llama_tokens a_sub(a.begin() + start, a.end());
     llama_tokens b_sub(b.begin() + start, b.end());
@@ -410,50 +475,24 @@ common_prefix find_common_text_token_prefix(const llama_context * ctx, const lla
     std::string a_str = llama_detokenize(ctx, a_sub, true);
     std::string b_str = llama_detokenize(ctx, b_sub, true);
     common_prefix string_prefix;
-    if (exact) {
-        size_t lcp = common_part(a_str, b_str);
-        string_prefix.first = lcp;
-        string_prefix.second = lcp;
-    }
-    else {
-        string_prefix = find_common_string_prefix(a_str, b_str);
-    }
 
     std::vector<size_t> a_list;
     std::vector<size_t> b_list;
 
-    token_prefix.first = find_n_tokens_from_string(ctx, a_sub, string_prefix.first, 0, a_list);
-    token_prefix.second = find_n_tokens_from_string(ctx, b_sub, string_prefix.second, 0, b_list);
-
-    if (exact && a_list.size() && b_list.size()) {
-        // find largest common value
-        int i = a_list.size() - 1; // start from end of a
-        int j = b_list.size() - 1; // start from end of b
-        if (i < 0 || j < 0) {
-            token_prefix.first = 0;
-            token_prefix.second = 0;
-            return token_prefix;
-        }
-        while (i >= 0 && j >= 0) {
-            if (a_list[i] == b_list[j]) {
-                // found largest common element
-                token_prefix.first = (size_t) i+1;
-                token_prefix.second = (size_t) j+1;
-                break;
-            }
-            else if (a_list[i] > b_list[j]) {
-                --i;
-            }
-            else {
-                --j;
-            }
-        }
-        if (a_list[i] != b_list[j]) {
-            token_prefix.first = 0;
-            token_prefix.second = 0;
-            return token_prefix;
-        }
+    if (exact) {
+        size_t lcp = common_part(a_str, b_str);
+        string_prefix.first = lcp;
+        string_prefix.second = lcp;
+        token_prefix.first = find_n_tokens_from_string(ctx, a_sub, string_prefix.first, 0, a_list);
+        token_prefix.second = find_n_tokens_from_string(ctx, b_sub, string_prefix.second, 0, b_list);
     }
+    else {
+        string_prefix = find_common_string_prefix(a_str, b_str, ignore_set);
+        token_prefix.first = find_n_tokens_from_string_with_ignore(ctx, a_sub, string_prefix.first, 0, ignore_set, a_list);
+        token_prefix.second = find_n_tokens_from_string_with_ignore(ctx, b_sub, string_prefix.second, 0, ignore_set, b_list);
+    }
+
+    token_prefix = find_largest_common_number(a_list, b_list);
     return token_prefix;
 }
 
@@ -1498,10 +1537,10 @@ public:
                         prefix.first += n_tok_a;
                         prefix.second += n_tok_a;
                         token_prefix = common_prefix_add(prefix, token_prefix);
-                    }
-                    else {
+                    } else {
                         // do no include image token prefix
                         // only return text token prefix
+                        token_prefix = common_prefix_add(prefix, token_prefix);
                         return token_prefix;
                     }                   
                 }
