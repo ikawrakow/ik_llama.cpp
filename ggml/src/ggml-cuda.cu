@@ -221,7 +221,8 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         cudaDeviceProp prop;
         CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
-        GGML_CUDA_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s\n", id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no");
+        GGML_CUDA_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n", id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
+                prop.totalGlobalMem/(1024*1024));
 
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
@@ -1553,20 +1554,6 @@ static void ggml_cuda_op_mul_mat(
 
     const int64_t src1_padded_col_size = GGML_PAD(ne10, MATRIX_ROW_PADDING);
 
-    const bool split = ggml_backend_buffer_is_cuda_split(src0->buffer);
-    GGML_ASSERT(!(split && ne02 > 1));
-    GGML_ASSERT(!(split && ne03 > 1));
-    GGML_ASSERT(!(split && ne02 < ne12));
-
-    ggml_tensor_extra_gpu * src0_extra = split ? (ggml_tensor_extra_gpu *) src0->extra : nullptr;
-
-
-    std::array<float, GGML_CUDA_MAX_DEVICES> tensor_split;
-    if (split) {
-        ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *) src0->buffer->buft->context;
-        tensor_split = buft_ctx->tensor_split;
-    }
-
     struct dev_data {
         int cc;
 
@@ -1595,31 +1582,12 @@ static void ggml_cuda_op_mul_mat(
         dev[id].row_low  = 0;
         dev[id].row_high = ne01;
 
-        // for multi GPU, get the row boundaries from tensor split
-        // and round to mul_mat_q tile sizes
-        if (split) {
-            const int64_t rounding = get_row_rounding(tensor_split);
-
-            if (id != 0) {
-                dev[id].row_low  = ne01*tensor_split[id];
-                if (dev[id].row_low < ne01) {
-                    dev[id].row_low -= dev[id].row_low % rounding;
-                }
-            }
-
-            if (id != ggml_backend_cuda_get_device_count() - 1) {
-                dev[id].row_high  = ne01*tensor_split[id + 1];
-                if (dev[id].row_high < ne01) {
-                    dev[id].row_high -= dev[id].row_high % rounding;
-                }
-            }
-        }
     }
 
     bool quantization_done = false;
 
     for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-        if ((!split && id != ctx.device) || dev[id].row_low == dev[id].row_high) {
+        if (id != ctx.device || dev[id].row_low == dev[id].row_high) {
             continue;
         }
 
@@ -1632,7 +1600,7 @@ static void ggml_cuda_op_mul_mat(
         cudaStream_t stream = ctx.stream(id, 0);
 
         if (src0_is_contiguous) {
-            dev[id].src0_dd = split ? (char *) src0_extra->data_device[id] : (char *) src0->data;
+            dev[id].src0_dd = (char *) src0->data;
         } else {
             // If src0 is not contiguous it will be copied to a temporary buffer, it may then be necessary to clear padding.
             const size_t nbytes_data    = ggml_nbytes(src0);
@@ -1676,20 +1644,13 @@ static void ggml_cuda_op_mul_mat(
         if (dst_on_device) {
             dev[id].dst_dd = (float *) dst->data;
         } else {
-            const size_t size_dst_ddf = split ? (dev[id].row_high - dev[id].row_low)*ne1 : ggml_nelements(dst);
+            const size_t size_dst_ddf = ggml_nelements(dst);
             dev[id].dst_dd = dev[id].dst_dd_alloc.alloc(ctx.pool(id), size_dst_ddf);
         }
     }
 
-    // if multiple devices are used they need to wait for the main device
-    // here an event is recorded that signals that the main device has finished calculating the input data
-    if (split && used_devices > 1) {
-        ggml_cuda_set_device(ctx.device);
-        CUDA_CHECK(cudaEventRecord(src0_extra->events[ctx.device][0], ctx.stream()));
-    }
-
-    const int64_t src1_col_stride = split && used_devices > 1 ? MUL_MAT_SRC1_COL_STRIDE : ne11;
-    if (!(split && used_devices > 1) && quantization_done && ne11 == 1 && ne12 > 1 && ne13 == 1 && ne02 == ne12 && ne02 == dst->ne[2]) {
+    const int64_t src1_col_stride = ne11;
+    if (quantization_done && ne11 == 1 && ne12 > 1 && ne13 == 1 && ne02 == ne12 && ne02 == dst->ne[2]) {
         //printf("invoking fast path for %s x %s\n", src0->name, src1->name);
         int id = ctx.device;
         char  *  src0_dd_i =  dev[id].src0_dd;
@@ -1704,11 +1665,11 @@ static void ggml_cuda_op_mul_mat(
     }
 
     for (int64_t src1_col_0 = 0; src1_col_0 < ne11; src1_col_0 += src1_col_stride) {
-        const int64_t is = split ? (src1_col_0/src1_col_stride) % GGML_CUDA_MAX_STREAMS : 0;
+        const int64_t is = 0;
         const int64_t src1_ncols = src1_col_0 + src1_col_stride > ne11 ? ne11 - src1_col_0 : src1_col_stride;
 
         for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-            if ((!split && id != ctx.device) || dev[id].row_low == dev[id].row_high) {
+            if (id != ctx.device || dev[id].row_low == dev[id].row_high) {
                 continue;
             }
 
@@ -1718,11 +1679,6 @@ static void ggml_cuda_op_mul_mat(
 
             ggml_cuda_set_device(id);
             cudaStream_t stream = ctx.stream(id, is);
-
-            // wait for main GPU data if necessary
-            if (split && (id != ctx.device || is != 0)) {
-                CUDA_CHECK(cudaStreamWaitEvent(stream, src0_extra->events[ctx.device][0], 0));
-            }
 
             for (int64_t i0 = 0; i0 < ne13*ne12; ++i0) {
                 const int64_t i03 = i0 / ne12;
@@ -1796,45 +1752,12 @@ static void ggml_cuda_op_mul_mat(
                 // copy dst to host or other device if necessary
                 if (!dst_on_device) {
                     void * dst_off_device = dst->data;
-                    if (split) {
-                        // src0 = weight matrix is saved as a transposed matrix for better memory layout.
-                        // dst is NOT transposed.
-                        // The outputs of matrix matrix multiplications can therefore NOT simply be concatenated for >1 GPU.
-                        // Instead they need to be copied to the correct slice in ne0 = dst row index.
-                        // If dst is a vector with ne0 == 1 then you don't have to do this but it still produces correct results.
-                        float * dhf_dst_i = (float *) ((char *) dst_off_device + i02*nb2 + i03*nb3);
-                        GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
-                        dhf_dst_i += src1_col_0*ne0 + dev[id].row_low;
-                        CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(
-                            dhf_dst_i, ctx.device, ne0*sizeof(float), dst_dd_i, id, row_diff*sizeof(float), row_diff*sizeof(float), src1_ncols, stream));
-                    } else {
-                        float * dhf_dst_i = (float *) ((char *) dst_off_device + i02*nb2 + i03*nb3);
-                        GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
-                        dhf_dst_i += src1_col_0*ne0;
-                        CUDA_CHECK(cudaMemcpyAsync(dhf_dst_i, dst_dd_i, src1_ncols*ne0*sizeof(float), cudaMemcpyDeviceToDevice, stream));
-                    }
+                    float * dhf_dst_i = (float *) ((char *) dst_off_device + i02*nb2 + i03*nb3);
+                    GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
+                    dhf_dst_i += src1_col_0*ne0;
+                    CUDA_CHECK(cudaMemcpyAsync(dhf_dst_i, dst_dd_i, src1_ncols*ne0*sizeof(float), cudaMemcpyDeviceToDevice, stream));
                 }
 
-                // add event for the main device to wait on until other device is done
-                if (split && (id != ctx.device || is != 0)) {
-                    CUDA_CHECK(cudaEventRecord(src0_extra->events[id][is], stream));
-                }
-            }
-        }
-    }
-
-    // main device waits for all other devices to be finished
-    if (split && ggml_backend_cuda_get_device_count() > 1) {
-        int64_t is_max = (ne11 + MUL_MAT_SRC1_COL_STRIDE - 1) / MUL_MAT_SRC1_COL_STRIDE;
-        is_max = is_max <= GGML_CUDA_MAX_STREAMS ? is_max : GGML_CUDA_MAX_STREAMS;
-
-        ggml_cuda_set_device(ctx.device);
-        for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-            if (dev[id].row_low == dev[id].row_high) {
-                continue;
-            }
-            for (int64_t is = 0; is < is_max; ++is) {
-                CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), src0_extra->events[id][is], 0));
             }
         }
     }
@@ -2167,7 +2090,6 @@ static int ggml_cuda_mul_mat_q(ggml_backend_cuda_context & ctx, const ggml_tenso
 
 static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
         const ggml_cgraph * cgraph, int node_n) {
-    const bool split = ggml_backend_buffer_is_cuda_split(src0->buffer);
 
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
     // But if src0 is also a view of another tensor then this cannot be done safely because it may overwrite valid tensor data.
@@ -2192,26 +2114,11 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
 
     bool any_gpus_with_slow_fp16 = false;
 
-    if (split) {
-        ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *) src0->buffer->buft->context;
-        auto & tensor_split = buft_ctx->tensor_split;
-        for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-            // skip devices that are not going to do any work:
-            if (tensor_split[id] >= (id + 1 < ggml_backend_cuda_get_device_count() ? tensor_split[id + 1] : 1.0f)) {
-                continue;
-            }
+    const int cc            = ggml_cuda_info().devices[ctx.device].cc;
+    use_mul_mat_q           = use_mul_mat_q           && ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1]);
+    any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16 || !fast_fp16_available(cc);
 
-            const int cc            = ggml_cuda_info().devices[id].cc;
-            use_mul_mat_q           = use_mul_mat_q           && ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1]);
-            any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16 || !fast_fp16_available(cc);
-        }
-    } else {
-        const int cc            = ggml_cuda_info().devices[ctx.device].cc;
-        use_mul_mat_q           = use_mul_mat_q           && ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1]);
-        any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16 || !fast_fp16_available(cc);
-    }
-
-    if (!split && (use_mul_mat_vec_q || use_mul_mat_q) && src1->ne[2]*src1->ne[3] == 1) {
+    if ((use_mul_mat_vec_q || use_mul_mat_q) && src1->ne[2]*src1->ne[3] == 1) {
         return ggml_cuda_mul_mat_q(ctx, src0, src1, dst, cgraph, node_n, use_mul_mat_vec_q);
     }
 
@@ -2223,13 +2130,13 @@ static int ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor 
     //printf("src0 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src0), ggml_is_transposed(src0), ggml_type_name(src0->type), src0->name);
     //printf("src1 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src1), ggml_is_transposed(src1), ggml_type_name(src1->type), src1->name);
 
-    if (!split && any_gpus_with_slow_fp16 && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
+    if (any_gpus_with_slow_fp16 && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
         // FP32 precision KQ single-batch for batch size 1 without FlashAttention
         ggml_cuda_mul_mat_vec_p021(ctx, src0, src1, dst);
-    } else if (!split && any_gpus_with_slow_fp16 && src0->type == GGML_TYPE_F16 && !ggml_is_contiguous(src0) && !ggml_is_transposed(src1) && src1->ne[1] == 1) {
+    } else if (any_gpus_with_slow_fp16 && src0->type == GGML_TYPE_F16 && !ggml_is_contiguous(src0) && !ggml_is_transposed(src1) && src1->ne[1] == 1) {
         // FP32 precision KQV single-batch for batch size 1 without FlashAttention
         ggml_cuda_mul_mat_vec_nc(ctx, src0, src1, dst);
-    } else if (!split && src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16)
+    } else if (src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16)
                && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
         // KQ + KQV multi-batch without FlashAttention
         ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
@@ -2364,7 +2271,6 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         ggml_backend_buffer_is_cuda(src0->buffer) &&
         ggml_backend_buffer_is_cuda(src1->buffer) &&
         ggml_backend_buffer_is_cuda(dst->buffer) &&
-        !ggml_backend_buffer_is_cuda_split(src0->buffer) &&
         src1->type == GGML_TYPE_F32) {
         int device_id = ctx.device;
         ggml_backend_cuda_buffer_context * src0_ctx = (ggml_backend_cuda_buffer_context *) src0->buffer->context;
@@ -2405,8 +2311,7 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             if (next && next->op == GGML_OP_MUL_MAT_ID && next->src[0]->type == src0->type && src1 == next->src[1] &&
                 ggml_are_same_shape(src0, next->src[0]) &&
                 ggml_backend_buffer_is_cuda(next->src[0]->buffer) &&
-                ggml_backend_buffer_is_cuda(next->buffer) &&
-                !ggml_backend_buffer_is_cuda_split(next->src[0]->buffer)) {
+                ggml_backend_buffer_is_cuda(next->buffer)) {
                 ggml_backend_cuda_buffer_context * next_src0_ctx = (ggml_backend_cuda_buffer_context *) next->src[0]->buffer->context;
                 ggml_backend_cuda_buffer_context * next_dst_ctx  = (ggml_backend_cuda_buffer_context *) next->buffer->context;
                 if (next_src0_ctx->device == device_id &&
@@ -2431,8 +2336,6 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     }
 
     GGML_TENSOR_BINARY_OP_LOCALS
-
-    GGML_ASSERT(!ggml_backend_buffer_is_cuda_split(src0->buffer) && "mul_mat_id does not support split buffers");
 
     cudaStream_t stream = ctx.stream();
 
@@ -2572,8 +2475,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         ggml_backend_buffer_is_cuda(src0_2->buffer) &&
         ggml_backend_buffer_is_cuda(src1->buffer) &&
         ggml_backend_buffer_is_cuda(dst->buffer) &&
-        !ggml_backend_buffer_is_cuda_split(src0_1->buffer) &&
-        !ggml_backend_buffer_is_cuda_split(src0_2->buffer) &&
         src1->type == GGML_TYPE_F32) {
         int device_id = ctx.device;
         ggml_backend_cuda_buffer_context * src0_1_ctx = (ggml_backend_cuda_buffer_context *) src0_1->buffer->context;
@@ -2615,7 +2516,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
 
             bool fuse_next = next && next->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(next->src[0]->type) &&
                 ggml_backend_buffer_is_cuda(next->src[0]->buffer) &&
-               !ggml_backend_buffer_is_cuda_split(next->src[0]->buffer) &&
                 ((ggml_backend_cuda_buffer_context *)next->src[0]->buffer->context)->device == device_id &&
                 ggml_backend_buffer_is_cuda(next->buffer) &&
                 ((ggml_backend_cuda_buffer_context *)next->buffer->context)->device == device_id;
@@ -2672,9 +2572,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             return result;
         }
     }
-
-    GGML_ASSERT(!ggml_backend_buffer_is_cuda_split(src0_1->buffer) && "mul_mat_id does not support split buffers");
-    GGML_ASSERT(!ggml_backend_buffer_is_cuda_split(src0_2->buffer) && "mul_mat_id does not support split buffers");
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -2975,8 +2872,6 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
     GGML_ASSERT(src1->ne[2] == 1);
     GGML_ASSERT(src1->ne[3] == 1);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
-    GGML_ASSERT(!ggml_backend_buffer_is_cuda_split(src0_1->buffer));
-    GGML_ASSERT(!ggml_backend_buffer_is_cuda_split(src0_2->buffer));
 
     auto stream = ctx.stream();
 
@@ -3823,8 +3718,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 for (int j = 0; j < GGML_MAX_SRC; j++) {
                     if (node->src[j] != nullptr) {
                         assert(node->src[j]->buffer);
-                        //assert(node->src[j]->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) ||
-                        //       ggml_backend_buft_is_cuda_split(node->src[j]->buffer->buft) || (integrated && ggml_backend_buft_is_cuda_host(node->src[j]->buffer->buft)));
                     }
                 }
 #else
@@ -3952,277 +3845,6 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
 
     return GGML_STATUS_SUCCESS;
 }
-
-/*
-GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
-
-    ggml_cuda_set_device(cuda_ctx->device);
-
-#ifdef USE_CUDA_GRAPH
-    static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
-
-    // Objects required for CUDA Graph
-    if (cuda_ctx->cuda_graph == nullptr) {
-        cuda_ctx->cuda_graph.reset(new ggml_cuda_graph());
-    }
-
-    bool use_cuda_graph = true;
-    bool cuda_graph_update_required = false;
-    // vector of pointers to CUDA cpy kernels, which are required to identify
-    // kernel parameters which need updated in the graph for each token
-    std::vector<void *> ggml_cuda_cpy_fn_ptrs;
-
-    if (cuda_ctx->cuda_graph->graph == nullptr) {
-        if (ggml_cuda_info().devices[cuda_ctx->device].cc < CC_AMPERE) {
-            cuda_ctx->cuda_graph->disable_due_to_gpu_arch = true;
-#ifndef NDEBUG
-            GGML_CUDA_LOG_WARN("%s: disabling CUDA graphs due to GPU architecture\n", __func__);
-#endif
-        }
-    }
-
-    // Disable CUDA graphs in presence of env var, old GPU, use-case which is changing too rapidly,
-    // or previous graph capture failure.
-    // Also disable for multi-gpu for now. TO DO investigate
-    if (disable_cuda_graphs_due_to_env
-        || cuda_ctx->cuda_graph->disable_due_to_gpu_arch
-        || cuda_ctx->cuda_graph->disable_due_to_too_many_updates
-        || cuda_ctx->cuda_graph->disable_due_to_failed_graph_capture) {
-        use_cuda_graph = false;
-    }
-
-    if (use_cuda_graph) {
-        if (cuda_ctx->cuda_graph->instance == nullptr) {
-            cuda_graph_update_required = true;
-        }
-
-        // Check if the graph size has changed
-        if (cuda_ctx->cuda_graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
-            cuda_graph_update_required = true;
-            cuda_ctx->cuda_graph->ggml_graph_properties.resize(cgraph->n_nodes);
-        }
-
-        // Loop over nodes in GGML graph to determine if CUDA graph update is required
-        // and store properties to allow this comparison for the next token
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            bool has_matching_properties = true;
-            if (!cuda_graph_update_required) {
-                has_matching_properties = ggml_graph_node_has_matching_properties(cgraph->nodes[i], &cuda_ctx->cuda_graph->ggml_graph_properties[i]);
-            }
-            if (!has_matching_properties) {
-                cuda_graph_update_required = true;
-            }
-            set_ggml_graph_node_properties(cgraph->nodes[i], &cuda_ctx->cuda_graph->ggml_graph_properties[i]);
-        }
-
-        // Loop over nodes in GGML graph to obtain info needed for CUDA graph
-        cuda_ctx->cuda_graph->updated_kernel_arg.clear();
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            ggml_tensor * node = cgraph->nodes[i];
-
-            if (node->src[0] && ggml_backend_buffer_is_cuda_split(node->src[0]->buffer)) {
-                use_cuda_graph = false; // Split buffers are not supported by CUDA graph capture
-#ifndef NDEBUG
-                GGML_CUDA_LOG_WARN("%s: disabling CUDA graphs due to split buffer\n", __func__);
-#endif
-            }
-
-            if (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_MOE_FUSED_UP_GATE) {
-                use_cuda_graph = false; // This node type is not supported by CUDA graph capture
-#ifndef NDEBUG
-                GGML_CUDA_LOG_WARN("%s: disabling CUDA graphs due to mul_mat_id\n", __func__);
-#endif
-            }
-
-            if (node->op == GGML_OP_ADD && node->src[1] && node->src[1]->ne[1] > 1) {
-                // disable CUDA graphs for batch size > 1 for now.
-                // Changes in batch size or context size can cause changes to the grid size of some kernels.
-                use_cuda_graph = false;
-#ifndef NDEBUG
-                GGML_CUDA_LOG_WARN("%s: disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__, node->name, node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
-#endif
-            }
-            if (node->op == GGML_OP_MULTI_ADD && node->ne[1] > 1) {
-                // disable CUDA graphs for batch size > 1 for now.
-                // Changes in batch size or context size can cause changes to the grid size of some kernels.
-                use_cuda_graph = false;
-#ifndef NDEBUG
-                GGML_CUDA_LOG_WARN("%s: disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__, node->name, node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
-#endif
-            }
-
-            if (node->op == GGML_OP_CPY) {
-                // store the copy op parameter which changes with each token.
-                cuda_ctx->cuda_graph->updated_kernel_arg.push_back((char **) &(node->src[1]->data));
-                // store a pointer to each copy op CUDA kernel to identify it later
-                void * ptr = ggml_cuda_cpy_fn(node->src[0], node->src[1]);
-                if (std::find(ggml_cuda_cpy_fn_ptrs.begin(), ggml_cuda_cpy_fn_ptrs.end(), ptr) == ggml_cuda_cpy_fn_ptrs.end()) {
-                    ggml_cuda_cpy_fn_ptrs.push_back(ptr);
-                }
-            }
-
-            if (!use_cuda_graph) {
-                break;
-            }
-        }
-
-        // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
-        if (use_cuda_graph && cuda_graph_update_required) {
-            cuda_ctx->cuda_graph->number_consecutive_updates++;
-        } else {
-            cuda_ctx->cuda_graph->number_consecutive_updates = 0;
-        }
-
-        if (cuda_ctx->cuda_graph->number_consecutive_updates >= 4) {
-            cuda_ctx->cuda_graph->disable_due_to_too_many_updates = true;
-#ifndef NDEBUG
-            GGML_CUDA_LOG_WARN("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
-#endif
-        }
-    }
-
-    if (use_cuda_graph && cuda_graph_update_required) { // Start CUDA graph capture
-        CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
-    }
-
-#else
-    bool use_cuda_graph = false;
-    bool cuda_graph_update_required = false;
-#endif // USE_CUDA_GRAPH
-
-    bool graph_evaluated_or_captured = false;
-
-    while (!graph_evaluated_or_captured) {
-        // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
-        // With the use of CUDA graphs, the execution will be performed by the graph launch.
-        if (!use_cuda_graph || cuda_graph_update_required) {
-            for (int i = 0; i < cgraph->n_nodes; i++) {
-                ggml_tensor * node = cgraph->nodes[i];
-                ggml_tensor * next = i < cgraph->n_nodes-1 ? cgraph->nodes[i+1] : nullptr;
-
-                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
-                    continue;
-                }
-
-#ifndef NDEBUG
-                assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
-                for (int j = 0; j < GGML_MAX_SRC; j++) {
-                    if (node->src[j] != nullptr) {
-                        assert(node->src[j]->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) || ggml_backend_buffer_is_cuda_split(node->src[j]->buffer));
-                    }
-                }
-#endif
-
-                bool skip_next = false;
-                bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, next, skip_next);
-                if (!ok) {
-                    GGML_CUDA_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
-                }
-                GGML_ASSERT(ok);
-                if (skip_next) ++i;
-            }
-        }
-
-#ifdef USE_CUDA_GRAPH
-        if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
-            if (cuda_ctx->cuda_graph->graph != nullptr) {
-                CUDA_CHECK(cudaGraphDestroy(cuda_ctx->cuda_graph->graph));
-                cuda_ctx->cuda_graph->graph = nullptr;
-            }
-            CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &cuda_ctx->cuda_graph->graph));
-
-#if 0
-            if (disable_cuda_graphs_due_to_failed_capture) {
-                use_cuda_graph = false;
-                cuda_ctx->cuda_graph->disable_due_to_failed_graph_capture = true;
-#ifndef NDEBUG
-                GGML_CUDA_LOG_WARN("%s: disabling CUDA graphs due to failed graph capture\n", __func__);
-#endif
-            } else {
-                graph_evaluated_or_captured = true; // CUDA graph has been captured
-            }
-#endif
-            graph_evaluated_or_captured = true; // CUDA graph has been captured
-        } else {
-            graph_evaluated_or_captured = true; // ggml graph has been directly evaluated
-        }
-    }
-
-    if (use_cuda_graph) {
-        if (cuda_ctx->cuda_graph->instance == nullptr) { // Create executable graph from captured graph.
-            CUDA_CHECK(cudaGraphInstantiate(&cuda_ctx->cuda_graph->instance, cuda_ctx->cuda_graph->graph, NULL, NULL, 0));
-        }
-
-        // Perform update to graph (if required for this token), and change copy parameter (required for every token)
-
-        if (cuda_graph_update_required) {
-            // Extract nodes from graph
-            // First call with null argument gets number of nodes in graph
-            CUDA_CHECK(cudaGraphGetNodes(cuda_ctx->cuda_graph->graph, nullptr, &cuda_ctx->cuda_graph->num_nodes));
-            // Subsequent call with non-null argument gets nodes
-            cuda_ctx->cuda_graph->nodes.resize(cuda_ctx->cuda_graph->num_nodes);
-            cuda_ctx->cuda_graph->params.resize(cuda_ctx->cuda_graph->num_nodes);
-            if (cuda_ctx->cuda_graph->num_nodes > 0) {
-                CUDA_CHECK(cudaGraphGetNodes(cuda_ctx->cuda_graph->graph, cuda_ctx->cuda_graph->nodes.data(), &cuda_ctx->cuda_graph->num_nodes));
-
-                // Loop over nodes, and extract kernel parameters from each node
-                for (size_t i = 0; i < cuda_ctx->cuda_graph->num_nodes; i++) {
-                    cudaGraphNodeType node_type;
-                    CUDA_CHECK(cudaGraphNodeGetType(cuda_ctx->cuda_graph->nodes[i], &node_type));
-                    if (node_type == cudaGraphNodeTypeKernel) {
-                        cudaError_t stat = cudaGraphKernelNodeGetParams(cuda_ctx->cuda_graph->nodes[i], &cuda_ctx->cuda_graph->params[i]); // Get params using runtime
-                        if (stat == cudaErrorInvalidDeviceFunction) {
-                            // Fails due to incorrect handling by CUDA runtime of CUDA BLAS node.
-                            // We don't need to update blas nodes, so clear error and move on.
-                            cudaGetLastError();
-                        } else {
-                            GGML_ASSERT(stat == cudaSuccess);
-                        }
-                    }
-                }
-            }
-        }
-
-        // One of the arguments to the copy kernel is updated for each token, hence we need to
-        // replace that argument with the updated value in the CUDA graph
-        if (!cuda_graph_update_required) { // on update steps, the live parameters will already be captured
-            int k = 0;
-            for (size_t i = 0; i < cuda_ctx->cuda_graph->num_nodes; i++) {
-                if(count(ggml_cuda_cpy_fn_ptrs.begin(), ggml_cuda_cpy_fn_ptrs.end(), cuda_ctx->cuda_graph->params[i].func) > 0) {
-                    char ** updated_kernel_arg_ptr = cuda_ctx->cuda_graph->updated_kernel_arg.at(k++);
-                    cuda_ctx->cuda_graph->params[i].kernelParams[1] = updated_kernel_arg_ptr;
-                    CUDA_CHECK(cudaGraphKernelNodeSetParams(cuda_ctx->cuda_graph->nodes[i], &cuda_ctx->cuda_graph->params[i]));
-                }
-            }
-        }
-
-        // Update graph executable
-        cudaGraphExecUpdateResultInfo result_info;
-        cudaError_t stat = cudaGraphExecUpdate(cuda_ctx->cuda_graph->instance, cuda_ctx->cuda_graph->graph, &result_info);
-        if (stat == cudaErrorGraphExecUpdateFailure) {
-#ifndef NDEBUG
-            GGML_CUDA_LOG_ERROR("%s: CUDA graph update failed\n", __func__);
-#endif
-            // The pre-existing graph exec cannot be updated due to violated constraints
-            // so instead clear error and re-instantiate
-            cudaGetLastError();
-            CUDA_CHECK(cudaGraphExecDestroy(cuda_ctx->cuda_graph->instance));
-            cuda_ctx->cuda_graph->instance = nullptr;
-            CUDA_CHECK(cudaGraphInstantiate(&cuda_ctx->cuda_graph->instance, cuda_ctx->cuda_graph->graph, NULL, NULL, 0));
-        } else {
-            GGML_ASSERT(stat == cudaSuccess);
-        }
-        // Launch graph
-        CUDA_CHECK(cudaGraphLaunch(cuda_ctx->cuda_graph->instance, cuda_ctx->stream()));
-#else
-        graph_evaluated_or_captured = true;
-#endif // USE_CUDA_GRAPH
-    }
-
-    return GGML_STATUS_SUCCESS;
-}
-*/
 
 GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_tensor * op) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
