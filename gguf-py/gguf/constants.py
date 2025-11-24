@@ -1468,6 +1468,7 @@ class GGMLQuantizationType(IntEnum):
     Q4_0_4_8  =  32
     Q4_0_8_8  =  33
     I2_S      =  36
+    MXFP4     =  39
     Q8_0_X4   =  97
     Q8_1_X4   =  98
     Q8_2_X4   =  99
@@ -1559,9 +1560,10 @@ class LlamaFileType(IntEnum):
     MOSTLY_IQ4_XS          = 22     #except 1d tensors
     MOSTLY_IQ1_M           = 23     #except 1d tensors
     MOSTLY_BF16            = 24     #except 1d tensors
-    MOSTLY_Q4_0_4_4        = 25     #except 1d tensors
-    MOSTLY_Q4_0_4_8        = 26     #except 1d tensors
-    MOSTLY_Q4_0_8_8        = 27     #except 1d tensors
+    MOSTLY_MXFP4           = 25     #except 1d tensors
+    MOSTLY_Q4_0_4_4        = 26     #except 1d tensors
+    MOSTLY_Q4_0_4_8        = 27     #except 1d tensors
+    MOSTLY_Q4_0_8_8        = 28     #except 1d tensors
     MOSTLY_Q6_0            = 127    #except 1d tensors
     MOSTLY_IQ1_BN          = 128    #except 1d tensors
     MOSTLY_IQ2_BN          = 129    #except 1d tensors
@@ -1682,6 +1684,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.F64         : (   1,    8),
     GGMLQuantizationType.IQ1_M       : ( 256,   56),
     GGMLQuantizationType.BF16        : (   1,    2),
+    GGMLQuantizationType.MXFP4       : (  32,   17),
     GGMLQuantizationType.Q4_0_4_4    : (  32,   18),
     GGMLQuantizationType.Q4_0_4_8    : (  32,   18),
     GGMLQuantizationType.Q4_0_8_8    : (  32,   18),
