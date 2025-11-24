@@ -108,6 +108,8 @@ struct result_timings {
     double predicted_ms;
     double predicted_per_token_ms;
     double predicted_per_second;
+    int32_t n_ctx = 0;
+    int32_t n_past = 0;
 
     // Optional speculative metrics - only included when > 0
     int32_t draft_n = 0;
@@ -124,6 +126,9 @@ struct result_timings {
             {"predicted_ms",           predicted_ms},
             {"predicted_per_token_ms", predicted_per_token_ms},
             {"predicted_per_second",   predicted_per_second},
+
+            {"n_ctx",           n_ctx},
+            {"n_past",           n_past},
         };
 
         if (draft_n > 0) {
@@ -585,6 +590,13 @@ struct slot_params {
 };
 
 
+inline std::string get_model_name(std::string path)
+{
+    std::string filename = path.substr(path.find_last_of("/\\") + 1);
+    return filename;
+};
+
+
 struct server_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
@@ -988,6 +1000,9 @@ struct server_slot {
             {"predicted_ms",           t_token_generation},
             {"predicted_per_token_ms", t_token_generation / n_decoded},
             {"predicted_per_second",   1e3 / t_token_generation * n_decoded},
+
+            {"n_ctx",           n_ctx},
+            {"n_past",           n_past},
         };
     }
 
@@ -1002,6 +1017,10 @@ struct server_slot {
         timings.predicted_ms = t_token_generation;
         timings.predicted_per_token_ms = t_token_generation / n_decoded;
         timings.predicted_per_second = 1e3 / t_token_generation * n_decoded;
+
+        timings.n_ctx = n_ctx;
+        timings.n_past = n_past;
+
 
         // Add speculative metrics
         if (n_draft_total > 0) {
@@ -4651,8 +4670,11 @@ int main(int argc, char ** argv) {
         }
         json data = {
             { "system_prompt",               ctx_server.system_prompt.c_str() },
+            { "model_alias",                 ctx_server.params.model_alias },
+            { "model_path",                  ctx_server.params.model},
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params.n_parallel },
+            { "model_name",                  get_model_name(ctx_server.params.model)},
             { "chat_template",               common_chat_templates_source(ctx_server.chat_templates.get()) },
             { "bos_token",                   llama_token_to_piece(ctx_server.ctx, llama_token_bos(ctx_server.model), /* special= */ true)},
             { "eos_token",                   llama_token_to_piece(ctx_server.ctx, llama_token_eos(ctx_server.model), /* special= */ true)},
@@ -4670,6 +4692,28 @@ int main(int argc, char ** argv) {
                 data["chat_template_tool_use"] = tool_use_src;
         }
         }
+        res.set_content(data.dump(), "application/json; charset=utf-8");
+    };
+
+    const auto handle_props_simple = [&ctx_server](const httplib::Request& req, httplib::Response& res) {
+        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        int n_past = 0;
+        int slot_id = 0;
+        for (server_slot& slot : ctx_server.slots) {
+            if (slot.n_past > n_past) {
+                n_past = slot.n_past;
+                slot_id = slot.id;
+            }
+        }
+        json data = {
+            { "model_name",                  get_model_name(ctx_server.params.model)},
+            { "model_path",                  ctx_server.params.model },
+            { "modalities",                  json {
+                {"vision", ctx_server.oai_parser_opt.allow_image},
+                {"audio",  ctx_server.oai_parser_opt.allow_audio},
+            } },
+             { "n_ctx",                       ctx_server.n_ctx }
+        };
         res.set_content(data.dump(), "application/json; charset=utf-8");
     };
 
@@ -5411,6 +5455,7 @@ int main(int argc, char ** argv) {
     svr->Get ("/health",              handle_health);
     svr->Get ("/metrics",             handle_metrics);
     svr->Get ("/props",               handle_props);
+    svr->Get("/v1/props",             handle_props_simple);
     svr->Get ("/v1/models",           handle_models);
     svr->Post("/completion",          handle_completions); // legacy
     svr->Post("/completions", handle_completions); // legacy

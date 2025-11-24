@@ -16,6 +16,7 @@ import { BtnWithTooltips } from '../utils/common';
 import { useAppContext } from '../utils/app.context';
 import toast from 'react-hot-toast';
 import { useModals } from './ModalProvider';
+import {DateTime} from 'luxon'
 
   // at the top of your file, alongside ConversationExport:
   async function importConversation() {  
@@ -114,7 +115,7 @@ export default function Sidebar() {
             aria-label="New conversation"
           >
             <PencilSquareIcon className="w-5 h-5" />
-            New conversation
+            New Conversations
           </button>
 
           {/* list of conversations */}
@@ -251,11 +252,11 @@ function ConversationItem({
           true,
         'btn-soft': isCurrConv,
       })}
+	  onClick={onSelect}
     >
       <button
         key={conv.id}
-        className="w-full overflow-hidden truncate text-start"
-        onClick={onSelect}
+        className="w-full overflow-hidden truncate text-start"        
         dir="auto"
       >
         {conv.name}
@@ -265,7 +266,7 @@ function ConversationItem({
           // on mobile, we always show the ellipsis icon
           // on desktop, we only show it when the user hovers over the conversation item
           // we use opacity instead of hidden to avoid layout shift
-          className="cursor-pointer opacity-100 md:opacity-0 group-hover:opacity-100"
+          className="cursor-pointer opacity-100 xl:opacity-0 group-hover:opacity-100"
           onClick={() => {}}
           tooltipsContent="More"
         >
@@ -318,23 +319,26 @@ export interface GroupedConversations {
 
 // TODO @ngxson : add test for this function
 // Group conversations by date
+// - Yesterday
 // - "Previous 7 Days"
 // - "Previous 30 Days"
 // - "Month Year" (e.g., "April 2023")
 export function groupConversationsByDate(
   conversations: Conversation[]
 ): GroupedConversations[] {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // Start of today
+  
+  const today=DateTime.now().startOf('day');
+  const yesterday = today.minus({ days: 1 });
 
-  const sevenDaysAgo = new Date(today);
-  sevenDaysAgo.setDate(today.getDate() - 7);
+  const yesterday2 = today.minus({ days: 2});
 
-  const thirtyDaysAgo = new Date(today);
-  thirtyDaysAgo.setDate(today.getDate() - 30);
+  const sevenDaysAgo = today.minus({ days: 7 });
 
+  const thirtyDaysAgo = today.minus({ days: 30 });
   const groups: { [key: string]: Conversation[] } = {
     Today: [],
+    Yesterday: [],
+    'Previous 2 Days': [],
     'Previous 7 Days': [],
     'Previous 30 Days': [],
   };
@@ -347,17 +351,20 @@ export function groupConversationsByDate(
   );
 
   for (const conv of sortedConversations) {
-    const convDate = new Date(conv.lastModified);
-
+    const convDate=DateTime.fromMillis(conv.lastModified).setZone('America/Chicago');
     if (convDate >= today) {
       groups['Today'].push(conv);
+    } else if (convDate >= yesterday) {
+      groups['Yesterday'].push(conv);
+    } else if (convDate >= yesterday2) {
+      groups['Previous 2 Days'].push(conv);
     } else if (convDate >= sevenDaysAgo) {
       groups['Previous 7 Days'].push(conv);
     } else if (convDate >= thirtyDaysAgo) {
       groups['Previous 30 Days'].push(conv);
     } else {
-      const monthName = convDate.toLocaleString('default', { month: 'long' });
-      const year = convDate.getFullYear();
+      const monthName = convDate.monthLong;
+      const year = convDate.year;
       const monthYearKey = `${monthName} ${year}`;
       if (!monthlyGroups[monthYearKey]) {
         monthlyGroups[monthYearKey] = [];
@@ -374,20 +381,23 @@ export function groupConversationsByDate(
       conversations: groups['Today'],
     });
   }
+const timeRanges = [
+  { key: 'Yesterday',       display:  'Yesterday'},
+  { key: 'Previous 2 Days', display:  'Previous 2 Days'},
+  { key: 'Previous 7 Days', display:  'Previous 7 Days' },
+  { key: 'Previous 30 Days', display: 'Previous 30 Days' },
 
-  if (groups['Previous 7 Days'].length > 0) {
+  // Add more ranges here if needed, e.g., 'Previous 90 Days'
+];
+
+for (const range of timeRanges) {
+  if (groups[range.key]?.length > 0) {
     result.push({
-      title: 'Previous 7 Days',
-      conversations: groups['Previous 7 Days'],
+      title: range.display,
+      conversations: groups[range.key]
     });
   }
-
-  if (groups['Previous 30 Days'].length > 0) {
-    result.push({
-      title: 'Previous 30 Days',
-      conversations: groups['Previous 30 Days'],
-    });
-  }
+}
 
   // Sort monthly groups by date (most recent month first)
   const sortedMonthKeys = Object.keys(monthlyGroups).sort((a, b) => {

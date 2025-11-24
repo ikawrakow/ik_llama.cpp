@@ -5,6 +5,7 @@ import { classNames } from '../utils/misc';
 import MarkdownDisplay, { CopyButton } from './MarkdownDisplay';
 import { ChevronLeftIcon, ChevronRightIcon,  ArrowPathIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
 import ChatInputExtraContextItem from './ChatInputExtraContextItem';
+import TextareaAutosize from 'react-textarea-autosize';
 
 interface SplitMessage {
   content: PendingMessage['content'];
@@ -34,7 +35,8 @@ export default function ChatMessage({
   isPending?: boolean;
 }) {
   const { viewingChat, config } = useAppContext();
-  const [editingContent, setEditingContent] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState<string | null>(null);  
+
   const timings = useMemo(
     () =>
       msg.timings
@@ -50,7 +52,6 @@ export default function ChatMessage({
   );
   const nextSibling = siblingLeafNodeIds[siblingCurrIdx + 1];
   const prevSibling = siblingLeafNodeIds[siblingCurrIdx - 1];
-
   // for reasoning model, we split the message into content and thought
   // TODO: implement this as remark/rehype plugin in the future
   const { content, thought, isThinking }: SplitMessage = useMemo(() => {
@@ -81,7 +82,8 @@ export default function ChatMessage({
   }, [msg]);
 
   if (!viewingChat) return null;
-
+  //const model_name = (timings?.model_name ??'')!== '' ? timings?.model_name: viewingChat.conv.model_name;
+  const model_name = viewingChat.conv.model_name;
   return (
     <div className="group" 
       id={id}       
@@ -108,12 +110,14 @@ export default function ChatMessage({
           {/* textarea for editing message */}
           {editingContent !== null && (
             <>
-              <textarea
+              <TextareaAutosize
                 dir="auto"
-                className="textarea textarea-bordered bg-base-100 text-base-content max-w-2xl w-[calc(90vw-8em)] h-24"
+                className="textarea textarea-bordered bg-base-100 text-base-content max-w-2xl w-[calc(90vw-8em)]"
                 value={editingContent}
-                onChange={(e) => setEditingContent(e.target.value)}
-              ></textarea>
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setEditingContent(e.target.value)}
+                minRows={3}
+                maxRows={15}
+              />
               <br />
               <button
                 className="btn btn-ghost mt-2 mr-2"
@@ -186,25 +190,48 @@ export default function ChatMessage({
               )}
               {/* render timings if enabled */}
               {timings && config.showTokensPerSecond && (
-                <div className="dropdown dropdown-hover dropdown-top mt-2">
+                <div className="dropdown dropdown-hover dropdown-top ax-w-[900px] w-full mt-4">
                   <div
                     tabIndex={0}
                     role="button"
                     className="cursor-pointer font-semibold text-sm opacity-60"
                   >
-                    Speed: {timings.predicted_per_second.toFixed(1)} t/s
+                    <div className="font-bold text-xs">                    
+                      {timings.n_ctx>0 && (       
+                        <div className="flex justify-between items-center">
+                          <span className="whitespace-nowrap">
+                            Token: {timings.predicted_per_second.toFixed(1)} t/s | Prompt: {timings.prompt_per_second.toFixed(1)} t/s
+                          </span>
+                          <span className="hidden lg:block pl-[200px] whitespace-nowrap">
+                            Ctx: {timings.predicted_n+timings.prompt_n} / {timings.n_past} / {timings.n_ctx}
+                          </span>
+                        </div>
+                      )}
+                      {(timings.n_ctx==null || timings.n_ctx <=0) && (
+                      <div>
+                        Token: {timings.predicted_per_second.toFixed(1)} t/s | Prompt: {timings.prompt_per_second.toFixed(1)} t/s
+                      </div>
+                      )}
+                    </div>
                   </div>
                   <div className="dropdown-content bg-base-100 z-10 w-64 p-2 shadow mt-4">
+                    <p className="text-xs"><b>{model_name}</b></p>
+                    <p className="text-sm">
                     <b>Prompt</b>
                     <br />- Tokens: {timings.prompt_n}
                     <br />- Time: {timings.prompt_ms} ms
-                    <br />- Speed: {timings.prompt_per_second.toFixed(1)} t/s
+                    <br />- Speed: {timings.prompt_per_second.toFixed(2)} t/s
                     <br />
                     <b>Generation</b>
                     <br />- Tokens: {timings.predicted_n}
                     <br />- Time: {timings.predicted_ms} ms
-                    <br />- Speed: {timings.predicted_per_second.toFixed(1)} t/s
+                    <br />- Speed: {timings.predicted_per_second.toFixed(2)} t/s
                     <br />
+                    <b>Context</b>
+                    <br />- n_ctx: {timings.n_ctx}
+                    <br />- n_past: {timings.n_past}
+                    <br />
+                    </p>
                   </div>
                 </div>
               )}
@@ -214,6 +241,13 @@ export default function ChatMessage({
       </div>
 
       {/* actions for each message */}
+      {msg.content !== null && !config.showTokensPerSecond && (            
+        msg.role === 'assistant' &&(
+        <div className="badge border-none outline-none btn-mini show-on-hover mr-2">
+          <p className="text-xs">Model: {model_name}</p>
+        </div>
+        )
+      )}
       {msg.content !== null && (
         <div
           className={classNames({
@@ -249,7 +283,7 @@ export default function ChatMessage({
           {/* user message */}
           {msg.role === 'user' && (
             <button
-              className="badge btn-mini show-on-hover"
+              className="badge border-none outline-none btn-mini show-on-hover"
               onClick={() => setEditingContent(msg.content)}
               disabled={msg.content === null}
             >
@@ -261,7 +295,7 @@ export default function ChatMessage({
             <>
               {!isPending && (
                 <button
-                  className="badge btn-mini show-on-hover mr-2"
+                  className="badge border-none outline-none btn-mini show-on-hover mr-2"
                   onClick={() => {
                     if (msg.content !== null) {
                       onRegenerateMessage(msg as Message);
@@ -274,7 +308,7 @@ export default function ChatMessage({
               )}
               {!isPending && (
                 <button
-                  className="badge btn-mini show-on-hover"
+                  className="badge border-none outline-none btn-mini show-on-hover"
                   onClick={() => setEditingContent(msg.content)}
                   disabled={msg.content === null}
                 >
@@ -284,7 +318,7 @@ export default function ChatMessage({
             </>
           )}
           <CopyButton
-            className="badge btn-mini show-on-hover mr-2"
+            className="badge border-none outline-none btn-mini show-on-hover mr-2"
             content={msg.content}
           />
         </div>

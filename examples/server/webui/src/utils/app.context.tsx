@@ -13,7 +13,7 @@ import {
   filterThoughtFromMsgs,
   normalizeMsgsForAPI,
   getSSEStreamAsync,
-  getServerProps
+  getServerProps,
 } from './misc';
 import { BASE_URL, CONFIG_DEFAULT, isDev } from '../Config';
 import { matchPath, useLocation, useNavigate } from 'react-router';
@@ -110,8 +110,7 @@ export const AppContextProvider = ({
         setServerProps(props);
       })
       .catch((err) => {
-        console.error(err);
-        toast.error('Failed to fetch server props');
+        console.error(err);       
       });
     // eslint-disable-next-line
   }, []);
@@ -216,6 +215,7 @@ export const AppContextProvider = ({
         content: null,
         parent: leafNodeId,
         children: [],
+        model_name: '',
       };
       setPending(convId, pendingMsg as PendingMessage);
     }
@@ -240,13 +240,8 @@ export const AppContextProvider = ({
         cache_prompt: true,
         reasoning_format: config.reasoning_format===''?'auto':config.reasoning_format,
         samplers: config.samplers,
-        temperature: config.temperature,
         dynatemp_range: config.dynatemp_range,
         dynatemp_exponent: config.dynatemp_exponent,
-        top_k: config.top_k,
-        top_p: config.top_p,
-        min_p: config.min_p,
-        typical_p: config.typical_p,
         xtc_probability: config.xtc_probability,
         xtc_threshold: config.xtc_threshold,
 		    top_n_sigma: config.top_n_sigma,
@@ -260,6 +255,13 @@ export const AppContextProvider = ({
         dry_penalty_last_n: config.dry_penalty_last_n,
         max_tokens: config.max_tokens,
         timings_per_token: !!config.showTokensPerSecond,
+	      ...(config.useServerDefaults ? {} :{
+	          temperature: config.temperature,
+	          top_k: config.top_k,
+	          top_p: config.top_p,
+	          min_p: config.min_p,
+	          typical_p: config.typical_p,
+	      }),
         ...(config.custom.length ? JSON.parse(config.custom) : {}),
       };
 
@@ -322,6 +324,8 @@ export const AppContextProvider = ({
             prompt_ms: timings.prompt_ms,
             predicted_n: timings.predicted_n,
             predicted_ms: timings.predicted_ms,
+            n_ctx: timings.n_ctx,
+            n_past: timings.n_past,
           };
         }
         setPending(convId, pendingMsg as PendingMessage);
@@ -333,10 +337,7 @@ export const AppContextProvider = ({
         // user stopped the generation via stopGeneration() function
         // we can safely ignore this error
       } else {
-        console.error(err);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        alert((err as any)?.message ?? 'Unknown error');
-        //throw err; // rethrow
+        toast.error(err instanceof Error ? err.message : String(err));
       }
     }
 	finally {
@@ -344,7 +345,7 @@ export const AppContextProvider = ({
       if (isContinuation) {
         await StorageUtils.updateMessage(pendingMsg as Message);
       } else if (pendingMsg.content.trim().length > 0) {
-        await StorageUtils.appendMsg(pendingMsg as Message, leafNodeId);
+        await StorageUtils.appendMsg(pendingMsg as Message, leafNodeId, '');
       }
 		}
 	}
@@ -375,6 +376,16 @@ export const AppContextProvider = ({
     const now = Date.now()+Timer.timercount;
 	Timer.timercount=Timer.timercount + 2;
     const currMsgId = now;
+    
+  let model_name:string='';
+    await getServerProps(BASE_URL)
+    .then((props) => {
+      console.debug('Server props:', props);
+      model_name = props.model_name;
+    })
+    .catch((err) => {
+      console.error(err);       
+    });
     StorageUtils.appendMsg(
       {
         id: currMsgId,
@@ -383,11 +394,13 @@ export const AppContextProvider = ({
         convId,
         role: 'user',
         content,
+        model_name: model_name,
         extra,
         parent: leafNodeId,
         children: [],
       },
-      leafNodeId
+      leafNodeId,
+      model_name
     );
     onChunk(currMsgId);
 
@@ -415,9 +428,20 @@ export const AppContextProvider = ({
   ) => {
     if (isGenerating(convId)) return;
 
-    if (content !== null) {
+    if (content !== null) {   
       const now = Date.now();
       const currMsgId = now;
+
+      let model_name:string='';
+      await getServerProps(BASE_URL)
+      .then((props) => {
+        console.debug('Server props:', props);
+        model_name = props.model_name;
+      })
+      .catch((err) => {
+        console.error(err);       
+      });
+
       StorageUtils.appendMsg(
         {
           id: currMsgId,
@@ -426,11 +450,13 @@ export const AppContextProvider = ({
           convId,
           role: 'user',
           content,
+          model_name:model_name,
           extra,
           parent: parentNodeId,
           children: [],
         },
-        parentNodeId
+        parentNodeId,
+        model_name
       );
       parentNodeId = currMsgId;
     }
@@ -452,9 +478,9 @@ export const AppContextProvider = ({
       messageIdToContinue
     );
     if (!existingMessage || existingMessage.role !== 'assistant') {
-      console.error(
-        'Cannot continue non-assistant message or message not found'
-      );
+      // console.error(
+      //   'Cannot continue non-assistant message or message not found'
+      // );
       toast.error(
         'Failed to continue message: Not an assistant message or not found.'
       );

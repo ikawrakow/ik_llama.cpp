@@ -13,8 +13,9 @@ export const CONFIG_DEFAULT = {
   // Do not use nested objects, keep it single level. Prefix the key if you need to group them.
   apiKey: '',
   systemMessage: 'You are a helpful assistant.',
-  showTokensPerSecond: false,
-  showThoughtInProgress: false,
+  showTokensPerSecond: false, 
+  showThoughtInProgress: false, 
+  useServerDefaults: false, // don't send defaults
   excludeThoughtOnReq: true,
   pasteLongTextToFileLen: 2500,
   pdfAsImage: false,
@@ -51,7 +52,7 @@ export const CONFIG_INFO: Record<string, string> = {
   pasteLongTextToFileLen:
     'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
   samplers:
-    'The order at which samplers are applied, in simplified way. Default is "dkypmxt": dry->top_k->typ_p->top_p->min_p->xtc->top_sigma->temperature',
+    'The order at which samplers are applied, in simplified way. Default is "dkypmxnt": dry->top_k->typ_p->top_p->min_p->xtc->top_sigma->temperature',
   temperature:
     'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
   dynatemp_range:
@@ -87,6 +88,7 @@ export const CONFIG_INFO: Record<string, string> = {
   dry_penalty_last_n:
     'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets DRY penalty for the last n tokens.',
   max_tokens: 'The maximum number of token per output.',
+  useServerDefaults: 'When enabled, skip sending WebUI defaults (e.g., temperature) and use the server\'s default values instead.',
   custom: '', // custom json-stringified object
 };
 // config keys having numeric value (i.e. temperature, top_k, top_p, etc)

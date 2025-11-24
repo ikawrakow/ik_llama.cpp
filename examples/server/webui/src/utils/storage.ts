@@ -1,11 +1,12 @@
 // coversations is stored in localStorage
 // format: { [convId]: { id: string, lastModified: number, messages: [...] } }
-
-import { CONFIG_DEFAULT } from '../Config';
+//import { useState } from 'react';
+import {BASE_URL,  CONFIG_DEFAULT } from '../Config';
 import { Conversation, Message, TimingReport, SettingsPreset } from './types';
 import Dexie, { Table } from 'dexie';
+import {getServerProps} from './misc'
 import { exportDB as exportDexieDB } from 'dexie-export-import';
-
+import toast from 'react-hot-toast';
 const event = new EventTarget();
 
 type CallbackConversationChanged = (convId: string) => void;
@@ -28,6 +29,12 @@ const db = new Dexie('LlamacppWebui') as Dexie & {
 db.version(1).stores({
   // Unlike SQL, you don’t need to specify all properties but only the one you wish to index.
   conversations: '&id, lastModified',
+  messages: '&id, convId, [convId+id], timestamp',
+});
+
+db.version(2).stores({
+  // Unlike SQL, you don’t need to specify all properties but only the one you wish to index.
+  conversations: '&id, lastModified, model_name',
   messages: '&id, convId, [convId+id], timestamp',
 });
 
@@ -118,11 +125,22 @@ const StorageUtils = {
   async createConversation(name: string): Promise<Conversation> {
     const now = Date.now();
     const msgId = now;
+    let model_name:string = '';
+    //window.alert(BASE_URL);
+    await getServerProps(BASE_URL)
+      .then((props) => {
+        console.debug('Server props:', props);
+        model_name = props.model_name;
+      })
+      .catch((err) => {
+        console.error(err);       
+      });
     const conv: Conversation = {
       id: `conv-${now}`,
       lastModified: now,
       currNode: msgId,
       name,
+	  model_name:model_name,
     };
     await db.conversations.add(conv);
     // create a root node
@@ -133,6 +151,7 @@ const StorageUtils = {
       timestamp: now,
       role: 'system',
       content: '',
+      model_name:conv.model_name,
       parent: -1,
       children: [],
     });
@@ -143,7 +162,8 @@ const StorageUtils = {
    */
   async appendMsg(
     msg: Exclude<Message, 'parent' | 'children'>,
-    parentNodeId: Message['id']
+    parentNodeId: Message['id'],
+    model_name:string,
   ): Promise<void> {
     if (msg.content === null) return;
     const { convId } = msg;
@@ -161,9 +181,11 @@ const StorageUtils = {
           `Parent message ID ${parentNodeId} does not exist in conversation ${convId}`
         );
       }
+      model_name = model_name!==''?model_name:conv.model_name;
       await db.conversations.update(convId, {
         lastModified: Date.now(),
         currNode: msg.id,
+        model_name: model_name,
       });
       // update parent
       await db.messages.update(parentNodeId, {
@@ -191,10 +213,10 @@ const StorageUtils = {
 
   // event listeners
   onConversationChanged(callback: CallbackConversationChanged) {
-    const fn = (e: Event) => callback((e as CustomEvent).detail.convId);
-    onConversationChangedHandlers.push([callback, fn]);
-    event.addEventListener('conversationChange', fn);
-  },
+	  const fn = (e: Event) => callback((e as CustomEvent).detail.convId);
+	  onConversationChangedHandlers.push([callback, fn]);
+	  event.addEventListener('conversationChange', fn);
+},
   offConversationChanged(callback: CallbackConversationChanged) {
     const fn = onConversationChangedHandlers.find(([cb, _]) => cb === callback);
     if (fn) {
@@ -295,7 +317,6 @@ async importConversation(importedData: {
   
   // Refresh the page to apply changes
   window.location.reload();
-  
   return conversation;
 },
 /**
@@ -329,7 +350,7 @@ async importConversation(importedData: {
           const conversation = await StorageUtils.importConversation(jsonData);
           resolve(conversation);
         } catch (error) {
-          console.error('Import failed:', error);
+          toast.error('Import failed:' +error);
           alert(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
           resolve(null);
         } finally {
@@ -367,7 +388,8 @@ async importConversation(importedData: {
     try {
       return JSON.parse(presetsJson);
     } catch (e) {
-      console.error('Failed to parse presets', e);
+      toast.error('Failed to parse presets: '+ e);
+
       return [];
     }
   },
@@ -444,6 +466,7 @@ async function migrationLStoIDB() {
         lastModified,
         currNode: lastMsg.id,
         name,
+        model_name:'migrate_name'
       });
       const rootId = messages[0].id - 2;
       await db.messages.add({
@@ -454,6 +477,7 @@ async function migrationLStoIDB() {
         role: 'system',
         content: '',
         parent: -1,
+        model_name:'migrate_name',
         children: [firstMsg.id],
       });
       for (let i = 0; i < messages.length; i++) {
@@ -465,6 +489,7 @@ async function migrationLStoIDB() {
           timestamp: msg.id,
           parent: i === 0 ? rootId : messages[i - 1].id,
           children: i === messages.length - 1 ? [] : [messages[i + 1].id],
+          model_name:'',
         });
       }
       migratedCount++;
