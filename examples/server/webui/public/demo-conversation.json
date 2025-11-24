@@ -16,7 +16,9 @@
         "prompt_n": 1,
         "prompt_ms": 28.923,
         "predicted_n": 25,
-        "predicted_ms": 573.016
+        "predicted_ms": 573.016,
+        "n_ctx": 4048,
+        "n_past": 1024
       }
     },
     {

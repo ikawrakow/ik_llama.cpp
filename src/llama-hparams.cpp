@@ -762,8 +762,10 @@ void llm_load_hparams(
                     for (auto& item : hparams.n_head_kv_arr) item = n_nead_kv;
                     hparams.n_embd_head_k = 192;
                     hparams.n_embd_head_v = 128;
+                    ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k);
+                    ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v);
                 }
-                bool is_lite = (hparams.n_layer == 27);
+                bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT, hparams.n_layer_dense_lead);
                 if (!is_lite) {

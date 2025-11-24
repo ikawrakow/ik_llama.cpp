@@ -62,11 +62,6 @@ export default function Header() {
 	if (newName && newName.trim().length > 0) {
 	  StorageUtils.updateConversationName(viewingChat?.conv.id ?? '', newName);
 	}
-    //const importedConv = await StorageUtils.updateConversationName();
-  //if (importedConv) {
-    //console.log('Successfully imported:', importedConv.name);
-    // Refresh UI or navigate to conversation
-  //}
   };
   
   // at the top of your file, alongside ConversationExport:
@@ -75,13 +70,30 @@ export default function Header() {
   if (importedConv) {
     console.log('Successfully imported:', importedConv.name);
     // Refresh UI or navigate to conversation
+    navigate(`/chat/${importedConv.id}`);
   }
   };
 
   const downloadConversation = () => {
     if (isCurrConvGenerating || !viewingChat) return;
     const convId = viewingChat?.conv.id;
-    const conversationJson = JSON.stringify(viewingChat, null, 2);
+
+    // Get the current system message from config
+    const systemMessage = StorageUtils.getConfig().systemMessage;
+    
+    // Clone the viewingChat object to avoid modifying the original
+    const exportData = {
+      conv: { ...viewingChat.conv },
+      messages: viewingChat.messages.map(msg => ({ ...msg }))
+    };
+    
+    // Find the root message and update its content
+    const rootMessage = exportData.messages.find(m => m.type === 'root');
+    if (rootMessage) {
+      rootMessage.content = systemMessage;
+    }
+
+    const conversationJson = JSON.stringify(exportData, null, 2);
     const blob = new Blob([conversationJson], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -116,9 +128,12 @@ export default function Header() {
 
       {/* action buttons (top right) */}
       <div className="flex items-center">
-        {viewingChat && (
+	  {/* start */ }
+	    {/*viewingChat && */ /* show options for new conversation as well */
+         (
           <div className="dropdown dropdown-end">
             {/* "..." button */}
+
             <button
               tabIndex={0}
               role="button"

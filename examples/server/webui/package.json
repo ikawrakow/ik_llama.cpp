@@ -22,6 +22,7 @@
     "dexie-export-import": "^4.0.11",
     "highlight.js": "^11.10.0",
     "katex": "^0.16.15",
+    "luxon": "^3.7.1",
     "pdfjs-dist": "^5.2.133",
     "postcss": "^8.4.49",
     "react": "^18.3.1",
@@ -30,6 +31,7 @@
     "react-hot-toast": "^2.5.2",
     "react-markdown": "^9.0.3",
     "react-router": "^7.1.5",
+    "react-textarea-autosize": "^8.5.9",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "remark-breaks": "^4.0.0",
@@ -41,6 +43,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@types/luxon": "^3.7.1",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.13.1",
     "@types/react": "^18.3.18",

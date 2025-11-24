@@ -5,7 +5,8 @@
     "lib": ["ES2023"],
     "module": "ESNext",
     "skipLibCheck": true,
-
+	"sourceMap": false,
+    "inlineSources": false,
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

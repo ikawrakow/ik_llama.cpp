@@ -466,6 +466,12 @@ static json oaicompat_chat_params_parse(const json& body) {
         throw std::runtime_error("Only no echo is supported");
     }
 
+    // Handle "logprobs" field
+    int n_probs = json_value(body, "logprobs", 0);
+    if (n_probs > 0) {
+        llama_params["n_probs"] = n_probs;
+    }
+
     // Params supported by OAI but unsupported by llama.cpp
     static const std::vector<std::string> unsupported_params{ "best_of", "suffix" };
     for (const auto& param : unsupported_params) {
