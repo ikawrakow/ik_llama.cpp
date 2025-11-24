@@ -91,7 +91,7 @@ static __device__ __forceinline__ void dequantize_q6_0(const void * vx, const in
 
     const dfloat d = x[ib].d;
 
-    const uint8_t h = x[ib].qh[iqs%8] >> 2*(iqs/8);
+    const uint8_t h = x[ib].qh[iqs%8] >> 4*(iqs/8);
     v.x = ((x[ib].qs[iqs] & 0xf) | ((h & 0x3) << 4));
     v.y = ((x[ib].qs[iqs] >>  4) | ((h & 0xc) << 2));
 
