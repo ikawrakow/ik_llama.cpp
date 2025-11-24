@@ -316,6 +316,38 @@ struct fattn_mma_f16_config<192, 128> {
 };
 
 template <>
+struct fattn_mma_f16_config<192, 192> {
+    static constexpr int  nbatch_fa      = 64;
+    static constexpr int  nwarps_max     = 4;
+    static constexpr bool Q_in_reg       = true;
+    static constexpr int  nstages_target = 1;
+
+    static int get_nbatch_K2_host(const int /*cc*/, const int /*ncols*/) {
+        return 64;
+    }
+
+    static constexpr __device__ int get_nbatch_K2_device(int /*ncols*/) {
+        return 64;
+    }
+
+    static int get_nbatch_V2_host(const int /*cc*/, const int /*ncols*/) {
+        return 64;
+    }
+
+    static constexpr __device__ int get_nbatch_V2_device(int /*ncols*/) {
+        return 64;
+    }
+
+    static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
+        return 32;
+    }
+
+    static constexpr __device__ int get_nbatch_combine_device(int /*ncols*/) {
+        return 32;
+    }
+};
+
+template <>
 struct fattn_mma_f16_config<576, 512> {
     static constexpr int  nbatch_fa      = 32;
     static constexpr int  nwarps_max     = 8;
@@ -2117,6 +2149,12 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
         //ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<192, 128>(ctx, dst);
         // Reduce compile time
         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 128, 1>(ctx, dst);
+        return;
+    }
+    if (K->ne[0] == 192 && V->ne[0] == 192) {
+        GGML_ASSERT(Q->ne[0] == 192);
+        GGML_ASSERT(gqa_ratio == 1);
+        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 192, 1>(ctx, dst);
         return;
     }
     GGML_ASSERT(Q->ne[0] == 576 && K->ne[0] == 576 && V->ne[0] == 512);
