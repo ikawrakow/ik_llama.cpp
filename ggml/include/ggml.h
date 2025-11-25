@@ -3015,6 +3015,13 @@ extern "C" {
 
     GGML_API ggml_type_traits_t ggml_internal_get_type_traits(enum ggml_type type);
 
+    typedef struct {
+        int                   n_device;
+        int                   split_dim;
+        struct ggml_tensor *  tensor;
+        struct ggml_tensor ** splits;
+    } ggml_split_tensor_t;
+
 #ifdef  __cplusplus
 }
 #endif

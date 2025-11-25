@@ -1243,10 +1243,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.split_mode = LLAMA_SPLIT_MODE_LAYER;
         }
         else if (arg_next == "row") {
-            fprintf(stderr, "\n\n=====================================================================================\n");
-            fprintf(stderr, " Split mode row is no longer supported\n");
-            fprintf(stderr, "=====================================================================================\n\n\n");
-            GGML_ABORT("fatal error");
+            //fprintf(stderr, "\n\n=====================================================================================\n");
+            //fprintf(stderr, " Split mode row is no longer supported\n");
+            //fprintf(stderr, "=====================================================================================\n\n\n");
+            //GGML_ABORT("fatal error");
             params.split_mode = LLAMA_SPLIT_MODE_ROW;
         }
         else {
