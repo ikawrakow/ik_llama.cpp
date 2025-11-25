@@ -426,9 +426,6 @@ common_prefix find_largest_common_number(const std::vector<size_t>& a_list, cons
             --j;
         }
     }
-    if (a_list[i] != b_list[j]) {
-        return token_prefix;
-    }
     return token_prefix;
 }
 
@@ -464,7 +461,7 @@ size_t find_n_tokens_from_string_with_ignore(const llama_context* ctx, const lla
 common_prefix find_common_text_token_prefix(const llama_context * ctx, const llama_tokens & a, const llama_tokens& b,
     size_t start, bool exact) {
     common_prefix token_prefix;
-    if (a.size()<= start && b.size()<= start) {
+    if (a.size()<= start || b.size()<= start) {
         return token_prefix;
     }
     std::set<char> ignore_set = { ' ', '\n' ,'\r'};
@@ -1411,7 +1408,7 @@ public:
             return str;
         }
         llama_tokens text_tokens;
-        text_tokens.reserve(tokens.size());
+        text_tokens.reserve(tokens.size() - start);
         size_t i = 0;
         size_t count = 0;
         for (const auto& t : tokens) {
