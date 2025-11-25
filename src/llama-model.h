@@ -183,6 +183,21 @@ struct llama_layer {
     struct ggml_tensor * bqk  = nullptr;
     struct ggml_tensor * bkv  = nullptr;
 
+    llama_split_tensor split_wq;
+    llama_split_tensor split_wk;
+    llama_split_tensor split_wv;
+    llama_split_tensor split_wo;
+    llama_split_tensor split_wqkv;
+    llama_split_tensor split_wqk;
+    llama_split_tensor split_wkv;
+    llama_split_tensor split_bq;
+    llama_split_tensor split_bk;
+    llama_split_tensor split_bv;
+    llama_split_tensor split_bo;
+    llama_split_tensor split_bqkv;
+    llama_split_tensor split_bqk;
+    llama_split_tensor split_bkv;
+
     // relative position bias
     struct ggml_tensor * attn_rel_b = nullptr;
     struct ggml_tensor * attn_rel_b_enc = nullptr;
@@ -205,11 +220,19 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_enc = nullptr;
     struct ggml_tensor * ffn_up_enc = nullptr;
 
+    llama_split_tensor split_ffn_up;
+    llama_split_tensor split_ffn_gate;
+    llama_split_tensor split_ffn_down;
+
     // ff MoE
     struct ggml_tensor * ffn_gate_inp = nullptr;
     struct ggml_tensor * ffn_gate_exps = nullptr;
     struct ggml_tensor * ffn_down_exps = nullptr;
     struct ggml_tensor * ffn_up_exps  = nullptr;
+
+    llama_split_tensor split_ffn_up_exps;
+    llama_split_tensor split_ffn_gate_exps;
+    llama_split_tensor split_ffn_down_exps;
 
     // ff MoE bias
     struct ggml_tensor * ffn_gate_inp_b = nullptr;
@@ -225,6 +248,10 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_shexp = nullptr;
     struct ggml_tensor * ffn_down_shexp = nullptr;
     struct ggml_tensor * ffn_up_shexp = nullptr;
+
+    llama_split_tensor split_ffn_up_shexp;
+    llama_split_tensor split_ffn_gate_shexp;
+    llama_split_tensor split_ffn_down_shexp;
 
     // ff bias
     struct ggml_tensor * ffn_gate_b = nullptr;
@@ -293,6 +320,8 @@ struct llama_model {
     struct ggml_tensor * output_b;
     struct ggml_tensor * output_norm_enc;
 
+    llama_split_tensor split_output;
+
     std::vector<llama_layer> layers;
 
     llama_split_mode split_mode;
@@ -353,6 +382,11 @@ struct llama_model {
     }
 
     void set_tensor_overrides(const llama_model_params& params);
+
+    int device_count() const;
+    ggml_backend_buffer_type_t default_buffer_type_offload(int device) const;
+
+    std::vector<float> splits;
 };
 
 struct llama_lora_weight {
