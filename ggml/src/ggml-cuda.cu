@@ -1010,31 +1010,50 @@ GGML_CALL static size_t ggml_backend_cuda_split_buffer_type_get_alignment(ggml_b
     GGML_UNUSED(buft);
 }
 
-GGML_CALL static size_t ggml_backend_cuda_split_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    ggml_backend_cuda_split_buffer_type_context * ctx = (ggml_backend_cuda_split_buffer_type_context *)buft->context;
+GGML_CALL static size_t ggml_backend_cuda_split_buffer_type_get_alloc_size([[maybe_unused]] ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
+    if (!tensor->extra) return 0;
+    auto extra = (ggml_split_tensor_t *)tensor->extra;
+    GGML_ASSERT(extra->n_device <= ggml_backend_cuda_get_device_count());
 
     size_t total_size = 0;
-
-    const int64_t ne0 = tensor->ne[0];
-
-    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-        int64_t row_low, row_high;
-        get_row_split(&row_low, &row_high, tensor, ctx->tensor_split, id);
-
-        int64_t nrows_split = row_high - row_low;
-        if (nrows_split == 0) {
-            continue;
-        }
-
-        total_size += ggml_nbytes_split(tensor, nrows_split);
-
-        // pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
+    for (int i = 0; i < extra->n_device; ++i) {
+        auto split = extra->splits[i];
+        if (!split) continue;
+        total_size += ggml_nbytes(split);
+        auto ne0 = split->ne[0];
         if (ne0 % MATRIX_ROW_PADDING != 0) {
-            total_size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+            auto nblock = (ne0 + MATRIX_ROW_PADDING - 1)/MATRIX_ROW_PADDING;
+            auto row_size = ggml_row_size(split->type, ne0);
+            auto padded_row_size = ggml_row_size(split->type, nblock*MATRIX_ROW_PADDING);
+            total_size += padded_row_size - row_size;
         }
     }
-
     return total_size;
+
+    //ggml_backend_cuda_split_buffer_type_context * ctx = (ggml_backend_cuda_split_buffer_type_context *)buft->context;
+
+    //size_t total_size = 0;
+
+    //const int64_t ne0 = tensor->ne[0];
+
+    //for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
+    //    int64_t row_low, row_high;
+    //    get_row_split(&row_low, &row_high, tensor, ctx->tensor_split, id);
+
+    //    int64_t nrows_split = row_high - row_low;
+    //    if (nrows_split == 0) {
+    //        continue;
+    //    }
+
+    //    total_size += ggml_nbytes_split(tensor, nrows_split);
+
+    //    // pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
+    //    if (ne0 % MATRIX_ROW_PADDING != 0) {
+    //        total_size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+    //    }
+    //}
+
+    //return total_size;
 }
 
 GGML_CALL static bool ggml_backend_cuda_split_buffer_type_is_host(ggml_backend_buffer_type_t buft) {

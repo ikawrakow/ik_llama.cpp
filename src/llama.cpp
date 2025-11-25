@@ -770,6 +770,8 @@ static bool llama_kv_cache_init(
                     split_v_l.ggml.n_device  = extra_V->n_device;
                     split_v_l.ggml.split_dim = 0;
                     split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
+                    k->extra = (void *)&split_k_l.ggml;
+                    v->extra = (void *)&split_v_l.ggml;
                 } else {
                     printf("Oops: don't have yet K and V for layer %d\n", i);
                 }
