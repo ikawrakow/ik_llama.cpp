@@ -224,6 +224,7 @@ struct llama_layer {
     llama_split_tensor split_ffn_up;
     llama_split_tensor split_ffn_gate;
     llama_split_tensor split_ffn_down;
+    llama_split_tensor split_ffn_norm;
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp = nullptr;
