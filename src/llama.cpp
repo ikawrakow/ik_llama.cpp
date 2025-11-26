@@ -819,6 +819,7 @@ static bool llama_kv_cache_init(
         cache.bufs.push_back(buf);
     }
 
+#if 0
     for (int il = 0; il < n_layer; ++il) {
         if (cache.k_l[il]->extra) {
             printf("Layer %2d, K-buffer: %p:", il, (void *)cache.k_l[il]->buffer);
@@ -837,6 +838,7 @@ static bool llama_kv_cache_init(
             printf("\n");
         }
     }
+#endif
 
     return true;
 }
