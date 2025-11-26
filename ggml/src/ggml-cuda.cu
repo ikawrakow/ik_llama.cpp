@@ -602,7 +602,7 @@ static ggml_backend_buffer_i ggml_backend_cuda_buffer_interface = {
     /* .free_buffer     = */ ggml_backend_cuda_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_cuda_buffer_get_base,
     /* .init_tensor     = */ ggml_backend_cuda_buffer_init_tensor,
-    /* .memset_tensor   = */ ggml_backend_cuda_buffer_memset_tensor,	
+    /* .memset_tensor   = */ ggml_backend_cuda_buffer_memset_tensor,
     /* .set_tensor      = */ ggml_backend_cuda_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_cuda_buffer_get_tensor,
     /* .cpy_tensor      = */ ggml_backend_cuda_buffer_cpy_tensor,
@@ -811,6 +811,10 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
         printf("    allocated %zu bytes for tensor %s of type %s, dim = %ld x %ld x %ld. padding: %zu\n", padded_size, split->name, ggml_type_name(split->type),
                 split->ne[0], split->ne[1], split->ne[2], padded_size - size);
         split->data = buf;
+        auto ctx = new ggml_backend_cuda_buffer_context(i, buf);
+        auto buft = ggml_backend_cuda_buffer_type(i);
+        split->buffer = ggml_backend_buffer_init(buft, ggml_backend_cuda_buffer_interface, ctx, padded_size);
+        ggml_backend_buffer_set_usage(split->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     }
     return;
 
@@ -862,7 +866,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
     //tensor->extra = extra;
 }
 
-GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     if (!tensor->extra) return;
     printf("%s(%s)\n", __func__, tensor->name);
 
@@ -873,19 +877,64 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buf
     auto extra = (ggml_split_tensor_t *)tensor->extra;
     GGML_ASSERT(extra->n_device <= ggml_backend_cuda_get_device_count());
 
-    if (extra->split_dim != 0) {
-        fprintf(stderr, "Split tensor copy not yet immplemented for dim 0\n");
-        return;
-    }
-
-    size_t cur_offset = 0;
     for (int i = 0; i < extra->n_device; ++i) {
         auto split = extra->splits[i];
         if (!split) continue;
-        auto size = ggml_nbytes(split);
-        const char * buf_host = (const char *)data + cur_offset;
-        CUDA_CHECK(cudaMemcpyAsync(split->data, buf_host, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-        cur_offset += size;
+        printf("  Split %d: %p, %p, %s\n", i, (void *)split->data, (void *)split->buffer, split->buffer ? ggml_backend_buffer_name(split->buffer) : "none");
+    }
+
+    if (extra->split_dim == 0) {
+        if (tensor->type >= GGML_TYPE_Q4_0_R8) {
+            GGML_ABORT("Dim 0 copy of row-interleaved quants is not supported yet");
+        }
+        auto tt = ggml_internal_get_type_traits(tensor->type);
+        //if (tt.row_meta_size > 0) {
+        //    GGML_ABORT("Dim 0 copy is not implemented for tensors with row meta data\n");
+        //}
+        GGML_ASSERT(ggml_is_contiguous(tensor));
+        int nrows = ggml_nrows(tensor);
+        auto bs = tt.blck_size;
+        auto ts = tt.type_size;
+        auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+        int ne = 0;
+        for (int i = 0; i < extra->n_device; ++i) {
+            auto split = extra->splits[i];
+            if (!split) continue;
+            ggml_cuda_set_device(i);
+            GGML_ASSERT(split->type == tensor->type);
+            GGML_ASSERT((int)ggml_nrows(split) == nrows);
+            GGML_ASSERT(split->ne[0] % bs == 0);
+            auto source_offset = tt.row_meta_size + (ne / bs) * ts;
+            auto chost0 = (const char *)data;
+            //auto chost = (const char *)data + source_offset;
+            auto split_row_size = ggml_row_size(split->type, split->ne[0]);
+            for (int ir = 0; ir < nrows; ++ir) {
+                auto dst = (char *)split->data + ir*split_row_size;
+                if (tt.row_meta_size > 0) {
+                    CUDA_CHECK(cudaMemcpyAsync(dst, chost0, tt.row_meta_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+                }
+                CUDA_CHECK(cudaMemcpyAsync(dst + tt.row_meta_size, chost0 + source_offset,
+                            split_row_size - tt.row_meta_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+                chost0 += row_size;
+            }
+            ne += split->ne[0];
+        }
+    }
+    else if (extra->split_dim == 1) {
+        size_t cur_offset = 0;
+        for (int i = 0; i < extra->n_device; ++i) {
+            auto split = extra->splits[i];
+            if (!split) continue;
+            ggml_cuda_set_device(i);
+            auto size = ggml_nbytes(split);
+            const char * buf_host = (const char *)data + cur_offset;
+            CUDA_CHECK(cudaMemcpyAsync(split->data, buf_host, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+            cur_offset += size;
+        }
+    }
+    else {
+        fprintf(stderr, "%s: not implemented for split dim %d\n", __func__, extra->split_dim == 0);
+        GGML_ABORT("fatal error");
     }
 
     for (int i = 0; i < extra->n_device; ++i) {
@@ -3023,6 +3072,7 @@ static inline bool ops_are_same_device(const ggml_cgraph * cgraph, int first, in
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst, const ggml_cgraph * cgraph, int & i) {
     // why is this here instead of mul_mat?
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_cuda_split(dst->src[0]->buffer)) {
+        printf("%s: split buffer for %s(%s)\n", __func__, ggml_op_name(dst->op), dst->name);
         ggml_cuda_set_peer_access(dst->src[1]->ne[1], ctx.device);
     }
 
@@ -3034,7 +3084,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
 
     auto fusion = ctx.fusion;
 
-    //printf("%4d %s(%s)\n", i, ggml_op_name(dst->op), dst->name);
+    printf("%4d %s(%s) on device %d. time = %ld\n", i, ggml_op_name(dst->op), dst->name, ctx.device, ggml_time_us());
     switch (dst->op) {
         case GGML_OP_ARGMAX:
             ggml_cuda_argmax(ctx, dst);
@@ -3759,6 +3809,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
     // TODO
     const bool integrated = false; //ggml_cuda_info().devices[cuda_ctx->device].integrated;
 
+    printf("======================== %s: graph with %d nodes on device %d. time = %ld\n", __func__, cgraph->n_nodes, cuda_ctx->device, ggml_time_us());
     while (!graph_evaluated_or_captured) {
         // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
         // With the use of CUDA graphs, the execution will be performed by the graph launch.
@@ -4183,6 +4234,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
 }
 
 GGML_CALL static bool ggml_backend_cuda_supports_buft(ggml_backend_t backend, ggml_backend_buffer_type_t buft) {
+    //printf("%s(%s, %s): %d, %d\n", __func__, ggml_backend_name(backend), ggml_backend_buft_name(buft), ggml_backend_buft_is_cuda_split(buft), ggml_backend_buft_is_cuda(buft));
     if (ggml_backend_buft_is_cuda_split(buft)) {
         return true;
     }
