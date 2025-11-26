@@ -4090,7 +4090,7 @@ struct llama_model * llama_load_model_from_file(
         device_names.insert(device_names.end(), gpu_names.begin(), gpu_names.end());
     }
 
-    for (auto device : device_names) {
+    for (auto & device : device_names) {
         if (buffer_names.count(device)) {
             model->devices.push_back(buffer_names[device]);
         }
