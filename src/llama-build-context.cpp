@@ -634,7 +634,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
          ggml_tensor * act_scales,
             llm_ffn_op_type   type_op,
           llm_ffn_gate_type   type_gate,
-         const llm_build_cb & cb, int il) {
+         const llm_build_cb & cb, int il, ggml_cgraph * graph) {
 
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
         up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
@@ -661,6 +661,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
                 // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
                 ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+            }
+            if (graph) {
+                ggml_build_forward_expand(graph, cur);
             }
             ffn.push_back(cur);
         }
@@ -1526,7 +1529,7 @@ ggml_cgraph * llm_build_context::build_llama() {
                     model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
                     model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
                     NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf);
             cb(cur, "ffn_out", il);
         } else if (model.arch == LLM_ARCH_LLAMA4) {
             // llama4 MoE
@@ -9152,6 +9155,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
                 }
                 cb(cur, "kqv_wo", il_cb);
+                ggml_build_forward_expand(gf, cur);
                 // TODO: wo_b
                 attn.push_back(cur);
             }
