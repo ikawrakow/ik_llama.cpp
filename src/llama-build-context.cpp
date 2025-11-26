@@ -680,6 +680,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             cur = ggml_add(ctx, cur, ffn[id]);
             cb(cur, "combine_ffn", il);
         }
+        cur->op_params[0] = 0xff;
         return cur;
     }
 
@@ -9088,6 +9089,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 cur = ggml_add(ctx0, cur, attn[id]);
                 cb(cur, "combine_attn", il);
             }
+            cur->op_params[0] = 0xff;
             return cur;
         }
     }
