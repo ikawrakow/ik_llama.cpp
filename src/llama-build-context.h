@@ -317,7 +317,7 @@ struct llm_build_context {
                     float     kq_scale,
          const llm_build_cb & cb, int il, ggml_tensor * sinks = nullptr, int n_swa = 0);
 
-    static ggml_tensor * llm_build_ffn(ggml_context * ctx, llama_context & lctx,
+    static ggml_tensor * llm_build_ffn(ggml_context * ctx, llama_context & lctx, ggml_tensor * ffn_norm,
          ggml_tensor * cur,
          ggml_tensor * up,
          ggml_tensor * up_b,
