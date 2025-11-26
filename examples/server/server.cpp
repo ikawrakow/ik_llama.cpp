@@ -96,6 +96,7 @@ enum oaicompat_type {
     OAICOMPAT_TYPE_CHAT,
     OAICOMPAT_TYPE_COMPLETION,
     OAICOMPAT_TYPE_EMBEDDING,
+    OAICOMPAT_TYPE_ANTHROPIC,
 };
 
 struct result_timings {
@@ -221,6 +222,8 @@ struct server_task_result {
             return to_json_oaicompat_final();
         case OAICOMPAT_TYPE_CHAT:
             return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat_final();
+        case OAICOMPAT_TYPE_ANTHROPIC:
+            return stream ? to_json_anthropic_stream() : to_json_anthropic_final();
         default:
             GGML_ASSERT(false && "Invalid oaicompat_type");
         }
@@ -233,7 +236,9 @@ struct server_task_result {
         case OAICOMPAT_TYPE_COMPLETION:
             return to_json_oaicompat_partial();
         case OAICOMPAT_TYPE_CHAT:
-            return  to_json_oaicompat_chat_partial();
+            return to_json_oaicompat_chat_partial();
+        case OAICOMPAT_TYPE_ANTHROPIC:
+            return to_json_anthropic_partial();
         default:
             GGML_ASSERT(false && "Invalid oaicompat_type");
         }
@@ -538,6 +543,307 @@ struct server_task_result {
         }
 
         return deltas;
+    }
+
+    json to_json_anthropic_final() {
+        std::string stop_reason = "max_tokens";
+        if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+            stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+        }
+
+        json content_blocks = json::array();
+
+        common_chat_msg msg;
+        if (!oaicompat_msg.empty()) {
+            msg = oaicompat_msg;
+        } else {
+            msg.role = "assistant";
+            msg.content = content;
+        }
+
+
+        if (!msg.content.empty()) {
+            content_blocks.push_back({
+                {"type", "text"},
+                {"text", msg.content}
+            });
+        }
+
+        for (const auto & tool_call : msg.tool_calls) {
+            json tool_use_block = {
+                {"type", "tool_use"},
+                {"id", tool_call.id},
+                {"name", tool_call.name}
+            };
+
+            try {
+                tool_use_block["input"] = json::parse(tool_call.arguments);
+            } catch (const std::exception &) {
+                tool_use_block["input"] = json::object();
+            }
+
+            content_blocks.push_back(tool_use_block);
+        }
+
+        json res = {
+            {"id", oaicompat_cmpl_id},
+            {"type", "message"},
+            {"role", "assistant"},
+            {"content", content_blocks},
+            {"model", oaicompat_model},
+            {"stop_reason", stop_reason},
+            {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
+            {"usage", {
+                {"input_tokens", n_prompt_tokens},
+                {"output_tokens", n_decoded}
+            }}
+        };
+
+        return res;
+    }
+
+    json to_json_anthropic_stream() {
+        json events = json::array();
+
+        std::string stop_reason = "max_tokens";
+        if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+            stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+        }
+
+        bool has_text = !oaicompat_msg.content.empty();
+        size_t num_tool_calls = oaicompat_msg.tool_calls.size();
+
+        bool text_block_started = false;
+        std::set<size_t> tool_calls_started;
+
+        for (const auto & diff : oaicompat_msg_diffs) {
+
+            if (!diff.content_delta.empty()) {
+                if (!text_block_started) {
+                    events.push_back({
+                        {"event", "content_block_start"},
+                        {"data", {
+                            {"type", "content_block_start"},
+                            {"index", 0},
+                            {"content_block", {
+                                {"type", "text"},
+                                {"text", ""}
+                            }}
+                        }}
+                    });
+                    text_block_started = true;
+                }
+
+                events.push_back({
+                    {"event", "content_block_delta"},
+                    {"data", {
+                        {"type", "content_block_delta"},
+                        {"index", 0},
+                        {"delta", {
+                            {"type", "text_delta"},
+                            {"text", diff.content_delta}
+                        }}
+                    }}
+                });
+            }
+
+            if (diff.tool_call_index != std::string::npos) {
+                size_t content_block_index = (has_text ? 1 : 0) + diff.tool_call_index;
+
+                if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
+                    const auto & full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
+
+                    events.push_back({
+                        {"event", "content_block_start"},
+                        {"data", {
+                            {"type", "content_block_start"},
+                            {"index", content_block_index},
+                            {"content_block", {
+                                {"type", "tool_use"},
+                                {"id", full_tool_call.id},
+                                {"name", full_tool_call.name}
+                            }}
+                        }}
+                    });
+                    tool_calls_started.insert(diff.tool_call_index);
+                }
+
+                if (!diff.tool_call_delta.arguments.empty()) {
+                    events.push_back({
+                        {"event", "content_block_delta"},
+                        {"data", {
+                            {"type", "content_block_delta"},
+                            {"index", content_block_index},
+                            {"delta", {
+                                {"type", "input_json_delta"},
+                                {"partial_json", diff.tool_call_delta.arguments}
+                            }}
+                        }}
+                    });
+                }
+            }
+        }
+
+        if (has_text) {
+            events.push_back({
+                {"event", "content_block_stop"},
+                {"data", {
+                    {"type", "content_block_stop"},
+                    {"index", 0}
+                }}
+            });
+        }
+
+        for (size_t i = 0; i < num_tool_calls; i++) {
+            size_t content_block_index = (has_text ? 1 : 0) + i;
+            events.push_back({
+                {"event", "content_block_stop"},
+                {"data", {
+                    {"type", "content_block_stop"},
+                    {"index", content_block_index}
+                }}
+            });
+        }
+
+        events.push_back({
+            {"event", "message_delta"},
+            {"data", {
+                {"type", "message_delta"},
+                {"delta", {
+                    {"stop_reason", stop_reason},
+                    {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)}
+                }},
+                {"usage", {
+                    {"output_tokens", n_decoded}
+                }}
+            }}
+        });
+
+        events.push_back({
+            {"event", "message_stop"},
+            {"data", {
+                {"type", "message_stop"}
+            }}
+        });
+
+        // extra fields for debugging purposes
+        if (verbose && !events.empty()) {
+            events.front()["data"]["__verbose"] = to_json_non_oaicompat_final();
+        }
+        // Don't add timings for Anthropic API (breaks spec compliance)
+        if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && timings.prompt_n >= 0 && !events.empty()) {
+            events.back()["data"]["timings"] = timings.to_json();
+        }
+
+        return events;
+    }
+
+    json to_json_anthropic_partial() {
+        json events = json::array();
+        bool first = n_decoded == 1;
+        static bool text_block_started = false;
+
+        if (first) {
+            text_block_started = false;
+
+            events.push_back({
+                {"event", "message_start"},
+                {"data", {
+                    {"type", "message_start"},
+                    {"message", {
+                        {"id", oaicompat_cmpl_id},
+                        {"type", "message"},
+                        {"role", "assistant"},
+                        {"content", json::array()},
+                        {"model", oaicompat_model},
+                        {"stop_reason", nullptr},
+                        {"stop_sequence", nullptr},
+                        {"usage", {
+                            {"input_tokens", n_prompt_tokens},
+                            {"output_tokens", 0}
+                        }}
+                    }}
+                }}
+            });
+        }
+
+        for (const auto & diff : oaicompat_msg_diffs) {
+            if (!diff.content_delta.empty()) {
+                if (!text_block_started) {
+                    events.push_back({
+                        {"event", "content_block_start"},
+                        {"data", {
+                            {"type", "content_block_start"},
+                            {"index", 0},
+                            {"content_block", {
+                                {"type", "text"},
+                                {"text", ""}
+                            }}
+                        }}
+                    });
+                    text_block_started = true;
+                }
+
+                events.push_back({
+                    {"event", "content_block_delta"},
+                    {"data", {
+                        {"type", "content_block_delta"},
+                        {"index", 0},
+                        {"delta", {
+                            {"type", "text_delta"},
+                            {"text", diff.content_delta}
+                        }}
+                    }}
+                });
+            }
+
+            if (diff.tool_call_index != std::string::npos) {
+                size_t content_block_index = (text_block_started ? 1 : 0) + diff.tool_call_index;
+
+                if (!diff.tool_call_delta.name.empty()) {
+                    events.push_back({
+                        {"event", "content_block_start"},
+                        {"data", {
+                            {"type", "content_block_start"},
+                            {"index", content_block_index},
+                            {"content_block", {
+                                {"type", "tool_use"},
+                                {"id", diff.tool_call_delta.id},
+                                {"name", diff.tool_call_delta.name}
+                            }}
+                        }}
+                    });
+                }
+
+                if (!diff.tool_call_delta.arguments.empty()) {
+                    events.push_back({
+                        {"event", "content_block_delta"},
+                        {"data", {
+                            {"type", "content_block_delta"},
+                            {"index", content_block_index},
+                            {"delta", {
+                                {"type", "input_json_delta"},
+                                {"partial_json", diff.tool_call_delta.arguments}
+                            }}
+                        }}
+                    });
+                }
+            }
+        }
+
+        if (verbose && !events.empty() && first) {
+            events.front()["data"]["__verbose"] = to_json_non_oaicompat_partial();
+        }
+
+        if (timings.prompt_n >= 0 && !events.empty()) {
+            events.back()["data"]["timings"] = timings.to_json();
+        }
+
+        //if (is_progress && !events.empty()) {
+        //    events.back()["data"]["prompt_progress"] = progress.to_json();
+        //}
+
+        return events;
     }
 };
 
@@ -4288,20 +4594,12 @@ int main(int argc, char ** argv) {
     //
 
     auto middleware_validate_api_key = [&params, &res_error](const httplib::Request & req, httplib::Response & res) {
-        // TODO: should we apply API key to all endpoints, including "/health" and "/models"?
-        static const std::set<std::string> protected_endpoints = {
-            "/props",
-            "/completion",
-            "/completions",
-            "/v1/completions",
-            "/chat/completions",
-            "/v1/chat/completions",
-            "/infill",
-            "/tokenize",
-            "/detokenize",
-            "/embedding",
-            "/embeddings",
-            "/v1/embeddings",
+        static const std::unordered_set<std::string> public_endpoints = {
+            "/health",
+            "/v1/health",
+            "/models",
+            "/v1/models",
+            "/api/tags"
         };
 
         // If API key is not set, skip validation
@@ -4309,8 +4607,8 @@ int main(int argc, char ** argv) {
             return true;
         }
 
-        // If path is not in protected_endpoints list, skip validation
-        if (protected_endpoints.find(req.path) == protected_endpoints.end()) {
+        // If path is public or is static file, skip validation
+        if (public_endpoints.find(req.path) != public_endpoints.end() || req.path == "/") {
             return true;
         }
 
@@ -4325,11 +4623,25 @@ int main(int argc, char ** argv) {
             }
         }
 
+        auth_header = req.get_header_value("X-Api-Key");
+
+        if (std::find(params.api_keys.begin(), params.api_keys.end(), auth_header) != params.api_keys.end()) {
+            return true; // API key is valid
+        }
+
         // API key is invalid or not provided
-        res_error(res, format_error_response("Invalid API Key", ERROR_TYPE_AUTHENTICATION));
-
-        LOG_WARNING("Unauthorized: Invalid API Key", {});
-
+        res.status = 401;
+        res.set_content(
+            (json {
+                {"error", {
+                    {"message", "Invalid API Key"},
+                    {"type", "authentication_error"},
+                    {"code", 401}
+                }}
+            }).dump(-1, ' ', false, json::error_handler_t::replace),
+            "application/json; charset=utf-8"
+        );
+        LOG_WARNING("Unauthorized: Invalid API Key\n", {});
         return false;
     };
 
@@ -4782,6 +5094,13 @@ int main(int argc, char ** argv) {
             else {
                 const auto chunked_content_provider = [id_task, &ctx_server, completion_id, oaicompat, send_done = params.send_done](size_t, httplib::DataSink& sink) {
                     bool successful_completion = false;
+                    const auto sse = [oaicompat, &sink](const json &res) {
+                        if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                            return server_sent_anthropic_event(sink, res);
+                        } else {
+                            return server_sent_event(sink, res);
+                        }
+                    };
                     while (true) {
                         server_task_result result = ctx_server.queue_results.recv(id_task);
                         if (!result.error) {
@@ -4803,7 +5122,7 @@ int main(int argc, char ** argv) {
                             if (res_json.is_array()) {
                                 // chat completions and oai completions
                                 for (const auto& res : res_json) {
-                                    if (!server_sent_event(sink, res)) {
+                                    if (!sse(res)) {
                                         // sending failed (HTTP connection closed), cancel the generation
                                         ctx_server.queue_results.remove_waiting_task_id(id_task);
                                         return false;
@@ -4816,7 +5135,7 @@ int main(int argc, char ** argv) {
                             }
                             else {
                                 // legacy completions
-                                if (!server_sent_event(sink, res_json)) {
+                                if (!sse(res_json)) {
                                     ctx_server.queue_results.remove_waiting_task_id(id_task);
                                     return false;
                                 }
@@ -4826,7 +5145,7 @@ int main(int argc, char ** argv) {
                             }
                         }
                         else {
-                            if (!server_sent_event(sink, result.data)) {
+                            if (!sse(result.data)) {
                                 ctx_server.queue_results.remove_waiting_task_id(id_task);
                                 return false;
                             }
@@ -4834,7 +5153,7 @@ int main(int argc, char ** argv) {
                         }
                     }
                     bool ok = true;
-                    if (successful_completion) {
+                    if (successful_completion && oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE) {
                         static const std::string done_message = "data: [DONE]\n\n";
                         LOG_VERBOSE("data stream", { {"to_send", done_message} });
                         if (!sink.write(done_message.c_str(), done_message.size())) {
@@ -4909,6 +5228,40 @@ int main(int argc, char ** argv) {
             files,
             res,
             OAICOMPAT_TYPE_CHAT);
+    };
+
+    const auto handle_anthropic_messages = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+        std::vector<raw_buffer> files;
+        json body = json::parse(req.body);
+        json body_parsed = anthropic_params_from_json(
+            ctx_server.model,
+            body,
+            ctx_server.oai_parser_opt,
+            files);
+        return handle_completions_impl(
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            res,
+            OAICOMPAT_TYPE_ANTHROPIC);
+    };
+
+    const auto handle_anthropic_count_tokens = [&ctx_server, &handle_completions_impl, &res_ok](const httplib::Request & req, httplib::Response & res) {
+        std::vector<raw_buffer> files;
+        json body = json::parse(req.body);
+
+        // Parse the Anthropic request (max_tokens is not required for count_tokens)
+        json body_parsed = anthropic_params_from_json(
+            ctx_server.model,
+            body,
+            ctx_server.oai_parser_opt,
+            files);
+
+        json prompt = body_parsed.at("prompt");
+        llama_tokens tokens = tokenize_mixed(llama_get_vocab(ctx_server.ctx), prompt, true, true);
+
+        res_ok(res, {{"input_tokens", static_cast<int>(tokens.size())}});
+        return res;
     };
 
     // same with handle_chat_completions, but without inference part
@@ -5462,6 +5815,8 @@ int main(int argc, char ** argv) {
     svr->Post("/v1/completions",     handle_completions_oai);
     svr->Post("/chat/completions",    handle_chat_completions);
     svr->Post("/v1/chat/completions", handle_chat_completions);
+    svr->Post("/v1/messages",         handle_anthropic_messages);
+    svr->Post("/v1/messages/count_tokens", handle_anthropic_count_tokens);
     svr->Post("/infill",              handle_infill);
     svr->Post("/embedding",           handle_embeddings); // legacy
     svr->Post("/embeddings",          handle_embeddings);
