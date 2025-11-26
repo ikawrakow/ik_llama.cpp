@@ -1404,6 +1404,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         // do not overwrite user assignments
         if (*leaf_backend_id == -1) {
             *leaf_backend_id = ggml_backend_sched_backend_id_from_cur(sched, leaf);
+            //printf("Pass 1: assigned backend %d to leaf %d, %s\n", *leaf_backend_id, i, graph->leafs[i]->name);
         }
     }
 
@@ -1413,6 +1414,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         // do not overwrite user assignments
         if (*node_backend_id == -1) {
             *node_backend_id = ggml_backend_sched_backend_id_from_cur(sched, node);
+            //printf("Pass 1: assigned backend %d to node %d, %s(%s)\n", *node_backend_id, i, ggml_op_name(node->op), node->name);
 
 #if 0
             // src
@@ -1456,6 +1458,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     cur_backend_id = *node_backend_id;
                 }
             } else if (cur_backend_id != -1) {
+                //printf("(u1) invoking ggml_backend_sched_set_if_supported for node %d, %s with cur_backend_id = %d, node_backend_id = %d\n", i, node->name, cur_backend_id, *node_backend_id);
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1477,6 +1480,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     cur_backend_id = *node_backend_id;
                 }
             } else if (cur_backend_id != -1) {
+                //printf("(d1) invoking ggml_backend_sched_set_if_supported for node %d, %s with cur_backend_id = %d, node_backend_id = %d\n", i, node->name, cur_backend_id, *node_backend_id);
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1493,6 +1497,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             if (*node_backend_id != -1) {
                 cur_backend_id = *node_backend_id;
             } else if (cur_backend_id != -1) {
+                //printf("(u2) invoking ggml_backend_sched_set_if_supported for node %d, %s with cur_backend_id = %d, node_backend_id = %d\n", i, node->name, cur_backend_id, *node_backend_id);
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1509,6 +1514,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             if (*node_backend_id != -1) {
                 cur_backend_id = *node_backend_id;
             } else if (cur_backend_id != -1) {
+                //printf("(d2) invoking ggml_backend_sched_set_if_supported for node %d, %s with cur_backend_id = %d, node_backend_id = %d\n", i, node->name, cur_backend_id, *node_backend_id);
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1546,6 +1552,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     if (n_supported > n_supported_best) {
                         n_supported_best = n_supported;
                         *node_backend_id = b;
+                        //printf("Pass 3: assigned backend %d to unassigned node %d, %s\n", b, i, node->name);
                         SET_CAUSE(node, "3.best");
                     }
                 }
@@ -1566,6 +1573,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         }
                     }
                     if (supported) {
+                        //printf("Pass 3: assigned backend %d to node %d, %s previously assigned to backend %d\n", b, i, node->name, *node_backend_id);
                         *node_backend_id = b;
                         SET_CAUSE(node, "3.upg");
                         break;
@@ -1594,9 +1602,11 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     // views are always on the same backend as the source
                     *src_backend_id = tensor_backend_id(src->view_src);
                     SET_CAUSE(src, "4.vsrc");
+                    //printf("Pass 4: assigned backend %d to src %d, %s in node %d, %s frpm view_src\n", *src_backend_id, j, src->name, i, node->name);
                 } else {
                     *src_backend_id = *cur_backend_id;
                     SET_CAUSE(src, "4.cur");
+                    //printf("Pass 4: assigned backend %d to src %d, %s in node %d, %s frpm current\n", *src_backend_id, j, src->name, i, node->name);
                 }
             }
         }
