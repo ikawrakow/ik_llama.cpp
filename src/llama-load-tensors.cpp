@@ -2750,13 +2750,11 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
     std::string name{tensor->name};
     split_tensor.tensor_splits.resize(splits.size());
     if (split_dim == 1) {
-        size_t offset = 0;
         for (int i = 0; i < int(splits.size()); ++i) {
             if (splits[i] > 0) {
-                split_tensor.tensor_splits[i] = ggml_view_3d(ctx, tensor, tensor->ne[0], splits[i], tensor->ne[2], tensor->nb[1], tensor->nb[2], offset);
+                split_tensor.tensor_splits[i] = ggml_new_tensor_3d(ctx, tensor->type, tensor->ne[0], splits[i], tensor->ne[2]);
                 auto name_i = name + '.' + std::to_string(i);
                 ggml_set_name(split_tensor.tensor_splits[i], name_i.c_str());
-                offset += tensor->nb[1]*splits[i];
             } else {
                 split_tensor.tensor_splits[i] = nullptr;
             }

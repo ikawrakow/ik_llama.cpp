@@ -753,8 +753,12 @@ static bool llama_kv_cache_init(
         else {
             k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
             v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
-            ggml_format_name(k, "cache_k_l%d", i);
-            ggml_format_name(v, "cache_v_l%d", i);
+            auto k_name = std::string{"cache_k_l"} + std::to_string(i);
+            auto v_name = std::string{"cache_v_l"} + std::to_string(i);
+            ggml_set_name(k, k_name.c_str());
+            ggml_set_name(v, v_name.c_str());
+            //ggml_format_name(k, "cache_k_l%d", i);
+            //ggml_format_name(v, "cache_v_l%d", i);
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
             if (split_cache) {
@@ -771,6 +775,8 @@ static bool llama_kv_cache_init(
                         auto split = extra_K->splits[is];
                         if (!split) continue;
                         split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, split->ne[1]/n_embd_head_k * kv_size);
+                        auto split_name = k_name + '.' + std::to_string(is);
+                        ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
                     }
                     split_k_l.ggml.n_device  = extra_K->n_device;
                     split_k_l.ggml.split_dim = 0;
@@ -779,6 +785,8 @@ static bool llama_kv_cache_init(
                         auto split = extra_V->splits[is];
                         if (!split) continue;
                         split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
+                        auto split_name = v_name + '.' + std::to_string(is);
+                        ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
                     }
                     split_v_l.ggml.n_device  = extra_V->n_device;
                     split_v_l.ggml.split_dim = 0;
@@ -809,6 +817,25 @@ static bool llama_kv_cache_init(
         ggml_backend_buffer_clear(buf, 0);
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
         cache.bufs.push_back(buf);
+    }
+
+    for (int il = 0; il < n_layer; ++il) {
+        if (cache.k_l[il]->extra) {
+            printf("Layer %2d, K-buffer: %p:", il, (void *)cache.k_l[il]->buffer);
+            auto split_kl = (ggml_split_tensor_t *)cache.k_l[il]->extra;
+            for (int id = 0; id < split_kl->n_device; ++id) {
+                if (split_kl->splits[id]) printf(" %p,%p", (void *)split_kl->splits[id]->data, (void *)split_kl->splits[id]->buffer);
+            }
+            printf("\n");
+        }
+        if (cache.v_l[il]->extra) {
+            printf("Layer %2d, V-buffer: %p:", il, (void *)cache.v_l[il]->buffer);
+            auto split_vl = (ggml_split_tensor_t *)cache.v_l[il]->extra;
+            for (int id = 0; id < split_vl->n_device; ++id) {
+                if (split_vl->splits[id]) printf(" %p,%p", (void *)split_vl->splits[id]->data, (void *)split_vl->splits[id]->buffer);
+            }
+            printf("\n");
+        }
     }
 
     return true;
@@ -4370,7 +4397,7 @@ struct llama_context * llama_new_context_with_model(
             ggml_backend_add_from_device(ctx,  ctx->backend_metal);
         }
 #elif defined(GGML_USE_CUDA)
-        if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_ROW) {
+        if (model->split_mode == LLAMA_SPLIT_MODE_NONE) {
             // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_ROW, only the main GPU backend is used
             ggml_backend_t backend = ggml_backend_cuda_init(model->main_gpu, cparams.cuda_params);
             if (backend == nullptr) {
@@ -4381,7 +4408,7 @@ struct llama_context * llama_new_context_with_model(
             ggml_backend_add_from_device(ctx, backend);
 
         } else {
-            // LLAMA_SPLIT_MODE_LAYER requires a backend for each GPU
+            // LLAMA_SPLIT_MODE_LAYER and LLAMA_SPLIT_MODE_ROW require a backend for each GPU
             for (int device = 0; device < ggml_backend_cuda_get_device_count(); ++device) {
                 ggml_backend_t backend = ggml_backend_cuda_init(device, cparams.cuda_params);
                 if (backend == nullptr) {
@@ -4390,7 +4417,6 @@ struct llama_context * llama_new_context_with_model(
                     return nullptr;
                 }
                 ggml_backend_add_from_device(ctx, backend);
-
             }
         }
 #elif defined(GGML_USE_VULKAN)
