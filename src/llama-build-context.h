@@ -331,7 +331,7 @@ struct llm_build_context {
          ggml_tensor * act_scales,
             llm_ffn_op_type   type_op,
           llm_ffn_gate_type   type_gate,
-         const llm_build_cb & cb, int il);
+         const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr);
 
     static ggml_tensor * llm_build_moe_ffn(ggml_context * ctx, llama_context & lctx,
          ggml_tensor * cur,
