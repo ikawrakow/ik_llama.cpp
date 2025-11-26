@@ -406,7 +406,7 @@ bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
         // optional bias tensors
         layer.bo = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd},     llama_model_loader::TENSOR_NOT_REQUIRED);
 
-        layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+        layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
         layer.rope_freqs = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FREQS, "weight"), {n_embd/n_head/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
 
@@ -2944,6 +2944,10 @@ bool create_tensors_helper::create_tensors() {
             }
 
             if (layer.ffn_down && layer.ffn_up && layer.ffn_gate) {
+                if (layer.ffn_norm) {
+                    auto split = create_split(ggml_nrows(layer.ffn_norm), -1, model.splits);
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, split);
+                }
                 int ffn_granularity = 16;
                 if (ggml_is_quantized(layer.ffn_down->type)) {
                     auto tt = ggml_internal_get_type_traits(layer.ffn_down->type);
