@@ -210,6 +210,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         ctx_map[it.first] = ctx;
         model.ctxs.push_back(ctx);
     }
+#if 0
     printf("=======================================================================\n");
     auto n_device = model.device_count();
     printf(" Model has %d devices:\n", n_device);
@@ -226,11 +227,13 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         for (auto s : model.splits) printf(" %g", s);
         printf("\n");
     }
+#endif
 }
 
 static std::vector<int> create_split(int nr, int granularity, const std::vector<float> & splits) {
     GGML_ASSERT(nr % granularity == 0);
     GGML_ASSERT(!splits.empty());
+    if (granularity < 0) return std::vector<int>(splits.size(), nr);
     int nchunk = nr / granularity;
     std::vector<int> result(splits.size());
     float last_split = 0;
@@ -394,7 +397,7 @@ bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
 
         auto & layer = model.layers[i];
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
         use_mmap_buffer &= !merge_qkv(tn, i, 1);
 
@@ -405,7 +408,7 @@ bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
 
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
 
-        layer.rope_freqs = create_tensor(ctx_layer, tn(LLM_TENSOR_ROPE_FREQS, "weight"), {n_embd/n_head/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
+        layer.rope_freqs = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FREQS, "weight"), {n_embd/n_head/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
 
         if (n_expert == 0) {
             create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
@@ -2745,11 +2748,22 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
 }
 
 static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor * tensor, llama_split_tensor & split_tensor, const std::vector<int> & splits) {
-    GGML_ASSERT(split_dim == 0 || split_dim == 1);
+    GGML_ASSERT(split_dim <= 1);
     GGML_ASSERT(splits.size() > 1);
     std::string name{tensor->name};
     split_tensor.tensor_splits.resize(splits.size());
-    if (split_dim == 1) {
+    if (split_dim < 0) {
+        for (int i = 0; i < int(splits.size()); ++i) {
+            if (splits[i] > 0) {
+                split_tensor.tensor_splits[i] = ggml_new_tensor_3d(ctx, tensor->type, tensor->ne[0], tensor->ne[1], tensor->ne[2]);
+                auto name_i = name + '.' + std::to_string(i);
+                ggml_set_name(split_tensor.tensor_splits[i], name_i.c_str());
+            } else {
+                split_tensor.tensor_splits[i] = nullptr;
+            }
+        }
+    }
+    else if (split_dim == 1) {
         for (int i = 0; i < int(splits.size()); ++i) {
             if (splits[i] > 0) {
                 split_tensor.tensor_splits[i] = ggml_new_tensor_3d(ctx, tensor->type, tensor->ne[0], splits[i], tensor->ne[2]);
@@ -2902,10 +2916,18 @@ bool create_tensors_helper::create_tensors() {
     if (model.split_mode == LLAMA_SPLIT_MODE_ROW) {
         const auto & hparams = model.hparams;
         int gqa_ratio = hparams.n_head() / hparams.n_head_kv();
-        printf("GQA ratio: %d\n", gqa_ratio);
+        //printf("GQA ratio: %d\n", gqa_ratio);
         for (int il = 0; il < int(model.layers.size()); ++il) {
             auto & layer = model.layers[il];
             auto ctx_split = ctx_for_layer_split(il);
+            if (layer.attn_norm) {
+                auto split = create_split(ggml_nrows(layer.attn_norm), -1, model.splits);
+                prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, split);
+            }
+            if (layer.rope_freqs) {
+                auto split = create_split(ggml_nrows(layer.rope_freqs), -1, model.splits);
+                prepare_split_tensors(-1, ctx_split, layer.rope_freqs, layer.split_rope_freqs, split);
+            }
             if (layer.wo && layer.wq && layer.wk && layer.wv) {
                 int attn_granularity = hparams.n_embd_head_k;
                 if (ggml_is_quantized(layer.wo->type)) {

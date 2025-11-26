@@ -183,6 +183,7 @@ struct llama_layer {
     struct ggml_tensor * bqk  = nullptr;
     struct ggml_tensor * bkv  = nullptr;
 
+    llama_split_tensor split_attn_norm;
     llama_split_tensor split_wq;
     llama_split_tensor split_wk;
     llama_split_tensor split_wv;
@@ -279,6 +280,8 @@ struct llama_layer {
     struct ggml_tensor * rope_long  = nullptr;
     struct ggml_tensor * rope_short = nullptr;
     struct ggml_tensor * rope_freqs = nullptr;
+
+    llama_split_tensor split_rope_freqs;
 
     // bitnet scale
     struct ggml_tensor * wq_scale = nullptr;
