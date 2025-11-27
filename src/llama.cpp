@@ -1415,6 +1415,9 @@ static void llm_prepare_mla(llama_model & model, int mla) {
             l.wk_b = l.computed_wk_b.get();
             model.tensors_by_name.push_back(std::make_pair(name, l.wk_b));
 
+            printf("Computed %s as %ld x %ld x %ld and stored in buffer %s\n", name.c_str(), wk_b->ne[0], wk_b->ne[1], wk_b->ne[2],
+                    ggml_backend_buffer_name(l.computed_wk_b->buffer));
+
             ggml_graph_clear(graph);
             auto wv_b = ggml_cont(ctx, ggml_view_3d(ctx, &wkv_b, kv_lora_rank, n_embd_head_v, n_head,
                         l.wkv_b->nb[1], l.wkv_b->nb[1]*(n_embd_head_qk_nope + n_embd_head_v), l.wkv_b->nb[1]*n_embd_head_qk_nope));
@@ -1444,8 +1447,8 @@ static void llm_prepare_mla(llama_model & model, int mla) {
             l.wv_b = l.computed_wv_b.get();
             model.tensors_by_name.push_back(std::make_pair(name, l.wv_b));
 
-            printf("Computed %s as %ld x %ld x %ld and stored in buffer %s\n", name.c_str(), wk_b->ne[0], wk_b->ne[1], wk_b->ne[2],
-                    ggml_backend_buffer_name(l.computed_wk_b->buffer));
+            printf("Computed %s as %ld x %ld x %ld and stored in buffer %s\n", name.c_str(), wv_b->ne[0], wv_b->ne[1], wv_b->ne[2],
+                    ggml_backend_buffer_name(l.computed_wv_b->buffer));
 
             ggml_graph_clear(graph);
         }
