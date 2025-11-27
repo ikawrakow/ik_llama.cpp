@@ -937,6 +937,7 @@ struct cmd_params_instance {
         mparams.use_thp = use_thp;
         mparams.merge_qkv = mqkv;
         mparams.tensor_buft_overrides = buft_overrides;
+        mparams.mla = mla_attn;
 
         return mparams;
     }
