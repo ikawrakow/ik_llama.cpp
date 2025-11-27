@@ -784,9 +784,10 @@ static bool llama_kv_cache_init(
                     split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
                     k->extra = (void *)&split_k_l.ggml;
                     v->extra = (void *)&split_v_l.ggml;
-                } else {
-                    printf("Oops: don't have yet K and V for layer %d\n", i);
                 }
+                //} else {
+                //    printf("Oops: don't have yet K and V for layer %d\n", i);
+                //}
             }
         }
     }
@@ -800,14 +801,20 @@ static bool llama_kv_cache_init(
     for (auto it : ctx_map) {
         ggml_backend_buffer_type_t buft = it.first;
         ggml_context * ctx = it.second;
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-        if (!buf) {
-            LLAMA_LOG_ERROR("%s: failed to allocate buffer for kv cache\n", __func__);
-            return false;
+        int ntensor = 0;
+        for (auto t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            ++ntensor;
         }
-        ggml_backend_buffer_clear(buf, 0);
-        LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
-        cache.bufs.push_back(buf);
+        if (ntensor > 0) {
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+            if (!buf) {
+                LLAMA_LOG_ERROR("%s: failed to allocate buffer for kv cache\n", __func__);
+                return false;
+            }
+            ggml_backend_buffer_clear(buf, 0);
+            LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
+            cache.bufs.push_back(buf);
+        }
     }
     if (split_cache) {
         LLAMA_LOG_INFO("%s: KV cache size per device:\n", __func__);
@@ -1868,24 +1875,33 @@ static bool llm_load_tensors(
         }
 #endif
         else {
-            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-            if (buf == nullptr) {
-                throw std::runtime_error("unable to allocate backend buffer");
+            int ntensor = 0;
+            for (auto t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+                ++ntensor;
             }
-            model.bufs.push_back(buf);
-            if (use_mlock && ggml_backend_buffer_is_host(buf)) {
-                model.mlock_bufs.emplace_back(new llama_mlock);
-                auto & mlock_buf = model.mlock_bufs.back();
-                mlock_buf->init   (ggml_backend_buffer_get_base(buf));
-                mlock_buf->grow_to(ggml_backend_buffer_get_size(buf));
-            }
-            for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
-                bufs.emplace(idx, buf);
+            if (ntensor > 0) {
+                ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+                if (buf == nullptr) {
+                    LLAMA_LOG_ERROR("Failed to allocate buffer type %s\n", ggml_backend_buft_name(buft));
+                    throw std::runtime_error("unable to allocate backend buffer");
+                }
+                model.bufs.push_back(buf);
+                if (use_mlock && ggml_backend_buffer_is_host(buf)) {
+                    model.mlock_bufs.emplace_back(new llama_mlock);
+                    auto & mlock_buf = model.mlock_bufs.back();
+                    mlock_buf->init   (ggml_backend_buffer_get_base(buf));
+                    mlock_buf->grow_to(ggml_backend_buffer_get_size(buf));
+                }
+                for (uint32_t idx = 0; idx < ml.files.size(); idx++) {
+                    bufs.emplace(idx, buf);
+                }
             }
         }
 
         if (bufs.empty()) {
-            throw std::runtime_error("failed to allocate buffer");
+            LLAMA_LOG_WARN("No tensors in buffer type %s\n", ggml_backend_buft_name(buft));
+            continue;
+            //throw std::runtime_error("failed to allocate buffer (1)");
         }
 
         for (auto & buf : bufs) {
