@@ -3579,7 +3579,43 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
 #ifdef GGML_CUDA_NO_PEER_COPY
             return false;
 #else
-            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+            if (false && src->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+                //
+                // The goal here is to reduce traffic between GPU's, which is entirely non-negligible
+                // for prompt processing.
+                // We cast the tensor to be copied to f16, copy the f16 data peer-to-peer
+                // and then cast back to f32 on the destination side.
+                // The cost for converting to/from f16 is much ower than the cost of copying
+                // two times more data over PCI-E (well, at least the 30 GB/s PCI-E I have).
+                // iBut for some reason the following is not working.
+                // Can somebody tell me why?
+                //
+                ggml_cuda_pool_alloc<half> tmp_src(cuda_ctx_src->pool(), ggml_nelements(src));
+                ggml_cuda_pool_alloc<half> tmp_dst(cuda_ctx_dst->pool(), ggml_nelements(dst));
+
+                auto src_f16 = *src;
+                src_f16.type = GGML_TYPE_F16;
+                for (int i = 0; i < 4; ++i) src_f16.nb[i] /= 2;
+                src_f16.data = tmp_src.get();
+
+                auto dst_f16 = *dst;
+                dst_f16.type = GGML_TYPE_F16;
+                for (int i = 0; i < 4; ++i) dst_f16.nb[i] /= 2;
+                dst_f16.data = tmp_dst.get();
+
+                ggml_cuda_set_device(cuda_ctx_src->device);
+                ggml_cuda_cpy(*cuda_ctx_src, src, &src_f16, true);
+                CUDA_CHECK(cudaStreamSynchronize(cuda_ctx_src->stream()));
+
+                CUDA_CHECK(cudaMemcpyPeerAsync(dst_f16.data, cuda_ctx_dst->device, src_f16.data, cuda_ctx_src->device, ggml_nbytes(&dst_f16), cuda_ctx_src->stream()));
+
+                ggml_cuda_set_device(cuda_ctx_dst->device);
+                CUDA_CHECK(cudaStreamSynchronize(cuda_ctx_dst->stream()));
+                ggml_cuda_cpy(*cuda_ctx_dst, &dst_f16, dst, true);
+
+            } else {
+                CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+            }
 #endif
         }
 
@@ -3603,6 +3639,7 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
 GGML_CALL static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
+    ggml_cuda_set_device(cuda_ctx->device);
     CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
 
     GGML_UNUSED(backend);
