@@ -230,7 +230,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
             printf("  Oops: null buft for debvice %d\n", device);
         }
     }
-    if (model.split_mode == LLAMA_SPLIT_MODE_ROW) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
         printf("model.splits:");
         for (auto s : model.splits) printf(" %g", s);
         printf("\n");
@@ -305,7 +305,7 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
     }
     if (actual_context) *actual_context = ctx;
     auto tensor = ml.create_tensor(ctx, name, ne, flags);
-    //if (tensor && requested_ctx == ctx && model.split_mode == LLAMA_SPLIT_MODE_ROW) {
+    //if (tensor && requested_ctx == ctx && model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
     //    int i_layer = -1;
     //    if (auto pos = name.find("blk."); pos == 0) {
     //        GGML_ASSERT(sscanf(name.c_str(), "blk.%d.", &i_layer) == 1);
@@ -2929,7 +2929,7 @@ bool create_tensors_helper::create_tensors() {
         default:
             throw std::runtime_error("unknown architecture");
     }
-    if (model.split_mode == LLAMA_SPLIT_MODE_ROW) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
         std::vector<size_t> mem_used(model.splits.size(), 0);
         const auto & hparams = model.hparams;
         int gqa_ratio = hparams.n_head() / hparams.n_head_kv();

@@ -648,7 +648,7 @@ static bool llama_kv_cache_init(
     }
 
     bool split_cache   = false;
-    if (model.split_mode == LLAMA_SPLIT_MODE_ROW && model.arch != LLM_ARCH_DEEPSEEK2 && offload) {
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.arch != LLM_ARCH_DEEPSEEK2 && offload) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
         split_cache = true;
@@ -1785,7 +1785,7 @@ static bool llm_load_tensors(
         }
     } else {
         ggml_backend_buffer_type_t split_buft;
-        if (split_mode == LLAMA_SPLIT_MODE_ROW && model.splits.size() > 1) {
+        if (split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
             split_buft = llama_default_buffer_type_split(model, model.devices[main_gpu], model.splits.data());
         } else {
             // LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_LAYER in backends where it is not supported
@@ -4424,7 +4424,7 @@ struct llama_context * llama_new_context_with_model(
         }
 #elif defined(GGML_USE_CUDA)
         if (model->split_mode == LLAMA_SPLIT_MODE_NONE) {
-            // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_ROW, only the main GPU backend is used
+            // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
             ggml_backend_t backend = ggml_backend_cuda_init(model->main_gpu, cparams.cuda_params);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, model->main_gpu);
@@ -4434,7 +4434,7 @@ struct llama_context * llama_new_context_with_model(
             ggml_backend_add_from_device(ctx, backend);
 
         } else {
-            // LLAMA_SPLIT_MODE_LAYER and LLAMA_SPLIT_MODE_ROW require a backend for each GPU
+            // LLAMA_SPLIT_MODE_LAYER and LLAMA_SPLIT_MODE_GRAPH require a backend for each GPU
             for (int device = 0; device < ggml_backend_cuda_get_device_count(); ++device) {
                 ggml_backend_t backend = ggml_backend_cuda_init(device, cparams.cuda_params);
                 if (backend == nullptr) {
@@ -4446,7 +4446,7 @@ struct llama_context * llama_new_context_with_model(
             }
         }
 #elif defined(GGML_USE_VULKAN)
-        if (model->split_mode == LLAMA_SPLIT_MODE_ROW) {
+        if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
             LLAMA_LOG_ERROR("%s: Row split not supported. Failed to initialize Vulkan backend\n", __func__);
             llama_free(ctx);
             return nullptr;
@@ -4471,8 +4471,8 @@ struct llama_context * llama_new_context_with_model(
             }
         }
 #elif defined(GGML_USE_SYCL)
-        // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_ROW, only the main GPU backend is used
-        if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_ROW) {
+        // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
+        if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
             ggml_backend_t backend = ggml_backend_sycl_init(model->main_gpu);
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize SYCL%d backend\n", __func__, model->main_gpu);
@@ -4503,9 +4503,9 @@ struct llama_context * llama_new_context_with_model(
             ggml_backend_add_from_device(ctx, backend);
         }
 #elif defined(GGML_USE_CANN)
-    // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_ROW, only the main GPU backend is used
+    // with split_mode LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_GRAPH, only the main GPU backend is used
     // TODO: ggml_backend_cann is not support split tensor now, just leave code here.
-    if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_ROW) {
+    if (model->split_mode == LLAMA_SPLIT_MODE_NONE || model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
         ggml_backend_t backend = ggml_backend_cann_init(model->main_gpu);
         if (backend == nullptr) {
             LLAMA_LOG_ERROR("%s: failed to initialize CANN%d backend\n", __func__, model->main_gpu);

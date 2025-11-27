@@ -217,7 +217,7 @@ static const char * split_mode_str(llama_split_mode mode) {
     switch (mode) {
         case LLAMA_SPLIT_MODE_NONE:  return "none";
         case LLAMA_SPLIT_MODE_LAYER: return "layer";
-        case LLAMA_SPLIT_MODE_ROW:   return "row";
+        case LLAMA_SPLIT_MODE_GRAPH: return "graph";
         default: GGML_ABORT("invalid split mode");
     }
 }
@@ -630,13 +630,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     mode = LLAMA_SPLIT_MODE_NONE;
                 } else if (m == "layer") {
                     mode = LLAMA_SPLIT_MODE_LAYER;
-                } else if (m == "row") {
-                    mode = LLAMA_SPLIT_MODE_ROW;
-                    //fprintf(stderr, "\n\n=======================================================================\n");
-                    //fprintf(stderr, "Split mode 'row' is no longer supported\n");
-                    //fprintf(stderr, "=======================================================================\n\n\n");
-                    //invalid_param = true;
-                    //break;
+                } else if (m == "graph") {
+                    mode = LLAMA_SPLIT_MODE_GRAPH;
                 } else {
                     invalid_param = true;
                     break;
