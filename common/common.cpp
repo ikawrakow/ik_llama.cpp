@@ -1276,12 +1276,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         else if (arg_next == "layer") {
             params.split_mode = LLAMA_SPLIT_MODE_LAYER;
         }
-        else if (arg_next == "row") {
-            //fprintf(stderr, "\n\n=====================================================================================\n");
-            //fprintf(stderr, " Split mode row is no longer supported\n");
-            //fprintf(stderr, "=====================================================================================\n\n\n");
-            //GGML_ABORT("fatal error");
-            params.split_mode = LLAMA_SPLIT_MODE_ROW;
+        else if (arg_next == "graph") {
+            params.split_mode = LLAMA_SPLIT_MODE_GRAPH;
         }
         else {
             invalid_param = true;
@@ -2249,6 +2245,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
         options.push_back({ "*",           "-sm,   --split-mode SPLIT_MODE",
                                                                         "how to split the model across multiple GPUs, one of:\n"
                                                                         "  - none: use one GPU only\n"
+                                                                        "  - graph: split model tensors and computation graph across GPUs\n"
                                                                         "  - layer (default): split layers and KV across GPUs\n" });
         options.push_back({ "*",           "-ts,   --tensor-split SPLIT",
                                                                         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1" });
