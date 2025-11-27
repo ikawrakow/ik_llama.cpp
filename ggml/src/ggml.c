@@ -7284,7 +7284,19 @@ static struct ggml_tensor * ggml_fused_rms_norm_impl(
         is_node = true;
     }
 
-    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    struct ggml_tensor * result;
+    if (inplace) {
+        GGML_ASSERT(a->type == GGML_TYPE_F32);
+        result = ggml_view_tensor(ctx, a);
+    } else {
+        if (a->type == GGML_TYPE_F32) {
+            result = ggml_dup_tensor(ctx, a);
+        } else {
+            result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, a->ne[0], a->ne[1], a->ne[2], a->ne[3]);
+        }
+    }
+
+    //struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params(result, &eps, sizeof(eps));
 
