@@ -18,6 +18,10 @@
 
 #define FATTN_KQ_STRIDE 256
 
+static inline bool mma_better_than_turing(const int cc) {
+    return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) > CC_TURING;
+}
+
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV  = dst;
     const ggml_tensor * Q    = dst->src[0];
@@ -102,7 +106,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     // Hence, we use it only for DeepSeek with MLA enabled, where head sizes are 576, 512,
     // so no other implementation works.
     //
-    if (new_mma_available(cc) && ((K->ne[0] == 576 && V->ne[0] == 512) || (K->ne[0] == 192 && V->ne[0] == 128))) {
+    if (new_mma_available(cc) && ((K->ne[0] == 576 && V->ne[0] == 512) || (K->ne[0] == 192 && V->ne[0] == 128 && mma_better_than_turing(cc)))) {
         ggml_cuda_flash_attn_ext_mma_new(ctx, dst);
         return;
     }
@@ -172,7 +176,7 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
         return ggml_cuda_fattn_vec_f32_is_supported(ctx, dst);
     }
 
-    if (new_mma_available(cc) && (Q->ne[0] == 576 || (K->ne[0] == 192 && V->ne[0] == 128))) {
+    if (new_mma_available(cc) && (Q->ne[0] == 576 || (K->ne[0] == 192 && V->ne[0] == 128 && mma_better_than_turing(cc)))) {
         return true;
     }
 
