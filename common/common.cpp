@@ -3002,11 +3002,20 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
 
 struct llama_context_params llama_context_params_from_gpt_params(const gpt_params & params) {
     auto cparams = llama_context_default_params();
+    int n_batch = params.n_batch;
+    int n_ubatch = params.n_ubatch;
+
+    // temporary fix for qwen mtmd
+    if (!params.mmproj.path.empty()) {
+        n_batch = std::max(params.n_batch, params.n_ubatch);
+        n_ubatch = params.n_batch;
+        fprintf(stdout, "Adjust batch size for mtmd: u_batch = %d, batch = %d\n", n_ubatch, n_batch);
+    }
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
-    cparams.n_batch           = params.n_batch;
-    cparams.n_ubatch          = params.n_ubatch;
+    cparams.n_batch           = n_batch;
+    cparams.n_ubatch          = n_ubatch;
     cparams.n_threads         = params.n_threads;
     cparams.n_threads_batch   = params.n_threads_batch == -1 ? params.n_threads : params.n_threads_batch;
     cparams.seed              = params.seed;
