@@ -139,7 +139,7 @@ struct create_tensors_helper : public create_tensors_helper_interface {
             ggml_context ** actual_ctx = nullptr);
 
     void create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias);
-    void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true);
+    void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true, bool use_ctx_split = false);
 
     void create_std_attn(int i, const LLM_TN & tn, llama_layer & layer, int n_embd, int n_embd_gqa, ggml_context * ctx_split);
     void create_std_ffn(int i, const LLM_TN & tn, llama_layer & layer, int n_ff, int n_embd, ggml_context * ctx_split);
@@ -360,17 +360,18 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
         bool use_mmap_buffer = true;
 
 
-void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm) {
+void create_tensors_helper::create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm, bool use_ctx_split) {
     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
 
     if (has_norm) {
     model.output_norm = create_tensor(ctx_output,       tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
     }
-    model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+    auto out_ctx = use_ctx_split ? ctx_output_split : ctx_output;
+    model.output      = create_tensor(out_ctx, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
     // if output is NULL, init from the input tok embed
     if (model.output == NULL) {
-        model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        model.output = create_tensor(out_ctx, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
     }
 }
 
@@ -389,7 +390,7 @@ void create_tensors_helper::create_std_ffn(int i, const LLM_TN & tn, llama_layer
 
 bool create_tensors_helper::create_llama_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -2934,6 +2935,7 @@ bool create_tensors_helper::create_tensors() {
                     auto tt = ggml_internal_get_type_traits(layer.wo->type);
                     if (tt.blck_size > attn_granularity) attn_granularity = tt.blck_size;
                 }
+                attn_granularity *= gqa_ratio;
                 GGML_ASSERT(attn_granularity % hparams.n_embd_head_k == 0);
                 auto split = create_split(layer.wo->ne[0], attn_granularity, model.splits);
                 prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split);
