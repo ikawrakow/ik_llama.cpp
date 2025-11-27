@@ -179,6 +179,14 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
 create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_model & _model) : ml(_ml), model(_model) {
 
+#if 0
+    for (int i = 0; i < model.hparams.n_layer; ++i) {
+        printf("Layer %2d: %s %s\n", i, ggml_backend_buft_name(model.buft_layer[i].buft_matrix), ggml_backend_buft_name(model.buft_layer[i].buft));
+    }
+    printf("Output: %s %s\n", ggml_backend_buft_name(model.buft_output.buft_matrix), ggml_backend_buft_name(model.buft_output.buft));
+    printf(" Input: %s %s\n", ggml_backend_buft_name(model.buft_input.buft_matrix), ggml_backend_buft_name(model.buft_input.buft));
+#endif
+
     const int n_layer = model.hparams.n_layer;
     buft_layer_count[model.buft_input.buft]++;
     buft_layer_count[model.buft_input.buft_matrix]++;
@@ -2927,6 +2935,10 @@ bool create_tensors_helper::create_tensors() {
         int gqa_ratio = hparams.n_head() / hparams.n_head_kv();
         //printf("GQA ratio: %d\n", gqa_ratio);
         for (int il = 0; il < int(model.layers.size()); ++il) {
+            if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
+                LLAMA_LOG_INFO("%s: not splitting layer %d because buffer type is host\n", __func__, il);
+                continue;
+            }
             auto & layer = model.layers[il];
             auto ctx_split = ctx_for_layer_split(il);
             if (layer.attn_norm) {
@@ -2994,9 +3006,13 @@ bool create_tensors_helper::create_tensors() {
         }
 
         if (model.output) {
-            auto ctx_split = ctx_map[model.buft_output.buft_matrix];
-            auto split = create_split(model.output->ne[1], 16, model.splits);
-            prepare_split_tensors(1, ctx_split, model.output, model.split_output, split, mem_used);
+            if (ggml_backend_buft_is_host(model.buft_output.buft_matrix)) {
+                LLAMA_LOG_INFO("%s: not splitting output tensor becausee buffer is host\n", __func__);
+            } else {
+                auto ctx_split = ctx_map[model.buft_output.buft_matrix];
+                auto split = create_split(model.output->ne[1], 16, model.splits);
+                prepare_split_tensors(1, ctx_split, model.output, model.split_output, split, mem_used);
+            }
         }
         LLAMA_LOG_INFO("Estimated model buffer size per device:\n");
         for (int i = 0; i < int(mem_used.size()); ++i) {
