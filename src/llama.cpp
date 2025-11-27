@@ -706,6 +706,8 @@ static bool llama_kv_cache_init(
     }
     if (needs_v_cache) cache.v_l.reserve(n_layer);
 
+    std::vector<size_t> mem_split(model.splits.size(), 0);
+
     int n_mla = 0;
     for (int i = 0; i < (int) n_layer; i++) {
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
@@ -764,6 +766,7 @@ static bool llama_kv_cache_init(
                         split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, split->ne[1]/n_embd_head_k * kv_size);
                         auto split_name = k_name + '.' + std::to_string(is);
                         ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
+                        mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
                     }
                     split_k_l.ggml.n_device  = extra_K->n_device;
                     split_k_l.ggml.split_dim = 0;
@@ -774,6 +777,7 @@ static bool llama_kv_cache_init(
                         split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
                         auto split_name = v_name + '.' + std::to_string(is);
                         ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
+                        mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
                     }
                     split_v_l.ggml.n_device  = extra_V->n_device;
                     split_v_l.ggml.split_dim = 0;
@@ -804,6 +808,10 @@ static bool llama_kv_cache_init(
         ggml_backend_buffer_clear(buf, 0);
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
         cache.bufs.push_back(buf);
+    }
+    if (split_cache) {
+        LLAMA_LOG_INFO("%s: KV cache size per device:\n", __func__);
+        for (int i = 0; i < int(mem_split.size()); ++i) printf("    Device %d:  %g MiB\n", i, mem_split[i]/1024./1024.);
     }
 
 #if 0
