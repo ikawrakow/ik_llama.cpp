@@ -232,6 +232,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_exps = nullptr;
     struct ggml_tensor * ffn_up_exps  = nullptr;
 
+    llama_split_tensor split_ffn_gate_inp;
     llama_split_tensor split_ffn_up_exps;
     llama_split_tensor split_ffn_gate_exps;
     llama_split_tensor split_ffn_down_exps;
@@ -255,12 +256,23 @@ struct llama_layer {
     llama_split_tensor split_ffn_gate_shexp;
     llama_split_tensor split_ffn_down_shexp;
 
+    llama_split_tensor split_ffn_gate_inp_b;
+    llama_split_tensor split_ffn_gate_exps_b;
+    llama_split_tensor split_ffn_down_exps_b;
+    llama_split_tensor split_ffn_up_exps_b;
+
     // ff bias
     struct ggml_tensor * ffn_gate_b = nullptr;
     struct ggml_tensor * ffn_down_b = nullptr; // b2
     struct ggml_tensor * ffn_up_b   = nullptr; // b3
     struct ggml_tensor * ffn_act = nullptr;
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
+
+    llama_split_tensor split_ffn_gate_b;
+    llama_split_tensor split_ffn_down_b;
+    llama_split_tensor split_ffn_up_b;
+    llama_split_tensor split_ffn_act;
+    llama_split_tensor split_ffn_exp_probs_b;
 
     // mamba proj
     struct ggml_tensor * ssm_in = nullptr;
