@@ -1313,12 +1313,16 @@ extern "C" {
 
 LLAMA_API void                   llama_sampler_reset(struct llama_sampler* smpl);
 
+/// @details Intializes a GBNF grammar, see grammars/README.md for details.
+/// @param vocab The vocabulary that this grammar will be used with.
+/// @param grammar_str The production rules for the grammar, encoded as a string. Returns an empty grammar if empty. Returns NULL if parsing of grammar_str fails.
+/// @param grammar_root The name of the start symbol for the grammar.
 LLAMA_API struct llama_grammar* llama_sampler_init_grammar(
     const struct llama_vocab* vocab,
     const char* grammar_str,
-
         const char* grammar_root);
-    /// @details Lazy grammar sampler, introduced in https://github.com/ggerganov/llama.cpp/pull/9639
+
+/// @details Lazy grammar sampler, introduced in https://github.com/ggerganov/llama.cpp/pull/9639
 /// @param trigger_words A list of words that will trigger the grammar sampler. This may be updated to a loose regex syntax (w/ ^) in a near future.
 /// @param trigger_tokens A list of tokens that will trigger the grammar sampler.
 DEPRECATED(LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy(

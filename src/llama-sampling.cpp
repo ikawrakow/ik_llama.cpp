@@ -1171,8 +1171,10 @@ struct llama_grammar* llama_sampler_init_grammar_impl(
             num_trigger_patterns = 1;
         }
         grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, trigger_patterns, num_trigger_patterns, trigger_tokens, num_trigger_tokens);
-    }
-    else {
+        if (!grammar) {
+            return nullptr;
+        }
+    } else {
         grammar = nullptr;
     }
     return grammar;
