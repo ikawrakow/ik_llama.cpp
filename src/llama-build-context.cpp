@@ -1122,6 +1122,7 @@ llm_expert_gating_func_type   gating_op,
     GGML_ASSERT(split_gate_inp && split_gate_inp->n_device == split_up_exps->n_device);
     auto split_exp_probs_b = exp_probs_b ? (ggml_split_tensor_t *)exp_probs_b->extra : nullptr;
     GGML_ASSERT(!split_exp_probs_b || split_exp_probs_b->n_device == split_up_exps->n_device);
+    if (gate_inp_b || up_exps_b || gate_exps_b || down_exps_b) printf("Have expert biases %p, %p, %p, %p\n", (void *)gate_inp_b, (void *)up_exps_b, (void *)gate_exps_b, (void *)down_exps_b);
     for (int id = 0; id < split_up_exps->n_device; ++id) {
         int il_cb = 1000*(id + 1) + il;
         auto cur = input;

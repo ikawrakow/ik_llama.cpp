@@ -2984,11 +2984,6 @@ bool create_tensors_helper::create_tensors() {
             if (layer.ffn_norm) {
                 auto split = create_split(ggml_nrows(layer.ffn_norm), -1, model.splits);
                 prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, split, mem_used);
-                printf("Created splits for %s\n", layer.ffn_norm->name);
-                auto splits = (ggml_split_tensor_t *)layer.ffn_norm->extra;
-                if (!splits) {
-                    printf("Oops: null extra?\n"); exit(1);
-                }
             }
 
             if (layer.ffn_down && layer.ffn_up && layer.ffn_gate) {
