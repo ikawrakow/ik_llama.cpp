@@ -69,9 +69,9 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
                 trigger_tokens.data(), trigger_tokens.size())
             : llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root");
 
-        if (!grmr) {
-            return nullptr;
-        }
+        //if (!grmr) {
+        //    return nullptr;
+        //}
 
         // if there is a grammar, parse it
         if (!params.grammar.empty()) {

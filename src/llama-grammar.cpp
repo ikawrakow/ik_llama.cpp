@@ -1246,11 +1246,11 @@ void llama_grammar_accept_token_impl(struct llama_grammar * grammar, const struc
                     // std::string constrained_str(match[1].first, grammar.trigger_buffer.end());
                     grammar->trigger_buffer.clear();
                     llama_grammar_accept_str(grammar, constrained_str);
-                    //LLAMA_LOG_DEBUG("Grammar triggered on regex: '%s'\n", constrained_str.c_str());
+                    LLAMA_LOG_DEBUG("Grammar triggered on regex: '%s'\n", constrained_str.c_str());
                     return;
                 }
             }
-            //LLAMA_LOG_DEBUG("Grammar still awaiting trigger after token %d (`%s`)\n", token, piece.c_str());
+            LLAMA_LOG_DEBUG("Grammar still awaiting trigger after token %d (`%s`)\n", token, piece.c_str());
             return;
         }
     }
