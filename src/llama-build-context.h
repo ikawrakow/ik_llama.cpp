@@ -375,6 +375,27 @@ llm_expert_gating_func_type   gating_op,
                 gating_op, cb, il, graph);
     }
 
+    static ggml_tensor * llm_build_std_moe_ffn(ggml_context * ctx, llama_context & lctx,
+         ggml_tensor * ffn_norm,
+         ggml_tensor * input,
+         ggml_tensor * gate_inp,   ggml_tensor * gate_inp_b,
+         ggml_tensor * up_exps,    ggml_tensor * up_exps_b,
+         ggml_tensor * gate_exps,  ggml_tensor * gate_exps_b,
+         ggml_tensor * down_exps,  ggml_tensor * down_exps_b,
+         ggml_tensor * exp_probs_b,
+         ggml_tensor * up_shexp,   ggml_tensor * up_b_shexp,
+         ggml_tensor * gate_shexp, ggml_tensor * gate_b_shexp,
+         ggml_tensor * down_shexp, ggml_tensor * down_b_shexp,
+                    int64_t   n_expert,
+                    int64_t   n_expert_used,
+            llm_ffn_op_type   type_op,
+                       bool   norm_w,
+                       bool   scale_w,
+                      float   w_scale,
+llm_expert_gating_func_type   gating_op,
+            llm_ffn_op_type   type_op_shexp,
+         const llm_build_cb & cb, int il, ggml_cgraph * graph);
+
     static ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids);
 
     static ggml_cgraph * llama_build_graph_k_shift(llama_context & lctx);

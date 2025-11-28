@@ -877,12 +877,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
     auto extra = (ggml_split_tensor_t *)tensor->extra;
     GGML_ASSERT(extra->n_device <= ggml_backend_cuda_get_device_count());
 
-    for (int i = 0; i < extra->n_device; ++i) {
-        auto split = extra->splits[i];
-        if (!split) continue;
-        //printf("  Split %d: %p, %p, %s\n", i, (void *)split->data, (void *)split->buffer, split->buffer ? ggml_backend_buffer_name(split->buffer) : "none");
-    }
-
     if (extra->split_dim < 0) {
         GGML_ASSERT(ggml_is_contiguous(tensor));
         auto nbytes = ggml_nbytes(tensor);
@@ -904,6 +898,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         //if (tt.row_meta_size > 0) {
         //    GGML_ABORT("Dim 0 copy is not implemented for tensors with row meta data\n");
         //}
+        std::vector<char> host_buffer;
         GGML_ASSERT(ggml_is_contiguous(tensor));
         int nrows = ggml_nrows(tensor);
         auto bs = tt.blck_size;
@@ -919,17 +914,26 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             GGML_ASSERT(split->ne[0] % bs == 0);
             auto source_offset = tt.row_meta_size + (ne / bs) * ts;
             auto chost0 = (const char *)data;
-            //auto chost = (const char *)data + source_offset;
             auto split_row_size = ggml_row_size(split->type, split->ne[0]);
+            if (host_buffer.size() < nrows*split_row_size) host_buffer.resize(nrows*split_row_size);
             for (int ir = 0; ir < nrows; ++ir) {
-                auto dst = (char *)split->data + ir*split_row_size;
+                auto dst = host_buffer.data() + ir*split_row_size;
                 if (tt.row_meta_size > 0) {
-                    CUDA_CHECK(cudaMemcpyAsync(dst, chost0, tt.row_meta_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+                    memcpy(dst, chost0, tt.row_meta_size);
                 }
-                CUDA_CHECK(cudaMemcpyAsync(dst + tt.row_meta_size, chost0 + source_offset,
-                            split_row_size - tt.row_meta_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+                memcpy(dst + tt.row_meta_size, chost0 + source_offset, split_row_size - tt.row_meta_size);
                 chost0 += row_size;
             }
+            CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+            //for (int ir = 0; ir < nrows; ++ir) {
+            //    auto dst = (char *)split->data + ir*split_row_size;
+            //    if (tt.row_meta_size > 0) {
+            //        CUDA_CHECK(cudaMemcpyAsync(dst, chost0, tt.row_meta_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+            //    }
+            //    CUDA_CHECK(cudaMemcpyAsync(dst + tt.row_meta_size, chost0 + source_offset,
+            //                split_row_size - tt.row_meta_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+            //    chost0 += row_size;
+            //}
             ne += split->ne[0];
         }
     }

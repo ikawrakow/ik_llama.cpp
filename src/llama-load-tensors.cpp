@@ -202,7 +202,7 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 
     if (model.splits.size() > 1) {
         ctx_size += ggml_tensor_overhead()*n_layer*4;    // for KV cache
-        ctx_size *= model.splits.size();
+        ctx_size *= (model.splits.size() + 1);
     }
 
     for (auto & it : buft_layer_count) {
@@ -1852,7 +1852,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
     GGML_ASSERT(hparams.n_expert > 0 && "n_expert must be > 0 for GLM4_MOE MoE layers");
     GGML_ASSERT(hparams.n_expert_used > 0 && "n_expert_used must be > 0 for GLM4_MOE MoE layers");
 
-    create_embd_output(tn, n_embd, n_vocab);
+    create_embd_output(tn, n_embd, n_vocab, true, true);
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_layer = ctx_for_layer(i);
@@ -1866,7 +1866,7 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
 
         auto & layer = model.layers[i];
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, flags);
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, flags);
 
         // GLM-style attention with bias terms
         if (!flags) {
@@ -1888,7 +1888,10 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
         layer.attn_k_norm = create_tensor(ctx_layer,
                 tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, llama_model_loader::TENSOR_NOT_REQUIRED | flags);
 
-        layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, flags);
+        // Why are we adding an additional tensor type?
+        // attn_post_norm is the exact same thing as ffn_norm
+        //layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, flags);
+        layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, flags);
 
         // Check if this layer uses MoE or dense FFN based on n_layer_dense_lead
         // GLM 4.5 uses hybrid architecture: layer 0 is dense, layers 1+ are MoE
@@ -1896,9 +1899,9 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
 
         if (use_moe) {
             // MoE layers
-            layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, flags);
+            layer.ffn_gate_inp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, flags);
             // gate bias
-            layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, flags);
+            layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, flags);
 
             // MoE branch
             const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
@@ -2747,9 +2750,9 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
         if (bias) {
             auto flags = bias == 1 ? llama_model_loader::TENSOR_NOT_REQUIRED : 0;
-            layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {layer.wq->ne[1]}, flags);
-            layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "bias", i), {layer.wk->ne[1]}, flags);
-            layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {layer.wv->ne[1]}, flags);
+            layer.bq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {layer.wq->ne[1]}, flags);
+            layer.bk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "bias", i), {layer.wk->ne[1]}, flags);
+            layer.bv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "bias", i), {layer.wv->ne[1]}, flags);
         }
     }
 
@@ -2801,6 +2804,8 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
     GGML_ASSERT(mem_used.size() >= splits.size());
     for (int i = 0; i < split_tensor.ggml.n_device; ++i) {
         if (split_tensor.ggml.splits[i]) {
+            //auto nbytes = ggml_nbytes(split_tensor.ggml.splits[i]);
+            //printf("mem_used(%s): %8.2f, total: %8.2f\n", split_tensor.ggml.splits[i]->name, nbytes/1024./1024., (mem_used[i] + nbytes)/1024./1024.);
             mem_used[i] += ggml_nbytes(split_tensor.ggml.splits[i]);
         }
     }
@@ -2959,16 +2964,34 @@ bool create_tensors_helper::create_tensors() {
                 auto split = create_split(layer.wo->ne[0], attn_granularity, model.splits);
                 prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split, mem_used);
                 prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split, mem_used);
+                if (layer.bo) {
+                    prepare_split_tensors(-1, ctx_split, layer.bo, layer.split_bo, split, mem_used);
+                }
+                if (layer.bq) {
+                    prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split, mem_used);
+                }
                 for (auto & s : split) s /= gqa_ratio;
                 prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split, mem_used);
                 prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split, mem_used);
+                if (layer.bk) {
+                    prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split, mem_used);
+                }
+                if (layer.bv) {
+                    prepare_split_tensors(0, ctx_split, layer.bv, layer.split_bv, split, mem_used);
+                }
+            }
+
+            if (layer.ffn_norm) {
+                auto split = create_split(ggml_nrows(layer.ffn_norm), -1, model.splits);
+                prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, split, mem_used);
+                printf("Created splits for %s\n", layer.ffn_norm->name);
+                auto splits = (ggml_split_tensor_t *)layer.ffn_norm->extra;
+                if (!splits) {
+                    printf("Oops: null extra?\n"); exit(1);
+                }
             }
 
             if (layer.ffn_down && layer.ffn_up && layer.ffn_gate) {
-                if (layer.ffn_norm) {
-                    auto split = create_split(ggml_nrows(layer.ffn_norm), -1, model.splits);
-                    prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, split, mem_used);
-                }
                 int ffn_granularity = 16;
                 if (ggml_is_quantized(layer.ffn_down->type)) {
                     auto tt = ggml_internal_get_type_traits(layer.ffn_down->type);
@@ -3002,6 +3025,27 @@ bool create_tensors_helper::create_tensors() {
                 prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, split, mem_used);
                 prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   split, mem_used);
                 prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, split, mem_used);
+                //printf("=== Layer %d routed experts, %s, %s, %s:\n", il, ggml_type_name(layer.ffn_down_exps->type), ggml_type_name(layer.ffn_gate_exps->type), ggml_type_name(layer.ffn_up_exps->type));
+                //printf("mem_used:"); for (auto mem : mem_used) printf(" %8.2f", mem/1024./1024.);
+                //printf(" MiB\n");
+                //printf("    down:");
+                //for (auto split : layer.split_ffn_down_exps.tensor_splits) printf("   %ldx%ldx%ld", split->ne[0], split->ne[1], split->ne[2]);
+                //printf("\n");
+                //printf("    gate:");
+                //for (auto split : layer.split_ffn_gate_exps.tensor_splits) printf("   %ldx%ldx%ld", split->ne[0], split->ne[1], split->ne[2]);
+                //printf("\n");
+                //printf("      up:");
+                //for (auto split : layer.split_ffn_up_exps.tensor_splits) printf("   %ldx%ldx%ld", split->ne[0], split->ne[1], split->ne[2]);
+                //printf("\n");
+
+                if (layer.ffn_gate_inp) {
+                    auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, model.splits);
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp, layer.split_ffn_gate_inp, shared_split, mem_used);
+                }
+                if (layer.ffn_exp_probs_b) {
+                    auto shared_split = create_split(ggml_nrows(layer.ffn_exp_probs_b), -1, model.splits);
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
+                }
             }
         }
 
