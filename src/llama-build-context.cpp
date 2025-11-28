@@ -691,9 +691,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         if (ffn.size() > 2) {
             cur->op_params[0] = 0xff;
         }
-        if (cur->type != GGML_TYPE_F32) {
-            cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-        }
+        //if (cur->type != GGML_TYPE_F32) {
+        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+        //}
 
         return cur;
     }
@@ -9001,6 +9001,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     auto split_norm = attn_norm->splits[id];
                     cur = llm_build_norm(ctx0, cur, hparams, split_norm, NULL, LLM_NORM_RMS, cb, il);
                     cb(cur, "attn_norm", il_cb);
+                }
+                else if (cur->type != GGML_TYPE_F32) {
+                    cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
                 }
                 auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, nullptr, nullptr, nullptr, nullptr,
                         split_wq, nullptr, split_wk, nullptr, split_wv, nullptr,
