@@ -916,15 +916,27 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             auto chost0 = (const char *)data;
             auto split_row_size = ggml_row_size(split->type, split->ne[0]);
             if (host_buffer.size() < nrows*split_row_size) host_buffer.resize(nrows*split_row_size);
-            for (int ir = 0; ir < nrows; ++ir) {
-                auto dst = host_buffer.data() + ir*split_row_size;
-                if (tt.row_meta_size > 0) {
-                    memcpy(dst, chost0, tt.row_meta_size);
+            for (int64_t i02 = 0; i02 < split->ne[2]; ++i02) {
+                for (int64_t i01 = 0; i01 < split->ne[1]; ++i01) {
+                    auto dst = host_buffer.data() + (i02*split->ne[1] + i01)*split_row_size;
+                    auto src = (const char *)data + i02*tensor->nb[2] + i01*tensor->nb[1];
+                    if (tt.row_meta_size > 0) {
+                        memcpy(dst, src, tt.row_meta_size);
+                    }
+                    memcpy(dst + tt.row_meta_size, src + source_offset, split_row_size - tt.row_meta_size);
                 }
-                memcpy(dst + tt.row_meta_size, chost0 + source_offset, split_row_size - tt.row_meta_size);
-                chost0 += row_size;
             }
             CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+            ne += split->ne[0];
+            //for (int ir = 0; ir < nrows; ++ir) {
+            //    auto dst = host_buffer.data() + ir*split_row_size;
+            //    if (tt.row_meta_size > 0) {
+            //        memcpy(dst, chost0, tt.row_meta_size);
+            //    }
+            //    memcpy(dst + tt.row_meta_size, chost0 + source_offset, split_row_size - tt.row_meta_size);
+            //    chost0 += row_size;
+            //}
+            //CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
             //for (int ir = 0; ir < nrows; ++ir) {
             //    auto dst = (char *)split->data + ir*split_row_size;
             //    if (tt.row_meta_size > 0) {
@@ -934,19 +946,39 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             //                split_row_size - tt.row_meta_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
             //    chost0 += row_size;
             //}
-            ne += split->ne[0];
+            //ne += split->ne[0];
         }
     }
     else if (extra->split_dim == 1) {
-        size_t cur_offset = 0;
-        for (int i = 0; i < extra->n_device; ++i) {
-            auto split = extra->splits[i];
-            if (!split) continue;
-            ggml_cuda_set_device(i);
-            auto size = ggml_nbytes(split);
-            const char * buf_host = (const char *)data + cur_offset;
-            CUDA_CHECK(cudaMemcpyAsync(split->data, buf_host, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-            cur_offset += size;
+        if (tensor->ne[2] > 1) {
+            auto row_size = ggml_row_size(tensor->type, tensor->ne[0]);
+            std::vector<char> host_buffer;
+            int ne1 = 0;
+            for (int i = 0; i < extra->n_device; ++i) {
+                auto split = extra->splits[i];
+                if (!split) continue;
+                ggml_cuda_set_device(i);
+                auto size = ggml_nbytes(split);
+                if (host_buffer.size() < size) host_buffer.resize(size);
+                for (int64_t i02 = 0; i02 < split->ne[2]; ++i02) {
+                    auto dst = host_buffer.data() + i02*split->ne[1]*row_size;
+                    auto src = (const char *)data + i02*tensor->nb[2] + ne1*tensor->nb[1];
+                    memcpy(dst, src, split->ne[1]*row_size);
+                }
+                CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+                ne1 += split->ne[1];
+            }
+        } else {
+            size_t cur_offset = 0;
+            for (int i = 0; i < extra->n_device; ++i) {
+                auto split = extra->splits[i];
+                if (!split) continue;
+                ggml_cuda_set_device(i);
+                auto size = ggml_nbytes(split);
+                const char * buf_host = (const char *)data + cur_offset;
+                CUDA_CHECK(cudaMemcpyAsync(split->data, buf_host, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+                cur_offset += size;
+            }
         }
     }
     else {
