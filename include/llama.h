@@ -1473,11 +1473,7 @@ using llama_grammar_candidates = std::vector<llama_grammar_candidate>;
 const llama_grammar_rules  & llama_grammar_get_rules (const struct llama_grammar * grammar);
       llama_grammar_stacks & llama_grammar_get_stacks(      struct llama_grammar * grammar);
 
-void llama_grammar_accept(
-        const llama_grammar_rules  & rules,
-        const llama_grammar_stacks & stacks,
-        const uint32_t chr,
-              llama_grammar_stacks & new_stacks);
+void llama_grammar_accept(struct llama_grammar* grammar, uint32_t chr);
 
 std::vector<llama_grammar_candidate> llama_grammar_reject_candidates_for_stack(
         const llama_grammar_rules & rules,
