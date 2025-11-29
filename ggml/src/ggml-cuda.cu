@@ -704,59 +704,25 @@ GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
 
 // cuda split buffer
 
-static int64_t get_row_rounding(const std::array<float, GGML_CUDA_MAX_DEVICES> & tensor_split) {
-    int64_t row_rounding = 0;
-    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-        if (tensor_split[id] >= (id + 1 < ggml_backend_cuda_get_device_count() ? tensor_split[id + 1] : 1.0f)) {
-            continue;
-        }
-
-        const int cc = ggml_cuda_info().devices[id].cc;
-        row_rounding = std::max(row_rounding, (int64_t)get_mmq_y_host(cc));
-    }
-    return row_rounding;
-}
-
-static void get_row_split(int64_t * row_low, int64_t * row_high, const ggml_tensor * tensor, const std::array<float, GGML_CUDA_MAX_DEVICES> & tensor_split, int id) {
-    const int64_t nrows = ggml_nrows(tensor);
-    const int64_t rounding = get_row_rounding(tensor_split);
-
-    *row_low = id == 0 ? 0 : nrows*tensor_split[id];
-    *row_low -= *row_low % rounding;
-
-    if (id == ggml_backend_cuda_get_device_count() - 1) {
-        *row_high = nrows;
-    } else {
-        *row_high = nrows*tensor_split[id + 1];
-        *row_high -= *row_high % rounding;
-    }
-}
-
-static size_t ggml_nbytes_split(const struct ggml_tensor * tensor, int nrows_split) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
-
-    return nrows_split*ggml_row_size(tensor->type, tensor->ne[0]);
-}
-
 struct ggml_backend_cuda_split_buffer_type_context {
-    std::array<float, GGML_CUDA_MAX_DEVICES> tensor_split;
+    //std::array<float, GGML_CUDA_MAX_DEVICES> tensor_split;
 };
 
 struct ggml_backend_cuda_split_buffer_context {
     ~ggml_backend_cuda_split_buffer_context() {
-        for (ggml_tensor_extra_gpu * extra : tensor_extras) {
-            for (int id = 0; id < GGML_CUDA_MAX_DEVICES; ++id) {
-                for (int64_t is = 0; is < GGML_CUDA_MAX_STREAMS; ++is) {
-                    if (extra->events[id][is] != nullptr) {
-                        CUDA_CHECK(cudaEventDestroy(extra->events[id][is]));
-                    }
-                }
-                if (extra->data_device[id] != nullptr) {
-                    CUDA_CHECK(cudaFree(extra->data_device[id]));
-                }
-            }
-            delete extra;
-        }
+        //for (ggml_tensor_extra_gpu * extra : tensor_extras) {
+        //    for (int id = 0; id < GGML_CUDA_MAX_DEVICES; ++id) {
+        //        for (int64_t is = 0; is < GGML_CUDA_MAX_STREAMS; ++is) {
+        //            if (extra->events[id][is] != nullptr) {
+        //                CUDA_CHECK(cudaEventDestroy(extra->events[id][is]));
+        //            }
+        //        }
+        //        if (extra->data_device[id] != nullptr) {
+        //            CUDA_CHECK(cudaFree(extra->data_device[id]));
+        //        }
+        //    }
+        //    delete extra;
+        //}
     }
 
     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
@@ -818,52 +784,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
     }
     return;
 
-    //if (tensor->view_src != nullptr) fprintf(stderr, "%s: tensor %s is a view into %s\n", __func__, tensor->name, tensor->view_src->name);
-    //GGML_ASSERT(tensor->view_src == nullptr); // views of split tensors are not supported
-
-    //ggml_backend_cuda_split_buffer_context * ctx = (ggml_backend_cuda_split_buffer_context *)buffer->context;
-    //ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *)buffer->buft->context;
-
-    //const int64_t ne0 = tensor->ne[0];
-
-    //ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
-    //ctx->tensor_extras.push_back(extra);
-
-    //for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-    //    int64_t row_low, row_high;
-    //    get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
-
-    //    int64_t nrows_split = row_high - row_low;
-    //    if (nrows_split == 0) {
-    //        continue;
-    //    }
-
-    //    size_t size = ggml_nbytes_split(tensor, nrows_split);
-    //    const size_t original_size = size;
-
-    //    // pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
-    //    if (ne0 % MATRIX_ROW_PADDING != 0) {
-    //        size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
-    //    }
-
-    //    // FIXME: do not crash if cudaMalloc fails
-    //    // currently, init_tensor cannot fail, it needs to be fixed in ggml-backend first
-    //    ggml_cuda_set_device(id);
-    //    char * buf;
-    //    CUDA_CHECK(ggml_cuda_device_malloc((void**)&buf, size, id));
-
-    //    // set padding to 0 to avoid possible NaN values
-    //    if (size > original_size) {
-    //        CUDA_CHECK(cudaMemset(buf + original_size, 0, size - original_size));
-    //    }
-
-    //    extra->data_device[id] = buf;
-
-    //    for (int64_t is = 0; is < GGML_CUDA_MAX_STREAMS; ++is) {
-    //        CUDA_CHECK(cudaEventCreateWithFlags(&extra->events[id][is], cudaEventDisableTiming));
-    //    }
-    //}
-    //tensor->extra = extra;
 }
 
 GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -895,9 +815,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             GGML_ABORT("Dim 0 copy of row-interleaved quants is not supported yet");
         }
         auto tt = ggml_internal_get_type_traits(tensor->type);
-        //if (tt.row_meta_size > 0) {
-        //    GGML_ABORT("Dim 0 copy is not implemented for tensors with row meta data\n");
-        //}
         std::vector<char> host_buffer;
         GGML_ASSERT(ggml_is_contiguous(tensor));
         int nrows = ggml_nrows(tensor);
@@ -913,7 +830,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             GGML_ASSERT((int)ggml_nrows(split) == nrows);
             GGML_ASSERT(split->ne[0] % bs == 0);
             auto source_offset = tt.row_meta_size + (ne / bs) * ts;
-            auto chost0 = (const char *)data;
             auto split_row_size = ggml_row_size(split->type, split->ne[0]);
             if (host_buffer.size() < nrows*split_row_size) host_buffer.resize(nrows*split_row_size);
             for (int64_t i02 = 0; i02 < split->ne[2]; ++i02) {
@@ -928,25 +844,6 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
             }
             CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
             ne += split->ne[0];
-            //for (int ir = 0; ir < nrows; ++ir) {
-            //    auto dst = host_buffer.data() + ir*split_row_size;
-            //    if (tt.row_meta_size > 0) {
-            //        memcpy(dst, chost0, tt.row_meta_size);
-            //    }
-            //    memcpy(dst + tt.row_meta_size, chost0 + source_offset, split_row_size - tt.row_meta_size);
-            //    chost0 += row_size;
-            //}
-            //CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-            //for (int ir = 0; ir < nrows; ++ir) {
-            //    auto dst = (char *)split->data + ir*split_row_size;
-            //    if (tt.row_meta_size > 0) {
-            //        CUDA_CHECK(cudaMemcpyAsync(dst, chost0, tt.row_meta_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-            //    }
-            //    CUDA_CHECK(cudaMemcpyAsync(dst + tt.row_meta_size, chost0 + source_offset,
-            //                split_row_size - tt.row_meta_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-            //    chost0 += row_size;
-            //}
-            //ne += split->ne[0];
         }
     }
     else if (extra->split_dim == 1) {
@@ -991,75 +888,15 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
     }
 
-    //ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *)buffer->buft->context;
-
-    //const int64_t ne0 = tensor->ne[0];
-    //const size_t nb1 = tensor->nb[1];
-    //ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
-
-    //for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-    //    int64_t row_low, row_high;
-    //    get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
-
-    //    int64_t nrows_split = row_high - row_low;
-    //    if (nrows_split == 0) {
-    //        continue;
-    //    }
-
-    //    const size_t offset_split = row_low*nb1;
-    //    size_t size = ggml_nbytes_split(tensor, nrows_split);
-    //    const size_t original_size = size;
-
-    //    // pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
-    //    if (ne0 % MATRIX_ROW_PADDING != 0) {
-    //        size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
-    //    }
-
-    //    const char * buf_host = (const char *)data + offset_split;
-    //    CUDA_CHECK(cudaMemcpyAsync(extra->data_device[id], buf_host, original_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
-    //}
-
-    //for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-    //    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
-    //}
 }
 
-GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+GGML_CALL static void ggml_backend_cuda_split_buffer_get_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, const ggml_tensor * tensor,
+        [[maybe_unused]] void * data, size_t offset, size_t size) {
     // split tensors must always be set in their entirety at once
     GGML_ASSERT(offset == 0);
     GGML_ASSERT(size == ggml_nbytes(tensor));
 
-    ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *)buffer->buft->context;
-
-    const int64_t ne0 = tensor->ne[0];
-    const size_t nb1 = tensor->nb[1];
-    ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
-
-    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-        int64_t row_low, row_high;
-        get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
-
-        int64_t nrows_split = row_high - row_low;
-        if (nrows_split == 0) {
-            continue;
-        }
-
-        const size_t offset_split = row_low*nb1;
-        size_t size = ggml_nbytes_split(tensor, nrows_split);
-        const size_t original_size = size;
-
-        // pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
-        if (ne0 % MATRIX_ROW_PADDING != 0) {
-            size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
-        }
-
-        char * buf_host = (char *)data + offset_split;
-        CUDA_CHECK(cudaMemcpyAsync(buf_host, extra->data_device[id], original_size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
-    }
-
-    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
-    }
+    GGML_ABORT("not implemented");
 }
 
 GGML_CALL static void ggml_backend_cuda_split_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -1128,30 +965,6 @@ GGML_CALL static size_t ggml_backend_cuda_split_buffer_type_get_alloc_size([[may
     }
     return total_size;
 
-    //ggml_backend_cuda_split_buffer_type_context * ctx = (ggml_backend_cuda_split_buffer_type_context *)buft->context;
-
-    //size_t total_size = 0;
-
-    //const int64_t ne0 = tensor->ne[0];
-
-    //for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-    //    int64_t row_low, row_high;
-    //    get_row_split(&row_low, &row_high, tensor, ctx->tensor_split, id);
-
-    //    int64_t nrows_split = row_high - row_low;
-    //    if (nrows_split == 0) {
-    //        continue;
-    //    }
-
-    //    total_size += ggml_nbytes_split(tensor, nrows_split);
-
-    //    // pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
-    //    if (ne0 % MATRIX_ROW_PADDING != 0) {
-    //        total_size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
-    //    }
-    //}
-
-    //return total_size;
 }
 
 GGML_CALL static bool ggml_backend_cuda_split_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
@@ -1169,40 +982,12 @@ static ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_interface 
     /* .is_host          = */ ggml_backend_cuda_split_buffer_type_is_host,
 };
 
-GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_type(const float * tensor_split) {
-    static std::mutex mutex;
-    std::lock_guard<std::mutex> lock(mutex);
-
-    static std::map<std::array<float, GGML_CUDA_MAX_DEVICES>, struct ggml_backend_buffer_type> buft_map;
-
-    std::array<float, GGML_CUDA_MAX_DEVICES> tensor_split_arr = {};
-
-    bool all_zero = tensor_split == nullptr || std::all_of(tensor_split, tensor_split + GGML_CUDA_MAX_DEVICES, [](float x) { return x == 0.0f; });
-    if (all_zero) {
-        tensor_split_arr = ggml_cuda_info().default_tensor_split;
-    } else {
-        float split_sum = 0.0f;
-        for (int i = 0; i < ggml_backend_cuda_get_device_count(); ++i) {
-            tensor_split_arr[i] = split_sum;
-            split_sum += tensor_split[i];
-        }
-        for (int i = 0; i < ggml_backend_cuda_get_device_count(); ++i) {
-            tensor_split_arr[i] /= split_sum;
-        }
-    }
-
-    auto it = buft_map.find(tensor_split_arr);
-    if (it != buft_map.end()) {
-        return &it->second;
-    }
-
-    struct ggml_backend_buffer_type buft {
+GGML_CALL ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_type(const float * /*tensor_split*/) {
+    static ggml_backend_buffer_type buft {
         /* .iface   = */ ggml_backend_cuda_split_buffer_type_interface,
-        /* .context = */ new ggml_backend_cuda_split_buffer_type_context{tensor_split_arr},
+        /* .context = */ new ggml_backend_cuda_split_buffer_type_context{}, //{tensor_split_arr},
     };
-
-    auto result = buft_map.emplace(tensor_split_arr, buft);
-    return &result.first->second;
+    return &buft;
 }
 
 // host buffer type
@@ -1610,6 +1395,7 @@ static void ggml_cuda_op_mul_mat_cublas(
     GGML_UNUSED(src1_padded_row_size);
 }
 
+#if 0
 static void ggml_cuda_set_peer_access(const int n_tokens, int main_device) {
     static bool peer_access_enabled = false;
 
@@ -1661,6 +1447,7 @@ static void ggml_cuda_set_peer_access(const int n_tokens, int main_device) {
 
     GGML_UNUSED(main_device);
 }
+#endif
 
 static cudaError_t ggml_cuda_Memcpy2DPeerAsync(
     void * dst, int dstDevice, size_t dpitch, void * src, int srcDevice, size_t spitch, size_t width, size_t height, cudaStream_t stream) {
@@ -3119,11 +2906,6 @@ static inline bool ops_are_same_device(const ggml_cgraph * cgraph, int first, in
 }
 
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst, const ggml_cgraph * cgraph, int & i) {
-    // why is this here instead of mul_mat?
-    if (dst->src[0] != nullptr && ggml_backend_buffer_is_cuda_split(dst->src[0]->buffer)) {
-        //printf("%s: split buffer for %s(%s)\n", __func__, ggml_op_name(dst->op), dst->name);
-        ggml_cuda_set_peer_access(dst->src[1]->ne[1], ctx.device);
-    }
 
 #if IK_PRINT_TIMING
     int64_t tim1 = ggml_time_us();
