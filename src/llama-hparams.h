@@ -190,6 +190,16 @@ struct llama_hparams {
         GGML_ABORT("fatal error");
     }
 
+    uint32_t n_embd_inp() const {
+        uint32_t n_embd_inp = n_embd;
+
+        if (n_deepstack_layers > 0) {
+            n_embd_inp += n_embd * n_deepstack_layers;
+        }
+
+        return n_embd_inp;
+    }
+
     uint32_t n_ff(uint32_t il = 0) const {
         if (il < n_layer) {
             return n_ff_arr[il];

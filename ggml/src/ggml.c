@@ -24439,6 +24439,28 @@ void ggml_graph_clear(struct ggml_cgraph * cgraph) {
     ggml_hash_set_reset(&cgraph->visited_hash_set);
 }
 
+int ggml_graph_size(struct ggml_cgraph* cgraph) {
+    return cgraph->size;
+}
+
+struct ggml_tensor* ggml_graph_node(struct ggml_cgraph* cgraph, int i) {
+    if (i < 0) {
+        GGML_ASSERT(cgraph->n_nodes + i >= 0);
+        return cgraph->nodes[cgraph->n_nodes + i];
+    }
+
+    GGML_ASSERT(i < cgraph->n_nodes);
+    return cgraph->nodes[i];
+}
+
+struct ggml_tensor** ggml_graph_nodes(struct ggml_cgraph* cgraph) {
+    return cgraph->nodes;
+}
+
+int ggml_graph_n_nodes(struct ggml_cgraph* cgraph) {
+    return cgraph->n_nodes;
+}
+
 //
 // thread data
 //
