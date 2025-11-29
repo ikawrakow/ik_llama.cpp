@@ -5,7 +5,13 @@
 
 #include <cmath>
 #include <algorithm>
+#include <cstdint>
 #include <stdexcept>
+
+#define MAX_REPETITION_THRESHOLD 2000
+//
+// helpers
+//
 
 // NOTE: assumes valid utf8 (but checks for overrun)
 static std::pair<uint32_t, const char*> decode_utf8(const char* src) {
@@ -349,8 +355,10 @@ const char* llama_grammar_parser::parse_sequence(
     size_t last_sym_start = rule.size();
     const char* pos = src;
 
-    auto handle_repetitions = [&](int min_times, int max_times) {
-
+    // use UINT64_MAX as the empty value because we aligned to the proper uint64_t type so -1 can't be used
+    // (though it's technically the same as -1 now)
+    auto handle_repetitions = [&](uint64_t min_times, uint64_t max_times) {
+        bool no_max = max_times == UINT64_MAX;
         if (last_sym_start == rule.size()) {
             throw std::runtime_error(std::string("expecting preceding item to */+/?/{ at ") + pos);
         }
@@ -378,20 +386,20 @@ const char* llama_grammar_parser::parse_sequence(
         }
         else {
             // Repeat the previous elements (min_times - 1) times
-            for (int i = 1; i < min_times; i++) {
+            for (uint64_t i = 1; i < min_times; i++) {
                 rule.insert(rule.end(), prev_rule.begin(), prev_rule.end());
             }
         }
 
         uint32_t last_rec_rule_id = 0;
-        auto n_opt = max_times < 0 ? 1 : max_times - min_times;
+        auto n_opt = no_max ? 1 : max_times - min_times;
 
         llama_grammar_rule rec_rule(prev_rule);
-        for (int i = 0; i < n_opt; i++) {
+        for (uint64_t i = 0; i < n_opt; i++) {
             rec_rule.resize(prev_rule.size());
             uint32_t rec_rule_id = generate_symbol_id(rule_name);
-            if (i > 0 || max_times < 0) {
-                rec_rule.push_back({ LLAMA_GRETYPE_RULE_REF, max_times < 0 ? rec_rule_id : last_rec_rule_id });
+            if (i > 0 || no_max) {
+                rec_rule.push_back({LLAMA_GRETYPE_RULE_REF, no_max ? rec_rule_id : last_rec_rule_id});
             }
             rec_rule.push_back({ LLAMA_GRETYPE_ALT, 0 });
             rec_rule.push_back({ LLAMA_GRETYPE_END, 0 });
@@ -491,10 +499,10 @@ const char* llama_grammar_parser::parse_sequence(
                 throw std::runtime_error(std::string("expecting an int at ") + pos);
             }
             const char* int_end = parse_int(pos);
-            int min_times = std::stoul(std::string(pos, int_end - pos));
+            uint64_t min_times = std::stoul(std::string(pos, int_end - pos));
             pos = parse_space(int_end, is_nested);
 
-            int max_times = -1;
+            uint64_t max_times = UINT64_MAX; // default: no max limit
 
             if (*pos == '}') {
                 max_times = min_times;
@@ -516,6 +524,10 @@ const char* llama_grammar_parser::parse_sequence(
             }
             else {
                 throw std::runtime_error(std::string("expecting ',' at ") + pos);
+            }
+            bool has_max = max_times != UINT64_MAX;
+            if (min_times > MAX_REPETITION_THRESHOLD || (has_max && max_times > MAX_REPETITION_THRESHOLD)) {
+                throw std::runtime_error(std::string("number of repetitions exceeds sane defaults, please reduce the number of repetitions"));
             }
             handle_repetitions(min_times, max_times);
         }
@@ -857,32 +869,30 @@ llama_grammar_stacks & llama_grammar_get_stacks(struct llama_grammar * grammar) 
 // be positioned at a character range (see `llama_grammar_advance_stack`), and
 // produces the N possible stacks if the given char is accepted at those
 // positions
-void llama_grammar_accept(
-        const llama_grammar_rules  & rules,
-        const llama_grammar_stacks & stacks,
-        const uint32_t               chr,
-              llama_grammar_stacks & new_stacks) {
-    new_stacks.clear();
+void llama_grammar_accept(struct llama_grammar* grammar, uint32_t chr) {
+    llama_grammar_stacks stacks_new;
+    stacks_new.reserve(grammar->stacks.size());
 
-    for (const auto & stack : stacks) {
+    for (const auto& stack : grammar->stacks) {
         if (stack.empty()) {
             continue;
         }
 
         auto match = llama_grammar_match_char(stack.back(), chr);
         if (match.first) {
-            const llama_grammar_element * pos = match.second;
+            const llama_grammar_element* pos = match.second;
 
             // update top of stack to next element, if any
             llama_grammar_stack new_stack(stack.begin(), stack.end() - 1);
             if (!llama_grammar_is_end_of_sequence(pos)) {
                 new_stack.push_back(pos);
             }
-            llama_grammar_advance_stack(rules, new_stack, new_stacks);
+            llama_grammar_advance_stack(grammar->rules, new_stack, stacks_new);
         }
     }
-}
 
+    grammar->stacks = std::move(stacks_new);
+}
 
 llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
         const llama_grammar_rules      & rules,
@@ -1236,11 +1246,11 @@ void llama_grammar_accept_token_impl(struct llama_grammar * grammar, const struc
                     // std::string constrained_str(match[1].first, grammar.trigger_buffer.end());
                     grammar->trigger_buffer.clear();
                     llama_grammar_accept_str(grammar, constrained_str);
-                    //LLAMA_LOG_DEBUG("Grammar triggered on regex: '%s'\n", constrained_str.c_str());
+                    LLAMA_LOG_DEBUG("Grammar triggered on regex: '%s'\n", constrained_str.c_str());
                     return;
                 }
             }
-            //LLAMA_LOG_DEBUG("Grammar still awaiting trigger after token %d (`%s`)\n", token, piece.c_str());
+            LLAMA_LOG_DEBUG("Grammar still awaiting trigger after token %d (`%s`)\n", token, piece.c_str());
             return;
         }
     }
@@ -1259,29 +1269,17 @@ void llama_grammar_accept_token_impl(struct llama_grammar * grammar, const struc
 }
 
 void llama_grammar_accept_str(struct llama_grammar* grammar, const std::string& piece) {
-
     // Note terminating 0 in decoded string
-    const auto   decoded     = decode_utf8(piece, grammar->partial_utf8);
-    const auto & code_points = decoded.first;
-    llama_grammar_stacks tmp_new_stacks;
-    for (auto it = code_points.begin(), end = code_points.end()-1; it != end; ++it) {
-        llama_grammar_accept(grammar->rules, grammar->stacks, *it, tmp_new_stacks);
-        // avoid empty grammar stack at the end of the code_points
-        // mainline has this bug too, reason unknown
-        if (end == code_points.end() - 1) { 
-            if (tmp_new_stacks.size()) {
-                grammar->stacks = tmp_new_stacks;
-            }
-        }
-        else {
-            grammar->stacks = tmp_new_stacks;
-        }
+    const auto   decoded = decode_utf8(piece, grammar->partial_utf8);
+    const auto& code_points = decoded.first;
 
+    for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
+        llama_grammar_accept(grammar, *it);
     }
 
     grammar->partial_utf8 = decoded.second;
     if (grammar->stacks.empty()) {
         throw std::runtime_error("Unexpected empty grammar stack after accepting piece: " + piece);
     }
-
 }
+

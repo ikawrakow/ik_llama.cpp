@@ -13,22 +13,14 @@
 #include <vector>
 
 static bool llama_sample_grammar_string(struct llama_grammar * grammar, const std::string & input_str, size_t & error_pos, std::string & error_msg) {
-    auto decoded = decode_utf8(input_str, {});
-    const auto & code_points = decoded.first;
-
-    const llama_grammar_rules  & rules      = llama_grammar_get_rules (grammar);
-          llama_grammar_stacks & cur_stacks = llama_grammar_get_stacks(grammar);
-
+    const auto cpts = unicode_cpts_from_utf8(input_str);
+    auto& cur_stacks = llama_grammar_get_stacks(grammar);
     size_t pos = 0;
-    for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
-        const llama_grammar_stacks prev_stacks = llama_grammar_get_stacks(grammar); // copy
-
-        llama_grammar_accept(rules, prev_stacks, *it, cur_stacks);
-
+    for (const auto& cpt : cpts) {
+        llama_grammar_accept(grammar, cpt);
         if (cur_stacks.empty()) {
             error_pos = pos;
-            error_msg = "Unexpected character '" + unicode_cpt_to_utf8(*it) + "'";
-            cur_stacks = prev_stacks;
+            error_msg = "Unexpected character '" + unicode_cpt_to_utf8(cpt) + "'";
             return false;
         }
         ++pos;

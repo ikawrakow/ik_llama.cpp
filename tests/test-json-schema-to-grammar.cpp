@@ -597,6 +597,22 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
+        "maxItems 0",
+        R"""({
+            "items": {
+                "type": "boolean"
+            },
+            "maxItems": 0
+        })""",
+        R"""(
+            boolean ::= ("true" | "false") space
+            root ::= "[" space  "]" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "maxItems 1",
         R"""({
             "items": {
@@ -694,7 +710,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^abc?d*efg+(hij)?kl$"
         })""",
         R"""(
-            root ::= "\"" "ab" "c"? "d"* "ef" "g"+ ("hij")? "kl" "\"" space
+            root ::= "\"" ("ab" "c"? "d"* "ef" "g"+ ("hij")? "kl") "\"" space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
@@ -707,7 +723,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^\\[\\]\\{\\}\\(\\)\\|\\+\\*\\?$"
         })""",
         R"""(
-            root ::= "\"" "[]{}()|+*?" "\"" space
+            root ::= "\"" ("[]{}()|+*?") "\"" space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
@@ -720,7 +736,20 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "pattern": "^\"$"
         })""",
         R"""(
-            root ::= "\"" "\"" "\"" space
+            root ::= "\"" ("\"") "\"" space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with top-level alternation",
+        R"""({
+            "type": "string",
+            "pattern": "^A|B|C|D$"
+        })""",
+        R"""(
+            root ::= "\"" ("A" | "B" | "C" | "D") "\"" space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
@@ -734,7 +763,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             dot ::= [^\x0A\x0D]
-            root ::= "\"" ("(" root-1{1,3} ")")? root-1{3,3} "-" root-1{4,4} " " "a"{3,5} "nd" dot dot dot "\"" space
+            root ::= "\"" (("(" root-1{1,3} ")")? root-1{3,3} "-" root-1{4,4} " " "a"{3,5} "nd" dot dot dot) "\"" space
             root-1 ::= [0-9]
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
@@ -1091,9 +1120,9 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-            foo ::= "{" space foo-a-kv "}" space
-            foo-a-kv ::= "\"a\"" space ":" space string
-            root ::= foo
+            ref-definitions-foo ::= "{" space ref-definitions-foo-a-kv "}" space
+            ref-definitions-foo-a-kv ::= "\"a\"" space ":" space string
+            root ::= ref-definitions-foo
             space ::= | " " | "\n" [ \t]{0,20}
             string ::= "\"" char* "\"" space
         )"""
@@ -1118,17 +1147,55 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "type": "object"
         })""",
         R"""(
-            alternative-0 ::= foo
-            alternative-1 ::= bar
-            bar ::= "{" space  (bar-b-kv )? "}" space
-            bar-b-kv ::= "\"b\"" space ":" space number
+            alternative-0 ::= ref-definitions-foo
+            alternative-1 ::= ref-definitions-bar
             decimal-part ::= [0-9]{1,16}
-            foo ::= "{" space  (foo-a-kv )? "}" space
-            foo-a-kv ::= "\"a\"" space ":" space number
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            ref-definitions-bar ::= "{" space  (ref-definitions-bar-b-kv )? "}" space
+            ref-definitions-bar-b-kv ::= "\"b\"" space ":" space number
+            ref-definitions-foo ::= "{" space  (ref-definitions-foo-a-kv )? "}" space
+            ref-definitions-foo-a-kv ::= "\"a\"" space ":" space number
             root ::= alternative-0 | alternative-1
             space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "anyOf $ref",
+        R"""({
+            "properties": {
+                "a": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "number"}
+                    ]
+                },
+                "b": {
+                    "anyOf": [
+                        {"$ref": "#/properties/a/anyOf/0"},
+                        {"type": "boolean"}
+                    ]
+                }
+            },
+            "type": "object"
+        })""",
+        R"""(
+            a ::= string | number
+            a-kv ::= "\"a\"" space ":" space a
+            a-rest ::= ( "," space b-kv )?
+            b ::= b-0 | boolean
+            b-0 ::= string
+            b-kv ::= "\"b\"" space ":" space b
+            boolean ::= ("true" | "false") space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            decimal-part ::= [0-9]{1,16}
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            root ::= "{" space  (a-kv a-rest | b-kv )? "}" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\"" space
         )"""
     });
 
@@ -1173,6 +1240,51 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
             root ::= "{" space a-kv "," space b-kv ( "," space ( d-kv d-rest | c-kv ) )? "}" space
             space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "allOf with enum schema",
+        R"""({
+            "allOf": [
+                {"$ref": "#/definitions/foo"}
+            ],
+            "definitions": {
+                "foo": {
+                    "type": "string",
+                    "enum": ["a", "b"]
+                }
+            }
+        })""",
+        R"""(
+            root ::= ("\"a\"" | "\"b\"") space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "allOf with multiple enum schemas",
+        R"""({
+            "allOf": [
+                {"$ref": "#/definitions/foo"},
+                {"$ref": "#/definitions/bar"}
+            ],
+            "definitions": {
+                "foo": {
+                    "type": "string",
+                    "enum": ["a", "b", "c"]
+                },
+                "bar": {
+                    "type": "string",
+                    "enum": ["b", "c", "d"]
+                }
+            }
+        })""",
+        R"""(
+            root ::= ("\"b\"" | "\"c\"") space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
 
