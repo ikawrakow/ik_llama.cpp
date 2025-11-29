@@ -568,6 +568,7 @@ GGML_CALL static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t 
 }
 
 GGML_CALL static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
+    printf("%s(%s -> %s)\n", __func__, src->name, dst->name);
     if (ggml_backend_buffer_is_cuda(src->buffer)) {
         ggml_backend_cuda_buffer_context * src_ctx = (ggml_backend_cuda_buffer_context *)src->buffer->context;
         ggml_backend_cuda_buffer_context * dst_ctx = (ggml_backend_cuda_buffer_context *)dst->buffer->context;
@@ -788,6 +789,37 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_init_tensor([[maybe_unused]
 
 GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]] ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     if (!tensor->extra) return;
+    static std::map<ggml_type, int> k_map = {
+        { GGML_TYPE_Q4_0_R8   , 8},
+        { GGML_TYPE_Q5_0_R4   , 4},
+        { GGML_TYPE_Q8_0_R8   , 8},
+        { GGML_TYPE_Q2_K_R4   , 4},
+        { GGML_TYPE_Q3_K_R4   , 4},
+        { GGML_TYPE_Q4_K_R4   , 4},
+        { GGML_TYPE_Q5_K_R4   , 4},
+        { GGML_TYPE_Q6_K_R4   , 4},
+        { GGML_TYPE_IQ2_XXS_R4, 4},
+        { GGML_TYPE_IQ2_XS_R4 , 4},
+        { GGML_TYPE_IQ3_XXS_R4, 4},
+        { GGML_TYPE_IQ1_S_R4  , 4},
+        { GGML_TYPE_IQ4_NL_R4 , 4},
+        { GGML_TYPE_IQ3_S_R4  , 4},
+        { GGML_TYPE_IQ2_S_R4  , 4},
+        { GGML_TYPE_IQ4_XS_R8 , 8},
+        { GGML_TYPE_IQ1_M_R4  , 4},
+        { GGML_TYPE_BF16_R16  , 16},
+        { GGML_TYPE_Q6_0_R4   , 4},
+        { GGML_TYPE_IQ2_BN_R4 , 4},
+        { GGML_TYPE_IQ2_K_R4  , 4},
+        { GGML_TYPE_IQ3_K_R4  , 4},
+        { GGML_TYPE_IQ4_K_R4  , 4},
+        { GGML_TYPE_IQ5_K_R4  , 4},
+        { GGML_TYPE_IQ4_KS_R4 , 4},
+        { GGML_TYPE_IQ5_KS_R4 , 4},
+        { GGML_TYPE_Q8_K_R16  , 4},
+        { GGML_TYPE_Q8_KV_R8  , 4},
+        { GGML_TYPE_Q8_K_R8   , 8},
+    };
     //printf("%s(%s)\n", __func__, tensor->name);
 
     // split tensors must always be set in their entirety at once
@@ -811,9 +843,11 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         }
     }
     else if (extra->split_dim == 0) {
-        if (tensor->type >= GGML_TYPE_Q4_0_R8) {
-            GGML_ABORT("Dim 0 copy of row-interleaved quants is not supported yet");
-        }
+        int n_interleave = 1;
+        if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = 1;
+        //if (tensor->type >= GGML_TYPE_Q4_0_R8) {
+        //    GGML_ABORT("Dim 0 copy of row-interleaved quants is not supported yet");
+        //}
         auto tt = ggml_internal_get_type_traits(tensor->type);
         std::vector<char> host_buffer;
         GGML_ASSERT(ggml_is_contiguous(tensor));
@@ -825,21 +859,22 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
         for (int i = 0; i < extra->n_device; ++i) {
             auto split = extra->splits[i];
             if (!split) continue;
+            GGML_ASSERT(split->ne[1]%n_interleave == 0);
             ggml_cuda_set_device(i);
             GGML_ASSERT(split->type == tensor->type);
             GGML_ASSERT((int)ggml_nrows(split) == nrows);
             GGML_ASSERT(split->ne[0] % bs == 0);
-            auto source_offset = tt.row_meta_size + (ne / bs) * ts;
+            auto source_offset = n_interleave*(tt.row_meta_size + (ne / bs) * ts);
             auto split_row_size = ggml_row_size(split->type, split->ne[0]);
             if (host_buffer.size() < nrows*split_row_size) host_buffer.resize(nrows*split_row_size);
             for (int64_t i02 = 0; i02 < split->ne[2]; ++i02) {
-                for (int64_t i01 = 0; i01 < split->ne[1]; ++i01) {
+                for (int64_t i01 = 0; i01 < split->ne[1]; i01 += n_interleave) {
                     auto dst = host_buffer.data() + (i02*split->ne[1] + i01)*split_row_size;
                     auto src = (const char *)data + i02*tensor->nb[2] + i01*tensor->nb[1];
                     if (tt.row_meta_size > 0) {
-                        memcpy(dst, src, tt.row_meta_size);
+                        memcpy(dst, src, tt.row_meta_size*n_interleave);
                     }
-                    memcpy(dst + tt.row_meta_size, src + source_offset, split_row_size - tt.row_meta_size);
+                    memcpy(dst + tt.row_meta_size*n_interleave, src + source_offset, n_interleave*(split_row_size - tt.row_meta_size));
                 }
             }
             CUDA_CHECK(cudaMemcpyAsync(split->data, host_buffer.data(), nrows*split_row_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
@@ -3487,7 +3522,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
         if (node->src[0] && node->src[0]->buffer && ggml_backend_buft_is_cuda_split(node->src[0]->buffer->buft)) {
             use_cuda_graph = false; // Split buffers are not supported by CUDA graph capture
 #ifndef NDEBUG
-            GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to split buffer\n", __func__);
+            GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to split buffer %s\n", __func__, node->src[0]->name);
 #endif
         }
 

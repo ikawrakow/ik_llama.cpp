@@ -1075,36 +1075,83 @@ llm_expert_gating_func_type   gating_op,
             llm_ffn_op_type   type_op_shexp,
          const llm_build_cb & cb, int il, ggml_cgraph * graph) {
 
-    auto split_up_exps   = (ggml_split_tensor_t *)up_exps->extra;
-    auto split_gate_exps = (ggml_split_tensor_t *)gate_exps->extra;
-    auto split_down_exps = (ggml_split_tensor_t *)down_exps->extra;
+    auto split_up_exps    = (ggml_split_tensor_t *)up_exps->extra;
+    auto split_gate_exps  = (ggml_split_tensor_t *)gate_exps->extra;
+    auto split_down_exps  = (ggml_split_tensor_t *)down_exps->extra;
+    auto split_up_shexp   = up_shexp   ? (ggml_split_tensor_t *)up_shexp->extra   : nullptr;
+    auto split_gate_shexp = gate_shexp ? (ggml_split_tensor_t *)gate_shexp->extra : nullptr;
+    auto split_down_shexp = down_shexp ? (ggml_split_tensor_t *)down_shexp->extra : nullptr;
+    auto split_up_b_shexp   = up_b_shexp   ? (ggml_split_tensor_t *)up_b_shexp   : nullptr;
+    auto split_gate_b_shexp = gate_b_shexp ? (ggml_split_tensor_t *)gate_b_shexp : nullptr;
+    auto split_down_b_shexp = down_b_shexp ? (ggml_split_tensor_t *)down_b_shexp : nullptr;
     if (!split_up_exps && !split_gate_exps && !split_down_exps) {
         auto cur = input;
         if (ffn_norm) {
-            cur = llm_build_norm(ctx, input, lctx.model.hparams, ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
+            auto the_ffn_norm = ffn_norm->extra ? ((ggml_split_tensor_t *)ffn_norm->extra)->splits[lctx.model.main_gpu] : ffn_norm;
+            cur = llm_build_norm(ctx, input, lctx.model.hparams, the_ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_inp_normed", il);
         }
+        else if (cur->type != GGML_TYPE_F32) {
+            cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+        }
+        auto the_gate_inp = gate_inp->extra ? ((ggml_split_tensor_t *)gate_inp->extra)->splits[lctx.model.main_gpu] : gate_inp;
+        auto the_gate_inp_b = gate_inp_b ? gate_inp_b->extra ? ((ggml_split_tensor_t *)gate_inp_b->extra)->splits[lctx.model.main_gpu] : gate_inp_b : nullptr;
+        auto the_exp_probs_b = exp_probs_b ? exp_probs_b->extra ? ((ggml_split_tensor_t *)exp_probs_b->extra)->splits[lctx.model.main_gpu] : exp_probs_b : nullptr;
+        //printf("Using non-split llm_build_moe_ffn for layer %d\n", il);
         auto routed_out = llm_build_moe_ffn(ctx, lctx, cur,
-                    gate_inp,  gate_inp_b,
+                    the_gate_inp, the_gate_inp_b,
                     up_exps,   up_exps_b,
                     gate_exps, gate_exps_b,
                     down_exps, down_exps_b,
-                    exp_probs_b,
+                    the_exp_probs_b,
                     n_expert, n_expert_used,
                     type_op, norm_w, scale_w, w_scale,
                     gating_op, cb, il, graph);
         cb(routed_out, "routed_out", il);
 
         if (up_shexp && gate_shexp && down_shexp) {
-            auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
-                    up_shexp,   up_b_shexp,   nullptr,
-                    gate_shexp, gate_b_shexp, nullptr,
-                    down_shexp, down_b_shexp, nullptr,
-                    nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
-            cb(shared_out, "ffn_shexp_out", il);
-
-            cur = ggml_add(ctx, routed_out, shared_out);
-            cb(cur, "ffn_out", il);
+            if (split_up_shexp) {
+                //printf("Using split ffn for shared experts in layer %d\n", il);
+                std::vector<ggml_tensor *> results(split_up_shexp->n_device);
+                GGML_ASSERT(!split_up_b_shexp   || split_up_b_shexp->n_device   == split_up_shexp->n_device);
+                GGML_ASSERT(!split_gate_b_shexp || split_gate_b_shexp->n_device == split_up_shexp->n_device);
+                GGML_ASSERT(!split_down_b_shexp || split_down_b_shexp->n_device == split_up_shexp->n_device);
+                for (int id = 0; id < split_up_shexp->n_device; ++id) {
+                    int il_cb = 1000*id + il;
+                    auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
+                            split_up_shexp->splits[id],   split_up_b_shexp   ? split_up_b_shexp->splits[id]   : nullptr, nullptr,
+                            split_gate_shexp->splits[id], split_gate_b_shexp ? split_gate_b_shexp->splits[id] : nullptr, nullptr,
+                            split_down_shexp->splits[id], split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
+                            nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
+                    cb(shared_out, "ffn_shexp_out", il_cb);
+                    if (shared_out->ne[1] > 32) {
+                        shared_out = ggml_cast(ctx, shared_out, GGML_TYPE_F16);
+                    }
+                    results[id] = shared_out;
+                }
+                auto cur = ggml_add(ctx, results[0], results[1]);
+                cur->op_params[0] = 0xff;
+                cb(cur, "ffn_shared_combined", il);
+                for (int id = 2; id < int(results.size()); ++id) {
+                    cur = ggml_add(ctx, cur, results[id]);
+                    cb(cur, "ffn_shared_combined", il);
+                }
+                if (cur->type == GGML_TYPE_F16) {
+                    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+                }
+                cur = ggml_add(ctx, routed_out, cur);
+                cb(cur, "ffn_out", il);
+            } else {
+                //printf("Using non-split ffn for shared experts in layer %d\n", il);
+                auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
+                        up_shexp,   up_b_shexp,   nullptr,
+                        gate_shexp, gate_b_shexp, nullptr,
+                        down_shexp, down_b_shexp, nullptr,
+                        nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
+                cb(shared_out, "ffn_shexp_out", il);
+                cur = ggml_add(ctx, routed_out, shared_out);
+                cb(cur, "ffn_out", il);
+            }
         } else {
             cur = routed_out;
         }
@@ -1113,16 +1160,12 @@ llm_expert_gating_func_type   gating_op,
     GGML_ASSERT(split_up_exps && split_gate_exps && split_down_exps);
     GGML_ASSERT(split_up_exps->n_device == split_gate_exps->n_device && split_up_exps->n_device == split_down_exps->n_device);
     std::vector<ggml_tensor *> results(split_up_exps->n_device);
-    auto split_up_shexp   = up_shexp   ? (ggml_split_tensor_t *)up_shexp->extra   : nullptr;
-    auto split_gate_shexp = gate_shexp ? (ggml_split_tensor_t *)gate_shexp->extra : nullptr;
-    auto split_down_shexp = down_shexp ? (ggml_split_tensor_t *)down_shexp->extra : nullptr;
     GGML_ASSERT((!split_up_shexp && !split_gate_shexp && !split_down_shexp) ||
                 ( split_up_shexp &&  split_gate_shexp &&  split_down_shexp));
     auto split_gate_inp = (ggml_split_tensor_t *)gate_inp->extra;
     GGML_ASSERT(split_gate_inp && split_gate_inp->n_device == split_up_exps->n_device);
     auto split_exp_probs_b = exp_probs_b ? (ggml_split_tensor_t *)exp_probs_b->extra : nullptr;
     GGML_ASSERT(!split_exp_probs_b || split_exp_probs_b->n_device == split_up_exps->n_device);
-    if (gate_inp_b || up_exps_b || gate_exps_b || down_exps_b) printf("Have expert biases %p, %p, %p, %p\n", (void *)gate_inp_b, (void *)up_exps_b, (void *)gate_exps_b, (void *)down_exps_b);
     for (int id = 0; id < split_up_exps->n_device; ++id) {
         int il_cb = 1000*(id + 1) + il;
         auto cur = input;
@@ -1147,9 +1190,6 @@ llm_expert_gating_func_type   gating_op,
         cb(routed_out, "routed_out", il_cb);
 
         if (split_up_shexp) {
-            auto split_up_b_shexp   = up_b_shexp   ? (ggml_split_tensor_t *)up_b_shexp   : nullptr;
-            auto split_gate_b_shexp = gate_b_shexp ? (ggml_split_tensor_t *)gate_b_shexp : nullptr;
-            auto split_down_b_shexp = down_b_shexp ? (ggml_split_tensor_t *)down_b_shexp : nullptr;
             GGML_ASSERT(!split_up_b_shexp   || split_up_b_shexp->n_device   == split_up_exps->n_device);
             GGML_ASSERT(!split_gate_b_shexp || split_gate_b_shexp->n_device == split_up_exps->n_device);
             GGML_ASSERT(!split_down_b_shexp || split_down_b_shexp->n_device == split_up_exps->n_device);
@@ -1499,12 +1539,12 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
         cb(Kcur, "Kcur", il);
         cb(Vcur, "Vcur", il);
         if (q_norm) {
-            Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
+            Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Qcur, "Qcur_normed", il);
             ggml_build_forward_expand(gf, Qcur);
         }
         if (k_norm) {
-            Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
+            Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Kcur, "Kcur_normed", il);
             ggml_build_forward_expand(gf, Kcur);
         }
@@ -1536,12 +1576,12 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
         if (q_norm) {
-            Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
+            Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Qcur, "Qcur_normed", il);
             ggml_build_forward_expand(gf, Qcur);
         }
         if (k_norm) {
-            Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
+            Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Kcur, "Kcur_normed", il);
             ggml_build_forward_expand(gf, Kcur);
         }
@@ -1559,7 +1599,7 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
 
     auto Kcur = ggml_reshape_3d(ctx0, K, n_embd_head, K->ne[0]/n_embd_head, n_tokens);
     if (k_norm) {
-        Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
+        Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(Kcur, "Kcur_normed", il);
     }
     auto Vcur = V;
