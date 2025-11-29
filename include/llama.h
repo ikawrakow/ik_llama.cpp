@@ -275,7 +275,7 @@ extern "C" {
     enum llama_split_mode {
         LLAMA_SPLIT_MODE_NONE    = 0, // single GPU
         LLAMA_SPLIT_MODE_LAYER   = 1, // split layers and KV across GPUs
-        LLAMA_SPLIT_MODE_ROW     = 2, // split rows across GPUs
+        LLAMA_SPLIT_MODE_GRAPH   = 2, // splits computations across GPUs
     };
 
 
