@@ -125,19 +125,6 @@
 // helpers
 //
 
-// trim whitespace from the beginning and end of a string
-//static std::string trim(const std::string & str) {
-// Fails for Chinese character
-//    size_t start = 0;
-//    size_t end = str.size();
-//    while (start < end && isspace(str[start])) {
-//        start += 1;
-//    }
-//    while (end > start && isspace(str[end - 1])) {
-//        end -= 1;
-//    }
-//    return str.substr(start, end - start);
-//}
 
 static bool is_utf8_whitespace(uint8_t c) {
     // Basic ASCII whitespace
@@ -155,37 +142,34 @@ static std::string trim(const std::string & str) {
 }
 
 
-static std::vector<std::string> llama_string_split(const std::string& str, const std::string& delimiter) {
+static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
     std::vector<std::string> parts;
     size_t start = 0;
     size_t end = str.find(delimiter);
-
     while (end != std::string::npos) {
         parts.push_back(str.substr(start, end - start));
         start = end + delimiter.length();
         end = str.find(delimiter, start);
     }
-
     parts.push_back(str.substr(start));
-
     return parts;
-
 }
 
 // extract ip and port from RPC[ip:port] for rpc and keep other device names
-static std::vector<std::string> extract_ip_from_rpc_device(std::vector<std::string> devices) {
-    std::vector<std::string> rpc_servers;
-    std::regex pattern("RPC\\[(.*?)\\]");
-    std::smatch matches;
-    for (auto device : devices) {
-        if (std::regex_search(device, matches, pattern)) {
-            rpc_servers.push_back(matches[1]);
-        } else {
-            rpc_servers.push_back(device);
+static std::vector<rpc_device>  extract_device_from_rpc_device(std::vector<std::string> devices) {
+    std::vector<rpc_device> rpc_servers;
+    for (auto & device : devices) {
+        rpc_device rpc;
+        auto value = string_split(device, "|");
+        if (value.size() == 2) {
+            rpc.device = std::stoi(value[1]);
+            rpc.endpoint = value[0];
         }
+        rpc_servers.push_back(rpc);
     }
     return rpc_servers;
 }
+
 
 enum llm_chat_template {
     LLM_CHAT_TEMPLATE_CHATML,
@@ -445,8 +429,10 @@ static ggml_backend_buffer_type_t llama_default_buffer_type_offload(const llama_
     int dev_count = (int)llama_get_device_count(model);
     int rpc_count = (int)model.rpc_servers.size();
     if (gpu >= dev_count - rpc_count) {
-        const char * endpoint = model.rpc_servers[gpu - dev_count + rpc_count].c_str();
-        return ggml_backend_rpc_buffer_type(endpoint);
+        int rpc_idx = gpu - dev_count + rpc_count;
+        rpc_device rpc = model.rpc_servers[rpc_idx];
+        const char * endpoint = rpc.endpoint.c_str();
+        return ggml_backend_rpc_buffer_type(endpoint, rpc.device);
     }
 #endif
 #if defined(GGML_USE_METAL)
@@ -504,8 +490,9 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
     if (device >= dev_count - rpc_count) {
         size_t total;
         size_t free;
-        const char * endpoint = model.rpc_servers[device - dev_count + rpc_count].c_str();
-        ggml_backend_rpc_get_device_memory(endpoint, &free, &total);
+        rpc_device rpc = model.rpc_servers[device - dev_count + rpc_count];
+        const char * endpoint = rpc.endpoint.c_str();
+        ggml_backend_rpc_get_device_memory(endpoint, rpc.device, &free, &total);
         return free;
     }
 #endif
@@ -1694,11 +1681,23 @@ static bool llm_load_tensors(
         int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
         for (int i = i_gpu_start; i < n_layer; ++i) {
             int layer_gpu = std::upper_bound(splits.begin(), splits.begin() + device_count, float(i - i_gpu_start)/act_gpu_layers) - splits.begin();
+#ifndef NDEBUG
+            ggml_backend_buffer_type_t buft = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
+            const char* name = ggml_backend_buft_name(buft);
+            LLAMA_LOG_DEBUG("load_tensors: layers %3d assigned to backend %s\n", i,
+                name);
+#endif
             model.buft_layer[i] = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
         }
         // assign the output layer
         if (n_gpu_layers > n_layer) {
             int layer_gpu = std::upper_bound(splits.begin(), splits.begin() + device_count, float(act_gpu_layers - 1)/act_gpu_layers) - splits.begin();
+#ifndef NDEBUG
+            ggml_backend_buffer_type_t buft = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
+            const char* name = ggml_backend_buft_name(buft);
+            LLAMA_LOG_DEBUG("load_tensors: output layers assigned to backend %s\n", 
+                name);
+#endif
             model.buft_output = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
         } else {
             model.buft_output = llama_default_buffer_type_cpu(true);
@@ -4016,16 +4015,10 @@ int64_t llama_time_us(void) {
     return ggml_time_us();
 }
 
-static int32_t find_device_idx(const std::string& str) {
-    std::regex pattern(R"((\d+)$)");  // Match digits at the end
-    std::smatch matches;
-    int number = -1;
-    if (std::regex_search(str, matches, pattern)) {
-        number = std::stoi(matches[1]);
-    }
-    return number;
+static std::string create_rpc_name(std::string endpoint, uint32_t device) {
+    std::string dev_name = "RPC" + std::to_string(device) + "[" + std::string(endpoint) + "]";
+    return dev_name;
 }
-
 
 struct llama_model * llama_load_model_from_file(
         const char * path_model,
@@ -4058,8 +4051,7 @@ struct llama_model * llama_load_model_from_file(
 
     std::vector<std::string> params_devices;
     if (params.devices && !striequals(params.devices, "")) {
-        params_devices = llama_string_split(params.devices, ",");
-        params_devices = extract_ip_from_rpc_device(params_devices);
+        params_devices = string_split(params.devices, ",");
     }
 
     std::map<std::string, int32_t> buffer_names;
@@ -4075,20 +4067,21 @@ struct llama_model * llama_load_model_from_file(
         gpu_names.push_back(std::string(name));
     }
     if (has_rpc) {
-        model->rpc_servers = llama_string_split(params.rpc_servers, ",");
+        model->rpc_servers = extract_device_from_rpc_device(string_split(params.rpc_servers, ","));
         for (auto rpc : model->rpc_servers) {
-            buffer_names.insert({ rpc, idx});
+            buffer_names.insert({ create_rpc_name(rpc.endpoint, rpc.device), idx});
             idx++;
         }
     }
     std::vector<std::string> device_names;
     if (params_devices.size()) {
         device_names = params_devices;
-    }
-    else {
+    } else {
         // add RPC servers at the front of the list to minimize the network transfers
         if (has_rpc) {
-            device_names = model->rpc_servers;
+            for (auto& it : model->rpc_servers) {
+                device_names.push_back(create_rpc_name(it.endpoint, it.device));
+            }     
         }
         device_names.insert(device_names.end(), gpu_names.begin(), gpu_names.end());
     }
@@ -4096,8 +4089,7 @@ struct llama_model * llama_load_model_from_file(
     for (auto & device : device_names) {
         if (buffer_names.count(device)) {
             model->devices.push_back(buffer_names[device]);
-        }
-        else {
+        } else {
             LLAMA_LOG_ERROR("%s backend not available.\n", device.c_str());
         }
     }
@@ -4451,10 +4443,11 @@ struct llama_context * llama_new_context_with_model(
 
 #if defined(GGML_USE_RPC)
         if (model->n_gpu_layers > 0) {
-            for (const auto & endpoint : model->rpc_servers) {
-                ggml_backend_t backend = ggml_backend_rpc_init(endpoint.c_str());
+            for (const auto & device : model->rpc_servers) {
+                ggml_backend_t backend = ggml_backend_rpc_init(device.endpoint.c_str(), device.device);
                 if (backend == nullptr) {
-                    LLAMA_LOG_ERROR("%s: failed to initialize RPC to '%s'\n", __func__, endpoint.c_str());
+                    LLAMA_LOG_ERROR("%s: failed to initialize RPC%d to '%s'\n", __func__, device.device,
+                        device.endpoint.c_str());
                     llama_free(ctx);
                     return nullptr;
                 }

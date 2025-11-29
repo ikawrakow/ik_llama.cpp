@@ -999,15 +999,6 @@ GGML_CALL static ggml_backend_t ggml_backend_reg_cpu_init(const char * params, v
     GGML_UNUSED(user_data);
 }
 
-#ifdef GGML_USE_RPC
-GGML_CALL static ggml_backend_t ggml_backend_reg_rpc_init(const char* params, void* user_data) {
-    return ggml_backend_rpc_init((const char*)user_data);
-
-    GGML_UNUSED(params);
-    GGML_UNUSED(user_data);
-}
-#endif
-
 // multi-buffer buffer
 
 struct ggml_backend_multi_buffer_context {
@@ -2159,6 +2150,7 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
 
 bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph) {
     GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
+    ggml_backend_sched_synchronize(sched);
 
     ggml_backend_sched_split_graph(sched, measure_graph);
 
@@ -2167,7 +2159,6 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
     }
 
     ggml_backend_sched_reset(sched);
-    ggml_backend_sched_synchronize(sched);
 
     return true;
 }
