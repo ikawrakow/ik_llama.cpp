@@ -556,23 +556,49 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
 }
 
 bool llama_context::update_cache_copies() {
-    int n_layer = cache_copies.size()/2;
+    int n_layer = model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
     if ((int)kv_self.k_l.size() != n_layer) return false;
     if (!(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer)) return false;
-    for (int il = 0; il < n_layer; ++il) {
-        auto& c = cache_copies[2*il+0];
-        if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) return false;
-        c.cpy->view_offs = kv_self.head*c.step;
-        c.cpy->src[1]->data = (char *)kv_self.k_l[il]->data + c.cpy->view_offs;
-        c.cpy->data = c.cpy->src[1]->data;
-    }
-    if (kv_self.v_l.empty()) return true;
-    for (int il = 0; il < n_layer; ++il) {
-        auto& c = cache_copies[2*il+1];
-        if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[il]) return false;
-        c.cpy->view_offs = kv_self.head*c.step;
-        c.cpy->src[1]->data = (char *)kv_self.v_l[il]->data + c.cpy->view_offs;
-        c.cpy->data = c.cpy->src[1]->data;
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
+        for (int il = 0; il < n_layer; ++il) {
+            auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
+            auto vl = !kv_self.v_l.empty() && kv_self.v_l[il] ? (ggml_split_tensor_t *)kv_self.v_l[il]->extra : nullptr;
+            GGML_ASSERT(kl && (!kv_self.v_l[il] || vl));
+            if (vl) {
+                GGML_ASSERT(kl->n_device == vl->n_device);
+            }
+            for (int id = 0; id < kl->n_device; ++id) {
+                auto& c = cache_copies[2*model.splits.size()*il + 2*id + 0];
+                if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kl->splits[id]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)kl->splits[id]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+            if (!vl) continue;
+            for (int id = 0; id < vl->n_device; ++id) {
+                auto& c = cache_copies[2*model.splits.size()*il + 2*id + 1];
+                if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != vl->splits[id]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)vl->splits[id]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+        }
+    } else {
+        for (int il = 0; il < n_layer; ++il) {
+            auto& c = cache_copies[2*il+0];
+            if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) return false;
+            c.cpy->view_offs = kv_self.head*c.step;
+            c.cpy->src[1]->data = (char *)kv_self.k_l[il]->data + c.cpy->view_offs;
+            c.cpy->data = c.cpy->src[1]->data;
+        }
+        if (kv_self.v_l.empty()) return true;
+        for (int il = 0; il < n_layer; ++il) {
+            auto& c = cache_copies[2*il+1];
+            if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[il]) return false;
+            c.cpy->view_offs = kv_self.head*c.step;
+            c.cpy->src[1]->data = (char *)kv_self.v_l[il]->data + c.cpy->view_offs;
+            c.cpy->data = c.cpy->src[1]->data;
+        }
     }
     return true;
 }
@@ -580,7 +606,11 @@ bool llama_context::update_cache_copies() {
 llama_context::llama_context(const llama_model & model)
     : model(model) , sampling(llama_n_vocab(&model)) , t_start_us(model.t_start_us) , t_load_us(model.t_load_us) {
     const auto & hparams = model.hparams;
-    cache_copies.resize(2*hparams.n_layer);
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
+        cache_copies.resize(2*model.splits.size()*hparams.n_layer);
+    } else {
+        cache_copies.resize(2*hparams.n_layer);
+    }
 }
 
 llama_context::~llama_context() {
