@@ -149,6 +149,7 @@ struct rpc_server_params {
     std::string              host = "127.0.0.1";
     int                      port = 50052;
     bool                     use_cache = false;
+    bool                     use_cpu = false;
     int                      n_threads = std::max(1U, std::thread::hardware_concurrency() / 2);
     std::vector<std::string> devices;
 };
@@ -156,12 +157,13 @@ struct rpc_server_params {
 static void print_usage(int /*argc*/, char** argv, rpc_server_params params) {
     fprintf(stderr, "Usage: %s [options]\n\n", argv[0]);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -h, --help                       show this help message and exit\n");
-    fprintf(stderr, "  -t, --threads N                  number of threads for the CPU device (default: %d)\n", params.n_threads);
-    fprintf(stderr, "  -d, -dev, --device <dev1,dev2,...>     comma-separated list of devices\n");
-    fprintf(stderr, "  -h, -H, --host, --Host HOST                  host to bind to (default: %s)\n", params.host.c_str());
-    fprintf(stderr, "  -p, -P, --port, --Port PORT                  port to bind to (default: %d)\n", params.port);
-    fprintf(stderr, "  -c, --cache                      enable local file cache\n");
+    fprintf(stderr, "  -h, --help                          show this help message and exit\n");
+    fprintf(stderr, "  -t, --threads N                     number of threads for the CPU device (default: %d)\n", params.n_threads);
+    fprintf(stderr, "  -d, -dev, --device <dev1,dev2,...>  comma-separated list of devices\n");
+    fprintf(stderr, "  -cpu                                enable cpu backend\n");
+    fprintf(stderr, "  -h, -H, --host, --Host HOST         host to bind to (default: %s)\n", params.host.c_str());
+    fprintf(stderr, "  -p, -P, --port, --Port PORT         port to bind to (default: %d)\n", params.port);
+    fprintf(stderr, "  -c, --cache                         enable local file cache\n");
     fprintf(stderr, "\n");
 }
 
@@ -215,6 +217,9 @@ static bool rpc_server_params_parse(int argc, char** argv, rpc_server_params& pa
         else if (arg == "-c" || arg == "--cache") {
             params.use_cache = true;
         }
+        else if (arg == "-cpu") {
+            params.use_cpu = true;
+        }
         else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv, params);
             exit(0);
@@ -228,11 +233,18 @@ static bool rpc_server_params_parse(int argc, char** argv, rpc_server_params& pa
     return true;
 }
 
-static ggml_backend_t create_backend(const rpc_server_params& params, uint32_t device) {
+static ggml_backend_t create_cpu_backend(const rpc_server_params& params) {   
+    fprintf(stderr, "%s: using CPU backend\n", __func__);
+    ggml_backend_t backend = ggml_backend_cpu_init();
+    ggml_backend_cpu_set_n_threads(backend, params.n_threads);
+    return backend;
+}
+
+static ggml_backend_t create_gpu_backend(const rpc_server_params& params, uint32_t device) {
     ggml_backend_t backend = NULL;
 #ifdef GGML_USE_CUDA
     fprintf(stderr, "%s: using CUDA backend: CUDA%d\n", __func__, device);
-    backend = ggml_backend_cuda_init(device, nullptr); // init device 0
+    backend = ggml_backend_cuda_init(device, nullptr); // init device
     if (!backend) {
         fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
     }
@@ -256,11 +268,11 @@ static ggml_backend_t create_backend(const rpc_server_params& params, uint32_t d
     }
 #endif
     // if there aren't GPU Backends fallback to CPU backend
-    if (!backend) {
-        fprintf(stderr, "%s: using CPU backend\n", __func__);
-        backend = ggml_backend_cpu_init();
-        ggml_backend_cpu_set_n_threads(backend, params.n_threads);
-    }
+    //if (!backend) {
+    //    fprintf(stderr, "%s: using CPU backend\n", __func__);
+    //    backend = ggml_backend_cpu_init();
+    //    ggml_backend_cpu_set_n_threads(backend, params.n_threads);
+    //}
     return backend;
 }
 
@@ -274,8 +286,8 @@ static int32_t find_device_idx(const std::string& str) {
     return number;
 }
 
-static size_t get_device_count() {
-    size_t count = 1;
+static size_t get_gpu_backend_count(const rpc_server_params& params) {
+    size_t count = 0;
 #if defined(GGML_USE_CUDA)
     count = ggml_backend_cuda_get_device_count();
 #elif defined(GGML_USE_SYCL)
@@ -292,27 +304,35 @@ static std::vector<ggml_backend_t> get_devices(const rpc_server_params& params) 
     std::vector<ggml_backend_t> devices;
     if (!params.devices.empty()) {
         for (auto device : params.devices) {
-            int32_t device_id = find_device_idx(device);
-            ggml_backend_t dev = create_backend(params, device_id);
+            int32_t device_id;
+            ggml_backend_t dev;
+            if (params.use_cpu && device == "CPU" ) {
+                dev = create_cpu_backend(params);
+            } else {
+                device_id = find_device_idx(device);
+                if (device_id < 0) {
+                    fprintf(stderr, "error: unknown device: %s\n", device.c_str());
+                    continue;
+                }
+                dev = create_gpu_backend(params, device_id);
+            }
             if (dev) {
                 devices.push_back(dev);
-            }
-            else {
+            } else {
                 fprintf(stderr, "error: unknown device: %s\n", device.c_str());
-                /*fprintf(stderr, "available devices:\n");
-                for (size_t i = 0; i < llama_get_device_count(nullptr); i++) {
-                    auto* dev = ggml_backend_dev_get(i);
-                    size_t free, total;
-                    ggml_backend_dev_memory(dev, &free, &total);
-                    printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
-                }*/
-                return {};
             }
         }
     }
     else {
-        for (size_t i = 0; i < get_device_count(); i++) {
-            ggml_backend_t dev = create_backend(params, i);
+        for (size_t i = 0; i < get_gpu_backend_count(params); i++) {
+            ggml_backend_t dev = create_gpu_backend(params, i);
+            if (dev) {
+                devices.push_back(dev);
+            }
+        }
+        // cpu backend at last
+        if (params.use_cpu || devices.empty()) {
+            ggml_backend_t dev = create_cpu_backend(params);
             if (dev) {
                 devices.push_back(dev);
             }
@@ -321,7 +341,20 @@ static std::vector<ggml_backend_t> get_devices(const rpc_server_params& params) 
     return devices;
 }
 
-
+static void get_cpu_backend_memory(size_t * free_mem, size_t * total_mem) {
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    GlobalMemoryStatusEx(&status);
+    *total_mem = status.ullTotalPhys;
+    *free_mem = status.ullAvailPhys;
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    *total_mem = pages * page_size;
+    *free_mem = *total_mem;
+#endif
+}
 
 static void get_backend_memory(uint32_t device, size_t * free_mem, size_t * total_mem) {
 #ifdef GGML_USE_CUDA
@@ -374,8 +407,12 @@ int main(int argc, char * argv[]) {
     for (size_t i = 0; i < devices.size(); i++) {
         size_t free, total;
         const char* name = ggml_backend_name(devices[i]);
-        uint32_t idx = find_device_idx(name);
-        get_backend_memory(idx, &free, &total);
+        if (std::string(name) == "CPU") {
+            get_cpu_backend_memory(&free, &total);
+        } else {
+            int32_t idx = find_device_idx(name);
+            get_backend_memory((uint32_t) idx, &free, &total);
+        }
         free_mem.push_back(free);
         total_mem.push_back(total);
     }
@@ -390,12 +427,6 @@ int main(int argc, char * argv[]) {
         }
         cache_dir = cache_dir_str.c_str();
     }
-    printf("Starting RPC server v%d.%d.%d\n",
-        RPC_PROTO_MAJOR_VERSION,
-        RPC_PROTO_MINOR_VERSION,
-        RPC_PROTO_PATCH_VERSION);
-    printf("  endpoint       : %s\n", endpoint.c_str());
-    printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
     ggml_backend_rpc_start_server(endpoint.c_str(), cache_dir, devices.size(), devices.data(),
         free_mem.data(), total_mem.data());
     return 0;

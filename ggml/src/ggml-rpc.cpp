@@ -1868,9 +1868,19 @@ GGML_API GGML_CALL void ggml_backend_rpc_start_server(const char* endpoint,
     std::vector<ggml_backend_t> backends;
     std::vector<size_t> free_mem_vec(free_mem, free_mem + n_devices);
     std::vector<size_t> total_mem_vec(total_mem, total_mem + n_devices);
+    printf("Starting RPC server v%d.%d.%d\n",
+        RPC_PROTO_MAJOR_VERSION,
+        RPC_PROTO_MINOR_VERSION,
+        RPC_PROTO_PATCH_VERSION);
+    printf("  endpoint       : %s\n", endpoint);
+    printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
+    printf("Using devices:\n");
     for (size_t i = 0; i < n_devices; i++) {
         auto dev = devices[i];
         backends.push_back(dev);
+        const char* name = ggml_backend_name(devices[i]);
+        printf("  %8s:  %10zu MiB total, %10zu MiB free\n", name, 
+            total_mem_vec[i] / 1024 / 1024, free_mem_vec[i] / 1024 / 1024);
     }
     std::string host;
     int port;
