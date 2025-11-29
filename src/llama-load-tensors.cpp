@@ -10,6 +10,7 @@
 #include <array>
 #include <future>
 #include <regex>
+#include <unordered_set>
 
 #define LLAMA_API_INTERNAL
 
@@ -159,6 +160,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     ggml_context * ctx_output;
     ggml_context * ctx_output_split;
 
+    std::unordered_set<ggml_tensor *> split_tensors;
+
     inline ggml_context * ctx_for_buft(ggml_backend_buffer_type_t buft) {
         if (auto it = ctx_map.find(buft); it != ctx_map.end()) return it->second;
 
@@ -292,7 +295,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
 
 ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne,
         int flags, ggml_context ** actual_context) {
-    //auto requested_ctx = ctx;
+    auto requested_ctx = ctx;
     if (ml.tensor_buft_overrides) {
         for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
             std::regex pattern(overrides->pattern);
@@ -305,39 +308,11 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
     }
     if (actual_context) *actual_context = ctx;
     auto tensor = ml.create_tensor(ctx, name, ne, flags);
-    //if (tensor && requested_ctx == ctx && model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-    //    int i_layer = -1;
-    //    if (auto pos = name.find("blk."); pos == 0) {
-    //        GGML_ASSERT(sscanf(name.c_str(), "blk.%d.", &i_layer) == 1);
-    //    }
-    //    if (i_layer >= 0) {
-    //        auto & layer = model.layers[i_layer];
-    //        auto & hparams = model.hparams;
-    //        if (auto pos = name.find("attn_q.weight"); pos != std::string::npos) {
-    //            auto split = create_split(tensor->ne[1], hparams.n_embd_head_k, model.splits);
-    //            printf("%s(%s):", __func__, name.c_str());
-    //            for (auto s : split) printf(" %d", s);
-    //            printf("\n");
-    //            layer.split_wq.tensor_splits.resize(split.size());
-    //            size_t offset = 0;
-    //            for (int i = 0; i < (int)split.size(); ++i) {
-    //                if (split[i] > 0) {
-    //                    layer.split_wq.tensor_splits[i] = ggml_view_2d(ctx, tensor, tensor->ne[0], split[i], tensor->nb[1], offset);
-    //                    auto split_name = name + '.' + std::to_string(i);
-    //                    ggml_set_name(layer.split_wq.tensor_splits[i], split_name.c_str());
-    //                    offset += tensor->nb[1]*split[i];
-    //                } else {
-    //                    layer.split_wq.tensor_splits[i] = nullptr;
-    //                }
-    //            }
-    //            layer.split_wq.ggml.n_device  = split.size();
-    //            layer.split_wq.ggml.split_dim = 1;
-    //            layer.split_wq.ggml.splits    = layer.split_wq.tensor_splits.data();
-    //        }
-    //    }
-    //}
+    if (tensor && ctx == requested_ctx) {
+        printf("%s: adding tensor %s to split tensors\n", __func__, tensor->name);
+        split_tensors.insert(tensor);
+    }
     return tensor;
-    //return ml.create_tensor(ctx, name, ne, flags);
 }
 
 #define LOADING_PRELUDE \
@@ -2998,41 +2973,45 @@ bool create_tensors_helper::create_tensors() {
                 prepare_split_tensors(1, ctx_split, layer.ffn_gate, layer.split_ffn_gate, split, mem_used);
             }
 
+            //bool any_ffn_split = false;
             if (layer.ffn_down_shexp && layer.ffn_up_shexp && layer.ffn_gate_shexp) {
-                int ffn_granularity = 16;
-                if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
-                    auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
-                    if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                bool use_split = split_tensors.find(layer.ffn_down_shexp) != split_tensors.end() &&
+                                 split_tensors.find(layer.ffn_gate_shexp) != split_tensors.end() &&
+                                 split_tensors.find(layer.ffn_up_shexp)   != split_tensors.end();
+                if (use_split) {
+                    //any_ffn_split = true;
+                    int ffn_granularity = 16;
+                    if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
+                        auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
+                        if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                    }
+                    auto split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, model.splits);
+                    prepare_split_tensors(0, ctx_split, layer.ffn_down_shexp, layer.split_ffn_down_shexp, split, mem_used);
+                    prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
+                    prepare_split_tensors(1, ctx_split, layer.ffn_gate_shexp, layer.split_ffn_gate_shexp, split, mem_used);
                 }
-                auto split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, model.splits);
-                prepare_split_tensors(0, ctx_split, layer.ffn_down_shexp, layer.split_ffn_down_shexp, split, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.ffn_gate_shexp, layer.split_ffn_gate_shexp, split, mem_used);
             }
 
             if (layer.ffn_down_exps && layer.ffn_up_exps && layer.ffn_gate_exps) {
-                int ffn_granularity = 16;
-                if (ggml_is_quantized(layer.ffn_down_exps->type)) {
-                    auto tt = ggml_internal_get_type_traits(layer.ffn_down_exps->type);
-                    if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
-                }
-                auto split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, model.splits);
-                prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, split, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   split, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, split, mem_used);
-                //printf("=== Layer %d routed experts, %s, %s, %s:\n", il, ggml_type_name(layer.ffn_down_exps->type), ggml_type_name(layer.ffn_gate_exps->type), ggml_type_name(layer.ffn_up_exps->type));
-                //printf("mem_used:"); for (auto mem : mem_used) printf(" %8.2f", mem/1024./1024.);
-                //printf(" MiB\n");
-                //printf("    down:");
-                //for (auto split : layer.split_ffn_down_exps.tensor_splits) printf("   %ldx%ldx%ld", split->ne[0], split->ne[1], split->ne[2]);
-                //printf("\n");
-                //printf("    gate:");
-                //for (auto split : layer.split_ffn_gate_exps.tensor_splits) printf("   %ldx%ldx%ld", split->ne[0], split->ne[1], split->ne[2]);
-                //printf("\n");
-                //printf("      up:");
-                //for (auto split : layer.split_ffn_up_exps.tensor_splits) printf("   %ldx%ldx%ld", split->ne[0], split->ne[1], split->ne[2]);
-                //printf("\n");
+                bool use_split = split_tensors.find(layer.ffn_down_exps) != split_tensors.end() &&
+                                 split_tensors.find(layer.ffn_gate_exps) != split_tensors.end() &&
+                                 split_tensors.find(layer.ffn_up_exps)   != split_tensors.end();
 
+                if (use_split) {
+                    //any_ffn_split = true;
+                    int ffn_granularity = 16;
+                    if (ggml_is_quantized(layer.ffn_down_exps->type)) {
+                        auto tt = ggml_internal_get_type_traits(layer.ffn_down_exps->type);
+                        if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                    }
+                    auto split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, model.splits);
+                    prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, split, mem_used);
+                    prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   split, mem_used);
+                    prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, split, mem_used);
+                }
+            }
+
+            //if (any_ffn_split) {
                 if (layer.ffn_gate_inp) {
                     auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, model.splits);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp, layer.split_ffn_gate_inp, shared_split, mem_used);
@@ -3041,7 +3020,7 @@ bool create_tensors_helper::create_tensors() {
                     auto shared_split = create_split(ggml_nrows(layer.ffn_exp_probs_b), -1, model.splits);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
                 }
-            }
+            //}
         }
 
         if (model.output) {
