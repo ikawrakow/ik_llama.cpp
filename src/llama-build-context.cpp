@@ -1097,7 +1097,7 @@ llm_expert_gating_func_type   gating_op,
         auto the_gate_inp = gate_inp->extra ? ((ggml_split_tensor_t *)gate_inp->extra)->splits[lctx.model.main_gpu] : gate_inp;
         auto the_gate_inp_b = gate_inp_b ? gate_inp_b->extra ? ((ggml_split_tensor_t *)gate_inp_b->extra)->splits[lctx.model.main_gpu] : gate_inp_b : nullptr;
         auto the_exp_probs_b = exp_probs_b ? exp_probs_b->extra ? ((ggml_split_tensor_t *)exp_probs_b->extra)->splits[lctx.model.main_gpu] : exp_probs_b : nullptr;
-        //printf("Using non-split llm_build_moe_ffn for layer %d\n", il);
+        //int n_before = graph->n_nodes;
         auto routed_out = llm_build_moe_ffn(ctx, lctx, cur,
                     the_gate_inp, the_gate_inp_b,
                     up_exps,   up_exps_b,
@@ -1108,6 +1108,8 @@ llm_expert_gating_func_type   gating_op,
                     type_op, norm_w, scale_w, w_scale,
                     gating_op, cb, il, graph);
         cb(routed_out, "routed_out", il);
+        ggml_build_forward_expand(graph, routed_out);
+        //printf("Using non-split llm_build_moe_ffn for layer %d. n_before = %d, n_now = %d\n", il, n_before, graph->n_nodes);
 
         if (up_shexp && gate_shexp && down_shexp) {
             if (split_up_shexp) {
@@ -1127,9 +1129,10 @@ llm_expert_gating_func_type   gating_op,
                     if (shared_out->ne[1] > 32) {
                         shared_out = ggml_cast(ctx, shared_out, GGML_TYPE_F16);
                     }
+                    ggml_build_forward_expand(graph, shared_out);
                     results[id] = shared_out;
                 }
-                auto cur = ggml_add(ctx, results[0], results[1]);
+                cur = ggml_add(ctx, results[0], results[1]);
                 cur->op_params[0] = 0xff;
                 cb(cur, "ffn_shared_combined", il);
                 for (int id = 2; id < int(results.size()); ++id) {
@@ -1155,6 +1158,7 @@ llm_expert_gating_func_type   gating_op,
         } else {
             cur = routed_out;
         }
+        ggml_build_forward_expand(graph, routed_out);
         return cur;
     }
     GGML_ASSERT(split_up_exps && split_gate_exps && split_down_exps);
