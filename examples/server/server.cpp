@@ -3779,7 +3779,7 @@ struct server_context {
                                 common_prefix prefix = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, true); // string level match
                                 common_prefix prefix_nonexact = slot.cache_tokens.get_common_prefix(ctx, prompt_tokens, false);
                                 auto n_past0 = slot.cache_tokens.get_common_prefix_exact(prompt_tokens); // token level match
-                                LLAMA_LOG_INFO("======== Cache: cache_size = %ld, n_past0 =  %ld, n_past1 =  %ld, n_past_prompt1 = %ld,  n_past2 =  %ld, n_past_prompt2 =  %ld\n", (int32_t) slot.cache_tokens.size(), (int32_t) n_past0, (int32_t) prefix.first, prefix.second, (int32_t) prefix_nonexact.first, (int32_t) prefix_nonexact.second);
+                                LLAMA_LOG_INFO("======== Cache: cache_size = %d, n_past0 =  %d, n_past1 =  %d, n_past_prompt1 = %d,  n_past2 =  %d, n_past_prompt2 =  %d\n", (int32_t) slot.cache_tokens.size(), (int32_t) n_past0, (int32_t) prefix.first, (int32_t)prefix.second, (int32_t) prefix_nonexact.first, (int32_t) prefix_nonexact.second);
                                 int32_t size_threshold = 20;
                                 if (prefix.first + size_threshold < prefix_nonexact.first) {
                                     LLAMA_LOG_WARN("Common part contains missing or extra space and new line\n");
@@ -4042,7 +4042,7 @@ struct server_context {
                         slot.state = SLOT_STATE_PROCESSING;
                         slot.command = SLOT_COMMAND_NONE;
                         slot.release();
-                        LLAMA_LOG_INFO("n_past =% d\n", slot.cache_tokens.size());
+                        LLAMA_LOG_INFO("n_past = %d\n", (int)slot.cache_tokens.size());
                         send_error(slot, "Input prompt is too big compared to KV size. Please try increasing KV size.");
                     }
                     break; // break loop of n_batch
