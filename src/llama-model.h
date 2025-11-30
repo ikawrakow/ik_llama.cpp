@@ -271,6 +271,11 @@ struct llama_layer {
 
 struct llama_lora_adapter;
 
+struct rpc_device {
+    std::string endpoint;
+    uint32_t device;
+};
+
 struct llama_model {
     e_model     type  = MODEL_UNKNOWN;
     llm_arch    arch  = LLM_ARCH_UNKNOWN;
@@ -299,7 +304,7 @@ struct llama_model {
     int main_gpu;
     int n_gpu_layers;
 
-    std::vector<std::string> rpc_servers;
+    std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
 
     // gguf metadata
