@@ -198,6 +198,8 @@ struct llama_layer {
     llama_split_tensor split_bqkv;
     llama_split_tensor split_bqk;
     llama_split_tensor split_bkv;
+    llama_split_tensor split_q_norm;
+    llama_split_tensor split_k_norm;
 
     // relative position bias
     struct ggml_tensor * attn_rel_b = nullptr;
