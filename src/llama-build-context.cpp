@@ -1120,7 +1120,8 @@ llm_expert_gating_func_type   gating_op,
                 GGML_ASSERT(!split_down_b_shexp || split_down_b_shexp->n_device == split_up_shexp->n_device);
                 for (int id = 0; id < split_up_shexp->n_device; ++id) {
                     int il_cb = 1000*id + il;
-                    auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
+                    auto the_ffn_norm = ffn_norm ? ffn_norm->extra ? ((ggml_split_tensor_t *)ffn_norm->extra)->splits[id] : ffn_norm : nullptr;
+                    auto shared_out = llm_build_ffn(ctx, lctx, the_ffn_norm, input,
                             split_up_shexp->splits[id],   split_up_b_shexp   ? split_up_b_shexp->splits[id]   : nullptr, nullptr,
                             split_gate_shexp->splits[id], split_gate_b_shexp ? split_gate_b_shexp->splits[id] : nullptr, nullptr,
                             split_down_shexp->splits[id], split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
@@ -1158,7 +1159,9 @@ llm_expert_gating_func_type   gating_op,
         } else {
             cur = routed_out;
         }
-        ggml_build_forward_expand(graph, routed_out);
+        if (cur != routed_out) {
+            ggml_build_forward_expand(graph, cur);
+        }
         return cur;
     }
     GGML_ASSERT(split_up_exps && split_gate_exps && split_down_exps);
