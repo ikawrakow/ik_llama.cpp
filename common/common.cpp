@@ -270,6 +270,28 @@ static std::string parse_device_list(const std::string& value) {
     return value;
 }
 
+static std::string add_rpc_devices(std::string& servers) {
+    std::string rpc_devices;
+    std::vector<std::string> rpc_servers = string_split(servers, ",");
+    if (rpc_servers.empty()) {
+        throw std::invalid_argument("no RPC servers specified");
+    }
+    for (auto& server : rpc_servers) {
+        uint32_t dev_count = ggml_backend_rpc_get_device_count(server.c_str());
+        uint32_t device = 0;
+        for (uint32_t i = 0; i < dev_count; ++i) {
+            const auto buft = ggml_backend_rpc_buffer_type(server.c_str(), device);
+            if (buft != nullptr) {
+                rpc_devices = rpc_devices + server + "|" + std::to_string(device) + ",";
+                ++device;
+            }
+        }
+    }
+    if (!rpc_devices.empty()) {
+        rpc_devices = rpc_devices.substr(0, rpc_devices.size() - 1); // remove trailing comma
+    }
+    return rpc_devices;
+}
 
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string& url, const common_remote_params&) {
     if (!url.empty()) {
@@ -1296,15 +1318,12 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--rpc") {
         CHECK_ARG
 #ifdef GGML_USE_RPC
-        params.rpc_servers = argv[i];
-        std::string servers(params.rpc_servers);
-        size_t pos = 0;
-        while ((pos = servers.find(",")) != std::string::npos) {
-            std::string server = servers.substr(0, pos);
-            ggml_backend_rpc_buffer_type(server.c_str());
-            servers.erase(0, pos + 1);
+        std::string servers(argv[i]);
+        servers = add_rpc_devices(servers);
+        if (servers.empty()) {
+            return false;
         }
-        ggml_backend_rpc_buffer_type(servers.c_str());
+        params.rpc_servers = servers;
 #endif
         return true;
     }
@@ -1319,10 +1338,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--override-tensor" || arg == "-ot") {
         CHECK_ARG
-            /*for (auto endpoint : params.rpc_servers.split)
-            {
-
-            }*/
         if (!parse_buft_overrides(std::string{ argv[i] }, params.tensor_buft_overrides)) {
             fprintf(stderr, "error: Invalid tensor buffer type override: %s\n", argv[i]);
             invalid_param = true;
