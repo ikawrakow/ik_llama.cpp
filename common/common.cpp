@@ -272,6 +272,7 @@ static std::string parse_device_list(const std::string& value) {
 
 static std::string add_rpc_devices(std::string& servers) {
     std::string rpc_devices;
+#ifdef GGML_USE_RPC
     std::vector<std::string> rpc_servers = string_split(servers, ",");
     if (rpc_servers.empty()) {
         throw std::invalid_argument("no RPC servers specified");
@@ -290,6 +291,7 @@ static std::string add_rpc_devices(std::string& servers) {
     if (!rpc_devices.empty()) {
         rpc_devices = rpc_devices.substr(0, rpc_devices.size() - 1); // remove trailing comma
     }
+#endif
     return rpc_devices;
 }
 
