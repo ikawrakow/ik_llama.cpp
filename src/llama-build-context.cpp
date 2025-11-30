@@ -1130,7 +1130,6 @@ llm_expert_gating_func_type   gating_op,
                     if (shared_out->ne[1] > 32) {
                         shared_out = ggml_cast(ctx, shared_out, GGML_TYPE_F16);
                     }
-                    ggml_build_forward_expand(graph, shared_out);
                     results[id] = shared_out;
                 }
                 cur = ggml_add(ctx, results[0], results[1]);
@@ -1140,10 +1139,12 @@ llm_expert_gating_func_type   gating_op,
                     cur = ggml_add(ctx, cur, results[id]);
                     cb(cur, "ffn_shared_combined", il);
                 }
-                if (cur->type == GGML_TYPE_F16) {
-                    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+                if (routed_out->ne[1] > 32) {
+                    auto routed_out_f16 = ggml_cast(ctx, routed_out, GGML_TYPE_F16);
+                    cur = ggml_add(ctx, routed_out_f16, cur);
+                } else {
+                    cur = ggml_add(ctx, routed_out, cur);
                 }
-                cur = ggml_add(ctx, routed_out, cur);
                 cb(cur, "ffn_out", il);
             } else {
                 //printf("Using non-split ffn for shared experts in layer %d\n", il);
