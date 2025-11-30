@@ -133,13 +133,17 @@ export const AppContextProvider = ({
   const setPending = (convId: string, pendingMsg: PendingMessage | null) => {
     // if pendingMsg is null, remove the key from the object
     if (!pendingMsg) {
-      setPendingMessages((prev) => {
-        const newState = { ...prev };
-        delete newState[convId];
-        return newState;
-      });
+      setTimeout(() => {
+            setPendingMessages((prev) => {
+              const newState = { ...prev };
+              delete newState[convId];
+              return newState;
+            });
+          }, 100); // Adjust delay as needed
     } else {
-      setPendingMessages((prev) => ({ ...prev, [convId]: pendingMsg }));
+            setTimeout(() => {
+              setPendingMessages((prev) => ({ ...prev, [convId]: pendingMsg }));
+            }, 100);
     }
   };
 
@@ -157,7 +161,9 @@ export const AppContextProvider = ({
 
   ////////////////////////////////////////////////////////////////////////
   // public functions
-
+  const sleep = (ms: number): Promise<void> => {
+      return new Promise(resolve => setTimeout(resolve, ms));
+  };
   const isGenerating = (convId: string) => !!pendingMessages[convId];
 
   const generateMessage = async (
