@@ -22,7 +22,6 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
 #endif // LLAMA_USE_LLGUIDANCE
     }
     else {
-
         std::vector<std::string> trigger_patterns;
         std::vector<std::string> patterns_anywhere;
         std::vector<llama_token> trigger_tokens;
@@ -70,30 +69,34 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
                 trigger_tokens.data(), trigger_tokens.size())
             : llama_sampler_init_grammar(vocab, params.grammar.c_str(), "root");
 
-    // if there is a grammar, parse it
-    if (!params.grammar.empty()) {
-        result->parsed_grammar = grammar_parser::parse(params.grammar.c_str());
-            if (result->parsed_grammar.success) {
-        // will be empty (default) if there are parse errors
-        if (result->parsed_grammar.rules.empty()) {
-            fprintf(stderr, "%s: failed to parse grammar\n", __func__);
-            delete result;
-            return nullptr;
-        }
+        //if (!grmr) {
+        //    return nullptr;
+        //}
 
-        // Ensure that there is a "root" node.
-        if (result->parsed_grammar.symbol_ids.find("root") == result->parsed_grammar.symbol_ids.end()) {
-            fprintf(stderr, "%s: grammar does not contain a 'root' symbol\n", __func__);
-            delete result;
-            return nullptr;
-        }
+        // if there is a grammar, parse it
+        if (!params.grammar.empty()) {
+            result->parsed_grammar = grammar_parser::parse(params.grammar.c_str());
+            if (result->parsed_grammar.success) {
+                // will be empty (default) if there are parse errors
+                if (result->parsed_grammar.rules.empty()) {
+                    fprintf(stderr, "%s: failed to parse grammar\n", __func__);
+                    delete result;
+                    return nullptr;
+                }
+
+                // Ensure that there is a "root" node.
+                if (result->parsed_grammar.symbol_ids.find("root") == result->parsed_grammar.symbol_ids.end()) {
+                    fprintf(stderr, "%s: grammar does not contain a 'root' symbol\n", __func__);
+                    delete result;
+                    return nullptr;
+                }
                 if (grmr == nullptr) {
-            throw std::runtime_error("Failed to initialize llama_grammar");
+                    throw std::runtime_error("Failed to initialize llama_grammar");
+                }
+            }
         }
-    }
-        }
-    result->prev.resize(params.n_prev);
-    result->n_valid = 0;
+        result->prev.resize(params.n_prev);
+        result->n_valid = 0;
     }
     result->grammar = grmr;
     // init DRY
