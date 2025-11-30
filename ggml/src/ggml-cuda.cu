@@ -844,7 +844,7 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
     }
     else if (extra->split_dim == 0) {
         int n_interleave = 1;
-        if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = 1;
+        if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = it->second;
         //if (tensor->type >= GGML_TYPE_Q4_0_R8) {
         //    GGML_ABORT("Dim 0 copy of row-interleaved quants is not supported yet");
         //}
@@ -901,10 +901,13 @@ GGML_CALL static void ggml_backend_cuda_split_buffer_set_tensor([[maybe_unused]]
                 ne1 += split->ne[1];
             }
         } else {
+            int n_interleave = 1;
+            if (auto it = k_map.find(tensor->type); it != k_map.end()) n_interleave = it->second;
             size_t cur_offset = 0;
             for (int i = 0; i < extra->n_device; ++i) {
                 auto split = extra->splits[i];
                 if (!split) continue;
+                GGML_ASSERT(split->ne[1]%n_interleave == 0);
                 ggml_cuda_set_device(i);
                 auto size = ggml_nbytes(split);
                 const char * buf_host = (const char *)data + cur_offset;
