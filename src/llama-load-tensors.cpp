@@ -309,7 +309,7 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
     if (actual_context) *actual_context = ctx;
     auto tensor = ml.create_tensor(ctx, name, ne, flags);
     if (tensor && ctx == requested_ctx) {
-        printf("%s: adding tensor %s to split tensors\n", __func__, tensor->name);
+        //printf("%s: adding tensor %s to split tensors\n", __func__, tensor->name);
         split_tensors.insert(tensor);
     }
     return tensor;
