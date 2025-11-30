@@ -9220,11 +9220,15 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 else if (cur->type != GGML_TYPE_F32) {
                     cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
                 }
+                auto the_q_norm = model.layers[il].attn_q_norm ? model.layers[il].attn_q_norm->extra ?
+                    ((ggml_split_tensor_t *)model.layers[il].attn_q_norm->extra)->splits[id] : model.layers[il].attn_q_norm : nullptr;
+                auto the_k_norm = model.layers[il].attn_k_norm ? model.layers[il].attn_k_norm->extra ?
+                    ((ggml_split_tensor_t *)model.layers[il].attn_k_norm->extra)->splits[id] : model.layers[il].attn_k_norm : nullptr;
                 auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, nullptr, nullptr, nullptr, nullptr,
                         split_wq, bq ? bq->splits[id] : nullptr,
                         split_wk, bk ? bk->splits[id] : nullptr,
                         split_wv, bv ? bv->splits[id] : nullptr,
-                        model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, f_attn_scale, il_cb);
+                        the_q_norm, the_k_norm, f_attn_scale, il_cb);
                 auto rope_factors = rope_factors_in;
                 if (!rope_factors && model.layers[il].rope_freqs && model.layers[il].rope_freqs->extra) {
                     auto extra = (ggml_split_tensor_t *)model.layers[il].rope_freqs->extra;

@@ -1858,9 +1858,9 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, flags);
 
         // K/Q norm tensors (optional for GLM-4.5 355B variant)
-        layer.attn_q_norm = create_tensor(ctx_layer,
+        layer.attn_q_norm = create_tensor(ctx_split,
                 tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, llama_model_loader::TENSOR_NOT_REQUIRED | flags);
-        layer.attn_k_norm = create_tensor(ctx_layer,
+        layer.attn_k_norm = create_tensor(ctx_split,
                 tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_head_k }, llama_model_loader::TENSOR_NOT_REQUIRED | flags);
 
         // Why are we adding an additional tensor type?
@@ -2945,6 +2945,9 @@ bool create_tensors_helper::create_tensors() {
                 if (layer.bq) {
                     prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split, mem_used);
                 }
+                if (layer.attn_q_norm) {
+                    prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split, mem_used);
+                }
                 for (auto & s : split) s /= gqa_ratio;
                 prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split, mem_used);
                 prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split, mem_used);
@@ -2953,6 +2956,9 @@ bool create_tensors_helper::create_tensors() {
                 }
                 if (layer.bv) {
                     prepare_split_tensors(0, ctx_split, layer.bv, layer.split_bv, split, mem_used);
+                }
+                if (layer.attn_k_norm) {
+                    prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split, mem_used);
                 }
             }
 
