@@ -1726,6 +1726,7 @@ static void ggml_backend_add_from_device(llama_context* ctx, ggml_backend_t back
 static bool is_model_split_supported(const llama_model & model) {
     static std::unordered_set<llm_arch> k_supported = {
         LLM_ARCH_LLAMA,
+        LLM_ARCH_QWEN3MOE,
         LLM_ARCH_GLM4_MOE,
     };
     auto it =  k_supported.find(model.arch);
