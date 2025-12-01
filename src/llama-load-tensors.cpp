@@ -2789,6 +2789,13 @@ static void prepare_split_tensors(int split_dim, ggml_context * ctx, ggml_tensor
 bool create_tensors_helper::create_tensors() {
     const auto tn = LLM_TN(model.arch);
     bool use_mmap_buffer = true;
+    if (ml.merge_qkv && model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        LLAMA_LOG_WARN("\n========================================================\n");
+        LLAMA_LOG_WARN("merge_qkv is not compatible with split model 'graph'\n");
+        LLAMA_LOG_WARN("  => turning off merge_qkv\n");
+        LLAMA_LOG_WARN("========================================================\n\n");
+        ml.merge_qkv = false;
+    }
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_REFACT:
