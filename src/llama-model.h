@@ -410,6 +410,7 @@ struct llama_model {
     ggml_backend_buffer_type_t default_buffer_type_offload(int device) const;
 
     std::vector<float> splits;
+    ggml_backend_buffer_type_t split_buft = nullptr;
 };
 
 struct llama_lora_weight {
