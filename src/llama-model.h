@@ -344,6 +344,7 @@ struct llama_model {
     struct ggml_tensor * output_norm_enc;
 
     llama_split_tensor split_output;
+    llama_split_tensor split_output_norm;
 
     std::vector<llama_layer> layers;
 

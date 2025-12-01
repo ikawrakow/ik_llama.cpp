@@ -1637,6 +1637,41 @@ static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml
     return cur;
 }
 
+static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml_tensor * cur, ggml_tensor * output, ggml_tensor * output_norm, const llm_build_cb & cb) {
+    // lm_head
+    if (output->extra) {
+        auto split_output = (ggml_split_tensor_t *)output->extra;
+        auto split_output_norm = output_norm && output_norm->extra ? (ggml_split_tensor_t *)output_norm->extra : nullptr;
+        std::vector<ggml_tensor *> o;
+        o.reserve(split_output->n_device);
+        for (int id = 0; id < split_output->n_device; ++id) {
+            auto split = split_output->splits[id];
+            if (!split) continue;
+            if (output_norm) {
+                auto the_norm = split_output_norm ? split_output_norm->splits[id] : output_norm;
+                auto cur_normed = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, the_norm, NULL, LLM_NORM_RMS, cb, -1);
+                cb(cur_normed, "output_normed", 1000*(id+1));
+                o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur_normed));
+            } else {
+                o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur));
+            }
+            cb(o.back(), "output", id);
+        }
+        if (o.size() == 1) cur = o.front();
+        cur = ggml_concat(ctx, o[0], o[1], 0);
+        for (int id = 2; id < int(o.size()); ++id) {
+            cur = ggml_concat(ctx, cur, o[id], 0);
+        }
+    } else {
+        if (output_norm) {
+            cur = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, output_norm, NULL, LLM_NORM_RMS, cb, -1);
+            cb(cur, "output_normed", -1);
+        }
+        cur = llm_build_context::llm_build_lora_mm(lctx, ctx, output, cur);
+    }
+    return cur;
+}
+
 ggml_cgraph * llm_build_context::build_llama() {
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(), false);
 
@@ -1826,11 +1861,8 @@ ggml_cgraph * llm_build_context::build_llama() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
-    cb(cur, "result_norm", -1);
-
     // lm_head
-    cur = build_output(lctx, ctx0, cur, model.output, cb);
+    cur = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
 
     // For Granite architecture
     if (hparams.f_logit_scale) {
@@ -3792,22 +3824,19 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
         struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
 
-        // MoE branch
-        cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "ffn_norm", il);
-
-        cur = llm_build_moe_ffn(ctx0, lctx, cur,
-                    model.layers[il].ffn_gate_inp,
-                    model.layers[il].ffn_up_exps,
-                    model.layers[il].ffn_gate_exps,
-                    model.layers[il].ffn_down_exps,
-                    nullptr,
-                    n_expert, n_expert_used,
-                    LLM_FFN_SILU, true,
-                    false, 0.0,
-                    LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    cb, il, gf);
-        cb(cur, "ffn_moe_out", il);
+        cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
+                model.layers[il].ffn_gate_inp,  nullptr,
+                model.layers[il].ffn_up_exps,   nullptr,
+                model.layers[il].ffn_gate_exps, nullptr,
+                model.layers[il].ffn_down_exps, nullptr,
+                model.layers[il].ffn_exp_probs_b,
+                nullptr,  nullptr, // we don't have shared expert biases?
+                nullptr,  nullptr,
+                nullptr,  nullptr,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, true, false, 0.0f,
+                LLM_EXPERT_GATING_FUNC_SOFTMAX,
+                LLM_FFN_SILU, cb, il, gf);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
         cur = lctx.cvec.apply_to(ctx0, cur, il);
@@ -3819,11 +3848,7 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
-    cb(cur, "result_norm", -1);
-
-    // lm_head
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cur = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
@@ -6777,12 +6802,8 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
 
     cur = inpL;
 
-    // final norm
-    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
-    cb(cur, "result_norm", -1);
-
     // lm head
-    cur = build_output(lctx, ctx0, cur, model.output, cb);
+    cur = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
