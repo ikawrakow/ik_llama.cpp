@@ -108,6 +108,7 @@
 #include <mutex>
 #include <numeric>
 #include <set>
+#include <unordered_set>
 #include <sstream>
 #include <thread>
 #include <type_traits>
@@ -1723,6 +1724,15 @@ static void ggml_backend_add_from_device(llama_context* ctx, ggml_backend_t back
     }
 }
 
+static bool is_model_split_supported(const llama_model & model) {
+    static std::unordered_set<llm_arch> k_supported = {
+        LLM_ARCH_LLAMA,
+        LLM_ARCH_GLM4_MOE,
+    };
+    auto it =  k_supported.find(model.arch);
+    return it != k_supported.end();
+}
+
 // Returns false if cancelled by progress_callback
 static bool llm_load_tensors(
         llama_model_loader & ml,
@@ -1739,6 +1749,16 @@ static bool llm_load_tensors(
     model.t_start_us = ggml_time_us();
 
     auto & hparams = model.hparams;
+
+    if (split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        if (!is_model_split_supported(model)) {
+            LLAMA_LOG_WARN("\n=======================================================\n");
+            LLAMA_LOG_WARN("Split mode 'graph' is not supported for this model\n");
+            LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
+            LLAMA_LOG_WARN("=======================================================\n\n");
+            split_mode = LLAMA_SPLIT_MODE_LAYER;
+        }
+    }
 
     model.split_mode   = split_mode;
     model.main_gpu     = main_gpu;
