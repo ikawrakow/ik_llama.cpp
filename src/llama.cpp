@@ -461,18 +461,18 @@ static ggml_backend_buffer_type_t llama_default_buffer_type_offload(const llama_
     GGML_UNUSED(gpu);
 }
 
-static ggml_backend_buffer_type_t llama_default_buffer_type_split(const llama_model & model, int fallback_gpu, const float * tensor_split) {
+static ggml_backend_buffer_type_t llama_default_buffer_type_split(const llama_model & model, int fallback_gpu) {
     ggml_backend_buffer_type_t buft = nullptr;
 
 #ifdef GGML_USE_CUDA
     if (ggml_backend_cuda_get_device_count() > 1) {
-        buft = ggml_backend_cuda_split_buffer_type(tensor_split);
+        buft = ggml_backend_cuda_split_buffer_type(model.splits.data());
     }
 #endif
 
 #ifdef GGML_USE_SYCL
     if (ggml_backend_sycl_get_device_count() > 1) {
-        buft = ggml_backend_sycl_split_buffer_type(tensor_split);
+        buft = ggml_backend_sycl_split_buffer_type(model.splits.data());
     }
 #endif
 
@@ -481,7 +481,6 @@ static ggml_backend_buffer_type_t llama_default_buffer_type_split(const llama_mo
     }
     return buft;
 
-    GGML_UNUSED(tensor_split);
 }
 
 int llama_model::device_count() const {
@@ -560,7 +559,7 @@ bool llama_context::update_cache_copies() {
     int n_layer = model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
     if ((int)kv_self.k_l.size() != n_layer) return false;
     if (!(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer)) return false;
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
         for (int il = 0; il < n_layer; ++il) {
             auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
             auto vl = !kv_self.v_l.empty() && kv_self.v_l[il] ? (ggml_split_tensor_t *)kv_self.v_l[il]->extra : nullptr;
@@ -607,7 +606,7 @@ bool llama_context::update_cache_copies() {
 llama_context::llama_context(const llama_model & model)
     : model(model) , sampling(llama_n_vocab(&model)) , t_start_us(model.t_start_us) , t_load_us(model.t_load_us) {
     const auto & hparams = model.hparams;
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
         cache_copies.resize(2*model.splits.size()*hparams.n_layer);
     } else {
         cache_copies.resize(2*hparams.n_layer);
@@ -666,7 +665,7 @@ static bool llama_kv_cache_init(
     }
 
     bool split_cache   = false;
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.arch != LLM_ARCH_DEEPSEEK2 && offload) {
+    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.arch != LLM_ARCH_DEEPSEEK2 && offload) {
         cache.split_k_l.reserve(n_layer);
         cache.split_v_l.reserve(n_layer);
         split_cache = true;
@@ -1750,7 +1749,7 @@ static bool llm_load_tensors(
 
     auto & hparams = model.hparams;
 
-    if (split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+    if (split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) {
         if (!is_model_split_supported(model)) {
             LLAMA_LOG_WARN("\n=======================================================\n");
             LLAMA_LOG_WARN("Split mode 'graph' is not supported for this model\n");
@@ -1804,11 +1803,11 @@ static bool llm_load_tensors(
         model.splits = { 1.0f };
     }
 
+    int device_count = model.splits.size();
+    // assign the repeating layers to the devices according to the splits
+    int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
     if (split_mode == LLAMA_SPLIT_MODE_LAYER) {
 
-        int device_count = model.splits.size();
-        // assign the repeating layers to the devices according to the splits
-        int act_gpu_layers = std::min(n_gpu_layers, (int)n_layer + 1);
         for (int i = i_gpu_start; i < n_layer; ++i) {
             int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count, float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
             model.buft_layer[i] = llama_default_buffer_type_offload(model, model.devices[layer_gpu]);
@@ -1822,18 +1821,24 @@ static bool llm_load_tensors(
         }
     } else {
         ggml_backend_buffer_type_t split_buft;
-        if (split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
-            split_buft = llama_default_buffer_type_split(model, model.devices[main_gpu], model.splits.data());
+        if ((split_mode == LLAMA_SPLIT_MODE_GRAPH || split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
+            split_buft = llama_default_buffer_type_split(model, model.devices[main_gpu]);
+            model.split_buft = split_buft;
         } else {
             // LLAMA_SPLIT_MODE_NONE or LLAMA_SPLIT_MODE_LAYER in backends where it is not supported
             split_buft = llama_default_buffer_type_offload(model, model.devices[main_gpu]);
         }
+        auto buft_layer = llama_default_buffer_type_offload(model, model.devices[main_gpu]);
         // assign the repeating layers
         for (int i = i_gpu_start; i < n_layer; ++i) {
-            model.buft_layer[i] = {
-                split_buft,
-                llama_default_buffer_type_offload(model, model.devices[main_gpu])
-            };
+            if (split_mode == LLAMA_SPLIT_MODE_ATTN) {
+                int layer_gpu = std::upper_bound(model.splits.begin(), model.splits.begin() + device_count,
+                        float(i - i_gpu_start)/act_gpu_layers) - model.splits.begin();
+                model.buft_layer[i] = { split_buft, llama_default_buffer_type_offload(model, model.devices[layer_gpu]) };
+                printf("Layer %d: assigning buft_layer to GPU %d\n", i, layer_gpu);
+            } else {
+                model.buft_layer[i] = { split_buft, buft_layer };
+            }
         }
         // assign the output layer
         if (n_gpu_layers > n_layer) {
@@ -4476,8 +4481,8 @@ struct llama_context * llama_new_context_with_model(
             }
         }
 #elif defined(GGML_USE_VULKAN)
-        if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-            LLAMA_LOG_ERROR("%s: Row split not supported. Failed to initialize Vulkan backend\n", __func__);
+        if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH || model->split_mode == LLAMA_SPLIT_MODE_ATTN) {
+            LLAMA_LOG_ERROR("%s: split mode 'graph' or 'attn' not supported. Failed to initialize Vulkan backend\n", __func__);
             llama_free(ctx);
             return nullptr;
         }

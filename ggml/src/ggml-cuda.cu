@@ -2989,6 +2989,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 cgraph->nodes[i+2]->op == GGML_OP_FUSED_RMS_NORM &&
                 ggml_is_contiguous(dst->src[0]) &&
                 ggml_is_contiguous(dst->src[1]) &&
+                dst->src[0]->type == GGML_TYPE_F32 &&               // with split mode "attn" we can end up having f16
                 ggml_are_same_shape(dst->src[0], dst->src[1]) &&
                 dst == cgraph->nodes[i+1]->src[0] &&
                 ggml_is_contiguous(cgraph->nodes[i+1]->src[1]) &&
