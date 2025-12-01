@@ -247,17 +247,22 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
 #endif
 }
 
-static std::vector<int> create_split(int nr, int granularity, const std::vector<float> & splits) {
+static std::vector<int> create_split(int nr, int granularity, const std::vector<float> & splits, const std::vector<size_t> & mem_used) {
     GGML_ASSERT(nr % granularity == 0);
     GGML_ASSERT(!splits.empty());
     if (granularity < 0) return std::vector<int>(splits.size(), nr);
+    GGML_ASSERT(mem_used.size() == splits.size());
+    size_t tot_memory_used = 1;
+    for (auto & mem : mem_used) tot_memory_used += mem;
     int nchunk = nr / granularity;
     std::vector<int> result(splits.size());
     float last_split = 0;
     int sum = 0;
     for (int i = 0; i < (int)splits.size(); ++i) {
         float p = splits[i] - last_split;
+        p += (p - 1.f*mem_used[i]/tot_memory_used);
         result[i] = roundf(p*nchunk);
+        if (result[i] < 0) result[i] = 0;
         sum += result[i];
         last_split = splits[i];
     }
@@ -267,8 +272,10 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
         int ibest = -1;
         for (int i = 0; i < (int)splits.size(); ++i) {
             if (result[i] > 0) {
-                float n_want = (splits[i] - last_split)*nchunk;
+                float p = splits[i] - last_split;
+                float n_want = p*nchunk;
                 float err = std::abs(n_want - result[i] + 1);
+                //float err = std::abs(n_want - result[i] + 1) + std::abs(p - 1.f*mem_used[i]/tot_memory_used)*nchunk;
                 if (err < best_err) {
                     best_err = err; ibest = i;
                 }
@@ -284,8 +291,10 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
         float best_err = std::numeric_limits<float>::max();
         int ibest = -1;
         for (int i = 0; i < (int)splits.size(); ++i) {
-            float n_want = (splits[i] - last_split)*nchunk;
+            float p = splits[i] - last_split;
+            float n_want = p*nchunk;
             float err = std::abs(n_want - result[i] - 1);
+            //float err = std::abs(n_want - result[i] - 1) + std::abs(p - 1.f*mem_used[i]/tot_memory_used)*nchunk;
             if (err < best_err) {
                 best_err = err; ibest = i;
             }
@@ -2938,11 +2947,11 @@ bool create_tensors_helper::create_tensors() {
             auto & layer = model.layers[il];
             auto ctx_split = ctx_for_layer_split(il);
             if (layer.attn_norm) {
-                auto split = create_split(ggml_nrows(layer.attn_norm), -1, model.splits);
+                auto split = create_split(ggml_nrows(layer.attn_norm), -1, model.splits, mem_used);
                 prepare_split_tensors(-1, ctx_split, layer.attn_norm, layer.split_attn_norm, split, mem_used);
             }
             if (layer.rope_freqs) {
-                auto split = create_split(ggml_nrows(layer.rope_freqs), -1, model.splits);
+                auto split = create_split(ggml_nrows(layer.rope_freqs), -1, model.splits, mem_used);
                 prepare_split_tensors(-1, ctx_split, layer.rope_freqs, layer.split_rope_freqs, split, mem_used);
             }
             if (layer.wo && layer.wq && layer.wk && layer.wv) {
@@ -2952,7 +2961,7 @@ bool create_tensors_helper::create_tensors() {
                     if (tt.blck_size > attn_granularity) attn_granularity = tt.blck_size;
                 }
                 GGML_ASSERT(attn_granularity % hparams.n_embd_head_k == 0);
-                auto split = create_split(layer.wo->ne[0], attn_granularity, model.splits);
+                auto split = create_split(layer.wo->ne[0], attn_granularity, model.splits, mem_used);
                 prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split, mem_used);
                 prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split, mem_used);
                 if (layer.bo) {
@@ -2980,7 +2989,7 @@ bool create_tensors_helper::create_tensors() {
 
             if (layer.ffn_norm) {
                 if (auto it = split_tensors.find(layer.ffn_norm); it != split_tensors.end()) {
-                    auto split = create_split(ggml_nrows(layer.ffn_norm), -1, model.splits);
+                    auto split = create_split(ggml_nrows(layer.ffn_norm), -1, model.splits, mem_used);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_norm, layer.split_ffn_norm, split, mem_used);
                 }
             }
@@ -2995,7 +3004,7 @@ bool create_tensors_helper::create_tensors() {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
-                    auto split = create_split(layer.ffn_down->ne[0], ffn_granularity, model.splits);
+                    auto split = create_split(layer.ffn_down->ne[0], ffn_granularity, model.splits, mem_used);
                     prepare_split_tensors(0, ctx_split, layer.ffn_down, layer.split_ffn_down, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up,   layer.split_ffn_up,   split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_gate, layer.split_ffn_gate, split, mem_used);
@@ -3014,7 +3023,7 @@ bool create_tensors_helper::create_tensors() {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
-                    auto split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, model.splits);
+                    auto split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, model.splits, mem_used);
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_shexp, layer.split_ffn_down_shexp, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_gate_shexp, layer.split_ffn_gate_shexp, split, mem_used);
@@ -3033,7 +3042,8 @@ bool create_tensors_helper::create_tensors() {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_exps->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
-                    auto split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, model.splits);
+                    auto split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, model.splits, mem_used);
+                    //printf("split(%2d):", il); for (auto & s : split) printf(" %d", s); printf("\n");
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, split, mem_used);
@@ -3042,13 +3052,13 @@ bool create_tensors_helper::create_tensors() {
 
             if (layer.ffn_gate_inp) {
                 if (auto it = split_tensors.find(layer.ffn_gate_inp); it != split_tensors.end()) {
-                    auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, model.splits);
+                    auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, model.splits, mem_used);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp, layer.split_ffn_gate_inp, shared_split, mem_used);
                 }
             }
             if (layer.ffn_exp_probs_b) {
                 if (auto it = split_tensors.find(layer.ffn_exp_probs_b); it != split_tensors.end()) {
-                    auto shared_split = create_split(ggml_nrows(layer.ffn_exp_probs_b), -1, model.splits);
+                    auto shared_split = create_split(ggml_nrows(layer.ffn_exp_probs_b), -1, model.splits, mem_used);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_exp_probs_b, layer.split_ffn_exp_probs_b, shared_split, mem_used);
                 }
             }
@@ -3060,7 +3070,7 @@ bool create_tensors_helper::create_tensors() {
                     LLAMA_LOG_INFO("%s: not splitting output tensor becausee buffer is host\n", __func__);
                 } else {
                     auto ctx_split = ctx_map[model.buft_output.buft_matrix];
-                    auto split = create_split(model.output->ne[1], 16, model.splits);
+                    auto split = create_split(model.output->ne[1], 16, model.splits, mem_used);
                     prepare_split_tensors(1, ctx_split, model.output, model.split_output, split, mem_used);
                     if (auto it = split_tensors.find(model.output_norm); it != split_tensors.end() && !ggml_backend_buft_is_host(model.buft_output.buft_matrix)) {
                         auto ctx_split = ctx_map[model.buft_output.buft_matrix];
