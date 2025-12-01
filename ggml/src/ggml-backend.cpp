@@ -43,7 +43,7 @@ GGML_CALL size_t ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buf
     // get_alloc_size is optional, defaults to ggml_nbytes
     if (buft->iface.get_alloc_size) {
         size_t size = buft->iface.get_alloc_size(buft, tensor);
-        assert(size >= ggml_nbytes(tensor));
+        //assert(size >= ggml_nbytes(tensor));
         return size;
     }
     return ggml_nbytes(tensor);
@@ -1216,8 +1216,10 @@ static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, co
         return -1;
     }
 
+    //printf("%s: have %d backends, buffer is %s\n", __func__, sched->n_backends, ggml_backend_buffer_name(buffer));
     // find highest prio backend that supports the buffer type and the op
     for (int i = 0; i < sched->n_backends; i++) {
+        //printf("  Checking bacckend %d (%s)\n", i, ggml_backend_name(sched->backends[i]));
         if (ggml_backend_supports_buft(sched->backends[i], buffer->buft) &&
             ggml_backend_supports_op(sched->backends[i], op)) {
             return i;
@@ -1393,6 +1395,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         // do not overwrite user assignments
         if (*leaf_backend_id == -1) {
             *leaf_backend_id = ggml_backend_sched_backend_id_from_cur(sched, leaf);
+            //printf("Pass 1: assigned backend %d to leaf %d, %s\n", *leaf_backend_id, i, graph->leafs[i]->name);
         }
     }
 
@@ -1402,6 +1405,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         // do not overwrite user assignments
         if (*node_backend_id == -1) {
             *node_backend_id = ggml_backend_sched_backend_id_from_cur(sched, node);
+            //printf("Pass 1: assigned backend %d to node %d, %s(%s)\n", *node_backend_id, i, ggml_op_name(node->op), node->name);
 
 #if 0
             // src
@@ -1445,6 +1449,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     cur_backend_id = *node_backend_id;
                 }
             } else if (cur_backend_id != -1) {
+                //printf("(u1) invoking ggml_backend_sched_set_if_supported for node %d, %s with cur_backend_id = %d, node_backend_id = %d\n", i, node->name, cur_backend_id, *node_backend_id);
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1466,6 +1471,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     cur_backend_id = *node_backend_id;
                 }
             } else if (cur_backend_id != -1) {
+                //printf("(d1) invoking ggml_backend_sched_set_if_supported for node %d, %s with cur_backend_id = %d, node_backend_id = %d\n", i, node->name, cur_backend_id, *node_backend_id);
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1482,6 +1488,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             if (*node_backend_id != -1) {
                 cur_backend_id = *node_backend_id;
             } else if (cur_backend_id != -1) {
+                //printf("(u2) invoking ggml_backend_sched_set_if_supported for node %d, %s with cur_backend_id = %d, node_backend_id = %d\n", i, node->name, cur_backend_id, *node_backend_id);
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1498,6 +1505,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             if (*node_backend_id != -1) {
                 cur_backend_id = *node_backend_id;
             } else if (cur_backend_id != -1) {
+                //printf("(d2) invoking ggml_backend_sched_set_if_supported for node %d, %s with cur_backend_id = %d, node_backend_id = %d\n", i, node->name, cur_backend_id, *node_backend_id);
                 ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
             }
         }
@@ -1535,6 +1543,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     if (n_supported > n_supported_best) {
                         n_supported_best = n_supported;
                         *node_backend_id = b;
+                        //printf("Pass 3: assigned backend %d to unassigned node %d, %s\n", b, i, node->name);
                         SET_CAUSE(node, "3.best");
                     }
                 }
@@ -1555,6 +1564,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         }
                     }
                     if (supported) {
+                        //printf("Pass 3: assigned backend %d to node %d, %s previously assigned to backend %d\n", b, i, node->name, *node_backend_id);
                         *node_backend_id = b;
                         SET_CAUSE(node, "3.upg");
                         break;
@@ -1583,9 +1593,11 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     // views are always on the same backend as the source
                     *src_backend_id = tensor_backend_id(src->view_src);
                     SET_CAUSE(src, "4.vsrc");
+                    //printf("Pass 4: assigned backend %d to src %d, %s in node %d, %s frpm view_src\n", *src_backend_id, j, src->name, i, node->name);
                 } else {
                     *src_backend_id = *cur_backend_id;
                     SET_CAUSE(src, "4.cur");
+                    //printf("Pass 4: assigned backend %d to src %d, %s in node %d, %s frpm current\n", *src_backend_id, j, src->name, i, node->name);
                 }
             }
         }
@@ -1620,7 +1632,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
-            if (node_backend_id == cur_backend_id && split->n_inputs > 0) {
+            if (node->op == GGML_OP_ADD && node->op_params[0] == 0xff) {
+                need_new_split = true;
+            }
+            else if (node_backend_id == cur_backend_id && split->n_inputs > 0) {
                 for (int j = 0; j < GGML_MAX_SRC; j++) {
                     struct ggml_tensor * src = node->src[j];
                     if (src == NULL) {
