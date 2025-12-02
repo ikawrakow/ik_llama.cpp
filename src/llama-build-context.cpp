@@ -688,12 +688,6 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             cur = ggml_add(ctx, cur, ffn[id]);
             cb(cur, "combine_ffn", il);
         }
-        if (ffn.size() > 2) {
-            cur->op_params[0] = 0xff;
-        }
-        //if (cur->type != GGML_TYPE_F32) {
-        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-        //}
 
         return cur;
     }
