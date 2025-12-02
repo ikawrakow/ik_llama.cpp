@@ -1109,17 +1109,18 @@ llm_expert_gating_func_type   gating_op,
                     gating_op, cb, il, graph);
         cb(routed_out, "routed_out", il);
         ggml_build_forward_expand(graph, routed_out);
-        //printf("Using non-split llm_build_moe_ffn for layer %d. n_before = %d, n_now = %d\n", il, n_before, graph->n_nodes);
 
         if (up_shexp && gate_shexp && down_shexp) {
             if (split_up_shexp) {
-                //printf("Using split ffn for shared experts in layer %d\n", il);
-                std::vector<ggml_tensor *> results(split_up_shexp->n_device);
+                std::vector<ggml_tensor *> results; results.reserve(split_up_shexp->n_device);
                 GGML_ASSERT(!split_up_b_shexp   || split_up_b_shexp->n_device   == split_up_shexp->n_device);
                 GGML_ASSERT(!split_gate_b_shexp || split_gate_b_shexp->n_device == split_up_shexp->n_device);
                 GGML_ASSERT(!split_down_b_shexp || split_down_b_shexp->n_device == split_up_shexp->n_device);
                 for (int id = 0; id < split_up_shexp->n_device; ++id) {
                     int il_cb = 1000*id + il;
+                    GGML_ASSERT((split_up_shexp->splits[id] && split_gate_shexp->splits[id] && split_down_shexp->splits[id]) ||
+                                (!split_up_shexp->splits[id] && !split_gate_shexp->splits[id] && !split_down_shexp->splits[id]));
+                    if (!split_up_shexp->splits[id]) continue;
                     auto the_ffn_norm = ffn_norm ? ffn_norm->extra ? ((ggml_split_tensor_t *)ffn_norm->extra)->splits[id] : ffn_norm : nullptr;
                     auto shared_out = llm_build_ffn(ctx, lctx, the_ffn_norm, input,
                             split_up_shexp->splits[id],   split_up_b_shexp   ? split_up_b_shexp->splits[id]   : nullptr, nullptr,
@@ -1130,17 +1131,19 @@ llm_expert_gating_func_type   gating_op,
                     if (shared_out->ne[1] > 32) {
                         shared_out = ggml_cast(ctx, shared_out, GGML_TYPE_F16);
                     }
-                    results[id] = shared_out;
+                    results.push_back(shared_out);
                 }
-                cur = ggml_add(ctx, results[0], results[1]);
-                if (cur->ne[1] > 32) {
-                    // Force a graph split
+                GGML_ASSERT(!results.empty());
+                if (results.size() == 1) {
+                    cur = results.front();
+                } else {
+                    cur = ggml_add(ctx, results[0], results[1]);
                     cur->op_params[0] = 0xff;
-                }
-                cb(cur, "ffn_shared_combined", il);
-                for (int id = 2; id < int(results.size()); ++id) {
-                    cur = ggml_add(ctx, cur, results[id]);
                     cb(cur, "ffn_shared_combined", il);
+                    for (int id = 2; id < int(results.size()); ++id) {
+                        cur = ggml_add(ctx, cur, results[id]);
+                        cb(cur, "ffn_shared_combined", il);
+                    }
                 }
                 if (routed_out->ne[1] > 32) {
                     auto routed_out_f16 = ggml_cast(ctx, routed_out, GGML_TYPE_F16);
@@ -1150,7 +1153,6 @@ llm_expert_gating_func_type   gating_op,
                 }
                 cb(cur, "ffn_out", il);
             } else {
-                //printf("Using non-split ffn for shared experts in layer %d\n", il);
                 auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
                         up_shexp,   up_b_shexp,   nullptr,
                         gate_shexp, gate_b_shexp, nullptr,
