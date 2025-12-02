@@ -1133,7 +1133,10 @@ llm_expert_gating_func_type   gating_op,
                     results[id] = shared_out;
                 }
                 cur = ggml_add(ctx, results[0], results[1]);
-                cur->op_params[0] = 0xff;
+                if (cur->ne[1] > 32) {
+                    // Force a graph split
+                    cur->op_params[0] = 0xff;
+                }
                 cb(cur, "ffn_shared_combined", il);
                 for (int id = 2; id < int(results.size()); ++id) {
                     cur = ggml_add(ctx, cur, results[id]);
