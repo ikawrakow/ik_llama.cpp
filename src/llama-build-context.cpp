@@ -653,11 +653,12 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             auto split_u = u->splits[id];
             auto split_g = g->splits[id];
             auto split_d = d->splits[id];
-            GGML_ASSERT((!split_u && !split_g && split_d) || (split_u && split_g && split_d));
+            GGML_ASSERT((!split_u && !split_g && !split_d) || (split_u && split_g && split_d));
             if (!split_u) continue;
             auto cur = input;
             if (ffn_norm && ffn_norm->extra) {
                 auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
+                GGML_ASSERT(norm->splits[id]);
                 cur = llm_build_norm(ctx, input, lctx.model.hparams, norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
                 cb(cur, "ffn_inp_normed", il_cb);
             }
@@ -1088,6 +1089,7 @@ llm_expert_gating_func_type   gating_op,
         auto cur = input;
         if (ffn_norm) {
             auto the_ffn_norm = ffn_norm->extra ? ((ggml_split_tensor_t *)ffn_norm->extra)->splits[lctx.model.main_gpu] : ffn_norm;
+            GGML_ASSERT(the_ffn_norm);
             cur = llm_build_norm(ctx, input, lctx.model.hparams, the_ffn_norm, nullptr, LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_inp_normed", il);
         }
@@ -1109,17 +1111,18 @@ llm_expert_gating_func_type   gating_op,
                     gating_op, cb, il, graph);
         cb(routed_out, "routed_out", il);
         ggml_build_forward_expand(graph, routed_out);
-        //printf("Using non-split llm_build_moe_ffn for layer %d. n_before = %d, n_now = %d\n", il, n_before, graph->n_nodes);
 
         if (up_shexp && gate_shexp && down_shexp) {
             if (split_up_shexp) {
-                //printf("Using split ffn for shared experts in layer %d\n", il);
-                std::vector<ggml_tensor *> results(split_up_shexp->n_device);
+                std::vector<ggml_tensor *> results; results.reserve(split_up_shexp->n_device);
                 GGML_ASSERT(!split_up_b_shexp   || split_up_b_shexp->n_device   == split_up_shexp->n_device);
                 GGML_ASSERT(!split_gate_b_shexp || split_gate_b_shexp->n_device == split_up_shexp->n_device);
                 GGML_ASSERT(!split_down_b_shexp || split_down_b_shexp->n_device == split_up_shexp->n_device);
                 for (int id = 0; id < split_up_shexp->n_device; ++id) {
                     int il_cb = 1000*id + il;
+                    GGML_ASSERT((split_up_shexp->splits[id] && split_gate_shexp->splits[id] && split_down_shexp->splits[id]) ||
+                                (!split_up_shexp->splits[id] && !split_gate_shexp->splits[id] && !split_down_shexp->splits[id]));
+                    if (!split_up_shexp->splits[id]) continue;
                     auto the_ffn_norm = ffn_norm ? ffn_norm->extra ? ((ggml_split_tensor_t *)ffn_norm->extra)->splits[id] : ffn_norm : nullptr;
                     auto shared_out = llm_build_ffn(ctx, lctx, the_ffn_norm, input,
                             split_up_shexp->splits[id],   split_up_b_shexp   ? split_up_b_shexp->splits[id]   : nullptr, nullptr,
@@ -1130,17 +1133,19 @@ llm_expert_gating_func_type   gating_op,
                     if (shared_out->ne[1] > 32) {
                         shared_out = ggml_cast(ctx, shared_out, GGML_TYPE_F16);
                     }
-                    results[id] = shared_out;
+                    results.push_back(shared_out);
                 }
-                cur = ggml_add(ctx, results[0], results[1]);
-                if (cur->ne[1] > 32) {
-                    // Force a graph split
+                GGML_ASSERT(!results.empty());
+                if (results.size() == 1) {
+                    cur = results.front();
+                } else {
+                    cur = ggml_add(ctx, results[0], results[1]);
                     cur->op_params[0] = 0xff;
-                }
-                cb(cur, "ffn_shared_combined", il);
-                for (int id = 2; id < int(results.size()); ++id) {
-                    cur = ggml_add(ctx, cur, results[id]);
                     cb(cur, "ffn_shared_combined", il);
+                    for (int id = 2; id < int(results.size()); ++id) {
+                        cur = ggml_add(ctx, cur, results[id]);
+                        cb(cur, "ffn_shared_combined", il);
+                    }
                 }
                 if (routed_out->ne[1] > 32) {
                     auto routed_out_f16 = ggml_cast(ctx, routed_out, GGML_TYPE_F16);
@@ -1150,7 +1155,6 @@ llm_expert_gating_func_type   gating_op,
                 }
                 cb(cur, "ffn_out", il);
             } else {
-                //printf("Using non-split ffn for shared experts in layer %d\n", il);
                 auto shared_out = llm_build_ffn(ctx, lctx, nullptr, cur,
                         up_shexp,   up_b_shexp,   nullptr,
                         gate_shexp, gate_b_shexp, nullptr,
@@ -1170,7 +1174,7 @@ llm_expert_gating_func_type   gating_op,
     }
     GGML_ASSERT(split_up_exps && split_gate_exps && split_down_exps);
     GGML_ASSERT(split_up_exps->n_device == split_gate_exps->n_device && split_up_exps->n_device == split_down_exps->n_device);
-    std::vector<ggml_tensor *> results(split_up_exps->n_device);
+    std::vector<ggml_tensor *> results; results.reserve(split_up_exps->n_device);
     GGML_ASSERT((!split_up_shexp && !split_gate_shexp && !split_down_shexp) ||
                 ( split_up_shexp &&  split_gate_shexp &&  split_down_shexp));
     auto split_gate_inp = (ggml_split_tensor_t *)gate_inp->extra;
@@ -1178,6 +1182,9 @@ llm_expert_gating_func_type   gating_op,
     auto split_exp_probs_b = exp_probs_b ? (ggml_split_tensor_t *)exp_probs_b->extra : nullptr;
     GGML_ASSERT(!split_exp_probs_b || split_exp_probs_b->n_device == split_up_exps->n_device);
     for (int id = 0; id < split_up_exps->n_device; ++id) {
+        GGML_ASSERT((split_up_exps->splits[id] && split_gate_exps->splits[id] && split_down_exps->splits[id]) ||
+                    (!split_up_exps->splits[id] && !split_gate_exps->splits[id] && !split_down_exps->splits[id]));
+        if (!split_up_exps->splits[id]) continue;
         int il_cb = 1000*(id + 1) + il;
         auto cur = input;
         if (ffn_norm) {
@@ -1220,8 +1227,9 @@ llm_expert_gating_func_type   gating_op,
             cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
             cb(cur, "ffn_out_f16", il_cb);
         }
-        results[id] = cur;
+        results.push_back(cur);
     }
+    GGML_ASSERT(!results.empty());
     if (results.size() == 1) return results.front();
 
     auto cur = ggml_add(ctx, results[0], results[1]);
@@ -1660,10 +1668,15 @@ static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml
             }
             cb(o.back(), "output", id);
         }
-        if (o.size() == 1) cur = o.front();
-        cur = ggml_concat(ctx, o[0], o[1], 0);
-        for (int id = 2; id < int(o.size()); ++id) {
-            cur = ggml_concat(ctx, cur, o[id], 0);
+        GGML_ASSERT(!o.empty());
+        if (o.size() == 1) {
+            cur = o.front();
+        }
+        else {
+            cur = ggml_concat(ctx, o[0], o[1], 0);
+            for (int id = 2; id < int(o.size()); ++id) {
+                cur = ggml_concat(ctx, cur, o[id], 0);
+            }
         }
     } else {
         if (output_norm) {
@@ -1721,7 +1734,7 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         // self-attention
         if (use_rope) {
-            cur = build_std_attention(gf, inpL, inp_pos, nullptr, this_KQ_mask, nullptr, kq_scale, hparams.f_attention_scale, this_n_swa, il);
+            cur = build_std_attention(gf, inpL, inp_pos, nullptr, this_KQ_mask, nullptr, nullptr, kq_scale, hparams.f_attention_scale, this_n_swa, il);
         }
         else {
 
@@ -1873,6 +1886,96 @@ ggml_cgraph * llm_build_context::build_llama() {
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
     }
 
+    cb(cur, "result_output", -1);
+
+    ggml_build_forward_expand(gf, cur);
+
+    return gf;
+}
+
+ggml_cgraph * llm_build_context::build_mistral3() {
+    auto gf = ggml_new_graph_custom(ctx0, model.max_nodes(), false);
+    const int64_t n_embd_head = hparams.n_embd_head_v;
+
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+    GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+    ggml_tensor * cur;
+    ggml_tensor * inpL;
+
+    inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+
+    // inp_pos - contains the positions
+    struct ggml_tensor * inp_pos = build_inp_pos();
+
+    // (optional) temperature tuning
+    ggml_tensor * inp_attn_scale = nullptr;
+    if (hparams.f_attn_temp_scale != 0.0f) {
+        inp_attn_scale = build_input_scale(n_tokens);
+    }
+
+    ggml_tensor * KQ_mask = build_inp_KQ_mask();
+
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    //const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+    const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : 1.f;
+
+    for (int il = 0; il < n_layer; ++il) {
+        ggml_tensor * inpSA = inpL;
+
+        auto rope_factors = build_rope_factors(il);
+
+        cur = build_std_attention(gf, inpL, inp_pos, rope_factors, KQ_mask, nullptr, inp_attn_scale, kq_scale, hparams.f_attention_scale, 0, il);
+
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cb(cur, "last_attn", il);
+            cb(inpSA, "last_ffn_inp", il);
+        }
+
+        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+        cb(ffn_inp, "ffn_inp", il);
+
+        // feed-forward network (non-MoE)
+        if (model.layers[il].ffn_gate_inp == nullptr) {
+            // non-MoE
+            cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
+                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   nullptr,
+                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, nullptr,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, nullptr,
+                    NULL,
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf);
+            cb(cur, "ffn_out", il);
+        } else {
+            // MoE branch
+            cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
+                    model.layers[il].ffn_gate_inp,  nullptr,
+                    model.layers[il].ffn_up_exps,   nullptr,
+                    model.layers[il].ffn_gate_exps, nullptr,
+                    model.layers[il].ffn_down_exps, nullptr,
+                    model.layers[il].ffn_exp_probs_b,
+                    nullptr,  nullptr, // we don't have shared experts
+                    nullptr,  nullptr,
+                    nullptr,  nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, true, false, 0.0f,
+                    LLM_EXPERT_GATING_FUNC_SOFTMAX,
+                    LLM_FFN_SILU, cb, il, gf);
+        }
+        cur = ggml_add(ctx0, cur, ffn_inp);
+        cb(cur, "ffn_out", il);
+
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        cb(cur, "l_out", il);
+
+        // input for next layer
+        inpL = cur;
+    }
+    cur = inpL;
+
+    cur = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
@@ -3815,7 +3918,7 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
         //cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
         //cb(cur, "attn_norm", il);
 
-        cur = build_std_attention(gf, inpL, inp_pos, nullptr, KQ_mask, nullptr, 1.0f/sqrtf(float(n_embd_head)), 0.0f, 0, il);
+        cur = build_std_attention(gf, inpL, inp_pos, nullptr, KQ_mask, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), 0.0f, 0, il);
 
         if (il == n_layer - 1) {
             // skip computing output for unused tokens
@@ -6694,7 +6797,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
 
         // self-attention
         if (rope_cache == nullptr) {
-            cur = build_std_attention(gf, inpL, inp_pos, nullptr, KQ_mask, nullptr, kq_scale, 0.0f, 0, il);
+            cur = build_std_attention(gf, inpL, inp_pos, nullptr, KQ_mask, nullptr, nullptr, kq_scale, 0.0f, 0, il);
         } else {
             // Pre-attention norm
             cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
@@ -9173,6 +9276,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_smollm3();
             } break;
+        case LLM_ARCH_MISTRAL3:
+            {
+                result = llm.build_mistral3();
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -9193,7 +9300,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
 }
 
 ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tensor * input, ggml_tensor * inp_pos, ggml_tensor * rope_factors_in,
-        ggml_tensor * KQ_mask, ggml_tensor * sinks, float KQ_scale, float f_attn_scale, int n_swa, int il) {
+        ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale, int n_swa, int il) {
     if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&
          model.layers[il].wq->extra && model.layers[il].wk->extra && model.layers[il].wv->extra && model.layers[il].wo->extra) {
         if (kv_self.k_l[il]->extra && kv_self.v_l[il]->extra) {
@@ -9264,6 +9371,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(Qcur, "Qcur", il_cb);
                 cb(Kcur, "Kcur", il_cb);
+                if (inp_attn_scale) {
+                    Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
+                    cb(Qcur, "Qcur_temp_scaled", il_cb);
+                }
                 ggml_build_forward_expand(gf, Qcur);
                 ggml_build_forward_expand(gf, Kcur);
                 ggml_build_forward_expand(gf, Vcur);
@@ -9357,6 +9468,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 ggml_build_forward_expand(gf, cur);
                 attn.push_back(cur);
             }
+            GGML_ASSERT(!attn.empty());
             if (attn.size() == 1) return attn.front();
             auto cur = ggml_add(ctx0, attn[0], attn[1]);
             cb(cur, "combine_attn", il);
@@ -9365,10 +9477,6 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 cur = ggml_add(ctx0, cur, attn[id]);
                 cb(cur, "combine_attn", il);
             }
-            // TODO: for more than 2 GPUs, do we need to add another forced graph split?
-            //if (attn.size() > 2) {
-            //    cur->op_params[0] = 0xff;
-            //}
             return cur;
         }
     }
@@ -9391,6 +9499,11 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 ext_factor, attn_factor, beta_fast, beta_slow);
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
+
+    if (inp_attn_scale) {
+        Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
+        cb(Qcur, "Qcur_temp_scaled", il);
+    }
 
     cur = llm_build_kv(ctx0, lctx, kv_self, gf,
             model.layers[il].wo, model.layers[il].bo,

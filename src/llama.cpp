@@ -1728,6 +1728,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_LLAMA,
         LLM_ARCH_QWEN3MOE,
         LLM_ARCH_GLM4_MOE,
+        LLM_ARCH_MISTRAL3,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -4833,6 +4834,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
         case LLM_ARCH_SMOLLM3:
+        case LLM_ARCH_MISTRAL3:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
