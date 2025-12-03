@@ -68,15 +68,6 @@ bool server_context::load_model(const gpt_params& params_) {
     add_bos_token = llama_should_add_bos_token(model);
     has_eos_token = llama_add_eos_token(model) != 1;
 
-    chat_templates = common_chat_templates_init(model, params_base.chat_template);
-    try {
-        common_chat_format_example(chat_templates.get(), params_base.use_jinja, {});
-    }
-    catch (const std::exception& e) {
-        LOG_WARNING("%s: The chat template that comes with this model is not yet supported, falling back to chatml. This may cause the model to output suboptimal responses\n", __func__);
-        chat_templates = common_chat_templates_init(model, "chatml");
-    }
-
     bool has_draft_model = !params_base.speculative.model.empty() || !params_base.speculative.params.empty();
     std::string& mmproj_path = params_base.mmproj.path;
     if (!mmproj_path.empty()) {
@@ -293,22 +284,43 @@ void server_context::init() {
         LLAMA_LOG_INFO("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
     }
 
-    // thinking is enabled if:
-    // 1. It's not explicitly disabled (reasoning_budget == 0)
-    // 2. The chat template supports it
-    const bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
-    //LLAMA_LOG_INFO("Enable thinking? %d\n", enable_thinking);
+    // populate chat template params
+    {
+        common_chat_templates_ptr chat_templates;
 
-    oai_parser_opt = {
-        /* use_jinja             */ params_base.use_jinja,
-        /* prefill_assistant     */ params_base.prefill_assistant,
-        /* reasoning_format      */ params_base.reasoning_format,
-        /* chat_template_kwargs  */ params_base.default_template_kwargs,
-        /* common_chat_templates */ chat_templates.get(),
-        /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
-        /* allow_audio           */ mctx ? mtmd_support_audio(mctx) : false,
-        /* enable_thinking       */ enable_thinking,
-    };
+        try {
+            chat_templates = common_chat_templates_init(model, params_base.chat_template);
+
+            LOG_INF("%s: chat template, example_format: '%s'\n", __func__,
+                common_chat_format_example(chat_templates.get(), params_base.use_jinja, params_base.default_template_kwargs).c_str());
+
+        }
+        catch (const std::exception & e) {
+            SRV_ERR("%s: chat template parsing error: %s\n", __func__, e.what());
+            SRV_ERR("%s: please consider disabling jinja via --no-jinja, or use a custom chat template via --chat-template\n", __func__);
+            SRV_ERR("%s: for example: --no-jinja --chat-template chatml\n", __func__);
+            return;
+        }
+
+        // thinking is enabled if:
+        // 1. It's not explicitly disabled (reasoning_budget == 0)
+        // 2. The chat template supports it
+        const bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
+        SRV_INF("%s: chat template, thinking = %d\n", __func__, enable_thinking);
+
+        chat_params = {
+            /* use_jinja             */ params_base.use_jinja,
+            /* prefill_assistant     */ params_base.prefill_assistant,
+            /* reasoning_format      */ params_base.reasoning_format,
+            /* chat_template_kwargs  */ params_base.default_template_kwargs,
+            /* tmpls                 */ std::move(chat_templates),
+            /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
+            /* allow_audio           */ mctx ? mtmd_support_audio(mctx) : false,
+            /* enable_thinking       */ enable_thinking,
+           // /* media_path            */ params_base.media_path,
+        };
+    }
+
 }
 
 
@@ -1061,7 +1073,9 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         slot.params.oaicompat_chat_syntax.reasoning_format = reasoning_format;
         slot.params.oaicompat_chat_syntax.reasoning_in_content = slot.params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
         slot.params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
-
+        if (data.contains("chat_parser")) {
+            slot.params.oaicompat_chat_syntax.parser.load(data.at("chat_parser").get<std::string>());
+        }
         slot.params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
     }
     {

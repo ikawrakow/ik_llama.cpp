@@ -8047,7 +8047,6 @@ static int32_t llama_chat_apply_template_internal(
 }
 
 int32_t llama_chat_apply_template(
-                const struct llama_model * model,
                               const char * tmpl,
          const struct llama_chat_message * chat,
                                   size_t   n_msg,
@@ -8055,19 +8054,19 @@ int32_t llama_chat_apply_template(
                                     char * buf,
                                  int32_t   length) {
     std::string curr_tmpl(tmpl == nullptr ? "" : tmpl);
-    if (tmpl == nullptr) {
-        GGML_ASSERT(model != nullptr);
+    //if (tmpl == nullptr) {
+    //    GGML_ASSERT(model != nullptr);
 
-        // load template from model, if available
-        const auto & it = model->gguf_kv.find("tokenizer.chat_template");
-        if (it != model->gguf_kv.end() && it->second.size() > 0) {
-            curr_tmpl = it->second;
-        }
-        else {
-            // worst case: there is no information about template, we will use chatml by default
-            curr_tmpl = "chatml";  // see llama_chat_apply_template_internal
-        }
-    }
+    //    // load template from model, if available
+    //    const auto & it = model->gguf_kv.find("tokenizer.chat_template");
+    //    if (it != model->gguf_kv.end() && it->second.size() > 0) {
+    //        curr_tmpl = it->second;
+    //    }
+    //    else {
+    //        // worst case: there is no information about template, we will use chatml by default
+    //        curr_tmpl = "chatml";  // see llama_chat_apply_template_internal
+    //    }
+    //}
 
     // format the chat to string
     std::vector<const llama_chat_message *> chat_vec;
