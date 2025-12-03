@@ -276,6 +276,7 @@ struct gpt_params {
     bool validate_quants   = false; // if true, check for NaNs while loading the model
     bool only_active_exps  = true;  // if true, offload only active experts (relevant only for hybrid CPU/GPU)
     bool merge_qkv         = false; // if true, merge separate Q, K, V tensors into a single, contiguous tensor
+    bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V

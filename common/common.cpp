@@ -1394,6 +1394,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.merge_qkv = true;
         return true;
     }
+    if (arg == "-khad" || arg == "--k-cache-hadamard") {
+        params.k_cache_hadamard = true;
+        return true;
+    }
     if (arg == "--numa") {
         CHECK_ARG
         std::string value(argv[i]);
@@ -2074,6 +2078,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-gr, --graph-reuse",            "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
+    options.push_back({ "*",         "-khad,  --k-cache-hadamard,",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
     options.push_back({ "*",           "-p,    --prompt PROMPT",        "prompt to start generation with\n"
                                                                         "in conversation mode, this will be used as system prompt\n"
@@ -3063,9 +3068,11 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.fused_mmad        = params.fused_mmad;
     cparams.rope_cache        = params.rope_cache;
     cparams.graph_reuse       = params.graph_reuse;
+    cparams.k_cache_hadamard  = params.k_cache_hadamard;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
     cparams.only_active_experts = params.only_active_exps;
+    cparams.k_cache_hadamard  = params.k_cache_hadamard;
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
@@ -4209,6 +4216,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "fused_mmad: %s # default: true\n", params.fused_mmad ? "true" : "false");
     fprintf(stream, "rope_cache: %s # default: false\n", params.rope_cache ? "true" : "false");
     fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
+    fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
 

@@ -82,6 +82,7 @@ struct llm_build_context {
     const bool fused_up_gate;
     const bool fused_mmad;
     const bool rope_cache;
+    const bool k_cache_hadamard;
     const int  min_experts;
     const float thresh_experts;
 
