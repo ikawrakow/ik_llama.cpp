@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <tuple>
+#include <memory>
 
 struct llama_model;
 struct llama_context;
@@ -36,6 +37,9 @@ enum llm_norm_type {
     LLM_NORM,
     LLM_NORM_RMS,
 };
+
+struct llm_build_context_data;
+struct GraphAllocator;
 
 struct llm_build_context {
     const llama_model    & model;
@@ -94,6 +98,8 @@ struct llm_build_context {
 
     struct ggml_context * ctx0 = nullptr;
 
+    std::unique_ptr<llm_build_context_data> data;
+
     // TODO: consider making the entire interface noexcept
     llm_build_context(
         llama_context  & lctx,
@@ -101,6 +107,8 @@ struct llm_build_context {
     const llm_build_cb & cb,
     bool   worst_case,
     bool   warmup);
+
+    ~llm_build_context();
 
     void init();
 
@@ -148,7 +156,7 @@ struct llm_build_context {
             ggml_tensor * wq, ggml_tensor * bq,
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
-            float attention_scale, int il) const;
+            float attention_scale, int il, GraphAllocator * alloc = nullptr) const;
 
     std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_mul_mat_qkv(ggml_cgraph * gf, ggml_tensor * cur,
             ggml_tensor * wqkv, ggml_tensor * bqkv,
@@ -156,7 +164,7 @@ struct llm_build_context {
             ggml_tensor * wq, ggml_tensor * bq,
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
-            ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il) const;
+            ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il, GraphAllocator * alloc = nullptr) const;
 
     ggml_cgraph * build_llama();
 

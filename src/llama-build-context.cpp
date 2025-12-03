@@ -61,6 +61,110 @@ llm_build_context::llm_build_context(
             // all initializations should be done in init()
 }
 
+struct GraphAllocator {
+    size_t cur_offset = 0;
+    size_t max_offset = 0;
+    std::unordered_map<ggml_tensor *, size_t> tensors;
+    std::vector<std::pair<std::size_t,std::size_t>> gaps;
+
+    bool debug = false;
+
+    inline void add(ggml_tensor * t, bool in_place = false) {
+        if (t->view_src) {
+            auto it = tensors.find(t->view_src);
+            GGML_ASSERT(it != tensors.end());
+            auto status = tensors.emplace(std::make_pair(t, it->second + t->view_offs));
+            GGML_ASSERT(status.second);
+            return;
+        }
+        auto offset = cur_offset;
+        auto nbytes = ggml_nbytes(t);
+        if (in_place) {
+            auto it = tensors.find(t->src[0]);
+            GGML_ASSERT(it != tensors.end());
+            offset = it->second;
+        } else {
+            for (auto it = gaps.begin(); it != gaps.end(); ++it) {
+                if (nbytes == it->second) {
+                    offset = it->first;
+                    gaps.erase(it);
+                    break;
+                }
+            }
+        }
+        auto status = tensors.emplace(std::make_pair(t, offset));
+        GGML_ASSERT(status.second);
+        if (debug) {
+            printf("Added tensor %s at offset %zu. cur_offset = %zu, max_offset = %zu\n", t->name, offset, cur_offset, max_offset);
+        }
+        if (offset == cur_offset) {
+            cur_offset += ggml_nbytes(t);
+            max_offset = std::max(max_offset, cur_offset);
+        }
+    }
+    inline void add(ggml_tensor * t, ggml_tensor * prev) {
+        GGML_ASSERT(ggml_nbytes(t) == ggml_nbytes(prev));
+        auto it = tensors.find(t);
+        GGML_ASSERT(it != tensors.end());
+        auto status = tensors.emplace(std::make_pair(t, it->second));
+        GGML_ASSERT(status.second);
+    }
+    inline void remove(ggml_tensor * t) {
+        if (t->view_src) return;
+        auto it = tensors.find(t);
+        GGML_ASSERT(it != tensors.end());
+        auto nbytes = ggml_nbytes(t);
+        if (it->second + nbytes == cur_offset) {
+            cur_offset -= nbytes;
+            if (debug) {
+                printf("Removed tensor %s at end, cur_offset is now %zu\n", t->name, cur_offset);
+            }
+            return;
+        }
+        for (int i = 0; i < int(gaps.size()); ++i) {
+            auto & gap = gaps[i];
+            if (gap.first + gap.second == it->second) {
+                gap.second += nbytes;
+                if (debug) printf("Added gap for removed tensor %s to existing gap %zu, %zu\n", t->name, gap.first, gap.second);
+                if (i + 1 < int(gaps.size()) && gap.first + gap.second == gaps[i+1].first) {
+                    if (debug) printf("  merged gaps %d, %d\n", i, i+1);
+                    gaps.erase(gaps.begin() + i + 1);
+                }
+                return;
+            }
+        }
+        gaps.push_back({it->second, nbytes});
+        if (debug) {
+            auto & gap = gaps.back();
+            printf("Created new gap %d: %zu,%zu after removing tensor %s\n", int(gaps.size()), gap.first, gap.second, t->name);
+        }
+    }
+    inline void remove_from(ggml_tensor * t, bool after) {
+        auto it = tensors.find(t);
+        GGML_ASSERT(it != tensors.end());
+        cur_offset = it->second;
+        if (after) cur_offset += ggml_nbytes(t);
+        for (auto gap = gaps.begin(); gap != gaps.end(); ) {
+            if (gap->first >= cur_offset) {
+                gap = gaps.erase(gap);
+            } else {
+                ++gap;
+            }
+        }
+    }
+    inline size_t offset(ggml_tensor * t) const {
+        auto it = tensors.find(t);
+        GGML_ASSERT(it != tensors.end());
+        return it->second;
+    }
+};
+
+struct llm_build_context_data {
+    std::vector<GraphAllocator> alloc;
+};
+
+llm_build_context::~llm_build_context() = default;
+
 void llm_build_context::init() {
     struct ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
@@ -85,6 +189,12 @@ void llm_build_context::init() {
     lctx.inp_pos_bucket    = nullptr;
     lctx.inp_embd_enc      = nullptr;
     lctx.inp_KQ_mask_cross = nullptr;
+
+    auto & model = lctx.model;
+    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
+        data = std::make_unique<llm_build_context_data>();
+        data->alloc.resize(model.splits.size());
+    }
 }
 
 void llm_build_context::free() {
@@ -1502,7 +1612,7 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
             ggml_tensor * wq, ggml_tensor * bq,
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
-            float attention_scale, int il) const {
+            float attention_scale, int il, GraphAllocator * alloc) const {
     auto Qcur = llm_build_lora_mm(lctx, ctx0, wq, cur);
     cb(Qcur, "Qcur", il);
     auto Kcur = llm_build_lora_mm(lctx, ctx0, wk, cur);
@@ -1512,25 +1622,34 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
     ggml_build_forward_expand(gf, Qcur);
     ggml_build_forward_expand(gf, Kcur);
     ggml_build_forward_expand(gf, Vcur);
+    if (alloc) {
+        alloc->add(Qcur);
+        alloc->add(Kcur);
+        alloc->add(Vcur);
+    }
 
     if (attention_scale != 0) {
         Qcur = ggml_scale(ctx0, Qcur, attention_scale);
         cb(Qcur, "Qcur", il);
+        if (alloc) alloc->add(Qcur, true);
     }
     if (bq) {
         Qcur = ggml_add(ctx0, Qcur, bq);
         cb(Qcur, "Qcur", il);
         ggml_build_forward_expand(gf, Qcur);
+        if (alloc) alloc->add(Qcur, true);
     }
     if (bk) {
         Kcur = ggml_add(ctx0, Kcur, bk);
         cb(Kcur, "Kcur", il);
         ggml_build_forward_expand(gf, Kcur);
+        if (alloc) alloc->add(Kcur, true);
     }
     if (bv) {
         Vcur = ggml_add(ctx0, Vcur, bv);
         cb(Vcur, "Vcur", il);
         ggml_build_forward_expand(gf, Vcur);
+        if (alloc) alloc->add(Vcur, true);
     }
     return {Qcur, Kcur, Vcur};
 }
@@ -1541,15 +1660,17 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
             ggml_tensor * wq, ggml_tensor * bq,
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
-            ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il) const {
+            ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il, GraphAllocator * alloc) const {
     const int64_t n_embd_head = hparams.n_embd_head_v;
     const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
     if (wqkv) {
         auto qkv = llm_build_lora_mm(lctx, ctx0, wqkv, cur);
+        if (alloc) alloc->add(qkv);
         cb(qkv, "qkv", il);
         if (bqkv) {
             qkv = ggml_add(ctx0, qkv, bqkv);
             cb(qkv, "qkv_b", il);
+            if (alloc) alloc->add(qkv, true);
         }
         auto Qcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head,    n_tokens, n_embd_head*sizeof(float), qkv->nb[1], 0*sizeof(float)*(n_embd));
         auto Kcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), qkv->nb[1], 1*sizeof(float)*Qcur->ne[0]*Qcur->ne[1]);
@@ -1557,15 +1678,22 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
         cb(Vcur, "Vcur", il);
+        if (alloc) {
+            alloc->add(Qcur);
+            alloc->add(Kcur);
+            alloc->add(Vcur);
+        }
         if (q_norm) {
             Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Qcur, "Qcur_normed", il);
             ggml_build_forward_expand(gf, Qcur);
+            if (alloc) alloc->add(Qcur, true);
         }
         if (k_norm) {
             Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Kcur, "Kcur_normed", il);
             ggml_build_forward_expand(gf, Kcur);
+            if (alloc) alloc->add(Kcur, true);
         }
 
         return {Qcur, Kcur, Vcur};
@@ -1577,49 +1705,63 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
 
     if (wqk) {
         auto qk = llm_build_lora_mm(lctx, ctx0, wqk, cur);
+        if (alloc) alloc->add(qk);
         cb(qk, "qkv", il);
         if (bqk) {
             qk = ggml_add(ctx0, qk, bqk);
             cb(qk, "qkv_b", il);
+            if (alloc) alloc->add(qk, true);
         }
         auto Vcur = llm_build_lora_mm(lctx, ctx0, wv, cur);
         cb(Vcur, "Vcur", il);
+        if (alloc) alloc->add(Vcur);
         if (bv) {
             Vcur = ggml_add(ctx0, Vcur, bv);
             cb(Vcur, "Vcur", il);
+            if (alloc) alloc->add(Vcur, true);
         }
         ggml_build_forward_expand(gf, qk);
         ggml_build_forward_expand(gf, Vcur);
         auto Qcur = ggml_view_3d(ctx0, qk, n_embd_head, n_head,    n_tokens, n_embd_head*sizeof(float), qk->nb[1], 0*sizeof(float)*(n_embd));
         auto Kcur = ggml_view_3d(ctx0, qk, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), qk->nb[1], 1*sizeof(float)*Qcur->ne[0]*Qcur->ne[1]);
+        if (alloc) {
+            alloc->add(Qcur);
+            alloc->add(Vcur);
+        }
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
         if (q_norm) {
             Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Qcur, "Qcur_normed", il);
             ggml_build_forward_expand(gf, Qcur);
+            if (alloc) alloc->add(Qcur, true);
         }
         if (k_norm) {
             Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(Kcur, "Kcur_normed", il);
             ggml_build_forward_expand(gf, Kcur);
+            if (alloc) alloc->add(Kcur, true);
         }
 
         return {Qcur, Kcur, Vcur};
 
     }
 
-    auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, wq, bq, wk, bk, wv, bv, attention_scale, il);
+    auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, wq, bq, wk, bk, wv, bv, attention_scale, il, alloc);
     auto Qcur = ggml_reshape_3d(ctx0, Q, n_embd_head, Q->ne[0]/n_embd_head, n_tokens);
+    if (alloc) alloc->add(Qcur);
     if (q_norm) {
         Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(Qcur, "Qcur_normed", il);
+        if (alloc) alloc->add(Qcur, true);
     }
 
     auto Kcur = ggml_reshape_3d(ctx0, K, n_embd_head, K->ne[0]/n_embd_head, n_tokens);
+    if (alloc) alloc->add(Kcur);
     if (k_norm) {
         Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(Kcur, "Kcur_normed", il);
+        if (alloc) alloc->add(Kcur, true);
     }
     auto Vcur = V;
     return {Qcur, Kcur, Vcur};
@@ -9238,6 +9380,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             }
             std::vector<ggml_tensor*> attn; attn.reserve(wq->n_device);
             for (int id = 0; id < wq->n_device; ++id) {
+                auto alloc = &data->alloc[id];
+                alloc->debug = true;
                 int il_cb = 1000*(id+1) + il;
                 auto split_wq = wq->splits[id];
                 auto split_wk = wk->splits[id];
@@ -9248,14 +9392,20 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 GGML_ASSERT((!split_wq && !split_wk && !split_wv && !split_wo && !split_kl && !split_vl) ||
                         (split_wq && split_wk && split_wv && split_wo && split_kl && split_vl));
                 if (!split_wq) continue;
+                alloc->add(input);
                 auto cur = input;
+                auto offset = alloc->offset(input) + ggml_nbytes(input);
                 if (attn_norm) {
                     auto split_norm = attn_norm->splits[id];
                     cur = llm_build_norm(ctx0, cur, hparams, split_norm, NULL, LLM_NORM_RMS, cb, il);
                     cb(cur, "attn_norm", il_cb);
+                    alloc->add(cur);
+                    offset = alloc->offset(cur);
                 }
                 else if (cur->type != GGML_TYPE_F32) {
                     cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
+                    alloc->add(cur);
+                    offset = alloc->offset(cur);
                 }
                 auto the_q_norm = model.layers[il].attn_q_norm ? model.layers[il].attn_q_norm->extra ?
                     ((ggml_split_tensor_t *)model.layers[il].attn_q_norm->extra)->splits[id] : model.layers[il].attn_q_norm : nullptr;
@@ -9265,7 +9415,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         split_wq, bq ? bq->splits[id] : nullptr,
                         split_wk, bk ? bk->splits[id] : nullptr,
                         split_wv, bv ? bv->splits[id] : nullptr,
-                        the_q_norm, the_k_norm, f_attn_scale, il_cb);
+                        the_q_norm, the_k_norm, f_attn_scale, il_cb, alloc);
                 auto rope_factors = rope_factors_in;
                 if (!rope_factors && model.layers[il].rope_freqs && model.layers[il].rope_freqs->extra) {
                     auto extra = (ggml_split_tensor_t *)model.layers[il].rope_freqs->extra;
@@ -9273,8 +9423,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 }
                 Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow);
+                alloc->add(Qcur, true);
                 Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow);
+                alloc->add(Kcur, true);
                 cb(Qcur, "Qcur", il_cb);
                 cb(Kcur, "Kcur", il_cb);
                 ggml_build_forward_expand(gf, Qcur);
@@ -9300,19 +9452,26 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 
                 struct ggml_tensor * v_cache_view = nullptr;
 
-                if (cparams.flash_attn) {
-                    v_cache_view = ggml_view_1d(ctx0, split_vl, n_tokens*split_wv->ne[1],
-                            kv_head*ggml_row_size(split_vl->type, split_wv->ne[1]));
-                    lctx.cache_copies[idx+1].step = ggml_row_size(split_vl->type, split_wv->ne[1]);
-                } else {
-                    // note: the V cache is transposed when not using flash attention
-                    v_cache_view = ggml_view_2d(ctx0, split_vl, n_tokens, split_wv->ne[1],
-                            (  n_ctx)*ggml_element_size(split_vl),
-                            (kv_head)*ggml_element_size(split_vl));
-                    lctx.cache_copies[idx+1].step = ggml_element_size(split_vl);
+                GGML_ASSERT(cparams.flash_attn);
+                v_cache_view = ggml_view_1d(ctx0, split_vl, n_tokens*split_wv->ne[1],
+                        kv_head*ggml_row_size(split_vl->type, split_wv->ne[1]));
+                lctx.cache_copies[idx+1].step = ggml_row_size(split_vl->type, split_wv->ne[1]);
+                alloc->remove(Vcur);
+                alloc->remove(Kcur);
 
-                    Vcur = ggml_transpose(ctx0, Vcur);
-                }
+                //if (cparams.flash_attn) {
+                //    v_cache_view = ggml_view_1d(ctx0, split_vl, n_tokens*split_wv->ne[1],
+                //            kv_head*ggml_row_size(split_vl->type, split_wv->ne[1]));
+                //    lctx.cache_copies[idx+1].step = ggml_row_size(split_vl->type, split_wv->ne[1]);
+                //} else {
+                //    // note: the V cache is transposed when not using flash attention
+                //    v_cache_view = ggml_view_2d(ctx0, split_vl, n_tokens, split_wv->ne[1],
+                //            (  n_ctx)*ggml_element_size(split_vl),
+                //            (kv_head)*ggml_element_size(split_vl));
+                //    lctx.cache_copies[idx+1].step = ggml_element_size(split_vl);
+
+                //    Vcur = ggml_transpose(ctx0, Vcur);
+                //}
                 cb(v_cache_view, "v_cache_view", il_cb);
 
                 lctx.cache_copies[idx+1].cpy  = ggml_cpy(ctx0, Vcur, v_cache_view);
@@ -9320,6 +9479,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 
                 auto q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
                 cb(q, "q", il_cb);
+                alloc->add(q);
 
                 auto k = ggml_view_3d(ctx0, split_kl, n_embd_head_k, n_kv, n_head_kv,
                              ggml_row_size(split_kl->type, n_embd_head_k)*n_head_kv, //n_embd_k_gqa),
@@ -9343,6 +9503,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 if (n_swa > 0) {
                     ((int32_t *)cur->op_params)[4] = n_swa;
                 }
+                alloc->add(cur);
+                alloc->remove(Qcur);
 
                 // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
                 if (use_f32_precision || model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX ||
@@ -9353,8 +9515,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 
                 cur = ggml_reshape_2d(ctx0, cur, split_wo->ne[0], n_tokens);
                 cb(cur, "flash_attn_reshaped", il_cb);
+                alloc->add(cur);
 
                 cur = llm_build_lora_mm(lctx, ctx0, split_wo, cur);
+                alloc->add(cur);
                 if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
                     // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
                     ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
@@ -9363,22 +9527,34 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 if (bo) {
                     cur = ggml_add(ctx0, cur, bo->splits[id]);
                     cb(cur, "kqv_wo_biased", il_cb);
+                    alloc->add(cur, true);
                 }
                 if (cur->ne[1] >= 32) {
                     cur = ggml_cast(ctx0, cur, GGML_TYPE_F16);
+                    alloc->add(cur);
                 }
                 ggml_build_forward_expand(gf, cur);
                 attn.push_back(cur);
+                if (id != model.main_gpu) {
+                    data->alloc[id].cur_offset = offset;
+                }
             }
             GGML_ASSERT(!attn.empty());
             if (attn.size() == 1) return attn.front();
+            auto alloc = &data->alloc[model.main_gpu];
+            if (model.main_gpu != 0) alloc->add(attn[0]);
+            if (model.main_gpu != 1) alloc->add(attn[1]);
             auto cur = ggml_add(ctx0, attn[0], attn[1]);
+            alloc->add(cur, true);
             cb(cur, "combine_attn", il);
             cur->op_params[0] = 0xff;
             for (int id = 2; id < (int)attn.size(); ++id) {
+                if (id != model.main_gpu) alloc->add(attn[id]);
                 cur = ggml_add(ctx0, cur, attn[id]);
                 cb(cur, "combine_attn", il);
+                alloc->add(cur, true);
             }
+            alloc->remove_from(cur, true);
             return cur;
         }
     }
