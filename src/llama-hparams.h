@@ -110,7 +110,7 @@ struct llama_hparams {
     uint32_t n_no_rope_layer_step    = 4;
     uint32_t n_attn_temp_floor_scale = 8192;
     float    f_attn_temp_scale       = 0.1;
-	
+
 	// qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 	

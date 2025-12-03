@@ -1037,6 +1037,42 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_MISTRAL3:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE, hparams.f_attn_temp_scale, false);
+
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow, false);
+                ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,     hparams.rope_yarn_log_mul, false);
+
+                if (hparams.f_attn_temp_scale != 0.0f) {
+                    hparams.n_attn_temp_floor_scale = hparams.n_ctx_orig_yarn;
+                    if (hparams.n_attn_temp_floor_scale == 0) {
+                        throw std::runtime_error("invalid n_ctx_orig_yarn for attention temperature scaling");
+                    }
+                }
+
+                // TODO: this seems to be correct with the case of mscale == mscale_all_dims == 1.0f
+                //       but may need further verification with other values
+                if (hparams.rope_yarn_log_mul != 0.0f) {
+                    float factor = 1.0f / hparams.rope_freq_scale_train;
+                    float mscale = 1.0f;
+                    float mscale_all_dims = hparams.rope_yarn_log_mul;
+                    static auto get_mscale = [](float scale, float mscale) {
+                        return scale <= 1.0f ? 1.0f : (0.1f * mscale * logf(scale) + 1.0f);
+                    };
+                    hparams.yarn_attn_factor = get_mscale(factor, mscale) / get_mscale(factor, mscale_all_dims);
+                }
+
+                switch (hparams.n_layer) {
+                    case 26: model.type = e_model::MODEL_3B; break;
+                    case 34: model.type = e_model::MODEL_8B; break;
+                    case 40: model.type = e_model::MODEL_14B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
+
         default: (void)0;
     }
 
