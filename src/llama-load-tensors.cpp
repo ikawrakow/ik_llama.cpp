@@ -2820,6 +2820,7 @@ bool create_tensors_helper::create_tensors() {
         case LLM_ARCH_MINICPM:
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
+        case LLM_ARCH_MISTRAL3:
             use_mmap_buffer = create_llama_tensors(tn); break;
         case LLM_ARCH_DECI:
             use_mmap_buffer = create_deci_tensors(tn); break;
