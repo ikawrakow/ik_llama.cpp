@@ -4048,6 +4048,7 @@ struct llama_context_params llama_context_default_params() {
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
+        /*.k_cache_hadamard            =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
@@ -4297,6 +4298,11 @@ struct llama_context * llama_new_context_with_model(
         return nullptr;
     }
 
+    if (params.k_cache_hadamard && !ggml_is_quantized(params.type_k)) {
+        LLAMA_LOG_WARN("%s: there is no point in Hadamard transforms with not quantized K-cache. Turning Hadamard off\n", __func__);
+        params.k_cache_hadamard = false;
+    }
+
     llama_context * ctx = new llama_context(*model);
 
     // add devices to ctx->cparams from model
@@ -4330,6 +4336,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.fused_mmad       = params.fused_mmad;
     cparams.rope_cache       = params.rope_cache;
     cparams.graph_reuse      = params.graph_reuse;
+    cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
@@ -4417,6 +4424,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: fused_mmad    = %d\n",     __func__, cparams.fused_mmad);
     LLAMA_LOG_INFO("%s: rope_cache    = %d\n",     __func__, cparams.rope_cache);
     LLAMA_LOG_INFO("%s: graph_reuse   = %d\n",     __func__, cparams.graph_reuse);
+    LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
     LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",     __func__, cparams.rope_freq_scale);

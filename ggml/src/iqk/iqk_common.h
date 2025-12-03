@@ -922,3 +922,22 @@ static IQK_ALWAYS_INLINE void prepare_iq4_nl_quants_r8(const int8x16_t& values, 
 #endif
 
 #endif
+
+#if defined(_MSC_VER)
+#pragma warning(disable: 4244 4267) // possible loss of data
+#include <intrin.h>
+#include <ammintrin.h>
+#include <nmmintrin.h>
+#include <immintrin.h>
+#include <stdlib.h>
+inline int popcount(uint8_t x) { return __popcnt(x); }
+inline int popcount(uint16_t x) { return __popcnt(x); }
+inline int popcount(uint32_t x) { return __popcnt(x); }
+inline int popcount(uint64_t x) { return _mm_popcnt_u64(x); }
+#else
+constexpr int popcount(uint8_t x) { return __builtin_popcount(x); }
+constexpr int popcount(uint16_t x) { return __builtin_popcount(x); }
+constexpr int popcount(uint32_t x) { return __builtin_popcount(x); }
+constexpr int popcount(uint64_t x) { return __builtin_popcountll(x); }
+#endif
+
