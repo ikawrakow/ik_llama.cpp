@@ -160,6 +160,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_llama();
 
+    ggml_cgraph * build_mistral3();
+
     ggml_cgraph * build_deci();
 
     ggml_cgraph * build_baichuan();
