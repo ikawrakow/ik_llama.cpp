@@ -440,6 +440,7 @@ extern "C" {
         int  min_experts;
         float thresh_experts;
         bool only_active_experts;
+        bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
