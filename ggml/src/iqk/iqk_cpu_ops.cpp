@@ -8,6 +8,7 @@
 
 #include "iqk_cpu_ops.h"
 #include "iqk_utils.h"
+#include "iqk_common.h"
 #include "ggml.h"
 
 #include <cstdint>
@@ -452,5 +453,53 @@ void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth) {
             c0 += src0->nb[1];
             c1 += src1->nb[1];
         }
+    }
+}
+
+namespace {
+template <typename T>
+void fast_ht(int n, T * values) {
+    constexpr float ksqrt2 = 0.707106781f;
+    float scale = 1;
+    for (int h = 1; h < n; h <<= 1) {
+        for (int i = 0; i < n; i += 2*h) {
+            for (int j = i; j < i + h; ++j) {
+                T x = values[j], y = values[j + h];
+                values[j+0] = x + y;
+                values[j+h] = x - y;
+            }
+        }
+        scale *= ksqrt2;
+    }
+    for (int i = 0; i < n; ++i) values[i] *= scale;
+}
+}
+
+void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth) {
+    auto src = dst->src[0];
+    GGML_ASSERT(src->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_are_same_shape(src, dst));
+    int nh = dst->op_params[0];
+    GGML_ASSERT(nh > 1 && popcount(uint32_t(nh)) == 1);
+    GGML_ASSERT(dst->ne[0] % nh == 0);
+
+    int nc = dst->ne[0]/nh;
+    int nr = ggml_nrows(dst) * nc;
+
+    int npt = (nr + nth - 1)/nth;
+    int first = npt*ith;
+    int last  = std::min(first + npt, nr);
+
+    for (int ir = first; ir < last; ++ir) {
+        int i3 = ir / (dst->ne[1] * dst->ne[2] * nc);
+        int i2 = (ir - i3*dst->ne[1] * dst->ne[2] * nc)/(dst->ne[1] * nc);
+        int i1 = (ir - i3*dst->ne[1] * dst->ne[2] * nc - i2*dst->ne[1]*nc)/nc;
+        int ic = (ir - i3*dst->ne[1] * dst->ne[2] * nc - i2*dst->ne[1]*nc - i1*nc);
+
+        auto x = (const float *)((const char *)src->data + i3*src->nb[3] + i2*src->nb[2] + i1*src->nb[1]) + ic*nh;
+        auto y = (      float *)((      char *)dst->data + i3*dst->nb[3] + i2*dst->nb[2] + i1*dst->nb[1]) + ic*nh;
+        std::memcpy(y, x, nh*sizeof(float));
+        fast_ht(nh, y);
     }
 }

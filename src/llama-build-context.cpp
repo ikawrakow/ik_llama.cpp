@@ -52,6 +52,7 @@ llm_build_context::llm_build_context(
         fused_up_gate    (cparams.fused_up_gate),
         fused_mmad       (cparams.fused_mmad),
         rope_cache       (cparams.rope_cache),
+        k_cache_hadamard (cparams.k_cache_hadamard),
         min_experts      (cparams.min_experts),
         thresh_experts   (cparams.thresh_experts),
         pooling_type     (cparams.pooling_type),
@@ -1465,6 +1466,13 @@ ggml_tensor * llm_build_context::llm_build_kv(
          const llm_build_cb & cb, int il, ggml_tensor * sinks, int n_swa) {
     const llama_hparams & hparams = lctx.model.hparams;
     const llama_cparams & cparams = lctx.cparams;
+
+    if (cparams.k_cache_hadamard) {
+        q_cur = ggml_hadamard(ctx, q_cur, hparams.n_embd_head_k);
+        k_cur = ggml_hadamard(ctx, k_cur, hparams.n_embd_head_k);
+        cb(q_cur, "Qcur_hadamard", il);
+        cb(k_cur, "Kcur_hadamard", il);
+    }
 
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
@@ -9374,6 +9382,12 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 if (inp_attn_scale) {
                     Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
                     cb(Qcur, "Qcur_temp_scaled", il_cb);
+                }
+                if (cparams.k_cache_hadamard) {
+                    Qcur = ggml_hadamard(ctx0, Qcur, hparams.n_embd_head_k);
+                    Kcur = ggml_hadamard(ctx0, Kcur, hparams.n_embd_head_k);
+                    cb(Qcur, "Qcur_hadamard", il_cb);
+                    cb(Kcur, "Kcur_hadamard", il_cb);
                 }
                 ggml_build_forward_expand(gf, Qcur);
                 ggml_build_forward_expand(gf, Kcur);
