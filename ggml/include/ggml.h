@@ -621,6 +621,7 @@ extern "C" {
         GGML_OP_FUSED_UP_GATE,
         GGML_OP_MOE_FUSED_UP_GATE,
         GGML_OP_MUL_MULTI_ADD,
+        GGML_OP_HADAMARD,
 
         GGML_OP_SCALE,
         GGML_OP_SET,
@@ -1091,6 +1092,11 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_hadamard(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   n);
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b

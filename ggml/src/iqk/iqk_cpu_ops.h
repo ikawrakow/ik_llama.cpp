@@ -28,6 +28,8 @@ void iqk_openai_experts(struct ggml_tensor * topk, struct ggml_tensor * softmax,
 
 void iqk_mul_multi_add(struct ggml_tensor * dst, int ith, int nth);
 
+void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth);
+
 #ifdef __cplusplus
 }
 #endif

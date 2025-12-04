@@ -4223,6 +4223,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FUSED_UP_GATE",
     "MOE_FUSED_UP_GATE",
     "MUL_MULTI_ADD",
+    "HADAMARD",
 
     "SCALE",
     "SET",
@@ -4292,7 +4293,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 91");
+static_assert(GGML_OP_COUNT == 92, "GGML_OP_COUNT != 92");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4330,6 +4331,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "X*Y1&X*Y2",
     "X*Y1&X*Y2",
     "x1*y1+x2*y2+...",
+    "hadamard(x)",
 
     "x*v",
     "y-\\>view(x)",
@@ -4399,7 +4401,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x),"
 };
 
-static_assert(GGML_OP_COUNT == 91, "GGML_OP_COUNT != 91");
+static_assert(GGML_OP_COUNT == 92, "GGML_OP_COUNT != 92");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6143,6 +6145,38 @@ struct ggml_tensor * ggml_mul_multi_add(
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
     result->src[0] = a;
     result->src[1] = b;
+
+    return result;
+}
+
+#if defined(_MSC_VER)
+#pragma warning(disable: 4244 4267) // possible loss of data
+#include <intrin.h>
+#include <ammintrin.h>
+#include <nmmintrin.h>
+#include <immintrin.h>
+#include <stdlib.h>
+inline int popcount(uint32_t x) { return __popcnt(x); }
+#else
+inline int popcount(uint32_t x) { return __builtin_popcount(x); }
+#endif
+
+struct ggml_tensor * ggml_hadamard(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   n) {
+
+    GGML_ASSERT(a->type == GGML_TYPE_F32); // will not bother implementing for other data types
+    GGML_ASSERT(n > 1);                    // no point in Hadamard transforms with less than 2 elements
+    GGML_ASSERT(a->ne[0] % n == 0);
+    GGML_ASSERT(popcount(n) == 1);         // must be a power of 2
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, a->ne);
+
+    result->op   = GGML_OP_HADAMARD;
+    result->src[0] = a;
+
+    result->op_params[0] = n;
 
     return result;
 }
@@ -22660,6 +22694,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 iqk_mul_multi_add(tensor, params->ith, params->nth);
             } break;
+        case GGML_OP_HADAMARD:
+            {
+                iqk_hadamard(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_ACC:
             {
                 ggml_compute_forward_acc(params, tensor);
@@ -23507,6 +23545,10 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 GGML_ABORT("fatal error"); // TODO: implement
             }
         case GGML_OP_MUL_MULTI_ADD:
+            {
+                GGML_ABORT("fatal error"); // TODO: implement
+            }
+        case GGML_OP_HADAMARD:
             {
                 GGML_ABORT("fatal error"); // TODO: implement
             }
@@ -24625,6 +24667,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ACC:
         case GGML_OP_MULTI_ADD:
         case GGML_OP_MUL_MULTI_ADD:
+        case GGML_OP_HADAMARD:
             {
                 n_tasks = n_threads;
             } break;
