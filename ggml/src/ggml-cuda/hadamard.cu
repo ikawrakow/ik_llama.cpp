@@ -25,8 +25,6 @@ static __global__ void hadamard_f32(const char * src, char * dst, int ne0,
 
     float scale = ksqrt2;
 
-    // h = 2  -> tid=0: 0,0 -> j = 0 -> 0,2; tid = 1: 0,1 -> j = 1 -> 1,3; tid = 2: 1,0 -> j = 4 -> 4,6, tid = 3: 1,1 -> j = 5 -> 5,7, ...
-    // h = 4  -> tif=0: 0,0 -> j = 0 -> 0,4; tid = 1: 0,1 -> j = 1 -> 1,5; tid = 2, 0,2 -> j = 2 -> 2,6; tid = 3: 0,3 -> j = 3 -> 3,7; tid = 4 -> 1,0 -> j = 8 -> 
 #pragma unroll
     for (int h = 2; h < nh; h <<= 2) {
         __syncthreads();
