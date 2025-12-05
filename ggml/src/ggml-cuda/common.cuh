@@ -840,6 +840,9 @@ struct ggml_backend_cuda_context {
     int  fusion = GGML_CUDA_FUSION;
     int  offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
     int  mmq_id_thresh = 32;
+#ifdef USE_CUDA_GRAPH
+    bool use_cuda_graph = true;
+#endif
 
     explicit ggml_backend_cuda_context(int device);
 
