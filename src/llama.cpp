@@ -4480,8 +4480,16 @@ struct llama_context * llama_new_context_with_model(
 
         } else {
             // LLAMA_SPLIT_MODE_LAYER and LLAMA_SPLIT_MODE_GRAPH require a backend for each GPU
+            auto params = cparams.cuda_params;
+            std::string new_params;
+            if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+                static const std::string extra_string{"graphs=0"};
+                if (params) new_params = std::string{(const char *)params} + ',';
+                new_params += extra_string;
+                params = new_params.data();
+            }
             for (int device = 0; device < ggml_backend_cuda_get_device_count(); ++device) {
-                ggml_backend_t backend = ggml_backend_cuda_init(device, cparams.cuda_params);
+                ggml_backend_t backend = ggml_backend_cuda_init(device, params);
                 if (backend == nullptr) {
                     LLAMA_LOG_ERROR("%s: failed to initialize CUDA%d backend\n", __func__, device);
                     llama_free(ctx);
