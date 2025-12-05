@@ -2950,6 +2950,13 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
     int64_t tim1 = ggml_time_us();
 #endif
 
+    if (ggml_is_noop(dst)) {
+        return true;
+    }
+
+    // In case we forget to do that in some kernel.
+    ggml_cuda_set_device(ctx.device);
+
     auto next = i < cgraph->n_nodes - 1 ? cgraph->nodes[i+1] : nullptr;
 
     auto fusion = ctx.fusion;
