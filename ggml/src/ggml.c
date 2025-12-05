@@ -6156,9 +6156,9 @@ struct ggml_tensor * ggml_mul_multi_add(
 #include <nmmintrin.h>
 #include <immintrin.h>
 #include <stdlib.h>
-inline int popcount(uint32_t x) { return __popcnt(x); }
+static inline int popcount(uint32_t x) { return __popcnt(x); }
 #else
-inline int popcount(uint32_t x) { return __builtin_popcount(x); }
+static inline int popcount(uint32_t x) { return __builtin_popcount(x); }
 #endif
 
 struct ggml_tensor * ggml_hadamard(
