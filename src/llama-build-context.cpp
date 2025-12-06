@@ -619,6 +619,61 @@ ggml_tensor * llm_build_context::llm_build_norm(
     return cur;
 }
 
+void llm_build_context::llm_build_ffn_split(
+        ggml_context * ctx, llama_context & lctx, ggml_tensor * ffn_norm,
+        std::vector<ggml_tensor *> & input, ggml_tensor * up, ggml_tensor * gate, ggml_tensor * down,
+        llm_ffn_op_type type_op, const llm_build_cb & cb, int il, ggml_cgraph * graph) {
+
+    GGML_ASSERT(up->extra);
+    GGML_ASSERT(gate->extra);
+    GGML_ASSERT(down->extra);
+    GGML_ASSERT(type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || type_op == LLM_FFN_GELU);
+
+    auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
+        type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU;
+    auto u = (ggml_split_tensor_t *)up->extra;
+    auto g = (ggml_split_tensor_t *)gate->extra;
+    auto d = (ggml_split_tensor_t *)down->extra;
+    GGML_ASSERT(u->n_device == g->n_device && u->n_device == d->n_device);
+    GGML_ASSERT(u->n_device == int(input.size()));
+    for (int id = 0; id < u->n_device; ++id) {
+        int il_cb = 1000*(id+1) + il;
+        auto split_u = u->splits[id];
+        auto split_g = g->splits[id];
+        auto split_d = d->splits[id];
+        GGML_ASSERT((!split_u && !split_g && !split_d) || (split_u && split_g && split_d));
+        if (!split_u) {
+            input[id] = nullptr;
+            continue;
+        }
+        auto cur = input[id];
+        if (ffn_norm && ffn_norm->extra) {
+            auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
+            GGML_ASSERT(norm->splits[id]);
+            cur = llm_build_norm(ctx, cur, lctx.model.hparams, norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
+            cb(cur, "ffn_inp_normed", il_cb);
+        }
+        else if (cur->type != GGML_TYPE_F32) {
+            cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+        }
+        cur = ggml_fused_up_gate(ctx, split_u, split_g, cur, unary_op);
+        cb(cur, "ffn_up_gate", il_cb);
+        cur = llm_build_lora_mm(lctx, ctx, split_d, cur);
+        cb(cur, "ffn_down", il_cb);
+        if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
+            // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
+            ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+        }
+        if (cur->ne[1] >= 32) {
+            cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
+        }
+        if (graph) {
+            ggml_build_forward_expand(graph, cur);
+        }
+        input[id] = cur;
+    }
+}
+
 ggml_tensor * llm_build_context::llm_build_ffn(
         ggml_context * ctx,
        llama_context & lctx,
@@ -641,62 +696,22 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
         up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
-        auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                        type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU;
         auto u = (ggml_split_tensor_t *)up->extra;
-        auto g = (ggml_split_tensor_t *)gate->extra;
-        auto d = (ggml_split_tensor_t *)down->extra;
-        GGML_ASSERT(u->n_device == g->n_device && u->n_device == d->n_device);
-        std::vector<ggml_tensor *> ffn;
-        ffn.reserve(u->n_device);
+        std::vector<ggml_tensor *> ffn(u->n_device, input);
+        llm_build_ffn_split(ctx, lctx, ffn_norm, ffn, up, gate, down, type_op, cb, il, graph);
+        std::vector<int> ids; ids.reserve(u->n_device);
         for (int id = 0; id < u->n_device; ++id) {
-            int il_cb = 1000*(id+1) + il;
-            auto split_u = u->splits[id];
-            auto split_g = g->splits[id];
-            auto split_d = d->splits[id];
-            GGML_ASSERT((!split_u && !split_g && !split_d) || (split_u && split_g && split_d));
-            if (!split_u) continue;
-            auto cur = input;
-            if (ffn_norm && ffn_norm->extra) {
-                auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
-                GGML_ASSERT(norm->splits[id]);
-                cur = llm_build_norm(ctx, input, lctx.model.hparams, norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
-                cb(cur, "ffn_inp_normed", il_cb);
-            }
-            else if (input->type != GGML_TYPE_F32) {
-                cur = ggml_cast(ctx, input, GGML_TYPE_F32);
-            }
-            cur = ggml_fused_up_gate(ctx, split_u, split_g, cur, unary_op);
-            cb(cur, "ffn_up_gate", il_cb);
-            cur = llm_build_lora_mm(lctx, ctx, split_d, cur);
-            cb(cur, "ffn_down", il_cb);
-            if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
-                // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
-                ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
-            }
-            if (cur->ne[1] >= 32) {
-                cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
-            }
-            if (graph) {
-                ggml_build_forward_expand(graph, cur);
-            }
-            ffn.push_back(cur);
+            if (ffn[id]) ids.push_back(id);
         }
-        if (ffn.size() == 1) return ffn.front();
-        auto cur = ggml_add(ctx, ffn[0], ffn[1]);
+        GGML_ASSERT(!ids.empty());
+        if (ids.size() == 1) return ffn[ids.front()];
+        auto cur = ggml_add(ctx, ffn[ids[0]], ffn[ids[1]]);
         cb(cur, "combine_ffn", il);
         cur->op_params[0] = 0xff;
-        for (int id = 2; id < int(ffn.size()); ++id) {
-            cur = ggml_add(ctx, cur, ffn[id]);
+        for (int id = 2; id < int(ids.size()); ++id) {
+            cur = ggml_add(ctx, cur, ffn[ids[id]]);
             cb(cur, "combine_ffn", il);
         }
-        if (ffn.size() > 2) {
-            cur->op_params[0] = 0xff;
-        }
-        //if (cur->type != GGML_TYPE_F32) {
-        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-        //}
-
         return cur;
     }
 
@@ -9307,7 +9322,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
     return result;
 }
 
-void llm_build_context::build_std_attention(ggml_cgraph * gf, std::vector<ggml_tensor *> & input, ggml_tensor * inp_pos, ggml_tensor * rope_factors_in,
+void llm_build_context::build_std_attention_split(ggml_cgraph * gf, std::vector<ggml_tensor *> & input, ggml_tensor * inp_pos, ggml_tensor * rope_factors_in,
         ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale, int n_swa, int il) {
     GGML_ASSERT(cparams.flash_attn);
     GGML_ASSERT(!model.layers[il].wqkv);
@@ -9499,7 +9514,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             }
         }
         GGML_ASSERT(!ids.empty());
-        build_std_attention(gf, attn, inp_pos, rope_factors_in, KQ_mask, sinks, inp_attn_scale, KQ_scale, f_attn_scale, n_swa, il);
+        build_std_attention_split(gf, attn, inp_pos, rope_factors_in, KQ_mask, sinks, inp_attn_scale, KQ_scale, f_attn_scale, n_swa, il);
 
         if (ids.size() == 1) return attn[ids.front()];
         auto cur = ggml_add(ctx0, attn[ids[0]], attn[ids[1]]);

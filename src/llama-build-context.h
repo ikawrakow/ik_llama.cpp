@@ -336,6 +336,10 @@ struct llm_build_context {
           llm_ffn_gate_type   type_gate,
          const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr);
 
+    static void llm_build_ffn_split(ggml_context * ctx, llama_context & lctx, ggml_tensor * ffn_norm,
+         std::vector<ggml_tensor *> & cur, ggml_tensor * up, ggml_tensor * gate, ggml_tensor * down,
+            llm_ffn_op_type type_op, const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr);
+
     static ggml_tensor * llm_build_moe_ffn(ggml_context * ctx, llama_context & lctx,
          ggml_tensor * cur,
          ggml_tensor * gate_inp,   ggml_tensor * gate_inp_b,
@@ -410,7 +414,7 @@ llm_expert_gating_func_type   gating_op,
     ggml_tensor * build_std_attention(ggml_cgraph * gf, ggml_tensor * cur, ggml_tensor * inp_pos, ggml_tensor * rope_factors,
             ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale, int n_swa, int il);
 
-    void build_std_attention(ggml_cgraph * gf, std::vector<ggml_tensor *> & cur, ggml_tensor * inp_pos, ggml_tensor * rope_factors,
+    void build_std_attention_split(ggml_cgraph * gf, std::vector<ggml_tensor *> & cur, ggml_tensor * inp_pos, ggml_tensor * rope_factors,
             ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale, int n_swa, int il);
 
 };
