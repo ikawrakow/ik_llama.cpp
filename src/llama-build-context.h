@@ -410,4 +410,7 @@ llm_expert_gating_func_type   gating_op,
     ggml_tensor * build_std_attention(ggml_cgraph * gf, ggml_tensor * cur, ggml_tensor * inp_pos, ggml_tensor * rope_factors,
             ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale, int n_swa, int il);
 
+    void build_std_attention(ggml_cgraph * gf, std::vector<ggml_tensor *> & cur, ggml_tensor * inp_pos, ggml_tensor * rope_factors,
+            ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale, int n_swa, int il);
+
 };
