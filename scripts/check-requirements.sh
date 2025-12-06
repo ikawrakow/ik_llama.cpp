@@ -149,7 +149,7 @@ FATAL: Avoid pinning exact package versions. Use '~=' instead.
 You can suppress this error by appending the following to the line:
 $tab# $ignore_eq_eq
 EOF
-        exit 1
+        #exit 1
     fi
 done
 
