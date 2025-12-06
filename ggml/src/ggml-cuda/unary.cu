@@ -38,6 +38,7 @@ static __global__ void silu_f32(const float * x, float * dst, const int k) {
     dst[i] = x[i] / (1.0f + expf(-x[i]));
 }
 
+#if 0
 static __global__ void swiglu_f32(const float * x, float * dst, const int k, const int ne0, const int64_t nb1) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
@@ -49,6 +50,7 @@ static __global__ void swiglu_f32(const float * x, float * dst, const int k, con
     const int j   = row*nb1 + idx;
     dst[i] = x[j] * x[j + ne0] / (1.0f + expf(-x[j]));
 }
+#endif
 
 static __global__ void fused_mul_silu_f32(const float * x, const float * y, float * dst, const int k) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
