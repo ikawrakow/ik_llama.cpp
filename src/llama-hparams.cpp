@@ -786,6 +786,11 @@ void llm_load_hparams(
                 }
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false);
 
+                hparams.f_attn_temp_scale = 0;
+                hparams.n_attn_temp_floor_scale = 0;
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE,  hparams.f_attn_temp_scale,       false);
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_LENGTH, hparams.n_attn_temp_floor_scale, false);
+
                 switch (hparams.n_layer) {
                     case 27: model.type = e_model::MODEL_16B; break;
                     case 60: model.type = e_model::MODEL_236B; break;
