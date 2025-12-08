@@ -5320,7 +5320,7 @@ bool llama_save_session_file(struct llama_context * ctx, const char * path_sessi
 // TODO: replace all non-fatal assertions with returned errors or exceptions
 struct llama_data_write {
     virtual void write(const void * src, size_t size) = 0;
-    virtual void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size) = 0;
+    virtual void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) = 0;
     virtual size_t get_size_written() = 0;
     virtual ~llama_data_write() = default;
 
@@ -5449,7 +5449,7 @@ struct llama_data_write {
             for (const auto & range : cell_ranges) {
                 const size_t range_size = range.second - range.first;
                 const size_t buf_size = range_size * k_size_row;
-                write_tensor_data(kv_self.k_l[il], range.first * k_size_row, buf_size);
+                write_tensor_data(kv_self.k_l[il], range.first * k_size_row, buf_size, il);
             }
         }
 
@@ -5469,7 +5469,7 @@ struct llama_data_write {
                 for (const auto & range : cell_ranges) {
                     const size_t range_size = range.second - range.first;
                     const size_t buf_size = range_size * v_size_row;
-                    write_tensor_data(kv_self.v_l[il], range.first * v_size_row, buf_size);
+                    write_tensor_data(kv_self.v_l[il], range.first * v_size_row, buf_size, il);
                 }
             }
         }
@@ -5497,7 +5497,7 @@ struct llama_data_write {
                         const size_t range_size = range.second - range.first;
                         const size_t src_offset = (range.first + j * kv_size) * v_size_el;
                         const size_t buf_size = range_size * v_size_el;
-                        write_tensor_data(kv_self.v_l[il], src_offset, buf_size);
+                        write_tensor_data(kv_self.v_l[il], src_offset, buf_size, il);
                     }
                 }
             }
@@ -5871,7 +5871,7 @@ struct llama_data_write_dummy : llama_data_write {
         size_written += size;
     }
 
-    void write_tensor_data(const struct ggml_tensor * /* tensor */, size_t /* offset */, size_t size) override {
+    void write_tensor_data(const struct ggml_tensor * /* tensor */, size_t /* offset */, size_t size, int /* il */) override {
         size_written += size;
     }
 
@@ -5885,7 +5885,11 @@ struct llama_data_write_buffer : llama_data_write {
     size_t buf_size = 0;
     size_t size_written = 0;
 
-    llama_data_write_buffer(uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
+    const llama_model & model;
+
+    std::vector<uint8_t> aux_buffer;
+
+    llama_data_write_buffer(uint8_t * p, size_t len, const llama_model & _model) : ptr(p), buf_size(len), model(_model) {}
 
     void write(const void * src, size_t size) override {
         if (size > buf_size) {
@@ -5897,14 +5901,64 @@ struct llama_data_write_buffer : llama_data_write {
         buf_size -= size;
     }
 
-    void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size) override {
+    void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) override {
         if (size > buf_size) {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
-        ggml_backend_tensor_get(tensor, ptr, offset, size);
+        if (tensor->extra) {
+            write_tensor_data_split(tensor, offset, size, il);
+        } else {
+            ggml_backend_tensor_get(tensor, ptr, offset, size);
+        }
         ptr += size;
         size_written += size;
         buf_size -= size;
+    }
+
+    void write_tensor_data_split(const ggml_tensor * tensor, size_t offset, size_t size, int il) {
+        auto tt = ggml_internal_get_type_traits(tensor->type);
+        if (tt.row_meta_size > 0) {
+            throw std::runtime_error(std::string{"Split cache for type "} + ggml_type_name(tensor->type) + " is not supported");
+        }
+        GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
+        auto kv = tensor->ne[1] > 1 ? model.layers[il].wk : model.layers[il].wv;
+        write_tensor_data_split(ptr, tensor, kv, aux_buffer, offset, size);
+    }
+
+    static void write_tensor_data_split(uint8_t * ptr, const ggml_tensor * tensor, const ggml_tensor * kv,
+            std::vector<uint8_t> & aux_buffer, size_t offset, size_t size) {
+        auto ne = kv->ne[1];
+        auto full_row_size = ggml_row_size(tensor->type, ne);
+        GGML_ASSERT(offset % full_row_size == 0);
+        GGML_ASSERT(size   % full_row_size == 0);
+        auto first_row = offset / full_row_size;
+        auto num_rows  = size / full_row_size;
+        auto extra = (const ggml_split_tensor_t *)tensor->extra;
+        auto kv_extra = (const ggml_split_tensor_t *)kv->extra;
+        GGML_ASSERT(extra && kv_extra);
+        size_t split_offset = 0;
+        size_t total_size   = 0;
+        for (int id = 0; id < extra->n_device; ++id) {
+            auto split = extra->splits[id];
+            auto kv_split = kv_extra->splits[id];
+            GGML_ASSERT((split && kv_split) || (!split && !kv_split));
+            if (!split) continue;
+            GGML_ASSERT(split->type == tensor->type);
+            auto split_row_size = ggml_row_size(tensor->type, kv_split->ne[1]);
+            auto split_size = split_row_size * num_rows;
+            if (split_size > aux_buffer.size()) aux_buffer.resize(split_size);
+            ggml_backend_tensor_get(split, aux_buffer.data(), first_row*split_row_size, split_size);
+            auto dst = ptr + split_offset;
+            auto src = aux_buffer.data();
+            for (int row = 0; row < (int)num_rows; ++row) {
+                std::memcpy(dst, src, split_row_size);
+                dst += full_row_size;
+                src += split_row_size;
+            }
+            split_offset += split_row_size;
+            total_size   += split_row_size * num_rows;
+        }
+        GGML_ASSERT(total_size == size);
     }
 
     size_t get_size_written() override {
@@ -5943,17 +5997,32 @@ struct llama_data_write_file : llama_data_write {
     llama_file * file;
     size_t size_written = 0;
     std::vector<uint8_t> temp_buffer;
+    std::vector<uint8_t> aux_buffer;
 
-    llama_data_write_file(llama_file * f) : file(f) {}
+    const llama_model & model;
+
+    llama_data_write_file(llama_file * f, const llama_model & _model) : file(f), model(_model) {}
 
     void write(const void * src, size_t size) override {
         file->write_raw(src, size);
         size_written += size;
     }
 
-    void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size) override {
+    void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) override {
         temp_buffer.resize(size);
-        ggml_backend_tensor_get(tensor, temp_buffer.data(), offset, size);
+        if (tensor->extra) {
+            write_tensor_data_split(tensor, offset, size, il);
+        } else {
+            ggml_backend_tensor_get(tensor, temp_buffer.data(), offset, size);
+        }
+        write(temp_buffer.data(), temp_buffer.size());
+    }
+
+    void write_tensor_data_split(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) {
+        GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
+        auto kv = tensor->ne[1] > 1 ? model.layers[il].wk : model.layers[il].wv;
+        temp_buffer.resize(size);
+        llama_data_write_buffer::write_tensor_data_split(temp_buffer.data(), tensor, kv, aux_buffer, offset, size);
         write(temp_buffer.data(), temp_buffer.size());
     }
 
@@ -6016,7 +6085,7 @@ static size_t llama_state_get_data_internal(struct llama_context * ctx, llama_da
 }
 
 size_t llama_state_get_data(struct llama_context * ctx, uint8_t * dst, size_t size) {
-    llama_data_write_buffer data_ctx(dst, size);
+    llama_data_write_buffer data_ctx(dst, size, ctx->model);
     try {
         return llama_state_get_data_internal(ctx, data_ctx);
     } catch (const std::exception & err) {
@@ -6128,7 +6197,7 @@ static bool llama_state_save_file_internal(struct llama_context * ctx, const cha
     file.write_raw(tokens, sizeof(llama_token) * n_token_count);
 
     // save the context state using stream saving
-    llama_data_write_file data_ctx(&file);
+    llama_data_write_file data_ctx(&file, ctx->model);
     llama_state_get_data_internal(ctx, data_ctx);
 
     return true;
@@ -6157,7 +6226,7 @@ size_t llama_state_seq_get_size(struct llama_context * ctx, llama_seq_id seq_id)
 }
 
 size_t llama_state_seq_get_data(struct llama_context * ctx, uint8_t * dst, size_t size, llama_seq_id seq_id) {
-    llama_data_write_buffer data_ctx(dst, size);
+    llama_data_write_buffer data_ctx(dst, size, ctx->model);
     try {
         return llama_state_seq_get_data_internal(ctx, data_ctx, seq_id);
     } catch (const std::exception & err) {
@@ -6195,7 +6264,7 @@ static size_t llama_state_seq_save_file_internal(struct llama_context * ctx, con
     file.write_raw(tokens, sizeof(llama_token) * n_token_count);
 
     // save the context state using stream saving
-    llama_data_write_file data_ctx(&file);
+    llama_data_write_file data_ctx(&file, ctx->model);
     llama_state_seq_get_data_internal(ctx, data_ctx, seq_id);
 
     const size_t res = file.tell();
