@@ -1880,6 +1880,27 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     ggml_tensor * last_ids_tensor = nullptr;
 
     for (int i = 0; i < sched->n_splits; i++) {
+        auto split = &splits[i];
+        if (split->n_inputs < 1) continue;
+        int n_host_inputs = 0;
+        int n_peer_inputs = 0;
+        for (int j = 0; j < split->n_inputs; ++j) {
+            if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
+                ++n_host_inputs;
+            } else {
+                ++n_peer_inputs;
+            }
+        }
+        if (n_host_inputs == 0 && n_peer_inputs == 1) {
+            auto input_cpy = tensor_copy(split->inputs[0], split->backend_id, sched->cur_copy);
+            printf("Split %4d: backend = %d, %d host, %d peer inputs, data size = %zu, buffer = %p\n", i, split->backend_id, n_host_inputs, n_peer_inputs,
+                    ggml_nbytes(split->inputs[0]), (const void *)input_cpy->buffer);
+        } else {
+            printf("Split %4d: backend = %d, %d host, %d peer inputs\n", i, split->backend_id, n_host_inputs, n_peer_inputs);
+        }
+    }
+
+    for (int i = 0; i < sched->n_splits; i++) {
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
 #endif
@@ -1897,19 +1918,25 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
             if (input->flags & GGML_TENSOR_FLAG_INPUT) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
+                //auto tim1 = ggml_time_us();
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
+                //auto tim2 = ggml_time_us();
+                //printf("Synchronized split backend %s (1) for %d us to copy %s\n", ggml_backend_name(split_backend), int(tim2-tim1), input->name);
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
                 // wait for the split backend to finish using the input before overwriting it
+                //auto tim1 = ggml_time_us();
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
+                //auto tim2 = ggml_time_us();
+                //printf("Synchronized split backend %s (2) for %d us to copy %s\n", ggml_backend_name(split_backend), int(tim2-tim1), input->name);
 
                 ggml_tensor * node = split->graph.nodes[0];
                 if (sched->only_active_experts && split->graph.n_nodes > 0 &&
@@ -2000,12 +2027,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                 if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                    //auto tim1 = ggml_time_us();
                     ggml_backend_synchronize(input_backend);
+                    //auto tim2 = ggml_time_us();
+                    //printf("Synchronized input backend %s for %d us to copy %s\n", ggml_backend_name(input_backend), int(tim2-tim1), input->name);
+                    //tim1 = ggml_time_us();
                     if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                         ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                     } else {
                         ggml_backend_synchronize(split_backend);
                     }
+                    //tim2 = ggml_time_us();
+                    //printf("Synchronized split backend %s (3) for %d us to copy %s\n", ggml_backend_name(input_backend), int(tim2-tim1), input->name);
                     ggml_backend_tensor_copy(input, input_cpy);
                 }
             }

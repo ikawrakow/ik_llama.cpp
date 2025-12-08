@@ -1744,6 +1744,60 @@ ggml_cgraph * llm_build_context::build_llama() {
 
     //const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : 1.f;
+
+    // Sadly, the following is much slower
+    if (false && model.split_mode == LLAMA_SPLIT_MODE_GRAPH && model.splits.size() > 1) {
+        int n_split = model.splits.size();
+        std::vector<ggml_tensor *> cur(model.splits.size(), inpL), prev(model.splits.size(), inpL);
+
+        auto combine = [&cur, &prev, n_split, ctx = ctx0] () {
+            for (int id = 0; id < n_split; ++id) {
+                if (cur[id]) {
+                    bool first = true;
+                    for (int id1 = 0; id1 < n_split; ++id1) {
+                        if (prev[id1]) {
+                            cur[id] = ggml_add(ctx, cur[id], prev[id1]);
+                            if (first) {
+                                cur[id]->op_params[0] = 0xff;
+                                first = false;
+                            }
+                        }
+                    }
+                }
+            }
+            for (int id = 0; id < n_split; ++id) prev[id] = cur[id];
+        };
+
+        for (int il = 0; il < n_layer; ++il) {
+
+            build_std_attention_split(gf, prev, inp_pos, nullptr, KQ_mask, nullptr, nullptr, kq_scale, hparams.f_attention_scale, 0, il);
+
+            if (il == n_layer - 1) {
+                // skip computing output for unused tokens
+                struct ggml_tensor * inp_out_ids = build_inp_out_ids();
+                n_tokens = n_outputs;
+                for (int id = 0; id < n_split; ++id) {
+                    if (cur[id])  cur[id]  = ggml_get_rows(ctx0, cur[id],  inp_out_ids);
+                    if (prev[id]) prev[id] = ggml_get_rows(ctx0, prev[id], inp_out_ids);
+                }
+            }
+
+            combine();
+
+            llm_build_ffn_split(ctx0, lctx, model.layers[il].ffn_norm, prev,
+                    model.layers[il].ffn_up, model.layers[il].ffn_gate, model.layers[il].ffn_down,
+                    LLM_FFN_SILU, cb, il, gf);
+
+            combine();
+        }
+
+        auto result = build_output(lctx, ctx0, cur[model.main_gpu], model.output, model.output_norm, cb);
+        cb(result, "result_output", -1);
+        ggml_build_forward_expand(gf, result);
+
+        return gf;
+    }
+
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
