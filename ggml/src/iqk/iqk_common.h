@@ -923,6 +923,15 @@ static IQK_ALWAYS_INLINE void prepare_iq4_nl_quants_r8(const int8x16_t& values, 
 
 #endif
 
+// static unrool for:
+template<int N, typename T> 
+inline void static_for(T&&f) {
+    if constexpr(N>0) {
+        static_for<N-1>(f);
+        f(N-1);
+    }
+}
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #include <intrin.h>
