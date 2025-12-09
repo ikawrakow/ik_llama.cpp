@@ -3417,6 +3417,16 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
     ggml_backend_buffer_t buf_src = src->view_src ? src->view_src->buffer : src->buffer;
     ggml_backend_buffer_t buf_dst = dst->view_src ? dst->view_src->buffer : dst->buffer;
 
+    if (!ggml_backend_is_cuda(backend_dst) || !ggml_backend_buffer_is_cuda(dst->buffer)) {
+        return false;
+    }
+    if (!ggml_backend_is_cuda(backend_src)) {
+        if (ggml_backend_buffer_is_host(buf_src) && ggml_backend_buffer_get_usage(buf_src) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            ggml_backend_cuda_set_tensor_async(backend_dst, dst, src->data, 0, ggml_nbytes(src));
+            return true;
+        }
+    }
+
     if (!ggml_backend_is_cuda(backend_src) || !ggml_backend_is_cuda(backend_dst)) {
         return false;
     }

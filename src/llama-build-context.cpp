@@ -851,6 +851,75 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     return cur;
 }
 
+//if (!backend || !ggml_backend_supports_op(backend, cur) || !ggml_backend_offload_op(backend, cur)) {
+static ggml_tensor * build_up_gate_exps(llama_context & lctx, ggml_context * ctx, llm_ffn_op_type type_op,
+        ggml_tensor * up, ggml_tensor * gate, ggml_tensor * up_b, ggml_tensor * gate_b,
+        ggml_tensor * selected_experts, ggml_tensor * cur, const llm_build_cb & cb, int il) {
+
+    ggml_tensor * par = nullptr;
+
+    if (up_b || gate_b) {
+        par = ggml_moe_up_gate_ext(ctx, up, gate, cur, selected_experts, up_b, gate_b,
+                type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
+                type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
+        return par;
+    }
+    GGML_ASSERT(type_op != LLM_FFN_SWIGLU_OAI_MOE);
+    par = ggml_moe_up_gate(ctx, up, gate, cur, selected_experts,
+            type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+    return par;
+    //int n_backend = ggml_backend_sched_get_n_backends(lctx.sched);
+    //bool up_is_host = ggml_backend_buffer_is_host(up->buffer);
+    //bool gate_is_host = ggml_backend_buffer_is_host(gate->buffer);
+    //printf("%s: checking for split in layer %d with %d backends, %d, %d, %s, %s\n", __func__, il, n_backend, up_is_host, gate_is_host,
+    //        ggml_backend_buffer_name(up->buffer), ggml_backend_buffer_name(gate->buffer));
+    if (int n_backend = ggml_backend_sched_get_n_backends(lctx.sched); n_backend > 2 &&
+            ggml_backend_buffer_is_host(up->buffer) && ggml_backend_buffer_is_host(gate->buffer)) {
+        bool should_offload = true;
+        for (int b = 0; b < n_backend-1; ++b) {
+            auto backend = ggml_backend_sched_get_backend(lctx.sched, b);
+            if (!backend || !ggml_backend_offload_op(backend, par)) {
+                //printf("  Backend %d (%s) says no to offload\n", b, ggml_backend_name(backend));
+                should_offload = false; break;
+            }
+        }
+        if (should_offload) {
+            //printf("Selected experts: %s, %ld x %ld x %ld x %ld\n", ggml_type_name(selected_experts->type), selected_experts->ne[0], selected_experts->ne[1], selected_experts->ne[2], selected_experts->ne[3]);
+            auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU;
+            GGML_ASSERT(up->ne[1] % 16 == 0);
+            auto nrows16 = up->ne[1]/16;
+            auto nrows16_per_backend = (nrows16 + n_backend-2) / (n_backend-1);
+            nrows16_per_backend *= 16;
+            std::vector<ggml_tensor *> up_gate; up_gate.reserve(n_backend-1);
+            for (int b = 0; b < n_backend-1; ++b) {
+                auto first = nrows16_per_backend*b;
+                auto last  = std::min(up->ne[1], first + nrows16_per_backend);
+                if (last > first) {
+                    auto up_view   = ggml_view_3d(ctx, up,   up->ne[0],   last-first, up->ne[2],   up->nb[1],   up->nb[2],   first*up->nb[1]);
+                    auto gate_view = ggml_view_3d(ctx, gate, gate->ne[0], last-first, gate->ne[2], gate->nb[1], gate->nb[2], first*gate->nb[1]);
+                    auto backend = ggml_backend_sched_get_backend(lctx.sched, b);
+                    //printf("Adding up_gate %ld...%ld on backend %s\n", first, last, ggml_backend_name(backend));
+                    up_gate.push_back(ggml_moe_up_gate(ctx, up_view, gate_view, cur, selected_experts, unary_op));
+                    ggml_backend_sched_set_tensor_backend(lctx.sched, up_gate.back(), backend);
+                    up_gate.back()->op_params[6] = 0xff;
+                    int il_b = 1000*(b+1) + il;
+                    cb(up_gate.back(), "ffn_up_gate", il_b);
+                }
+            }
+            //printf("Split up_gate into %d parts\n", int(up_gate.size()));
+            GGML_ASSERT(up_gate.size() >= 2);
+            par = ggml_concat(ctx, up_gate[0], up_gate[1], 0);
+            par->op_params[1] = 0xff;
+            cb(par, "ffn_up_gate_concat", il);
+            for (int b = 2; b < int(up_gate.size()); ++b) {
+                par = ggml_concat(ctx, par, up_gate[b], 0);
+                cb(par, "ffn_up_gate_concat", il);
+            }
+        }
+    }
+    return par;
+}
+
 ggml_tensor * llm_build_context::llm_build_moe_ffn(
         ggml_context * ctx,
        llama_context & lctx,
@@ -981,15 +1050,16 @@ llm_expert_gating_func_type   gating_op,
 
     ggml_tensor * par;
     if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type) {
-        if (up_exps_b || gate_exps_b) {
-            par = ggml_moe_up_gate_ext(ctx, up_exps, gate_exps, cur, selected_experts, up_exps_b, gate_exps_b,
-                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
-                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
-        } else {
-            GGML_ASSERT(type_op != LLM_FFN_SWIGLU_OAI_MOE);
-            par = ggml_moe_up_gate(ctx, up_exps, gate_exps, cur, selected_experts,
-                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
-        }
+        par = build_up_gate_exps(lctx, ctx, type_op, up_exps, gate_exps, up_exps_b, gate_exps_b, selected_experts, cur, cb, il);
+        //if (up_exps_b || gate_exps_b) {
+        //    par = ggml_moe_up_gate_ext(ctx, up_exps, gate_exps, cur, selected_experts, up_exps_b, gate_exps_b,
+        //            type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
+        //            type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
+        //} else {
+        //    GGML_ASSERT(type_op != LLM_FFN_SWIGLU_OAI_MOE);
+        //    par = ggml_moe_up_gate(ctx, up_exps, gate_exps, cur, selected_experts,
+        //            type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+        //}
     } else {
         ggml_tensor * up = llm_build_lora_mm_id(lctx, ctx, up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
