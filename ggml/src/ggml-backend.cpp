@@ -1953,6 +1953,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
 
                         ggml_backend_synchronize(ids_backend);
+                        needs_sync[tensor_backend_id(ids_tensor)] = false;
 
                         unique_ids.resize((n_expert + 31)/32);
                         std::memset(unique_ids.data(), 0, unique_ids.size()*sizeof(uint32_t));
@@ -2009,7 +2010,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                 if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-                    ggml_backend_synchronize(input_backend);
+                    int input_backend_id = tensor_backend_id(input);
+                    if (needs_sync[input_backend_id]) {
+                        ggml_backend_synchronize(input_backend);
+                        needs_sync[input_backend_id] = false;
+                    }
                     if (needs_sync[split_backend_id]) {
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
@@ -2023,7 +2028,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
 
-        needs_sync[split_backend_id] = true;
+        if (split->n_inputs > 0) {
+            needs_sync[split_backend_id] = true;
+        }
         if (!sched->callback_eval) {
 #if IK_PRINT_TIMING
             int64_t tim2 = ggml_time_us();
