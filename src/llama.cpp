@@ -5952,7 +5952,7 @@ struct llama_data_write_buffer : llama_data_write {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
         if (tensor->extra) {
-            write_tensor_data_split(tensor, offset, size, il);
+            get_tensor_data_split(tensor, offset, size, il);
         } else {
             ggml_backend_tensor_get(tensor, ptr, offset, size);
         }
@@ -5961,17 +5961,17 @@ struct llama_data_write_buffer : llama_data_write {
         buf_size -= size;
     }
 
-    void write_tensor_data_split(const ggml_tensor * tensor, size_t offset, size_t size, int il) {
+    void get_tensor_data_split(const ggml_tensor * tensor, size_t offset, size_t size, int il) {
         auto tt = ggml_internal_get_type_traits(tensor->type);
         if (tt.row_meta_size > 0) {
             throw std::runtime_error(std::string{"Split cache for type "} + ggml_type_name(tensor->type) + " is not supported");
         }
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
         auto kv = tensor->ne[1] > 1 ? model.layers[il].wk : model.layers[il].wv;
-        write_tensor_data_split(ptr, tensor, kv, aux_buffer, offset, size);
+        get_tensor_data_split(ptr, tensor, kv, aux_buffer, offset, size);
     }
 
-    static void write_tensor_data_split(uint8_t * ptr, const ggml_tensor * tensor, const ggml_tensor * kv,
+    static void get_tensor_data_split(uint8_t * ptr, const ggml_tensor * tensor, const ggml_tensor * kv,
             std::vector<uint8_t> & aux_buffer, size_t offset, size_t size) {
         auto ne = kv->ne[1];
         auto full_row_size = ggml_row_size(tensor->type, ne);
@@ -6057,19 +6057,18 @@ struct llama_data_write_file : llama_data_write {
     void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) override {
         temp_buffer.resize(size);
         if (tensor->extra) {
-            write_tensor_data_split(tensor, offset, size, il);
+            get_tensor_data_split(tensor, offset, size, il);
         } else {
             ggml_backend_tensor_get(tensor, temp_buffer.data(), offset, size);
         }
         write(temp_buffer.data(), temp_buffer.size());
     }
 
-    void write_tensor_data_split(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) {
+    void get_tensor_data_split(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) {
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
         auto kv = tensor->ne[1] > 1 ? model.layers[il].wk : model.layers[il].wv;
         temp_buffer.resize(size);
-        llama_data_write_buffer::write_tensor_data_split(temp_buffer.data(), tensor, kv, aux_buffer, offset, size);
-        write(temp_buffer.data(), temp_buffer.size());
+        llama_data_write_buffer::get_tensor_data_split(temp_buffer.data(), tensor, kv, aux_buffer, offset, size);
     }
 
     size_t get_size_written() override {
