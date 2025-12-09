@@ -1633,6 +1633,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
+            //if ((node->op == GGML_OP_ADD && node->op_params[0] == 0xff) ||
+            //     node->op == GGML_OP_SYNC) {
+            //    need_new_split = true;
+            //}
             if (node->op == GGML_OP_ADD && node->op_params[0] == 0xff) {
                 need_new_split = true;
             }
@@ -1906,7 +1910,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     } else {
                         ggml_backend_synchronize(split_backend);
                     }
-                    needs_sync[split_backend_id] = false;
+                    //needs_sync[split_backend_id] = false;
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
@@ -1917,7 +1921,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     } else {
                         ggml_backend_synchronize(split_backend);
                     }
-                    needs_sync[split_backend_id] = false;
+                    //needs_sync[split_backend_id] = false;
                 }
 
                 ggml_tensor * node = split->graph.nodes[0];
@@ -1953,7 +1957,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
 
                         ggml_backend_synchronize(ids_backend);
-                        needs_sync[tensor_backend_id(ids_tensor)] = false;
+                        //needs_sync[tensor_backend_id(ids_tensor)] = false;
 
                         unique_ids.resize((n_expert + 31)/32);
                         std::memset(unique_ids.data(), 0, unique_ids.size()*sizeof(uint32_t));
@@ -2013,7 +2017,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     int input_backend_id = tensor_backend_id(input);
                     if (needs_sync[input_backend_id]) {
                         ggml_backend_synchronize(input_backend);
-                        needs_sync[input_backend_id] = false;
+                        //needs_sync[input_backend_id] = false;
                     }
                     if (needs_sync[split_backend_id]) {
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
@@ -2021,7 +2025,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         } else {
                             ggml_backend_synchronize(split_backend);
                         }
-                        needs_sync[split_backend_id] = false;
+                        //needs_sync[split_backend_id] = false;
                     }
                     ggml_backend_tensor_copy(input, input_cpy);
                 }

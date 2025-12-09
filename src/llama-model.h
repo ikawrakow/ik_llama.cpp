@@ -312,6 +312,12 @@ struct llama_layer {
     std::unique_ptr<ggml_tensor> computed_wk_b;
     std::unique_ptr<ggml_tensor> computed_wv_b;
     std::unique_ptr<ggml_tensor> computed_wkv_b;
+
+    mutable ggml_split_tensor_t attn_splits;
+    mutable ggml_split_tensor_t ffn_splits;
+
+    mutable std::vector<ggml_tensor *> result_tensors_attn;
+    mutable std::vector<ggml_tensor *> result_tensors_ffn;
 };
 
 struct llama_lora_adapter;

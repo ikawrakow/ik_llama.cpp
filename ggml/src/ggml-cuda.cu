@@ -134,6 +134,7 @@ void ggml_cuda_set_device(int device) {
         return;
     }
 
+    //printf("%s: setting device to %d. Previous device was %d\n", __func__, device, current_device);
     CUDA_CHECK(cudaSetDevice(device));
 }
 
@@ -463,14 +464,29 @@ static std::mutex ggml_cuda_lock;
 static std::condition_variable ggml_cuda_lock_cv;
 static std::atomic<int> ggml_cuda_lock_counter;
 
+static std::map<int, std::vector<ggml_backend_cuda_context *>> & ggml_cude_device_context_map() {
+    static std::map<int, std::vector<ggml_backend_cuda_context *>> map;
+    return map;
+}
+
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
+    ggml_cude_device_context_map()[device].push_back(this);
 }
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
+
+    auto & map = ggml_cude_device_context_map();
+    if (auto it = map.find(this->device); it != map.end()) {
+        for (int j = 0; j < int(it->second.size()); ++j) {
+            if (it->second[j] == this) {
+                it->second.erase(it->second.begin() + j);
+            }
+        }
+    }
 
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
@@ -2944,6 +2960,8 @@ static inline bool ops_are_same_device(const ggml_cgraph * cgraph, int first, in
     return true;
 }
 
+void ggml_cuda_op_sync(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
 static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst, const ggml_cgraph * cgraph, int & i) {
 
 #if IK_PRINT_TIMING
@@ -3353,6 +3371,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cuda_flash_attn_ext(ctx, dst);
+            break;
+        case GGML_OP_SYNC:
+            ggml_cuda_op_sync(ctx, dst);
             break;
         default:
             return false;
@@ -4145,6 +4166,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
 #else
             return ggml_cuda_fattn_is_supported(*cuda_ctx, op);
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+        case GGML_OP_SYNC:
+            return true;
         default:
             return false;
     }
@@ -4391,6 +4414,61 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
     }
 
     return cuda_backend;
+}
+
+void ggml_cuda_op_sync(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    auto extra = (ggml_split_tensor_t *)dst->extra;
+    GGML_ASSERT(extra && extra->n_device > 0);
+    auto op = ggml_op(dst->op_params[0]);
+    GGML_ASSERT(op == GGML_OP_ADD);
+
+    auto local_dst = *dst;
+    auto src0 = local_dst.src[0];
+    local_dst.op = op;
+
+    auto & map = ggml_cude_device_context_map();
+
+    int n_add = 0;
+    size_t n_bytes = 0;
+    for (int i = 0; i < extra->n_device; ++i) {
+        if (extra->splits[i]) {
+            GGML_ASSERT(ggml_are_same_shape(src0, extra->splits[i]));
+            GGML_ASSERT(extra->splits[i]->buffer);
+            auto buffer_context = (ggml_backend_cuda_buffer_context *)extra->splits[i]->buffer->context;
+            GGML_ASSERT(map[buffer_context->device].size() == 1);
+            GGML_ASSERT(ggml_backend_buffer_is_cuda(extra->splits[i]->buffer));
+            GGML_ASSERT(buffer_context->device != ctx.device);
+            n_bytes += ggml_nbytes(extra->splits[i]);
+            ++n_add;
+        }
+    }
+    GGML_ASSERT(n_add > 0);
+
+    ggml_cuda_pool_alloc<char> data(ctx.pool(), n_bytes);
+
+    auto ptr = data.ptr;
+    for (int i = 0; i < extra->n_device; ++i) {
+        if (!extra->splits[i]) continue;
+        auto local_src = *extra->splits[i];
+        local_src.data = ptr;
+        local_dst.src[1] = &local_src;
+        auto buffer_context = (ggml_backend_cuda_buffer_context *)extra->splits[i]->buffer->context;
+        auto nb = ggml_nbytes(extra->splits[i]);
+        auto ctx_src = map[buffer_context->device].front();
+        //CUDA_CHECK(cudaStreamSynchronize(ctx_src->stream()));
+        //CUDA_CHECK(cudaMemcpyPeer(ptr, ctx.device, extra->splits[i]->data, buffer_context->device, nb));
+        //CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
+        ggml_cuda_set_device(ctx_src->device);
+        CUDA_CHECK(cudaMemcpyPeerAsync(ptr, ctx.device, extra->splits[i]->data, buffer_context->device, nb, ctx_src->stream()));
+        if (!ctx_src->copy_event) {
+            CUDA_CHECK(cudaEventCreateWithFlags(&ctx_src->copy_event, cudaEventDisableTiming));
+        }
+        CUDA_CHECK(cudaEventRecord(ctx_src->copy_event, ctx_src->stream()));
+        ggml_cuda_set_device(ctx.device);
+        CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), ctx_src->copy_event, 0));
+        ggml_cuda_op_add(ctx, &local_dst);
+        ptr += nb;
+    }
 }
 
 GGML_CALL bool ggml_backend_is_cuda(ggml_backend_t backend) {

@@ -649,13 +649,21 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         GGML_ASSERT(u->n_device == g->n_device && u->n_device == d->n_device);
         std::vector<ggml_tensor *> ffn;
         ffn.reserve(u->n_device);
+        auto & layer = lctx.model.layers[il];
+        layer.result_tensors_ffn.clear();
+        if ((int)lctx.ffn_buffes.size() < u->n_device) {
+            lctx.ffn_buffes.resize(u->n_device, nullptr);
+        }
         for (int id = 0; id < u->n_device; ++id) {
             int il_cb = 1000*(id+1) + il;
             auto split_u = u->splits[id];
             auto split_g = g->splits[id];
             auto split_d = d->splits[id];
             GGML_ASSERT((!split_u && !split_g && !split_d) || (split_u && split_g && split_d));
-            if (!split_u) continue;
+            if (!split_u) {
+                layer.result_tensors_ffn.push_back(nullptr);
+                continue;
+            }
             auto cur = input;
             if (ffn_norm && ffn_norm->extra) {
                 auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
@@ -676,28 +684,53 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             }
             if (cur->ne[1] >= 32) {
                 cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
+                cb(cur, "ffn_down_f16", il_cb);
             }
             if (graph) {
                 ggml_build_forward_expand(graph, cur);
             }
+            auto backend = ggml_backend_sched_get_backend(lctx.sched, id);
+            GGML_ASSERT(backend);
+            auto nbytes = ggml_nbytes(cur);
+            if (!lctx.ffn_buffes[id]) {
+                lctx.ffn_buffes[id] = ggml_backend_alloc_buffer(backend, nbytes);
+                ggml_backend_buffer_set_usage(lctx.ffn_buffes[id], GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            } else {
+                if (ggml_backend_buffer_get_size(lctx.ffn_buffes[id]) < ggml_nbytes(cur)) {
+                    ggml_backend_buffer_free(lctx.ffn_buffes[id]);
+                    lctx.ffn_buffes[id] = ggml_backend_alloc_buffer(backend, nbytes);
+                    ggml_backend_buffer_set_usage(lctx.ffn_buffes[id], GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                }
+            }
+            cur->buffer = lctx.ffn_buffes[id];
+            cur->data = ggml_backend_buffer_get_base(lctx.ffn_buffes[id]);
             ffn.push_back(cur);
+            layer.result_tensors_ffn.push_back(cur);
         }
         if (ffn.size() == 1) return ffn.front();
-        auto cur = ggml_add(ctx, ffn[0], ffn[1]);
+        layer.ffn_splits.n_device = u->n_device;
+        layer.ffn_splits.splits = layer.result_tensors_ffn.data();
+        auto cur = layer.result_tensors_ffn[1];
+        layer.result_tensors_ffn[1] = nullptr;
+        cur = ggml_sync(ctx, cur, &layer.ffn_splits, GGML_OP_ADD);
+        ggml_backend_sched_set_tensor_backend(lctx.sched, cur, ggml_backend_sched_get_backend(lctx.sched, 1));
         cb(cur, "combine_ffn", il);
-        cur->op_params[0] = 0xff;
-        for (int id = 2; id < int(ffn.size()); ++id) {
-            cur = ggml_add(ctx, cur, ffn[id]);
-            cb(cur, "combine_ffn", il);
-        }
-        if (ffn.size() > 2) {
-            cur->op_params[0] = 0xff;
-        }
-        //if (cur->type != GGML_TYPE_F32) {
-        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-        //}
-
         return cur;
+        //auto cur = ggml_add(ctx, ffn[0], ffn[1]);
+        //cb(cur, "combine_ffn", il);
+        //cur->op_params[0] = 0xff;
+        //for (int id = 2; id < int(ffn.size()); ++id) {
+        //    cur = ggml_add(ctx, cur, ffn[id]);
+        //    cb(cur, "combine_ffn", il);
+        //}
+        //if (ffn.size() > 2) {
+        //    cur->op_params[0] = 0xff;
+        //}
+        ////if (cur->type != GGML_TYPE_F32) {
+        ////    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+        ////}
+
+        //return cur;
     }
 
     if (ffn_norm) {
@@ -1808,6 +1841,10 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
+        if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+            //printf("Forcing split at %s\n", ffn_inp->name);
+            ffn_inp->op_params[0] = 0xff;
+        }
 
         // feed-forward network
         if (model.layers[il].ffn_gate_inp == nullptr) {
@@ -1875,6 +1912,10 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         cur = ggml_add(ctx0, cur, ffn_inp);
         cb(cur, "ffn_out", il);
+        if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+            //printf("Forcing split at %s\n", cur->name);
+            cur->op_params[0] = 0xff;
+        }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
@@ -9339,6 +9380,11 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 GGML_ASSERT(bv->n_device == wq->n_device);
             }
             std::vector<ggml_tensor*> attn; attn.reserve(wq->n_device);
+            auto & layer = lctx.model.layers[il];
+            layer.result_tensors_attn.clear();
+            if ((int)lctx.attn_buffes.size() < wq->n_device) {
+                lctx.attn_buffes.resize(wq->n_device);
+            }
             for (int id = 0; id < wq->n_device; ++id) {
                 int il_cb = 1000*(id+1) + il;
                 auto split_wq = wq->splits[id];
@@ -9349,7 +9395,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 auto split_vl = vl->splits[id];
                 GGML_ASSERT((!split_wq && !split_wk && !split_wv && !split_wo && !split_kl && !split_vl) ||
                         (split_wq && split_wk && split_wv && split_wo && split_kl && split_vl));
-                if (!split_wq) continue;
+                if (!split_wq) {
+                    layer.result_tensors_attn.push_back(nullptr);
+                    continue;
+                }
                 auto cur = input;
                 if (attn_norm) {
                     auto split_norm = attn_norm->splits[id];
@@ -9478,20 +9527,47 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 }
                 if (cur->ne[1] >= 32) {
                     cur = ggml_cast(ctx0, cur, GGML_TYPE_F16);
+                    cb(cur, "kqv_wo_f16", il_cb);
                 }
                 ggml_build_forward_expand(gf, cur);
+                auto backend = ggml_backend_sched_get_backend(lctx.sched, id);
+                GGML_ASSERT(backend);
+                auto nbytes = ggml_nbytes(cur);
+                if (!lctx.attn_buffes[id]) {
+                    lctx.attn_buffes[id] = ggml_backend_alloc_buffer(backend, nbytes);
+                    ggml_backend_buffer_set_usage(lctx.attn_buffes[id], GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                } else {
+                    if (ggml_backend_buffer_get_size(lctx.attn_buffes[id]) < nbytes) {
+                        GGML_ASSERT(il == 0); // we should only end up here if we are dealing with a larger batch size, and that should have been handled in layer 0
+                        ggml_backend_buffer_free(lctx.attn_buffes[id]);
+                        lctx.attn_buffes[id] = ggml_backend_alloc_buffer(backend, nbytes);
+                        ggml_backend_buffer_set_usage(lctx.attn_buffes[id], GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                    }
+                }
+                cur->buffer = lctx.attn_buffes[id];
+                cur->data = ggml_backend_buffer_get_base(lctx.attn_buffes[id]);
+                //printf("Setting up tensor %s with buffer %p and data %p\n", cur->name, (void *)cur->buffer, cur->data);
                 attn.push_back(cur);
+                layer.result_tensors_attn.push_back(cur);
             }
             GGML_ASSERT(!attn.empty());
             if (attn.size() == 1) return attn.front();
-            auto cur = ggml_add(ctx0, attn[0], attn[1]);
+            auto cur = layer.result_tensors_attn[1];
+            layer.result_tensors_attn[1] = nullptr;
+            layer.attn_splits.n_device = layer.result_tensors_attn.size();
+            layer.attn_splits.splits = layer.result_tensors_attn.data();
+            cur = ggml_sync(ctx0, cur, &layer.attn_splits, GGML_OP_ADD);
             cb(cur, "combine_attn", il);
-            cur->op_params[0] = 0xff;
-            for (int id = 2; id < (int)attn.size(); ++id) {
-                cur = ggml_add(ctx0, cur, attn[id]);
-                cb(cur, "combine_attn", il);
-            }
+            ggml_backend_sched_set_tensor_backend(lctx.sched, cur, ggml_backend_sched_get_backend(lctx.sched, 1));
             return cur;
+            //auto cur = ggml_add(ctx0, attn[0], attn[1]);
+            //cb(cur, "combine_attn", il);
+            //cur->op_params[0] = 0xff;
+            //for (int id = 2; id < (int)attn.size(); ++id) {
+            //    cur = ggml_add(ctx0, cur, attn[id]);
+            //    cb(cur, "combine_attn", il);
+            //}
+            //return cur;
         }
     }
 

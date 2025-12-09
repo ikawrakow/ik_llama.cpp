@@ -4291,9 +4291,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS_BACK",
 
     "GLU",
+
+    "SYNC",
 };
 
-static_assert(GGML_OP_COUNT == 92, "GGML_OP_COUNT != 92");
+static_assert(GGML_OP_COUNT == 93, "GGML_OP_COUNT != 93");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4398,10 +4400,12 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss(x,y)",
     "cross_entropy_loss_back(x,y)",
 
-    "glu(x),"
+    "glu(x),",
+
+    "sync",
 };
 
-static_assert(GGML_OP_COUNT == 92, "GGML_OP_COUNT != 92");
+static_assert(GGML_OP_COUNT == 93, "GGML_OP_COUNT != 93");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6058,6 +6062,36 @@ struct ggml_tensor * ggml_dup_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor * a) {
     return ggml_dup_impl(ctx, a, true);
+}
+
+struct ggml_tensor * ggml_sync(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_split_tensor * split, enum ggml_op op) {
+
+    GGML_ASSERT(op == GGML_OP_ADD); // we currently support only that
+
+    int n_add = 0;
+    for (int j = 0; j < split->n_device; ++j) {
+        // Note: we hide the participants in this sync-add operation so that
+        //       the ggml back-end does not get involved in memory allocations
+        //       and device synchronization. We doing that instead is
+        //       the whole purpose of this op.
+        if (split->splits[j]) {
+            GGML_ASSERT(ggml_are_same_shape(a, split->splits[j]));
+            ++n_add;
+        }
+    }
+    GGML_ASSERT(n_add > 0);
+    GGML_ASSERT(!a->extra);
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+    result->src[0] = a;
+    result->op = GGML_OP_SYNC;
+    result->extra = split;
+    result->op_params[0] = (int32_t)op;
+
+    return result;
 }
 
 // ggml_add
@@ -23113,6 +23147,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 // nop
             } break;
+        case GGML_OP_SYNC:
         case GGML_OP_COUNT:
             {
                 GGML_ABORT("fatal error");
@@ -24223,6 +24258,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
             {
                 // nop
             } break;
+        case GGML_OP_SYNC:
         case GGML_OP_COUNT:
             {
                 GGML_ABORT("fatal error");
@@ -24259,6 +24295,19 @@ static void ggml_visit_parents(struct ggml_cgraph * cgraph, struct ggml_tensor *
             ggml_visit_parents(cgraph, node->src[k]);
         }
     }
+
+    //if (node->op == GGML_OP_SYNC) {
+    //    const ggml_split_tensor_t * extra = (ggml_split_tensor_t *)node->extra;
+    //    if (extra) {
+    //        for (int i = 0; i < extra->n_device; ++i) {
+    //            if (extra->splits[i]) {
+    //                GGML_ASSERT(cgraph->n_nodes < cgraph->size);
+    //                cgraph->nodes[cgraph->n_nodes++] = extra->splits[i];
+    //                //ggml_visit_parents(cgraph, extra->splits[i]);
+    //            }
+    //        }
+    //    }
+    //}
 
     if (node->op == GGML_OP_NONE && node->grad == NULL) {
         // reached a leaf node, not part of the gradient graph (e.g. a constant)

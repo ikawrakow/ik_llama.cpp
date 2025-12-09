@@ -689,6 +689,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_SYNC,
+
         GGML_OP_COUNT,
     };
 
@@ -1429,10 +1431,12 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
-    //
-    // *** from mainline end ***
-    //
-
+    struct ggml_split_tensor;
+    GGML_API struct ggml_tensor * ggml_sync(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_split_tensor * split,
+            enum ggml_op op);
 
     // a - x
     // b - dy
@@ -3027,7 +3031,7 @@ extern "C" {
 
     GGML_API ggml_type_traits_t ggml_internal_get_type_traits(enum ggml_type type);
 
-    typedef struct {
+    typedef struct ggml_split_tensor {
         int                   n_device;
         int                   split_dim;
         struct ggml_tensor *  tensor;

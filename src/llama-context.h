@@ -221,6 +221,12 @@ struct llama_context {
     };
     std::vector<CacheCopy> cache_copies;
 
+    std::vector<ggml_backend_buffer_t> attn_buffes;
+    std::vector<ggml_backend_buffer_t> ffn_buffes;
+
+    std::vector<ggml_tensor *> attn_results;
+    std::vector<ggml_tensor *> ffn_results;
+
     bool update_cache_copies();
 
 };
