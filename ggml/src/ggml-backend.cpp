@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <set>
+#include <array>
 
 #define IK_PRINT_TIMING 0
 
@@ -1879,6 +1880,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<uint32_t> unique_ids;
     ggml_tensor * last_ids_tensor = nullptr;
 
+    std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync{{true}};
+
     for (int i = 0; i < sched->n_splits; i++) {
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
@@ -1897,18 +1900,24 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
             if (input->flags & GGML_TENSOR_FLAG_INPUT) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
-                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                    ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-                } else {
-                    ggml_backend_synchronize(split_backend);
+                if (needs_sync[split_backend_id]) {
+                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                        ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                    } else {
+                        ggml_backend_synchronize(split_backend);
+                    }
+                    needs_sync[split_backend_id] = false;
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
                 // wait for the split backend to finish using the input before overwriting it
-                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                    ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
-                } else {
-                    ggml_backend_synchronize(split_backend);
+                if (needs_sync[split_backend_id]) {
+                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                        ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
+                    } else {
+                        ggml_backend_synchronize(split_backend);
+                    }
+                    needs_sync[split_backend_id] = false;
                 }
 
                 ggml_tensor * node = split->graph.nodes[0];
@@ -2001,16 +2010,20 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                 if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
                     ggml_backend_synchronize(input_backend);
-                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                        ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-                    } else {
-                        ggml_backend_synchronize(split_backend);
+                    if (needs_sync[split_backend_id]) {
+                        if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                            ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                        } else {
+                            ggml_backend_synchronize(split_backend);
+                        }
+                        needs_sync[split_backend_id] = false;
                     }
                     ggml_backend_tensor_copy(input, input_cpy);
                 }
             }
         }
 
+        needs_sync[split_backend_id] = true;
         if (!sched->callback_eval) {
 #if IK_PRINT_TIMING
             int64_t tim2 = ggml_time_us();
