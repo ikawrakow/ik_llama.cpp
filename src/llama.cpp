@@ -1742,6 +1742,7 @@ static bool llm_load_tensors(
         int mla_attn,
         enum llama_split_mode split_mode,
         int main_gpu,
+        int max_gpu,
         const float * tensor_split,
         bool use_mlock,
         bool validate_quants,
@@ -1763,6 +1764,7 @@ static bool llm_load_tensors(
 
     model.split_mode   = split_mode;
     model.main_gpu     = main_gpu;
+    model.max_gpu      = max_gpu;
     model.n_gpu_layers = n_gpu_layers;
 
     const int n_layer     = hparams.n_layer;
@@ -2138,7 +2140,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 #endif
 
         if (!llm_load_tensors(
-            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.tensor_split,
+            ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu, params.tensor_split,
             params.use_mlock, params.validate_quants,
             params.progress_callback, params.progress_callback_user_data
         )) {
@@ -3985,6 +3987,7 @@ struct llama_model_params llama_model_default_params() {
         /*.mla                         =*/ 0,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
         /*.main_gpu                    =*/ 0,
+        /*.max_gpu                     =*/ 0,
         /*.tensor_split                =*/ nullptr,
         /*.rpc_servers                 =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
