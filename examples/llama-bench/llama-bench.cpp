@@ -1385,9 +1385,6 @@ struct test {
             field == "rcache" || field == "reuse") {
             return BOOL;
         }
-        if (field == "cuda_params" || field == "override_tensor") {
-            return STRING;
-        }
         if (field == "avg_ts" || field == "stddev_ts") {
             return FLOAT;
         }
