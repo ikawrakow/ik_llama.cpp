@@ -425,7 +425,7 @@ jobs:
 
     strategy:
       matrix:
-        cuda: ['12.8'] # , '11.7'
+        cuda: ['12.8', '13.1'] # , '11.7'
         instr: ['avx2', 'avx512', 'avx512_vnni', 'avx512_vnni_bf16', 'avx512_vnni_vbmi', 'avx512_vnni_vbmi_bf16'] # 'avx', 'noavx' won't compile because missing declarations all over the place
         
     steps:
