@@ -1358,7 +1358,7 @@ struct test {
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "fused_moe", "grouped_er",
-            "fused_up_gate", "use_thp", "ooae", "rcache", "cuda_params", "override_tensor",
+            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1380,7 +1380,7 @@ struct test {
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
             field == "gpu_blas" || field == "blas" || field == "sycl" ||field == "f16_kv" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
-            field == "fused_moe" || field == "grouped_er" || field == "fused_up_gate" || field == "ooae" || field == "mqkv" ||
+            field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
             field == "rcache" || field == "reuse") {
             return BOOL;
         }
@@ -1622,10 +1622,10 @@ struct markdown_printer : public printer {
         if (field == "rcache") {
             return 6;
         }
-        if (field == "fused_up_gate") {
+        if (field == "no_fused_up_gate") {
             return 6;
         }
-        if (field == "ooae") {
+        if (field == "no_ooae") {
             return 7;
         }
         if (field == "test") {
@@ -1689,10 +1689,10 @@ struct markdown_printer : public printer {
         if (field == "rcache") {
             return "rcache";
         }
-        if (field == "fused_up_gate") {
+        if (field == "no_fused_up_gate") {
             return "no-fug";
         }
-        if (field == "ooae") {
+        if (field == "no_ooae") {
             return "no-ooae";
         }
         if (field == "embeddings") {
@@ -1781,10 +1781,10 @@ struct markdown_printer : public printer {
             fields.emplace_back("rcache");
         }
         if (params.no_fug != cmd_params_defaults.no_fug) {
-            fields.emplace_back("fused_up_gate");
+            fields.emplace_back("no_fused_up_gate");
         }
         if (params.no_ooae != cmd_params_defaults.no_ooae) {
-            fields.emplace_back("ooae");
+            fields.emplace_back("no_ooae");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
