@@ -1212,6 +1212,7 @@ struct test {
     bool no_ooae = false;
     bool mqkv = false;
     bool rcache = false;
+    std::string override_tensor;
     int n_prompt;
     int n_gen;
     std::string test_time;
@@ -1253,6 +1254,20 @@ struct test {
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         no_ooae = inst.no_ooae;
+        
+        if (inst.buft_overrides) {
+            const auto* bo = inst.buft_overrides;
+            while (bo->name) {
+                if (!override_tensor.empty()) {
+                    override_tensor += ",";
+                }
+                override_tensor += bo->name;
+                override_tensor += "=";
+                override_tensor += ggml_backend_buft_name(bo->buft);
+                bo++;
+            }
+        }
+
         n_prompt = inst.n_prompt;
         n_gen = inst.n_gen;
         test_kind = inst.test_kind;
@@ -1344,7 +1359,7 @@ struct test {
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "fused_moe", "grouped_er",
-            "fused_up_gate", "use_thp", "ooae", "rcache",
+            "fused_up_gate", "use_thp", "ooae", "rcache", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1369,6 +1384,9 @@ struct test {
             field == "fused_moe" || field == "grouped_er" || field == "fused_up_gate" || field == "ooae" || field == "mqkv" ||
             field == "rcache" || field == "reuse") {
             return BOOL;
+        }
+        if (field == "cuda_params" || field == "override_tensor") {
+            return STRING;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
             return FLOAT;
@@ -1412,6 +1430,7 @@ struct test {
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
             std::to_string(repack), std::to_string(fmoe), std::to_string(ger), std::to_string(rcache),
             std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(mqkv),
+            cuda_params, override_tensor,
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
             std::to_string(avg_ts()), std::to_string(stdev_ts()),
