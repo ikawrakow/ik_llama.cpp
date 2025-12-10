@@ -352,7 +352,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                       (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
     printf("  -w, --warmup <0|1>                  (default: %s)\n", cmd_params_defaults.warmup ? "1" : "0");
     printf("  -rtr, --run-time-repack <0|1>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
-    printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
+    printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.cuda_params.c_str());
     printf("  -mqkv, --merge-qkv                  (default: %s)\n", cmd_params_defaults.mqkv ? "1" : "0");
     printf("  -rcache, --rope-cache               (default: %s)\n", cmd_params_defaults.rcache ? "1" : "0");
     printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
@@ -1254,17 +1254,16 @@ struct test {
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         no_ooae = inst.no_ooae;
-        
         if (inst.buft_overrides) {
-            const auto* bo = inst.buft_overrides;
-            while (bo->name) {
+            const auto * bo = inst.buft_overrides;
+            while (bo->pattern) {
                 if (!override_tensor.empty()) {
                     override_tensor += ",";
                 }
-                override_tensor += bo->name;
+                override_tensor += bo->pattern;
                 override_tensor += "=";
                 override_tensor += ggml_backend_buft_name(bo->buft);
-                bo++;
+                ++bo;
             }
         }
 
@@ -1415,7 +1414,7 @@ struct test {
         bool is_gen = n_gen > 0;
         std::vector<std::string> values = {
             build_commit, std::to_string(build_number),
-            std::to_string(cuda), std::to_string(vulkan), std::to_string(vulkan),
+            std::to_string(cuda), std::to_string(vulkan), std::to_string(kompute),
             std::to_string(metal), std::to_string(sycl), std::to_string(has_rpc), std::to_string(gpu_blas), std::to_string(blas),
             cpu_info, gpu_info,
             model_filename, model_type, std::to_string(model_size), std::to_string(model_n_params),
