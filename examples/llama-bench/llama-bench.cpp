@@ -1378,7 +1378,7 @@ struct test {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
-            field == "gpu_blas" || field == "blas" || field == "sycl" ||field == "f16_kv" || field == "no_kv_offload" ||
+            field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
             field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
             field == "rcache" || field == "reuse") {
@@ -1424,8 +1424,8 @@ struct test {
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser), std::to_string(reuse),
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
-            std::to_string(repack), std::to_string(fmoe), std::to_string(ger), std::to_string(rcache),
-            std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(mqkv),
+            std::to_string(repack), std::to_string(mqkv), std::to_string(fmoe), std::to_string(ger),
+            std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache),
             cuda_params, override_tensor,
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
@@ -1866,6 +1866,17 @@ struct markdown_printer : public printer {
 };
 
 struct sql_printer : public printer {
+    static std::string escape_sql(const std::string & value) {
+        std::string escaped;
+        for (auto c : value) {
+            if (c == '\'') {
+                escaped += "''";
+            } else {
+                escaped += c;
+            }
+        }
+        return escaped;
+    }
     static std::string get_sql_field_type(const std::string & field) {
         switch (test::get_field_type(field)) {
             case test::STRING:
@@ -1896,6 +1907,7 @@ struct sql_printer : public printer {
         fprintf(fout, "INSERT INTO test (%s) ", join(test::get_fields(), ", ").c_str());
         fprintf(fout, "VALUES (");
         std::vector<std::string> values = t.get_values();
+        std::transform(values.begin(), values.end(), values.begin(), escape_sql);
         for (size_t i = 0; i < values.size(); i++) {
             fprintf(fout, "'%s'%s", values.at(i).c_str(), i < values.size() - 1 ? ", " : "");
         }
