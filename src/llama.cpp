@@ -5733,10 +5733,10 @@ struct llama_data_read {
         std::vector<uint8_t> aux;
         for (int id = 0; id < extra->n_device; ++id) {
             auto split = extra->splits[id];
-            GGML_ASSERT(split->type == tensor->type);
             auto kv_split = kv_extra->splits[id];
             GGML_ASSERT((split && kv_split) || (!split && !kv_split));
             if (!split) continue;
+            GGML_ASSERT(split->type == tensor->type);
             auto split_row_size = ggml_row_size(tensor->type, kv_split->ne[1]);
             aux.resize(split_row_size*nrows);
             auto src = data + sum_split_row_size;
