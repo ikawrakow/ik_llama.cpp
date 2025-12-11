@@ -352,7 +352,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                       (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
     printf("  -w, --warmup <0|1>                  (default: %s)\n", cmd_params_defaults.warmup ? "1" : "0");
     printf("  -rtr, --run-time-repack <0|1>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
-    printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.repack ? "1" : "0");
+    printf("  -cuda, --cuda-params <string>       (default: %s)\n", cmd_params_defaults.cuda_params.c_str());
     printf("  -mqkv, --merge-qkv                  (default: %s)\n", cmd_params_defaults.mqkv ? "1" : "0");
     printf("  -rcache, --rope-cache               (default: %s)\n", cmd_params_defaults.rcache ? "1" : "0");
     printf("  -thp, --transparent-huge-pages <0|1> (default: %s)\n", cmd_params_defaults.use_thp? "1" : "0");
@@ -1212,6 +1212,7 @@ struct test {
     bool no_ooae = false;
     bool mqkv = false;
     bool rcache = false;
+    std::string override_tensor;
     int n_prompt;
     int n_gen;
     std::string test_time;
@@ -1253,6 +1254,19 @@ struct test {
         no_fug = inst.no_fug;
         use_thp = inst.use_thp;
         no_ooae = inst.no_ooae;
+        if (inst.buft_overrides) {
+            const auto * bo = inst.buft_overrides;
+            while (bo->pattern) {
+                if (!override_tensor.empty()) {
+                    override_tensor += ",";
+                }
+                override_tensor += bo->pattern;
+                override_tensor += "=";
+                override_tensor += ggml_backend_buft_name(bo->buft);
+                ++bo;
+            }
+        }
+
         n_prompt = inst.n_prompt;
         n_gen = inst.n_gen;
         test_kind = inst.test_kind;
@@ -1344,7 +1358,7 @@ struct test {
             "n_gpu_layers", "split_mode",
             "main_gpu", "no_kv_offload", "flash_attn", "mla_attn", "attn_max_batch", "ser", "reuse",
             "tensor_split", "use_mmap", "embeddings", "repack", "mqkv", "fused_moe", "grouped_er",
-            "fused_up_gate", "use_thp", "ooae", "rcache",
+            "no_fused_up_gate", "use_thp", "no_ooae", "rcache", "cuda_params", "override_tensor",
             "n_prompt", "n_gen", "test_time",
             "avg_ns", "stddev_ns",
             "avg_ts", "stddev_ts", "test",
@@ -1364,9 +1378,9 @@ struct test {
             return INT;
         }
         if (field == "cuda" || field == "vulkan" || field == "kompute" || field == "metal" ||
-            field == "gpu_blas" || field == "blas" || field == "sycl" ||field == "f16_kv" || field == "no_kv_offload" ||
+            field == "gpu_blas" || field == "blas" || field == "sycl" || field == "no_kv_offload" ||
             field == "flash_attn" || field == "use_mmap" || field == "embeddings" || field == "repack" || field == "use_thp" ||
-            field == "fused_moe" || field == "grouped_er" || field == "fused_up_gate" || field == "ooae" || field == "mqkv" ||
+            field == "fused_moe" || field == "grouped_er" || field == "no_fused_up_gate" || field == "no_ooae" || field == "mqkv" ||
             field == "rcache" || field == "reuse") {
             return BOOL;
         }
@@ -1400,7 +1414,7 @@ struct test {
         bool is_gen = n_gen > 0;
         std::vector<std::string> values = {
             build_commit, std::to_string(build_number),
-            std::to_string(cuda), std::to_string(vulkan), std::to_string(vulkan),
+            std::to_string(cuda), std::to_string(vulkan), std::to_string(kompute),
             std::to_string(metal), std::to_string(sycl), std::to_string(has_rpc), std::to_string(gpu_blas), std::to_string(blas),
             cpu_info, gpu_info,
             model_filename, model_type, std::to_string(model_size), std::to_string(model_n_params),
@@ -1410,8 +1424,9 @@ struct test {
             std::to_string(main_gpu), std::to_string(no_kv_offload), std::to_string(flash_attn),
             std::to_string(mla_attn), std::to_string(attn_max_batch), ser_to_string(ser), std::to_string(reuse),
             tensor_split_str, std::to_string(use_mmap), std::to_string(embeddings),
-            std::to_string(repack), std::to_string(fmoe), std::to_string(ger), std::to_string(rcache),
-            std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(mqkv),
+            std::to_string(repack), std::to_string(mqkv), std::to_string(fmoe), std::to_string(ger),
+            std::to_string(no_fug), std::to_string(use_thp), std::to_string(no_ooae), std::to_string(rcache),
+            cuda_params, override_tensor,
             std::to_string(n_prompt), std::to_string(n_gen), test_time,
             std::to_string(avg_ns()), std::to_string(stdev_ns()),
             std::to_string(avg_ts()), std::to_string(stdev_ts()),
@@ -1607,10 +1622,10 @@ struct markdown_printer : public printer {
         if (field == "rcache") {
             return 6;
         }
-        if (field == "fused_up_gate") {
+        if (field == "no_fused_up_gate") {
             return 6;
         }
-        if (field == "ooae") {
+        if (field == "no_ooae") {
             return 7;
         }
         if (field == "test") {
@@ -1674,10 +1689,10 @@ struct markdown_printer : public printer {
         if (field == "rcache") {
             return "rcache";
         }
-        if (field == "fused_up_gate") {
+        if (field == "no_fused_up_gate") {
             return "no-fug";
         }
-        if (field == "ooae") {
+        if (field == "no_ooae") {
             return "no-ooae";
         }
         if (field == "embeddings") {
@@ -1685,6 +1700,12 @@ struct markdown_printer : public printer {
         }
         if (field == "tensor_split") {
             return "ts";
+        }
+        if (field == "cuda_params") {
+            return "cuda";
+        }
+        if (field == "override_tensor") {
+            return "ot";
         }
         return field;
     }
@@ -1747,6 +1768,12 @@ struct markdown_printer : public printer {
         if (params.embeddings.size() > 1 || params.embeddings != cmd_params_defaults.embeddings) {
             fields.emplace_back("embeddings");
         }
+        if (params.cuda_params != cmd_params_defaults.cuda_params) {
+            fields.emplace_back("cuda_params");
+        }
+        if (params.buft_overrides != cmd_params_defaults.buft_overrides) {
+            fields.emplace_back("override_tensor");
+        }
         if (params.repack != cmd_params_defaults.repack) {
             fields.emplace_back("repack");
         }
@@ -1766,10 +1793,10 @@ struct markdown_printer : public printer {
             fields.emplace_back("rcache");
         }
         if (params.no_fug != cmd_params_defaults.no_fug) {
-            fields.emplace_back("fused_up_gate");
+            fields.emplace_back("no_fused_up_gate");
         }
         if (params.no_ooae != cmd_params_defaults.no_ooae) {
-            fields.emplace_back("ooae");
+            fields.emplace_back("no_ooae");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
@@ -1851,6 +1878,17 @@ struct markdown_printer : public printer {
 };
 
 struct sql_printer : public printer {
+    static std::string escape_sql(const std::string & value) {
+        std::string escaped;
+        for (auto c : value) {
+            if (c == '\'') {
+                escaped += "''";
+            } else {
+                escaped += c;
+            }
+        }
+        return escaped;
+    }
     static std::string get_sql_field_type(const std::string & field) {
         switch (test::get_field_type(field)) {
             case test::STRING:
@@ -1881,6 +1919,7 @@ struct sql_printer : public printer {
         fprintf(fout, "INSERT INTO test (%s) ", join(test::get_fields(), ", ").c_str());
         fprintf(fout, "VALUES (");
         std::vector<std::string> values = t.get_values();
+        std::transform(values.begin(), values.end(), values.begin(), escape_sql);
         for (size_t i = 0; i < values.size(); i++) {
             fprintf(fout, "'%s'%s", values.at(i).c_str(), i < values.size() - 1 ? ", " : "");
         }
