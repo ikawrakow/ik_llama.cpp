@@ -467,11 +467,16 @@ std::vector<std::pair<T1,T2>> string_split_pairs(const std::string & str, char d
     }
     return values;
 }
-}
-namespace std {
 bool operator==(const llama_model_tensor_buft_override & lhs, const llama_model_tensor_buft_override & rhs) {
     return lhs.buft == rhs.buft &&
           ((lhs.pattern == nullptr && rhs.pattern == nullptr) || strcmp(lhs.pattern, rhs.pattern) == 0);
+}
+bool operator==(const std::vector<llama_model_tensor_buft_override> & lhs, const std::vector<llama_model_tensor_buft_override> & rhs) {
+    if (lhs.size() != rhs.size()) return false;
+    for (int i = 0; i < int(lhs.size()); ++i) {
+        if (!(lhs[i] == rhs[i])) return false;
+    }
+    return true;
 }
 }
 
