@@ -350,6 +350,7 @@ struct llama_model {
 
     llama_split_mode split_mode;
     int main_gpu;
+    int max_gpu = 0; // max. number of GPUs to use per layer for aplit mode "graph"
     int n_gpu_layers;
 
     std::vector<rpc_device> rpc_servers;
