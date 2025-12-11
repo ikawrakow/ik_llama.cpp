@@ -468,6 +468,12 @@ std::vector<std::pair<T1,T2>> string_split_pairs(const std::string & str, char d
     return values;
 }
 }
+namespace std {
+bool operator==(const llama_model_tensor_buft_override & lhs, const llama_model_tensor_buft_override & rhs) {
+    return lhs.buft == rhs.buft &&
+          ((lhs.pattern == nullptr && rhs.pattern == nullptr) || strcmp(lhs.pattern, rhs.pattern) == 0);
+}
+}
 
 static cmd_params parse_cmd_params(int argc, char ** argv) {
     cmd_params params;
@@ -1771,7 +1777,7 @@ struct markdown_printer : public printer {
         if (params.cuda_params != cmd_params_defaults.cuda_params) {
             fields.emplace_back("cuda_params");
         }
-        if (params.buft_overrides != cmd_params_defaults.buft_overrides) {
+        if (!(params.buft_overrides == cmd_params_defaults.buft_overrides)) {
             fields.emplace_back("override_tensor");
         }
         if (params.repack != cmd_params_defaults.repack) {
