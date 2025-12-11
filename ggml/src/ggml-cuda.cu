@@ -1434,59 +1434,30 @@ static void ggml_cuda_op_mul_mat_cublas(
     GGML_UNUSED(src1_padded_row_size);
 }
 
-#if 0
-static void ggml_cuda_set_peer_access(const int n_tokens, int main_device) {
-    static bool peer_access_enabled = false;
+static void ggml_cuda_set_peer_access(int main_device) {
+    ggml_cuda_set_device(main_device);
 
-    const bool enable_peer_access = n_tokens <= GGML_CUDA_PEER_MAX_BATCH_SIZE;
+    for (int id_other = 0; id_other < ggml_backend_cuda_get_device_count(); ++id_other) {
+        if (main_device == id_other) {
+            continue;
+        }
 
-    if (peer_access_enabled == enable_peer_access) {
-        return;
-    }
-
-#ifdef NDEBUG
-    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-        ggml_cuda_set_device(id);
-        CUDA_CHECK(cudaDeviceSynchronize());
-    }
-
-    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-        ggml_cuda_set_device(id);
-
-        for (int id_other = 0; id_other < ggml_backend_cuda_get_device_count(); ++id_other) {
-            if (id == id_other) {
-                continue;
-            }
-            if (id != main_device && id_other != main_device) {
-                continue;
-            }
-
-            int can_access_peer;
-            CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, id, id_other));
-            if (can_access_peer) {
-                if (enable_peer_access) {
-                    cudaError_t err = cudaDeviceEnablePeerAccess(id_other, 0);
-                    if (err != cudaErrorPeerAccessAlreadyEnabled) {
-                        CUDA_CHECK(err);
-                    }
-                } else {
-                    cudaError_t err = cudaDeviceDisablePeerAccess(id_other);
-                    if (err != cudaErrorPeerAccessNotEnabled) {
-                        CUDA_CHECK(err);
-                    }
-                }
+        int can_access_peer;
+        CUDA_CHECK(cudaDeviceCanAccessPeer(&can_access_peer, main_device, id_other));
+        if (can_access_peer) {
+//~ #ifdef NDEBUG
+            GGML_CUDA_LOG_INFO(" =========================== %s: Enabling Peer Access between Devices %d->%d\n", __func__, main_device, id_other);
+//~ #endif //NDEBUG
+            cudaError_t err = cudaDeviceEnablePeerAccess(id_other, 0);
+            if (err != cudaErrorPeerAccessAlreadyEnabled) {
+                CUDA_CHECK(err);
+            } else {
+                // reset the error
+                (void)cudaGetLastError();
             }
         }
     }
-
-    ggml_cuda_set_device(main_device);
-#endif // NDEBUG
-
-    peer_access_enabled = enable_peer_access;
-
-    GGML_UNUSED(main_device);
 }
-#endif
 
 static cudaError_t ggml_cuda_Memcpy2DPeerAsync(
     void * dst, int dstDevice, size_t dpitch, void * src, int srcDevice, size_t spitch, size_t width, size_t height, cudaStream_t stream) {
@@ -4389,6 +4360,10 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         }
 #endif
     }
+
+#if !defined(GGML_CUDA_NO_PEER_COPY)
+    ggml_cuda_set_peer_access(device);
+#endif
 
     return cuda_backend;
 }
