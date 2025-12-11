@@ -1701,6 +1701,12 @@ struct markdown_printer : public printer {
         if (field == "tensor_split") {
             return "ts";
         }
+        if (field == "cuda_params") {
+            return "cuda";
+        }
+        if (field == "override_tensor") {
+            return "ot";
+        }
         return field;
     }
 
@@ -1761,6 +1767,12 @@ struct markdown_printer : public printer {
         }
         if (params.embeddings.size() > 1 || params.embeddings != cmd_params_defaults.embeddings) {
             fields.emplace_back("embeddings");
+        }
+        if (params.cuda_params != cmd_params_defaults.cuda_params) {
+            fields.emplace_back("cuda_params");
+        }
+        if (params.buft_overrides != cmd_params_defaults.buft_overrides) {
+            fields.emplace_back("override_tensor");
         }
         if (params.repack != cmd_params_defaults.repack) {
             fields.emplace_back("repack");
