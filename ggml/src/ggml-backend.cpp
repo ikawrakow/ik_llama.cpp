@@ -2053,6 +2053,19 @@ static ggml_status ggml_backend_sched_compute_splits_sm_graph(ggml_backend_sched
             }
             this_split.push_back(split_j);
         }
+        if (false) {
+            auto split = this_split.front();
+            if (this_split.size() == 1) {
+                printf("=== Split %d with %d inputs on backend %d\n", i, split->n_inputs, split->backend_id);
+            } else {
+                printf("=== Split %d with %d inputs on backends", i, split->n_inputs);
+                for (int j = 0; j < (int)this_split.size(); ++j) printf(" %d", this_split[j]->backend_id);
+                printf("\n");
+            }
+            for (int j = 0; j < split->graph.n_nodes; ++j) {
+                printf("  %d  %s(%s)\n", j, ggml_op_name(split->graph.nodes[j]->op), split->graph.nodes[j]->name);
+            }
+        }
         for (auto split : this_split) {
             ggml_backend_sched_copy_inputs(sched, split, needs_sync, ids, unique_ids, last_ids_tensor);
         }
