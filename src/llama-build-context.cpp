@@ -7263,14 +7263,13 @@ ggml_cgraph * llm_build_context::build_cohere2() {
     cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
 
-    // lm_head
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
-    cb(cur, "output", -1);
-
     if (f_logit_scale) {
         cur = ggml_scale(ctx0, cur, f_logit_scale);
+        cb(cur, "result_norm_scaled", -1);
     }
 
+    // lm_head
+    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
