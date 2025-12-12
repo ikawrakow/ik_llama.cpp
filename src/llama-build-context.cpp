@@ -693,9 +693,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         if (ffn.size() > 2) {
             cur->op_params[0] = 0xff;
         }
-        //if (cur->type != GGML_TYPE_F32) {
-        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-        //}
+        if (cur->type != GGML_TYPE_F32) {
+            cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+        }
 
         return cur;
     }
@@ -1224,10 +1224,10 @@ llm_expert_gating_func_type   gating_op,
         } else {
             cur = routed_out;
         }
-        //if (cur->ne[1] >= 32) {
-        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
-        //    cb(cur, "ffn_out_f16", il_cb);
-        //}
+        if (cur->ne[1] >= 32) {
+            cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
+            cb(cur, "ffn_out_f16", il_cb);
+        }
         ggml_build_forward_expand(graph, routed_out);
         results.push_back(cur);
     }
@@ -9460,9 +9460,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     cur = ggml_add(ctx0, cur, bo->splits[id]);
                     cb(cur, "kqv_wo_biased", il_cb);
                 }
-                //if (cur->ne[1] >= 32) {
-                //    cur = ggml_cast(ctx0, cur, GGML_TYPE_F16);
-                //}
+                if (cur->ne[1] >= 32) {
+                    cur = ggml_cast(ctx0, cur, GGML_TYPE_F16);
+                }
                 ggml_build_forward_expand(gf, cur);
                 attn.push_back(cur);
             }

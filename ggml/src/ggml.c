@@ -7232,7 +7232,12 @@ static struct ggml_tensor * ggml_norm_impl(
         is_node = true;
     }
 
-    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    if (inplace && a->type != GGML_TYPE_F32) {
+        GGML_ABORT("Fatal error");
+    }
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : a->type == GGML_TYPE_F32 ? ggml_dup_tensor(ctx, a)
+        : ggml_new_tensor_4d(ctx, GGML_TYPE_F32, a->ne[0], a->ne[1], a->ne[2], a->ne[3]);
 
     ggml_set_op_params(result, &eps, sizeof(eps));
 
