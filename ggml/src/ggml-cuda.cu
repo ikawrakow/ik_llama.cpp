@@ -4262,6 +4262,7 @@ struct cuda_params {
 #else
     bool use_cuda_graph = false;
 #endif
+    bool enable_p2p = true;
 };
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
@@ -4308,6 +4309,9 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
             else if (parsed[0] == "mmq-id-size") {
                 is_good = read_value(parsed[1], params.mmq_id_thresh);
             }
+            else if (parsed[0] == "enable-p2p") {
+                is_good = read_value(parsed[1], params.enable_p2p);
+            }
 #ifdef USE_CUDA_GRAPH
             else if (parsed[0] == "graphs") {
                 is_good = read_value(parsed[1], params.use_cuda_graph);
@@ -4339,6 +4343,7 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         /* .context   = */ ctx
     };
 
+    bool enable_p2p = true;
     if (param_string) {
         [[maybe_unused]] auto params = ggml_cuda_parse_params((const char *)param_string);
         if (params.fusion != ctx->fusion) {
@@ -4353,6 +4358,7 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
             GGML_CUDA_LOG_INFO(" =========================== %s: setting mmq_id_thresh to %d\n", __func__, params.mmq_id_thresh);
             ctx->mmq_id_thresh      = params.mmq_id_thresh;
         }
+        enable_p2p = params.enable_p2p;
 #ifdef USE_CUDA_GRAPH
         if (params.use_cuda_graph != ctx->use_cuda_graph) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting use_cuda_graph to %d\n", __func__, params.use_cuda_graph);
@@ -4362,7 +4368,9 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
     }
 
 #if !defined(GGML_CUDA_NO_PEER_COPY)
-    ggml_cuda_set_peer_access(device);
+    if (enable_p2p) {
+        ggml_cuda_set_peer_access(device);
+    }
 #endif
 
     return cuda_backend;
