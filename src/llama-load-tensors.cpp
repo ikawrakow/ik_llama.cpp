@@ -2259,18 +2259,13 @@ bool create_tensors_helper::create_chatglm_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_cohere2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
-    // output
-    model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
-    // init output from the input tok embed
-    model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab },
-            llama_model_loader::TENSOR_DUPLICATED);
+    create_embd_output(tn, n_embd, n_vocab, true, false); //true);
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = model.layers[i];
-        ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
+        ggml_context * ctx_layer = ctx_for_layer(i);
 
         layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
 
