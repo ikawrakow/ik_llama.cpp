@@ -442,6 +442,7 @@ extern "C" {
         float thresh_experts;
         bool only_active_experts;
         bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
+        bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
