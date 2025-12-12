@@ -4771,6 +4771,9 @@ struct llama_context * llama_new_context_with_model(
         LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXX Setting only active experts offload\n");
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
+    if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && !model->has_tensor_overrides()) {
+        ggml_backend_sched_set_split_mode_graph(ctx->sched, true);
+    }
 
     return ctx;
 }
