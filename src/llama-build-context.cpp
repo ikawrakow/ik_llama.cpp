@@ -1228,6 +1228,7 @@ llm_expert_gating_func_type   gating_op,
             cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
             cb(cur, "ffn_out_f16", il_cb);
         }
+        ggml_build_forward_expand(graph, routed_out);
         results.push_back(cur);
     }
     GGML_ASSERT(!results.empty());
