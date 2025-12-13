@@ -71,6 +71,8 @@ add_library(${TARGET} STATIC
     json-schema-to-grammar.cpp
     train.h
     train.cpp
+    log.cpp
+    log.h    
     ngram-cache.h
     ngram-cache.cpp
     speculative.cpp
