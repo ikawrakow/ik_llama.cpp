@@ -1,9 +1,8 @@
 #include "server-task.h"
 #include "server-queue.h"
-#include <functional>
+#include "server-common.h"
 
 #include "log.h"
-#include "server-common.h"
 #include <chrono>
 
 #define QUE_INF(fmt, ...) LOG_INF("que  %12.*s: " fmt, 12, __func__, __VA_ARGS__)

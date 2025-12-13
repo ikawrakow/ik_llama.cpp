@@ -3,9 +3,10 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include <src/llama-impl.h>
 #include "chat.h"
 #include "mtmd.h"
-
+#include "mtmd-helper.h"
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
@@ -15,16 +16,11 @@
 
 
 
-#include "llama.h"
-#include <src/llama-impl.h>
-#include "common.h"
-
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "base64.hpp"
 
-#include "mtmd-helper.h"
-#include "chat.h"
+
 #include <string>
 #include <vector>
 #include <sstream>
@@ -44,6 +40,18 @@
 #define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo-0613"
 
 using json = nlohmann::ordered_json;
+
+#define SLT_INF(slot, fmt, ...) LOG_INF("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_CNT(slot, fmt, ...) LOG_CNT(""                                 fmt,                                                                __VA_ARGS__)
+#define SLT_WRN(slot, fmt, ...) LOG_WRN("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_ERR(slot, fmt, ...) LOG_ERR("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+
+#define SRV_INF(fmt, ...) LOG_INF("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SRV_CNT(fmt, ...) LOG_CNT(""              fmt,               __VA_ARGS__)
+#define SRV_WRN(fmt, ...) LOG_WRN("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SRV_ERR(fmt, ...) LOG_ERR("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SRV_DBG(fmt, ...) LOG_DBG("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 
 // https://community.openai.com/t/openai-chat-list-of-error-codes-and-types/357791/11
 enum error_type {

@@ -1,12 +1,13 @@
 #include "server-task.h"
 #include "server-queue.h"
+#include "speculative.h"
 #include "json-schema-to-grammar.h"
 #include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
 #include <memory>
 
-#include "speculative.h"
+
 
 enum slot_state {
     SLOT_STATE_IDLE,

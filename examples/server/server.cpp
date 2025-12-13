@@ -1,14 +1,13 @@
 #pragma warning(disable : 4996)
 #include "server-context.h"
-#include "chat.h"
 #include "server-common.h"
+#include "chat.h"
+
 #include "common.h"
 #include "speculative.h"
 #include "mtmd.h"
 #include "sampling.h"
-#include "json-schema-to-grammar.h"
 #include "llama.h"
-#include "grammar-parser.h"
 #include "llama-vocab.h"
 
 #ifndef NDEBUG
@@ -51,9 +50,6 @@ using json = nlohmann::ordered_json;
 
 bool server_verbose = false;
 bool server_log_json = true;
-
-
-
 
 
 enum server_state {
@@ -239,31 +235,6 @@ static std::vector<json> format_partial_response_oaicompat(server_task_result ta
     return std::vector<json>({ ret });
 }
 
-
-//static json format_embeddings_response_oaicompat(const json& request, const json& embeddings) {
-//    json data = json::array();
-//    int32_t n_tokens = 0;
-//    int i = 0;
-//    for (auto& elem : embeddings) {
-//        data.push_back(json{
-//            {"embedding", json_value(elem, "embedding", json::array())},
-//            {"index",     i++},
-//            {"object",    "embedding"}
-//            });
-//    }
-//
-//    json res = json{
-//        {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
-//        {"object", "list"},
-//        {"usage", json {
-//            {"prompt_tokens", n_tokens},
-//            {"total_tokens", n_tokens}
-//        }},
-//        {"data", data}
-//    };
-//
-//    return res;
-//}
 
 static json format_embeddings_response_oaicompat(const json& request, const json& embeddings, bool use_base64 = false) {
     json data = json::array();

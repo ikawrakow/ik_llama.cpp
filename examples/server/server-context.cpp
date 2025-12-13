@@ -2835,11 +2835,7 @@ void server_context::update_slots() {
 
             // ignore small drafts
             if (slot.params.speculative.n_min > (int)draft.size()) {
-                LOG_VERBOSE("ignoring small draft", {
-                    {"id_slot", slot.id},
-                    {"draft_size", (int)draft.size()},
-                    {"n_min", slot.params.speculative.n_min}
-                    });
+                SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int)draft.size(), slot.params.speculative.n_min);
                 continue;
             }
 

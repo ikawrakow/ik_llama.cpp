@@ -773,7 +773,6 @@ void launch_fattn(
     size_t nb11 = K->nb[1];
     size_t nb12 = K->nb[2];
     size_t nb13 = K->nb[3];
-    fprintf(stderr, "nb11: %d, nb12: %d\n", nb11, nb12);
     char * V_data = (char *) V->data;
     size_t nb21 = V->nb[1];
     size_t nb22 = V->nb[2];
