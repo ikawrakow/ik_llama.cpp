@@ -22,59 +22,6 @@ enum slot_command {
     SLOT_COMMAND_RELEASE,
 };
 
-struct server_prompt_checkpoint {
-    llama_pos pos_min;
-    llama_pos pos_max;
-
-    std::vector<uint8_t> data;
-
-    size_t size() const {
-        return data.size();
-    }
-};
-
-
-struct server_prompt {
-    server_tokens tokens;
-    int n_kept_prompt;
-    int n_discarded_prompt;
-
-    std::vector<uint8_t> data;
-
-    std::list<server_prompt_checkpoint> checkpoints;
-
-    size_t size() const;
-
-    int n_tokens() const {
-        return tokens.size();
-    }
-};
-
-struct server_prompt_cache {
-    server_prompt_cache(llama_context* ctx, int32_t limit_size_mib, size_t limit_tokens) {
-        this->ctx = ctx;
-        this->limit_size = 1024ull * 1024ull * (limit_size_mib < 0 ? 0 : limit_size_mib);
-        this->limit_tokens = limit_tokens;
-    }
-
-    std::list<server_prompt> states;
-
-    // in bytes, 0 = no limit
-    size_t limit_size = 0;
-
-    // in tokens, 0 = no limit
-    size_t limit_tokens = 0;
-    llama_context* ctx;
-    size_t size() const;
-
-    size_t n_tokens() const;
-
-    server_prompt* alloc(const server_prompt& prompt, size_t state_size);
-
-    bool load(server_prompt& prompt, const server_tokens& tokens_new, llama_context* ctx, int32_t id_slot);
-
-    void update();
-};
 
 
 
