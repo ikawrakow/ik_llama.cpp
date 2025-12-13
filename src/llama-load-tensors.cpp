@@ -2259,20 +2259,15 @@ bool create_tensors_helper::create_chatglm_tensors(const LLM_TN & tn) {
 
 bool create_tensors_helper::create_cohere2_tensors(const LLM_TN & tn) {
     LOADING_PRELUDE
-    model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
-    // output
-    model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
-    // init output from the input tok embed
-    model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab },
-            llama_model_loader::TENSOR_DUPLICATED);
+    create_embd_output(tn, n_embd, n_vocab, true, false); //true);
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = model.layers[i];
-        ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
+        ggml_context * ctx_layer = ctx_for_layer(i);
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
 
         create_std_attn(i, tn, layer, n_embd, n_embd_gqa, ctx_split);
         create_std_ffn (i, tn, layer, n_ff, n_embd, ctx_split);
@@ -2963,6 +2958,23 @@ bool create_tensors_helper::create_tensors() {
         int gqa_ratio = hparams.n_head() / hparams.n_head_kv();
         auto cur_splits = model.splits;
         int adjust_step = std::max(1, int(model.layers.size() / (2*model.splits.size())));
+        if (model.max_gpu > 1 && model.max_gpu < int(cur_splits.size())) {
+            bool equal_split = true;
+            for (int i = 0; i < int(cur_splits.size()); ++i) {
+                float p = i > 0 ? cur_splits[i] - cur_splits[i-1] : cur_splits[i];
+                if (std::abs(p*cur_splits.size() - 1.f) > 0.02f) {
+                    equal_split = false; break;
+                }
+            }
+            if (equal_split) {
+                if (cur_splits.size() % model.max_gpu == 0) {
+                    int nadj = cur_splits.size()/model.max_gpu;
+                    adjust_step = (model.layers.size() + nadj - 1) / nadj;
+                } else {
+                    adjust_step = (model.layers.size() + cur_splits.size() - 1)/cur_splits.size();
+                }
+            }
+        }
         for (int il = 0; il < int(model.layers.size()); ++il) {
             if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
                 LLAMA_LOG_INFO("%s: not splitting layer %d because buffer type is host\n", __func__, il);

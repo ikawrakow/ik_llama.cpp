@@ -1639,7 +1639,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
-            if (node->op == GGML_OP_ADD && node->op_params[0] == 0xff) {
+            if ((node->op == GGML_OP_ADD && node->op_params[0] == 0xff) ||
+                 node->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] == 0xff) {
                 need_new_split = true;
             }
             else if (node_backend_id == cur_backend_id && split->n_inputs > 0) {
@@ -1882,6 +1883,7 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_backend_sched_split * split, std::array<bool, GGML_SCHED_MAX_BACKENDS> & needs_sync,
         std::vector<int32_t> & ids, std::vector<uint32_t> & unique_ids, ggml_tensor * last_ids_tensor) {
     if (split->n_inputs < 1) return;
+    constexpr bool k_set_sync = false;
     int split_backend_id = split->backend_id;
     ggml_backend_t split_backend = sched->backends[split_backend_id];
     ggml_backend_t last_input_backend = nullptr;
@@ -1906,7 +1908,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
-                needs_sync[split_backend_id] = false;
+                needs_sync[split_backend_id] = k_set_sync;
             }
 
             ggml_tensor * node = split->graph.nodes[0];
@@ -1941,7 +1943,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
 
                     ggml_backend_synchronize(ids_backend);
-                    needs_sync[tensor_backend_id(ids_tensor)] = false;
+                    needs_sync[tensor_backend_id(ids_tensor)] = k_set_sync;
 
                     unique_ids.resize((n_expert + 31)/32);
                     std::memset(unique_ids.data(), 0, unique_ids.size()*sizeof(uint32_t));
@@ -2001,7 +2003,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     int input_backend_id = tensor_backend_id(input);
                     if (needs_sync[input_backend_id]) {
                         ggml_backend_synchronize(input_backend);
-                        needs_sync[input_backend_id] = false;
+                        needs_sync[input_backend_id] = k_set_sync;
                     }
                     if (needs_sync[split_backend_id]) {
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
@@ -2009,7 +2011,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                         } else {
                             ggml_backend_synchronize(split_backend);
                         }
-                        needs_sync[split_backend_id] = false;
+                        needs_sync[split_backend_id] = k_set_sync;
                     }
                     ggml_backend_tensor_copy(input, input_cpy);
                 }
