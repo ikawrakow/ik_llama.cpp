@@ -693,9 +693,9 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         if (ffn.size() > 2) {
             cur->op_params[0] = 0xff;
         }
-        if (cur->type != GGML_TYPE_F32) {
-            cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-        }
+        //if (cur->type != GGML_TYPE_F32) {
+        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+        //}
 
         return cur;
     }
@@ -7246,23 +7246,20 @@ ggml_cgraph * llm_build_context::build_cohere2() {
             ggml_backend_sched_set_tensor_backend(lctx.sched, cur->src[0], ggml_backend_sched_get_backend(lctx.sched, id));
         }
         cb(cur, "attn_norm", il);
-        struct ggml_tensor * ffn_inp = cur;
+        auto ffn_inp = cur;
 
         // self-attention
-        cur = build_std_attention(gf, nullptr, cur, inp_pos, nullptr, KQ_mask_l, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), 0.f,
+        auto attn_out = build_std_attention(gf, nullptr, cur, inp_pos, nullptr, KQ_mask_l, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), 0.f,
                 is_sliding ? hparams.n_swa : 0, il, is_sliding, true);
-
-        cur = ggml_add(ctx0, cur, inpL);
-        cb(cur, "attn_out", il);
+        cb(attn_out, "attn_out", il);
 
         if (il == n_layer - 1) {
             // skip computing output for unused tokens
             struct ggml_tensor * inp_out_ids = build_inp_out_ids();
-            cur                              = ggml_get_rows(ctx0, cur, inp_out_ids);
+            attn_out                         = ggml_get_rows(ctx0, attn_out, inp_out_ids);
             ffn_inp                          = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+            inpL                             = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
-
-        auto attn_out = cur;
 
         // feed-forward network
         cur = llm_build_ffn(ctx0, lctx, nullptr, ffn_inp, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate,
@@ -7272,6 +7269,7 @@ ggml_cgraph * llm_build_context::build_cohere2() {
 
         // add together residual + FFN + self-attention
         cur = ggml_add(ctx0, cur, attn_out);
+        cur = ggml_add(ctx0, cur, inpL);
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
 
@@ -7280,9 +7278,9 @@ ggml_cgraph * llm_build_context::build_cohere2() {
     }
 
     cur = inpL;
-    if (cur->type != GGML_TYPE_F32) {
-        cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
-    }
+    //if (cur->type != GGML_TYPE_F32) {
+    //    cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
+    //}
 
     cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
@@ -9491,6 +9489,21 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             }
             GGML_ASSERT(!attn.empty());
             if (attn.size() == 1) return attn.front();
+            //if (attn.size() > 2 && attn.size()%2 == 0) {
+            //    for (int id = 0; id < int(attn.size()/2); ++id) {
+            //        attn[id] = ggml_add(ctx0, attn[2*id+0], attn[2*id+1]);
+            //        attn[id]->op_params[0] = 0xff;
+            //    }
+            //    attn.resize(attn.size()/2);
+            //    auto cur = ggml_add(ctx0, attn[0], attn[1]);
+            //    cur->op_params[0] = 0xff;
+            //    cur->op_params[0] = 0xff;
+            //    for (int id = 2; id < (int)attn.size(); ++id) {
+            //        cur = ggml_add(ctx0, cur, attn[id]);
+            //        cb(cur, "combine_attn", il);
+            //    }
+            //    return cur;
+            //}
             auto cur = ggml_add(ctx0, attn[0], attn[1]);
             cb(cur, "combine_attn", il);
             cur->op_params[0] = 0xff;
