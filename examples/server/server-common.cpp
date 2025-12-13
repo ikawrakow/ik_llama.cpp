@@ -1,4 +1,3 @@
-#pragma once
 #include "server-common.h"
 
 using raw_buffer = std::vector<uint8_t>;
