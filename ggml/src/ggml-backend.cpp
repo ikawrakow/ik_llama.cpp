@@ -1898,7 +1898,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
-                needs_sync[split_backend_id] = false;
+                //needs_sync[split_backend_id] = false;
             }
             ggml_backend_tensor_copy(input, input_cpy);
         } else {
@@ -1909,7 +1909,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
-                needs_sync[split_backend_id] = false;
+                //needs_sync[split_backend_id] = false;
             }
 
             ggml_tensor * node = split->graph.nodes[0];
@@ -1945,7 +1945,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
 
                     ggml_backend_synchronize(ids_backend);
-                    needs_sync[tensor_backend_id(ids_tensor)] = false;
+                    //needs_sync[tensor_backend_id(ids_tensor)] = false;
 
                     unique_ids.resize((n_expert + 31)/32);
                     std::memset(unique_ids.data(), 0, unique_ids.size()*sizeof(uint32_t));
@@ -2005,7 +2005,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                     int input_backend_id = tensor_backend_id(input);
                     if (needs_sync[input_backend_id]) {
                         ggml_backend_synchronize(input_backend);
-                        needs_sync[input_backend_id] = false;
+                        //needs_sync[input_backend_id] = false;
                     }
                     if (needs_sync[split_backend_id]) {
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
@@ -2013,7 +2013,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
                         } else {
                             ggml_backend_synchronize(split_backend);
                         }
-                        needs_sync[split_backend_id] = false;
+                        //needs_sync[split_backend_id] = false;
                     }
                     ggml_backend_tensor_copy(input, input_cpy);
                 }
@@ -2092,7 +2092,7 @@ static ggml_status ggml_backend_sched_compute_splits_sm_graph(ggml_backend_sched
 
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
 
-    if (sched->split_mode_graph) {
+    if (false && sched->split_mode_graph) {
         return ggml_backend_sched_compute_splits_sm_graph(sched);
     }
 
