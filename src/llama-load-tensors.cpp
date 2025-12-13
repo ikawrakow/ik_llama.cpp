@@ -2267,7 +2267,7 @@ bool create_tensors_helper::create_cohere2_tensors(const LLM_TN & tn) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
         ggml_context * ctx_layer = ctx_for_layer(i);
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
 
         create_std_attn(i, tn, layer, n_embd, n_embd_gqa, ctx_split);
         create_std_ffn (i, tn, layer, n_ff, n_embd, ctx_split);

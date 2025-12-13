@@ -1639,7 +1639,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
-            if (node->op == GGML_OP_ADD && node->op_params[0] == 0xff) {
+            if ((node->op == GGML_OP_ADD && node->op_params[0] == 0xff) ||
+                 node->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] == 0xff) {
                 need_new_split = true;
             }
             else if (node_backend_id == cur_backend_id && split->n_inputs > 0) {
