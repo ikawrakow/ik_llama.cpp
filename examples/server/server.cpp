@@ -929,7 +929,7 @@ int main(int argc, char ** argv) {
         if (ctx_server.params.use_jinja) {
             if (auto tool_use_src = common_chat_templates_source(ctx_server.chat_templates.get(), "tool_use")) {
                 data["chat_template_tool_use"] = tool_use_src;
-        }
+            }
         }
         res.set_content(data.dump(), "application/json; charset=utf-8");
     };
