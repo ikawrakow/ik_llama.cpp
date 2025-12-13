@@ -321,6 +321,15 @@ static __global__ void k_fast_add(int64_t ne0, int64_t nelem, const float * x, c
     z[i] = x[i] + y[i % ne0];
 }
 
+template <typename src1_t, typename src2_t, typename dst_t>
+static __global__ void k_fast_add_2(int64_t ne0, int64_t nelem, const src1_t * x, const src2_t * y, dst_t * z) {
+    int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    z[i] = (dst_t)((float)x[i] + (float)y[i]);
+}
+
 void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     if (ggml_nrows(dst->src[1]) == 1 && dst->src[0]->ne[0] == dst->src[1]->ne[0] &&
         dst->type == GGML_TYPE_F32 && dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_F32 &&
@@ -330,6 +339,45 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         int nblocks = (nelem + kBlockSize - 1)/kBlockSize;
         k_fast_add<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
                 (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
+        return;
+    }
+    if (ggml_is_contiguous(dst->src[0]) && ggml_are_same_shape(dst->src[0], dst->src[1]) && ggml_is_contiguous(dst)) {
+        constexpr int kBlockSize = 256;
+        auto nelem = ggml_nelements(dst);
+        int nblocks = (nelem + kBlockSize - 1)/kBlockSize;
+        if (dst->type == GGML_TYPE_F16) {
+            if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_F16) {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const half *)dst->src[0]->data, (const half *)dst->src[1]->data, (half *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const half *)dst->src[0]->data, (const float *)dst->src[1]->data, (half *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (half *)dst->data);
+            } else {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const float *)dst->src[0]->data, (const half *)dst->src[1]->data, (half *)dst->data);
+            }
+        } else {
+            if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_F16) {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const half *)dst->src[0]->data, (const half *)dst->src[1]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const half *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (float *)dst->data);
+            } else {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const float *)dst->src[0]->data, (const half *)dst->src[1]->data, (float *)dst->data);
+            }
+        }
         return;
     }
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_add>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());

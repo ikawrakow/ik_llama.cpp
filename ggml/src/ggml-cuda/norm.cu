@@ -1,14 +1,14 @@
 #include "norm.cuh"
 
-template <int block_size>
-static __global__ void norm_f32(const float * x, float * dst, const int ncols, const float eps) {
+template <int block_size, typename T>
+static __global__ void norm_f32(const T * x, float * dst, const int ncols, const float eps) {
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
 
     float2 mean_var = make_float2(0.f, 0.f);
 
     for (int col = tid; col < ncols; col += block_size) {
-        const float xi = x[row*ncols + col];
+        const float xi = (float)x[row*ncols + col];
         mean_var.x += xi;
         mean_var.y += xi * xi;
     }
@@ -32,7 +32,7 @@ static __global__ void norm_f32(const float * x, float * dst, const int ncols, c
     const float inv_std = rsqrtf(var + eps);
 
     for (int col = tid; col < ncols; col += block_size) {
-        dst[row*ncols + col] = (x[row*ncols + col] - mean) * inv_std;
+        dst[row*ncols + col] = (T)(((float)x[row*ncols + col] - mean) * inv_std);
     }
 }
 
@@ -261,14 +261,15 @@ static __global__ void fused_rms_norm_f32_nc(
     }
 }
 
-static void norm_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, const float eps, cudaStream_t stream) {
+template <typename T>
+static void norm_f32_cuda(const T * x, float * dst, const int ncols, const int nrows, const float eps, cudaStream_t stream) {
     GGML_ASSERT(ncols % WARP_SIZE == 0);
     if (ncols < 1024) {
         const dim3 block_dims(WARP_SIZE, 1, 1);
-        norm_f32<WARP_SIZE><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
+        norm_f32<WARP_SIZE, T><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        norm_f32<1024><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
+        norm_f32<1024, T><<<nrows, block_dims, 0, stream>>>(x, dst, ncols, eps);
     }
 }
 
@@ -364,7 +365,7 @@ void ggml_cuda_op_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     GGML_ASSERT(ggml_is_contiguous(src0));
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
     const int64_t ne00 = src0->ne[0];
@@ -373,7 +374,11 @@ void ggml_cuda_op_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
 
-    norm_f32_cuda(src0_d, dst_d, ne00, nrows, eps, stream);
+    if (src0->type == GGML_TYPE_F32) {
+        norm_f32_cuda(src0_d, dst_d, ne00, nrows, eps, stream);
+    } else {
+        norm_f32_cuda((const half *)src0_d, dst_d, ne00, nrows, eps, stream);
+    }
 }
 
 void ggml_cuda_op_group_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
