@@ -2952,12 +2952,13 @@ bool create_tensors_helper::create_tensors() {
             throw std::runtime_error("unknown architecture");
     }
     if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
+        const int n_layer = model.layers.size() - model.hparams.nextn_predict_layers;
         printf("================================ max_gpu = %d\n", model.max_gpu);
         std::vector<size_t> mem_used(model.splits.size(), 0);
         const auto & hparams = model.hparams;
         int gqa_ratio = hparams.n_head() / hparams.n_head_kv();
         auto cur_splits = model.splits;
-        int adjust_step = std::max(1, int(model.layers.size() / (2*model.splits.size())));
+        int adjust_step = std::max(1, int(n_layer / (2*model.splits.size())));
         if (model.max_gpu > 1 && model.max_gpu < int(cur_splits.size())) {
             bool equal_split = true;
             for (int i = 0; i < int(cur_splits.size()); ++i) {
@@ -2969,13 +2970,13 @@ bool create_tensors_helper::create_tensors() {
             if (equal_split) {
                 if (cur_splits.size() % model.max_gpu == 0) {
                     int nadj = cur_splits.size()/model.max_gpu;
-                    adjust_step = (model.layers.size() + nadj - 1) / nadj;
+                    adjust_step = (n_layer + nadj - 1) / nadj;
                 } else {
-                    adjust_step = (model.layers.size() + cur_splits.size() - 1)/cur_splits.size();
+                    adjust_step = (n_layer + cur_splits.size() - 1)/cur_splits.size();
                 }
             }
         }
-        for (int il = 0; il < int(model.layers.size()); ++il) {
+        for (int il = 0; il < n_layer; ++il) {
             if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
                 LLAMA_LOG_INFO("%s: not splitting layer %d because buffer type is host\n", __func__, il);
                 continue;
