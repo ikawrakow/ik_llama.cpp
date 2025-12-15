@@ -120,7 +120,7 @@ export default function ChatScreen() {
     // reset to latest node when conversation changes
     setCurrNodeId(-1);
     // scroll to bottom when conversation changes
-    scrollToBottom(false, 1);
+    // scrollToBottom(false, 1);
   }, [currConvId]);
 
   const onChunk: CallbackGeneratedChunk = (currLeafNodeId?: Message['id']) => {
