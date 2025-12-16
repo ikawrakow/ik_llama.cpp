@@ -2120,6 +2120,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             backend_splits[sched->splits[i].backend_id].push_back(&sched->splits[i]);
         }
         for (int backend_id = 0; backend_id < sched->n_backends; ++backend_id) {
+            if (ggml_backend_is_cpu(ggml_backend_sched_get_backend(sched, backend_id))) continue;
             if (backend_splits[backend_id].empty()) continue;
             size_t input_size = 0;
             size_t max_input_size = 0;
@@ -2206,6 +2207,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         if (split->n_inputs > 0 && !own_cpy[split_backend_id]) {
             needs_sync[split_backend_id] = true;
+        } else {
+            for (int j = 0; j < split->n_inputs; ++j) {
+                if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
+                    needs_sync[split_backend_id] = true;
+                }
+            }
         }
         if (!sched->callback_eval) {
 #if IK_PRINT_TIMING
