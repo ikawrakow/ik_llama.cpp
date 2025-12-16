@@ -13,12 +13,13 @@
 #include <vector>
 #include <set>
 #include <array>
+#include <chrono>
 
 #define IK_PRINT_TIMING 0
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-constexpr size_t k_max_extra_alloc = 1024*1024*64;
+constexpr size_t k_max_extra_alloc = 1024*1024*256;
 
 // backend buffer type
 
@@ -2101,6 +2102,83 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::array<bool, GGML_SCHED_MAX_BACKENDS> own_cpy{{false}};
 
     if (sched->split_mode_graph) {
+        auto tensor_size = [] (const ggml_tensor * t) {
+            auto nbytes = ggml_nbytes(t);
+            nbytes = 256*((nbytes + 255)/256);
+            return nbytes;
+        };
+        //auto tim1 = std::chrono::steady_clock::now();
+        std::vector<std::vector<ggml_backend_sched_split*>> backend_splits(sched->n_backends);
+        for (int i = 0; i < sched->n_splits; i++) {
+            backend_splits[sched->splits[i].backend_id].push_back(&sched->splits[i]);
+        }
+        for (int backend_id = 0; backend_id < sched->n_backends; ++backend_id) {
+            if (backend_splits[backend_id].empty()) continue;
+            size_t input_size = 0;
+            size_t max_input_size = 0;
+            int last_split = 0;
+            bool can_alloc = true;
+            for (int i = 0; i < int(backend_splits[backend_id].size()); ++i) {
+                auto split = backend_splits[backend_id][i];
+                size_t this_size = 0;
+                for (int j = 0; j < split->n_inputs; ++j) {
+                    if (!ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
+                        this_size += tensor_size(split->inputs[j]);
+                    }
+                }
+                if (input_size + this_size > k_max_extra_alloc) {
+                    if (i - last_split < 3) {
+                        can_alloc = false;
+                        break;
+                    }
+                    max_input_size = std::max(max_input_size, input_size);
+                    //printf("Backend %d: rewinding at split %d, last_split = %d\n", backend_id, i, last_split);
+                    input_size = 0;
+                    last_split = i - 1;
+                }
+                input_size += this_size;
+            }
+            max_input_size = std::max(max_input_size, input_size);
+            if (!can_alloc || !max_input_size) continue;
+            //printf("Allocating %.2f MiB for backend %d\n", max_input_size/1024./1024., backend_id);
+            if (sched->input_memory_bufs[backend_id] && sched->input_memory_bufs[backend_id]->size < max_input_size) {
+                ggml_backend_buffer_free(sched->input_memory_bufs[backend_id]);
+                sched->input_memory_bufs[backend_id] = nullptr;
+            }
+            if (!sched->input_memory_bufs[backend_id]) {
+                sched->input_memory_bufs[backend_id] = ggml_backend_alloc_buffer(sched->backends[backend_id], max_input_size);
+            }
+            auto ptr = (char *)ggml_backend_buffer_get_base(sched->input_memory_bufs[backend_id]);
+            input_size = 0;
+            for (int i = 0; i < int(backend_splits[backend_id].size()); ++i) {
+                auto split = backend_splits[backend_id][i];
+                size_t this_size = 0;
+                for (int j = 0; j < split->n_inputs; ++j) {
+                    if (!ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
+                        this_size += tensor_size(split->inputs[j]);
+                    }
+                }
+                if (input_size + this_size > max_input_size) {
+                    ptr = (char *)ggml_backend_buffer_get_base(sched->input_memory_bufs[backend_id]);
+                }
+                for (int j = 0; j < split->n_inputs; ++j) {
+                    if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) continue;
+                    auto input_cpy = tensor_copy(split->inputs[j], backend_id, sched->cur_copy);
+                    for (int k = 0; k < split->graph.n_nodes; ++k) {
+                        auto node = split->graph.nodes[k];
+                        for (int l = 0; l < GGML_MAX_SRC; ++l) {
+                            if (node->src[l] && node->src[l]->data == input_cpy->data) node->src[l]->data = ptr;
+                        }
+                    }
+                    input_cpy->data = ptr;
+                    ptr += tensor_size(split->inputs[j]);
+                }
+                input_size += this_size;
+            }
+            needs_sync[backend_id] = false;
+            own_cpy[backend_id] = true;
+        }
+        /*
         std::vector<size_t> input_size(sched->n_backends, 0);
         for (int i = 0; i < sched->n_splits; i++) {
             auto split = &sched->splits[i];
@@ -2143,8 +2221,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 own_cpy[backend_id] = true;
             }
         }
+        auto tim2 = std::chrono::steady_clock::now();
+        printf("%s: %g us\n", __func__, 1e-3*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count());
         //printf("=== Input memory per backend:\n");
         //for (int i = 0; i < sched->n_backends; ++i) printf("  %d:  %.2f MiB\n", i, input_size[i]/1024./1024.);
+        */
     }
 
     struct ggml_backend_sched_split * splits = sched->splits;
