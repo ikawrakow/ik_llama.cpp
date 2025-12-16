@@ -4022,6 +4022,7 @@ struct llama_context_params llama_context_default_params() {
         /*.n_seq_max                   =*/ 1,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
+        /*.max_extra_alloc             =*/ 256,
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
@@ -4774,6 +4775,7 @@ struct llama_context * llama_new_context_with_model(
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && !model->has_tensor_overrides()) {
         ggml_backend_sched_set_split_mode_graph(ctx->sched, true);
+        ggml_backend_sched_set_max_extra_alloc(ctx->sched, params.max_extra_alloc);
     }
 
     return ctx;

@@ -19,8 +19,6 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-constexpr size_t k_max_extra_alloc = 1024*1024*256;
-
 // backend buffer type
 
 const char * ggml_backend_buft_name(ggml_backend_buffer_type_t buft) {
@@ -1150,6 +1148,8 @@ struct ggml_backend_sched {
     int n_splits;
     int splits_capacity;
 
+    size_t max_extra_alloc = 0;
+
     // pipeline parallelism support
     int n_copies;
     int cur_copy;
@@ -1199,6 +1199,13 @@ void ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool
 void ggml_backend_sched_set_split_mode_graph(ggml_backend_sched_t sched, bool on_or_off) {
     if (!sched) return;
     sched->split_mode_graph = on_or_off;
+}
+
+void ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB) {
+    if (!sched) return;
+    if (extra_alloc_MiB >= 0) {
+        sched->max_extra_alloc = size_t(extra_alloc_MiB)*1024*1024;
+    }
 }
 
 static inline bool ggml_backend_sched_offload_enabled(ggml_backend_sched_t sched, enum ggml_op op) {
@@ -2126,7 +2133,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         this_size += tensor_size(split->inputs[j]);
                     }
                 }
-                if (input_size + this_size > k_max_extra_alloc) {
+                if (input_size + this_size > sched->max_extra_alloc) {
                     if (i - last_split < 3) {
                         can_alloc = false;
                         break;
@@ -2191,7 +2198,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
         for (int backend_id = 0; backend_id < sched->n_backends; ++backend_id) {
             if (!input_size[backend_id]) continue; // this backend has no inputs, so no need to worry about it.
-            if (input_size[backend_id] <= k_max_extra_alloc) {
+            if (input_size[backend_id] <= sched->max_extra_alloc) {
                 if (sched->input_memory_bufs[backend_id] && sched->input_memory_bufs[backend_id]->size < input_size[backend_id]) {
                     ggml_backend_buffer_free(sched->input_memory_bufs[backend_id]);
                     sched->input_memory_bufs[backend_id] = nullptr;
