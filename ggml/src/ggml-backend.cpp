@@ -18,6 +18,8 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
+constexpr size_t k_max_extra_alloc = 1024*1024*64;
+
 // backend buffer type
 
 const char * ggml_backend_buft_name(ggml_backend_buffer_type_t buft) {
@@ -1162,6 +1164,8 @@ struct ggml_backend_sched {
     char * context_buffer;
     size_t context_buffer_size;
 
+    std::array<ggml_backend_buffer_t, GGML_SCHED_MAX_BACKENDS> input_memory_bufs = {{ nullptr }};
+
     uint32_t op_offload[(GGML_OP_COUNT + 31)/32];
 
     bool only_active_experts;
@@ -2093,13 +2097,61 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         return ggml_backend_sched_compute_splits_sm_graph(sched);
     }
 
+    std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync{{true}};
+    std::array<bool, GGML_SCHED_MAX_BACKENDS> own_cpy{{false}};
+
+    if (sched->split_mode_graph) {
+        std::vector<size_t> input_size(sched->n_backends, 0);
+        for (int i = 0; i < sched->n_splits; i++) {
+            auto split = &sched->splits[i];
+            int split_backend_id = split->backend_id;
+            for (int j = 0; j < split->n_inputs; ++j) {
+                auto nbytes = ggml_nbytes(split->inputs[j]);
+                nbytes = 256*((nbytes + 255)/256);
+                input_size[split_backend_id] += nbytes;
+            }
+        }
+        for (int backend_id = 0; backend_id < sched->n_backends; ++backend_id) {
+            if (!input_size[backend_id]) continue; // this backend has no inputs, so no need to worry about it.
+            if (input_size[backend_id] <= k_max_extra_alloc) {
+                if (sched->input_memory_bufs[backend_id] && sched->input_memory_bufs[backend_id]->size < input_size[backend_id]) {
+                    ggml_backend_buffer_free(sched->input_memory_bufs[backend_id]);
+                    sched->input_memory_bufs[backend_id] = nullptr;
+                }
+                if (!sched->input_memory_bufs[backend_id]) {
+                    sched->input_memory_bufs[backend_id] = ggml_backend_alloc_buffer(sched->backends[backend_id], input_size[backend_id]);
+                }
+                auto ptr = (char *)ggml_backend_buffer_get_base(sched->input_memory_bufs[backend_id]);
+                for (int i = 0; i < sched->n_splits; ++i) {
+                    auto split = &sched->splits[i];
+                    if (split->backend_id != backend_id) continue;
+                    for (int j = 0; j < split->n_inputs; ++j) {
+                        auto input_cpy = tensor_copy(split->inputs[j], backend_id, sched->cur_copy);
+                        for (int k = 0; k < split->graph.n_nodes; ++k) {
+                            auto node = split->graph.nodes[k];
+                            for (int l = 0; l < GGML_MAX_SRC; ++l) {
+                                if (node->src[l] && node->src[l]->data == input_cpy->data) node->src[l]->data = ptr;
+                            }
+                        }
+                        input_cpy->data = ptr;
+                        auto nbytes = ggml_nbytes(split->inputs[j]);
+                        nbytes = 256*((nbytes + 255)/256);
+                        ptr += nbytes;
+                    }
+                }
+                needs_sync[backend_id] = false;
+                own_cpy[backend_id] = true;
+            }
+        }
+        //printf("=== Input memory per backend:\n");
+        //for (int i = 0; i < sched->n_backends; ++i) printf("  %d:  %.2f MiB\n", i, input_size[i]/1024./1024.);
+    }
+
     struct ggml_backend_sched_split * splits = sched->splits;
 
     std::vector<int32_t> ids;
     std::vector<uint32_t> unique_ids;
     ggml_tensor * last_ids_tensor = nullptr;
-
-    std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync{{true}};
 
     for (int i = 0; i < sched->n_splits; i++) {
 #if IK_PRINT_TIMING
@@ -2112,7 +2164,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         // copy the input tensors to the split backend
         ggml_backend_sched_copy_inputs(sched, split, needs_sync, ids, unique_ids, last_ids_tensor);
 
-        if (split->n_inputs > 0) {
+        if (split->n_inputs > 0 && !own_cpy[split_backend_id]) {
             needs_sync[split_backend_id] = true;
         }
         if (!sched->callback_eval) {
@@ -2238,6 +2290,11 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     for (int b = 0; b < sched->n_backends; b++) {
         for (int c = 0; c < sched->n_copies; c++) {
             ggml_backend_event_free(sched->events[b][c]);
+        }
+    }
+    for (int i = 0; i < sched->n_backends; ++i) {
+        if (sched->input_memory_bufs[i]) {
+            ggml_backend_buffer_free(sched->input_memory_bufs[i]);
         }
     }
     ggml_gallocr_free(sched->galloc);
