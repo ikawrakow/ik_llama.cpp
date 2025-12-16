@@ -112,7 +112,7 @@ void common_log_set_timestamps(struct common_log* log, bool timestamps);   // wh
         } \
     } while (0)
 
-#define LOG(...)             LOG_TMPL(GGML_LOG_LEVEL_NONE, LOG_LEVEL_OUTPUT, __VA_ARGS__)
+//#define LOG(...)             LOG_TMPL(GGML_LOG_LEVEL_NONE, LOG_LEVEL_OUTPUT, __VA_ARGS__)
 #define LOGV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_NONE, verbosity,        __VA_ARGS__)
 
 #define LOG_DBG(...) LOG_TMPL(GGML_LOG_LEVEL_DEBUG, LOG_LEVEL_DEBUG,  __VA_ARGS__)
@@ -412,11 +412,11 @@ inline std::string log_filename_generator_impl(LogTriState multilog, const std::
 // Main LOG macro.
 //  behaves like printf, and supports arguments the exact same way.
 //
-//#if !defined(_MSC_VER) || defined(__clang__)
-//    #define LOG(...) LOG_IMPL(__VA_ARGS__, "")
-//#else
-//    #define LOG(str, ...) LOG_IMPL("%s" str, "", ##__VA_ARGS__, "")
-//#endif
+#if !defined(_MSC_VER) || defined(__clang__)
+    #define LOG(...) LOG_IMPL(__VA_ARGS__, "")
+#else
+    #define LOG(str, ...) LOG_IMPL("%s" str, "", ##__VA_ARGS__, "")
+#endif
 
 // Main TEE macro.
 //  does the same as LOG
