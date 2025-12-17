@@ -167,6 +167,7 @@ struct gpt_params {
     float   yarn_beta_slow        =  -1.0f; // YaRN high correction dim
     int32_t yarn_orig_ctx         =     0; // YaRN original context length
     float   defrag_thold          = -1.0f; // KV cache defragmentation threshold
+    int32_t max_extra_alloc_MiB   = 256;   // additional VRAM per GPU the scheduler may allocate for more efficient compute graph evaluation
 
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
@@ -278,6 +279,7 @@ struct gpt_params {
     bool only_active_exps  = true;  // if true, offload only active experts (relevant only for hybrid CPU/GPU)
     bool merge_qkv         = false; // if true, merge separate Q, K, V tensors into a single, contiguous tensor
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
+    bool split_mode_graph_scheduling = false; // if true, force split mode graph scheduling
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V

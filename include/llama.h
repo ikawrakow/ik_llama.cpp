@@ -404,6 +404,7 @@ extern "C" {
         uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
         uint32_t n_threads;         // number of threads to use for generation
         uint32_t n_threads_batch;   // number of threads to use for batch processing
+        int32_t  max_extra_alloc;   // Max. additional VRAM the scheduler is allowed to allocate
 
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
@@ -442,6 +443,7 @@ extern "C" {
         float thresh_experts;
         bool only_active_experts;
         bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
+        bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted

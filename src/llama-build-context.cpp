@@ -53,6 +53,7 @@ llm_build_context::llm_build_context(
         fused_mmad       (cparams.fused_mmad),
         rope_cache       (cparams.rope_cache),
         k_cache_hadamard (cparams.k_cache_hadamard),
+        split_mode_graph_scheduling (cparams.split_mode_graph_scheduling),
         min_experts      (cparams.min_experts),
         thresh_experts   (cparams.thresh_experts),
         pooling_type     (cparams.pooling_type),
