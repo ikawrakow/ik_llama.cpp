@@ -4022,6 +4022,7 @@ struct llama_context_params llama_context_default_params() {
         /*.n_seq_max                   =*/ 1,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
+        /*.max_extra_alloc             =*/ 256,
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
         /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
         /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
@@ -4775,12 +4776,13 @@ struct llama_context * llama_new_context_with_model(
         LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXX Setting only active experts offload\n");
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
-    if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && !model->has_tensor_overrides()) {
+    if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
         ggml_backend_sched_set_split_mode_graph(ctx->sched, true);
-    } else if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && cparams.split_mode_graph_scheduling == 1) {
-        ggml_backend_sched_set_split_mode_graph(ctx->sched, true);
-        LLAMA_LOG_INFO("XXXXXXXX Split Mode Graph Scheduling is FORCED despite tensor overrides due to user choice.\n");
-        LLAMA_LOG_INFO("XXXXXXXX It may or might NOT infer properly due to unsupported combinations between SMGS and every possible tensor overrides.\n");
+        ggml_backend_sched_set_max_extra_alloc(ctx->sched, params.max_extra_alloc);
+        if (model->has_tensor_overrides() && cparams.split_mode_graph_scheduling) {
+            LLAMA_LOG_INFO("XXXXXXXX Split Mode Graph Scheduling is FORCED despite tensor overrides due to user choice.\n");
+            LLAMA_LOG_INFO("XXXXXXXX It may or might NOT infer properly due to unsupported combinations between SMGS and every possible tensor overrides.\n");
+        }
     } 
 
     return ctx;
