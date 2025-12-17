@@ -384,7 +384,7 @@ export const AppContextProvider = ({
     const currMsgId = now;
     
   let model_name:string='';
-    await getServerProps(BASE_URL)
+    await getServerProps(BASE_URL, config.apiKey)
     .then((props) => {
       console.debug('Server props:', props);
       model_name = props.model_name;
@@ -439,7 +439,7 @@ export const AppContextProvider = ({
       const currMsgId = now;
 
       let model_name:string='';
-      await getServerProps(BASE_URL)
+      await getServerProps(BASE_URL, config.apiKey)
       .then((props) => {
         console.debug('Server props:', props);
         model_name = props.model_name;
