@@ -1068,16 +1068,6 @@ extern "C" {
             struct ggml_tensor  * a,
             enum   ggml_op        op);
 
-    GGML_API struct ggml_tensor * ggml_reduce(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            enum   ggml_op        op);
-
-    GGML_API struct ggml_tensor * ggml_reduce_inplace(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            enum   ggml_op        op);
-
     GGML_API struct ggml_tensor * ggml_add_cast(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -3057,6 +3047,18 @@ extern "C" {
             int                   n_device,
             int                   split_dim,
             struct ggml_tensor  * tensor);
+
+    GGML_API struct ggml_tensor * ggml_reduce(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            ggml_split_tensor_t * b,
+            enum   ggml_op        op);
+
+    GGML_API struct ggml_tensor * ggml_reduce_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            ggml_split_tensor_t * b,
+            enum   ggml_op        op);
 
 #ifdef  __cplusplus
 }

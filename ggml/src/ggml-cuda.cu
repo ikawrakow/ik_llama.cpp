@@ -48,6 +48,7 @@
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/multiadd.cuh"
 #include "ggml-cuda/hadamard.cuh"
+#include "ggml-cuda/reduce.cuh"
 
 #include <algorithm>
 #include <array>
@@ -2948,6 +2949,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
 
     //printf("%4d %s(%s) on device %d. time = %ld\n", i, ggml_op_name(dst->op), dst->name, ctx.device, ggml_time_us());
     switch (dst->op) {
+        case GGML_OP_REDUCE:
+            ggml_cuda_op_reduce(ctx, dst);
+            break;
         case GGML_OP_ARGMAX:
             ggml_cuda_argmax(ctx, dst);
             break;
@@ -3747,12 +3751,12 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 }
 #endif
 #ifndef NDEBUG
-                assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
-                for (int j = 0; j < GGML_MAX_SRC; j++) {
-                    if (node->src[j] != nullptr) {
-                        assert(node->src[j]->buffer);
-                    }
-                }
+                //assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
+                //for (int j = 0; j < GGML_MAX_SRC; j++) {
+                //    if (node->src[j] != nullptr) {
+                //        assert(node->src[j]->buffer);
+                //    }
+                //}
 #endif // NDEBUG
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, cgraph, i);
@@ -3881,6 +3885,8 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
 GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_tensor * op) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
     switch (op->op) {
+        case GGML_OP_REDUCE:
+            return true;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
                 case GGML_UNARY_OP_GELU:

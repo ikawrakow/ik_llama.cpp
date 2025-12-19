@@ -5314,7 +5314,7 @@ ggml_split_tensor_t * ggml_new_split(
     result->n_device  = n_device;
     result->split_dim = split_dim;
     result->tensor    = tensor;
-    result->splits    = (struct ggml_tensor**)(result->tensor + 1);
+    result->splits    = (struct ggml_tensor**)(&result->splits + 1);
     for (int i = 0; i < n_device; ++i) {
         result->splits[i] = NULL;
     }
@@ -6085,34 +6085,46 @@ struct ggml_tensor * ggml_dup_inplace(
 static struct ggml_tensor * ggml_reduce_impl(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+            ggml_split_tensor_t * extra,
             enum   ggml_op        op,
             bool                  inplace) {
     GGML_ASSERT(op == GGML_OP_ADD); // the only op we currently support
-    GGML_ASSERT(a->extra);
-    ggml_split_tensor_t * extra = (ggml_split_tensor_t *)a->extra;
     GGML_ASSERT(extra->n_device > 1);
     GGML_ASSERT(extra->splits);
+    int idx[GGML_MAX_SRC];
     int nhave = 0;
     for (int j = 0; j < extra->n_device; ++j) {
-        if (extra->splits[j]) ++nhave;
+        if (extra->splits[j]) {
+            if (nhave == GGML_MAX_SRC) {
+                GGML_ABORT("Too many tensors to reduce");
+            }
+            idx[nhave++] = j;
+        }
     }
     GGML_ASSERT(nhave > 1);
+
+    for (int j = 1; j < nhave; ++j) {
+        GGML_ASSERT(ggml_are_same_shape(extra->splits[idx[j]], extra->splits[idx[0]]));
+    }
 
     struct ggml_tensor * result;
     if (inplace) {
         result = ggml_view_tensor(ctx, a);
-        result->src[0] = a;
-        result->extra  = a->extra;
+        //for (int j = 0; j < nhave; ++j) result->src[j] = extra->splits[idx[j]];
+        result->extra  = extra;
     } else {
-        result = ggml_new_tensor_4d(ctx, a->type, a->ne[0], a->ne[1], a->ne[2], a->ne[3]);
+        result = ggml_dup_tensor(ctx, a);
         ggml_split_tensor_t * new_extra = ggml_new_split(ctx, extra->n_device, extra->split_dim, result);
         result->extra = new_extra;
+        //int jj = 0;
         for (int j = 0; j < extra->n_device; ++j) {
             if (extra->splits[j]) {
                 new_extra->splits[j] = ggml_dup_tensor(ctx, extra->splits[j]);
+                //result->src[jj++] = new_extra->splits[j];
             }
         }
     }
+    result->src[0] = a;
     result->op = GGML_OP_REDUCE;
     result->op_params[0] = (int32_t)op;
     return result;
@@ -6121,15 +6133,17 @@ static struct ggml_tensor * ggml_reduce_impl(
 struct ggml_tensor * ggml_reduce(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+            ggml_split_tensor_t * extra,
             enum   ggml_op        op) {
-    return ggml_reduce_impl(ctx, a, op, false);
+    return ggml_reduce_impl(ctx, a, extra, op, false);
 }
 
 struct ggml_tensor * ggml_reduce_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+            ggml_split_tensor_t * extra,
             enum   ggml_op        op) {
-    return ggml_reduce_impl(ctx, a, op, true);
+    return ggml_reduce_impl(ctx, a, extra, op, true);
 }
 
 
@@ -6140,6 +6154,49 @@ static struct ggml_tensor * ggml_add_impl(
         struct ggml_tensor * a,
         struct ggml_tensor * b,
         bool inplace) {
+
+    //if (a->extra) {
+    //    ggml_split_tensor_t * a_extra = (ggml_split_tensor_t *)a->extra;
+    //    ggml_split_tensor_t * b_extra = (ggml_split_tensor_t *)b->extra;
+    //    GGML_ASSERT(a_extra->n_device > 1);
+    //    if (b_extra) {
+    //        GGML_ASSERT(b_extra->n_device == a_extra->n_device);
+    //    }
+    //    int nhave = 0;
+    //    for (int j = 0; j < a_extra->n_device; ++j) if (a_extra->splits[j]) ++nhave;
+    //    GGML_ASSERT(nhave > 1);
+    //    ggml_split_tensor_t * new_extra = ggml_new_split(ctx, a_extra->n_device, -1, NULL);
+    //    struct ggml_tensor * last = NULL;
+    //    for (int j = 0; j < a_extra->n_device; ++j) {
+    //        if (!a_extra->splits[j]) continue;
+    //        struct ggml_tensor * aj = a_extra->splits[j];
+    //        struct ggml_tensor * bj = b;
+    //        if (b_extra) {
+    //            GGML_ASSERT(b_extra->splits[j]);
+    //            bj = b_extra->splits[j];
+    //        }
+    //        GGML_ASSERT(ggml_are_same_shape(aj, bj));
+    //        GGML_ASSERT(!aj->extra && !bj->extra);
+    //        struct ggml_tensor * abj = inplace ? ggml_view_tensor(ctx, aj) : ggml_dup_tensor(ctx, aj);
+    //        abj->op = GGML_OP_ADD;
+    //        abj->src[0] = aj;
+    //        abj->src[1] = bj;
+    //        abj->src[2] = a;
+    //        abj->src[3] = b;
+    //        new_extra->splits[j] = abj;
+    //        last = abj;
+    //    }
+    //    GGML_ASSERT(last);
+    //    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    //    result->op   = GGML_OP_ADD;
+    //    result->src[0] = a;
+    //    result->src[1] = b;
+    //    new_extra->tensor = result;
+    //    result->extra  = new_extra;
+    //    ggml_set_input(result);
+    //    return result;
+    //}
+
     GGML_ASSERT(ggml_can_repeat(b, a));
 
     bool is_node = false;
@@ -8494,6 +8551,32 @@ struct ggml_tensor * ggml_get_rows(
     GGML_ASSERT(a->ne[2] == b->ne[1]);
     GGML_ASSERT(b->ne[3] == 1);
     GGML_ASSERT(b->type == GGML_TYPE_I32);
+
+    if (a->extra) {
+        ggml_split_tensor_t * extra = (ggml_split_tensor_t *)a->extra;
+        int nhave = 0;
+        for (int j = 0; j < extra->n_device; ++j) if (extra->splits[j]) ++nhave;
+        if (nhave > 1) {
+            ggml_split_tensor_t * new_extra = ggml_new_split(ctx, extra->n_device, -1, NULL);
+            struct ggml_tensor * last = NULL;
+            ggml_split_tensor_t * b_extra = (ggml_split_tensor_t *)b->extra;
+            for (int j = 0; j < extra->n_device; ++j) {
+                if (!extra->splits[j]) continue;
+                struct ggml_tensor * aj = extra->splits[j];
+                struct ggml_tensor * bj = b_extra && b_extra->splits[j] ? b_extra->splits[j] : b;
+                GGML_ASSERT(!aj->extra && !bj->extra);
+                new_extra->splits[j] = ggml_get_rows(ctx, aj, bj);
+                last = new_extra->splits[j];
+            }
+            struct ggml_tensor * result = ggml_view_tensor(ctx, last);
+            result->src[0] = a;
+            result->src[1] = b;
+            result->op = GGML_OP_GET_ROWS;
+            new_extra->tensor = result;
+            result->extra = new_extra;
+            return result;
+        }
+    }
 
     bool is_node = false;
 

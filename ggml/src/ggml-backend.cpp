@@ -14,6 +14,7 @@
 #include <set>
 #include <array>
 #include <chrono>
+#include <thread>
 
 #define IK_PRINT_TIMING 0
 
@@ -1421,6 +1422,15 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
         int * node_backend_id = &tensor_backend_id(node);
+        if (node->op == GGML_OP_REDUCE) {
+            auto extra = (const ggml_split_tensor_t *)node->extra;
+            GGML_ASSERT(extra);
+            for (int j = extra->n_device-1; j >= 0; --j) {
+                if (extra->splits[j]) {
+                    *node_backend_id = j; break;
+                }
+            }
+        }
         // do not overwrite user assignments
         if (*node_backend_id == -1) {
             *node_backend_id = ggml_backend_sched_backend_id_from_cur(sched, node);
@@ -1652,6 +1662,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
             if ((node->op == GGML_OP_ADD && node->op_params[0] == 0xff) ||
+                 node->op == GGML_OP_REDUCE ||
                  node->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] == 0xff) {
                 need_new_split = true;
             }
@@ -2184,19 +2195,36 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
     }
 
+    //auto compute = [sched, &needs_sync, &own_cpy] (int my_backend_id) {
+
     struct ggml_backend_sched_split * splits = sched->splits;
+    //bool is_cpu = ggml_backend_is_cpu(sched->backends[my_backend_id]);
 
     std::vector<int32_t> ids;
     std::vector<uint32_t> unique_ids;
     ggml_tensor * last_ids_tensor = nullptr;
 
     for (int i = 0; i < sched->n_splits; i++) {
+        //printf("Thread %d: split %d\n", my_backend_id, i);
 #if IK_PRINT_TIMING
         int64_t tim1 = ggml_time_us();
 #endif
         struct ggml_backend_sched_split * split = &splits[i];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+
+        printf("Split %d on backend %d\n", i, split_backend_id);
+
+        auto node = split->graph.nodes[0];
+        //if (node->op == GGML_OP_REDUCE && split_backend_id != my_backend_id && !is_cpu) {
+        //    printf("%s: triggering reduce for %s on backend %d\n", __func__, node->name, my_backend_id);
+        //    auto graph = split->graph;
+        //    graph.n_nodes = 1;
+        //    auto ec = ggml_backend_graph_compute_async(sched->backends[my_backend_id], &graph);
+        //    if (ec != GGML_STATUS_SUCCESS) return ec;
+        //}
+
+        //if (split_backend_id != my_backend_id) continue;
 
         // copy the input tensors to the split backend
         ggml_backend_sched_copy_inputs(sched, split, needs_sync, ids, unique_ids, last_ids_tensor);
@@ -2257,6 +2285,17 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 j0 = j1;
             }
         }
+        if (node->op == GGML_OP_REDUCE) {
+            for (int ib = 0; ib < sched->n_backends; ++ib) {
+                if (ib != split_backend_id && !ggml_backend_is_cpu(sched->backends[ib])) {
+                    printf("%s: triggering reduce for %s on backend %d\n", __func__, node->name, ib);
+                    auto graph = split->graph;
+                    graph.n_nodes = 1;
+                    auto ec = ggml_backend_graph_compute_async(sched->backends[ib], &graph);
+                    if (ec != GGML_STATUS_SUCCESS) return ec;
+                }
+            }
+        }
 
         // record the event of this copy
         if (split->n_inputs > 0) {
@@ -2265,6 +2304,14 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
     }
+    //};
+
+    //std::vector<std::thread> workers;
+    //workers.reserve(sched->n_backends);
+    //for (int i = 0; i < sched->n_backends; ++i) {
+    //    workers.emplace_back(compute, i);
+    //}
+    //for (auto & w : workers) w.join();
 
     sched->cur_copy = (sched->cur_copy + 1) % sched->n_copies;
 
