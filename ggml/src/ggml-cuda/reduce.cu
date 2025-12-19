@@ -40,7 +40,7 @@ void ggml_cuda_op_reduce(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         this_comm = info.nccl_coms[device];
     } else {
         int color = extra->splits[device] ? 1 : 0;
-        auto status = ncclCommSplit(info.nccl_coms[0], color, ctx.device, &this_comm, nullptr);
+        auto status = ncclCommSplit(info.nccl_coms[device], color, ctx.device, &this_comm, nullptr);
         GGML_ASSERT(status == ncclSuccess);
     }
     GGML_ASSERT(this_comm);

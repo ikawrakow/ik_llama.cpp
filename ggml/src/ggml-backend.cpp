@@ -16,6 +16,8 @@
 #include <chrono>
 #include <thread>
 
+#include <nccl.h>
+
 #define IK_PRINT_TIMING 0
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
@@ -2223,6 +2225,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         //    auto ec = ggml_backend_graph_compute_async(sched->backends[my_backend_id], &graph);
         //    if (ec != GGML_STATUS_SUCCESS) return ec;
         //}
+        if (node->op == GGML_OP_REDUCE) {
+            ncclGroupStart();
+            for (int ib = 0; ib < sched->n_backends; ++ib) {
+                if (ib != split_backend_id && !ggml_backend_is_cpu(sched->backends[ib])) {
+                    printf("%s: triggering reduce for %s on backend %d\n", __func__, node->name, ib);
+                    auto graph = split->graph;
+                    graph.n_nodes = 1;
+                    auto ec = ggml_backend_graph_compute_async(sched->backends[ib], &graph);
+                    if (ec != GGML_STATUS_SUCCESS) return ec;
+                }
+            }
+        }
 
         //if (split_backend_id != my_backend_id) continue;
 
@@ -2286,15 +2300,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
         if (node->op == GGML_OP_REDUCE) {
-            for (int ib = 0; ib < sched->n_backends; ++ib) {
-                if (ib != split_backend_id && !ggml_backend_is_cpu(sched->backends[ib])) {
-                    printf("%s: triggering reduce for %s on backend %d\n", __func__, node->name, ib);
-                    auto graph = split->graph;
-                    graph.n_nodes = 1;
-                    auto ec = ggml_backend_graph_compute_async(sched->backends[ib], &graph);
-                    if (ec != GGML_STATUS_SUCCESS) return ec;
-                }
-            }
+            ncclGroupEnd();
         }
 
         // record the event of this copy
