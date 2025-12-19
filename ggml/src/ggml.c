@@ -8552,31 +8552,31 @@ struct ggml_tensor * ggml_get_rows(
     GGML_ASSERT(b->ne[3] == 1);
     GGML_ASSERT(b->type == GGML_TYPE_I32);
 
-    if (a->extra) {
-        ggml_split_tensor_t * extra = (ggml_split_tensor_t *)a->extra;
-        int nhave = 0;
-        for (int j = 0; j < extra->n_device; ++j) if (extra->splits[j]) ++nhave;
-        if (nhave > 1) {
-            ggml_split_tensor_t * new_extra = ggml_new_split(ctx, extra->n_device, -1, NULL);
-            struct ggml_tensor * last = NULL;
-            ggml_split_tensor_t * b_extra = (ggml_split_tensor_t *)b->extra;
-            for (int j = 0; j < extra->n_device; ++j) {
-                if (!extra->splits[j]) continue;
-                struct ggml_tensor * aj = extra->splits[j];
-                struct ggml_tensor * bj = b_extra && b_extra->splits[j] ? b_extra->splits[j] : b;
-                GGML_ASSERT(!aj->extra && !bj->extra);
-                new_extra->splits[j] = ggml_get_rows(ctx, aj, bj);
-                last = new_extra->splits[j];
-            }
-            struct ggml_tensor * result = ggml_view_tensor(ctx, last);
-            result->src[0] = a;
-            result->src[1] = b;
-            result->op = GGML_OP_GET_ROWS;
-            new_extra->tensor = result;
-            result->extra = new_extra;
-            return result;
-        }
-    }
+    //if (a->extra) {
+    //    ggml_split_tensor_t * extra = (ggml_split_tensor_t *)a->extra;
+    //    int nhave = 0;
+    //    for (int j = 0; j < extra->n_device; ++j) if (extra->splits[j]) ++nhave;
+    //    if (nhave > 1) {
+    //        ggml_split_tensor_t * new_extra = ggml_new_split(ctx, extra->n_device, -1, NULL);
+    //        struct ggml_tensor * last = NULL;
+    //        ggml_split_tensor_t * b_extra = (ggml_split_tensor_t *)b->extra;
+    //        for (int j = 0; j < extra->n_device; ++j) {
+    //            if (!extra->splits[j]) continue;
+    //            struct ggml_tensor * aj = extra->splits[j];
+    //            struct ggml_tensor * bj = b_extra && b_extra->splits[j] ? b_extra->splits[j] : b;
+    //            GGML_ASSERT(!aj->extra && !bj->extra);
+    //            new_extra->splits[j] = ggml_get_rows(ctx, aj, bj);
+    //            last = new_extra->splits[j];
+    //        }
+    //        struct ggml_tensor * result = ggml_view_tensor(ctx, last);
+    //        result->src[0] = a;
+    //        result->src[1] = b;
+    //        result->op = GGML_OP_GET_ROWS;
+    //        new_extra->tensor = result;
+    //        result->extra = new_extra;
+    //        return result;
+    //    }
+    //}
 
     bool is_node = false;
 

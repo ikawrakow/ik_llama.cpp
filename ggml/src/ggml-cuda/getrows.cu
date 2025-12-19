@@ -142,11 +142,20 @@ static void get_rows_cuda_float(const ggml_tensor * src0, const ggml_tensor * sr
 void ggml_cuda_op_get_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
+    if (src0->extra) {
+        auto extra = (ggml_split_tensor_t *)src0->extra;
+        src0 = extra->splits[ctx.device];
+        GGML_ASSERT(src0);
+    }
+    if (src1->extra) {
+        auto extra = (ggml_split_tensor_t *)src1->extra;
+        src1 = extra->splits[ctx.device];
+        GGML_ASSERT(src1);
+    }
     const float * src0_d = (const float *)src0->data;
     const float * src1_d = (const float *)src1->data;
     float * dst_d = (float *)dst->data;
     cudaStream_t stream = ctx.stream();
-
 
     GGML_ASSERT(src1->type == GGML_TYPE_I32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);

@@ -2215,7 +2215,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
-        printf("Split %d on backend %d\n", i, split_backend_id);
+        //printf("Split %d on backend %d\n", i, split_backend_id);
 
         auto node = split->graph.nodes[0];
         //if (node->op == GGML_OP_REDUCE && split_backend_id != my_backend_id && !is_cpu) {
@@ -2229,7 +2229,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             ncclGroupStart();
             for (int ib = 0; ib < sched->n_backends; ++ib) {
                 if (ib != split_backend_id && !ggml_backend_is_cpu(sched->backends[ib])) {
-                    printf("%s: triggering reduce for %s on backend %d\n", __func__, node->name, ib);
+                    //printf("%s: triggering reduce for %s on backend %d\n", __func__, node->name, ib);
                     auto graph = split->graph;
                     graph.n_nodes = 1;
                     auto ec = ggml_backend_graph_compute_async(sched->backends[ib], &graph);

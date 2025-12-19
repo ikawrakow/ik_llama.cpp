@@ -693,7 +693,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             ffn.push_back(cur);
         }
         GGML_ASSERT(last_result);
-        auto result = ggml_reduce_inplace(ctx, input, split_result, GGML_OP_ADD);
+        auto result = ggml_reduce_inplace(ctx, last_result, split_result, GGML_OP_ADD);
         cb(result, "ffn_out_split", il);
         split_result->tensor = result;
         return result;
@@ -9536,7 +9536,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 attn.push_back(cur);
             }
             GGML_ASSERT(last_result);
-            auto result = ggml_reduce_inplace(ctx0, input, split_result, GGML_OP_ADD);
+            auto result = ggml_reduce_inplace(ctx0, last_result, split_result, GGML_OP_ADD);
             cb(result, "attn_out_split", il);
             split_result->tensor = result;
             return result;

@@ -19,7 +19,7 @@ void ggml_cuda_op_reduce(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     auto extra = (ggml_split_tensor_t *)dst->extra;
     GGML_ASSERT(extra && extra->n_device > 1);
 
-    printf("============================== %s on device %d\n", __func__, ctx.device);
+    //printf("============================== %s on device %d\n", __func__, ctx.device);
 
 #ifdef GGML_USE_NCCL
     auto & info = ggml_cuda_info();

@@ -3353,6 +3353,8 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         CUDA_CHECK(err);
     }
 
+    //CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
+
 #if IK_PRINT_TIMING
     int64_t tim2 = ggml_time_us();
     printf("%s(%s): %d us\n", ggml_op_name(dst->op), dst->name, (int)(tim2 - tim1));
