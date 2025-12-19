@@ -689,6 +689,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_REDUCE,
+
         GGML_OP_COUNT,
     };
 
@@ -716,6 +718,7 @@ extern "C" {
     enum ggml_object_type {
         GGML_OBJECT_TYPE_TENSOR,
         GGML_OBJECT_TYPE_GRAPH,
+        GGML_OBJECT_TYPE_EXTRA,
         GGML_OBJECT_TYPE_WORK_BUFFER
     };
 
@@ -1059,6 +1062,21 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_add_reduce(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            enum   ggml_op        op);
+
+    GGML_API struct ggml_tensor * ggml_reduce(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            enum   ggml_op        op);
+
+    GGML_API struct ggml_tensor * ggml_reduce_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            enum   ggml_op        op);
 
     GGML_API struct ggml_tensor * ggml_add_cast(
             struct ggml_context * ctx,
@@ -3033,6 +3051,12 @@ extern "C" {
         struct ggml_tensor *  tensor;
         struct ggml_tensor ** splits;
     } ggml_split_tensor_t;
+
+    GGML_API ggml_split_tensor_t * ggml_new_split(
+            struct ggml_context * ctx,
+            int                   n_device,
+            int                   split_dim,
+            struct ggml_tensor  * tensor);
 
 #ifdef  __cplusplus
 }
