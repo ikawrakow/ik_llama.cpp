@@ -3471,6 +3471,7 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
                 needs_f16_f32_copy = true;
 
             } else {
+                printf("%s on device %d -> %s on device %d\n", src->name, cuda_ctx_src->device, dst->name, cuda_ctx_dst->device);
                 ggml_cuda_set_device(cuda_ctx_src->device);
                 CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
             }

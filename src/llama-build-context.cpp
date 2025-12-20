@@ -663,7 +663,8 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                 GGML_ASSERT((!split_u && !iextra->splits[id]) || (split_u && iextra->splits[id]));
             }
             if (!split_u) continue;
-            auto cur = iextra ? iextra->splits[id] : input;
+            //auto cur = iextra ? iextra->splits[id] : input;
+            auto cur = input;
             if (ffn_norm && ffn_norm->extra) {
                 auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
                 GGML_ASSERT(norm->splits[id]);
@@ -671,7 +672,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                 cb(cur, "ffn_inp_normed", il_cb);
             }
             if (cur->type != GGML_TYPE_F32) {
-                cur = ggml_cast(ctx, input, GGML_TYPE_F32);
+                cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
             }
             cur = ggml_fused_up_gate(ctx, split_u, split_g, cur, unary_op);
             cb(cur, "ffn_up_gate", il_cb);
@@ -9398,7 +9399,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     GGML_ASSERT((!split_wq && !iextra->splits[id]) || (split_wq && iextra->splits[id]));
                 }
                 if (!split_wq) continue;
-                auto cur = iextra ? iextra->splits[id] : input;
+                //auto cur = iextra ? iextra->splits[id] : input;
+                auto cur = input;
                 if (attn_norm) {
                     auto split_norm = attn_norm->splits[id];
                     cur = llm_build_norm(ctx0, cur, hparams, split_norm, NULL, LLM_NORM_RMS, cb, il);
