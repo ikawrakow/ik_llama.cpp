@@ -34,6 +34,10 @@
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIPBLAS)
 
+#ifdef GGML_USE_NCCL
+#include <nccl.h>
+#endif
+
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
@@ -754,6 +758,11 @@ struct ggml_cuda_device_info {
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
 
     std::array<float, GGML_CUDA_MAX_DEVICES> default_tensor_split = {};
+
+#ifdef GGML_USE_NCCL
+    ncclComm_t nccl_coms[GGML_CUDA_MAX_DEVICES];
+    bool have_nccl;
+#endif
 };
 
 const ggml_cuda_device_info & ggml_cuda_info();

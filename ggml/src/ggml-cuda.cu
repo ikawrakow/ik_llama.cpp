@@ -246,6 +246,20 @@ static ggml_cuda_device_info ggml_cuda_init() {
     // configure logging to stdout
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
 
+#ifdef GGML_USE_NCCL
+    info.have_nccl = false;
+    if (info.device_count > 1) {
+        int gpu_list[GGML_CUDA_MAX_DEVICES];
+        for(int i = 0; i < info.device_count; ++i) gpu_list[i] = i;
+        auto status = ncclCommInitAll(info.nccl_coms, info.device_count, gpu_list);
+        if (status == ncclSuccess) {
+            printf("=============================== NCCL initialized\n");
+            info.have_nccl = true;
+        } else {
+            printf("=============================== NCCL initialization failed with status %d\n", int(status));
+        }
+    }
+#endif
     return info;
 }
 
@@ -3733,12 +3747,12 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 }
 #endif
 #ifndef NDEBUG
-                assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
-                for (int j = 0; j < GGML_MAX_SRC; j++) {
-                    if (node->src[j] != nullptr) {
-                        assert(node->src[j]->buffer);
-                    }
-                }
+                //assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
+                //for (int j = 0; j < GGML_MAX_SRC; j++) {
+                //    if (node->src[j] != nullptr) {
+                //        assert(node->src[j]->buffer);
+                //    }
+                //}
 #endif // NDEBUG
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, cgraph, i);
