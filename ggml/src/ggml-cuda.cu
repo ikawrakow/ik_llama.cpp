@@ -479,12 +479,20 @@ static std::atomic<int> ggml_cuda_lock_counter;
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
+    auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
+    if (info->all_ctx[device]) {
+        GGML_CUDA_LOG_WARN("%s: a context for device %d already exists?\n", __func__, device);
+    }
+    info->all_ctx[device] = this;
 }
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
+
+    auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
+    info->all_ctx[this->device] = nullptr;
 
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
