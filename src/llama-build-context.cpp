@@ -642,6 +642,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
         up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
+        //printf("%s: %s\n", __func__, ggml_op_name(input->op));
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                         type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU;
         auto u = (ggml_split_tensor_t *)up->extra;
@@ -657,7 +658,18 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             auto split_d = d->splits[id];
             GGML_ASSERT((!split_u && !split_g && !split_d) || (split_u && split_g && split_d));
             if (!split_u) continue;
+            //auto cur = input->op == GGML_OP_REDUCE ? ggml_fake_cpy(ctx, input->src[id], input) : input;
             auto cur = input;
+            if (input->op == GGML_OP_REDUCE) {
+                auto view_src = input->view_src;
+                GGML_ASSERT(view_src);
+                cur = input->src[id];
+                if (cur == view_src) {
+                    //printf("%s: Setting input to %s for id = %d\n", __func__, view_src->name, id);
+                    cur = input;
+                }
+            }
+            //auto cur = input->op == GGML_OP_REDUCE ? input->src[id] : input;
             if (ffn_norm && ffn_norm->extra) {
                 auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
                 GGML_ASSERT(norm->splits[id]);
@@ -688,21 +700,25 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             cb(ffn.back(), "ffn_with_inp", il);
         }
         if (ffn.size() == 1) return ffn.front();
-        auto cur = ggml_add(ctx, ffn[0], ffn[1]);
-        cb(cur, "combine_ffn", il);
-        cur->op_params[0] = 0xff;
-        for (int id = 2; id < int(ffn.size()); ++id) {
-            cur = ggml_add(ctx, cur, ffn[id]);
-            cb(cur, "combine_ffn", il);
-        }
-        if (ffn.size() > 2) {
-            cur->op_params[0] = 0xff;
-        }
-        //if (cur->type != GGML_TYPE_F32) {
-        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-        //}
-
+        auto cur = ggml_reduce(ctx, ffn.data(), u->n_device, GGML_OP_ADD);
+        cb(cur, "ffn_combined", il);
+        ggml_build_forward_expand(graph, cur);
         return cur;
+        //auto cur = ggml_add(ctx, ffn[0], ffn[1]);
+        //cb(cur, "combine_ffn", il);
+        //cur->op_params[0] = 0xff;
+        //for (int id = 2; id < int(ffn.size()); ++id) {
+        //    cur = ggml_add(ctx, cur, ffn[id]);
+        //    cb(cur, "combine_ffn", il);
+        //}
+        //if (ffn.size() > 2) {
+        //    cur->op_params[0] = 0xff;
+        //}
+        ////if (cur->type != GGML_TYPE_F32) {
+        ////    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+        ////}
+
+        //return cur;
     }
 
     if (ffn_norm) {
@@ -1822,6 +1838,7 @@ ggml_cgraph * llm_build_context::build_llama() {
                     Kcur, Vcur, Qcur, this_KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il, nullptr,
                     this_n_swa);
         }
+        //printf("%s: attn result for layer %d is %s, %s\n", __func__, il, cur->name, ggml_op_name(cur->op));
 
         if (il == n_layer - 1) {
             // skip computing output for unused tokens
@@ -1829,7 +1846,7 @@ ggml_cgraph * llm_build_context::build_llama() {
             n_tokens = n_outputs;
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             cb(cur, "last_attn", il);
-            if (use_rope) {
+            if (!use_rope) {
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
                 cb(inpSA, "last_ffn_inp", il);
             }
@@ -1906,6 +1923,7 @@ ggml_cgraph * llm_build_context::build_llama() {
                     cb, il, gf, true);
             cb(cur, "ffn_moe_out", il);
         }
+        //printf("%s: ffn result for layer %d is %s, %s\n", __func__, il, cur->name, ggml_op_name(cur->op));
 
         // For Granite architecture
         if (hparams.f_residual_scale) {
@@ -9344,6 +9362,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&
          model.layers[il].wq->extra && model.layers[il].wk->extra && model.layers[il].wv->extra && model.layers[il].wo->extra) {
         if (kv_self.k_l[il]->extra && kv_self.v_l[il]->extra) {
+            //printf("%s: %s\n", __func__, ggml_op_name(input->op));
             ggml_split_tensor_t * attn_norm = the_attn_norm ? (ggml_split_tensor_t *)the_attn_norm->extra : nullptr;
             auto wq = (ggml_split_tensor_t *)model.layers[il].wq->extra;
             auto wk = (ggml_split_tensor_t *)model.layers[il].wk->extra;
@@ -9382,7 +9401,18 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 GGML_ASSERT((!split_wq && !split_wk && !split_wv && !split_wo && !split_kl && !split_vl) ||
                         (split_wq && split_wk && split_wv && split_wo && split_kl && split_vl));
                 if (!split_wq) continue;
+                //auto cur = input = input->op == GGML_OP_REDUCE ? ggml_fake_cpy(ctx0, input->src[id], input) : input;
                 auto cur = input;
+                if (input->op == GGML_OP_REDUCE) {
+                    auto view_src = input->view_src;
+                    GGML_ASSERT(view_src);
+                    cur = input->src[id];
+                    if (cur == view_src) {
+                        //printf("%s: Setting input to %s for id = %d\n", __func__, view_src->name, id);
+                        cur = input;
+                    }
+                }
+                //auto cur = input = input->op == GGML_OP_REDUCE ? input->src[id] : input;
                 if (attn_norm) {
                     auto split_norm = attn_norm->splits[id];
                     cur = llm_build_norm(ctx0, cur, hparams, split_norm, NULL, LLM_NORM_RMS, cb, il);
@@ -9522,36 +9552,40 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 cb(attn.back(), "attn_out_with_input", il);
             }
             if (attn.size() == 1) return attn.front();
-            //if (attn.size() > 2 && attn.size()%2 == 0) {
-            //    for (int id = 0; id < int(attn.size()/2); ++id) {
-            //        attn[id] = ggml_add(ctx0, attn[2*id+0], attn[2*id+1]);
-            //        attn[id]->op_params[0] = 0xff;
-            //    }
-            //    attn.resize(attn.size()/2);
-            //    auto cur = ggml_add(ctx0, attn[0], attn[1]);
-            //    cur->op_params[0] = 0xff;
-            //    cur->op_params[0] = 0xff;
-            //    for (int id = 2; id < (int)attn.size(); ++id) {
-            //        cur = ggml_add(ctx0, cur, attn[id]);
-            //        cb(cur, "combine_attn", il);
-            //    }
-            //    return cur;
-            //}
-            auto cur = ggml_add(ctx0, attn[0], attn[1]);
-            cb(cur, "combine_attn", il);
-            cur->op_params[0] = 0xff;
-            for (int id = 2; id < (int)attn.size(); ++id) {
-                cur = ggml_add(ctx0, cur, attn[id]);
-                cb(cur, "combine_attn", il);
-            }
-            if (attn.size() > 2) {
-                cur->op_params[0] = 0xff;
-            }
-            //if (add_input) {
-            //    cur = ggml_add(ctx0, cur, input);
-            //    cb(cur, "combine_attn_inp", il);
-            //}
+            auto cur = ggml_reduce(ctx0, attn.data(), wq->n_device, GGML_OP_ADD);
+            ggml_build_forward_expand(gf, cur);
+            cb(cur, "attn_combined", il);
             return cur;
+            ////if (attn.size() > 2 && attn.size()%2 == 0) {
+            ////    for (int id = 0; id < int(attn.size()/2); ++id) {
+            ////        attn[id] = ggml_add(ctx0, attn[2*id+0], attn[2*id+1]);
+            ////        attn[id]->op_params[0] = 0xff;
+            ////    }
+            ////    attn.resize(attn.size()/2);
+            ////    auto cur = ggml_add(ctx0, attn[0], attn[1]);
+            ////    cur->op_params[0] = 0xff;
+            ////    cur->op_params[0] = 0xff;
+            ////    for (int id = 2; id < (int)attn.size(); ++id) {
+            ////        cur = ggml_add(ctx0, cur, attn[id]);
+            ////        cb(cur, "combine_attn", il);
+            ////    }
+            ////    return cur;
+            ////}
+            //auto cur = ggml_add(ctx0, attn[0], attn[1]);
+            //cb(cur, "combine_attn", il);
+            //cur->op_params[0] = 0xff;
+            //for (int id = 2; id < (int)attn.size(); ++id) {
+            //    cur = ggml_add(ctx0, cur, attn[id]);
+            //    cb(cur, "combine_attn", il);
+            //}
+            //if (attn.size() > 2) {
+            //    cur->op_params[0] = 0xff;
+            //}
+            ////if (add_input) {
+            ////    cur = ggml_add(ctx0, cur, input);
+            ////    cb(cur, "combine_attn_inp", il);
+            ////}
+            //return cur;
         }
     }
 

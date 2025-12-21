@@ -1421,6 +1421,28 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
         int * node_backend_id = &tensor_backend_id(node);
+        if (node->op == GGML_OP_REDUCE) {
+            auto view_src = node->view_src;
+            int src_id = -1;
+            for (int j = 0; j < node->op_params[1]; ++j) {
+                if (node->src[j]) {
+                    int * this_node_backend_id = &tensor_backend_id(node->src[j]);
+                    if (*this_node_backend_id == -1) {
+                        *this_node_backend_id = j;
+                    } else {
+                        GGML_ASSERT(*this_node_backend_id == j);
+                    }
+                    if (view_src == node->src[j]) {
+                        src_id = j;
+                    }
+                }
+            }
+            if (src_id >= 0) {
+                int * this_node_backend_id = &tensor_backend_id(view_src);
+                *this_node_backend_id = tensor_backend_id(node->src[src_id]);
+                *node_backend_id = *this_node_backend_id;
+            }
+        }
         // do not overwrite user assignments
         if (*node_backend_id == -1) {
             *node_backend_id = ggml_backend_sched_backend_id_from_cur(sched, node);
@@ -1652,6 +1674,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
             if ((node->op == GGML_OP_ADD && node->op_params[0] == 0xff) ||
+                 node->op == GGML_OP_REDUCE ||
+                 node->op == GGML_OP_FAKE_CPY ||
                  node->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] == 0xff) {
                 need_new_split = true;
             }
@@ -1739,6 +1763,13 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
                     // create a copy of the input in the split's backend
                     if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
+                        if (node->op == GGML_OP_REDUCE) {
+                            //printf("setting tensor_id_copy(reduce, %zu, %d, %s) to %s\n", src_id, cur_backend_id, node->name, src->name);
+                            tensor_id_copy(src_id, cur_backend_id, 0) = src;
+                        } else if (node->op == GGML_OP_FAKE_CPY && src->op == GGML_OP_REDUCE) {
+                            //printf("setting tensor_id_copy(fake_cpy, %zu, %d, %s) to %s\n", src_id, cur_backend_id, node->name, src->src[j]->name);
+                            tensor_id_copy(src_id, cur_backend_id, 0) = src->src[j];
+                        } else {
                         ggml_backend_t backend = sched->backends[cur_backend_id];
                         for (int c = 0; c < sched->n_copies; c++) {
                             struct ggml_tensor * tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
@@ -1753,6 +1784,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         int n_inputs = split->n_inputs++;
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split->inputs[n_inputs] = src;
+                        }
                     }
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
