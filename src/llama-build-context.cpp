@@ -6873,7 +6873,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
 
         // self-attention
         if (rope_cache == nullptr) {
-            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, KQ_mask, nullptr, nullptr, kq_scale, 0.0f, 0, il);
+            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, KQ_mask, nullptr, nullptr, kq_scale, 0.0f, 0, il, true, false, true);
         } else {
             // Pre-attention norm
             cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
@@ -6917,8 +6917,13 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         }
 
         // residual connection for attention output
-        struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-        cb(ffn_inp, "ffn_inp", il);
+        ggml_tensor * ffn_inp;
+        if (rope_cache) {
+            ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+        } else {
+            ffn_inp = cur;
+        }
 
         if ((uint32_t) il < hparams.n_layer_dense_lead) {
             // dense FFN
@@ -6927,7 +6932,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
                     NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf);
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
             cb(cur, "ffn_out", il);
         } else {
             cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
@@ -6942,39 +6947,11 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
                     (llm_expert_gating_func_type) hparams.expert_gating_func,
-                    LLM_FFN_SILU, cb, il, gf);
-
-            //// Post-attention norm
-            //cur = llm_build_norm(ctx0, ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
-            //cb(cur, "post_attn_norm", il);
-            //// MoE FFN
-            //auto routed_out = llm_build_moe_ffn(ctx0, lctx, cur,
-            //        model.layers[il].ffn_gate_inp,
-            //        model.layers[il].ffn_up_exps,
-            //        model.layers[il].ffn_gate_exps,
-            //        model.layers[il].ffn_down_exps,
-            //        model.layers[il].ffn_exp_probs_b,
-            //        n_expert, n_expert_used,
-            //        LLM_FFN_SILU, hparams.expert_weights_norm,
-            //        true, hparams.expert_weights_scale,
-            //        (enum llm_expert_gating_func_type) hparams.expert_gating_func,
-            //        cb, il, gf);
-            //cb(routed_out, "routed_out", il);
-
-            //auto shared_out = llm_build_ffn(ctx0, lctx, nullptr, cur,
-            //            model.layers[il].ffn_up_shexp, NULL, NULL,
-            //            model.layers[il].ffn_gate_shexp, NULL, NULL,
-            //            model.layers[il].ffn_down_shexp, NULL, NULL,
-            //            NULL,
-            //            LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-            //cb(shared_out, "ffn_shexp_out", il);
-
-            //cur = ggml_add(ctx0, routed_out, shared_out);
-            //cb(cur, "ffn_out", il);
+                    LLM_FFN_SILU, cb, il, gf, true);
         }
 
         // residual and context vector
-        cur = ggml_add(ctx0, cur, ffn_inp);
+        //cur = ggml_add(ctx0, cur, ffn_inp);
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
 
