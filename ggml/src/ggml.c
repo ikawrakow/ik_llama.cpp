@@ -4290,10 +4290,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS",
     "CROSS_ENTROPY_LOSS_BACK",
 
+    "GLU",
+
     "REDUCE",
     "FAKE_CPY",
-
-    "GLU",
 };
 
 static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
@@ -6080,6 +6080,7 @@ struct ggml_tensor * ggml_reduce(
         if (a[j]) ++nhave;
     }
     GGML_ASSERT(nhave > 1);
+    result->op = GGML_OP_REDUCE;
     result->op_params[0] = (int)op;
     result->op_params[1] = n;
     result->op_params[2] = nhave;
@@ -6091,9 +6092,9 @@ struct ggml_tensor * ggml_fake_cpy(
             struct ggml_tensor          * dst,
             struct ggml_tensor          * src) {
     struct ggml_tensor * result = ggml_view_tensor(ctx, dst);
+    result->op = GGML_OP_FAKE_CPY;
     result->src[0] = dst;
     result->src[1] = src;
-    result->op = GGML_OP_FAKE_CPY;
     return result;
 }
 
@@ -8471,6 +8472,21 @@ struct ggml_tensor * ggml_get_rows(
     if (a->type == GGML_TYPE_I32) {
         type = a->type;
     }
+
+    if (a->op == GGML_OP_REDUCE) {
+        //printf("======================= %s(%s)\n", __func__, a->name);
+        struct ggml_tensor * result = NULL;
+        for (int j = a->op_params[1]-1; j >= 0; --j) {
+            if (a->src[j]) {
+                struct ggml_tensor * aj = ggml_get_rows(ctx, a->src[j], b);
+                if (result == NULL) result = ggml_view_tensor(ctx, aj);
+                result->src[j] = aj;
+            }
+        }
+        GGML_ASSERT(result);
+        return result;
+    }
+
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, type, a->ne[0], b->ne[0], b->ne[1], b->ne[2]);
 
     result->op   = GGML_OP_GET_ROWS;

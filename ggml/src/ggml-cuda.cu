@@ -48,6 +48,7 @@
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/multiadd.cuh"
 #include "ggml-cuda/hadamard.cuh"
+#include "ggml-cuda/reduce.cuh"
 
 #include <algorithm>
 #include <array>
@@ -2956,6 +2957,11 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
 
     //printf("%4d %s(%s) on device %d. time = %ld\n", i, ggml_op_name(dst->op), dst->name, ctx.device, ggml_time_us());
     switch (dst->op) {
+        case GGML_OP_REDUCE:
+            ggml_cuda_op_reduce(ctx, dst);
+            break;
+        case GGML_OP_FAKE_CPY:
+            break;
         case GGML_OP_ARGMAX:
             ggml_cuda_argmax(ctx, dst);
             break;
@@ -4066,6 +4072,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 }
                 return false;
             } break;
+        case GGML_OP_REDUCE:
+        case GGML_OP_FAKE_CPY:
         case GGML_OP_ARGMAX:
             return true;
         case GGML_OP_HADAMARD:

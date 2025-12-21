@@ -17,7 +17,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     GGML_ASSERT(ggml_is_contiguous(dst));
     GGML_ASSERT(nhave >=2 && nhave <= nreduce);
 
-    //printf("============================== %s on device %d\n", __func__, ctx.device);
+    //printf("============================== %s on device %d with %d sources\n", __func__, ctx.device, nreduce);
 
 #ifdef GGML_USE_NCCL
     auto & info = ggml_cuda_info();
