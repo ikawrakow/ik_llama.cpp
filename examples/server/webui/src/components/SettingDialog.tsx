@@ -1,7 +1,6 @@
 import { useState, useRef} from 'react';
 import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
-import { isDev } from '../Config';
 import StorageUtils from '../utils/storage';
 import { useModals } from './ModalProvider';
 import { classNames, isBoolean, isNumeric, isString } from '../utils/misc';
@@ -602,16 +601,8 @@ export default function SettingDialog({
         toast.error(`Unknown default type for key ${key}`);
       }
     }
-    if (isDev) {
-      console.log('Saving config', newConfig);
-    }
-    else {
-      console.log('Save config', newConfig);
-    }
     saveConfig(newConfig);
-    console.log('Config to Close', newConfig);
     onClose();
-    console.log('Config Closed', newConfig);
   };
 
   const onChange = (key: SettKey) => (value: string | boolean) => {

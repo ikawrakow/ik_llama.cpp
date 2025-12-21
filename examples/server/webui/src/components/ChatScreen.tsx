@@ -140,8 +140,8 @@ export default function ChatScreen() {
       return;
 
     textarea.setValue('');
-    scrollToBottom(false);
     setCurrNodeId(-1);
+    scrollToBottom(false);
     // get the last message node
     const lastMsgNodeId = messages.at(-1)?.msg.id ?? null;
     const successSendMsg=await sendMessage(
@@ -252,7 +252,7 @@ export default function ChatScreen() {
     >
       <div
         className={classNames({
-          'flex flex-col w-[75vw] mx-auto': true,
+          'flex flex-col w-full lg:w-[75vw] lg:mx-auto': true, // Changed here
           'hidden lg:flex': hasCanvas, // adapted for mobile
           flex: !hasCanvas,
         })}

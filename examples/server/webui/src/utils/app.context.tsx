@@ -161,9 +161,6 @@ export const AppContextProvider = ({
 
   ////////////////////////////////////////////////////////////////////////
   // public functions
-  const sleep = (ms: number): Promise<void> => {
-      return new Promise(resolve => setTimeout(resolve, ms));
-  };
   const isGenerating = (convId: string) => !!pendingMessages[convId];
 
   const generateMessage = async (
