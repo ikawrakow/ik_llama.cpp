@@ -3051,13 +3051,15 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_reduce(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            ggml_split_tensor_t * b,
+            int                   idx,
+            int                   nreduce,
             enum   ggml_op        op);
 
     GGML_API struct ggml_tensor * ggml_reduce_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            ggml_split_tensor_t * b,
+            int                   idx,
+            int                   nreduce,
             enum   ggml_op        op);
 
 #ifdef  __cplusplus

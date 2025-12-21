@@ -1425,13 +1425,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         struct ggml_tensor * node = graph->nodes[i];
         int * node_backend_id = &tensor_backend_id(node);
         if (node->op == GGML_OP_REDUCE) {
-            auto extra = (const ggml_split_tensor_t *)node->extra;
-            GGML_ASSERT(extra);
-            for (int j = extra->n_device-1; j >= 0; --j) {
-                if (extra->splits[j]) {
-                    *node_backend_id = j; break;
-                }
-            }
+            *node_backend_id = node->op_params[0];
+        }
+        else if (node->op == GGML_OP_ADD && node->op_params[1] > 0) {
+            *node_backend_id = node->op_params[1] - 1;
         }
         // do not overwrite user assignments
         if (*node_backend_id == -1) {
@@ -2218,25 +2215,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         //printf("Split %d on backend %d\n", i, split_backend_id);
 
         auto node = split->graph.nodes[0];
-        //if (node->op == GGML_OP_REDUCE && split_backend_id != my_backend_id && !is_cpu) {
-        //    printf("%s: triggering reduce for %s on backend %d\n", __func__, node->name, my_backend_id);
-        //    auto graph = split->graph;
-        //    graph.n_nodes = 1;
-        //    auto ec = ggml_backend_graph_compute_async(sched->backends[my_backend_id], &graph);
-        //    if (ec != GGML_STATUS_SUCCESS) return ec;
-        //}
-        if (node->op == GGML_OP_REDUCE) {
-            ncclGroupStart();
-            for (int ib = 0; ib < sched->n_backends; ++ib) {
-                if (ib != split_backend_id && !ggml_backend_is_cpu(sched->backends[ib])) {
-                    //printf("%s: triggering reduce for %s on backend %d\n", __func__, node->name, ib);
-                    auto graph = split->graph;
-                    graph.n_nodes = 1;
-                    auto ec = ggml_backend_graph_compute_async(sched->backends[ib], &graph);
-                    if (ec != GGML_STATUS_SUCCESS) return ec;
-                }
-            }
-        }
 
         //if (split_backend_id != my_backend_id) continue;
 
@@ -2298,9 +2276,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 j0 = j1;
             }
-        }
-        if (node->op == GGML_OP_REDUCE) {
-            ncclGroupEnd();
         }
 
         // record the event of this copy
