@@ -39,10 +39,10 @@ export default function ChatMessage({
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (isPending) {
+    if (msg.content=== null) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [isPending]); 
+  }, [msg.content]);
   const timings = useMemo(
     () =>
       msg.timings

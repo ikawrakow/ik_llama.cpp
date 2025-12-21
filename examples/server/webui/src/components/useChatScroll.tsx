@@ -24,7 +24,7 @@ export const scrollToBottom = (requiresNearBottom: boolean, delay?: number) => {
 export function useChatScroll(msgListRef: React.RefObject<HTMLDivElement>) {
   useEffect(() => {
     if (!msgListRef.current) return;
-
+    
     const resizeObserver = new ResizeObserver((_) => {
       // Remove throttle but keep the near-bottom logic
       scrollToBottom(true, 10);
