@@ -2088,7 +2088,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync{{true}};
     std::array<bool, GGML_SCHED_MAX_BACKENDS> own_cpy{{false}};
 
-    if (false && sched->split_mode_graph) {
+    if (sched->split_mode_graph) {
         auto tensor_size = [] (const ggml_tensor * t) {
             auto nbytes = ggml_nbytes(t);
             nbytes = 256*((nbytes + 255)/256);
