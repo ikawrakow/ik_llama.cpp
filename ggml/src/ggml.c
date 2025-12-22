@@ -8473,19 +8473,19 @@ struct ggml_tensor * ggml_get_rows(
         type = a->type;
     }
 
-    if (a->op == GGML_OP_REDUCE) {
-        //printf("======================= %s(%s)\n", __func__, a->name);
-        struct ggml_tensor * result = NULL;
-        for (int j = a->op_params[1]-1; j >= 0; --j) {
-            if (a->src[j]) {
-                struct ggml_tensor * aj = ggml_get_rows(ctx, a->src[j], b);
-                if (result == NULL) result = ggml_view_tensor(ctx, aj);
-                result->src[j] = aj;
-            }
-        }
-        GGML_ASSERT(result);
-        return result;
-    }
+    //if (a->op == GGML_OP_REDUCE) {
+    //    //printf("======================= %s(%s)\n", __func__, a->name);
+    //    struct ggml_tensor * result = NULL;
+    //    for (int j = a->op_params[1]-1; j >= 0; --j) {
+    //        if (a->src[j]) {
+    //            struct ggml_tensor * aj = ggml_get_rows(ctx, a->src[j], b);
+    //            if (result == NULL) result = ggml_view_tensor(ctx, aj);
+    //            result->src[j] = aj;
+    //        }
+    //    }
+    //    GGML_ASSERT(result);
+    //    return result;
+    //}
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, type, a->ne[0], b->ne[0], b->ne[1], b->ne[2]);
 
