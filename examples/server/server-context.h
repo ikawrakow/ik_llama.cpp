@@ -34,6 +34,8 @@ struct slot_params {
     int32_t  n_discard = 0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
     int32_t  n_predict = -1; // new tokens to predict
 
+    thinking_tokens think_tokens;
+    
     std::vector<std::string> antiprompt;
 
     bool timings_per_token = false;
@@ -259,6 +261,12 @@ struct server_context {
 
     server_slot* get_slot_by_id(int id);
 
+    float calculate_slot_f_keep(const server_slot& slot, llama_context* ctx, const server_tokens& a, const server_tokens& b);
+
+    std::pair<common_prefix, float> calculate_slot_similarity(const server_slot& slot, llama_context* ctx, const server_tokens& a, const server_tokens& b);
+
+    void copy_data_to_cached_prompt(const server_tokens& tokens, server_slot& slot);
+
     server_slot* get_available_slot(const server_task& task);
 
     bool launch_slot_with_task(server_slot& slot, server_task& task);
@@ -302,12 +310,14 @@ struct server_context {
 
     void print_tokens(const server_tokens& prompt, const server_tokens& cache, size_t start1 = 0, size_t start2 = 0, size_t length = 10);
 
+    // discard tokens in kv cache and cached tokens
     void discard_n_kv_and_cache_tokens(llama_context* ctx, server_slot& slot, int32_t n_keep, int32_t n_discard);
 
     // convert keep first few and discard next tokens in a to b
     void context_shift_find_n_tokens(llama_context* ctx, const server_tokens& a, const server_tokens& b, int32_t n_keep,
         int32_t n_discard, int32_t& n_kept, int32_t& n_discarded, bool exact = false);
 
+    // handle context shift for prompt
     void context_shift_prompt(llama_context* ctx, server_slot& slot, bool exact = false);
 
     void update_slots();
