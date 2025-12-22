@@ -250,47 +250,36 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #ifdef GGML_USE_NCCL
     info.have_nccl = false;
     if (info.device_count > 1) {
-        if (info.device_count == 4) {
-            int devs[8] = {0,1, 2,3, 0,2, 1,3};
-            for (int ip = 0; ip < 4; ++ip) {
-                if (auto status = ncclCommInitAll(info.nccl_coms+2*ip, 2, devs+2*ip); status != ncclSuccess) {
-                    printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
-                    GGML_ABORT("Fatal error");
-                }
-            }
-            int gpus[4] = {0, 1, 2, 3};
-            if (auto status = ncclCommInitAll(info.nccl_coms+8, 4, gpus); status != ncclSuccess) {
-                printf("=============================== NCCL initialization of 4 GPUs failed with status %d\n", int(status));
-                GGML_ABORT("Fatal error");
-            }
-            info.have_nccl = true;
-            printf("=============================== NCCL initialized\n");
-        } else if (info.device_count == 3) {
-            int devs[4] = {0,1, 0,2};
-            for (int ip = 0; ip < 2; ++ip) {
-                if (auto status = ncclCommInitAll(info.nccl_coms+2*ip, 2, devs+2*ip); status != ncclSuccess) {
-                    printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
-                    GGML_ABORT("Fatal error");
-                }
-            }
-            int gpus[3] = {0, 1, 2};
-            if (auto status = ncclCommInitAll(info.nccl_coms+4, 3, gpus); status != ncclSuccess) {
-                printf("=============================== NCCL initialization of 4 GPUs failed with status %d\n", int(status));
-                GGML_ABORT("Fatal error");
-            }
-            info.have_nccl = true;
-            printf("=============================== NCCL initialized\n");
-        } else {
         int gpu_list[GGML_CUDA_MAX_DEVICES];
         for(int i = 0; i < info.device_count; ++i) gpu_list[i] = i;
         auto status = ncclCommInitAll(info.nccl_coms, info.device_count, gpu_list);
         if (status == ncclSuccess) {
-            printf("=============================== NCCL initialized\n");
+            printf("=============================== NCCL main communicator initialized\n");
             info.have_nccl = true;
         } else {
             printf("=============================== NCCL initialization failed with status %d\n", int(status));
             GGML_ABORT("Fatal error");
         }
+        auto com = info.nccl_coms + info.device_count;
+        if (info.device_count == 4) {
+            int devs[8] = {0,1, 2,3, 0,2, 1,3};
+            auto com = info.nccl_coms + info.device_count;
+            for (int ip = 0; ip < 4; ++ip) {
+                if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
+                    printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
+                    GGML_ABORT("Fatal error");
+                }
+            }
+            printf("=============================== NCCL pair communicators for %d GPUs initialized\n", info.device_count);
+        } else if (info.device_count == 3) {
+            int devs[4] = {0,1, 0,2};
+            for (int ip = 0; ip < 2; ++ip) {
+                if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
+                    printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
+                    GGML_ABORT("Fatal error");
+                }
+            }
+            printf("=============================== NCCL pair communicators for %d GPUs initialized\n", info.device_count);
         }
     }
 #endif
@@ -3512,8 +3501,23 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
                 needs_f16_f32_copy = true;
 
             } else {
+#ifdef GGML_USE_NCCL__
+                auto & info = ggml_cuda_info();
+                auto nbytes = ggml_nbytes(src);
+                ncclGroupStart();
+                ggml_cuda_set_device(cuda_ctx_src->device);
+                auto status1 = ncclSend(src->data, nbytes, ncclUint8, cuda_ctx_dst->device, info.nccl_coms[cuda_ctx_src->device],
+                        info.all_ctx[cuda_ctx_src->device]->stream());
+                ggml_cuda_set_device(cuda_ctx_dst->device);
+                auto status2 = ncclRecv(dst->data, nbytes, ncclUint8, cuda_ctx_src->device, info.nccl_coms[cuda_ctx_dst->device],
+                        info.all_ctx[cuda_ctx_dst->device]->stream());
+                ncclGroupEnd();
+                GGML_ASSERT(status1 == ncclSuccess && status2 == ncclSuccess);
+                return true;
+#else
                 ggml_cuda_set_device(cuda_ctx_src->device);
                 CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+#endif
             }
 #endif
         }
@@ -4434,6 +4438,13 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         }
 #endif
     }
+
+#ifdef GGML_USE_NCCL
+    if (!enable_p2p) {
+        printf("================== P2P disabled, but needed for NCCL\n");
+        enable_p2p = true;
+    }
+#endif
 
 #if !defined(GGML_CUDA_NO_PEER_COPY)
     if (enable_p2p) {
