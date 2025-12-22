@@ -253,6 +253,30 @@ common_webui common_webui_from_name(const std::string& format) {
     }
 }
 
+thinking_tokens thinking_tokens_from_string(const std::string& format) {
+    thinking_tokens think_token;
+    std::string token_string = string_strip(format);
+    if (token_string == "none" || token_string == "None") {
+        think_token.exclude = false;
+        return think_token;
+    }
+    else if (token_string == "auto" || token_string == "Auto") {
+        think_token.exclude = true;
+        think_token.begin = "<think>";
+        think_token.end = "</think>";
+        return think_token;
+    }
+    // Use user provided think tokens
+    auto start_end = string_split(format, ",");
+    if (start_end.size() == 2) {
+        think_token.exclude = true;
+        think_token.begin = start_end[0];
+        think_token.end = start_end[1];
+    }
+    return think_token;
+}
+
+
 static std::string read_file(const std::string& fname) {
     std::ifstream file(fname);
     if (!file) {
@@ -1745,6 +1769,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--reasoning-tokens") {
+        CHECK_ARG
+        params.think_tokens = thinking_tokens_from_string(std::string(argv[i]));
+        return true;
+    }
     if (arg == "--reasoning-budget") {
         CHECK_ARG
         params.reasoning_budget = std::stoi(argv[i]);
@@ -2160,6 +2189,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "main",        "       --cfg-negative-prompt-file FNAME",
                                                                         "negative prompt file to use for guidance" });
     options.push_back({ "main",        "       --cfg-scale N",          "strength of guidance (default: %.1f, 1.0 = disable)", (double)sparams.cfg_scale });
+    options.push_back({ "template" });
     options.push_back({ "main",        "       --jinja",
                                                                         "set custom jinja chat template (default: template taken from model's metadata)\n"
                                                                         "if suffix/prefix are specified, template will be disabled\n"
@@ -2176,7 +2206,15 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                         "- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`\n"
                         "(default: none)", });
     options.push_back({ "main",      "       --chat-template-kwargs JSON",  "sets additional params for the json template parser"});
-    options.push_back({ "main",      "       --reasoning-budget N",  "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)" });
+    options.push_back({ "main",      "       --reasoning-budget N",  "controls the amount of thinking allowed.\n"
+                                                                                                     "currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking"
+                                                                                                      "(default: -1)" });
+    options.push_back({ "main",      "       --reasoning-tokens FORMAT",     "exclude reasoning tokens to select the slot more accurately.\n"
+						                                                                                            "none: include all tokens\n"
+                                                                                                                    "auto: exclude all tokens between <think> and </think>\n"
+						                                                                                            "Or comma separated start and end tokens such as [THINK],[/THINK]\n"
+						                                                                                            "(default: auto)" });
+
     options.push_back({ "main",      "       --no-prefill-assistant",  "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
             "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n" });
     options.push_back({ "grammar" });

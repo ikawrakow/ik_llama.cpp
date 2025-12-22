@@ -171,6 +171,7 @@ std::string tokens_to_str(llama_context* ctx, const llama_tokens& tokens);
 // format incomplete utf-8 multibyte character for output
 std::string tokens_to_output_formatted_string(const llama_context* ctx, const llama_token token);
 
+
 struct common_prefix {
     size_t first = 0;
     size_t second = 0;
@@ -389,6 +390,7 @@ public:
 
     size_t get_common_prefix_exact(const server_tokens& b) const;
 
+    llama_tokens get_text_tokens_exclude_think(const llama_context* ctx, const thinking_tokens& think_token) const;
 
     common_prefix get_common_prefix(const llama_context* ctx, const server_tokens& b, bool exact = false) const;
     // take first n tokens of tokens list a

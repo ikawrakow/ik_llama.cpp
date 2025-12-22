@@ -119,6 +119,15 @@ enum common_webui {
 
 common_webui common_webui_from_name(const std::string& format);
 
+struct thinking_tokens {
+    bool exclude = true;
+    std::string begin = "<think>";
+    std::string end = "</think>";
+};
+
+thinking_tokens thinking_tokens_from_string(const std::string& format);
+
+
 struct model_paths {
     std::string path        = ""; // model local path                                       // NOLINT
     std::string url         = ""; // model url to download                                  // NOLINT
@@ -314,6 +323,7 @@ struct gpt_params {
     std::string system_prompt = "";
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    thinking_tokens think_tokens;
     int reasoning_budget = -1;
     bool prefill_assistant = true;
 
