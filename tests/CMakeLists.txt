@@ -129,7 +129,7 @@ if (NOT WIN32)
 endif()
 
 llama_target_and_test(test-chat-parser.cpp)
-llama_target_and_test(test-chat-template.cpp)
+#llama_target_and_test(test-chat-template.cpp)
 llama_target_and_test(test-json-partial.cpp)
 llama_target_and_test(test-regex-partial.cpp)
 

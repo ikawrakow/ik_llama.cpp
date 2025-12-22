@@ -14,6 +14,7 @@
 #include <set>
 #include <array>
 #include <chrono>
+#include <barrier>
 
 #define IK_PRINT_TIMING 0
 
@@ -2088,6 +2089,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync{{true}};
     std::array<bool, GGML_SCHED_MAX_BACKENDS> own_cpy{{false}};
 
+    std::barrier barrier(sched->n_backends, [] () {});
+    std::vector<std::thread> workers;
+    workers.reserve(sched->n_backends);
+    std::vector<ggml_status> statuses(sched->n_backends, GGML_STATUS_SUCCESS);
+
     if (sched->split_mode_graph) {
         auto tensor_size = [] (const ggml_tensor * t) {
             auto nbytes = ggml_nbytes(t);
@@ -2168,6 +2174,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
     }
 
+    auto compute = [sched, &needs_sync, &own_cpy, &barrier, &statuses] (int ith) {
+
     struct ggml_backend_sched_split * splits = sched->splits;
 
     std::vector<int32_t> ids;
@@ -2182,6 +2190,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
+        bool needs_barrier = split->n_inputs > 0 || split->graph.nodes[0]->op == GGML_OP_REDUCE;
+
+        if (needs_barrier) {
+            barrier.arrive_and_wait();
+        }
+
+        if (ith == split_backend_id) {
         // copy the input tensors to the split backend
         ggml_backend_sched_copy_inputs(sched, split, needs_sync, ids, unique_ids, last_ids_tensor);
 
@@ -2201,7 +2216,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 #endif
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
-                return ec;
+                statuses[ith] = ec;
+                return;
             }
         } else {
             // similar to ggml_backend_compare_graph_backend
@@ -2228,7 +2244,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
                 if (ec != GGML_STATUS_SUCCESS) {
-                    return ec;
+                    statuses[ith] = ec;
+                    return;
                 }
 
                 // TODO: pass backend to the callback, then the user can decide if they want to synchronize
@@ -2241,6 +2258,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 j0 = j1;
             }
         }
+        }
+
+        if (needs_barrier) {
+            barrier.arrive_and_wait();
+        }
 
         // record the event of this copy
         if (split->n_inputs > 0) {
@@ -2248,6 +2270,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
             }
         }
+    }
+    };
+
+    for (int i = 0; i < sched->n_backends; ++i) workers.emplace_back(compute, i);
+    for (auto & w : workers) w.join();
+    for (auto status : statuses) {
+        if (status != GGML_STATUS_SUCCESS) return status;
     }
 
     sched->cur_copy = (sched->cur_copy + 1) % sched->n_copies;
