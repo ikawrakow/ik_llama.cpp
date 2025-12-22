@@ -265,6 +265,21 @@ static ggml_cuda_device_info ggml_cuda_init() {
             }
             info.have_nccl = true;
             printf("=============================== NCCL initialized\n");
+        } else if (info.device_count == 3) {
+            int devs[4] = {0,1, 0,2};
+            for (int ip = 0; ip < 2; ++ip) {
+                if (auto status = ncclCommInitAll(info.nccl_coms+2*ip, 2, devs+2*ip); status != ncclSuccess) {
+                    printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
+                    GGML_ABORT("Fatal error");
+                }
+            }
+            int gpus[3] = {0, 1, 2};
+            if (auto status = ncclCommInitAll(info.nccl_coms+4, 3, gpus); status != ncclSuccess) {
+                printf("=============================== NCCL initialization of 4 GPUs failed with status %d\n", int(status));
+                GGML_ABORT("Fatal error");
+            }
+            info.have_nccl = true;
+            printf("=============================== NCCL initialized\n");
         } else {
         int gpu_list[GGML_CUDA_MAX_DEVICES];
         for(int i = 0; i < info.device_count; ++i) gpu_list[i] = i;
