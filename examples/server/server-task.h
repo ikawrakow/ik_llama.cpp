@@ -177,6 +177,7 @@ struct server_prompt {
     server_tokens tokens;
     int n_kept_prompt;
     int n_discarded_prompt;
+    thinking_tokens think_tokens;
 
     std::vector<uint8_t> data;
 
