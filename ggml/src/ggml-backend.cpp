@@ -2083,84 +2083,12 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
     }
 }
 
-static ggml_status ggml_backend_sched_compute_splits_sm_graph(ggml_backend_sched_t sched) {
-    std::vector<int32_t> ids;
-    std::vector<uint32_t> unique_ids;
-    ggml_tensor * last_ids_tensor = nullptr;
-
-    std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync{{true}};
-
-    auto splits = sched->splits;
-
-    std::vector<ggml_backend_sched_split *> this_split;
-    for (int i = 0; i < sched->n_splits; ++i) {
-        auto split_i = &splits[i];
-        this_split.clear();
-        this_split.push_back(split_i);
-        for (int j = i+1; j < sched->n_splits; ++j) {
-            auto split_j = &splits[j];
-            if (split_i->backend_id == split_j->backend_id) {
-                break;
-            }
-            int n_nodes = std::min(split_i->graph.n_nodes, split_j->graph.n_nodes);
-            bool same = true;
-            for (int k = 0; k < n_nodes; ++k) {
-                if (split_i->graph.nodes[k]->op != split_j->graph.nodes[k]->op) {
-                    same = false; break;
-                }
-            }
-            if (!same) {
-                break;
-            }
-            this_split.push_back(split_j);
-        }
-        if (false) {
-            auto split = this_split.front();
-            if (this_split.size() == 1) {
-                printf("=== Split %d with %d inputs on backend %d\n", i, split->n_inputs, split->backend_id);
-            } else {
-                printf("=== Split %d with %d inputs on backends", i, split->n_inputs);
-                for (int j = 0; j < (int)this_split.size(); ++j) printf(" %d", this_split[j]->backend_id);
-                printf("\n");
-            }
-            for (int j = 0; j < split->graph.n_nodes; ++j) {
-                printf("  %d  %s(%s)\n", j, ggml_op_name(split->graph.nodes[j]->op), split->graph.nodes[j]->name);
-            }
-        }
-        for (auto split : this_split) {
-            ggml_backend_sched_copy_inputs(sched, split, needs_sync, ids, unique_ids, last_ids_tensor);
-        }
-        for (auto split : this_split) {
-            auto split_backend_id = split->backend_id;
-            if (split->n_inputs > 0) {
-                needs_sync[split_backend_id] = true;
-            }
-            auto split_backend = sched->backends[split_backend_id];
-            auto ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
-            if (ec != GGML_STATUS_SUCCESS) {
-                return ec;
-            }
-            if (split->n_inputs > 0) {
-                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                    ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
-                }
-            }
-        }
-        i += this_split.size() - 1;
-    }
-    return GGML_STATUS_SUCCESS;
-}
-
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
-
-    if (false && sched->split_mode_graph) {
-        return ggml_backend_sched_compute_splits_sm_graph(sched);
-    }
 
     std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync{{true}};
     std::array<bool, GGML_SCHED_MAX_BACKENDS> own_cpy{{false}};
 
-    if (sched->split_mode_graph) {
+    if (false && sched->split_mode_graph) {
         auto tensor_size = [] (const ggml_tensor * t) {
             auto nbytes = ggml_nbytes(t);
             nbytes = 256*((nbytes + 255)/256);

@@ -76,9 +76,9 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         }
         ncclGroupStart();
         ggml_cuda_set_device(0);
-        auto status1 = ncclSend(dst->src[0]->data, ggml_nelements(dst), data_type, 1, info.nccl_coms[0], info.all_ctx[0]->stream());
+        auto status1 = ncclSend(dst->src[0]->data, ggml_nelements(dst), data_type, 1, com[0], info.all_ctx[0]->stream());
         ggml_cuda_set_device(1);
-        auto status2 = ncclRecv(dst->src[1]->data, ggml_nelements(dst), data_type, 0, info.nccl_coms[1], info.all_ctx[1]->stream());
+        auto status2 = ncclRecv(dst->src[1]->data, ggml_nelements(dst), data_type, 0, com[1], info.all_ctx[1]->stream());
         ncclGroupEnd();
         if (status1 != ncclSuccess || status2 != ncclSuccess) {
             fprintf(stderr, "%s: ncclSend/Recv failed with statuses %d, %d\n", __func__, (int)status1, (int)status2);
