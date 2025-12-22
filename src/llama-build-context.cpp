@@ -651,7 +651,8 @@ ggml_tensor * llm_build_context::llm_build_ffn(
          ggml_tensor * act_scales,
             llm_ffn_op_type   type_op,
           llm_ffn_gate_type   type_gate,
-         const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input) {
+         const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
+         bool is_norm, ggml_tensor * add_extra) {
 
     if (!up_b && !up_s && !gate_b && !gate_s && !down_b && !down_s &&
         up->extra && gate->extra && down->extra && type_gate == LLM_FFN_PAR &&
@@ -676,7 +677,13 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             if (ffn_norm && ffn_norm->extra) {
                 auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
                 GGML_ASSERT(norm->splits[id]);
-                cur = llm_build_norm(ctx, cur, lctx.model.hparams, norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
+                if (is_norm) {
+                    cur = llm_build_norm(ctx, cur, lctx.model.hparams, norm->splits[id], NULL, LLM_NORM, cb, il);
+                    GGML_ASSERT(cur->src[0]->op == GGML_OP_NORM);
+                    cur->src[0]->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+                } else {
+                    cur = llm_build_norm(ctx, cur, lctx.model.hparams, norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
+                }
                 cb(cur, "ffn_inp_normed", il_cb);
             }
             else if (cur->type != GGML_TYPE_F32) {
@@ -702,6 +709,10 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             ffn.back() = ggml_add(ctx, ffn.back(), input);
             cb(ffn.back(), "ffn_with_inp", il);
         }
+        if (add_extra) {
+            ffn.back() = ggml_add(ctx, ffn.back(), add_extra);
+            cb(ffn.back(), "ffn_with_inp", il);
+        }
         if (ffn.size() == 1) return ffn.front();
         auto cur = ggml_reduce(ctx, ffn.data(), u->n_device, GGML_OP_ADD);
         cb(cur, "ffn_combined", il);
@@ -711,7 +722,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
 
     auto cur = input;
     if (ffn_norm) {
-        cur = llm_build_norm(ctx, cur, lctx.model.hparams, ffn_norm, NULL, LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx, cur, lctx.model.hparams, ffn_norm, NULL, is_norm ? LLM_NORM : LLM_NORM_RMS, cb, il);
         cb(input, "ffn_norm", il);
     }
     if (cur->type != GGML_TYPE_F32) {
@@ -744,6 +755,10 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         }
         if (add_input) {
             cur = ggml_add(ctx, cur, input);
+            cb(cur, "ffn_out_with_inp", il);
+        }
+        if (add_extra) {
+            cur = ggml_add(ctx, cur, add_extra);
             cb(cur, "ffn_out_with_inp", il);
         }
         return cur;
@@ -863,6 +878,10 @@ ggml_tensor * llm_build_context::llm_build_ffn(
 
     if (add_input) {
         cur = ggml_add(ctx, cur, input);
+        cb(cur, "ffn_out_with_inp", il);
+    }
+    if (add_extra) {
+        cur = ggml_add(ctx, cur, add_extra);
         cb(cur, "ffn_out_with_inp", il);
     }
 
@@ -7254,48 +7273,25 @@ ggml_cgraph * llm_build_context::build_cohere2() {
         const bool           is_sliding = il % sliding_window_pattern < (sliding_window_pattern - 1);
         struct ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
 
-        // norm
-        auto attn_norm = model.layers[il].attn_norm;
-        int id = -1;
-        if (attn_norm->extra) {
-            auto extra = (ggml_split_tensor_t *)attn_norm->extra;
-            for (int i = extra->n_device-1; i >= 0; --i) {
-                if (extra->splits[i]) {
-                    attn_norm = extra->splits[i];
-                    id = i;
-                    break;
-                }
-            }
-        }
-        cur = llm_build_norm(ctx0, inpL, hparams, attn_norm, NULL, LLM_NORM, cb, il);
-        if (id >= 0) {
-            ggml_backend_sched_set_tensor_backend(lctx.sched, cur->src[0], ggml_backend_sched_get_backend(lctx.sched, id));
-        }
-        cb(cur, "attn_norm", il);
-        auto ffn_inp = cur;
-
         // self-attention
-        auto attn_out = build_std_attention(gf, nullptr, cur, inp_pos, nullptr, KQ_mask_l, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), 0.f,
-                is_sliding ? hparams.n_swa : 0, il, is_sliding, true);
+        auto attn_out = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, KQ_mask_l, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), 0.f,
+                is_sliding ? hparams.n_swa : 0, il, is_sliding, false, true, true);
         cb(attn_out, "attn_out", il);
 
         if (il == n_layer - 1) {
             // skip computing output for unused tokens
             struct ggml_tensor * inp_out_ids = build_inp_out_ids();
             attn_out                         = ggml_get_rows(ctx0, attn_out, inp_out_ids);
-            ffn_inp                          = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
             inpL                             = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
 
         // feed-forward network
-        cur = llm_build_ffn(ctx0, lctx, nullptr, ffn_inp, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate,
+        cur = llm_build_ffn(ctx0, lctx, model.layers[il].attn_norm, inpL, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate,
                     NULL, NULL, model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR,
-                    cb, il, gf);
+                    cb, il, gf, false, true, attn_out);
         cb(cur, "ffn_out", il);
 
         // add together residual + FFN + self-attention
-        cur = ggml_add(ctx0, cur, attn_out);
-        cur = ggml_add(ctx0, cur, inpL);
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
 
@@ -7304,9 +7300,6 @@ ggml_cgraph * llm_build_context::build_cohere2() {
     }
 
     cur = inpL;
-    //if (cur->type != GGML_TYPE_F32) {
-    //    cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
-    //}
 
     cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM, cb, -1);
     cb(cur, "result_norm", -1);
@@ -9337,7 +9330,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
 ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tensor * the_attn_norm,
         ggml_tensor * input, ggml_tensor * inp_pos, ggml_tensor * rope_factors_in,
         ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
-        int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input) {
+        int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input, bool is_norm) {
     if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&
          model.layers[il].wq->extra && model.layers[il].wk->extra && model.layers[il].wv->extra && model.layers[il].wo->extra) {
         if (kv_self.k_l[il]->extra && kv_self.v_l[il]->extra) {
@@ -9382,11 +9375,20 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 if (!split_wq) continue;
                 auto cur = get_input_tensor_sm_graph(input, id);
                 if (attn_norm) {
-                    auto split_norm = attn_norm->splits[id];
-                    cur = llm_build_norm(ctx0, cur, hparams, split_norm, NULL, LLM_NORM_RMS, cb, il);
-                    cb(cur, "attn_norm", il_cb);
+                    if (is_norm) {
+                        cur = llm_build_norm(ctx0, cur, lctx.model.hparams, attn_norm->splits[id], NULL, LLM_NORM, cb, il);
+                        GGML_ASSERT(cur->src[0]->op == GGML_OP_NORM);
+                        cur->src[0]->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+                    } else {
+                        cur = llm_build_norm(ctx0, cur, lctx.model.hparams, attn_norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
+                    }
                 }
-                else if (cur->type != GGML_TYPE_F32) {
+                //if (attn_norm) {
+                //    auto split_norm = attn_norm->splits[id];
+                //    cur = llm_build_norm(ctx0, cur, hparams, split_norm, NULL, is_norm ? LLM_NORM : LLM_NORM_RMS, cb, il);
+                //    cb(cur, "attn_norm", il_cb);
+                //}
+                if (cur->type != GGML_TYPE_F32) {
                     cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
                 }
                 auto the_q_norm = model.layers[il].attn_q_norm ? model.layers[il].attn_q_norm->extra ?
@@ -9559,7 +9561,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
 
     auto cur = input;
     if (the_attn_norm) {
-        cur = llm_build_norm(ctx0, cur, hparams, the_attn_norm, NULL, LLM_NORM_RMS, cb, il);
+        cur = llm_build_norm(ctx0, cur, hparams, the_attn_norm, NULL, is_norm ? LLM_NORM : LLM_NORM_RMS, cb, il);
         cb(cur, "attn_norm", il);
     }
 

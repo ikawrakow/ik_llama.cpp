@@ -1414,7 +1414,6 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         // do not overwrite user assignments
         if (*leaf_backend_id == -1) {
             *leaf_backend_id = ggml_backend_sched_backend_id_from_cur(sched, leaf);
-            //printf("Pass 1: assigned backend %d to leaf %d, %s\n", *leaf_backend_id, i, graph->leafs[i]->name);
         }
     }
 
@@ -1441,6 +1440,31 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 int * this_node_backend_id = &tensor_backend_id(view_src);
                 *this_node_backend_id = tensor_backend_id(node->src[src_id]);
                 *node_backend_id = *this_node_backend_id;
+            }
+        }
+        else if (node->op == GGML_OP_MUL && node->src[0]->op == GGML_OP_NORM) {
+            // This is a hack for Cohere2. Without this hack the scheduler creates
+            // totally nonsensical splits for that arch
+            int * src1_id = &tensor_backend_id(node->src[1]);
+            if (*src1_id >= 0) {
+                int * src0_id = &tensor_backend_id(node->src[0]);
+                int * dst_id  = &tensor_backend_id(node);
+                *src0_id = *src1_id;
+                *dst_id  = *src1_id;
+                // For some reason that I don't understand, we can have norm backend already assigned
+                // at this point. How? That's why this more logical approach of first checking is commented out
+                //if (*src0_id < 0) {
+                //    *src0_id = *src1_id;
+                //} else {
+                //    printf("Oops: backend_id_src0(%s) = %d, backend_id_src1(%s) = %d\n", node->src[0]->name, *src0_id, node->src[1]->name, *src1_id);
+                //    //GGML_ASSERT(*src0_id == *src1_id);
+                //}
+                //if (*dst_id < 0) {
+                //    *dst_id = *src1_id;
+                //} else {
+                //    printf("Oops: backend_id_dst(%s) = %d, backend_id_src1(%s) = %d\n", node->name, *dst_id, node->src[1]->name, *src1_id);
+                //    //GGML_ASSERT(*dst_id == *src1_id);
+                //}
             }
         }
         // do not overwrite user assignments
