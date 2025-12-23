@@ -144,7 +144,7 @@ int ggml_cuda_get_device() {
     return id;
 }
 
-static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
+cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
     ggml_cuda_set_device(device);
 #if defined(GGML_USE_HIPBLAS) && defined(GGML_HIP_UMA)
     auto res = hipMallocManaged(ptr, size);
