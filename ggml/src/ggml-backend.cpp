@@ -2260,9 +2260,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
         }
 
-        if (needs_barrier) {
+        if (split->graph.nodes[0]->op == GGML_OP_REDUCE) {
             barrier.arrive_and_wait();
         }
+        //if (needs_barrier) {
+        //    barrier.arrive_and_wait();
+        //}
 
         // record the event of this copy
         if (split->n_inputs > 0) {
