@@ -761,8 +761,8 @@ struct ggml_cuda_device_info {
 
     std::array<float, GGML_CUDA_MAX_DEVICES> default_tensor_split = {};
 
-#ifdef GGML_USE_NCCL
     ggml_backend_cuda_context * all_ctx[GGML_CUDA_MAX_DEVICES] = { nullptr };
+#ifdef GGML_USE_NCCL
     ncclComm_t nccl_coms[GGML_CUDA_MAX_DEVICES];
     bool have_nccl;
 #endif
