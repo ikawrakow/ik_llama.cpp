@@ -6073,13 +6073,17 @@ struct ggml_tensor * ggml_reduce(
             enum ggml_op                  op) {
     GGML_ASSERT(n > 1 && n <= GGML_MAX_SRC);
     GGML_ASSERT(op == GGML_OP_ADD); // currently we only handle reduce_add
-    struct ggml_tensor * result = ggml_view_tensor(ctx, a[n-1]);
+    struct ggml_tensor * last = NULL;
     int nhave = 0;
     for (int j = 0; j < n; ++j) {
-        result->src[j] = a[j];
-        if (a[j]) ++nhave;
+        if (a[j]) { ++nhave; last = a[j]; }
     }
+    GGML_ASSERT(last);
     GGML_ASSERT(nhave > 1);
+    struct ggml_tensor * result = ggml_view_tensor(ctx, last);
+    for (int j = 0; j < n; ++j) {
+        result->src[j] = a[j];
+    }
     result->op = GGML_OP_REDUCE;
     result->op_params[0] = (int)op;
     result->op_params[1] = n;
@@ -22729,6 +22733,14 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
 #endif
 
     switch (tensor->op) {
+        case GGML_OP_REDUCE:
+            {
+                GGML_ABORT("REDUCE not implemented");
+            }
+        case GGML_OP_FAKE_CPY:
+            {
+                GGML_ABORT("FAKE_CPY not implemented");
+            }
         case GGML_OP_DUP:
             {
                 ggml_compute_forward_dup(params, tensor);
@@ -23406,6 +23418,14 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
     struct ggml_tensor * src2 = tensor->src[2];
 
     switch (tensor->op) {
+        case GGML_OP_REDUCE:
+            {
+                GGML_ABORT("REDUCE not implemented");
+            }
+        case GGML_OP_FAKE_CPY:
+            {
+                GGML_ABORT("FAKE_CPY not implemented");
+            }
         case GGML_OP_DUP:
             {
                 if (src0->grad) {
