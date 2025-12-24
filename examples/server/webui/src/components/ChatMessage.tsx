@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useRef, useEffect } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
 import { classNames } from '../utils/misc';
@@ -36,7 +36,13 @@ export default function ChatMessage({
 }) {
   const { viewingChat, config } = useAppContext();
   const [editingContent, setEditingContent] = useState<string | null>(null);  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    if (msg.content=== null) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [msg.content]);
   const timings = useMemo(
     () =>
       msg.timings
@@ -235,6 +241,7 @@ export default function ChatMessage({
                   </div>
                 </div>
               )}
+              <div ref={messagesEndRef} />
             </>
           )}
         </div>
