@@ -4055,6 +4055,7 @@ struct llama_context_params llama_context_default_params() {
         /*.only_active_experts         =*/ false,
         /*.k_cache_hadamard            =*/ false,
         /*.split_mode_graph_scheduling =*/ false,
+        /*.split_mode_f16              =*/ true,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
@@ -4344,6 +4345,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.graph_reuse      = params.graph_reuse;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
+    cparams.split_mode_f16   = params.split_mode_f16;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
@@ -4433,6 +4435,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: graph_reuse   = %d\n",     __func__, cparams.graph_reuse);
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
     LLAMA_LOG_INFO("%s: split_mode_graph_scheduling = %d\n",   __func__, cparams.split_mode_graph_scheduling);
+    LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
     LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",     __func__, cparams.rope_freq_scale);
