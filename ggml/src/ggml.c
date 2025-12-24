@@ -4294,9 +4294,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 
     "REDUCE",
     "FAKE_CPY",
+    "FUSED_NORM",
 };
 
-static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
+static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4405,9 +4406,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
     "reduce(x1,x2,...)",
     "fake_cpy(x,y)",
+    "norm(x,y)",
 };
 
-static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
+static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -7404,6 +7406,67 @@ struct ggml_tensor * ggml_fused_rms_norm_inplace(
         struct ggml_tensor  * b,
         float eps) {
     return ggml_fused_rms_norm_impl(ctx, a, b, eps, true);
+}
+
+static struct ggml_tensor * ggml_fused_norm_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        float eps,
+        bool inplace) {
+
+    if (!b) {
+        return ggml_norm_impl(ctx, a, eps, inplace);
+    }
+
+    if (ggml_nrows(b) > 1 || a->ne[0] != b->ne[0]) {
+        struct ggml_tensor * result = ggml_norm_impl(ctx, a, eps, inplace);
+        result = ggml_mul_impl(ctx, result, b, inplace);
+        return result;
+    }
+
+    bool is_node = false;
+
+    if (!inplace && (a->grad)) {
+        is_node = true;
+    }
+
+    struct ggml_tensor * result;
+    if (inplace) {
+        GGML_ASSERT(a->type == GGML_TYPE_F32);
+        result = ggml_view_tensor(ctx, a);
+    } else {
+        if (a->type == GGML_TYPE_F32) {
+            result = ggml_dup_tensor(ctx, a);
+        } else {
+            result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, a->ne[0], a->ne[1], a->ne[2], a->ne[3]);
+        }
+    }
+
+    ggml_set_op_params(result, &eps, sizeof(eps));
+
+    result->op   = GGML_OP_FUSED_NORM;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_fused_norm(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        float  eps) {
+    return ggml_fused_norm_impl(ctx, a, b, eps, false);
+}
+
+struct ggml_tensor * ggml_fused_norm_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        float eps) {
+    return ggml_fused_norm_impl(ctx, a, b, eps, true);
 }
 
 // ggml_rms_norm_back
@@ -15404,6 +15467,88 @@ static void ggml_compute_forward_norm(
     }
 }
 
+static void ggml_compute_forward_fused_norm_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    if (!src1) {
+        ggml_compute_forward_norm_f32(params, dst);
+        return;
+    }
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->ne[0] == src0->ne[0]);
+    GGML_ASSERT(ggml_nrows(src1) == 1);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+
+    GGML_ASSERT(eps > 0.0f);
+
+    const float * c = (const float *)src1->data;
+
+    // TODO: optimize
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+
+                ggml_float sum = 0.0;
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    ggml_float xi = (ggml_float)x[i00];
+                    sum += xi;
+                }
+
+                const float mean = sum/ne00;
+
+                float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
+
+                ggml_float sum2 = 0.0;
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    float v = x[i00] - mean;
+                    y[i00] = v * c[i00];
+                    sum2 += (ggml_float)(v*v);
+                }
+
+                float variance = sum2/ne00;
+                const float scale = 1.0f/sqrtf(variance + eps);
+
+                ggml_vec_scale_f32(ne00, y, scale);
+
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_fused_norm(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_fused_norm_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_group_rms_norm
 
 static void ggml_compute_forward_rms_norm_f32(
@@ -22853,6 +22998,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_fused_rms_norm(params, tensor);
             } break;
+        case GGML_OP_FUSED_NORM:
+            {
+                ggml_compute_forward_fused_norm(params, tensor);
+            } break;
         case GGML_OP_RMS_NORM_BACK:
             {
                 ggml_compute_forward_rms_norm_back(params, tensor);
@@ -23657,6 +23806,7 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 }
             } break;
         case GGML_OP_FUSED_RMS_NORM:
+        case GGML_OP_FUSED_NORM:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -24817,6 +24967,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_NORM:
         case GGML_OP_RMS_NORM:
         case GGML_OP_FUSED_RMS_NORM:
+        case GGML_OP_FUSED_NORM:
         case GGML_OP_RMS_NORM_BACK:
         case GGML_OP_GROUP_NORM:
         case GGML_OP_CONCAT:
