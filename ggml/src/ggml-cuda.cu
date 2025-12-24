@@ -48,6 +48,7 @@
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/multiadd.cuh"
 #include "ggml-cuda/hadamard.cuh"
+#include "ggml-cuda/reduce.cuh"
 
 #include <algorithm>
 #include <array>
@@ -143,7 +144,7 @@ int ggml_cuda_get_device() {
     return id;
 }
 
-static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
+cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
     ggml_cuda_set_device(device);
 #if defined(GGML_USE_HIPBLAS) && defined(GGML_HIP_UMA)
     auto res = hipMallocManaged(ptr, size);
@@ -246,6 +247,42 @@ static ggml_cuda_device_info ggml_cuda_init() {
     // configure logging to stdout
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
 
+#ifdef GGML_USE_NCCL
+    info.have_nccl = false;
+    if (info.device_count > 1) {
+        int gpu_list[GGML_CUDA_MAX_DEVICES];
+        for(int i = 0; i < info.device_count; ++i) gpu_list[i] = i;
+        auto status = ncclCommInitAll(info.nccl_coms, info.device_count, gpu_list);
+        if (status == ncclSuccess) {
+            printf("=============================== NCCL main communicator initialized\n");
+            info.have_nccl = true;
+        } else {
+            printf("=============================== NCCL initialization failed with status %d\n", int(status));
+            GGML_ABORT("Fatal error");
+        }
+        auto com = info.nccl_coms + info.device_count;
+        if (info.device_count == 4) {
+            int devs[8] = {0,1, 2,3, 0,2, 1,3};
+            auto com = info.nccl_coms + info.device_count;
+            for (int ip = 0; ip < 4; ++ip) {
+                if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
+                    printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
+                    GGML_ABORT("Fatal error");
+                }
+            }
+            printf("=============================== NCCL pair communicators for %d GPUs initialized\n", info.device_count);
+        } else if (info.device_count == 3) {
+            int devs[4] = {0,1, 0,2};
+            for (int ip = 0; ip < 2; ++ip) {
+                if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
+                    printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
+                    GGML_ABORT("Fatal error");
+                }
+            }
+            printf("=============================== NCCL pair communicators for %d GPUs initialized\n", info.device_count);
+        }
+    }
+#endif
     return info;
 }
 
@@ -465,12 +502,20 @@ static std::atomic<int> ggml_cuda_lock_counter;
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
+    auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
+    if (info->all_ctx[device]) {
+        GGML_CUDA_LOG_WARN("%s: a context for device %d already exists?\n", __func__, device);
+    }
+    info->all_ctx[device] = this;
 }
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
+
+    auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
+    info->all_ctx[this->device] = nullptr;
 
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
@@ -2934,6 +2979,11 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
 
     //printf("%4d %s(%s) on device %d. time = %ld\n", i, ggml_op_name(dst->op), dst->name, ctx.device, ggml_time_us());
     switch (dst->op) {
+        case GGML_OP_REDUCE:
+            ggml_cuda_op_reduce(ctx, dst);
+            break;
+        case GGML_OP_FAKE_CPY:
+            break;
         case GGML_OP_ARGMAX:
             ggml_cuda_argmax(ctx, dst);
             break;
@@ -3451,8 +3501,23 @@ GGML_CALL static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_
                 needs_f16_f32_copy = true;
 
             } else {
+#ifdef GGML_USE_NCCL__
+                auto & info = ggml_cuda_info();
+                auto nbytes = ggml_nbytes(src);
+                ncclGroupStart();
+                ggml_cuda_set_device(cuda_ctx_src->device);
+                auto status1 = ncclSend(src->data, nbytes, ncclUint8, cuda_ctx_dst->device, info.nccl_coms[cuda_ctx_src->device],
+                        info.all_ctx[cuda_ctx_src->device]->stream());
+                ggml_cuda_set_device(cuda_ctx_dst->device);
+                auto status2 = ncclRecv(dst->data, nbytes, ncclUint8, cuda_ctx_src->device, info.nccl_coms[cuda_ctx_dst->device],
+                        info.all_ctx[cuda_ctx_dst->device]->stream());
+                ncclGroupEnd();
+                GGML_ASSERT(status1 == ncclSuccess && status2 == ncclSuccess);
+                return true;
+#else
                 ggml_cuda_set_device(cuda_ctx_src->device);
                 CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+#endif
             }
 #endif
         }
@@ -3733,12 +3798,12 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 }
 #endif
 #ifndef NDEBUG
-                assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
-                for (int j = 0; j < GGML_MAX_SRC; j++) {
-                    if (node->src[j] != nullptr) {
-                        assert(node->src[j]->buffer);
-                    }
-                }
+                //assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
+                //for (int j = 0; j < GGML_MAX_SRC; j++) {
+                //    if (node->src[j] != nullptr) {
+                //        assert(node->src[j]->buffer);
+                //    }
+                //}
 #endif // NDEBUG
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, cgraph, i);
@@ -4044,6 +4109,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 }
                 return false;
             } break;
+        case GGML_OP_REDUCE:
+        case GGML_OP_FAKE_CPY:
         case GGML_OP_ARGMAX:
             return true;
         case GGML_OP_HADAMARD:
@@ -4371,6 +4438,13 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         }
 #endif
     }
+
+#ifdef GGML_USE_NCCL
+    if (!enable_p2p) {
+        printf("================== P2P disabled, but needed for NCCL\n");
+        enable_p2p = true;
+    }
+#endif
 
 #if !defined(GGML_CUDA_NO_PEER_COPY)
     if (enable_p2p) {

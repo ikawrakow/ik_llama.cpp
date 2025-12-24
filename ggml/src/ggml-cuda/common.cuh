@@ -34,6 +34,10 @@
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIPBLAS)
 
+#ifdef GGML_USE_NCCL
+#include <nccl.h>
+#endif
+
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
@@ -738,6 +742,8 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ5_K_R4> {
 
 //////////////////////
 
+struct ggml_backend_cuda_context;
+
 struct ggml_cuda_device_info {
     int device_count;
 
@@ -754,6 +760,12 @@ struct ggml_cuda_device_info {
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
 
     std::array<float, GGML_CUDA_MAX_DEVICES> default_tensor_split = {};
+
+    ggml_backend_cuda_context * all_ctx[GGML_CUDA_MAX_DEVICES] = { nullptr };
+#ifdef GGML_USE_NCCL
+    ncclComm_t nccl_coms[GGML_CUDA_MAX_DEVICES];
+    bool have_nccl;
+#endif
 };
 
 const ggml_cuda_device_info & ggml_cuda_info();
@@ -844,6 +856,9 @@ struct ggml_backend_cuda_context {
     bool use_cuda_graph = true;
 #endif
 
+    void * copy_buffer = nullptr;
+    size_t copy_size   = 0;
+
     explicit ggml_backend_cuda_context(int device);
 
     ~ggml_backend_cuda_context();
@@ -889,3 +904,5 @@ struct ggml_backend_cuda_context {
         return pool(device);
     }
 };
+
+cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device);

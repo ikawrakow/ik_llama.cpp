@@ -4291,9 +4291,12 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS_BACK",
 
     "GLU",
+
+    "REDUCE",
+    "FAKE_CPY",
 };
 
-static_assert(GGML_OP_COUNT == 92, "GGML_OP_COUNT != 92");
+static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4398,10 +4401,13 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss(x,y)",
     "cross_entropy_loss_back(x,y)",
 
-    "glu(x),"
+    "glu(x),",
+
+    "reduce(x1,x2,...)",
+    "fake_cpy(x,y)",
 };
 
-static_assert(GGML_OP_COUNT == 92, "GGML_OP_COUNT != 92");
+static_assert(GGML_OP_COUNT == 94, "GGML_OP_COUNT != 94");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6059,6 +6065,43 @@ struct ggml_tensor * ggml_dup_inplace(
         struct ggml_tensor * a) {
     return ggml_dup_impl(ctx, a, true);
 }
+
+struct ggml_tensor * ggml_reduce(
+            struct ggml_context         * ctx,
+            struct ggml_tensor         ** a,
+            int                           n,
+            enum ggml_op                  op) {
+    GGML_ASSERT(n > 1 && n <= GGML_MAX_SRC);
+    GGML_ASSERT(op == GGML_OP_ADD); // currently we only handle reduce_add
+    struct ggml_tensor * last = NULL;
+    int nhave = 0;
+    for (int j = 0; j < n; ++j) {
+        if (a[j]) { ++nhave; last = a[j]; }
+    }
+    GGML_ASSERT(last);
+    GGML_ASSERT(nhave > 1);
+    struct ggml_tensor * result = ggml_view_tensor(ctx, last);
+    for (int j = 0; j < n; ++j) {
+        result->src[j] = a[j];
+    }
+    result->op = GGML_OP_REDUCE;
+    result->op_params[0] = (int)op;
+    result->op_params[1] = n;
+    result->op_params[2] = nhave;
+    return result;
+}
+
+struct ggml_tensor * ggml_fake_cpy(
+            struct ggml_context         * ctx,
+            struct ggml_tensor          * dst,
+            struct ggml_tensor          * src) {
+    struct ggml_tensor * result = ggml_view_tensor(ctx, dst);
+    result->op = GGML_OP_FAKE_CPY;
+    result->src[0] = dst;
+    result->src[1] = src;
+    return result;
+}
+
 
 // ggml_add
 
@@ -8433,6 +8476,21 @@ struct ggml_tensor * ggml_get_rows(
     if (a->type == GGML_TYPE_I32) {
         type = a->type;
     }
+
+    //if (a->op == GGML_OP_REDUCE) {
+    //    //printf("======================= %s(%s)\n", __func__, a->name);
+    //    struct ggml_tensor * result = NULL;
+    //    for (int j = a->op_params[1]-1; j >= 0; --j) {
+    //        if (a->src[j]) {
+    //            struct ggml_tensor * aj = ggml_get_rows(ctx, a->src[j], b);
+    //            if (result == NULL) result = ggml_view_tensor(ctx, aj);
+    //            result->src[j] = aj;
+    //        }
+    //    }
+    //    GGML_ASSERT(result);
+    //    return result;
+    //}
+
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, type, a->ne[0], b->ne[0], b->ne[1], b->ne[2]);
 
     result->op   = GGML_OP_GET_ROWS;
@@ -22675,6 +22733,14 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
 #endif
 
     switch (tensor->op) {
+        case GGML_OP_REDUCE:
+            {
+                GGML_ABORT("REDUCE not implemented");
+            }
+        case GGML_OP_FAKE_CPY:
+            {
+                GGML_ABORT("FAKE_CPY not implemented");
+            }
         case GGML_OP_DUP:
             {
                 ggml_compute_forward_dup(params, tensor);
@@ -23352,6 +23418,14 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
     struct ggml_tensor * src2 = tensor->src[2];
 
     switch (tensor->op) {
+        case GGML_OP_REDUCE:
+            {
+                GGML_ABORT("REDUCE not implemented");
+            }
+        case GGML_OP_FAKE_CPY:
+            {
+                GGML_ABORT("FAKE_CPY not implemented");
+            }
         case GGML_OP_DUP:
             {
                 if (src0->grad) {

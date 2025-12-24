@@ -1414,13 +1414,59 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         // do not overwrite user assignments
         if (*leaf_backend_id == -1) {
             *leaf_backend_id = ggml_backend_sched_backend_id_from_cur(sched, leaf);
-            //printf("Pass 1: assigned backend %d to leaf %d, %s\n", *leaf_backend_id, i, graph->leafs[i]->name);
         }
     }
 
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
         int * node_backend_id = &tensor_backend_id(node);
+        if (node->op == GGML_OP_REDUCE) {
+            auto view_src = node->view_src;
+            int src_id = -1;
+            for (int j = 0; j < node->op_params[1]; ++j) {
+                if (node->src[j]) {
+                    int * this_node_backend_id = &tensor_backend_id(node->src[j]);
+                    if (*this_node_backend_id == -1) {
+                        *this_node_backend_id = j;
+                    } else {
+                        GGML_ASSERT(*this_node_backend_id == j);
+                    }
+                    if (view_src == node->src[j]) {
+                        src_id = j;
+                    }
+                }
+            }
+            if (src_id >= 0) {
+                int * this_node_backend_id = &tensor_backend_id(view_src);
+                *this_node_backend_id = tensor_backend_id(node->src[src_id]);
+                *node_backend_id = *this_node_backend_id;
+            }
+        }
+        else if (node->op == GGML_OP_MUL && node->src[0]->op == GGML_OP_NORM) {
+            // This is a hack for Cohere2. Without this hack the scheduler creates
+            // totally nonsensical splits for that arch
+            int * src1_id = &tensor_backend_id(node->src[1]);
+            if (*src1_id >= 0) {
+                int * src0_id = &tensor_backend_id(node->src[0]);
+                int * dst_id  = &tensor_backend_id(node);
+                *src0_id = *src1_id;
+                *dst_id  = *src1_id;
+                // For some reason that I don't understand, we can have norm backend already assigned
+                // at this point. How? That's why this more logical approach of first checking is commented out
+                //if (*src0_id < 0) {
+                //    *src0_id = *src1_id;
+                //} else {
+                //    printf("Oops: backend_id_src0(%s) = %d, backend_id_src1(%s) = %d\n", node->src[0]->name, *src0_id, node->src[1]->name, *src1_id);
+                //    //GGML_ASSERT(*src0_id == *src1_id);
+                //}
+                //if (*dst_id < 0) {
+                //    *dst_id = *src1_id;
+                //} else {
+                //    printf("Oops: backend_id_dst(%s) = %d, backend_id_src1(%s) = %d\n", node->name, *dst_id, node->src[1]->name, *src1_id);
+                //    //GGML_ASSERT(*dst_id == *src1_id);
+                //}
+            }
+        }
         // do not overwrite user assignments
         if (*node_backend_id == -1) {
             *node_backend_id = ggml_backend_sched_backend_id_from_cur(sched, node);
@@ -1652,6 +1698,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
             if ((node->op == GGML_OP_ADD && node->op_params[0] == 0xff) ||
+                 node->op == GGML_OP_REDUCE ||
+                 node->op == GGML_OP_FAKE_CPY ||
                  node->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] == 0xff) {
                 need_new_split = true;
             }
@@ -1739,6 +1787,13 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
                     // create a copy of the input in the split's backend
                     if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
+                        if (node->op == GGML_OP_REDUCE) {
+                            //printf("setting tensor_id_copy(reduce, %zu, %d, %s) to %s\n", src_id, cur_backend_id, node->name, src->name);
+                            tensor_id_copy(src_id, cur_backend_id, 0) = src;
+                        } else if (node->op == GGML_OP_FAKE_CPY && src->op == GGML_OP_REDUCE) {
+                            //printf("setting tensor_id_copy(fake_cpy, %zu, %d, %s) to %s\n", src_id, cur_backend_id, node->name, src->src[j]->name);
+                            tensor_id_copy(src_id, cur_backend_id, 0) = src->src[j];
+                        } else {
                         ggml_backend_t backend = sched->backends[cur_backend_id];
                         for (int c = 0; c < sched->n_copies; c++) {
                             struct ggml_tensor * tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
@@ -1753,6 +1808,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         int n_inputs = split->n_inputs++;
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split->inputs[n_inputs] = src;
+                        }
                     }
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
@@ -2027,79 +2083,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
     }
 }
 
-static ggml_status ggml_backend_sched_compute_splits_sm_graph(ggml_backend_sched_t sched) {
-    std::vector<int32_t> ids;
-    std::vector<uint32_t> unique_ids;
-    ggml_tensor * last_ids_tensor = nullptr;
-
-    std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync{{true}};
-
-    auto splits = sched->splits;
-
-    std::vector<ggml_backend_sched_split *> this_split;
-    for (int i = 0; i < sched->n_splits; ++i) {
-        auto split_i = &splits[i];
-        this_split.clear();
-        this_split.push_back(split_i);
-        for (int j = i+1; j < sched->n_splits; ++j) {
-            auto split_j = &splits[j];
-            if (split_i->backend_id == split_j->backend_id) {
-                break;
-            }
-            int n_nodes = std::min(split_i->graph.n_nodes, split_j->graph.n_nodes);
-            bool same = true;
-            for (int k = 0; k < n_nodes; ++k) {
-                if (split_i->graph.nodes[k]->op != split_j->graph.nodes[k]->op) {
-                    same = false; break;
-                }
-            }
-            if (!same) {
-                break;
-            }
-            this_split.push_back(split_j);
-        }
-        if (false) {
-            auto split = this_split.front();
-            if (this_split.size() == 1) {
-                printf("=== Split %d with %d inputs on backend %d\n", i, split->n_inputs, split->backend_id);
-            } else {
-                printf("=== Split %d with %d inputs on backends", i, split->n_inputs);
-                for (int j = 0; j < (int)this_split.size(); ++j) printf(" %d", this_split[j]->backend_id);
-                printf("\n");
-            }
-            for (int j = 0; j < split->graph.n_nodes; ++j) {
-                printf("  %d  %s(%s)\n", j, ggml_op_name(split->graph.nodes[j]->op), split->graph.nodes[j]->name);
-            }
-        }
-        for (auto split : this_split) {
-            ggml_backend_sched_copy_inputs(sched, split, needs_sync, ids, unique_ids, last_ids_tensor);
-        }
-        for (auto split : this_split) {
-            auto split_backend_id = split->backend_id;
-            if (split->n_inputs > 0) {
-                needs_sync[split_backend_id] = true;
-            }
-            auto split_backend = sched->backends[split_backend_id];
-            auto ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
-            if (ec != GGML_STATUS_SUCCESS) {
-                return ec;
-            }
-            if (split->n_inputs > 0) {
-                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                    ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
-                }
-            }
-        }
-        i += this_split.size() - 1;
-    }
-    return GGML_STATUS_SUCCESS;
-}
-
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
-
-    if (false && sched->split_mode_graph) {
-        return ggml_backend_sched_compute_splits_sm_graph(sched);
-    }
 
     std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync{{true}};
     std::array<bool, GGML_SCHED_MAX_BACKENDS> own_cpy{{false}};
