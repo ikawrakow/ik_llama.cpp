@@ -55,106 +55,91 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     GGML_ASSERT(ggml_is_contiguous(dst));
     GGML_ASSERT(nhave >=2 && nhave <= nreduce);
 
-    //printf("============================== %s on device %d with %d sources\n", __func__, ctx.device, nreduce);
-
     auto & info = ggml_cuda_info();
 #ifdef GGML_USE_NCCL
-    if (info.have_nccl) {
-    GGML_ASSERT(info.have_nccl);
-    GGML_ASSERT(info.device_count == nreduce);
-    auto type = dst->type;
-    //int device = ctx.device;
-    if (nreduce != info.device_count) {
-        GGML_ABORT("Not implemented");
-    }
-    //auto tim1 = std::chrono::steady_clock::now();
-    auto data_type = type == GGML_TYPE_F32 ? ncclFloat : ncclHalf;
-    if (nreduce == 4 && dst->ne[1] > 32) {
-        auto com = info.nccl_coms + info.device_count;
-        static const int devs[8] = {0,1, 2,3, 0,2, 1,3};
-        for (int ip = 0; ip < 4; ++ip) {
+    if (info.have_nccl && nhave == nreduce) { // somehow I'm not able to figure out how to use NCCL when not all GPUs participate in the reduce op
+        GGML_ASSERT(info.have_nccl);
+        GGML_ASSERT(info.device_count == nreduce);
+        auto type = dst->type;
+        //int device = ctx.device;
+        if (nreduce != info.device_count) {
+            GGML_ABORT("Not implemented");
+        }
+        //auto tim1 = std::chrono::steady_clock::now();
+        auto data_type = type == GGML_TYPE_F32 ? ncclFloat : ncclHalf;
+        if (nreduce == 4 && dst->ne[1] > 32) {
+            auto com = info.nccl_coms + info.device_count;
+            static const int devs[8] = {0,1, 2,3, 0,2, 1,3};
+            for (int ip = 0; ip < 4; ++ip) {
+                ncclGroupStart();
+                ggml_cuda_set_device(devs[2*ip+0]);
+                auto status1 = ncclAllReduce(dst->src[devs[2*ip+0]]->data, dst->src[devs[2*ip+0]]->data,
+                        ggml_nelements(dst), data_type, ncclSum, com[2*ip+0], info.all_ctx[devs[2*ip+0]]->stream());
+                ggml_cuda_set_device(devs[2*ip+1]);
+                auto status2 = ncclAllReduce(dst->src[devs[2*ip+1]]->data, dst->src[devs[2*ip+1]]->data,
+                        ggml_nelements(dst), data_type, ncclSum, com[2*ip+1], info.all_ctx[devs[2*ip+1]]->stream());
+                ncclGroupEnd();
+                if (status1 != ncclSuccess || status2 != ncclSuccess) {
+                    fprintf(stderr, "%s: ncclAllReduce failed with statuses %d, %d\n", __func__, (int)status1, (int)status2);
+                    GGML_ABORT("Fatal error");
+                }
+            }
+        }
+        else if (nreduce == 3 && dst->ne[1] > 32) {
+            auto com = info.nccl_coms + info.device_count;
+            static const int devs[4] = {0,1, 0,2};
+            for (int ip = 0; ip < 2; ++ip) {
+                ncclGroupStart();
+                ggml_cuda_set_device(devs[2*ip+0]);
+                auto status1 = ncclAllReduce(dst->src[devs[2*ip+0]]->data, dst->src[devs[2*ip+0]]->data,
+                        ggml_nelements(dst), data_type, ncclSum, com[2*ip+0], info.all_ctx[devs[2*ip+0]]->stream());
+                ggml_cuda_set_device(devs[2*ip+1]);
+                auto status2 = ncclAllReduce(dst->src[devs[2*ip+1]]->data, dst->src[devs[2*ip+1]]->data,
+                        ggml_nelements(dst), data_type, ncclSum, com[2*ip+1], info.all_ctx[devs[2*ip+1]]->stream());
+                ncclGroupEnd();
+                if (status1 != ncclSuccess || status2 != ncclSuccess) {
+                    fprintf(stderr, "%s: ncclAllReduce failed with statuses %d, %d\n", __func__, (int)status1, (int)status2);
+                    GGML_ABORT("Fatal error");
+                }
+            }
             ncclGroupStart();
-            ggml_cuda_set_device(devs[2*ip+0]);
-            auto status1 = ncclAllReduce(dst->src[devs[2*ip+0]]->data, dst->src[devs[2*ip+0]]->data,
-                    ggml_nelements(dst), data_type, ncclSum, com[2*ip+0], info.all_ctx[devs[2*ip+0]]->stream());
-            ggml_cuda_set_device(devs[2*ip+1]);
-            auto status2 = ncclAllReduce(dst->src[devs[2*ip+1]]->data, dst->src[devs[2*ip+1]]->data,
-                    ggml_nelements(dst), data_type, ncclSum, com[2*ip+1], info.all_ctx[devs[2*ip+1]]->stream());
+            ggml_cuda_set_device(0);
+            auto status1 = ncclSend(dst->src[0]->data, ggml_nelements(dst), data_type, 1, com[0], info.all_ctx[0]->stream());
+            ggml_cuda_set_device(1);
+            auto status2 = ncclRecv(dst->src[1]->data, ggml_nelements(dst), data_type, 0, com[1], info.all_ctx[1]->stream());
             ncclGroupEnd();
             if (status1 != ncclSuccess || status2 != ncclSuccess) {
-                fprintf(stderr, "%s: ncclAllReduce failed with statuses %d, %d\n", __func__, (int)status1, (int)status2);
+                fprintf(stderr, "%s: ncclSend/Recv failed with statuses %d, %d\n", __func__, (int)status1, (int)status2);
                 GGML_ABORT("Fatal error");
             }
         }
-    }
-    else if (nreduce == 3 && dst->ne[1] > 32) {
-        auto com = info.nccl_coms + info.device_count;
-        static const int devs[4] = {0,1, 0,2};
-        for (int ip = 0; ip < 2; ++ip) {
+        else {
             ncclGroupStart();
-            ggml_cuda_set_device(devs[2*ip+0]);
-            auto status1 = ncclAllReduce(dst->src[devs[2*ip+0]]->data, dst->src[devs[2*ip+0]]->data,
-                    ggml_nelements(dst), data_type, ncclSum, com[2*ip+0], info.all_ctx[devs[2*ip+0]]->stream());
-            ggml_cuda_set_device(devs[2*ip+1]);
-            auto status2 = ncclAllReduce(dst->src[devs[2*ip+1]]->data, dst->src[devs[2*ip+1]]->data,
-                    ggml_nelements(dst), data_type, ncclSum, com[2*ip+1], info.all_ctx[devs[2*ip+1]]->stream());
+            for (int i = 0; i < nreduce; ++i) {
+                ncclComm_t this_comm;
+                if (nhave == nreduce) {
+                    this_comm = info.nccl_coms[i];
+                } else {
+                    auto status = ncclCommSplit(info.nccl_coms[i], dst->src[i] ? 0 : NCCL_SPLIT_NOCOLOR, i, &this_comm, NULL);
+                    GGML_ASSERT(status == ncclSuccess);
+                }
+                ggml_cuda_set_device(i);
+                auto stream = info.all_ctx[i]->stream();
+                GGML_ASSERT(stream);
+                auto status = ncclAllReduce(dst->src[i] ? dst->src[i]->data : nullptr,
+                        dst->src[i] ? dst->src[i]->data : nullptr,
+                        ggml_nelements(dst), data_type, ncclSum, this_comm, stream);
+                if (status != ncclSuccess) {
+                    fprintf(stderr, "%s: ncclAllReduce failed with status %d\n", __func__, (int)status);
+                    GGML_ABORT("Fatal error");
+                }
+            }
             ncclGroupEnd();
-            if (status1 != ncclSuccess || status2 != ncclSuccess) {
-                fprintf(stderr, "%s: ncclAllReduce failed with statuses %d, %d\n", __func__, (int)status1, (int)status2);
-                GGML_ABORT("Fatal error");
-            }
         }
-        ncclGroupStart();
-        ggml_cuda_set_device(0);
-        auto status1 = ncclSend(dst->src[0]->data, ggml_nelements(dst), data_type, 1, com[0], info.all_ctx[0]->stream());
-        ggml_cuda_set_device(1);
-        auto status2 = ncclRecv(dst->src[1]->data, ggml_nelements(dst), data_type, 0, com[1], info.all_ctx[1]->stream());
-        ncclGroupEnd();
-        if (status1 != ncclSuccess || status2 != ncclSuccess) {
-            fprintf(stderr, "%s: ncclSend/Recv failed with statuses %d, %d\n", __func__, (int)status1, (int)status2);
-            GGML_ABORT("Fatal error");
-        }
-    }
-    else {
-        ncclGroupStart();
-        for (int i = 0; i < nreduce; ++i) {
-            ncclComm_t this_comm;
-            if (nhave == nreduce) {
-                this_comm = info.nccl_coms[i];
-            } else {
-                auto status = ncclCommSplit(info.nccl_coms[i], dst->src[i] ? 1 : 0, i, &this_comm, NULL);
-                GGML_ASSERT(status == ncclSuccess);
-            }
-            ggml_cuda_set_device(i);
-            auto stream = info.all_ctx[i]->stream();
-            GGML_ASSERT(stream);
-            ncclResult_t status;
-            if (type == GGML_TYPE_F32) {
-                status = ncclAllReduce(dst->src[i] ? dst->src[i]->data : nullptr,
-                        dst->src[i] ? dst->src[i]->data : nullptr,
-                        ggml_nelements(dst),
-                        ncclFloat, ncclSum, this_comm, stream);
-            } else {
-                status = ncclAllReduce(dst->src[i] ? dst->src[i]->data : nullptr,
-                        dst->src[i] ? dst->src[i]->data : nullptr,
-                        ggml_nelements(dst),
-                        ncclHalf, ncclSum, this_comm, stream);
-            }
-            if (status != ncclSuccess) {
-                fprintf(stderr, "%s: ncclAllReduce failed with status %d\n", __func__, (int)status);
-                GGML_ABORT("Fatal error");
-            }
-        }
-        ncclGroupEnd();
-    }
-    ggml_cuda_set_device(ctx.device);
-    //auto tim2 = std::chrono::steady_clock::now();
-    //printf("%s: launched in %g us\n", __func__, 1e-3*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count());
-    return;
+        ggml_cuda_set_device(ctx.device);
+        return;
     }
 #endif
-    //auto tim1 = std::chrono::steady_clock::now();
-    //GGML_ASSERT(nhave == nreduce);
     GGML_ASSERT(dst->data == dst->src[ctx.device]->data);
     auto nbytes = ggml_nbytes(dst);
     if (nhave == 2 && (nhave == nreduce || dst->ne[1] <= 8)) {
@@ -226,7 +211,6 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             if (!info.all_ctx[i]->copy_event) {
                 CUDA_CHECK(cudaEventCreateWithFlags(&info.all_ctx[i]->copy_event, cudaEventDisableTiming));
             }
-            //CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->copy_event, info.all_ctx[i]->stream()));
         }
         auto nelem = ggml_nelements(dst);
         for (int ii = 0; ii < nhave/2; ++ii) {
@@ -332,8 +316,4 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, i, dst->data, ctx.device, nbytes, info.all_ctx[i]->stream()));
     }
     ggml_cuda_set_device(ctx.device);
-    //auto tim2 = std::chrono::steady_clock::now();
-    //printf("%s: launched in %g us\n", __func__, 1e-3*std::chrono::duration_cast<std::chrono::nanoseconds>(tim2-tim1).count());
-    //fprintf(stderr, "%s: not implemented without NCCL\n", __func__);
-    //GGML_ABORT("Fatal error");
 }
