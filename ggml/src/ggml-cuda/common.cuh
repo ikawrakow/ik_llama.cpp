@@ -761,8 +761,8 @@ struct ggml_cuda_device_info {
 
     std::array<float, GGML_CUDA_MAX_DEVICES> default_tensor_split = {};
 
-#ifdef GGML_USE_NCCL
     ggml_backend_cuda_context * all_ctx[GGML_CUDA_MAX_DEVICES] = { nullptr };
+#ifdef GGML_USE_NCCL
     ncclComm_t nccl_coms[GGML_CUDA_MAX_DEVICES];
     bool have_nccl;
 #endif
@@ -856,6 +856,9 @@ struct ggml_backend_cuda_context {
     bool use_cuda_graph = true;
 #endif
 
+    void * copy_buffer = nullptr;
+    size_t copy_size   = 0;
+
     explicit ggml_backend_cuda_context(int device);
 
     ~ggml_backend_cuda_context();
@@ -901,3 +904,5 @@ struct ggml_backend_cuda_context {
         return pool(device);
     }
 };
+
+cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device);

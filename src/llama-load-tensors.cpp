@@ -2265,7 +2265,6 @@ bool create_tensors_helper::create_cohere2_tensors(const LLM_TN & tn) {
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = model.layers[i];
         ggml_context * ctx_split = ctx_for_layer_split(i);
-        ggml_context * ctx_layer = ctx_for_layer(i);
 
         layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
 

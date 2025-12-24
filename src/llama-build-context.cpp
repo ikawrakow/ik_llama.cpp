@@ -626,7 +626,7 @@ static ggml_tensor * get_input_tensor_sm_graph(ggml_tensor * input, int id) {
         auto view_src = input->view_src;
         GGML_ASSERT(view_src);
         cur = input->src[id];
-        if (cur == view_src) {
+        if (cur == view_src || !cur) {
             //printf("%s: Setting input to %s for id = %d\n", __func__, view_src->name, id);
             cur = input;
         }
@@ -664,8 +664,8 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         auto g = (ggml_split_tensor_t *)gate->extra;
         auto d = (ggml_split_tensor_t *)down->extra;
         GGML_ASSERT(u->n_device == g->n_device && u->n_device == d->n_device);
-        std::vector<ggml_tensor *> ffn;
-        ffn.reserve(u->n_device);
+        std::vector<ggml_tensor *> ffn(u->n_device, nullptr);
+        int id_last = -1;
         for (int id = 0; id < u->n_device; ++id) {
             int il_cb = 1000*(id+1) + il;
             auto split_u = u->splits[id];
@@ -678,9 +678,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                 auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
                 GGML_ASSERT(norm->splits[id]);
                 if (is_norm) {
-                    cur = llm_build_norm(ctx, cur, lctx.model.hparams, norm->splits[id], NULL, LLM_NORM, cb, il);
-                    GGML_ASSERT(cur->src[0]->op == GGML_OP_NORM);
-                    cur->src[0]->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+                    cur = ggml_fused_norm(ctx, cur, norm->splits[id], lctx.model.hparams.f_norm_eps);
                 } else {
                     cur = llm_build_norm(ctx, cur, lctx.model.hparams, norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
                 }
@@ -697,23 +695,31 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                 // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
                 ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
             }
-            if (cur->ne[1] >= 32) {
+            if (cur->ne[1] > 32 && lctx.cparams.split_mode_f16) {
                 cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
+            }
+            if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
+                // When the reduce op is turned off via op_params[3] == 1, we need to add each src
+                // rtaher than add the reduced add_extra result to the ffn reduced ffn result.
+                GGML_ASSERT(add_extra->src[id]); // TODO: fix this! It can be null if the splits of the attention and ffn tensors are different
+                cur = ggml_add(ctx, cur, add_extra->src[id]);
+                cb(cur, "ffn_with_extra", il_cb);
             }
             if (graph) {
                 ggml_build_forward_expand(graph, cur);
             }
-            ffn.push_back(cur);
+            ffn[id] = cur;
+            id_last = id;
         }
+        GGML_ASSERT(id_last >= 0);
         if (add_input) {
-            ffn.back() = ggml_add(ctx, ffn.back(), input);
-            cb(ffn.back(), "ffn_with_inp", il);
+            ffn[id_last] = ggml_add(ctx, ffn[id_last], input);
+            cb(ffn[id_last], "ffn_with_inp", il);
         }
-        if (add_extra) {
-            ffn.back() = ggml_add(ctx, ffn.back(), add_extra);
-            cb(ffn.back(), "ffn_with_inp", il);
+        if (add_extra && !(add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1)) {
+            ffn[id_last] = ggml_add(ctx, ffn[id_last], add_extra);
+            cb(ffn[id_last], "ffn_with_inp", il);
         }
-        if (ffn.size() == 1) return ffn.front();
         auto cur = ggml_reduce(ctx, ffn.data(), u->n_device, GGML_OP_ADD);
         cb(cur, "ffn_combined", il);
         ggml_build_forward_expand(graph, cur);
@@ -1184,7 +1190,7 @@ llm_expert_gating_func_type   gating_op,
                             split_down_shexp->splits[id], split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
                             nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
                     cb(shared_out, "ffn_shexp_out", il_cb);
-                    if (shared_out->ne[1] > 32) {
+                    if (shared_out->ne[1] > 32 && lctx.cparams.split_mode_f16) {
                         shared_out = ggml_cast(ctx, shared_out, GGML_TYPE_F16);
                     }
                     results.push_back(shared_out);
@@ -1201,7 +1207,7 @@ llm_expert_gating_func_type   gating_op,
                         cb(cur, "ffn_shared_combined", il);
                     }
                 }
-                if (routed_out->ne[1] > 32) {
+                if (routed_out->ne[1] > 32 && lctx.cparams.split_mode_f16) {
                     auto routed_out_f16 = ggml_cast(ctx, routed_out, GGML_TYPE_F16);
                     cur = ggml_add(ctx, routed_out_f16, cur);
                 } else {
@@ -1228,13 +1234,14 @@ llm_expert_gating_func_type   gating_op,
     }
     GGML_ASSERT(split_up_exps && split_gate_exps && split_down_exps);
     GGML_ASSERT(split_up_exps->n_device == split_gate_exps->n_device && split_up_exps->n_device == split_down_exps->n_device);
-    std::vector<ggml_tensor *> results; results.reserve(split_up_exps->n_device);
+    std::vector<ggml_tensor *> results(split_up_exps->n_device, nullptr);
     GGML_ASSERT((!split_up_shexp && !split_gate_shexp && !split_down_shexp) ||
                 ( split_up_shexp &&  split_gate_shexp &&  split_down_shexp));
     auto split_gate_inp = (ggml_split_tensor_t *)gate_inp->extra;
     GGML_ASSERT(split_gate_inp && split_gate_inp->n_device == split_up_exps->n_device);
     auto split_exp_probs_b = exp_probs_b ? (ggml_split_tensor_t *)exp_probs_b->extra : nullptr;
     GGML_ASSERT(!split_exp_probs_b || split_exp_probs_b->n_device == split_up_exps->n_device);
+    int last_id = -1;
     for (int id = 0; id < split_up_exps->n_device; ++id) {
         GGML_ASSERT((split_up_exps->splits[id] && split_gate_exps->splits[id] && split_down_exps->splits[id]) ||
                     (!split_up_exps->splits[id] && !split_gate_exps->splits[id] && !split_down_exps->splits[id]));
@@ -1277,19 +1284,19 @@ llm_expert_gating_func_type   gating_op,
         } else {
             cur = routed_out;
         }
-        if (cur->ne[1] >= 32) {
+        if (cur->ne[1] > 32 && lctx.cparams.split_mode_f16) {
             cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
             cb(cur, "ffn_out_f16", il_cb);
         }
         ggml_build_forward_expand(graph, cur);
-        results.push_back(cur);
+        results[id] = cur;
+        last_id = id;
     }
-    GGML_ASSERT(!results.empty());
+    GGML_ASSERT(last_id >= 0);
     if (add_input) {
-        results.back() = ggml_add(ctx, results.back(), input);
-        cb(results.back(), "ffn_inp_added", il);
+        results[last_id] = ggml_add(ctx, results[last_id], input);
+        cb(results[last_id], "ffn_inp_added", il);
     }
-    if (results.size() == 1) return results.front();
 
     auto cur = ggml_reduce(ctx, results.data(), split_up_exps->n_device, GGML_OP_ADD);
     cb(cur, "moe_ffn_combined", il);
@@ -7285,6 +7292,8 @@ ggml_cgraph * llm_build_context::build_cohere2() {
             inpL                             = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
 
+        attn_out->op_params[3] = 1; // i.e., turn off the reduce operation as it is not required
+
         // feed-forward network
         cur = llm_build_ffn(ctx0, lctx, model.layers[il].attn_norm, inpL, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate,
                     NULL, NULL, model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR,
@@ -9361,7 +9370,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 bv = (ggml_split_tensor_t *)model.layers[il].bv->extra;
                 GGML_ASSERT(bv->n_device == wq->n_device);
             }
-            std::vector<ggml_tensor*> attn; attn.reserve(wq->n_device);
+            std::vector<ggml_tensor*> attn(wq->n_device, nullptr);
+            int id_last = -1;
             for (int id = 0; id < wq->n_device; ++id) {
                 int il_cb = 1000*(id+1) + il;
                 auto split_wq = wq->splits[id];
@@ -9376,9 +9386,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 auto cur = get_input_tensor_sm_graph(input, id);
                 if (attn_norm) {
                     if (is_norm) {
-                        cur = llm_build_norm(ctx0, cur, lctx.model.hparams, attn_norm->splits[id], NULL, LLM_NORM, cb, il);
-                        GGML_ASSERT(cur->src[0]->op == GGML_OP_NORM);
-                        cur->src[0]->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+                        cur = ggml_fused_norm(ctx0, cur, attn_norm->splits[id], lctx.model.hparams.f_norm_eps);
                     } else {
                         cur = llm_build_norm(ctx0, cur, lctx.model.hparams, attn_norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
                     }
@@ -9510,52 +9518,22 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     cur = ggml_add(ctx0, cur, bo->splits[id]);
                     cb(cur, "kqv_wo_biased", il_cb);
                 }
-                if (cur->ne[1] >= 32) {
+                if (cur->ne[1] > 32 && lctx.cparams.split_mode_f16) {
                     cur = ggml_cast(ctx0, cur, GGML_TYPE_F16);
                 }
                 ggml_build_forward_expand(gf, cur);
-                attn.push_back(cur);
+                attn[id] = cur;
+                id_last = id;
             }
-            GGML_ASSERT(!attn.empty());
+            GGML_ASSERT(id_last >= 0);
             if (add_input) {
-                attn.back() = ggml_add(ctx0, attn.back(), input);
-                cb(attn.back(), "attn_out_with_input", il);
+                attn[id_last] = ggml_add(ctx0, attn[id_last], input);
+                cb(attn[id_last], "attn_out_with_input", il);
             }
-            if (attn.size() == 1) return attn.front();
             auto cur = ggml_reduce(ctx0, attn.data(), wq->n_device, GGML_OP_ADD);
             ggml_build_forward_expand(gf, cur);
             cb(cur, "attn_combined", il);
             return cur;
-            ////if (attn.size() > 2 && attn.size()%2 == 0) {
-            ////    for (int id = 0; id < int(attn.size()/2); ++id) {
-            ////        attn[id] = ggml_add(ctx0, attn[2*id+0], attn[2*id+1]);
-            ////        attn[id]->op_params[0] = 0xff;
-            ////    }
-            ////    attn.resize(attn.size()/2);
-            ////    auto cur = ggml_add(ctx0, attn[0], attn[1]);
-            ////    cur->op_params[0] = 0xff;
-            ////    cur->op_params[0] = 0xff;
-            ////    for (int id = 2; id < (int)attn.size(); ++id) {
-            ////        cur = ggml_add(ctx0, cur, attn[id]);
-            ////        cb(cur, "combine_attn", il);
-            ////    }
-            ////    return cur;
-            ////}
-            //auto cur = ggml_add(ctx0, attn[0], attn[1]);
-            //cb(cur, "combine_attn", il);
-            //cur->op_params[0] = 0xff;
-            //for (int id = 2; id < (int)attn.size(); ++id) {
-            //    cur = ggml_add(ctx0, cur, attn[id]);
-            //    cb(cur, "combine_attn", il);
-            //}
-            //if (attn.size() > 2) {
-            //    cur->op_params[0] = 0xff;
-            //}
-            ////if (add_input) {
-            ////    cur = ggml_add(ctx0, cur, input);
-            ////    cb(cur, "combine_attn_inp", il);
-            ////}
-            //return cur;
         }
     }
 
