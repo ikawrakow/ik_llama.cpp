@@ -125,9 +125,10 @@ const StorageUtils = {
   async createConversation(name: string): Promise<Conversation> {
     const now = Date.now();
     const msgId = now;
+    const config = StorageUtils.getConfig();
     let model_name:string = '';
     //window.alert(BASE_URL);
-    await getServerProps(BASE_URL)
+    await getServerProps(BASE_URL, config.apiKey)
       .then((props) => {
         console.debug('Server props:', props);
         model_name = props.model_name;

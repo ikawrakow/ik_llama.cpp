@@ -1,7 +1,6 @@
 import { useState, useRef} from 'react';
 import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
-import { isDev } from '../Config';
 import StorageUtils from '../utils/storage';
 import { useModals } from './ModalProvider';
 import { classNames, isBoolean, isNumeric, isString } from '../utils/misc';
@@ -555,13 +554,24 @@ export default function SettingDialog({
     }
   };
 
+  function isValidKey(key: string): key is SettKey {
+    return key in CONFIG_DEFAULT;
+  }
+
+
   const handleSave = () => {
     // copy the local config to prevent direct mutation
-    const newConfig: typeof CONFIG_DEFAULT = JSON.parse(
+    const newConfig: typeof CONFIG_DEFAULT = { 
+      ...CONFIG_DEFAULT,
+      ...JSON.parse(
       JSON.stringify(localConfig)
-    );
+    )};
     // validate the config
     for (const key in newConfig) {
+      if (!isValidKey(key)) {
+        console.log(`Unknown default type for key ${key}`);
+        continue;
+      }
       const value = newConfig[key as SettKey];
       const mustBeBoolean = isBoolean(CONFIG_DEFAULT[key as SettKey]);
       const mustBeString = isString(CONFIG_DEFAULT[key as SettKey]);
@@ -591,7 +601,6 @@ export default function SettingDialog({
         toast.error(`Unknown default type for key ${key}`);
       }
     }
-    if (isDev) console.log('Saving config', newConfig);
     saveConfig(newConfig);
     onClose();
   };
