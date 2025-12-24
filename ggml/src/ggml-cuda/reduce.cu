@@ -54,6 +54,10 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     GGML_ASSERT(dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);
     GGML_ASSERT(ggml_is_contiguous(dst));
     GGML_ASSERT(nhave >=2 && nhave <= nreduce);
+    if (dst->op_params[3] == 1) {
+        // The dst tensor is just a container for the sources and the reduce op is turned off
+        return;
+    }
 
     auto & info = ggml_cuda_info();
 #ifdef GGML_USE_NCCL
