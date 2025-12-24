@@ -97,6 +97,7 @@ endif()
 option(GGML_LASX        "ggml: enable lasx"             ON)
 option(GGML_LSX         "ggml: enable lsx"              ON)
 option(GGML_SVE         "ggml: enable SVE"              OFF)
+option(GGML_NCCL        "ggml: enable NCCL"             ON)
 
 if (WIN32)
     set(GGML_WIN_VER "0x602" CACHE STRING "ggml: Windows Version")
