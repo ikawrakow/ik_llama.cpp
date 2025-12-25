@@ -1479,9 +1479,10 @@ static void ggml_cuda_op_mul_mat_cublas(
     GGML_UNUSED(src1_padded_row_size);
 }
 
-static void ggml_cuda_set_peer_access(int main_device) {
+static bool ggml_cuda_set_peer_access(int main_device) {
     ggml_cuda_set_device(main_device);
 
+    bool all_enabled = true;
     for (int id_other = 0; id_other < ggml_backend_cuda_get_device_count(); ++id_other) {
         if (main_device == id_other) {
             continue;
@@ -1500,8 +1501,11 @@ static void ggml_cuda_set_peer_access(int main_device) {
                 // reset the error
                 (void)cudaGetLastError();
             }
+        } else {
+            all_enabled = false;
         }
     }
+    return all_enabled;
 }
 
 static cudaError_t ggml_cuda_Memcpy2DPeerAsync(
@@ -4453,7 +4457,7 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
 
 #if !defined(GGML_CUDA_NO_PEER_COPY)
     if (enable_p2p) {
-        ggml_cuda_set_peer_access(device);
+        ctx->p2p_enabled = ggml_cuda_set_peer_access(device);
     }
 #endif
 

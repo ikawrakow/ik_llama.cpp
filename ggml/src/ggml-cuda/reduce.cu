@@ -176,7 +176,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         GGML_ASSERT(ii == nhave);
         GGML_ASSERT(have_this_device);
     }
-    if (nhave == 4 && dst->ne[1] <= 8) {
+    if (nhave == 4 && dst->ne[1] <= 8 && ctx.p2p_enabled) {
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             GGML_ASSERT(dst->src[i]->type == dst->type);
@@ -241,7 +241,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         ggml_cuda_set_device(ctx.device);
         return;
     }
-    if (dst->ne[1] <= 8) {
+    if (dst->ne[1] <= 8 && ctx.p2p_enabled) {
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             GGML_ASSERT(dst->src[i]->type == dst->type);
