@@ -14,10 +14,9 @@
 #include <set>
 #include <array>
 #include <chrono>
+#include <barrier>
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
-#else
-#include <barrier>
 #endif
 
 #define IK_PRINT_TIMING 0
@@ -1174,9 +1173,7 @@ struct ggml_backend_sched {
 
     uint32_t op_offload[(GGML_OP_COUNT + 31)/32];
 
-#ifndef GGML_USE_OPENMP
     std::vector<std::thread> workers;
-#endif
     std::vector<ggml_status> statuses;
     std::vector<std::vector<ggml_backend_sched_split*>> backend_splits;
     std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync;
@@ -2164,7 +2161,22 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         for (auto & s : sched->statuses) s = GGML_STATUS_SUCCESS;
 
+        bool work_done = false;
 #ifdef GGML_USE_OPENMP
+        bool has_cpu_work = false;
+        for (int i = 0; i < sched->n_backends; ++i) {
+            if (!sched->backend_splits[i].empty()) {
+                auto split = sched->backend_splits[i].front();
+                if (ggml_backend_is_cpu(sched->backends[split->backend_id])) {
+                    if (sched->backend_splits[i].size() > 1) {
+                        has_cpu_work = true;
+                    }
+                    break;
+                    //printf("CPU backend %d has %d splits\n", split->backend_id, (int)sched->backend_splits[i].size());
+                }
+            }
+        }
+        if (!has_cpu_work) {
         #pragma omp parallel num_threads(sched->n_backends)
         {
 
@@ -2218,7 +2230,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
-#else
+        work_done = true;
+        }
+#endif
+        if (!work_done) {
         std::barrier barrier(sched->n_backends, [] () {});
         auto compute = [sched, &barrier] (int ith) {
 
@@ -2277,7 +2292,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         for (int i = 0; i < sched->n_backends; ++i) sched->workers.emplace_back(compute, i);
         for (auto & w : sched->workers) w.join();
         sched->workers.clear();
-#endif
+        }
         for (auto status : sched->statuses) {
             if (status != GGML_STATUS_SUCCESS) return status;
         }
@@ -2379,9 +2394,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);
 
-#ifndef GGML_USE_OPENMP
     sched->workers.reserve(sched->n_backends);
-#endif
     sched->statuses.resize(sched->n_backends, GGML_STATUS_SUCCESS);
     sched->backend_splits.resize(sched->n_backends);
 
@@ -2444,27 +2457,6 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
     ggml_backend_sched_reset(sched);
 
     return true;
-}
-
-bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
-    GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs);
-
-    ggml_backend_sched_split_graph(sched, graph);
-
-
-    if (!ggml_backend_sched_alloc_splits(sched)) {
-        return false;
-    }
-
-    sched->is_alloc = true;
-
-    return true;
-}
-
-enum ggml_status ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
-    enum ggml_status err = ggml_backend_sched_graph_compute_async(sched, graph);
-    ggml_backend_sched_synchronize(sched);
-    return err;
 }
 
 static void ggml_sched_prepare_graph(ggml_backend_sched_t sched) {
@@ -2553,6 +2545,27 @@ static void ggml_sched_prepare_graph(ggml_backend_sched_t sched) {
     }
 }
 
+bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
+    GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs);
+
+    ggml_backend_sched_split_graph(sched, graph);
+
+    if (!ggml_backend_sched_alloc_splits(sched)) {
+        return false;
+    }
+    ggml_sched_prepare_graph(sched);
+
+    sched->is_alloc = true;
+
+    return true;
+}
+
+enum ggml_status ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
+    enum ggml_status err = ggml_backend_sched_graph_compute_async(sched, graph);
+    ggml_backend_sched_synchronize(sched);
+    return err;
+}
+
 enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     if (!sched->is_reset && !sched->is_alloc) {
         ggml_backend_sched_reset(sched);
@@ -2562,7 +2575,6 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
         if (!ggml_backend_sched_alloc_graph(sched, graph)) {
             return GGML_STATUS_ALLOC_FAILED;
         }
-        ggml_sched_prepare_graph(sched);
     }
 
     return ggml_backend_sched_compute_splits(sched);
