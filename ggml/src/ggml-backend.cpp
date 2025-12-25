@@ -14,7 +14,11 @@
 #include <set>
 #include <array>
 #include <chrono>
+#ifdef GGML_USE_OPENMP
+#include <omp.h>
+#else
 #include <barrier>
+#endif
 
 #define IK_PRINT_TIMING 0
 
@@ -1170,7 +1174,9 @@ struct ggml_backend_sched {
 
     uint32_t op_offload[(GGML_OP_COUNT + 31)/32];
 
+#ifndef GGML_USE_OPENMP
     std::vector<std::thread> workers;
+#endif
     std::vector<ggml_status> statuses;
     std::vector<std::vector<ggml_backend_sched_split*>> backend_splits;
     std::array<bool, GGML_SCHED_MAX_BACKENDS> needs_sync;
@@ -2154,11 +2160,66 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     //}
     for (auto & item : sched->needs_sync) item = true;
 
-    if (sched->n_backends > 3 && sched->split_mode_graph && sched->has_reduce) {
+    if (sched->n_backends > 2 && sched->split_mode_graph && sched->has_reduce) {
 
-        std::barrier barrier(sched->n_backends, [] () {});
         for (auto & s : sched->statuses) s = GGML_STATUS_SUCCESS;
 
+#ifdef GGML_USE_OPENMP
+        #pragma omp parallel num_threads(sched->n_backends)
+        {
+
+            int ith = omp_get_thread_num();
+
+            struct ggml_backend_sched_split * splits = sched->splits;
+
+            std::vector<int32_t> ids;
+            std::vector<uint32_t> unique_ids;
+            ggml_tensor * last_ids_tensor = nullptr;
+
+            for (int i = 0; i < sched->n_splits; i++) {
+#if IK_PRINT_TIMING
+                int64_t tim1 = ggml_time_us();
+#endif
+                struct ggml_backend_sched_split * split = &splits[i];
+                int split_backend_id = split->backend_id;
+                ggml_backend_t split_backend = sched->backends[split_backend_id];
+
+                bool needs_barrier = split->n_inputs > 0 || split->graph.nodes[0]->op == GGML_OP_REDUCE;
+
+                if (needs_barrier) {
+                    #pragma omp barrier
+                }
+
+                if (ith == split_backend_id) {
+                    // copy the input tensors to the split backend
+                    ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+
+                    if (split->n_inputs > 0 && !sched->own_cpy[split_backend_id]) {
+                        sched->needs_sync[split_backend_id] = true;
+                    } else {
+                        for (int j = 0; j < split->n_inputs; ++j) {
+                            if (ggml_backend_buffer_is_host(split->inputs[j]->buffer)) {
+                                sched->needs_sync[split_backend_id] = true;
+                            }
+                        }
+                    }
+                    sched->statuses[ith] = ggml_backend_sched_eval(sched, split_backend, split);
+                }
+
+                if (split->graph.nodes[0]->op == GGML_OP_REDUCE) {
+                    #pragma omp barrier
+                }
+
+                // record the event of this copy
+                if (split->n_inputs > 0) {
+                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                        ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
+                    }
+                }
+            }
+        }
+#else
+        std::barrier barrier(sched->n_backends, [] () {});
         auto compute = [sched, &barrier] (int ith) {
 
             struct ggml_backend_sched_split * splits = sched->splits;
@@ -2216,6 +2277,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         for (int i = 0; i < sched->n_backends; ++i) sched->workers.emplace_back(compute, i);
         for (auto & w : sched->workers) w.join();
         sched->workers.clear();
+#endif
         for (auto status : sched->statuses) {
             if (status != GGML_STATUS_SUCCESS) return status;
         }
@@ -2317,7 +2379,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);
 
+#ifndef GGML_USE_OPENMP
     sched->workers.reserve(sched->n_backends);
+#endif
     sched->statuses.resize(sched->n_backends, GGML_STATUS_SUCCESS);
     sched->backend_splits.resize(sched->n_backends);
 
