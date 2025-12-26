@@ -343,6 +343,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         auto elem_size = ggml_element_size(dst);
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
+            ggml_cuda_set_device(i);
             int this_nelem = std::min(nelem_per_device, nelem - ii*nelem_per_device);
             copy_task task;
             task.nptr = nhave;
@@ -389,18 +390,20 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         //printf("Submitted kernels\n");
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
+            ggml_cuda_set_device(i);
             CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->copy_event, info.all_ctx[i]->stream()));
         }
         //printf("Recorded events again\n");
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
+            ggml_cuda_set_device(i);
             for (int jj = 0; jj < nhave; ++jj) {
                 if (jj == ii) continue;
                 int j = idx[jj];
                 CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[j]->copy_event));
             }
         }
-        //printf("All good so far\n");
+        ggml_cuda_set_device(ctx.device);
         return;
     }
     auto required_size = nbytes*(nhave-1);
