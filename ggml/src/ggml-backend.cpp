@@ -15,6 +15,7 @@
 #include <array>
 #include <chrono>
 #include <barrier>
+#include <thread>
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
 #endif
@@ -2163,16 +2164,20 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         bool work_done = false;
 #ifdef GGML_USE_OPENMP
+        if (int nlevels = omp_get_max_active_levels(); nlevels < 2) {
+            omp_set_max_active_levels(nlevels+1);
+            //printf("%s: Setting omp max active levels to 2\n", __func__);
+        }
         bool has_cpu_work = false;
         for (int i = 0; i < sched->n_backends; ++i) {
             if (!sched->backend_splits[i].empty()) {
                 auto split = sched->backend_splits[i].front();
                 if (ggml_backend_is_cpu(sched->backends[split->backend_id])) {
+                    //printf("CPU backend %d has %d splits\n", split->backend_id, (int)sched->backend_splits[i].size());
                     if (sched->backend_splits[i].size() > 1) {
                         has_cpu_work = true;
+                        break;
                     }
-                    break;
-                    //printf("CPU backend %d has %d splits\n", split->backend_id, (int)sched->backend_splits[i].size());
                 }
             }
         }
