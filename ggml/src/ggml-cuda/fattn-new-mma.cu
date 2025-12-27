@@ -1080,6 +1080,20 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         __syncthreads();
     }
 
+    // Finally, sum up partial KQ rowsums.
+    // The partial sums are spread across 8/4 threads each, does not need full reduce.
+    {
+        constexpr int offset_first = ntiles == 1 ? 16 : 2;
+        constexpr int offset_last  = ntiles == 1 ?  4 : 1;
+#pragma unroll
+        for (int col = 0; col < cols_per_thread; ++col) {
+#pragma unroll
+            for (int offset = offset_first; offset >= offset_last; offset >>= 1) {
+                KQ_rowsum[col] += __shfl_xor_sync(0xFFFFFFFF, KQ_rowsum[col], offset, WARP_SIZE);
+            }
+        }
+    }
+
     // If attention sinks are used, potentially re-scale if KQ_max is small.
     // Also add the sink as a value to KQ_rowsum, this is done after synchonization of KQ_rowsum
     //     so it's being done unconditionally for every thread.
@@ -1088,7 +1102,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #pragma unroll
         for (int col = 0; col < cols_per_thread; ++col) {
             static_assert(ntiles == 1 || ntiles == 2, "ntiles > 2 not implemented");
-            const int jc = ntiles == 1 ? 2*tile_C_VKQ::get_j(col/2) + col % 2 : tile_C_VKQ_16::get_i(col);
+            const int jc = cols_per_warp == 8 ? tile_C_VKQ::get_j(col) : tile_C_VKQ_16::get_i(2*col);
+            //const int jc = ntiles == 1 ? 2*tile_C_VKQ::get_j(col/2) + col % 2 : tile_C_VKQ_16::get_i(col);
             const float sink = sinks_f[jc % ncols2];
 
             const float KQ_max_new = fmaxf(KQ_max[col], sink);
@@ -1122,20 +1137,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
                         VKQ_C_16[i*ntiles/2 + col/2].x[l0 + col % 2] *= KQ_max_scale_h2;
                     }
                 }
-            }
-        }
-    }
-
-    // Finally, sum up partial KQ rowsums.
-    // The partial sums are spread across 8/4 threads each, does not need full reduce.
-    {
-        constexpr int offset_first = ntiles == 1 ? 16 : 2;
-        constexpr int offset_last  = ntiles == 1 ?  4 : 1;
-#pragma unroll
-        for (int col = 0; col < cols_per_thread; ++col) {
-#pragma unroll
-            for (int offset = offset_first; offset >= offset_last; offset >>= 1) {
-                KQ_rowsum[col] += __shfl_xor_sync(0xFFFFFFFF, KQ_rowsum[col], offset, WARP_SIZE);
             }
         }
     }
@@ -2145,10 +2146,10 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
     //}
     if (K->ne[0] == 192 && V->ne[0] == 128) {
         GGML_ASSERT(Q->ne[0] == 192);
-        GGML_ASSERT(gqa_ratio == 1);
-        //ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<192, 128>(ctx, dst);
+        //GGML_ASSERT(gqa_ratio == 1); // Haha, this assert was for DeepSeek. But now we have Mimo2, which has GQA > 1
+        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<192, 128>(ctx, dst);
         // Reduce compile time
-        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 128, 1>(ctx, dst);
+        //ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 128, 1>(ctx, dst);
         return;
     }
     if (K->ne[0] == 192 && V->ne[0] == 192) {
