@@ -6661,6 +6661,9 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
     auto row_size_x = ggml_row_size(GGML_TYPE_Q8_KV,    n_per_row);
     auto row_size_y = ggml_row_size(GGML_TYPE_Q8_KV_R8, n_per_row);
     const int8_t * x8[8];
+#if !defined(__AVX2__) && !defined(__ARM_NEON)
+    const int nblock    = n_per_row / 16;
+#endif
 #ifdef __ARM_NEON
     int8x16x2_t m0, m1, m2, m3;
 #endif
@@ -6721,11 +6724,26 @@ static void repack_q8_KV(int nrows, int n_per_row, const char * cx, char * cy, [
             vst1q_s8_x2(qy + 64 + 128*ib, m2);
             vst1q_s8_x2(qy + 96 + 128*ib, m3);
 #else
-            // TODO
-            for (int l = 0; l < 4; ++l) {
-                for (int k = 0; k < 8; ++k) for (int i = 0; i < 4; ++i) {
-                    y[ib].qs[32*l+4*k+i+  0] = x8[k][ib].qs[i+4*l+ 0];
-                    y[ib].qs[32*l+4*k+i+128] = x8[k][ib].qs[i+4*l+16];
+            // Pure‑C fallback: copy 16‑byte blocks directly from x8[k2] into qy
+            // Each block has 16 bytes of q, so for block index ib the start is ib*16
+            // Destination is qy, 128 bytes per block, so ib*128
+        
+            const int src_stride = 16;
+            const int dst_stride = 128;
+            for (int ib = 0; ib < nblock; ++ib) {
+                const int base_dst = ib * dst_stride;
+                const int base_src = ib * src_stride;
+                for (int k2 = 0; k2 < 8; ++k2) {
+                    // copy 16 bytes at x8[k2] + base_src into the 128‑byte frame at base_dst + k2*16
+                    // Note: Q8_KV packs the 16 quant bytes for each of the 8 rows in interleaved fashion,
+                    // so the layout within each block is exactly 8×16 bytes sequentially.
+                    const int8_t *src = x8[k2] + base_src;
+                    // position within the 128‑byte output:
+                    const int out_offset = k2 * 16;
+                    // copy:
+                    for (int j = 0; j < 16; ++j) {
+                        qy[base_dst + out_offset + j] = src[j];
+                    }
                 }
             }
 #endif
