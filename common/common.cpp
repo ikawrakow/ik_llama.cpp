@@ -1251,6 +1251,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.graph_reuse = true;
         return true;
     }
+    if (arg == "-no-gr" || arg == "--no-graph-reuse") {
+        params.graph_reuse = false;
+        return true;
+    }
     if (arg == "-ser" || arg == "--smart-expert-reduction") {
         CHECK_ARG
         auto values = string_split_pairs<int,float>(argv[i], ',');
@@ -2131,6 +2135,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-mmad, --no-fused-mul-multiadd", "disable fused mul-multi_add (default: %s)", params.fused_mmad? "enabled" : "disabled" });
     //options.push_back({ "*",           "-rcache, --rope-cache",         "enable RoPE cache (default: %s)", params.rope_cache ? "enabled" : "disabled" });
     options.push_back({ "*",           "-gr, --graph-reuse",            "enable graph reuse (default: %s)", params.graph_reuse ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (default: %s)", !params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard,",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});

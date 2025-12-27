@@ -4049,7 +4049,7 @@ struct llama_context_params llama_context_default_params() {
         /*.fused_up_gate               =*/ true,
         /*.fused_mmad                  =*/ true,
         /*.rope_cache                  =*/ false,
-        /*.graph_reuse                 =*/ false,
+        /*.graph_reuse                 =*/ true,
         /*.min_experts                 =*/ -1,
         /*.thtesh_experts              =*/ 0.0f,
         /*.only_active_experts         =*/ false,
