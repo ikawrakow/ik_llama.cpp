@@ -265,7 +265,7 @@ struct gpt_params {
     bool fused_mmad        = true;  // fused mul+multi_add op
     bool grouped_expert_routing = false; // if to use grouped expert routing (BailingMoeV2 arch)
     bool rope_cache        = false; // if to use RoPE cache (for supported models)
-    bool graph_reuse       = false; // if to reuse compute graphs
+    bool graph_reuse       = true;  // if to reuse compute graphs
     int  min_experts       = -1;
     float thresh_experts   = 0;
 
@@ -290,6 +290,7 @@ struct gpt_params {
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
     bool split_mode_graph_scheduling = false; // if true, force split mode graph scheduling
     bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
+    bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
