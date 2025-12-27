@@ -2162,10 +2162,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         bool work_done = false;
 #ifdef GGML_USE_OPENMP
-        if (int nlevels = omp_get_max_active_levels(); nlevels < 2) {
-            omp_set_max_active_levels(nlevels+1);
-            //printf("%s: Setting omp max active levels to 2\n", __func__);
-        }
+        //This maty not be available in old OpenMP versions
+        //if (int nlevels = omp_get_max_active_levels(); nlevels < 2) {
+        //    omp_set_max_active_levels(nlevels+1);
+        //    //printf("%s: Setting omp max active levels to 2\n", __func__);
+        //}
         bool has_cpu_work = false;
         for (int i = 0; i < sched->n_backends; ++i) {
             if (!sched->backend_splits[i].empty()) {
@@ -2237,7 +2238,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 #endif
         if (!work_done) {
-        std::barrier barrier(sched->n_backends, [] () {});
+        std::barrier barrier(sched->n_backends, [] () noexcept {});
         auto compute = [sched, &barrier] (int ith) {
 
             struct ggml_backend_sched_split * splits = sched->splits;
