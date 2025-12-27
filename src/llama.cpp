@@ -4056,6 +4056,7 @@ struct llama_context_params llama_context_default_params() {
         /*.k_cache_hadamard            =*/ false,
         /*.split_mode_graph_scheduling =*/ false,
         /*.split_mode_f16              =*/ true,
+        /*.scheduler_async             =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
@@ -4346,6 +4347,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
     cparams.split_mode_f16   = params.split_mode_f16;
+    cparams.scheduler_async  = params.scheduler_async;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
@@ -4436,6 +4438,7 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
     LLAMA_LOG_INFO("%s: split_mode_graph_scheduling = %d\n",   __func__, cparams.split_mode_graph_scheduling);
     LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
+    LLAMA_LOG_INFO("%s: sched_async   = %d\n",     __func__, cparams.scheduler_async);
     LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n",   __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",     __func__, cparams.rope_freq_scale);
@@ -4780,13 +4783,13 @@ struct llama_context * llama_new_context_with_model(
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
-        ggml_backend_sched_set_split_mode_graph(ctx->sched, true);
+        ggml_backend_sched_set_split_mode_graph(ctx->sched, true, cparams.scheduler_async);
         ggml_backend_sched_set_max_extra_alloc(ctx->sched, params.max_extra_alloc);
         if (model->has_tensor_overrides() && cparams.split_mode_graph_scheduling) {
             LLAMA_LOG_INFO("XXXXXXXX Split Mode Graph Scheduling is FORCED despite tensor overrides due to user choice.\n");
             LLAMA_LOG_INFO("XXXXXXXX It may or might NOT infer properly due to unsupported combinations between SMGS and every possible tensor overrides.\n");
         }
-    } 
+    }
 
     return ctx;
 }
