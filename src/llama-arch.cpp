@@ -69,6 +69,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MINIMAX_M2,      "minimax-m2"   },
     { LLM_ARCH_SMOLLM3,         "smollm3"      },
     { LLM_ARCH_MISTRAL3,        "mistral3"     },
+    { LLM_ARCH_MIMO2,           "mimo2"        },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
@@ -140,6 +141,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_KV_LORA_RANK,           "%s.attention.kv_lora_rank"           },
     { LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT, "%s.attention.relative_buckets_count" },
     { LLM_KV_ATTENTION_SLIDING_WINDOW,         "%s.attention.sliding_window"         },
+    { LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, "%s.attention.sliding_window_pattern" },
     { LLM_KV_ATTENTION_SCALE,                  "%s.attention.scale"                  },
     { LLM_KV_ATTENTION_OUTPUT_SCALE,           "%s.attention.output_scale"           },
     { LLM_KV_ATTENTION_TEMPERATURE_LENGTH,     "%s.attention.temperature_length"     },
@@ -150,6 +152,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ROPE_DIMENSION_COUNT,          "%s.rope.dimension_count"                 },
     { LLM_KV_ROPE_DIMENSION_SECTIONS,       "%s.rope.dimension_sections"              },
     { LLM_KV_ROPE_FREQ_BASE,                "%s.rope.freq_base"                       },
+    { LLM_KV_ROPE_FREQ_BASE_SWA,            "%s.rope.freq_base_swa"                   },
     { LLM_KV_ROPE_SCALE_LINEAR,             "%s.rope.scale_linear"                    },
     { LLM_KV_ROPE_SCALING_TYPE,             "%s.rope.scaling.type"                    },
     { LLM_KV_ROPE_SCALING_FACTOR,           "%s.rope.scaling.factor"                  },

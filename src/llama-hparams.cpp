@@ -1072,6 +1072,23 @@ void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_MIMO2:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,   hparams.n_swa);
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,         hparams.rope_freq_base_train_swa);
+                //TODO
+                //hparams.swa_type = LLAMA_SWA_TYPE_STANDARD; // which is the same as OpenAI
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
+
+                switch (hparams.n_layer) {
+                    case 48: model.type = e_model::MODEL_310B_A15B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+
+            } break;
 
         default: (void)0;
     }

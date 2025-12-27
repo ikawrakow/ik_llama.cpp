@@ -113,7 +113,7 @@ struct llama_hparams {
 
 	// qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
-	
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = -1;
@@ -121,6 +121,8 @@ struct llama_hparams {
     enum llama_pooling_type      pooling_type            = LLAMA_POOLING_TYPE_NONE;
     enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
+
+    std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
 
     bool operator!=(const llama_hparams & other) const {
         if (this->vocab_only    != other.vocab_only)    return true;

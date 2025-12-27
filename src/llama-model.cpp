@@ -1295,6 +1295,29 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+        LLM_ARCH_MIMO2,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
+            { LLM_TENSOR_OUTPUT,          "output" },
+            { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_SINKS,      "blk.%d.attn_sinks" },
+            { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,        "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,        "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
+            { LLM_TENSOR_FFN_GATE_INP,    "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_EXPS,   "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,   "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,     "blk.%d.ffn_up_exps" },
+	        { LLM_TENSOR_FFN_EXP_PROBS_B, "blk.%d.exp_probs_b" },
+        },
+    },
+    {
         LLM_ARCH_UNKNOWN,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -1538,6 +1561,7 @@ const char * llama_model_type_name(e_model type) {
         case MODEL_106B_A12B:     return "106B.A12B";
         case MODEL_230B_A10B:     return "230B.A10B";
         case MODEL_235B_A22B:     return "235B.A22B";
+        case MODEL_310B_A15B:     return "310B.A15B";
         case MODEL_300B_A47B:     return "300B.A47B";
         case MODEL_355B_A32B:     return "355B.A32B";
         case MODEL_E2B:           return "E2B";
