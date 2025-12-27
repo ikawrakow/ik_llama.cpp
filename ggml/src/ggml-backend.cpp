@@ -1182,6 +1182,7 @@ struct ggml_backend_sched {
 
     bool only_active_experts;
     bool split_mode_graph;
+    bool is_async = false;
     bool debug;
     bool has_reduce = false;
 };
@@ -1208,9 +1209,10 @@ void ggml_backend_sched_set_only_active_experts(ggml_backend_sched_t sched, bool
     sched->only_active_experts = on_or_off;
 }
 
-void ggml_backend_sched_set_split_mode_graph(ggml_backend_sched_t sched, bool on_or_off) {
+void ggml_backend_sched_set_split_mode_graph(ggml_backend_sched_t sched, bool on_or_off, bool async) {
     if (!sched) return;
     sched->split_mode_graph = on_or_off;
+    sched->is_async = async;
 }
 
 void ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB) {
@@ -2152,13 +2154,9 @@ static ggml_status ggml_backend_sched_eval(ggml_backend_sched_t sched, ggml_back
 
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
 
-    //if (!sched->split_mode_graph) {
-    //    for (auto & item : sched->own_cpy   ) item = false;
-    //    for (auto & item : sched->needs_sync) item = true;
-    //}
     for (auto & item : sched->needs_sync) item = true;
 
-    if (sched->n_backends > 2 && sched->split_mode_graph && sched->has_reduce) {
+    if (sched->is_async && sched->n_backends > 2 && sched->split_mode_graph && sched->has_reduce) {
 
         for (auto & s : sched->statuses) s = GGML_STATUS_SUCCESS;
 
