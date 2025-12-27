@@ -1804,9 +1804,16 @@ static void launch_fattn_new_mma(
         to_fp16(K_data, K_f16.ptr, 1, ggml_nelements(K), main_stream);
         K_data = (char *) K_f16.ptr;
 
-        nb11 = K->ne[0]*sizeof(half);
-        nb12 = nb11*K->ne[1];
-        nb13 = nb12*K->ne[2];
+        auto bs = ggml_blck_size(K->type);
+        auto ts = ggml_type_size(K->type);
+
+        nb11 = nb11*bs*sizeof(half)/ts;
+        nb12 = nb12*bs*sizeof(half)/ts;
+        nb13 = nb13*bs*sizeof(half)/ts;
+
+        //nb11 = K->ne[0]*sizeof(half);
+        //nb12 = nb11*K->ne[1];
+        //nb13 = nb12*K->ne[2];
     }
 
     if (need_f16_V && V->type != GGML_TYPE_F16) {
@@ -1823,9 +1830,16 @@ static void launch_fattn_new_mma(
             to_fp16(V_data, V_f16.ptr, 1, ggml_nelements(V), main_stream);
             V_data = (char *) V_f16.ptr;
 
-            nb21 = V->ne[0]*sizeof(half);
-            nb22 = nb21*V->ne[1];
-            nb23 = nb22*V->ne[2];
+            auto bs = ggml_blck_size(V->type);
+            auto ts = ggml_type_size(V->type);
+
+            nb21 = nb21*bs*sizeof(half)/ts;
+            nb22 = nb22*bs*sizeof(half)/ts;
+            nb23 = nb23*bs*sizeof(half)/ts;
+
+            //nb21 = V->ne[0]*sizeof(half);
+            //nb22 = nb21*V->ne[1];
+            //nb23 = nb22*V->ne[2];
         }
     }
 
