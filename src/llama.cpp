@@ -7557,6 +7557,11 @@ void llama_sample_dry([[maybe_unused]] struct llama_context* ctx, struct llama_s
     llama_sampler_dry_apply(smpl, candidates_p);
 }
 
+void llama_sample_adaptive_p(struct llama_context* ctx, struct llama_sampler * samplaw, llama_token_data_array* candidates) {
+    ((llama_sampler_adaptive_p *) samplaw->ctx)->sampling = &ctx->sampling;
+    llama_sampler_adaptive_p_apply(samplaw, candidates);
+}
+
 void llama_sample_repetition_penalties(
             struct llama_context * ctx,
           llama_token_data_array * candidates,
@@ -7646,6 +7651,56 @@ void llama_sampler_dry_accept(struct llama_sampler_dry* smpl, llama_token token)
     }
     smpl->last_tokens.push_back(token);
 }
+
+
+// adaptive p
+
+struct llama_sampler * llama_sampler_init_adaptive_p(
+    const float     target,
+    const float     decay,
+    const uint32_t  seed
+) {
+    static struct llama_sampler_i iface = {
+        /* .name   = */ [](const struct llama_sampler *) { return "adaptive-p"; },
+        /* .accept = */ nullptr,
+        /* .apply  = */ llama_sampler_adaptive_p_apply,
+
+        /* .reset  = */ [](struct llama_sampler * samplaw) {
+            auto * const ctx  = (llama_sampler_adaptive_p *) samplaw->ctx;
+            ctx->weighted_sum = 0.0f;
+            ctx->total_weight = 0.0f;
+        },
+
+        /* .clone  = */ [](const struct llama_sampler * samplaw) {
+            const auto * const ctx  = (const llama_sampler_adaptive_p * const) samplaw->ctx;
+            auto * const result     = llama_sampler_init_adaptive_p(ctx->target, ctx->decay, ctx->seed);
+            auto * const result_ctx = (llama_sampler_adaptive_p * const) result->ctx;
+            result_ctx->rng          = ctx->rng;
+            result_ctx->weighted_sum = ctx->weighted_sum;
+            result_ctx->total_weight = ctx->total_weight;
+            result_ctx->probs.reserve(ctx->probs.capacity());
+            return result;
+        },
+
+        /* .free   = */ [](struct llama_sampler * samplaw) {
+            delete (llama_sampler_adaptive_p *) samplaw->ctx;
+        },
+    };
+    return new llama_sampler {
+        /* .iface = */ &iface,
+        /* .ctx   = */ new llama_sampler_adaptive_p {
+            /* .target       = */ std::clamp(target, 0.0f, 1.0f),
+            /* .decay        = */ std::clamp(decay, 0.0f, 0.99f),
+            /* .seed         = */ seed,
+            /* .rng          = */ std::mt19937(seed),
+            /* .weighted_sum = */ std::clamp(target, 0.0f, 1.0f),
+            /* .total_weight = */ 1.0f,
+            /* .probs        = */ {},
+            /* .sampling     = */ nullptr,
+        }
+    };
+}
+
 
 int llama_split_prefix(char * dest, size_t maxlen, const char * split_path, int split_no, int split_count) {
     std::string str_split_path(split_path);

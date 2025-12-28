@@ -925,6 +925,16 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         }
         return true;
     }
+    if (arg == "--adaptive-target") {
+        CHECK_ARG
+        sparams.adaptive_target = std::stof(argv[i]);
+        return true;
+    }
+    if (arg == "--adaptive-decay") {
+        CHECK_ARG
+        sparams.adaptive_decay = std::stof(argv[i]);
+        return true;
+    }
     if (arg == "--spec-replace") {
         CHECK_ARG
         std::string target = argv[i];
@@ -2201,6 +2211,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --xtc-probability p",    "xtc probability (default: %.1f, 0.0 = disabled)", (double)sparams.xtc_probability });
     options.push_back({ "*",           "       --xtc-threshold t",      "xtc threshold (default: %.1f, >0.5 = disabled)", (double)sparams.xtc_threshold});
     options.push_back({ "*",           "       --top-n-sigma t",        "top-n-sigma parmeter (default: %.1f, 0.0 = disabled)", (double)sparams.top_n_sigma});
+    options.push_back({ "*",           "       --adaptive-target",      "adaptive-p sampling: (default: %.2f, <0.0 = disabled)", (double)sparams.adaptive_target});
+    options.push_back({ "*",           "       --adaptive-decay",       "adaptive-p sampling: (default: %.2f)", (double)sparams.adaptive_decay});
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -4174,6 +4186,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "top_p: %f # default: 0.95\n", sparams.top_p);
     fprintf(stream, "min_p: %f # default: 0.0\n", sparams.min_p);
     fprintf(stream, "typical_p: %f # default: 1.0\n", sparams.typical_p);
+    fprintf(stream, "adaptive_target: %f # default: -1.0\n", sparams.adaptive_target);
+    fprintf(stream, "adaptive_decay: %f # default: 0.9\n", sparams.adaptive_decay);
     fprintf(stream, "verbose_prompt: %s # default: false\n", params.verbose_prompt ? "true" : "false");
     fprintf(stream, "display_prompt: %s # default: true\n", params.display_prompt ? "true" : "false");
 }

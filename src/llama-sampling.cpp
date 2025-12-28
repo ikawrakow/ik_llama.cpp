@@ -1033,6 +1033,53 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 }
 
 
+// adaptive p
+
+void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_data_array * cur_p) {
+    auto * const ctx = (llama_sampler_adaptive_p * const) samplaw->ctx;
+    const bool sorted = cur_p->sorted;
+    cur_p->sorted = true;
+    llama_sample_softmax_impl(ctx->sampling, cur_p);
+
+    // enabled?
+    if (ctx->target < 0.0f) {
+        cur_p->sorted = sorted;
+        return;
+    }
+
+    // store pre-transform probabilities
+    ctx->probs.resize(cur_p->size);
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        ctx->probs[i] = cur_p->data[i].p;
+    }
+
+    // compute adapted target probability
+    const float adapted_target = std::clamp(2.0f * ctx->target - (ctx->weighted_sum / ctx->total_weight), 0.0f, 1.0f);
+
+    // transformation constants
+    const float peak_logit_value = 5.0f;
+    const float inv_width = 1.0f / 0.3f;
+    const float sharpness = 4.0f;
+
+    // quadratic near target for finite differentiation, transitioning to linear decay in tails
+    // unbounded negative logits suppress far-from-target tokens after softmax
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        const float dist = std::abs((cur_p->data[i].p - adapted_target) * inv_width);
+        cur_p->data[i].logit = peak_logit_value - sharpness * dist * dist / (1.0f + dist);
+    }
+
+    // softmax and sample from transformed distribution
+    llama_sample_softmax_impl(ctx->sampling, cur_p);
+    const size_t idx = llama_sample_token_impl(ctx->sampling, cur_p);
+
+    // update history with pre-transform probability of selected token
+    ctx->weighted_sum = ctx->probs[idx] + ctx->decay * ctx->weighted_sum;
+    ctx->total_weight = 1.0f + ctx->decay * ctx->total_weight;
+
+    cur_p->sorted = sorted;
+}
+
+
 // grammar
 
 struct llama_sampler_grammar {

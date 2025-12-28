@@ -99,7 +99,7 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
         result->n_valid = 0;
     }
     result->grammar = grmr;
-    // init DRY
+    llama_sampling_set_rng_seed(result, params.seed);
     for (const auto& cnstr : params.samplers_sequence)
     {
         switch (cnstr)
@@ -116,11 +116,15 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
 
                 break;
             }
+            case llama_sampler_type::ADAPTIVE_P:
+            {
+                result->samplaw=llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.seed);
+                break;
+            }
             default:
                 break;
         }
     }
-    llama_sampling_set_rng_seed(result, params.seed);
     return result;
 }
 
@@ -247,11 +251,13 @@ std::string llama_sampling_print(const llama_sampling_params & params) {
             "\trepeat_last_n = %d, repeat_penalty = %.3f, frequency_penalty = %.3f, presence_penalty = %.3f\n"
             "\ttop_k = %d, tfs_z = %.3f, top_p = %.3f, min_p = %.3f, typical_p = %.3f, temp = %.3f\n"
             "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f\n"
-            "\txtc_probability = %.3f, xtc_threshold = %.3f, top_n_sigma = %.3f",
+            "\txtc_probability = %.3f, xtc_threshold = %.3f, top_n_sigma = %.3f\n"
+            "\tadaptive_target = %.2f, adaptive_decay = %.2f",
             params.penalty_last_n, params.penalty_repeat, params.penalty_freq, params.penalty_present,
             params.top_k, params.tfs_z, params.top_p, params.min_p, params.typical_p, params.temp,
             params.mirostat, params.mirostat_eta, params.mirostat_tau,
-            params.xtc_probability, params.xtc_threshold, params.top_n_sigma);
+            params.xtc_probability, params.xtc_threshold, params.top_n_sigma,
+            params.adaptive_target, params.adaptive_decay);
 
     return std::string(result);
 }
@@ -283,6 +289,7 @@ std::string llama_sampling_type_to_str(llama_sampler_type sampler_type) {
         case llama_sampler_type::TEMPERATURE: return "temperature";
         case llama_sampler_type::XTC        : return "xtc";
         case llama_sampler_type::TOP_N_SIGMA: return "top_n_sigma";
+        case llama_sampler_type::ADAPTIVE_P : return "adaptive_p";
         default : return "";
     }
 }
@@ -297,7 +304,8 @@ std::vector<llama_sampler_type> llama_sampling_types_from_names(const std::vecto
         {"tfs_z",       llama_sampler_type::TFS_Z},
         {"xtc",         llama_sampler_type::XTC},
         {"top_n_sigma", llama_sampler_type::TOP_N_SIGMA},
-        {"temperature", llama_sampler_type::TEMPERATURE}
+        {"temperature", llama_sampler_type::TEMPERATURE},
+        {"adaptive_p",  llama_sampler_type::ADAPTIVE_P},
     };
 
     // since samplers names are written multiple ways
@@ -314,7 +322,8 @@ std::vector<llama_sampler_type> llama_sampling_types_from_names(const std::vecto
         {"tfs",         llama_sampler_type::TFS_Z},
         {"xtc",         llama_sampler_type::XTC},
         {"top-n-sigma", llama_sampler_type::TOP_N_SIGMA},
-        {"temp",        llama_sampler_type::TEMPERATURE}
+        {"temp",        llama_sampler_type::TEMPERATURE},
+        {"adaptive-p",  llama_sampler_type::ADAPTIVE_P},
     };
 
     std::vector<llama_sampler_type> sampler_types;
@@ -351,7 +360,8 @@ std::vector<llama_sampler_type> llama_sampling_types_from_chars(const std::strin
         {'f', llama_sampler_type::TFS_Z},
         {'x', llama_sampler_type::XTC},
         {'n', llama_sampler_type::TOP_N_SIGMA},
-        {'t', llama_sampler_type::TEMPERATURE}
+        {'t', llama_sampler_type::TEMPERATURE},
+        {'w', llama_sampler_type::ADAPTIVE_P},
     };
 
     std::vector<llama_sampler_type> sampler_types;
@@ -405,6 +415,7 @@ static void sampler_queue(
                     llama_sample_temp(ctx_main, &cur_p, temp);
                 }
                 break;
+            case llama_sampler_type::ADAPTIVE_P : llama_sample_adaptive_p(ctx_main, ctx_sampling->samplaw, &cur_p); break;
             default : break;
         }
     }
