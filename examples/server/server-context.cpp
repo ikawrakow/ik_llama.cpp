@@ -159,6 +159,15 @@ bool server_context::load_model(const gpt_params& params_) {
         model_draft = llama_init_dft.model;
         ctx_draft = llama_init_dft.context;
     }
+    // if model has MTP and no draft model is specified...
+    else if (llama_model_n_nextn_layer(model) > 0) {
+        SRV_INF("model has nextn layers = %d\n", llama_model_n_nextn_layer(model));
+        params.has_mtp = true;
+
+
+        SRV_INF("%s\n", "MTP needs embeddings on decode, enabling");
+        llama_set_embeddings(ctx, true);
+    }
     return true;
 }
 
@@ -2468,12 +2477,32 @@ void server_context::add_sampled_tokens() {
                 GGML_ABORT("not supported by multimodal");
             }
 
+            llama_tokens draft;
             struct llama_speculative_params params_spec;
             params_spec.n_draft = n_draft_max;
-            params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.params.speculative.n_max;
             params_spec.p_min = slot.params.speculative.p_min;
-            const llama_tokens& cached_text_tokens = slot.cache_tokens.get_text_tokens();
-            llama_tokens draft = llama_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+
+            if (slot.ctx_dft) {
+                params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.params.speculative.n_max;
+            } else {
+                params_spec.n_reuse = 0;
+            }
+            if (slot.has_mtp) {
+                llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
+
+                llama_tokens draft = mtp_speculative_gen_draft(
+                    slot.ctx_sampling, 
+                    ctx,
+                    params_spec,
+                    slot.sampled, 
+                    slot.n_past,
+                    slot.id
+                );
+            }
+            else {
+                const llama_tokens& cached_text_tokens = slot.cache_tokens.get_text_tokens();
+                llama_tokens draft = llama_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+            }
 
             // add the sampled token to the batch
             slot.i_batch_dft.push_back(batch.n_tokens);
@@ -3086,6 +3115,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             batch.n_seq_id + i,
             batch.seq_id + i,
             batch.logits + i,
+            { MTP_OP_NONE },
             0, 0, 0, // unused
         };
 
@@ -3127,6 +3157,10 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 });
 
             continue; // continue loop of n_batch
+        }
+
+        if (params.has_mtp) {
+            mtp_update_kv_cache(ctx, batch_view, true);
         }
 
         for (auto& slot : slots) {

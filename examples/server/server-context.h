@@ -125,6 +125,8 @@ struct server_slot {
     llama_context* ctx_dft = nullptr;
     llama_batch batch_spec = {};
 
+    bool has_mtp = false;
+
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted

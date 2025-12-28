@@ -359,6 +359,8 @@ struct llama_model {
     int max_gpu = 0; // max. number of GPUs to use per layer for aplit mode "graph"
     int n_gpu_layers;
 
+    bool mtp; // use mtp if is supported by the Model
+
     std::vector<rpc_device> rpc_servers;
     std::vector<int32_t> devices;
 

@@ -705,6 +705,7 @@ static bool decode_helper(llama_context * ctx, llama_batch & batch, std::vector<
             batch.n_seq_id + i,
             batch.seq_id   + i,
             batch.logits   + i,
+            { MTP_OP_NONE },
             0, 0, 0, // unused
         };
 

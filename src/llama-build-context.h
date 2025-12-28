@@ -114,6 +114,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_defrag(const std::vector<uint32_t> & ids);
 
+    struct ggml_tensor * build_inp_embd_mtp(struct ggml_tensor * mtp_tok_embd);
+
     ggml_tensor * build_inp_pos();
 
     ggml_tensor * build_input_scale(int n_tokens);
@@ -424,4 +426,10 @@ llm_expert_gating_func_type   gating_op,
             int n_swa, int il, bool do_rope = true, bool add_graph_split = false, bool add_input = false, bool is_norm = false,
             bool is_multi = false);
 
+    struct ggml_tensor * build_mtp_tail(
+        const struct llama_layer & mtp_layer, 
+        struct ggml_tensor * prev_embeddings, 
+        int64_t n_embd_head, 
+        struct ggml_cgraph * gf
+    );
 };

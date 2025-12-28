@@ -309,6 +309,7 @@ int main(int argc, char ** argv) {
                 batch.n_seq_id + i,
                 batch.seq_id   + i,
                 batch.logits   + i,
+                { MTP_OP_NONE },
                 0, 0, 0, // unused
             };
 

@@ -1990,9 +1990,12 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
         int flags = 0;
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
-            // skip all tensors in the NextN layers
-            flags |= llama_model_loader::TENSOR_SKIP;
+        // Skip loading MTP layers if the feature is disabled
+        if (!model.mtp) {
+            if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+                // skip all tensors in the NextN layers
+                flags |= llama_model_loader::TENSOR_SKIP;
+            }
         }
 
         auto & layer = model.layers[i];
@@ -3187,7 +3190,8 @@ bool create_tensors_helper::create_tensors() {
             throw std::runtime_error("unknown architecture");
     }
     if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
-        const int n_layer = model.layers.size() - model.hparams.nextn_predict_layers;
+        const int n_layer = model.mtp ? model.layers.size() 
+                                  : model.layers.size() - model.hparams.nextn_predict_layers;
         LLAMA_LOG_INFO("================================ max_gpu = %d\n", model.max_gpu);
         std::vector<size_t> mem_used(model.splits.size(), 0);
         const auto & hparams = model.hparams;

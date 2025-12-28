@@ -279,6 +279,16 @@ extern "C" {
         LLAMA_SPLIT_MODE_GRAPH   = 3, // splits computations across GPUs
     };
 
+    typedef enum {
+        MTP_OP_NONE,
+        MTP_OP_WARMUP,
+        MTP_OP_UPDATE_ACCEPTED,
+        MTP_OP_DRAFT_GEN,
+    } llama_mtp_op_type;
+
+    typedef struct llama_mtp_params {
+        llama_mtp_op_type op_type;
+    } llama_mtp_params;
 
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -313,6 +323,7 @@ extern "C" {
         int32_t      *  n_seq_id;
         llama_seq_id ** seq_id;
         int8_t       *  logits; // TODO: rename this to "output"
+        llama_mtp_params mtp_params;
 
         // NOTE: helpers for smooth API transition - can be deprecated in the future
         //       for future-proof code, use the above fields instead and ignore everything below
@@ -393,6 +404,7 @@ extern "C" {
         bool validate_quants; // if true, check for NaNs while loading the model
         bool merge_qkv;     // if true, merge separate Q, K, V tensors into a single, contiguous tensor
         bool merge_up_gate_exps;  // if true, merge ffn_up_exps and ffn_gate_exps tensors into a single, contiguous tensor
+        bool mtp;           // if true, load MTP layers if present
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -582,6 +594,8 @@ extern "C" {
     LLAMA_API int32_t     llama_vocab_n_tokens(const struct llama_vocab * vocab);
     LLAMA_API llama_token llama_vocab_bos(const struct llama_vocab * vocab);
     LLAMA_API llama_token llama_vocab_eos(const struct llama_vocab * vocab);
+
+    LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
 
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_rope_freq_scale_train(const struct llama_model * model);
@@ -1439,6 +1453,12 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     LLAMA_API void llama_log_set(ggml_log_callback log_callback, void * user_data);
 
     LLAMA_API void llama_dump_timing_info_yaml(FILE * stream, const struct llama_context * ctx);
+
+    //
+    // MTP
+    //
+
+    LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
 #ifdef __cplusplus
 }

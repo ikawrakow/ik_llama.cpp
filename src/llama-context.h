@@ -81,6 +81,8 @@ struct llama_kv_cache {
     }
 };
 
+struct llama_context_kv_cache_data;
+
 struct llama_control_vector {
     std::vector<struct ggml_tensor *> tensors; // per layer
     std::vector<struct ggml_context *> ctxs;
@@ -189,6 +191,12 @@ struct llama_context {
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
 
+    ggml_tensor * get_embeddings_tensor();
+
+    const float * draft_input_hidden_state = nullptr;
+
+    void * kv_cache_data = nullptr; 
+
     // input tensors
     struct ggml_tensor * inp_tokens;      // I32 [n_batch]
     struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
@@ -206,6 +214,7 @@ struct llama_context {
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
     struct ggml_tensor * inp_scale = nullptr; // F32 [n_tokens]
+    struct ggml_tensor * inp_mtp_states = nullptr;
 
     ggml_backend_t ggml_backend_by_name(const char * name);
 
