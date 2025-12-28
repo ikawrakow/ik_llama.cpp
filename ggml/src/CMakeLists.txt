@@ -162,9 +162,9 @@ if (GGML_OPENMP)
 
         # On non-MSVC platforms keep linking the imported OpenMP target
         if (MSVC)
-            message(STATUS "MSVC detected — will request -openmp:vllm and avoid OpenMP::OpenMP_CXX to prevent /openmp being injected earlier")
+            message(STATUS "MSVC detected — will request -openmp:experimental and avoid OpenMP::OpenMP_CXX to prevent /openmp being injected earlier")
             # record a flag to apply to the ggml target later (ensures it appears last on the command line)
-            set(GGML_MSVC_OPENMP_FLAG "-openmp:vllm")
+            set(GGML_MSVC_OPENMP_FLAG "-openmp:experimental")
             # Do NOT add OpenMP::OpenMP_C / CXX to GGML_EXTRA_LIBS on MSVC so that CMake's OpenMP usage requirements
             # don't inject /openmp (which could override experimental if it appears later).
         else()
