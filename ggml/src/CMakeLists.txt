@@ -160,7 +160,17 @@ if (GGML_OPENMP)
 
         add_compile_definitions(GGML_USE_OPENMP)
 
-        set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+        # On non-MSVC platforms keep linking the imported OpenMP target
+        if (MSVC)
+            message(STATUS "MSVC detected — will request -openmp:experimental and avoid OpenMP::OpenMP_CXX to prevent /openmp being injected earlier")
+            # record a flag to apply to the ggml target later (ensures it appears last on the command line)
+            set(GGML_MSVC_OPENMP_FLAG "-openmp:experimental")
+            # Do NOT add OpenMP::OpenMP_C / CXX to GGML_EXTRA_LIBS on MSVC so that CMake's OpenMP usage requirements
+            # don't inject /openmp (which could override experimental if it appears later).
+        else()
+            # Non-MSVC: keep the imported OpenMP targets
+            set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+        endif()
 
         if (GGML_MUSA)
             set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} "/usr/lib/llvm-10/include/openmp")
@@ -1568,6 +1578,13 @@ add_library(ggml
             ${GGML_SOURCES_CANN}      ${GGML_HEADERS_CANN}
             ggml-aarch64.c            ggml-aarch64.h
             )
+
+# Ensure MSVC experimental flag is appended to the compile options for the ggml target
+if (MSVC AND GGML_OPENMP AND DEFINED GGML_MSVC_OPENMP_FLAG)
+    message(STATUS "Appending ${GGML_MSVC_OPENMP_FLAG} to target 'ggml' compile options")
+    # Use APPEND so the flag is added after any other compile options (last wins on MSVC)
+    set_property(TARGET ggml APPEND PROPERTY COMPILE_OPTIONS "${GGML_MSVC_OPENMP_FLAG}")
+endif()
 
 if (EMSCRIPTEN)
     set_target_properties(ggml PROPERTIES COMPILE_FLAGS "-msimd128")
