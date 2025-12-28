@@ -162,15 +162,6 @@ if (GGML_OPENMP)
 
         set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
 
-        # On MSVC request the experimental OpenMP runtime (exposes newer APIs)
-        if(MSVC)
-            message(STATUS "MSVC detected — requesting /openmp:experimental")
-            # Apply to C and C++ compile commands (global fallback)
-            add_compile_options($<$<COMPILE_LANGUAGE:C>:/openmp:experimental>)
-            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/openmp:experimental>)
-            # (Optional) also export to linker flags if you need; usually not necessary
-        endif()
-
         if (GGML_MUSA)
             set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} "/usr/lib/llvm-10/include/openmp")
             set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} "/usr/lib/llvm-10/lib/libomp.so")
