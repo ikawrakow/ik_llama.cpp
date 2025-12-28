@@ -164,10 +164,10 @@ if (GGML_OPENMP)
 
         # On MSVC request the experimental OpenMP runtime (exposes newer APIs)
         if(MSVC)
-            message(STATUS "MSVC detected — requesting /openmp:experimental")
+            message(STATUS "MSVC detected — requesting /openmp:llvm")
             # Apply to C and C++ compile commands (global fallback)
-            add_compile_options($<$<COMPILE_LANGUAGE:C>:/openmp:experimental>)
-            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/openmp:experimental>)
+            add_compile_options($<$<COMPILE_LANGUAGE:C>:/openmp:llvm>)
+            add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/openmp:llvm>)
             # (Optional) also export to linker flags if you need; usually not necessary
         endif()
 
