@@ -1170,7 +1170,7 @@ endif()
 set(CUDA_CXX_FLAGS "")
 
 if (GGML_CUDA)
-    set(CUDA_FLAGS -use_fast_math -extended-lambda)
+    set(CUDA_FLAGS -use_fast_math -extended-lambda -lineinfo)
 
     if (GGML_FATAL_WARNINGS)
         list(APPEND CUDA_FLAGS -Werror all-warnings)
