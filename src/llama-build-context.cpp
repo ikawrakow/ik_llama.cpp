@@ -260,7 +260,7 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
     if (batch.token) {
         lctx.inp_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, batch.n_tokens);
         
-        cb(lctx.inp_tokens, "mtp_inp_tokens", -1); 
+        cb(lctx.inp_tokens, "inp_tokens", -1);
         ggml_set_input(lctx.inp_tokens);
 
         cur = ggml_get_rows(ctx0, mtp_tok_embd, lctx.inp_tokens);
@@ -268,7 +268,7 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
         return nullptr; 
     }
 
-    cb(cur, "mtp_inp_embd", -1);
+    cb(cur, "inp_embd", -1);
     
     return cur;
 }

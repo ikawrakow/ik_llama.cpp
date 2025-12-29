@@ -159,14 +159,9 @@ bool server_context::load_model(const gpt_params& params_) {
         model_draft = llama_init_dft.model;
         ctx_draft = llama_init_dft.context;
     }
-    // if model has MTP and no draft model is specified...
-    else if (llama_model_n_nextn_layer(model) > 0) {
-        SRV_INF("model has nextn layers = %d\n", llama_model_n_nextn_layer(model));
-        params.has_mtp = true;
-
-
-        SRV_INF("%s\n", "MTP needs embeddings on decode, enabling");
-        llama_set_embeddings(ctx, true);
+    else if (params.has_mtp && llama_model_n_nextn_layer(model) == 0) {
+        LOG_WARNING("WARNING: -mtp flag provided, but model has 0 NextN layers. MTP will be disabled.\n", {});
+        params.has_mtp = false;
     }
     return true;
 }
@@ -238,6 +233,17 @@ void server_context::init() {
                 llama_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
             }
 
+        }
+        else if (params.has_mtp && llama_model_n_nextn_layer(model) > 0) {
+            slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
+            SLT_DBG(slot, "batch_spec contains %d tokens\n", slot.batch_spec.n_tokens);
+
+            slot.params.speculative.n_min = 0;
+
+            SRV_INF("%s\n", "MTP needs embeddings on decode, enabling");
+            llama_set_embeddings(ctx, true);
+
+            slot.has_mtp = true;
         }
 
         slot.reset();

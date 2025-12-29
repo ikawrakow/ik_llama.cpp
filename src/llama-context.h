@@ -231,5 +231,8 @@ struct llama_context {
     std::vector<CacheCopy> cache_copies;
 
     bool update_cache_copies();
+    bool prepare_mtp_graph_inputs(
+        struct llama_context & lctx, const llama_mtp_params & mtp_params);
 
+    ggml_tensor * embd_tensor = nullptr;
 };
