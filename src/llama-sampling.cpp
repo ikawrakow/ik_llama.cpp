@@ -1048,9 +1048,9 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
     }
 
     // store pre-transform probabilities
-    ctx->probs.resize(cur_p->size);
+    ctx->pre_xform_probs.resize(cur_p->size);
     for (size_t i = 0; i < cur_p->size; ++i) {
-        ctx->probs[i] = cur_p->data[i].p;
+        ctx->pre_xform_probs[i] = cur_p->data[i].p;
     }
 
     // compute adapted target probability
@@ -1068,13 +1068,15 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
         cur_p->data[i].logit = peak_logit_value - sharpness * dist * dist / (1.0f + dist);
     }
 
-    // softmax and sample from transformed distribution
+    // softmax and sample
     llama_sample_softmax_impl(ctx->sampling, cur_p);
-    const size_t idx = llama_sample_token_impl(ctx->sampling, cur_p);
+    const float prob = ctx->pre_xform_probs[
+        llama_sample_token_impl(ctx->sampling, cur_p) // idx
+    ];
 
     // update history with pre-transform probability of selected token
-    ctx->weighted_sum = ctx->probs[idx] + ctx->decay * ctx->weighted_sum;
-    ctx->total_weight = 1.0f + ctx->decay * ctx->total_weight;
+    ctx->weighted_sum = ctx->decay * ctx->weighted_sum + prob;
+    ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
 
     cur_p->sorted = false;
 }

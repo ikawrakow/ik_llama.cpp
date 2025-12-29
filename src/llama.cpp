@@ -7678,7 +7678,7 @@ struct llama_sampler * llama_sampler_init_adaptive_p(
             result_ctx->rng          = ctx->rng;
             result_ctx->weighted_sum = ctx->weighted_sum;
             result_ctx->total_weight = ctx->total_weight;
-            result_ctx->probs.reserve(ctx->probs.capacity());
+            result_ctx->pre_xform_probs.reserve(ctx->pre_xform_probs.capacity());
             return result;
         },
 
@@ -7689,14 +7689,14 @@ struct llama_sampler * llama_sampler_init_adaptive_p(
     return new llama_sampler {
         /* .iface = */ &iface,
         /* .ctx   = */ new llama_sampler_adaptive_p {
-            /* .target       = */ std::clamp(target, 0.0f, 1.0f),
-            /* .decay        = */ std::clamp(decay, 0.0f, 0.99f),
-            /* .seed         = */ seed,
-            /* .rng          = */ std::mt19937(seed),
-            /* .weighted_sum = */ std::clamp(target, 0.0f, 1.0f),
-            /* .total_weight = */ 1.0f,
-            /* .probs        = */ {},
-            /* .sampling     = */ nullptr,
+            /* .target          = */ std::clamp(target, 0.0f, 1.0f),
+            /* .decay           = */ std::clamp(decay, 0.0f, 0.99f),
+            /* .seed            = */ seed,
+            /* .rng             = */ std::mt19937(seed),
+            /* .weighted_sum    = */ std::clamp(target, 0.0f, 1.0f),
+            /* .total_weight    = */ 1.0f,
+            /* .pre_xform_probs = */ {},
+            /* .sampling        = */ nullptr,
         }
     };
 }
