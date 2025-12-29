@@ -2841,8 +2841,9 @@ static size_t llama_output_reserve(llama_context & lctx, size_t n_outputs) {
     const auto n_embd  = hparams.n_embd;
 
     // TODO: use a per-batch flag for logits presence instead
-    const bool has_logits = !cparams.embeddings;
-    const bool has_embd   =  lctx.is_encoding || (cparams.embeddings && (cparams.pooling_type == LLAMA_POOLING_TYPE_NONE));
+    const bool has_mtp = lctx.model.hparams.nextn_predict_layers > 0;
+    const bool has_logits = !cparams.embeddings || has_mtp;
+    const bool has_embd   = lctx.is_encoding || (cparams.embeddings && (cparams.pooling_type == LLAMA_POOLING_TYPE_NONE)) || has_mtp;
 
     const size_t logits_size = has_logits ? n_vocab*n_outputs_max : 0;
     const size_t embd_size   = has_embd   ?  n_embd*n_outputs_max : 0;
@@ -2925,7 +2926,7 @@ static bool prepare_mtp_graph_inputs(struct llama_context & lctx, const llama_mt
     ggml_tensor * dst = lctx.inp_mtp_states;
     const float * src = nullptr;
     if (mtp_params.op_type == MTP_OP_WARMUP || mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
-        src = lctx.embd; 
+        src = lctx.embd;
     } else { 
         src = lctx.draft_input_hidden_state;
     }
@@ -3188,28 +3189,32 @@ static int llama_decode_internal(
         }
         // the output is always the last tensor in the graph
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
-        struct ggml_tensor * embd = gf->nodes[gf->n_nodes - 2];
+        struct ggml_tensor * embd = nullptr;
 
         if (lctx.n_outputs == 0) {
-            // no output
-            res  = nullptr;
-            embd = nullptr;
-        } else if (cparams.embeddings) {
-            res  = nullptr; // do not extract logits for embedding case
-            embd = nullptr;
-            for (int i = gf->n_nodes - 1; i >= 0; --i) {
-                if (strcmp(gf->nodes[i]->name, "result_embd_pooled") == 0) {
-                    embd = gf->nodes[i];
-                    break;
+            res = nullptr;
+        } 
+        else {
+            const bool has_mtp = lctx.model.hparams.nextn_predict_layers > 0 || lctx.model.mtp;
+            if (cparams.embeddings || has_mtp) {
+                for (int i = gf->n_nodes - 1; i >= 0; --i) {
+                    if (strcmp(gf->nodes[i]->name, "result_embd_pooled") == 0) {
+                        embd = gf->nodes[i];
+                        break;
+                    }
+                    if (strcmp(gf->nodes[i]->name, "result_norm") == 0) {
+                        embd = gf->nodes[i];
+                    }
                 }
             }
-            GGML_ASSERT(embd != nullptr && "missing embeddings tensor");
-        } else {
-            embd = nullptr; // do not extract embeddings when not needed
-            GGML_ASSERT(strcmp(res->name, "result_output") == 0 && "missing result_output tensor");
+            if (cparams.embeddings && lctx.model.hparams.nextn_predict_layers == 0) {
+                res = nullptr; 
+            } else {
+                if (!embd) {
+                    GGML_ASSERT(strcmp(res->name, "result_output") == 0 && "missing result_output tensor");
+                }
+            }
         }
-        // LLAMA_LOG_INFO("graph build time: %.3f ms (%d nodes, %d leafs)\n", (ggml_time_us() - t_start_us)/1000.0, gf->n_nodes, gf->n_leafs);
-
 #if IK_PRINT_TIMING == 1
         tim1 = ggml_time_us();
 #endif
@@ -3272,7 +3277,7 @@ static int llama_decode_internal(
         }
 
         // extract embeddings
-        if (embd) {
+        if (embd && u_batch.mtp_params.op_type == MTP_OP_NONE) {
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif

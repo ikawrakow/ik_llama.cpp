@@ -385,7 +385,10 @@ ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
     struct ggml_tensor * inp = nullptr;
     for (int i = gf->n_nodes - 1; i >= 0; --i) {
         inp = gf->nodes[i];
-        if (strcmp(inp->name, "result_norm") == 0 || strcmp(inp->name, "result_embd") == 0) {
+
+        if (strcmp(inp->name, "result_norm") == 0 || 
+            strcmp(inp->name, "result_embd") == 0 || 
+            strcmp(inp->name, "output_normed") == 0) { 
             break;
         }
         inp = nullptr;
@@ -7248,6 +7251,8 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
 
     struct ggml_tensor * inp_pos = build_inp_pos();
 
+    struct ggml_tensor * inp_out_ids = build_inp_out_ids();
+
     // auto * inp_attn = build_attn_inp_kv_unified();
 
     // If nextn.embed_tokens is missing (GLM-4.6), use model.tok_embd
@@ -7352,12 +7357,17 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     }
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.nextn.shared_head_norm, NULL, LLM_NORM_RMS, cb, il);
 
+    if (inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
     // If nextn.shared_head_head is missing (GLM-4.6), use model.output (Main LM Head)
     ggml_tensor * mtp_head_weights = mtp_layer.nextn.shared_head_head;
     if (mtp_head_weights == nullptr) {
         mtp_head_weights = model.output;
     }
     cur = llm_build_lora_mm(lctx, ctx0, mtp_head_weights, cur);
+    cb(cur, "result_output", -1);
 
     return cur;
 }
@@ -9699,7 +9709,8 @@ ggml_cgraph * llm_build_context::llama_build_graph(
     }
 
     // add on pooling layer
-    if (batch.mtp_params.op_type == MTP_OP_NONE && lctx.cparams.embeddings) {
+    if (batch.mtp_params.op_type == MTP_OP_NONE && (lctx.cparams.embeddings || 
+        (lctx.model.hparams.nextn_predict_layers > 0 || lctx.model.mtp))) {
         result = llm.append_pooling(result);
     }
 
