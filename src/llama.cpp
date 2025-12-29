@@ -7672,9 +7672,9 @@ struct llama_sampler * llama_sampler_init_adaptive_p(
         },
 
         /* .clone  = */ [](const struct llama_sampler * samplaw) {
-            const auto * const ctx  = (const llama_sampler_adaptive_p * const) samplaw->ctx;
+            const auto * const ctx  = (const llama_sampler_adaptive_p *) samplaw->ctx;
             auto * const result     = llama_sampler_init_adaptive_p(ctx->target, ctx->decay, ctx->seed);
-            auto * const result_ctx = (llama_sampler_adaptive_p * const) result->ctx;
+            auto * const result_ctx = (llama_sampler_adaptive_p *) result->ctx;
             result_ctx->rng          = ctx->rng;
             result_ctx->weighted_sum = ctx->weighted_sum;
             result_ctx->total_weight = ctx->total_weight;

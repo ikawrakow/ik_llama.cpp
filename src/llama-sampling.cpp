@@ -1036,7 +1036,7 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 // adaptive p
 
 void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_data_array * cur_p) {
-    auto * const ctx = (llama_sampler_adaptive_p * const) samplaw->ctx;
+    auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
     const bool sorted = cur_p->sorted;
     cur_p->sorted = true;
     llama_sample_softmax_impl(ctx->sampling, cur_p);
@@ -1076,7 +1076,7 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
     ctx->weighted_sum = ctx->probs[idx] + ctx->decay * ctx->weighted_sum;
     ctx->total_weight = 1.0f + ctx->decay * ctx->total_weight;
 
-    cur_p->sorted = sorted;
+    cur_p->sorted = false;
 }
 
 
