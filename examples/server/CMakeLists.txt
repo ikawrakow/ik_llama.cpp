@@ -96,5 +96,11 @@ endif()
 if (WIN32)
     TARGET_LINK_LIBRARIES(${TARGET} PRIVATE ws2_32)
 endif()
+if(MSVC)
+    set_target_properties(${TARGET} PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
+endif()
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
