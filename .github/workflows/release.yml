@@ -469,8 +469,7 @@ jobs:
             -DGGML_CUDA_IQK_FORCE_BF16=1 ^
             -DGGML_MAX_CONTEXTS=2048 ^
             -DLLAMA_CURL=OFF ^
-            -DGGML_CUDA_USE_GRAPHS=ON ^
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL
+            -DGGML_CUDA_USE_GRAPHS=ON
 
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS%
