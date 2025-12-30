@@ -1317,6 +1317,12 @@ extern "C" {
           llama_token_data_array * candidates_p,
                            float   top_n_sigma);
 
+    /// @details Adaptive p sampler described in https://github.com/MrJackSpade/llama.cpp/
+    void llama_sample_adaptive_p(
+            struct llama_context * ctx,
+            struct llama_sampler * samplaw,
+          llama_token_data_array * candidates);
+
 
 LLAMA_API void                   llama_sampler_reset(struct llama_sampler* smpl);
 
@@ -1380,18 +1386,13 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
 
 
-    /// @details Adaptive p sampler described in https://github.com/MrJackSpade/llama.cpp/tree/master
+    /// @details Adaptive p sampler initializer
     /// @param target Select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
     /// @param decay Decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
-    void llama_sample_adaptive_p(
-            struct llama_context * ctx,
-            struct llama_sampler * samplaw,
-          llama_token_data_array * candidates);
-
     struct llama_sampler * llama_sampler_init_adaptive_p(
-        const float     target,
-        const float     decay,
-        const uint32_t  seed);
+             const float   target,
+             const float   decay,
+          const uint32_t   seed);
 
 
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
