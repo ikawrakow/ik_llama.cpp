@@ -1318,7 +1318,7 @@ extern "C" {
                            float   top_n_sigma);
 
     /// @details Adaptive p sampler described in https://github.com/MrJackSpade/llama.cpp/
-    void llama_sample_adaptive_p(
+    LLAMA_API void llama_sample_adaptive_p(
             struct llama_context * ctx,
             struct llama_sampler * samplaw,
           llama_token_data_array * candidates);
@@ -1389,7 +1389,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     /// @details Adaptive p sampler initializer
     /// @param target Select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
     /// @param decay Decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
-    struct llama_sampler * llama_sampler_init_adaptive_p(
+    LLAMA_API struct llama_sampler * llama_sampler_init_adaptive_p(
              const float   target,
              const float   decay,
           const uint32_t   seed);
