@@ -310,6 +310,11 @@ endif()
 
 if (GGML_CUDA)
     cmake_minimum_required(VERSION 3.18)  # for CMAKE_CUDA_ARCHITECTURES
+    # Hack for the extra \EHsc that gets added on Windows to the nvcc compile line, which causes the error:
+    # "nvcc fatal: A single input file is required for a non-link phase when an outputfile is specified..."
+    if(IS_MSVC)
+        add_compile_options(-Xcompiler)
+    endif()
 
     if (GGML_MUSA)
         list(APPEND CMAKE_MODULE_PATH "/usr/local/musa/cmake/")
