@@ -1054,7 +1054,11 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
     }
 
     // compute adapted target probability
-    const float adapted_target = std::clamp(2.0f * ctx->target - (ctx->weighted_sum / ctx->total_weight), 0.0f, 1.0f);
+    const float target = std::clamp(ctx->target, 0.0f, 1.0f);
+    const float adapted_target = std::clamp(ctx->total_weight == 0.0f
+        ? target
+        : 2.0f * target - (ctx->weighted_sum / ctx->total_weight),
+        0.0f, 1.0f);
 
     // transformation constants
     const float peak_logit_value = 5.0f;

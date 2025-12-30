@@ -99,7 +99,7 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
         result->n_valid = 0;
     }
     result->grammar = grmr;
-    llama_sampling_set_rng_seed(result, params.seed);
+    
     for (const auto& cnstr : params.samplers_sequence)
     {
         switch (cnstr)
@@ -125,6 +125,7 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
                 break;
         }
     }
+    llama_sampling_set_rng_seed(result, params.seed);
     return result;
 }
 
