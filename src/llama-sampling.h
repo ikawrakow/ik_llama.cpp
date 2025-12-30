@@ -77,7 +77,14 @@ struct llama_sampler_adaptive_p {
     struct llama_sampling * sampling;
 };
 
-void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_data_array * cur_p);
+void llama_sampler_adaptive_p_apply(
+    struct llama_sampler   * samplaw,
+    llama_token_data_array * cur_p);
+
+struct llama_sampler * llama_sampler_init_adaptive_p_impl(
+    const float    target,
+    const float    decay,
+    const uint32_t seed);
 
 
 void llama_sample_repetition_penalties_impl(

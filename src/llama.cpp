@@ -7653,53 +7653,8 @@ void llama_sampler_dry_accept(struct llama_sampler_dry* smpl, llama_token token)
 }
 
 
-// adaptive p
-
-struct llama_sampler * llama_sampler_init_adaptive_p(
-    const float     target,
-    const float     decay,
-    const uint32_t  seed
-) {
-    static struct llama_sampler_i iface = {
-        /* .name   = */ [](const struct llama_sampler *) { return "adaptive-p"; },
-        /* .accept = */ nullptr,
-        /* .apply  = */ llama_sampler_adaptive_p_apply,
-
-        /* .reset  = */ [](struct llama_sampler * samplaw) {
-            auto * const ctx  = (llama_sampler_adaptive_p *) samplaw->ctx;
-            ctx->weighted_sum = 0.0f;
-            ctx->total_weight = 0.0f;
-        },
-
-        /* .clone  = */ [](const struct llama_sampler * samplaw) {
-            const auto * const ctx  = (const llama_sampler_adaptive_p *) samplaw->ctx;
-            auto * const result     = llama_sampler_init_adaptive_p(ctx->target, ctx->decay, ctx->seed);
-            auto * const result_ctx = (llama_sampler_adaptive_p *) result->ctx;
-            result_ctx->rng          = ctx->rng;
-            result_ctx->weighted_sum = ctx->weighted_sum;
-            result_ctx->total_weight = ctx->total_weight;
-            result_ctx->pre_xform_probs.reserve(ctx->pre_xform_probs.capacity());
-            return result;
-        },
-
-        /* .free   = */ [](struct llama_sampler * samplaw) {
-            delete (llama_sampler_adaptive_p *) samplaw->ctx;
-        },
-    };
-    const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
-    return new llama_sampler {
-        /* .iface = */ &iface,
-        /* .ctx   = */ new llama_sampler_adaptive_p {
-            /* .target          = */ target,
-            /* .decay           = */ clamped_decay,
-            /* .seed            = */ seed,
-            /* .rng             = */ std::mt19937(seed),
-            /* .weighted_sum    = */ target / (1.0f - clamped_decay),
-            /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
-            /* .pre_xform_probs = */ {},
-            /* .sampling        = */ nullptr,
-        }
-    };
+struct llama_sampler * llama_sampler_init_adaptive_p(const float target, const float decay, const uint32_t seed) {
+    return llama_sampler_init_adaptive_p_impl(target, decay, seed);
 }
 
 
