@@ -1039,7 +1039,7 @@ llama_token llama_sample_token_adaptive_p_impl(struct llama_sampling * smpl, lla
     GGML_ASSERT(smpl);
     const int64_t t_start_sample_us = ggml_time_us();
 
-    candidates->sorted = true;  // disable sorting because algorithm requirement
+    candidates->sorted = true;  // disable sorting
     llama_sample_softmax_impl((struct llama_sampling *) nullptr, candidates);
 
     std::vector<float> probs;
@@ -1054,18 +1054,19 @@ llama_token llama_sample_token_adaptive_p_impl(struct llama_sampling * smpl, lla
 
     llama_token result = candidates->data[idx].id;
 
-    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
-    smpl->n_sample++;
-
     // update history with pre-transform probability of selected token
     ctx->weighted_sum = ctx->decay * ctx->weighted_sum + ctx->pre_xform_probs[idx];
     ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
+
+    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+    smpl->n_sample++;
 
     return result;
 }
 
 void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_data_array * cur_p)
 {
+    cur_p->sorted = true;   // disable sorting
     llama_sample_softmax_impl(nullptr, cur_p);
     auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
     if (ctx->target < 0.0f) {
@@ -1097,7 +1098,6 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
         const float dist = std::abs((cur_p->data[i].p - adapted_target) * inv_width);
         cur_p->data[i].logit = peak_logit_value - sharpness * dist * dist / (1.0f + dist);
     }
-    cur_p->sorted = false;
 }
 
 struct llama_sampler * llama_sampler_init_adaptive_p_impl(const float target, const float decay, const uint32_t seed)
