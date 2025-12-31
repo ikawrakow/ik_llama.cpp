@@ -1115,13 +1115,16 @@ struct llama_sampler * llama_sampler_init_adaptive_p_impl(const float target, co
         },
     };
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
+    const uint32_t new_seed = (seed == LLAMA_DEFAULT_SEED)
+        ? std::random_device{}()
+        : seed;
     return new llama_sampler {
         /* .iface = */ &iface,
         /* .ctx   = */ new llama_sampler_adaptive_p {
             /* .target          = */ target,
             /* .decay           = */ clamped_decay,
-            /* .seed            = */ seed,
-            /* .rng             = */ std::mt19937(seed),
+            /* .seed            = */ new_seed,
+            /* .rng             = */ std::mt19937(new_seed),
             /* .weighted_sum    = */ target / (1.0f - clamped_decay),
             /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
             /* .pre_xform_probs = */ {},
