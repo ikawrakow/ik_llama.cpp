@@ -1318,7 +1318,7 @@ extern "C" {
                            float   top_n_sigma);
 
     /// @details Adaptive p sampler described in https://github.com/MrJackSpade/llama.cpp/
-    LLAMA_API void llama_sample_adaptive_p(
+    void llama_sample_adaptive_p(
             struct llama_context * ctx,
             struct llama_sampler * samplaw,
           llama_token_data_array * candidates);
