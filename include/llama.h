@@ -1320,8 +1320,8 @@ extern "C" {
     /// @details Adaptive p sampler described in https://github.com/MrJackSpade/llama.cpp/
     void llama_sample_adaptive_p(
             struct llama_context * ctx,
-            struct llama_sampler * samplaw,
-          llama_token_data_array * candidates);
+          llama_token_data_array * candidates,
+            struct llama_sampler * samplaw);
 
 
 LLAMA_API void                   llama_sampler_reset(struct llama_sampler* smpl);
@@ -1431,6 +1431,12 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     LLAMA_API llama_token llama_sample_token(
             struct llama_context * ctx,
           llama_token_data_array * candidates);
+
+    /// @details Randonly selects a token from the candidates following adaptive p sampler.
+    llama_token llama_sample_token_adaptive_p(
+            struct llama_context * ctx,
+          llama_token_data_array * candidates,
+            struct llama_sampler * samplaw);
 
     //
     // Model split

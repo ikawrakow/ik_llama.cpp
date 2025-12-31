@@ -1035,16 +1035,41 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 
 // adaptive p
 
+llama_token llama_sample_token_adaptive_p_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, struct llama_sampler * samplaw) {
+    GGML_ASSERT(smpl);
+    const int64_t t_start_sample_us = ggml_time_us();
+
+    candidates->sorted = true;  // disable sorting because algorithm requirement
+    llama_sample_softmax_impl((struct llama_sampling *) nullptr, candidates);
+
+    std::vector<float> probs;
+    probs.reserve(candidates->size);
+    for (size_t i = 0; i < candidates->size; ++i) {
+        probs.push_back(candidates->data[i].p);
+    }
+
+    auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
+    std::discrete_distribution<> dist(probs.begin(), probs.end());
+    int idx = dist(ctx->rng);
+
+    llama_token result = candidates->data[idx].id;
+
+    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+    smpl->n_sample++;
+
+    // update history with pre-transform probability of selected token
+    ctx->weighted_sum = ctx->decay * ctx->weighted_sum + ctx->pre_xform_probs[idx];
+    ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
+
+    return result;
+}
+
 void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_data_array * cur_p)
 {
-    auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
-    const bool sorted = cur_p->sorted;
-    cur_p->sorted = true;
     llama_sample_softmax_impl(nullptr, cur_p);
-
-    // enabled?
+    auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
     if (ctx->target < 0.0f) {
-        cur_p->sorted = sorted;
+        // sampler is disabled
         return;
     }
 
@@ -1072,23 +1097,6 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
         const float dist = std::abs((cur_p->data[i].p - adapted_target) * inv_width);
         cur_p->data[i].logit = peak_logit_value - sharpness * dist * dist / (1.0f + dist);
     }
-
-    // softmax and sample
-    llama_sample_softmax_impl(nullptr, cur_p);
-    std::vector<float> probs;
-    probs.reserve(cur_p->size);
-    for (size_t i = 0; i < cur_p->size; ++i) {
-        probs.push_back(cur_p->data[i].p);
-    }
-    std::discrete_distribution<> dist(probs.begin(), probs.end());
-    const float prob = ctx->pre_xform_probs[
-        dist(ctx->rng) // idx
-    ];
-
-    // update history with pre-transform probability of selected token
-    ctx->weighted_sum = ctx->decay * ctx->weighted_sum + prob;
-    ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
-
     cur_p->sorted = false;
 }
 

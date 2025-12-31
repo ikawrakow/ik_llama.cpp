@@ -416,7 +416,7 @@ static void sampler_queue(
                     llama_sample_temp(ctx_main, &cur_p, temp);
                 }
                 break;
-            case llama_sampler_type::ADAPTIVE_P : llama_sample_adaptive_p(ctx_main, ctx_sampling->samplaw, &cur_p); break;
+            case llama_sampler_type::ADAPTIVE_P : llama_sample_adaptive_p(ctx_main, &cur_p, ctx_sampling->samplaw); break;
             default : break;
         }
     }
@@ -434,6 +434,7 @@ static llama_token llama_sampling_sample_impl(
     const int     mirostat        = params.mirostat;
     const float   mirostat_tau    = params.mirostat_tau;
     const float   mirostat_eta    = params.mirostat_eta;
+    const float   adaptive_target = params.adaptive_target;
 
     std::vector<float> original_logits;
     auto cur_p = llama_sampling_prepare(ctx_sampling, ctx_main, ctx_cfg, idx, /* apply_grammar= */ is_resampling, &original_logits);
@@ -457,6 +458,10 @@ static llama_token llama_sampling_sample_impl(
         } else if (mirostat == 2) {
             llama_sample_temp(ctx_main, &cur_p, temp);
             id = llama_sample_token_mirostat_v2(ctx_main, &cur_p, mirostat_tau, mirostat_eta, &ctx_sampling->mirostat_mu);
+        } else if (adaptive_target >= 0.0f) {
+            // adaptive p sampling
+            sampler_queue(ctx_main, params,ctx_sampling, cur_p, std::max(1, params.min_keep));
+            id = llama_sample_token_adaptive_p(ctx_main, &cur_p, ctx_sampling->samplaw);
         } else {
             // temperature sampling
             size_t min_keep = std::max(1, params.min_keep);
