@@ -7557,8 +7557,7 @@ void llama_sample_dry([[maybe_unused]] struct llama_context* ctx, struct llama_s
     llama_sampler_dry_apply(smpl, candidates_p);
 }
 
-void llama_sample_adaptive_p(struct llama_context* ctx, struct llama_sampler * samplaw, llama_token_data_array* candidates) {
-    ((llama_sampler_adaptive_p *) samplaw->ctx)->sampling = &ctx->sampling;
+void llama_sample_adaptive_p([[maybe_unused]] struct llama_context* ctx, struct llama_sampler * samplaw, llama_token_data_array* candidates) {
     llama_sampler_adaptive_p_apply(samplaw, candidates);
 }
 

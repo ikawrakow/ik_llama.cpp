@@ -74,7 +74,6 @@ struct llama_sampler_adaptive_p {
     float weighted_sum;     // sum(p_n * decay^N)
     float total_weight;     // sum(decay^i), converges to 1/(1-decay)
     std::vector<float> pre_xform_probs;     // pre-transform probs, cached for EMA update
-    struct llama_sampling * sampling;
 };
 
 void llama_sampler_adaptive_p_apply(

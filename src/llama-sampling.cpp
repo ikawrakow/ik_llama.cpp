@@ -1040,7 +1040,7 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
     auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
     const bool sorted = cur_p->sorted;
     cur_p->sorted = true;
-    llama_sample_softmax_impl(ctx->sampling, cur_p);
+    llama_sample_softmax_impl(nullptr, cur_p);
 
     // enabled?
     if (ctx->target < 0.0f) {
@@ -1074,9 +1074,15 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
     }
 
     // softmax and sample
-    llama_sample_softmax_impl(ctx->sampling, cur_p);
+    llama_sample_softmax_impl(nullptr, cur_p);
+    std::vector<float> probs;
+    probs.reserve(cur_p->size);
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        probs.push_back(cur_p->data[i].p);
+    }
+    std::discrete_distribution<> dist(probs.begin(), probs.end());
     const float prob = ctx->pre_xform_probs[
-        llama_sample_token_impl(ctx->sampling, cur_p) // idx
+        dist(ctx->rng) // idx
     ];
 
     // update history with pre-transform probability of selected token
@@ -1128,7 +1134,6 @@ struct llama_sampler * llama_sampler_init_adaptive_p_impl(const float target, co
             /* .weighted_sum    = */ target / (1.0f - clamped_decay),
             /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
             /* .pre_xform_probs = */ {},
-            /* .sampling        = */ nullptr,
         }
     };
 }
