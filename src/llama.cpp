@@ -954,6 +954,44 @@ static bool llama_kv_cache_find_slot(
     }
     // otherwise, one cell per token.
 
+    if (batch.mtp_params.op_type == MTP_OP_WARMUP || 
+        batch.mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
+        const llama_pos target_pos = batch.pos[0];
+        const llama_seq_id target_seq = batch.seq_id[0][0]; 
+
+        bool found = false;
+
+        if (cache.head < cache.size && 
+            cache.cells[cache.head].pos == target_pos && 
+            cache.cells[cache.head].has_seq_id(target_seq)) {
+            found = true;
+        }
+        else {
+            for (uint32_t i = 0; i < cache.size; ++i) {
+                if (cache.cells[i].pos == target_pos && 
+                    cache.cells[i].has_seq_id(target_seq)) {
+                    
+                    cache.head = i;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            LLAMA_LOG_ERROR("%s: MTP Update failed - slot for seq %d pos %d not found\n", 
+                __func__, target_seq, target_pos);
+            return false;
+        }
+
+        if (cache.head + n_tokens > cache.size) {
+             LLAMA_LOG_ERROR("%s: MTP Update out of bounds\n", __func__);
+             return false;
+        }
+
+        return true;
+    }
+
     if (n_tokens > cache.size) {
         LLAMA_LOG_ERROR("%s: n_tokens=%d > cache.size=%d\n", __func__, n_tokens, cache.size);
         return false;

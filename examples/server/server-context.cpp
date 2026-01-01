@@ -3166,7 +3166,22 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
         }
 
         if (params.has_mtp) {
-            mtp_update_kv_cache(ctx, batch_view, true);
+            bool is_prompt_phase = false;
+            for (const auto& slot : slots) {
+                if (slot.state == SLOT_STATE_PROCESSING && 
+                    slot.i_batch >= i && 
+                    slot.i_batch < (i + n_tokens)) {
+
+                    if (slot.n_decoded == 0) {
+                        is_prompt_phase = true;
+                        break;
+                    }
+                }
+            }
+
+            if (is_prompt_phase) {
+                mtp_update_kv_cache(ctx, batch_view, is_prompt_phase);
+            }
         }
 
         for (auto& slot : slots) {
