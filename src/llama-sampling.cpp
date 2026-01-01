@@ -1039,34 +1039,41 @@ llama_token llama_sample_token_adaptive_p_impl(struct llama_sampling * smpl, lla
     GGML_ASSERT(smpl);
     const int64_t t_start_sample_us = ggml_time_us();
 
-    candidates->sorted = true;  // disable sorting
-    llama_sample_softmax_impl((struct llama_sampling *) nullptr, candidates);
+    // softmax
+    auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
+    const float max_logit = ctx->max_logit;
+    float cum_sum = 0.0f;
+    for (size_t i = 0; i < candidates->size; ++i) {
+        const float p = expf(candidates->data[i].logit - max_logit);
+        candidates->data[i].p = p;
+        cum_sum += p;
+    }
+    for (size_t i = 0; i < candidates->size; ++i) {
+        candidates->data[i].p /= cum_sum;
+    }
 
+    // sample
     std::vector<float> probs;
     probs.reserve(candidates->size);
     for (size_t i = 0; i < candidates->size; ++i) {
         probs.push_back(candidates->data[i].p);
     }
-
-    auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
     std::discrete_distribution<> dist(probs.begin(), probs.end());
-    int idx = dist(ctx->rng);
-
+    const size_t idx = dist(ctx->rng);
     llama_token result = candidates->data[idx].id;
+
+    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+    smpl->n_sample++;
 
     // update history with pre-transform probability of selected token
     ctx->weighted_sum = ctx->decay * ctx->weighted_sum + ctx->pre_xform_probs[idx];
     ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
-
-    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
-    smpl->n_sample++;
 
     return result;
 }
 
 void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_data_array * cur_p)
 {
-    cur_p->sorted = true;   // disable sorting
     llama_sample_softmax_impl(nullptr, cur_p);
     auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
     if (ctx->target < 0.0f) {
@@ -1094,10 +1101,15 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
 
     // quadratic near target for finite differentiation, transitioning to linear decay in tails
     // unbounded negative logits suppress far-from-target tokens after softmax
+    float max_logit = std::numeric_limits<float>::min();
     for (size_t i = 0; i < cur_p->size; ++i) {
         const float dist = std::abs((cur_p->data[i].p - adapted_target) * inv_width);
-        cur_p->data[i].logit = peak_logit_value - sharpness * dist * dist / (1.0f + dist);
+        const float logit = peak_logit_value - sharpness * dist * dist / (1.0f + dist);
+        cur_p->data[i].logit = logit;
+        max_logit = std::max(max_logit, logit);
     }
+    cur_p->sorted = false;
+    ctx->max_logit = max_logit;
 }
 
 struct llama_sampler * llama_sampler_init_adaptive_p_impl(const float target, const float decay, const uint32_t seed)
@@ -1121,6 +1133,7 @@ struct llama_sampler * llama_sampler_init_adaptive_p_impl(const float target, co
             result_ctx->weighted_sum = ctx->weighted_sum;
             result_ctx->total_weight = ctx->total_weight;
             result_ctx->pre_xform_probs.reserve(ctx->pre_xform_probs.capacity());
+            result_ctx->max_logit = ctx->max_logit;
             return result;
         },
 
@@ -1145,6 +1158,7 @@ struct llama_sampler * llama_sampler_init_adaptive_p_impl(const float target, co
             /* .weighted_sum    = */ target / (1.0f - clamped_decay),
             /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
             /* .pre_xform_probs = */ {},
+            /* .max_logit       = */ 0.0f,
         }
     };
 }
