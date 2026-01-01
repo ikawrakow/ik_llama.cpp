@@ -1320,8 +1320,8 @@ extern "C" {
     /// @details Adaptive p sampler described in https://github.com/MrJackSpade/llama.cpp/
     void llama_sample_adaptive_p(
             struct llama_context * ctx,
-          llama_token_data_array * candidates,
-            struct llama_sampler * samplaw);
+            struct llama_sampler * samplaw,
+          llama_token_data_array * candidates);
 
 
 LLAMA_API void                   llama_sampler_reset(struct llama_sampler* smpl);

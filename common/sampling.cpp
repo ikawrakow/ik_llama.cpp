@@ -416,7 +416,7 @@ static void sampler_queue(
                     llama_sample_temp(ctx_main, &cur_p, temp);
                 }
                 break;
-            case llama_sampler_type::ADAPTIVE_P : llama_sample_adaptive_p(ctx_main, &cur_p, ctx_sampling->samplaw); break;
+            case llama_sampler_type::ADAPTIVE_P: llama_sample_adaptive_p(ctx_main, ctx_sampling->samplaw, &cur_p); break;
             default : break;
         }
     }
