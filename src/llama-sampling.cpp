@@ -1088,9 +1088,9 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
         0.0f, 1.0f);
 
     // transformation constants
-    const float peak_logit_value = 5.0f;
-    const float inv_width = 1.0f / 0.3f;
-    const float sharpness = 10.0f;
+    constexpr float peak_logit_value = 5.0f;
+    constexpr float inv_width = 1.0f / 0.3f;
+    constexpr float sharpness = 10.0f;
 
     // quadratic near target for finite differentiation, transitioning to linear decay in tails
     // unbounded negative logits suppress far-from-target tokens after softmax
