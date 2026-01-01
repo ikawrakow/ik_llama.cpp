@@ -460,7 +460,7 @@ static llama_token llama_sampling_sample_impl(
             id = llama_sample_token_mirostat_v2(ctx_main, &cur_p, mirostat_tau, mirostat_eta, &ctx_sampling->mirostat_mu);
         } else if (adaptive_target >= 0.0f) {
             // adaptive p sampling
-            sampler_queue(ctx_main, params,ctx_sampling, cur_p, std::max(1, params.min_keep));
+            sampler_queue(ctx_main, params, ctx_sampling, cur_p, std::max(1, params.min_keep));
             id = llama_sample_token_adaptive_p(ctx_main, &cur_p, ctx_sampling->samplaw);
         } else {
             // temperature sampling
