@@ -429,6 +429,12 @@ static llama_token llama_sampling_sample_impl(
         GGML_ASSERT(!original_logits.empty());
     }
     llama_token id = 0;
+    // Sample grammar first for resampling
+    if (ctx_sampling->grammar != NULL && is_resampling) {
+        float* logits = llama_get_logits_ith(ctx_main, idx);
+        // Apply grammar constraints to all candidates
+        llama_grammar_sample(ctx_sampling->grammar, ctx_main, &cur_p);        
+    }
 
     if (temp < 0.0) {
         // greedy sampling, with probs
