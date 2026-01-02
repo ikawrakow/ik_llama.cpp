@@ -2494,7 +2494,12 @@ void server_context::add_sampled_tokens() {
                 params_spec.n_reuse = 0;
             }
             if (slot.has_mtp) {
-                llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
+                if (!slot.mtp_hidden_state.empty()) {
+                    llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
+                } else {
+                    LOG_ERROR("MTP hidden state is empty during speculation", {});
+                    llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
+                }
 
                 llama_tokens draft = mtp_speculative_gen_draft(
                     slot.ctx_sampling, 
@@ -2939,6 +2944,30 @@ void server_context::speculative_decoding_accept() {
         slot.i_batch_dft.clear();
         slot.drafted.clear();
 
+        if (slot.has_mtp) {
+                const float* emb = llama_get_embeddings_ith(ctx, -1);
+                if (emb) {
+                    float sum = 0.0f;
+                    for (int k = 0; k < 10; k++) sum += std::abs(emb[k]);
+                    if (sum < 0.0001f) {
+                        SLT_DBG(slot, "Main Model Embeddings appear to be empty/zero! Sync failed or Embeddings not extracted.\n", 0);
+                    }
+                } else {
+                    SLT_DBG(slot, "Main Model Embeddings are NULL.\n", 0);
+                }         
+                if (!ids.empty()) {
+                    // const int n_embd = llama_n_embd(llama_get_model(ctx));
+                    
+                    // const float* emb = llama_get_embeddings_ith(ctx, ids.size() - 1);
+                    // if (emb) {
+                    //      slot.mtp_hidden_state.resize(n_embd);
+                    //      memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                    // }
+                    mtp_accept_tokens(ctx, ids, slot.n_past, slot.id);
+
+                }
+            }
+
         slot.n_past += ids.size();
         slot.n_decoded += ids.size();
         const int64_t t_current = ggml_time_us();
@@ -3166,12 +3195,25 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
         }
 
         if (params.has_mtp) {
-            bool is_prompt_phase = false;
-            for (const auto& slot : slots) {
+            for (auto& slot : slots) {
                 if (slot.state == SLOT_STATE_PROCESSING && 
                     slot.i_batch >= i && 
                     slot.i_batch < (i + n_tokens)) {
 
+                    const float* emb = llama_get_embeddings_ith(ctx, -1);
+                    if (emb) {
+                        const int n_embd = llama_n_embd(llama_get_model(ctx));
+                        slot.mtp_hidden_state.resize(n_embd);
+                        memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                    }
+                }
+            }
+
+            bool is_prompt_phase = false;
+             for (const auto& slot : slots) {
+                if (slot.state == SLOT_STATE_PROCESSING && 
+                    slot.i_batch >= i && 
+                    slot.i_batch < (i + n_tokens)) {
                     if (slot.n_decoded == 0) {
                         is_prompt_phase = true;
                         break;
