@@ -24,6 +24,8 @@ struct llama_sampling {
 
 void llama_set_rng_seed_impl(struct llama_sampling * smpl, uint32_t seed);
 
+void llama_sample_softmax_nosort_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, const float * const max_logit);
+
 void llama_sample_softmax_impl  (struct llama_sampling * smpl, llama_token_data_array * candidates);
 void llama_sample_top_k_impl    (struct llama_sampling * smpl, llama_token_data_array * candidates, int32_t k, size_t min_keep);
 void llama_sample_top_p_impl    (struct llama_sampling * smpl, llama_token_data_array * candidates, float p, size_t min_keep);
@@ -79,7 +81,7 @@ struct llama_sampler_adaptive_p {
 
 void llama_sampler_adaptive_p_apply(
     struct llama_sampler   * samplaw,
-    llama_token_data_array * cur_p);
+    llama_token_data_array * candidates);
 
 struct llama_sampler * llama_sampler_init_adaptive_p_impl(
     const float    target,
