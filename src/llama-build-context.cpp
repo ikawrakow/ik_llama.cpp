@@ -1394,13 +1394,6 @@ static ggml_tensor * llm_build_kqv(
 
         auto kq_size = k->ne[1]*q->ne[1]*q->ne[2]*sizeof(float)/(1024*1024);
         if (cparams.attn_max_batch == 0 || cparams.attn_max_batch >= kq_size || k->ne[2] != q->ne[2] || v->ne[2] != q->ne[2] || sinks) {
-            //if (n_swa > 0 && k->ne[1] > n_swa + q->ne[1]) {
-            //    auto nton = n_swa + q->ne[1];
-            //    auto first = k->ne[1] - nton;
-            //    k = ggml_view_3d(ctx, k, k->ne[0], nton, k->ne[2], k->nb[1], k->nb[2], k->nb[1]*first);
-            //    v = ggml_view_3d(ctx, v, v->ne[0], nton, v->ne[2], v->nb[1], v->nb[2], v->nb[1]*first);
-            //    kq_mask = ggml_view_3d(ctx, kq_mask, nton, kq_mask->ne[1], kq_mask->ne[2], kq_mask->nb[1], kq_mask->nb[2], kq_mask->nb[0]*first);
-            //}
             struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
             cb(kq, "kq", il);
 
@@ -9430,10 +9423,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     float freq_base_l  = n_swa > 0 ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
     float freq_scale_l = n_swa > 0 ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
 
-    if (!model.layers[il].wqkv && !model.layers[il].wqk && //cparams.flash_attn &&
+    if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&
          model.layers[il].wq->extra && model.layers[il].wk->extra && model.layers[il].wv->extra && model.layers[il].wo->extra) {
         if (kv_self.k_l[il]->extra && kv_self.v_l[il]->extra) {
-            //printf("%s: %s\n", __func__, ggml_op_name(input->op));
             ggml_split_tensor_t * attn_norm = the_attn_norm ? (ggml_split_tensor_t *)the_attn_norm->extra : nullptr;
             auto wq = (ggml_split_tensor_t *)model.layers[il].wq->extra;
             auto wk = (ggml_split_tensor_t *)model.layers[il].wk->extra;
@@ -9565,68 +9557,39 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                              ggml_row_size(split_kl->type, n_embd_head_k), 0);
                 cb(k, "k", il_cb);
 
+                auto v = ggml_view_3d(ctx0, split_vl, n_embd_head_v, n_kv, n_head_kv,
+                             ggml_row_size(split_vl->type, split_wv->ne[1]),
+                             ggml_row_size(split_vl->type, n_embd_head_v), 0);
+                cb(v, "v", il_cb);
+
 #ifdef GGML_USE_VULKAN
                 constexpr bool use_f32_precision = true;
 #else
                 constexpr bool use_f32_precision = false;
 #endif
-                if (cparams.flash_attn) {
-                    auto v = ggml_view_3d(ctx0, split_vl, n_embd_head_v, n_kv, n_head_kv,
-                                 ggml_row_size(split_vl->type, split_wv->ne[1]),
-                                 ggml_row_size(split_vl->type, n_embd_head_v), 0);
-                    cb(v, "v", il_cb);
-                    cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask, KQ_scale, hparams.f_max_alibi_bias,
-                            hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
-                    cb(cur, "flash_attn", il_cb);
-                    if (model.layers[il].attn_sinks && model.layers[il].attn_sinks->extra) {
-                        auto split = (ggml_split_tensor_t *)model.layers[il].attn_sinks->extra;
-                        GGML_ASSERT(split->n_device == wq->n_device);
-                        GGML_ASSERT(split->splits[id]);
-                        ggml_flash_attn_ext_add_sinks(cur, split->splits[id]);
-                        //printf("%s(%d): added sink %d\n", __func__, il, id);
-                    } else {
-                        ggml_flash_attn_ext_add_sinks(cur, sinks);
-                    }
-                    if (n_swa > 0) {
-                        ((int32_t *)cur->op_params)[4] = n_swa;
-                    }
-                    // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
-                    if (use_f32_precision || model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX ||
-                            (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8) || model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 ||
-                            model.arch == LLM_ARCH_GLM4_MOE) {
-                        ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
-                    }
-
-                    cur = ggml_reshape_2d(ctx0, cur, split_wo->ne[0], n_tokens);
-                    cb(cur, "flash_attn_reshaped", il_cb);
+                cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask, KQ_scale, hparams.f_max_alibi_bias,
+                                  hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+                cb(cur, "flash_attn", il_cb);
+                if (model.layers[il].attn_sinks && model.layers[il].attn_sinks->extra) {
+                    auto split = (ggml_split_tensor_t *)model.layers[il].attn_sinks->extra;
+                    GGML_ASSERT(split->n_device == wq->n_device);
+                    GGML_ASSERT(split->splits[id]);
+                    ggml_flash_attn_ext_add_sinks(cur, split->splits[id]);
                 } else {
-                    int nhead_v = split_wv->ne[1]/n_embd_head_v;
-                    auto v = ggml_view_3d(ctx0, split_vl,
-                                          n_kv, n_embd_head_v, nhead_v,
-                                          ggml_element_size(split_vl)*n_ctx,
-                                          ggml_element_size(split_vl)*n_ctx*nhead_v, 0);
-                    cb(v, "v", il);
-
-                    auto kq = ggml_mul_mat(ctx0, q, k);
-                    cb(kq, "kq", il_cb);
-                    kq = ggml_soft_max_ext(ctx0, kq, KQ_mask, KQ_scale, hparams.f_max_alibi_bias);
-                    if (model.layers[il].attn_sinks && model.layers[il].attn_sinks->extra) {
-                        auto split = (ggml_split_tensor_t *)model.layers[il].attn_sinks->extra;
-                        GGML_ASSERT(split->n_device == wq->n_device);
-                        GGML_ASSERT(split->splits[id]);
-                        ggml_soft_max_add_sinks(kq, split->splits[id]);
-                        //printf("%s(%d): added sink %d\n", __func__, il, id);
-                    } else {
-                        ggml_soft_max_add_sinks(kq, sinks);
-                    }
-                    cb(kq, "kq_soft_max_ext", il_cb);
-                    auto kqv = ggml_mul_mat(ctx0, v, kq);
-                    cb(kqv, "kqv", il_cb);
-                    auto kqv_merged = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-                    cb(kqv_merged, "kqv_merged", il_cb);
-                    cur = ggml_cont_2d(ctx0, kqv_merged, split_wo->ne[0], n_tokens);
-                    cb(cur, "kqv_merged_cont", il_cb);
+                    ggml_flash_attn_ext_add_sinks(cur, sinks);
                 }
+                if (n_swa > 0) {
+                    ((int32_t *)cur->op_params)[4] = n_swa;
+                }
+                // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
+                if (use_f32_precision || model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX ||
+                        (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8) || model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 ||
+                        model.arch == LLM_ARCH_GLM4_MOE) {
+                    ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
+                }
+
+                cur = ggml_reshape_2d(ctx0, cur, split_wo->ne[0], n_tokens);
+                cb(cur, "flash_attn_reshaped", il_cb);
 
                 cur = llm_build_lora_mm(lctx, ctx0, split_wo, cur);
                 if (lctx.model.arch == LLM_ARCH_GLM4 || lctx.model.arch == LLM_ARCH_GLM4_MOE) {
