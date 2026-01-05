@@ -78,12 +78,12 @@
     #include <io.h>
 #endif
 
-#if __cplusplus >= 202000L
-    #define LU8(x) (const char*)(u8##x)
-#else
-    #define LU8(x) u8##x
-#endif
-
+//#if __cplusplus >= 202000L
+//    #define LU8(x) (const char*)(u8##x)
+//#else
+//    #define LU8(x) u8##x
+//#endif
+#define LU8(x) (const char*)(u8##x)
 #include <algorithm>
 #include <array>
 #include <cassert>

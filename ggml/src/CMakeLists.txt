@@ -1540,6 +1540,12 @@ target_compile_definitions(ggml PRIVATE $<$<CONFIG:Release>:NDEBUG>)
 target_include_directories(ggml PUBLIC ../include)
 target_include_directories(ggml PRIVATE . ${GGML_EXTRA_INCLUDES})
 target_link_directories(ggml PRIVATE ${GGML_EXTRA_LIBDIRS})
+if(MSVC)
+    set_target_properties(ggml PROPERTIES
+	CUDA_STANDARD 17
+    CUDA_STANDARD_REQUIRED ON
+)
+endif()
 target_compile_features   (ggml PRIVATE c_std_11) # don't bump
 
 target_link_libraries(ggml PRIVATE Threads::Threads ${GGML_EXTRA_LIBS})
