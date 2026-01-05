@@ -47,6 +47,7 @@ struct DatabaseHandle {
 #endif
 
 using json = nlohmann::ordered_json;
+namespace fs = std::filesystem;
 
 bool server_verbose = false;
 bool server_log_json = true;
@@ -1310,7 +1311,6 @@ int main(int argc, char ** argv) {
 
     const auto list_saved_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
         json response = json::array();
-        namespace fs = std::filesystem;
 
         try {
             for (const auto& entry : fs::directory_iterator(params.slot_save_path)) {
