@@ -3049,9 +3049,6 @@ bool create_tensors_helper::create_tensors() {
                 prepare_split_tensors(-1, ctx_split, layer.rope_freqs, layer.split_rope_freqs, split, mem_used);
             }
             if (layer.wo && layer.wq && layer.wk && layer.wv) {
-                // TODO: fix this logic. It only works whe K and V head size is the same
-                //printf("Layer %d: q = %ld x %ld, k = %ld x %ld, v = %ld x %ld, qo = %ld x %ld\n", il, layer.wq->ne[0], layer.wq->ne[1],
-                //        layer.wk->ne[0], layer.wk->ne[1], layer.wv->ne[0], layer.wv->ne[1], layer.wo->ne[0], layer.wo->ne[1]);
                 auto granularity_kq = hparams.n_embd_head_k * gqa_ratio;
                 auto granularity_vo = hparams.n_embd_head_v * gqa_ratio;
                 if (ggml_is_quantized(layer.wo->type)) {
@@ -3074,12 +3071,9 @@ bool create_tensors_helper::create_tensors() {
                 }
                 if (layer.attn_sinks) {
                     auto split_sinks = split_kq;
-                    //printf("Attention sinks for layer %d:", il);
                     for (auto & s : split_sinks) {
                         s /= hparams.n_embd_head_k;
-                        //printf(" %d", s);
                     }
-                    //printf("\n");
                     prepare_split_tensors(0, ctx_split, layer.attn_sinks, layer.split_sinks, split_sinks, mem_used);
                 }
                 for (auto & s : split_kq) s /= gqa_ratio;
@@ -3095,39 +3089,6 @@ bool create_tensors_helper::create_tensors() {
                 if (layer.attn_k_norm) {
                     prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
                 }
-                /*
-                int attn_granularity = hparams.n_embd_head_v * gqa_ratio;
-                if (ggml_is_quantized(layer.wo->type)) {
-                    auto tt = ggml_internal_get_type_traits(layer.wo->type);
-                    if (tt.blck_size > attn_granularity) attn_granularity = tt.blck_size;
-                }
-                GGML_ASSERT(attn_granularity % hparams.n_embd_head_v == 0);
-                auto split = create_split(layer.wo->ne[0], attn_granularity, cur_splits, mem_used);
-                //printf("Split:"); for (auto s : split) printf(" %d", s); printf("\n");
-                prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split, mem_used);
-                if (layer.bo) {
-                    prepare_split_tensors(-1, ctx_split, layer.bo, layer.split_bo, split, mem_used);
-                }
-                if (layer.bq) {
-                    prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split, mem_used);
-                }
-                if (layer.attn_q_norm) {
-                    prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split, mem_used);
-                }
-                for (auto & s : split) s /= gqa_ratio;
-                prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split, mem_used);
-                if (layer.bk) {
-                    prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split, mem_used);
-                }
-                if (layer.bv) {
-                    prepare_split_tensors(0, ctx_split, layer.bv, layer.split_bv, split, mem_used);
-                }
-                if (layer.attn_k_norm) {
-                    prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split, mem_used);
-                }
-                */
             }
 
             if (layer.ffn_norm) {
