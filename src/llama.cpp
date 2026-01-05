@@ -1730,6 +1730,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_GLM4_MOE,
         LLM_ARCH_MISTRAL3,
         LLM_ARCH_COHERE2,
+        LLM_ARCH_MIMO2,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -1760,6 +1761,13 @@ static bool llm_load_tensors(
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("=======================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
+        } else {
+            if (model.arch == LLM_ARCH_MIMO2 && model.devices.size() > 2 && max_gpu != 2) {
+                LLAMA_LOG_WARN("\n================================================================\n");
+                LLAMA_LOG_WARN("Split mode 'graph' for Mimo2 does not work with more than 2 GPUs\n");
+                LLAMA_LOG_WARN("  => setting max_gpu to 2\n");
+                LLAMA_LOG_WARN("================================================================\n\n");
+            }
         }
     }
 
