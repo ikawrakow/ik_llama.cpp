@@ -1111,7 +1111,7 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #endif
 
 #ifndef GGML_SCHED_MAX_COPIES
-#define GGML_SCHED_MAX_COPIES 4
+#define GGML_SCHED_MAX_COPIES 1
 #endif
 
 struct ggml_backend_sched_split {
