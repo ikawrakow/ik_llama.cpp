@@ -1205,7 +1205,7 @@ endif()
 set(CUDA_CXX_FLAGS "")
 
 if (GGML_CUDA)
-    set(CUDA_FLAGS -use_fast_math -extended-lambda)
+    set(CUDA_FLAGS -use_fast_math -extended-lambda -lineinfo)
 
     if (GGML_FATAL_WARNINGS)
         list(APPEND CUDA_FLAGS -Werror all-warnings)
@@ -1578,6 +1578,12 @@ target_compile_definitions(ggml PRIVATE $<$<CONFIG:Release>:NDEBUG>)
 target_include_directories(ggml PUBLIC ../include)
 target_include_directories(ggml PRIVATE . ${GGML_EXTRA_INCLUDES})
 target_link_directories(ggml PRIVATE ${GGML_EXTRA_LIBDIRS})
+if(MSVC)
+    set_target_properties(ggml PROPERTIES
+	CUDA_STANDARD 17
+    CUDA_STANDARD_REQUIRED ON
+)
+endif()
 target_compile_features   (ggml PRIVATE c_std_11) # don't bump
 
 target_link_libraries(ggml PRIVATE Threads::Threads ${GGML_EXTRA_LIBS})

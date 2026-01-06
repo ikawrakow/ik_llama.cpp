@@ -133,6 +133,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_smollm3_tensors(const LLM_TN & tn);
 
+    bool create_mimo2_tensors(const LLM_TN & tn);
+
     llama_model_loader & ml;
     llama_model        & model;
 
@@ -1114,8 +1116,8 @@ bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
 
     // output
     {
-        model.output_norm = create_tensor(ctx_output,       tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
-        model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // if output is NULL, init from the input tok embed
         if (model.output == NULL) {
             model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
@@ -1123,21 +1125,20 @@ bool create_tensors_helper::create_qwen3_tensors(const LLM_TN & tn) {
     }
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
         auto & layer = model.layers[i];
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
         use_mmap_buffer &= !merge_qkv(tn, i, 0);
 
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd});
 
-        layer.attn_k_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
-        layer.attn_q_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k});
+        layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k});
+        layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k});
 
-        layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+        layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
         create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
@@ -1190,6 +1191,49 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
         layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert});
         layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert});
         layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert});
+    }
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_mimo2_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    create_embd_output(tn, n_embd, n_vocab, true, false); //true);
+
+    for (int i = 0; i < n_layer; ++i) {
+        uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i);
+        uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i);
+        uint32_t n_head = hparams.n_head(i);
+        //printf("Layer %2d: n_head = %u, n_embd_head_k = %d, n_embd_head_v = %d, n_embd_k_gqa = %d, n_embd_v_gqa = %d\n", i, n_head, (int)n_embd_head_k, (int)n_embd_head_v, n_embd_k_gqa, n_embd_v_gqa);
+
+        ggml_context * ctx_layer = ctx_for_layer(i);
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+
+        auto & layer = model.layers[i];
+
+        layer.attn_norm  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM,  "weight", i), {n_embd});
+        layer.attn_sinks = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head}, llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q, "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
+        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K, "weight", i), { n_embd, n_embd_k_gqa }, 0);
+        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_v_gqa }, 0);
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_v * n_head, n_embd }, 0);
+
+        auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
+        layer.ffn_norm = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+
+        // non-MoE branch
+        layer.ffn_gate = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_down = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        // MoE branch
+        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+        layer.ffn_gate_inp  = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_exp_probs_b = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
     }
     return use_mmap_buffer;
 }
@@ -2947,6 +2991,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_minimaxm2_tensors(tn); break;
         case LLM_ARCH_SMOLLM3:
             use_mmap_buffer = create_smollm3_tensors(tn); break;
+        case LLM_ARCH_MIMO2:
+            use_mmap_buffer = create_mimo2_tensors(tn); break;
         default:
             throw std::runtime_error("unknown architecture");
     }
@@ -2955,7 +3001,6 @@ bool create_tensors_helper::create_tensors() {
         printf("================================ max_gpu = %d\n", model.max_gpu);
         std::vector<size_t> mem_used(model.splits.size(), 0);
         const auto & hparams = model.hparams;
-        int gqa_ratio = hparams.n_head() / hparams.n_head_kv();
         auto cur_splits = model.splits;
         int adjust_step = std::max(1, int(n_layer / (2*model.splits.size())));
         if (model.max_gpu > 1 && model.max_gpu < int(cur_splits.size())) {
@@ -2976,6 +3021,7 @@ bool create_tensors_helper::create_tensors() {
             }
         }
         for (int il = 0; il < n_layer; ++il) {
+            int gqa_ratio = hparams.n_head(il) / hparams.n_head_kv(il);
             if (ggml_backend_buft_is_host(model.buft_layer[il].buft_matrix)) {
                 LLAMA_LOG_INFO("%s: not splitting layer %d because buffer type is host\n", __func__, il);
                 continue;
@@ -3002,35 +3048,45 @@ bool create_tensors_helper::create_tensors() {
                 prepare_split_tensors(-1, ctx_split, layer.rope_freqs, layer.split_rope_freqs, split, mem_used);
             }
             if (layer.wo && layer.wq && layer.wk && layer.wv) {
-                int attn_granularity = hparams.n_embd_head_k * gqa_ratio;
+                auto granularity_kq = hparams.n_embd_head_k * gqa_ratio;
+                auto granularity_vo = hparams.n_embd_head_v * gqa_ratio;
                 if (ggml_is_quantized(layer.wo->type)) {
                     auto tt = ggml_internal_get_type_traits(layer.wo->type);
-                    if (tt.blck_size > attn_granularity) attn_granularity = tt.blck_size;
+                    if (tt.blck_size > granularity_vo) granularity_vo = tt.blck_size;
+                    GGML_ASSERT(granularity_vo % hparams.n_embd_head_v == 0);
                 }
-                GGML_ASSERT(attn_granularity % hparams.n_embd_head_k == 0);
-                auto split = create_split(layer.wo->ne[0], attn_granularity, cur_splits, mem_used);
-                prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split, mem_used);
+                auto split_vo = create_split(layer.wo->ne[0], granularity_vo, cur_splits, mem_used);
+                auto split_kq = create_split(layer.wq->ne[1], granularity_kq, cur_splits, mem_used);
+                prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split_vo, mem_used);
+                prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                 if (layer.bo) {
-                    prepare_split_tensors(-1, ctx_split, layer.bo, layer.split_bo, split, mem_used);
+                    prepare_split_tensors(-1, ctx_split, layer.bo, layer.split_bo, split_vo, mem_used);
                 }
                 if (layer.bq) {
-                    prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split, mem_used);
+                    prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split_kq, mem_used);
                 }
                 if (layer.attn_q_norm) {
-                    prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split, mem_used);
+                    prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
                 }
-                for (auto & s : split) s /= gqa_ratio;
-                prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split, mem_used);
+                if (layer.attn_sinks) {
+                    auto split_sinks = split_kq;
+                    for (auto & s : split_sinks) {
+                        s /= hparams.n_embd_head_k;
+                    }
+                    prepare_split_tensors(0, ctx_split, layer.attn_sinks, layer.split_sinks, split_sinks, mem_used);
+                }
+                for (auto & s : split_kq) s /= gqa_ratio;
+                for (auto & s : split_vo) s /= gqa_ratio;
+                prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split_kq, mem_used);
+                prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split_vo, mem_used);
                 if (layer.bk) {
-                    prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split, mem_used);
+                    prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
                 }
                 if (layer.bv) {
-                    prepare_split_tensors(0, ctx_split, layer.bv, layer.split_bv, split, mem_used);
+                    prepare_split_tensors(0, ctx_split, layer.bv, layer.split_bv, split_vo, mem_used);
                 }
                 if (layer.attn_k_norm) {
-                    prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split, mem_used);
+                    prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
                 }
             }
 

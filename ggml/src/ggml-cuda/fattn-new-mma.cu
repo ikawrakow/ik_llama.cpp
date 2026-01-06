@@ -285,17 +285,17 @@ struct fattn_mma_f16_config;
 
 template <>
 struct fattn_mma_f16_config<192, 128> {
-    static constexpr int  nbatch_fa      = 64;
+    static constexpr int  nbatch_fa      = 32;
     static constexpr int  nwarps_max     = 4;
     static constexpr bool Q_in_reg       = true;
     static constexpr int  nstages_target = 1;
 
     static int get_nbatch_K2_host(const int /*cc*/, const int /*ncols*/) {
-        return 64;
+        return 96;
     }
 
     static constexpr __device__ int get_nbatch_K2_device(int /*ncols*/) {
-        return 64;
+        return 96;
     }
 
     static int get_nbatch_V2_host(const int /*cc*/, const int /*ncols*/) {
@@ -317,17 +317,17 @@ struct fattn_mma_f16_config<192, 128> {
 
 template <>
 struct fattn_mma_f16_config<192, 192> {
-    static constexpr int  nbatch_fa      = 64;
+    static constexpr int  nbatch_fa      = 32;
     static constexpr int  nwarps_max     = 4;
     static constexpr bool Q_in_reg       = true;
     static constexpr int  nstages_target = 1;
 
     static int get_nbatch_K2_host(const int /*cc*/, const int /*ncols*/) {
-        return 64;
+        return 96;
     }
 
     static constexpr __device__ int get_nbatch_K2_device(int /*ncols*/) {
-        return 64;
+        return 96;
     }
 
     static int get_nbatch_V2_host(const int /*cc*/, const int /*ncols*/) {
@@ -1080,6 +1080,20 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         __syncthreads();
     }
 
+    // Finally, sum up partial KQ rowsums.
+    // The partial sums are spread across 8/4 threads each, does not need full reduce.
+    {
+        constexpr int offset_first = ntiles == 1 ? 16 : 2;
+        constexpr int offset_last  = ntiles == 1 ?  4 : 1;
+#pragma unroll
+        for (int col = 0; col < cols_per_thread; ++col) {
+#pragma unroll
+            for (int offset = offset_first; offset >= offset_last; offset >>= 1) {
+                KQ_rowsum[col] += __shfl_xor_sync(0xFFFFFFFF, KQ_rowsum[col], offset, WARP_SIZE);
+            }
+        }
+    }
+
     // If attention sinks are used, potentially re-scale if KQ_max is small.
     // Also add the sink as a value to KQ_rowsum, this is done after synchonization of KQ_rowsum
     //     so it's being done unconditionally for every thread.
@@ -1088,6 +1102,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 #pragma unroll
         for (int col = 0; col < cols_per_thread; ++col) {
             static_assert(ntiles == 1 || ntiles == 2, "ntiles > 2 not implemented");
+            //const int jc = cols_per_warp == 8 ? tile_C_VKQ::get_j(col) : tile_C_VKQ_16::get_i(2*col);
             const int jc = ntiles == 1 ? 2*tile_C_VKQ::get_j(col/2) + col % 2 : tile_C_VKQ_16::get_i(col);
             const float sink = sinks_f[jc % ncols2];
 
@@ -1122,20 +1137,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
                         VKQ_C_16[i*ntiles/2 + col/2].x[l0 + col % 2] *= KQ_max_scale_h2;
                     }
                 }
-            }
-        }
-    }
-
-    // Finally, sum up partial KQ rowsums.
-    // The partial sums are spread across 8/4 threads each, does not need full reduce.
-    {
-        constexpr int offset_first = ntiles == 1 ? 16 : 2;
-        constexpr int offset_last  = ntiles == 1 ?  4 : 1;
-#pragma unroll
-        for (int col = 0; col < cols_per_thread; ++col) {
-#pragma unroll
-            for (int offset = offset_first; offset >= offset_last; offset >>= 1) {
-                KQ_rowsum[col] += __shfl_xor_sync(0xFFFFFFFF, KQ_rowsum[col], offset, WARP_SIZE);
             }
         }
     }
@@ -1803,18 +1804,16 @@ static void launch_fattn_new_mma(
         to_fp16(K_data, K_f16.ptr, 1, ggml_nelements(K), main_stream);
         K_data = (char *) K_f16.ptr;
 
-        nb11 = K->ne[0]*sizeof(half);
-        nb12 = nb11*K->ne[1];
-        nb13 = nb12*K->ne[2];
+        auto bs = ggml_blck_size(K->type);
+        auto ts = ggml_type_size(K->type);
 
-        // Original PR in llama.cpp. I don't think that can work when K is not contiguous (e.g., nb11 > nb12), there are
-        //                           gaps between the rows, etc., as ggml_get_to_fp16_cuda stores into contiguous memory.
-        //const size_t bs = ggml_blck_size(K->type);
-        //const size_t ts = ggml_type_size(K->type);
+        nb11 = nb11*bs*sizeof(half)/ts;
+        nb12 = nb12*bs*sizeof(half)/ts;
+        nb13 = nb13*bs*sizeof(half)/ts;
 
-        //nb11 = nb11*bs*sizeof(half)/ts;
-        //nb12 = nb12*bs*sizeof(half)/ts;
-        //nb13 = nb13*bs*sizeof(half)/ts;
+        //nb11 = K->ne[0]*sizeof(half);
+        //nb12 = nb11*K->ne[1];
+        //nb13 = nb12*K->ne[2];
     }
 
     if (need_f16_V && V->type != GGML_TYPE_F16) {
@@ -1831,17 +1830,16 @@ static void launch_fattn_new_mma(
             to_fp16(V_data, V_f16.ptr, 1, ggml_nelements(V), main_stream);
             V_data = (char *) V_f16.ptr;
 
-            nb21 = K->ne[0]*sizeof(half);
-            nb22 = nb21*V->ne[1];
-            nb23 = nb22*V->ne[2];
+            auto bs = ggml_blck_size(V->type);
+            auto ts = ggml_type_size(V->type);
 
-            // Original PR in llama.cpp. Same comment as above for the K cache.
-            //const size_t bs = ggml_blck_size(V->type);
-            //const size_t ts = ggml_type_size(V->type);
+            nb21 = nb21*bs*sizeof(half)/ts;
+            nb22 = nb22*bs*sizeof(half)/ts;
+            nb23 = nb23*bs*sizeof(half)/ts;
 
-            //nb21 = nb21*bs*sizeof(half)/ts;
-            //nb22 = nb22*bs*sizeof(half)/ts;
-            //nb23 = nb23*bs*sizeof(half)/ts;
+            //nb21 = V->ne[0]*sizeof(half);
+            //nb22 = nb21*V->ne[1];
+            //nb23 = nb22*V->ne[2];
         }
     }
 
@@ -2145,10 +2143,10 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
     //}
     if (K->ne[0] == 192 && V->ne[0] == 128) {
         GGML_ASSERT(Q->ne[0] == 192);
-        GGML_ASSERT(gqa_ratio == 1);
-        //ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<192, 128>(ctx, dst);
+        //GGML_ASSERT(gqa_ratio == 1); // Haha, this assert was for DeepSeek. But now we have Mimo2, which has GQA > 1
+        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<192, 128>(ctx, dst);
         // Reduce compile time
-        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 128, 1>(ctx, dst);
+        //ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 128, 1>(ctx, dst);
         return;
     }
     if (K->ne[0] == 192 && V->ne[0] == 192) {

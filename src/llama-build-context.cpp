@@ -1400,7 +1400,7 @@ static ggml_tensor * llm_build_kqv(
             //ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
 
             if (use_f32_precision || model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX || model.arch == LLM_ARCH_QWEN2 ||
-                model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 || model.arch == LLM_ARCH_GLM4_MOE) {
+                model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 || model.arch == LLM_ARCH_GLM4_MOE || model.arch == LLM_ARCH_MIMO2) {
                 // for this arch, we need to perform the KQ multiplication with F32 precision, otherwise we get NaNs
                 // ref: https://github.com/ggerganov/llama.cpp/pull/4490#issuecomment-1859055847
                 ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
@@ -1615,7 +1615,7 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
             ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il, bool add_graph_split) const {
-    const int64_t n_embd_head = hparams.n_embd_head_v;
+    const int64_t n_embd_head_k = hparams.n_embd_head_k;
     const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
     if (wqkv) {
         auto qkv = llm_build_lora_mm(lctx, ctx0, wqkv, cur);
@@ -1627,8 +1627,8 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
             qkv = ggml_add(ctx0, qkv, bqkv);
             cb(qkv, "qkv_b", il);
         }
-        auto Qcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head,    n_tokens, n_embd_head*sizeof(float), qkv->nb[1], 0*sizeof(float)*(n_embd));
-        auto Kcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), qkv->nb[1], 1*sizeof(float)*Qcur->ne[0]*Qcur->ne[1]);
+        auto Qcur = ggml_view_3d(ctx0, qkv, n_embd_head_k, n_head,    n_tokens, n_embd_head_k*sizeof(float), qkv->nb[1], 0*sizeof(float)*(n_embd));
+        auto Kcur = ggml_view_3d(ctx0, qkv, n_embd_head_k, n_head_kv, n_tokens, n_embd_head_k*sizeof(float), qkv->nb[1], 1*sizeof(float)*Qcur->ne[0]*Qcur->ne[1]);
         auto Vcur = ggml_view_2d(ctx0, qkv, n_embd_gqa, n_tokens, qkv->nb[1], 1*sizeof(float)*(Qcur->ne[0]*Qcur->ne[1] + Kcur->ne[0]*Kcur->ne[1]));
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
@@ -1669,8 +1669,8 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
         }
         ggml_build_forward_expand(gf, qk);
         ggml_build_forward_expand(gf, Vcur);
-        auto Qcur = ggml_view_3d(ctx0, qk, n_embd_head, n_head,    n_tokens, n_embd_head*sizeof(float), qk->nb[1], 0*sizeof(float)*(n_embd));
-        auto Kcur = ggml_view_3d(ctx0, qk, n_embd_head, n_head_kv, n_tokens, n_embd_head*sizeof(float), qk->nb[1], 1*sizeof(float)*Qcur->ne[0]*Qcur->ne[1]);
+        auto Qcur = ggml_view_3d(ctx0, qk, n_embd_head_k, n_head,    n_tokens, n_embd_head_k*sizeof(float), qk->nb[1], 0*sizeof(float)*(n_embd));
+        auto Kcur = ggml_view_3d(ctx0, qk, n_embd_head_k, n_head_kv, n_tokens, n_embd_head_k*sizeof(float), qk->nb[1], 1*sizeof(float)*Qcur->ne[0]*Qcur->ne[1]);
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
         if (q_norm) {
@@ -1689,13 +1689,13 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
     }
 
     auto [Q, K, V] = llm_build_mul_mat_qkv(gf, cur, wq, bq, wk, bk, wv, bv, attention_scale, il, add_graph_split);
-    auto Qcur = ggml_reshape_3d(ctx0, Q, n_embd_head, Q->ne[0]/n_embd_head, n_tokens);
+    auto Qcur = ggml_reshape_3d(ctx0, Q, n_embd_head_k, Q->ne[0]/n_embd_head_k, n_tokens);
     if (q_norm) {
         Qcur = llm_build_norm(ctx0, Qcur, hparams, q_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(Qcur, "Qcur_normed", il);
     }
 
-    auto Kcur = ggml_reshape_3d(ctx0, K, n_embd_head, K->ne[0]/n_embd_head, n_tokens);
+    auto Kcur = ggml_reshape_3d(ctx0, K, n_embd_head_k, K->ne[0]/n_embd_head_k, n_tokens);
     if (k_norm) {
         Kcur = llm_build_norm(ctx0, Kcur, hparams, k_norm, NULL, LLM_NORM_RMS, cb, il);
         cb(Kcur, "Kcur_normed", il);
@@ -3904,64 +3904,71 @@ ggml_cgraph * llm_build_context::build_qwen3() {
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
-    auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
-        ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
+    ggml_tensor * rope_cache = nullptr;
+    if (model.split_mode != LLAMA_SPLIT_MODE_GRAPH && cparams.rope_cache &&
+            (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM)) {
+        rope_cache = ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow);
+    }
 
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
-        // norm
-        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_norm", il);
+        if (!rope_cache) {
+            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, KQ_mask, nullptr, nullptr,
+                    1.0f/sqrtf(float(n_embd_head)), 0.0f, 0, il, true, false, true);
+        } else {
 
-        // self-attention
-        {
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
-                    model.layers[il].wqkv, nullptr,
-                    model.layers[il].wqk, nullptr,
-                    model.layers[il].wq, nullptr,
-                    model.layers[il].wk, nullptr,
-                    model.layers[il].wv, nullptr,
-                    model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0, il);
+            // norm
+            cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
+            cb(cur, "attn_norm", il);
 
-            if (rope_cache) {
-                Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
-                Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
-            } else {
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
+            // self-attention
+            {
+                auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
+                        model.layers[il].wqkv, nullptr,
+                        model.layers[il].wqk, nullptr,
+                        model.layers[il].wq, nullptr,
+                        model.layers[il].wk, nullptr,
+                        model.layers[il].wv, nullptr,
+                        model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0, il);
+
+                if (rope_cache) {
+                    Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
+                    Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
+                } else {
+                    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor, beta_fast, beta_slow);
+                    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor, beta_fast, beta_slow);
+                }
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+
+                cur = llm_build_kv(ctx0, lctx, kv_self, gf,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
+
+                cur = ggml_add(ctx0, cur, inpSA);
+                cb(cur, "attn_with_inp", il);
             }
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-
-            cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                    model.layers[il].wo, model.layers[il].bo,
-                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
         }
 
         if (il == n_layer - 1) {
             // skip computing output for unused tokens
             struct ggml_tensor * inp_out_ids = build_inp_out_ids();
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
 
-        struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-        cb(ffn_inp, "ffn_inp", il);
-
         // feed-forward network
-        cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
+        cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
                 model.layers[il].ffn_up,   NULL, NULL,
                 model.layers[il].ffn_gate, NULL, NULL,
                 model.layers[il].ffn_down, NULL, NULL,
                 NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
         cb(cur, "ffn_out", il);
 
-        cur = ggml_add(ctx0, cur, ffn_inp);
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
 
@@ -3969,13 +3976,7 @@ ggml_cgraph * llm_build_context::build_qwen3() {
         inpL = cur;
     }
 
-    cur = inpL;
-
-    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
-    cb(cur, "result_norm", -1);
-
-    // lm_head
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
@@ -4076,9 +4077,10 @@ ggml_cgraph * llm_build_context::build_qwen3vl() {
     int sections[4];
     std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
-    std::vector<struct ggml_tensor *> deepstack_features(n_deepstack_layers, nullptr);
+    std::vector<struct ggml_tensor *> deepstack_features;
 
     if (batch.embd) {
+        deepstack_features.resize(n_deepstack_layers, nullptr);
         // Image input: split main embd and deepstack embds
         struct ggml_tensor * inpL_main = ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[1], 0);
         for (size_t i = 0; i < n_deepstack_layers; i++) {
@@ -4094,93 +4096,33 @@ ggml_cgraph * llm_build_context::build_qwen3vl() {
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
     for (int il = 0; il < n_layer; ++il) {
-        struct ggml_tensor * inpSA = inpL;
 
-        // norm
-        cur = llm_build_norm(ctx0, inpL, hparams,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_norm", il);
-
-        // self-attention
-        {
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
-                                                            model.layers[il].wq, nullptr,
-                                                            model.layers[il].wk, nullptr,
-                                                            model.layers[il].wv, nullptr,
-                                                            0, il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, cb, il);
-            cb(Qcur, "Qcur_normed", il);
-
-            Qcur = ggml_rope_multi(
-                    ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-            cb(Qcur, "Qcur", il);
-
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, cb, il);
-            cb(Kcur, "Kcur_normed", il);
-
-            Kcur = ggml_rope_multi(
-                    ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-            cb(Kcur, "Kcur", il);
-
-            cb(Vcur, "Vcur", il);
-
-            cur = llm_build_kv(ctx0, lctx, kv_self, gf,
-                    model.layers[il].wo, model.layers[il].bo,
-                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
-        }
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, KQ_mask,
+                nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), 0.0f, 0, il, true, false, true, false, true);
 
         if (il == n_layer - 1) {
             // skip computing output for unused tokens
             struct ggml_tensor * inp_out_ids = build_inp_out_ids();
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
 
-        struct ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-        cb(ffn_inp, "ffn_inp", il);
-
         // feed-forward network
-        cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
+        cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
                 model.layers[il].ffn_up,   NULL, NULL,
                 model.layers[il].ffn_gate, NULL, NULL,
                 model.layers[il].ffn_down, NULL, NULL,
                 NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-        cb(cur, "ffn_out", il);
-
-        cur = ggml_add(ctx0, cur, ffn_inp);
+                LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true, false,
+                batch.embd && (size_t)il < n_deepstack_layers ? deepstack_features[il] : nullptr);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
-
-        if (batch.embd && (size_t)il < n_deepstack_layers) {
-            cur = ggml_add(ctx0, cur, deepstack_features[il]);
-            cb(cur, "deepstack_out", il);
-        }
 
         // input for next layer
         inpL = cur;
     }
 
-    cur = inpL;
-
-    cur = llm_build_norm(ctx0, cur, hparams,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, cb, -1);
-    cb(cur, "result_norm", -1);
-
-    // lm_head
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+    cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
@@ -8494,6 +8436,81 @@ ggml_cgraph * llm_build_context::build_hunyuan_moe() {
     return gf;
 }
 
+ggml_cgraph * llm_build_context::build_mimo2() {
+    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model), false);
+
+    //const int64_t n_embd_head = hparams.n_embd_head_v;
+    //GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+    //GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+    struct ggml_tensor * cur;
+    struct ggml_tensor * inpL;
+
+    inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
+
+    // inp_pos - contains the positions
+    struct ggml_tensor * inp_pos = build_inp_pos();
+    struct ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
+    struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
+    struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa();
+
+    for (int il = 0; il < n_layer; ++il) {
+        const bool is_sliding = model.hparams.swa_layers[il];
+        auto KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
+
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, KQ_mask_l, model.layers[il].attn_sinks,
+                nullptr, 1.0f/sqrtf(float(n_embd_head_k)), 0.0f, is_sliding ? hparams.n_swa : 0, il, true, false, true);
+
+        if (il == n_layer - 1) {
+            // skip computing output for unused tokens
+            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+        }
+
+        auto ffn_inp = cur;
+
+        if (model.layers[il].ffn_gate_inp == nullptr) {
+            cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
+                    model.layers[il].ffn_up,   NULL, NULL,
+                    model.layers[il].ffn_gate, NULL, NULL,
+                    model.layers[il].ffn_down, NULL, NULL,
+                    NULL,
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
+            cb(cur, "ffn_out", il);
+        } else {
+            cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, ffn_inp,
+                    model.layers[il].ffn_gate_inp,  nullptr,
+                    model.layers[il].ffn_up_exps,   nullptr,
+                    model.layers[il].ffn_gate_exps, nullptr,
+                    model.layers[il].ffn_down_exps, nullptr,
+                    model.layers[il].ffn_exp_probs_b,
+                    nullptr,  nullptr, // we don't have shared expert biases?
+                    nullptr,  nullptr,
+                    nullptr,  nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, true, false, 0.0f,
+                    LLM_EXPERT_GATING_FUNC_SIGMOID,
+                    LLM_FFN_SILU, cb, il, gf, true);
+        }
+
+        cur = lctx.cvec.apply_to(ctx0, cur, il);
+        cb(cur, "l_out", il);
+
+        // input for next layer
+        inpL = cur;
+    }
+
+    cur = inpL;
+
+    cur = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
+    cb(cur, "result_output", -1);
+
+    ggml_build_forward_expand(gf, cur);
+
+    return gf;
+}
+
 ggml_cgraph * llm_build_context::build_openai_moe() {
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model), false);
 
@@ -9317,6 +9334,10 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_mistral3();
             } break;
+        case LLM_ARCH_MIMO2:
+            {
+                result = llm.build_mimo2();
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -9339,11 +9360,14 @@ ggml_cgraph * llm_build_context::llama_build_graph(
 ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tensor * the_attn_norm,
         ggml_tensor * input, ggml_tensor * inp_pos, ggml_tensor * rope_factors_in,
         ggml_tensor * KQ_mask, ggml_tensor * sinks, ggml_tensor * inp_attn_scale, float KQ_scale, float f_attn_scale,
-        int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input, bool is_norm) {
+        int n_swa, int il, bool do_rope, bool add_graph_split, bool add_input, bool is_norm, bool is_multi) {
+
+    float freq_base_l  = n_swa > 0 ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
+    float freq_scale_l = n_swa > 0 ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
+
     if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&
          model.layers[il].wq->extra && model.layers[il].wk->extra && model.layers[il].wv->extra && model.layers[il].wo->extra) {
         if (kv_self.k_l[il]->extra && kv_self.v_l[il]->extra) {
-            //printf("%s: %s\n", __func__, ggml_op_name(input->op));
             ggml_split_tensor_t * attn_norm = the_attn_norm ? (ggml_split_tensor_t *)the_attn_norm->extra : nullptr;
             auto wq = (ggml_split_tensor_t *)model.layers[il].wq->extra;
             auto wk = (ggml_split_tensor_t *)model.layers[il].wk->extra;
@@ -9391,11 +9415,6 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         cur = llm_build_norm(ctx0, cur, lctx.model.hparams, attn_norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
                     }
                 }
-                //if (attn_norm) {
-                //    auto split_norm = attn_norm->splits[id];
-                //    cur = llm_build_norm(ctx0, cur, hparams, split_norm, NULL, is_norm ? LLM_NORM : LLM_NORM_RMS, cb, il);
-                //    cb(cur, "attn_norm", il_cb);
-                //}
                 if (cur->type != GGML_TYPE_F32) {
                     cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
                 }
@@ -9414,10 +9433,21 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     rope_factors = extra->splits[id];
                 }
                 if (do_rope) {
-                    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow);
-                    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow);
+                    if (is_multi) {
+                        int sections[4];
+                        std::copy(hparams.rope_sections.begin(), hparams.rope_sections.begin() + GGML_MROPE_SECTIONS, sections);
+                        Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, rope_factors,
+                                n_rot, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                                ext_factor, attn_factor, beta_fast, beta_slow);
+                        Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, rope_factors,
+                                n_rot, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                                ext_factor, attn_factor, beta_fast, beta_slow);
+                    } else {
+                        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                                ext_factor, attn_factor, beta_fast, beta_slow);
+                        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                                ext_factor, attn_factor, beta_fast, beta_slow);
+                    }
                 }
                 cb(Qcur, "Qcur", il_cb);
                 cb(Kcur, "Kcur", il_cb);
@@ -9493,15 +9523,21 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask, KQ_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
                 cb(cur, "flash_attn", il_cb);
-                ggml_flash_attn_ext_add_sinks(cur, sinks);
+                if (model.layers[il].attn_sinks && model.layers[il].attn_sinks->extra) {
+                    auto split = (ggml_split_tensor_t *)model.layers[il].attn_sinks->extra;
+                    GGML_ASSERT(split->n_device == wq->n_device);
+                    GGML_ASSERT(split->splits[id]);
+                    ggml_flash_attn_ext_add_sinks(cur, split->splits[id]);
+                } else {
+                    ggml_flash_attn_ext_add_sinks(cur, sinks);
+                }
                 if (n_swa > 0) {
                     ((int32_t *)cur->op_params)[4] = n_swa;
                 }
-
                 // Some models produced NaNs/gibberish when FA is computed with f16 precision on CUDA
                 if (use_f32_precision || model.arch == LLM_ARCH_PHI2 || model.arch == LLM_ARCH_PHI3 || model.arch == LLM_ARCH_GPTNEOX ||
-                    (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8) || model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 ||
-                    model.arch == LLM_ARCH_GLM4_MOE) {
+                        (model.arch == LLM_ARCH_DEEPSEEK2 && q->ne[1] <= 8) || model.arch == LLM_ARCH_COHERE2 || model.arch == LLM_ARCH_GLM4 ||
+                        model.arch == LLM_ARCH_GLM4_MOE) {
                     ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
                 }
 
@@ -9550,10 +9586,21 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, f_attn_scale, il);
 
     if (do_rope) {
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors_in, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-        Kcur = ggml_rope_ext( ctx0, Kcur, inp_pos, rope_factors_in, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
+        if (is_multi) {
+            int sections[4];
+            std::copy(hparams.rope_sections.begin(), hparams.rope_sections.begin() + GGML_MROPE_SECTIONS, sections);
+            Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, rope_factors_in,
+                    n_rot, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                    ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, rope_factors_in,
+                    n_rot, sections, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                    ext_factor, attn_factor, beta_fast, beta_slow);
+        } else {
+            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors_in, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                    ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = ggml_rope_ext( ctx0, Kcur, inp_pos, rope_factors_in, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                    ext_factor, attn_factor, beta_fast, beta_slow);
+        }
     }
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);

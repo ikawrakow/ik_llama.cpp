@@ -112,6 +112,7 @@ enum e_model {
     MODEL_106B_A12B,
     MODEL_230B_A10B, // Minimax M2
     MODEL_235B_A22B,
+    MODEL_310B_A15B,
     MODEL_300B_A47B, // Ernie MoE big
     MODEL_355B_A32B,
     MODEL_E2B,
@@ -184,6 +185,7 @@ struct llama_layer {
     struct ggml_tensor * bkv  = nullptr;
 
     llama_split_tensor split_attn_norm;
+    llama_split_tensor split_attn_sinks;
     llama_split_tensor split_wq;
     llama_split_tensor split_wk;
     llama_split_tensor split_wv;
@@ -200,6 +202,7 @@ struct llama_layer {
     llama_split_tensor split_bkv;
     llama_split_tensor split_q_norm;
     llama_split_tensor split_k_norm;
+    llama_split_tensor split_sinks;
 
     // relative position bias
     struct ggml_tensor * attn_rel_b = nullptr;

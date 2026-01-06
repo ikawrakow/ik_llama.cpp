@@ -78,12 +78,12 @@
     #include <io.h>
 #endif
 
-#if __cplusplus >= 202000L
-    #define LU8(x) (const char*)(u8##x)
-#else
-    #define LU8(x) u8##x
-#endif
-
+//#if __cplusplus >= 202000L
+//    #define LU8(x) (const char*)(u8##x)
+//#else
+//    #define LU8(x) u8##x
+//#endif
+#define LU8(x) (const char*)(u8##x)
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -1730,6 +1730,9 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_GLM4_MOE,
         LLM_ARCH_MISTRAL3,
         LLM_ARCH_COHERE2,
+        LLM_ARCH_MIMO2,
+        LLM_ARCH_QWEN3,
+        LLM_ARCH_QWEN3VL,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -1760,6 +1763,13 @@ static bool llm_load_tensors(
             LLAMA_LOG_WARN("  => changing split mode to 'layer'\n");
             LLAMA_LOG_WARN("=======================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
+        } else {
+            if (model.arch == LLM_ARCH_MIMO2 && model.devices.size() > 2 && max_gpu != 2) {
+                LLAMA_LOG_WARN("\n================================================================\n");
+                LLAMA_LOG_WARN("Split mode 'graph' for Mimo2 does not work with more than 2 GPUs\n");
+                LLAMA_LOG_WARN("  => setting max_gpu to 2\n");
+                LLAMA_LOG_WARN("================================================================\n\n");
+            }
         }
     }
 
@@ -4905,6 +4915,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_BAILINGMOE2:
         case LLM_ARCH_MINIMAX_M2:
+        case LLM_ARCH_MIMO2:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
