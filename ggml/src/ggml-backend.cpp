@@ -476,43 +476,15 @@ extern "C" GGML_CALL void ggml_backend_rpc_reg_devices(void);
 #endif
 
 GGML_CALL static void ggml_backend_registry_init(void) {
-    static bool initialized = false;
-
-    if (initialized) {
-        return;
-    }
-
-    initialized = true;
-
-    ggml_backend_register("CPU", ggml_backend_reg_cpu_init, ggml_backend_cpu_buffer_type(), NULL);
-
-    // add forward decls here to avoid including the backend headers
-#ifdef GGML_USE_CUDA
-    ggml_backend_cuda_reg_devices();
-#endif
-
-#ifdef GGML_USE_SYCL
-    ggml_backend_sycl_reg_devices();
-#endif
-
-#ifdef GGML_USE_METAL
-    ggml_backend_register("Metal", ggml_backend_reg_metal_init, ggml_backend_metal_buffer_type(), NULL);
-#endif
-
-#ifdef GGML_USE_VULKAN
-    ggml_backend_vk_reg_devices();
-#endif
-
-#ifdef GGML_USE_KOMPUTE
-    ggml_backend_kompute_reg_devices();
-#endif
-
-#ifdef GGML_USE_CANN
-    ggml_backend_cann_reg_devices();
-#endif
-#ifdef GGML_USE_RPC
-    ggml_backend_rpc_reg_devices();
-#endif
+    // NOTE:
+    // Registry initialization that calls into backend-specific registration
+    // functions (CUDA/Vulkan/Metal/...) has been moved to ggml-backend-reg.cpp
+    // which is compiled into the ggml-cpu backend DLL.  This allows ggml-base
+    // to be built as a standalone DLL that doesn't require backend-specific
+    // implementations at link time (fixes LNK2019 on Windows).
+    //
+    // The real registration implementation lives in ggml-backend-reg.cpp.
+    (void)0;
 }
 
 GGML_CALL void ggml_backend_register(const char * name, ggml_backend_init_fn init_fn, ggml_backend_buffer_type_t default_buffer_type, void * user_data) {

@@ -470,21 +470,49 @@ if (GGML_CUDA)
         endif()
 
         if (GGML_STATIC)
+            # We still need to append libraries, but avoid hard-failing if CUDA:: targets are missing
+        endif()
+
+        #
+        # --- Safe CUDA imported-target fallback helper ---
+        #
+        # Append an imported target if present, otherwise append a plain library name.
+        #
+        macro(ggml_append_cuda_target_or_lib IMPORTED_TARGET LIB_NAME)
+            if (TARGET ${IMPORTED_TARGET})
+                list(APPEND GGML_EXTRA_LIBS ${IMPORTED_TARGET})
+            else()
+                # Fall back to the plain linker name; the system linker will try to resolve it.
+                list(APPEND GGML_EXTRA_LIBS ${LIB_NAME})
+            endif()
+        endmacro()
+
+        #
+        # Link libraries for CUDA: pick imported targets if available, otherwise fallback
+        #
+        if (GGML_STATIC)
             if (WIN32)
-                # As of 12.3.1 CUDA Toolkit for Windows does not offer a static cublas library
-                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart_static CUDA::cublas CUDA::cublasLt)
+                # As of some CUDA versions the static cublas target may not exist on Windows,
+                # so prefer a safe append that falls back to library name.
+                ggml_append_cuda_target_or_lib(CUDA::cudart_static cudart_static)
+                ggml_append_cuda_target_or_lib(CUDA::cublas       cublas)
+                ggml_append_cuda_target_or_lib(CUDA::cublasLt     cublasLt)
             else ()
                 if (GGML_MUSA)
                     set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} MUSA::musart_static MUSA::mublas_static)
                 else()
-                    set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
+                    ggml_append_cuda_target_or_lib(CUDA::cudart_static cudart_static)
+                    ggml_append_cuda_target_or_lib(CUDA::cublas_static cublas_static)
+                    ggml_append_cuda_target_or_lib(CUDA::cublasLt_static cublasLt_static)
                 endif()
             endif()
         else()
             if (GGML_MUSA)
                 set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} MUSA::musart MUSA::mublas)
             else()
-                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart CUDA::cublas CUDA::cublasLt)
+                ggml_append_cuda_target_or_lib(CUDA::cudart cudart)
+                ggml_append_cuda_target_or_lib(CUDA::cublas cublas)
+                ggml_append_cuda_target_or_lib(CUDA::cublasLt cublasLt)
             endif()
         endif()
 
@@ -494,7 +522,8 @@ if (GGML_CUDA)
             if (GGML_MUSA)
                 set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} MUSA::musa_driver) # required by muDeviceGetAttribute(), muMemGetAllocationGranularity(...), ...
             else()
-                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cuda_driver) # required by cuDeviceGetAttribute(), cuMemGetAllocationGranularity(...), ...
+                # prefer CUDA::cuda_driver imported target if provided; otherwise fall back to 'cuda' (or libcuda)
+                ggml_append_cuda_target_or_lib(CUDA::cuda_driver cuda)
             endif()
         endif()
 
@@ -1056,7 +1085,7 @@ if (GGML_KOMPUTE)
         list(APPEND GGML_CDEF_PUBLIC GGML_USE_KOMPUTE)
 
         set(GGML_EXTRA_LIBS     ${GGML_EXTRA_LIBS}     kompute)
-        set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR})
+        set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${CMAKE_CURRENT_SOURCE_DIR})
     else()
         message(WARNING "Kompute not found")
     endif()
@@ -1149,7 +1178,7 @@ function(get_flags CCID CCVER)
             (CCID STREQUAL "AppleClang" AND CCVER VERSION_GREATER_EQUAL 7.3.0)
         )
             list(APPEND C_FLAGS -Wdouble-promotion)
-        endif()
+        endif ()
     elseif (CCID STREQUAL "GNU")
         set(C_FLAGS   -Wdouble-promotion)
         set(CXX_FLAGS -Wno-array-bounds)
@@ -1544,58 +1573,292 @@ endif()
 
 # ggml
 
-add_library(ggml
-            ../include/ggml.h
-            ../include/ggml-alloc.h
-            ../include/ggml-backend.h
-            ggml.c
-            ggml-alloc.c
-            ggml-backend.cpp
-            ggml-quants.c
-            ggml-quants.h
-            ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}
-            ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
-            ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}
-            ${GGML_SOURCES_EXTRA}     ${GGML_HEADERS_EXTRA}
-            ${GGML_SOURCES_SYCL}      ${GGML_HEADERS_SYCL}
-            ${GGML_SOURCES_KOMPUTE}   ${GGML_HEADERS_KOMPUTE}
-            ${GGML_SOURCES_VULKAN}    ${GGML_HEADERS_VULKAN}
-            ${GGML_SOURCES_ROCM}      ${GGML_HEADERS_ROCM}
-            ${GGML_SOURCES_BLAS}      ${GGML_HEADERS_BLAS}
-            ${GGML_SOURCES_LLAMAFILE} ${GGML_HEADERS_LLAMAFILE}
-            ${GGML_SOURCES_IQK_MM}    ${GGML_HEADERS_IQK_MM}
-            ${GGML_SOURCES_IQK}       ${GGML_HEADERS_IQK}
-            ${GGML_SOURCES_CANN}      ${GGML_HEADERS_CANN}
-            ggml-aarch64.c            ggml-aarch64.h
-            )
+#
+# Split ggml into multiple shared libraries:
+#  - ggml-base  : core ggml code (self-contained; includes IQK implementation so quantize/vec_dot resolve)
+#  - ggml-cpu   : CPU & non-CUDA backends (contains non-reg backend code)
+#  - ggml-cuda  : CUDA backend (only created when GGML_CUDA is enabled)
+#
+# Keep a real "ggml" library that brings everything together (like mainline).
+#
+
+# core sources (keep the minimal core that others will link against)
+set(GGML_CORE_SOURCES
+    ../include/ggml.h
+    ../include/ggml-alloc.h
+    ../include/ggml-backend.h
+    ggml.c
+    ggml-alloc.c
+    ggml-quants.c
+    ggml-quants.h
+    ggml-aarch64.c
+)
+
+# Add IQK implementation sources into ggml-base so quantize/vec_dot/iqk symbols
+# are available at link time (this addresses the earlier LNK2019/LNK2001 failures).
+list(APPEND GGML_CORE_SOURCES ${GGML_SOURCES_IQK} ${GGML_SOURCES_IQK_MM})
+
+# Add ggml-backend.cpp to core so ggml-base provides the backend API that
+# core files (ggml-alloc.c, etc.) expect. The **registration calls**
+# (calling into CUDA/Vulkan/Metal, etc.) are in ggml-backend-reg.cpp and will be
+# compiled into the top-level ggml library (so consumers linking ggml get backend symbols).
+list(APPEND GGML_CORE_SOURCES ggml-backend.cpp)
+
+# Optionally include IQK headers for IDE visibility (no effect on linking).
+list(APPEND GGML_CORE_SOURCES ${GGML_HEADERS_IQK} ${GGML_HEADERS_IQK_MM})
+
+# --- IMPORTANT: ensure ggml-impl implementation is compiled into ggml-base ---
+# ggml-impl.h contains tables/utility implementations (e.g. ggml_table_f32_f16).
+# Add any matching implementation file to the core sources if present.
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ggml-impl.c")
+    list(APPEND GGML_CORE_SOURCES ggml-impl.c)
+endif()
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ggml-impl.cpp")
+    list(APPEND GGML_CORE_SOURCES ggml-impl.cpp)
+endif()
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ggml-impl.cc")
+    list(APPEND GGML_CORE_SOURCES ggml-impl.cc)
+endif()
+# -------------------------------------------------------------------------
+
+#
+# Build core as an OBJECT library (compile sources once), then make:
+#  - ggml-base-static (STATIC)  : used to link into backend DLLs (resolves symbols at link time)
+#  - ggml-base (SHARED)         : real DLL consumers expect (can be patched)
+#
+add_library(ggml_base_objs OBJECT ${GGML_CORE_SOURCES})
+
+# apply compile defs/includes to object compilation
+target_compile_definitions(ggml_base_objs PUBLIC ${GGML_CDEF_PUBLIC})
+target_compile_definitions(ggml_base_objs PRIVATE $<$<CONFIG:Release>:NDEBUG>)
+target_include_directories(ggml_base_objs PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+    $<INSTALL_INTERFACE:include>
+)
+target_include_directories(ggml_base_objs PRIVATE . ${GGML_EXTRA_INCLUDES})
+target_compile_features(ggml_base_objs PRIVATE c_std_11 cxx_std_17)
+
+# create a static library from the objects (used for linking into backend DLLs)
+add_library(ggml-base-static STATIC $<TARGET_OBJECTS:ggml_base_objs>)
+
+# create the shared ggml-base DLL from the same objects (for external consumers)
+add_library(ggml-base SHARED $<TARGET_OBJECTS:ggml_base_objs>)
+
+# Set versioning like mainline if variables are defined
+if (DEFINED GGML_VERSION)
+    set_target_properties(ggml-base PROPERTIES
+        VERSION ${GGML_VERSION}
+        SOVERSION ${GGML_VERSION_MAJOR}
+    )
+    set_target_properties(ggml-base-static PROPERTIES
+        VERSION ${GGML_VERSION}
+        SOVERSION ${GGML_VERSION_MAJOR}
+    )
+endif()
 
 if (EMSCRIPTEN)
-    set_target_properties(ggml PROPERTIES COMPILE_FLAGS "-msimd128")
+    set_target_properties(ggml-base PROPERTIES COMPILE_FLAGS "-msimd128")
+    set_target_properties(ggml-base-static PROPERTIES COMPILE_FLAGS "-msimd128")
 endif()
 
-target_compile_definitions(ggml PUBLIC  ${GGML_CDEF_PUBLIC})
-target_compile_definitions(ggml PRIVATE $<$<CONFIG:Release>:NDEBUG>)
-target_include_directories(ggml PUBLIC ../include)
-target_include_directories(ggml PRIVATE . ${GGML_EXTRA_INCLUDES})
-target_link_directories(ggml PRIVATE ${GGML_EXTRA_LIBDIRS})
-if(MSVC)
-    set_target_properties(ggml PROPERTIES
-	CUDA_STANDARD 17
-    CUDA_STANDARD_REQUIRED ON
+# compile defs, includes for ggml-base (shared)
+target_include_directories(ggml-base PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+    $<INSTALL_INTERFACE:include>
 )
+target_compile_definitions(ggml-base PUBLIC ${GGML_CDEF_PUBLIC})
+target_compile_definitions(ggml-base PRIVATE $<$<CONFIG:Release>:NDEBUG>)
+
+# compile defs for static variant (so code compiled into backend DLLs gets same flags)
+target_compile_definitions(ggml-base-static PUBLIC ${GGML_CDEF_PUBLIC})
+target_compile_definitions(ggml-base-static PRIVATE $<$<CONFIG:Release>:NDEBUG>)
+
+# Ensure position independent code for shared build if requested
+if (BUILD_SHARED_LIBS)
+    set_target_properties(ggml-base PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    set_target_properties(ggml-base-static PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
-target_compile_features   (ggml PRIVATE c_std_11) # don't bump
 
-target_link_libraries(ggml PRIVATE Threads::Threads ${GGML_EXTRA_LIBS})
+# Link threading to core (matches mainline behavior)
+target_link_libraries(ggml-base PRIVATE Threads::Threads)
+target_link_libraries(ggml-base-static PRIVATE Threads::Threads)
 
-find_library(MATH_LIBRARY m)
-if (MATH_LIBRARY)
-    if (NOT WIN32 OR NOT GGML_SYCL)
-        target_link_libraries(ggml PRIVATE ${MATH_LIBRARY})
+# If building shared, expose the GGML_SHARED/GGML_BUILD compile defs for the shared target
+if (BUILD_SHARED_LIBS)
+    target_compile_definitions(ggml-base PRIVATE GGML_BUILD)
+    target_compile_definitions(ggml-base PUBLIC  GGML_SHARED)
+endif()
+
+# ggml-cpu: CPU and other non-CUDA backends (do NOT include ggml-backend-reg.cpp here)
+# Note: this collects the same backend source variables that were previously in the big ggml target,
+# but excludes the CUDA-specific variables.
+add_library(ggml-cpu SHARED
+    ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
+    ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}
+    ${GGML_SOURCES_EXTRA}     ${GGML_HEADERS_EXTRA}
+    ${GGML_SOURCES_SYCL}      ${GGML_HEADERS_SYCL}
+    ${GGML_SOURCES_KOMPUTE}   ${GGML_HEADERS_KOMPUTE}
+    ${GGML_SOURCES_VULKAN}    ${GGML_HEADERS_VULKAN}
+    ${GGML_SOURCES_ROCM}      ${GGML_HEADERS_ROCM}
+    ${GGML_SOURCES_BLAS}      ${GGML_HEADERS_BLAS}
+    ${GGML_SOURCES_LLAMAFILE} ${GGML_HEADERS_LLAMAFILE}
+    ${GGML_SOURCES_CANN}      ${GGML_HEADERS_CANN}
+    # Note: IQK sources are compiled into ggml_base_objs already (do NOT duplicate)
+)
+
+# includes and compile defs
+target_include_directories(ggml-cpu PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+    $<INSTALL_INTERFACE:include>
+)
+target_include_directories(ggml-cpu PRIVATE . ${GGML_EXTRA_INCLUDES})
+target_compile_definitions(ggml-cpu PUBLIC ${GGML_CDEF_PUBLIC})
+target_compile_definitions(ggml-cpu PRIVATE $<$<CONFIG:Release>:NDEBUG>)
+
+if (BUILD_SHARED_LIBS)
+    set_target_properties(ggml-cpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
+# Link cpu backend against the core shared library (avoid embedding static objects into DLLs
+# which can create very large images on Windows). Using the shared ggml-base keeps backend DLLs small.
+target_link_libraries(ggml-cpu PUBLIC ggml-base)
+target_link_libraries(ggml-cpu PRIVATE ${GGML_EXTRA_LIBS})
+target_link_directories(ggml-cpu PRIVATE ${GGML_EXTRA_LIBDIRS})
+
+# On Linux, some runtime plugin behavior may need dl
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+    target_link_libraries(ggml-cpu PRIVATE dl)
+endif()
+
+# ggml-cuda: only create this when CUDA is enabled; links against core (shared)
+if (GGML_CUDA)
+    add_library(ggml-cuda SHARED
+        ${GGML_SOURCES_CUDA} ${GGML_HEADERS_CUDA}
+    )
+
+    if (DEFINED GGML_VERSION)
+        set_target_properties(ggml-cuda PROPERTIES
+            VERSION ${GGML_VERSION}
+            SOVERSION ${GGML_VERSION_MAJOR}
+        )
+    endif()
+
+    target_include_directories(ggml-cuda PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+        $<INSTALL_INTERFACE:include>
+    )
+    target_include_directories(ggml-cuda PRIVATE . ${GGML_EXTRA_INCLUDES})
+    target_compile_definitions(ggml-cuda PUBLIC ${GGML_CDEF_PUBLIC})
+    target_compile_definitions(ggml-cuda PRIVATE $<$<CONFIG:Release>:NDEBUG>)
+
+    if (BUILD_SHARED_LIBS)
+        set_target_properties(ggml-cuda PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    endif()
+
+    if(MSVC)
+        set_target_properties(ggml-cuda PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+        )
+    endif()
+
+    # --- Critical: ensure cuBLAS/CUDA headers are visible to the host compiler invoked by nvcc
+    # If the imported CUDA::cublas target exists, use its INTERFACE_INCLUDE_DIRECTORIES.
+    # Otherwise attempt to find the CUDA include path (cublas_v2.h) in common places or via CUDA_PATH.
+    if (TARGET CUDA::cublas)
+        # Propagate interface include directories from imported target so nvcc -> host compiler sees them.
+        target_include_directories(ggml-cuda PRIVATE $<TARGET_PROPERTY:CUDA::cublas,INTERFACE_INCLUDE_DIRECTORIES>)
+    else()
+        # Try to use CUDA_PATH env var commonly set on Windows/Linux; otherwise look in common install locations.
+        if (DEFINED ENV{CUDA_PATH})
+            set(_cuda_guess "$ENV{CUDA_PATH}/include")
+        else()
+            set(_cuda_guess "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA" "/usr/local/cuda")
+        endif()
+        find_path(CUDA_INCLUDE_DIR cublas_v2.h HINTS ${_cuda_guess} PATH_SUFFIXES include)
+        if (CUDA_INCLUDE_DIR)
+            message(STATUS "Found cuBLAS headers at ${CUDA_INCLUDE_DIR}")
+            target_include_directories(ggml-cuda PRIVATE ${CUDA_INCLUDE_DIR})
+        else()
+            message(WARNING "Could not find cublas_v2.h automatically. If you have CUDA installed, set CUDA_PATH or pass -DCUDA_TOOLKIT_ROOT_DIR or add the CUDA include directory to GGML_EXTRA_INCLUDES.")
+        endif()
+    endif()
+
+    # Link CUDA backend against the core **shared** library to avoid embedding the
+    # entire core object set into the ggml-cuda DLL (this caused LNK1248 on Windows).
+    target_link_libraries(ggml-cuda PUBLIC ggml-base)
+    target_link_libraries(ggml-cuda PRIVATE ${GGML_EXTRA_LIBS})
+    target_link_directories(ggml-cuda PRIVATE ${GGML_EXTRA_LIBDIRS})
+
+    if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+        target_link_libraries(ggml-cuda PRIVATE dl)
     endif()
 endif()
 
+#
+# top-level ggml library: glue that consumers should link to (like mainline)
+# It contains the registration entrypoint (ggml-backend-reg.cpp) and links
+# PUBLIC to ggml-base (shared) and the backend libraries so consumer targets (llama, apps)
+# get backend symbols resolved during link (and runtime).
+#
+# ggml-backend-reg.cpp must exist in ggml/src/ (your registration implementation).
+#
+add_library(ggml ggml-backend-reg.cpp)
+add_library(ggml::ggml ALIAS ggml)
+
+if (DEFINED GGML_VERSION)
+    set_target_properties(ggml PROPERTIES
+        VERSION ${GGML_VERSION}
+        SOVERSION ${GGML_VERSION_MAJOR}
+    )
+endif()
+
+target_include_directories(ggml PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+    $<INSTALL_INTERFACE:include>
+)
+# Keep compile features consistent
+target_compile_features(ggml PRIVATE c_std_11 cxx_std_17)
+
+# ggml links the core API (shared)
+target_link_libraries(ggml PUBLIC ggml-base)
+
+# ensure backends are linked so symbols like ggml_backend_cuda_init are available
+# (ordering: link cpu, then cuda if present)
+target_link_libraries(ggml PUBLIC ggml-cpu)
+if (GGML_CUDA)
+    target_link_libraries(ggml PUBLIC ggml-cuda)
+endif()
+
+# On Linux, link dl for consumers if necessary
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+    target_link_libraries(ggml PRIVATE dl)
+endif()
+
+# If BUILD_SHARED_LIBS, mimic mainline by exposing GGML_SHARED/GGML_BUILD
 if (BUILD_SHARED_LIBS)
-    set_target_properties(ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_compile_definitions(ggml PRIVATE GGML_SHARED GGML_BUILD)
+    # ggml-base side (shared already handled above)
+    target_compile_definitions(ggml-base PRIVATE GGML_BUILD)
+    target_compile_definitions(ggml-base PUBLIC  GGML_SHARED)
+
+    target_compile_definitions(ggml-cpu PRIVATE GGML_BUILD)
+    target_compile_definitions(ggml-cpu PUBLIC  GGML_SHARED)
+
+    if (GGML_CUDA)
+        target_compile_definitions(ggml-cuda PRIVATE GGML_BUILD)
+        target_compile_definitions(ggml-cuda PUBLIC  GGML_SHARED)
+    endif()
+
+    # top-level ggml
+    target_compile_definitions(ggml PRIVATE GGML_BUILD)
+    target_compile_definitions(ggml PUBLIC  GGML_SHARED)
+endif()
+
+# math library linking like mainline
+find_library(MATH_LIBRARY m)
+if (MATH_LIBRARY)
+    if (NOT WIN32 OR NOT GGML_SYCL)
+        target_link_libraries(ggml-base PRIVATE ${MATH_LIBRARY})
+        target_link_libraries(ggml-base-static PRIVATE ${MATH_LIBRARY})
+    endif()
 endif()
