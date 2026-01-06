@@ -1,13 +1,5 @@
 include(CheckCXXCompilerFlag)
 
-# Ensure consistent MSVC runtime selection to avoid conflicting -MD / -MT flags
-if (MSVC)
-    if (NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
-        # Prefer MultiThreadedDLL (/MD) for shared builds to avoid nvcc/CL compatibility issues.
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "MSVC runtime library" FORCE)
-    endif()
-endif()
-
 unset(GGML_CDEF_PUBLIC)
 
 add_compile_definitions(GGML_SCHED_MAX_COPIES=${GGML_SCHED_MAX_COPIES})
