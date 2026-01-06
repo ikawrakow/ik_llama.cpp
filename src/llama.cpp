@@ -78,18 +78,9 @@
     #include <io.h>
 #endif
 
-// Make u8 string literal usage compatible with APIs expecting const char*
-// - MSVC (and C++20 char8_t) treat u8"..." as char8_t[], which does not convert to const char*
-// - Perform an explicit reinterpret_cast to const char* on MSVC and on C++20 where needed.
-// - Keep pre-C++20 behavior unchanged.
-#if defined(_MSC_VER)
-    // MSVC in C++20 mode exposes u8"" as char8_t[]. Cast to const char* for compatibility.
-    #define LU8(x) reinterpret_cast<const char*>(u8##x)
-#elif defined(__cpp_char8_t) && (__cplusplus >= 202000L)
-    // Other C++20 compilers that expose char8_t: cast to const char* for compatibility.
-    #define LU8(x) reinterpret_cast<const char*>(u8##x)
+#if __cplusplus >= 202000L
+    #define LU8(x) (const char*)(u8##x)
 #else
-    // Pre-C++20: u8"" is const char[], keep the literal as-is.
     #define LU8(x) u8##x
 #endif
 
