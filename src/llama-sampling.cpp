@@ -1119,9 +1119,9 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
         0.0f, 1.0f);
 
     // transformation constants
-    constexpr float peak_logit_value = 5.0f;
-    constexpr float inv_width = 1.0f / 0.3f;
-    constexpr float sharpness = 10.0f;
+    static constexpr float peak_logit_value = 5.0f;
+    static constexpr float inv_width = 1.0f / 0.3f;
+    static constexpr float sharpness = 10.0f;
 
     // quadratic near target for finite differentiation, transitioning to linear decay in tails
     // unbounded negative logits suppress far-from-target tokens after softmax
@@ -1153,10 +1153,10 @@ struct llama_sampler * llama_sampler_init_adaptive_p_impl(const float target, co
             const auto * const ctx  = (const llama_sampler_adaptive_p *) samplaw->ctx;
             auto * const result     = llama_sampler_init_adaptive_p(ctx->target, ctx->decay, ctx->seed);
             auto * const result_ctx = (llama_sampler_adaptive_p *) result->ctx;
-            result_ctx->rng          = ctx->rng;
-            result_ctx->weighted_sum = ctx->weighted_sum;
-            result_ctx->total_weight = ctx->total_weight;
-            result_ctx->pre_xform_probs.reserve(ctx->pre_xform_probs.capacity());
+            result_ctx->rng             = ctx->rng;
+            result_ctx->weighted_sum    = ctx->weighted_sum;
+            result_ctx->total_weight    = ctx->total_weight;
+            result_ctx->pre_xform_probs = ctx->pre_xform_probs;
             result_ctx->max_logit = ctx->max_logit;
             return result;
         },
@@ -1166,19 +1166,13 @@ struct llama_sampler * llama_sampler_init_adaptive_p_impl(const float target, co
         },
     };
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
-    uint32_t new_seed = seed;
-    if (new_seed == LLAMA_DEFAULT_SEED) {
-        new_seed = (std::random_device().entropy() == 0)
-            ? time(NULL)
-            : std::random_device()();
-    }
     return new llama_sampler {
         /* .iface = */ &iface,
         /* .ctx   = */ new llama_sampler_adaptive_p {
             /* .target          = */ target,
             /* .decay           = */ clamped_decay,
-            /* .seed            = */ new_seed,
-            /* .rng             = */ std::mt19937(new_seed),
+            /* .seed            = */ seed,
+            /* .rng             = */ std::mt19937(seed),
             /* .weighted_sum    = */ target / (1.0f - clamped_decay),
             /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
             /* .pre_xform_probs = */ {},

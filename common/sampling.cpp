@@ -99,7 +99,8 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
         result->n_valid = 0;
     }
     result->grammar = grmr;
-    
+
+    llama_sampling_set_rng_seed(result, params.seed);
     for (const auto& cnstr : params.samplers_sequence)
     {
         switch (cnstr)
@@ -118,14 +119,13 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
             }
             case llama_sampler_type::ADAPTIVE_P:
             {
-                result->samplaw=llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.seed);
+                result->samplaw=llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, result->rng());
                 break;
             }
             default:
                 break;
         }
     }
-    llama_sampling_set_rng_seed(result, params.seed);
     return result;
 }
 
