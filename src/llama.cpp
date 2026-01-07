@@ -1733,6 +1733,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MIMO2,
         LLM_ARCH_QWEN3,
         LLM_ARCH_QWEN3VL,
+        LLM_ARCH_HUNYUAN_MOE,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
