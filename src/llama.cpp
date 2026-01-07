@@ -4433,6 +4433,15 @@ struct llama_context * llama_new_context_with_model(
         //LLAMA_LOG_WARN("=====================================================================\n");
         cparams.mla_attn = 0;
     }
+    if (model->arch == LLM_ARCH_OPENAI_MOE && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        if (cparams.split_mode_f16) {
+            LLAMA_LOG_WARN("=====================================================================\n");
+            LLAMA_LOG_WARN("GPT-OSS with split mode graph requires f32 precision\n");
+            LLAMA_LOG_WARN("    => changing cparams.split_mode_f16 to 'false'\n");
+            LLAMA_LOG_WARN("=====================================================================\n");
+            cparams.split_mode_f16 = false;
+        }
+    }
 
     LLAMA_LOG_INFO("%s: n_ctx         = %u\n",     __func__, cparams.n_ctx);
     LLAMA_LOG_INFO("%s: n_batch       = %u\n",     __func__, cparams.n_batch);
