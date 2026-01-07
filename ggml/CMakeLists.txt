@@ -135,6 +135,9 @@ option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"  
 option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashAttention"     OFF)
 option(GGML_CUDA_USE_GRAPHS                 "ggml: use CUDA graphs (llama.cpp only)"          ON)
 set   (GGML_CUDA_FUSION  "1" CACHE STRING   "ggml: enable/disable fusion")
+set   (GGML_CUDA_COMPRESSION_MODE "size" CACHE STRING
+                                            "ggml: cuda link binary compression mode; requires cuda 12.8+")
+set_property(CACHE GGML_CUDA_COMPRESSION_MODE PROPERTY STRINGS "none;speed;balance;size")
 
 option(GGML_IQK_FLASH_ATTENTION             "ggml: enable the IQK FlashAttention CPU kernels" ON)
 option(GGML_IQK_FA_ALL_QUANTS               "ggml: compile all quants for IQK FlashAttention" OFF)
