@@ -1764,11 +1764,12 @@ static bool llm_load_tensors(
             LLAMA_LOG_WARN("=======================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
         } else {
-            if (model.arch == LLM_ARCH_MIMO2 && model.devices.size() > 2 && max_gpu != 2) {
+            if (model.arch == LLM_ARCH_MIMO2 && model.devices.size() > 4 && (max_gpu == 0 || max_gpu > 4)) {
                 LLAMA_LOG_WARN("\n================================================================\n");
-                LLAMA_LOG_WARN("Split mode 'graph' for Mimo2 does not work with more than 2 GPUs\n");
-                LLAMA_LOG_WARN("  => setting max_gpu to 2\n");
+                LLAMA_LOG_WARN("Split mode 'graph' for Mimo2 does not work with more than 4 GPUs\n");
+                LLAMA_LOG_WARN("  => setting max_gpu to 4\n");
                 LLAMA_LOG_WARN("================================================================\n\n");
+                max_gpu = 4;
             }
         }
     }
