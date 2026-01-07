@@ -8316,7 +8316,6 @@ ggml_cgraph * llm_build_context::build_hunyuan_moe() {
 
     inpL = llm_build_inp_embd(ctx0, lctx, hparams, batch, model.tok_embd, cb);
 
-    // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
@@ -8326,114 +8325,42 @@ ggml_cgraph * llm_build_context::build_hunyuan_moe() {
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
-        ggml_tensor * inpSA = inpL;
 
-        // norm
-        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_norm", il);
-
-        // self-attention
-        {
-            // rope freq factors for llama3; may return nullptr for llama2 and other models
-            struct ggml_tensor * rope_factors = build_rope_factors(il);
-
-            // compute Q and K and RoPE them
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, model.layers[il].bq,
-                    model.layers[il].wk, model.layers[il].bk,
-                    model.layers[il].wv, model.layers[il].bv, 0.f, il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-
-            Qcur = ggml_rope_ext(
-                    ctx0, Qcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-            cb(Qcur, "Qcur", il);
-
-            Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
-            cb(Kcur, "Kcur", il);
-
-            Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
-            cb(Kcur, "Kcur_norm", il);
-
-            Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, cb, il);
-            cb(Qcur, "Qcur_norm", il);
-
-            cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, model.layers[il].bo, Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
-            cb(cur, "attn_out", il);
-        }
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, KQ_mask,
+                nullptr, nullptr, kq_scale, 0.0f, 0, il, true, false, true);
 
         if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
 
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-        cb(ffn_inp, "ffn_inp", il);
-
-        cur = llm_build_norm(ctx0,ffn_inp, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "ffn_norm", il);
-
-        // feed-forward network (non-MoE)
-        ggml_tensor * cur_mlp = llm_build_ffn(ctx0, lctx, nullptr, cur,
-                model.layers[il].ffn_up_shexp,   NULL, NULL,
-                model.layers[il].ffn_gate_shexp, NULL, NULL,
-                model.layers[il].ffn_down_shexp, NULL, NULL,
-                NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-        cb(cur_mlp, "ffn_mlp", il);
-
-        // MoE branch
-        ggml_tensor * cur_moe = llm_build_moe_ffn(ctx0, lctx, cur,
-                model.layers[il].ffn_gate_inp,
-                model.layers[il].ffn_up_exps,
-                model.layers[il].ffn_gate_exps,
-                model.layers[il].ffn_down_exps,
+        cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                model.layers[il].ffn_gate_inp,  nullptr,
+                model.layers[il].ffn_up_exps,   nullptr,
+                model.layers[il].ffn_gate_exps, nullptr,
+                model.layers[il].ffn_down_exps, nullptr,
                 nullptr,
+                model.layers[il].ffn_up_shexp,    nullptr, // we don't have shared expert biases?
+                model.layers[il].ffn_gate_shexp,  nullptr,
+                model.layers[il].ffn_down_shexp,  nullptr,
                 n_expert, n_expert_used,
-                LLM_FFN_SILU,
-                true, // norm_topk_prob
-                false,
-                0.0,
+                LLM_FFN_SILU, true, false, 0.0f,
                 LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                cb,
-                il, gf);
-        cb(cur_moe, "ffn_moe_out", il);
-
-        ggml_tensor * ffn_out = ggml_add(ctx0, cur_moe, cur_mlp);
-        cb(ffn_out, "ffn_out", il);
-
-        cur = ggml_add(ctx0, ffn_out, ffn_inp);
+                LLM_FFN_SILU, cb, il, gf, true);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
 
-        // input for next layer
         inpL = cur;
     }
 
     cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
-
-    cb(cur, "result_norm", -1);
-    //res->t_embd = cur;
-
-    // lm_head
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
-
+    cur = build_output(lctx, ctx0, cur, model.output, model.output_norm, cb);
     cb(cur, "result_output", -1);
-    //res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);
-
     return gf;
+
 }
 
 ggml_cgraph * llm_build_context::build_mimo2() {
