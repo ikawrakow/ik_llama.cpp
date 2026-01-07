@@ -196,7 +196,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     //   i = 0, peer = 1, ichunk = 1 -> copy part 1 from device 1, device 0 now has parts 0, 1, 2, 3
     //   etc.
     //
-    if (false && dst->ne[1] >= 32) {
+    if (dst->ne[1] >= 32) {
         auto nelem = ggml_nelements(dst);
         auto elem_size = ggml_element_size(dst);
         auto nelem_per_device = (nelem + nhave - 1)/nhave;
