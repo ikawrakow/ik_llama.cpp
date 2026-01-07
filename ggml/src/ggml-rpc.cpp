@@ -1828,6 +1828,16 @@ static void rpc_serve_client(const std::vector<ggml_backend_t>& backends, const 
             }
             break;
         }
+        case RPC_CMD_GRAPH_RECOMPUTE: {
+            rpc_msg_graph_recompute_req request;
+            if (!recv_msg(sockfd, &request, sizeof(request))) {
+                return;
+            }
+            if (!server.graph_recompute(request)) {
+                return;
+            }
+            break;
+        }
         case RPC_CMD_GET_DEVICE_MEMORY: {
             rpc_msg_get_device_memory_req request;
             if (!recv_msg(sockfd, &request, sizeof(request))) {
