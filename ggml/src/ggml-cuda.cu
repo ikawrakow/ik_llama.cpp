@@ -253,33 +253,32 @@ static ggml_cuda_device_info ggml_cuda_init() {
         int gpu_list[GGML_CUDA_MAX_DEVICES];
         for(int i = 0; i < info.device_count; ++i) gpu_list[i] = i;
         auto status = ncclCommInitAll(info.nccl_coms, info.device_count, gpu_list);
-        if (status == ncclSuccess) {
+        if (status != ncclSuccess) {
+            printf("=============================== NCCL initialization failed with status %d\n", int(status));
+        } else {
             printf("=============================== NCCL main communicator initialized\n");
             info.have_nccl = true;
-        } else {
-            printf("=============================== NCCL initialization failed with status %d\n", int(status));
-            GGML_ABORT("Fatal error");
-        }
-        auto com = info.nccl_coms + info.device_count;
-        if (info.device_count == 4) {
-            int devs[8] = {0,1, 2,3, 0,2, 1,3};
             auto com = info.nccl_coms + info.device_count;
-            for (int ip = 0; ip < 4; ++ip) {
-                if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
-                    printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
-                    GGML_ABORT("Fatal error");
+            if (info.device_count == 4) {
+                int devs[8] = {0,1, 2,3, 0,2, 1,3};
+                auto com = info.nccl_coms + info.device_count;
+                for (int ip = 0; ip < 4; ++ip) {
+                    if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
+                        printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
+                        GGML_ABORT("Fatal error");
+                    }
                 }
-            }
-            printf("=============================== NCCL pair communicators for %d GPUs initialized\n", info.device_count);
-        } else if (info.device_count == 3) {
-            int devs[4] = {0,1, 0,2};
-            for (int ip = 0; ip < 2; ++ip) {
-                if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
-                    printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
-                    GGML_ABORT("Fatal error");
+                printf("=============================== NCCL pair communicators for %d GPUs initialized\n", info.device_count);
+            } else if (info.device_count == 3) {
+                int devs[4] = {0,1, 0,2};
+                for (int ip = 0; ip < 2; ++ip) {
+                    if (auto status = ncclCommInitAll(com+2*ip, 2, devs+2*ip); status != ncclSuccess) {
+                        printf("=============================== NCCL initialization of pair %d failed with status %d\n", ip, int(status));
+                        GGML_ABORT("Fatal error");
+                    }
                 }
+                printf("=============================== NCCL pair communicators for %d GPUs initialized\n", info.device_count);
             }
-            printf("=============================== NCCL pair communicators for %d GPUs initialized\n", info.device_count);
         }
     }
 #endif
