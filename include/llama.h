@@ -1385,7 +1385,8 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     /// @param decay Decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
     LLAMA_API struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p(
            const float target,
-           const float decay);
+           const float decay,
+        const uint32_t seed);
 
     /// @details Adaptive p sampler described in https://github.com/MrJackSpade/adaptive-p-docs/blob/main/README.md
     void llama_sample_adaptive_p(

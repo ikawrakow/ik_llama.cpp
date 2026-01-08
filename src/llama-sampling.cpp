@@ -1086,7 +1086,7 @@ llama_token llama_sample_token_adaptive_p_impl(
         probs.emplace_back(candidates->data[i].p);
     }
     std::discrete_distribution<> dist(probs.begin(), probs.end());
-    llama_token id = candidates->data[dist(smpl->rng)].id;
+    llama_token id = candidates->data[dist(adapt_p_ctx->rng)].id;
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     smpl->n_sample++;
@@ -1120,7 +1120,7 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ct
 
     // quadratic near target for finite differentiation, transitioning to linear decay in tails
     // unbounded negative logits suppress far-from-target tokens after softmax
-    float max_logit = std::numeric_limits<float>::min();
+    float max_logit = -INFINITY;
     for (size_t i = 0; i < candidates->size; ++i) {
         const float dist = std::abs((candidates->data[i].p - adapted_target) * inv_width);
         const float logit = peak_logit_value - sharpness * dist * dist / (1.0f + dist);
@@ -1131,12 +1131,13 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ct
     adapt_p_ctx->max_logit = max_logit;
 }
 
-struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p_impl(const float target, const float decay)
+struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p_impl(const float target, const float decay, const uint32_t seed)
 {
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
     return new llama_sampler_adaptive_p {
         /* .target          = */ target,
         /* .decay           = */ clamped_decay,
+        /* .rng             = */ std::mt19937(seed),
         /* .weighted_sum    = */ target / (1.0f - clamped_decay),
         /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
         /* .max_logit       = */ 0.0f,
