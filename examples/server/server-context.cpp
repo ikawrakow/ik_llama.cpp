@@ -139,7 +139,7 @@ bool server_context::load_model(const gpt_params& params_) {
         }
         params_dft.n_ctx = params_dft.n_ctx == 0 ? params.n_ctx / params.n_parallel : params_dft.n_ctx;
         params_dft.n_parallel = 1;
-
+        params_dft.n_batch = params_dft.n_ctx;
         llama_init_result llama_init_dft = llama_init_from_gpt_params(params_dft);
 
         llama_model* model_dft = llama_init_dft.model;
@@ -155,7 +155,6 @@ bool server_context::load_model(const gpt_params& params_) {
         const int n_ctx_dft = llama_n_ctx(llama_init_dft.context);
 
         cparams_dft = llama_context_params_from_gpt_params(params_dft);
-        cparams_dft.n_batch = n_ctx_dft;
 
         model_draft = llama_init_dft.model;
         ctx_draft = llama_init_dft.context;
