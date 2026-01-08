@@ -7557,8 +7557,11 @@ void llama_sample_dry([[maybe_unused]] struct llama_context* ctx, struct llama_s
     llama_sampler_dry_apply(smpl, candidates_p);
 }
 
-void llama_sample_adaptive_p([[maybe_unused]] struct llama_context* ctx, struct llama_sampler * samplaw, llama_token_data_array* candidates) {
-    llama_sampler_adaptive_p_apply(samplaw, candidates);
+void llama_sample_adaptive_p(
+    [[maybe_unused]] struct llama_context * ctx,
+          struct llama_sampler_adaptive_p * adapt_p_ctx,
+                   llama_token_data_array * candidates) {
+    llama_sampler_adaptive_p_apply(adapt_p_ctx, candidates);
 }
 
 void llama_sample_repetition_penalties(
@@ -7600,8 +7603,13 @@ llama_token llama_sample_token(struct llama_context * ctx, llama_token_data_arra
     return llama_sample_token_with_rng_impl(&ctx->sampling, candidates, ctx->sampling.rng);
 }
 
-llama_token llama_sample_token_adaptive_p(struct llama_context * ctx, llama_token_data_array * candidates, struct llama_sampler * samplaw) {
-    return llama_sample_token_adaptive_p_impl(&ctx->sampling, candidates, samplaw);
+llama_token llama_sample_token_adaptive_p(
+               struct llama_context * ctx,
+             llama_token_data_array * candidates,
+    struct llama_sampler_adaptive_p * adapt_p_ctx,
+                              float * orig_probs)
+{
+    return llama_sample_token_adaptive_p_impl(&ctx->sampling, candidates, adapt_p_ctx, orig_probs);
 }
 
 int llama_split_path(char * split_path, size_t maxlen, const char * path_prefix, int split_no, int split_count) {
@@ -7656,8 +7664,9 @@ void llama_sampler_dry_accept(struct llama_sampler_dry* smpl, llama_token token)
 }
 
 
-struct llama_sampler * llama_sampler_init_adaptive_p(const float target, const float decay, const uint32_t seed) {
-    return llama_sampler_init_adaptive_p_impl(target, decay, seed);
+struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p(const float target, const float decay)
+{
+    return llama_sampler_init_adaptive_p_impl(target, decay);
 }
 
 

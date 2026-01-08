@@ -100,7 +100,6 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
     }
     result->grammar = grmr;
 
-    llama_sampling_set_rng_seed(result, params.seed);
     for (const auto& cnstr : params.samplers_sequence)
     {
         switch (cnstr)
@@ -119,13 +118,14 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
             }
             case llama_sampler_type::ADAPTIVE_P:
             {
-                result->samplaw=llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, result->rng());
+                result->adapt_p_ctx=llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay);
                 break;
             }
             default:
                 break;
         }
     }
+    llama_sampling_set_rng_seed(result, params.seed);
     return result;
 }
 
@@ -416,7 +416,7 @@ static void sampler_queue(
                     llama_sample_temp(ctx_main, &cur_p, temp);
                 }
                 break;
-            case llama_sampler_type::ADAPTIVE_P: llama_sample_adaptive_p(ctx_main, ctx_sampling->samplaw, &cur_p); break;
+            case llama_sampler_type::ADAPTIVE_P: llama_sample_adaptive_p(ctx_main, ctx_sampling->adapt_p_ctx, &cur_p); break;
             default : break;
         }
     }
@@ -460,8 +460,15 @@ static llama_token llama_sampling_sample_impl(
             id = llama_sample_token_mirostat_v2(ctx_main, &cur_p, mirostat_tau, mirostat_eta, &ctx_sampling->mirostat_mu);
         } else if (adaptive_target >= 0.0f) {
             // adaptive p sampling
+            static std::vector<float> orig_probs;
+            orig_probs.reserve(cur_p.size);
+
+            // store original probabilities
+            for (size_t ii = 0; ii < cur_p.size; ++ii) {
+                orig_probs.emplace_back(cur_p.data[ii].p);
+            }
             sampler_queue(ctx_main, params, ctx_sampling, cur_p, std::max(1, params.min_keep));
-            id = llama_sample_token_adaptive_p(ctx_main, &cur_p, ctx_sampling->samplaw);
+            id = llama_sample_token_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx, orig_probs.data());
         } else {
             // temperature sampling
             size_t min_keep = std::max(1, params.min_keep);

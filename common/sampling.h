@@ -122,7 +122,7 @@ struct llama_sampling_context {
     std::vector<llama_token_data> cur;
     llama_sampler_dry* smpl;
 
-    llama_sampler * samplaw;    // adaptive p sampler
+    llama_sampler_adaptive_p * adapt_p_ctx;    // adaptive p sampler
 
     size_t n_valid; // Number of correct top tokens with correct probabilities.
 

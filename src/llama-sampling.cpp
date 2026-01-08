@@ -1067,55 +1067,50 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 
 // adaptive p
 
-llama_token llama_sample_token_adaptive_p_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, struct llama_sampler * samplaw)
+llama_token llama_sample_token_adaptive_p_impl(
+              struct llama_sampling * smpl,
+             llama_token_data_array * candidates,
+    struct llama_sampler_adaptive_p * adapt_p_ctx,
+                              float * orig_probs)
 {
     GGML_ASSERT(smpl);
     const int64_t t_start_sample_us = ggml_time_us();
 
     // softmax with known maximum logit
-    auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
-    llama_sample_softmax_nosort_impl(nullptr, candidates, &(ctx->max_logit));
+    llama_sample_softmax_nosort_impl(nullptr, candidates, &(adapt_p_ctx->max_logit));
 
     // sample
     std::vector<float> probs;
     probs.reserve(candidates->size);
     for (size_t i = 0; i < candidates->size; ++i) {
-        probs.push_back(candidates->data[i].p);
+        probs.emplace_back(candidates->data[i].p);
     }
     std::discrete_distribution<> dist(probs.begin(), probs.end());
-    const size_t idx = dist(ctx->rng);
-    llama_token result = candidates->data[idx].id;
+    llama_token id = candidates->data[dist(smpl->rng)].id;
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     smpl->n_sample++;
 
-    // update history with pre-transform probability of selected token
-    ctx->weighted_sum = ctx->decay * ctx->weighted_sum + ctx->pre_xform_probs[idx];
-    ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
+    // update history with original probability of selected token
+    adapt_p_ctx->weighted_sum = adapt_p_ctx->decay * adapt_p_ctx->weighted_sum + orig_probs[id];
+    adapt_p_ctx->total_weight = adapt_p_ctx->decay * adapt_p_ctx->total_weight + 1.0f;
 
-    return result;
+    return id;
 }
 
-void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_data_array * candidates)
+void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ctx, llama_token_data_array * candidates)
 {
     llama_sample_softmax_nosort_impl(nullptr, candidates, nullptr);
-    auto * const ctx = (llama_sampler_adaptive_p *) samplaw->ctx;
-    if (ctx->target < 0.0f) {
+    if (adapt_p_ctx->target < 0.0f) {
         // sampler is disabled
         return;
     }
 
-    // store pre-transform probabilities
-    ctx->pre_xform_probs.resize(candidates->size);
-    for (size_t i = 0; i < candidates->size; ++i) {
-        ctx->pre_xform_probs[i] = candidates->data[i].p;
-    }
-
     // compute adapted target probability
-    const float target = std::clamp(ctx->target, 0.0f, 1.0f);
-    const float adapted_target = std::clamp(ctx->total_weight == 0.0f
+    const float target = std::clamp(adapt_p_ctx->target, 0.0f, 1.0f);
+    const float adapted_target = std::clamp(adapt_p_ctx->total_weight == 0.0f
         ? target
-        : 2.0f * target - (ctx->weighted_sum / ctx->total_weight),
+        : 2.0f * target - (adapt_p_ctx->weighted_sum / adapt_p_ctx->total_weight),
         0.0f, 1.0f);
 
     // transformation constants
@@ -1133,51 +1128,18 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler * samplaw, llama_token_
         max_logit = std::max(max_logit, logit);
     }
     candidates->sorted = false;
-    ctx->max_logit = max_logit;
+    adapt_p_ctx->max_logit = max_logit;
 }
 
-struct llama_sampler * llama_sampler_init_adaptive_p_impl(const float target, const float decay, const uint32_t seed)
+struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p_impl(const float target, const float decay)
 {
-    static struct llama_sampler_i iface = {
-        /* .name   = */ [](const struct llama_sampler *) { return "adaptive-p"; },
-        /* .accept = */ nullptr,
-        /* .apply  = */ llama_sampler_adaptive_p_apply,
-
-        /* .reset  = */ [](struct llama_sampler * samplaw) {
-            auto * const ctx  = (llama_sampler_adaptive_p *) samplaw->ctx;
-            ctx->weighted_sum = ctx->target / (1.0f - ctx->decay);
-            ctx->total_weight = 1.0f / (1.0f - ctx->decay);
-        },
-
-        /* .clone  = */ [](const struct llama_sampler * samplaw) {
-            const auto * const ctx  = (const llama_sampler_adaptive_p *) samplaw->ctx;
-            auto * const result     = llama_sampler_init_adaptive_p(ctx->target, ctx->decay, ctx->seed);
-            auto * const result_ctx = (llama_sampler_adaptive_p *) result->ctx;
-            result_ctx->rng             = ctx->rng;
-            result_ctx->weighted_sum    = ctx->weighted_sum;
-            result_ctx->total_weight    = ctx->total_weight;
-            result_ctx->pre_xform_probs = ctx->pre_xform_probs;
-            result_ctx->max_logit = ctx->max_logit;
-            return result;
-        },
-
-        /* .free   = */ [](struct llama_sampler * samplaw) {
-            delete (llama_sampler_adaptive_p *) samplaw->ctx;
-        },
-    };
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
-    return new llama_sampler {
-        /* .iface = */ &iface,
-        /* .ctx   = */ new llama_sampler_adaptive_p {
-            /* .target          = */ target,
-            /* .decay           = */ clamped_decay,
-            /* .seed            = */ seed,
-            /* .rng             = */ std::mt19937(seed),
-            /* .weighted_sum    = */ target / (1.0f - clamped_decay),
-            /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
-            /* .pre_xform_probs = */ {},
-            /* .max_logit       = */ 0.0f,
-        }
+    return new llama_sampler_adaptive_p {
+        /* .target          = */ target,
+        /* .decay           = */ clamped_decay,
+        /* .weighted_sum    = */ target / (1.0f - clamped_decay),
+        /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
+        /* .max_logit       = */ 0.0f,
     };
 }
 
