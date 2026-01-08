@@ -2574,32 +2574,31 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
 
     // output
     model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-    model.output      = create_tensor(ctx_output_split, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+    model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
         auto & layer = model.layers[i];
 
-        layer.attn_norm      = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
-        layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
+        layer.ffn_norm  = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
 
         use_mmap_buffer &= !merge_qkv(tn, i, 2);
 
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_rot, n_embd}, 0);
-        layer.bo = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd}, 0);
+        layer.bo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "bias",   i), {n_embd}, 0);
 
-        layer.attn_sinks = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head}, 0);
+        layer.attn_sinks = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head}, 0);
 
         ggml_context *ctx_ffn_gate, *ctx_ffn_up, *ctx_ffn_down;
-        layer.ffn_gate_inp  = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {  n_embd, n_expert}, 0);
+        layer.ffn_gate_inp  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {  n_embd, n_expert}, 0);
         layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0, &ctx_ffn_gate);
         layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0, &ctx_ffn_down);
         layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0, &ctx_ffn_up);
 
         // bias
         ggml_context *ctx_ffn_gate_b, *ctx_ffn_up_b, *ctx_ffn_down_b;
-        layer.ffn_gate_inp_b  = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP,  "bias", i), {n_expert}, 0);
+        layer.ffn_gate_inp_b  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "bias", i), {n_expert}, 0);
         layer.ffn_gate_exps_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_gate_b);
         layer.ffn_down_exps_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i), {  n_embd, n_expert}, 0, &ctx_ffn_down_b);
         layer.ffn_up_exps_b   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_up_b);
@@ -3149,6 +3148,18 @@ bool create_tensors_helper::create_tensors() {
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, split, mem_used);
+                    if (layer.ffn_down_exps_b) {
+                        prepare_split_tensors(-1, ctx_split, layer.ffn_down_exps_b, layer.split_ffn_down_exps_b, split, mem_used);
+                    }
+                    if (layer.ffn_up_exps_b) {
+                        prepare_split_tensors( 0, ctx_split, layer.ffn_up_exps_b, layer.split_ffn_up_exps_b, split, mem_used);
+                    }
+                    if (layer.ffn_gate_exps_b) {
+                        prepare_split_tensors( 0, ctx_split, layer.ffn_gate_exps_b, layer.split_ffn_gate_exps_b, split, mem_used);
+                    }
+                    if (layer.ffn_gate_inp_b) {
+                        prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_b, layer.split_ffn_gate_inp_b, split, mem_used);
+                    }
                 }
             }
 
