@@ -204,17 +204,21 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             auto this_ctx = info.all_ctx[i];
-            if (!this_ctx->copy_event) {
+            if (!this_ctx->copy_event || !this_ctx->compute_event || required_size > this_ctx->copy_size) {
                 ggml_cuda_set_device(this_ctx->device);
-                CUDA_CHECK(cudaEventCreateWithFlags(&this_ctx->copy_event, cudaEventDisableTiming));
-            }
-            if (required_size > this_ctx->copy_size) {
-                ggml_cuda_set_device(this_ctx->device);
-                if (this_ctx->copy_buffer) {
-                    CUDA_CHECK(cudaFree(this_ctx->copy_buffer));
+                if (!this_ctx->copy_event) {
+                    CUDA_CHECK(cudaEventCreateWithFlags(&this_ctx->copy_event, cudaEventDisableTiming));
                 }
-                CUDA_CHECK(ggml_cuda_device_malloc(&this_ctx->copy_buffer, required_size, this_ctx->device));
-                this_ctx->copy_size = required_size;
+                if (!this_ctx->compute_event) {
+                    CUDA_CHECK(cudaEventCreateWithFlags(&this_ctx->compute_event, cudaEventDisableTiming));
+                }
+                if (required_size > this_ctx->copy_size) {
+                    if (this_ctx->copy_buffer) {
+                        CUDA_CHECK(cudaFree(this_ctx->copy_buffer));
+                    }
+                    CUDA_CHECK(ggml_cuda_device_malloc(&this_ctx->copy_buffer, required_size, this_ctx->device));
+                    this_ctx->copy_size = required_size;
+                }
             }
         }
         for (int stage = 0; stage < nhave-1; ++stage) {
@@ -224,10 +228,20 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 int peer = idx[(ii+1)%nhave];
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
                 ggml_cuda_set_device(info.all_ctx[peer]->device);
+                if (stage > 0) {
+                    CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[peer]->stream(), info.all_ctx[i]->compute_event, 0));
+                }
                 CUDA_CHECK(cudaMemcpyPeerAsync(info.all_ctx[i]->copy_buffer, info.all_ctx[i]->device,
                             (const char *)dst->src[peer]->data + ichunk*nelem_per_device*elem_size, info.all_ctx[peer]->device,
                             this_nelem*elem_size, info.all_ctx[peer]->stream()));
                 CUDA_CHECK(cudaEventRecord(info.all_ctx[peer]->copy_event, info.all_ctx[peer]->stream()));
+                ichunk = (ichunk + 1)%nhave;
+            }
+            ichunk = stage;
+            for (int ii = 0; ii < nhave; ++ii) {
+                int i = idx[ii];
+                int peer = idx[(ii+1)%nhave];
+                auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
                 ggml_cuda_set_device(info.all_ctx[i]->device);
                 CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
                 int num_blocks = (this_nelem + CUDA_REDUCE_BLOCK_SIZE - 1)/CUDA_REDUCE_BLOCK_SIZE;
@@ -238,6 +252,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                     k_add<float, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(this_nelem,
                             (const float *)info.all_ctx[i]->copy_buffer, (float *)dst->src[i]->data + ichunk*nelem_per_device);
                 }
+                CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->compute_event, info.all_ctx[i]->stream()));
                 ichunk = (ichunk + 1)%nhave;
             }
         }

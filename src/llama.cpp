@@ -1733,6 +1733,8 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_MIMO2,
         LLM_ARCH_QWEN3,
         LLM_ARCH_QWEN3VL,
+        LLM_ARCH_HUNYUAN_MOE,
+        LLM_ARCH_OPENAI_MOE,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -1764,11 +1766,12 @@ static bool llm_load_tensors(
             LLAMA_LOG_WARN("=======================================================\n\n");
             split_mode = LLAMA_SPLIT_MODE_LAYER;
         } else {
-            if (model.arch == LLM_ARCH_MIMO2 && model.devices.size() > 2 && max_gpu != 2) {
+            if (model.arch == LLM_ARCH_MIMO2 && model.devices.size() > 4 && (max_gpu == 0 || max_gpu > 4)) {
                 LLAMA_LOG_WARN("\n================================================================\n");
-                LLAMA_LOG_WARN("Split mode 'graph' for Mimo2 does not work with more than 2 GPUs\n");
-                LLAMA_LOG_WARN("  => setting max_gpu to 2\n");
+                LLAMA_LOG_WARN("Split mode 'graph' for Mimo2 does not work with more than 4 GPUs\n");
+                LLAMA_LOG_WARN("  => setting max_gpu to 4\n");
                 LLAMA_LOG_WARN("================================================================\n\n");
+                max_gpu = 4;
             }
         }
     }
@@ -4429,6 +4432,15 @@ struct llama_context * llama_new_context_with_model(
         //LLAMA_LOG_WARN(" MLA is only available for LLM_ARCH_DEEPSEEK2 -> turning off MLA\n");
         //LLAMA_LOG_WARN("=====================================================================\n");
         cparams.mla_attn = 0;
+    }
+    if (model->arch == LLM_ARCH_OPENAI_MOE && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+        if (cparams.split_mode_f16) {
+            LLAMA_LOG_WARN("=====================================================================\n");
+            LLAMA_LOG_WARN("GPT-OSS with split mode graph requires f32 precision\n");
+            LLAMA_LOG_WARN("    => changing cparams.split_mode_f16 to 'false'\n");
+            LLAMA_LOG_WARN("=====================================================================\n");
+            cparams.split_mode_f16 = false;
+        }
     }
 
     LLAMA_LOG_INFO("%s: n_ctx         = %u\n",     __func__, cparams.n_ctx);
