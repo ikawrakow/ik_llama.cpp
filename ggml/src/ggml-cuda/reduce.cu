@@ -263,6 +263,9 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 int peer = idx[(ii+1)%nhave];
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
                 ggml_cuda_set_device(info.all_ctx[peer]->device);
+                if (stage == 0) {
+                    CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[peer]->stream(), info.all_ctx[i]->compute_event, 0));
+                }
                 CUDA_CHECK(cudaMemcpyPeerAsync((char *)dst->src[i]->data + ichunk*nelem_per_device*elem_size, info.all_ctx[i]->device,
                             (const char *)dst->src[peer]->data + ichunk*nelem_per_device*elem_size, info.all_ctx[peer]->device,
                             this_nelem*elem_size, info.all_ctx[peer]->stream()));
@@ -275,7 +278,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         ggml_cuda_set_device(ctx.device);
         return;
     }
-    if (nhave == 4 && dst->ne[1] <= 8 && ctx.p2p_enabled) {
+    if (false && nhave == 4 && dst->ne[1] <= 8 && ctx.p2p_enabled) {
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             GGML_ASSERT(dst->src[i]->type == dst->type);
