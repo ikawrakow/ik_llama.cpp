@@ -274,7 +274,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
     }
     while (sum > nchunk) {
         last_split = 0;
-        float best_err = 0;
+        float best_err = -INFINITY;
         int ibest = -1;
         for (int i = 0; i < (int)splits.size(); ++i) {
             if (result[i] > 0) {
@@ -294,7 +294,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
     }
     while (sum < nchunk) {
         last_split = 0;
-        float best_err = 0;
+        float best_err = -INFINITY;
         int ibest = -1;
         for (int i = 0; i < (int)splits.size(); ++i) {
             float p = splits[i] - last_split;
