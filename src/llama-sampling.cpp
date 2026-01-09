@@ -31,41 +31,6 @@ void llama_set_rng_seed_impl(struct llama_sampling * smpl, uint32_t seed) {
     smpl->rng.seed(seed);
 }
 
-void llama_sample_softmax_nosort_impl(
-     struct llama_sampling * smpl,
-    llama_token_data_array * candidates,
-       const float * const   max_logit)
-{
-    GGML_ASSERT(candidates->size > 0);
-    const int64_t t_start_sample_us = ggml_time_us();
-
-    float max_l = candidates->data[0].logit;
-    if (max_logit == nullptr) {
-        // maximum logit is not known
-        for (size_t i = 1; i < candidates->size; ++i) {
-            max_l = std::max(max_l, candidates->data[i].logit);
-        }
-    } else {
-        // maximum logit is known
-        max_l = *max_logit;
-    }
-
-    float cum_sum = 0.0f;
-    for (size_t i = 0; i < candidates->size; ++i) {
-        float p = expf(candidates->data[i].logit - max_l);
-        candidates->data[i].p = p;
-        cum_sum += p;
-    }
-
-    for (size_t i = 0; i < candidates->size; ++i) {
-        candidates->data[i].p /= cum_sum;
-    }
-
-    if (smpl) {
-        smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
-    }
-}
-
 void llama_sample_softmax_impl(struct llama_sampling * smpl, llama_token_data_array * candidates) {
     GGML_ASSERT(candidates->size > 0);
 
@@ -1111,10 +1076,22 @@ llama_token llama_sample_token_adaptive_p_impl(
 
 void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ctx, llama_token_data_array * candidates)
 {
-    llama_sample_softmax_nosort_impl(nullptr, candidates, nullptr);
     if (adapt_p_ctx->target < 0.0f) {
         // sampler is disabled
+        llama_sample_softmax_impl(nullptr, candidates);
         return;
+    }
+
+    // incomplete softmax because final division can be fused
+    float max_l = candidates->data[0].logit;
+    for (size_t i = 1; i < candidates->size; ++i) {
+        max_l = std::max(max_l, candidates->data[i].logit);
+    }
+    float cum_sum = 0.0f;
+    for (size_t i = 0; i < candidates->size; ++i) {
+        float p = expf(candidates->data[i].logit - max_l);
+        candidates->data[i].p = p;
+        cum_sum += p;
     }
 
     // compute adapted target probability
@@ -1129,11 +1106,14 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ct
     static constexpr float inv_width = 1.0f / 0.3f;
     static constexpr float sharpness = 10.0f;
 
+    const float fused_target = adapted_target * inv_width;
+    const float fused_width = inv_width / cum_sum;
+
     // quadratic near target for finite differentiation, transitioning to linear decay in tails
     // unbounded negative logits suppress far-from-target tokens after softmax
     float max_logit = -INFINITY;
     for (size_t i = 0; i < candidates->size; ++i) {
-        const float dist = std::abs((candidates->data[i].p - adapted_target) * inv_width);
+        const float dist = std::abs(candidates->data[i].p * fused_width - fused_target);
         const float logit = peak_logit_value - sharpness * dist * dist / (1.0f + dist);
         candidates->data[i].logit = logit;
         max_logit = std::max(max_logit, logit);
