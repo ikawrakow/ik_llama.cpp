@@ -2583,6 +2583,7 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
 
     for (int i = 0; i < n_layer; ++i) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
+        ggml_context * ctx_layer = ctx_for_layer(i);
         auto & layer = model.layers[i];
 
         layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
@@ -2602,11 +2603,14 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
         layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0, &ctx_ffn_up);
 
         // bias
-        ggml_context *ctx_ffn_gate_b, *ctx_ffn_up_b, *ctx_ffn_down_b;
         layer.ffn_gate_inp_b  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "bias", i), {n_expert}, 0);
-        layer.ffn_gate_exps_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_gate_b);
-        layer.ffn_down_exps_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i), {  n_embd, n_expert}, 0, &ctx_ffn_down_b);
-        layer.ffn_up_exps_b   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_up_b);
+        ggml_context *ctx_ffn_gate_b, *ctx_ffn_up_b, *ctx_ffn_down_b;
+        auto ctx_gate_b = ctx_ffn_gate == ctx_split ? ctx_split : ctx_layer;
+        auto ctx_down_b = ctx_ffn_down == ctx_split ? ctx_split : ctx_layer;
+        auto ctx_up_b   = ctx_ffn_up   == ctx_split ? ctx_split : ctx_layer;
+        layer.ffn_gate_exps_b = create_tensor(ctx_gate_b, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_gate_b);
+        layer.ffn_down_exps_b = create_tensor(ctx_down_b, tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i), {  n_embd, n_expert}, 0, &ctx_ffn_down_b);
+        layer.ffn_up_exps_b   = create_tensor(ctx_up_b,   tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_up_b);
 
         if (ctx_ffn_gate_b != ctx_ffn_gate) {
             layer.ffn_gate_exps_b_dup = create_tensor(ctx_ffn_gate, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert},
@@ -3169,9 +3173,6 @@ bool create_tensors_helper::create_tensors() {
                     if (layer.ffn_gate_exps_b) {
                         prepare_split_tensors( 0, ctx_split, layer.ffn_gate_exps_b, layer.split_ffn_gate_exps_b, split, mem_used);
                     }
-                    if (layer.ffn_gate_inp_b) {
-                        prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_b, layer.split_ffn_gate_inp_b, split, mem_used);
-                    }
                 }
             }
 
@@ -3179,6 +3180,12 @@ bool create_tensors_helper::create_tensors() {
                 if (auto it = split_tensors.find(layer.ffn_gate_inp); it != split_tensors.end()) {
                     auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp), -1, cur_splits, mem_used);
                     prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp, layer.split_ffn_gate_inp, shared_split, mem_used);
+                }
+            }
+            if (layer.ffn_gate_inp_b) {
+                if (auto it = split_tensors.find(layer.ffn_gate_inp_b); it != split_tensors.end()) {
+                    auto shared_split = create_split(ggml_nrows(layer.ffn_gate_inp_b), -1, cur_splits, mem_used);
+                    prepare_split_tensors(-1, ctx_split, layer.ffn_gate_inp_b, layer.split_ffn_gate_inp_b, shared_split, mem_used);
                 }
             }
             if (layer.ffn_exp_probs_b) {
