@@ -31,7 +31,10 @@ void llama_set_rng_seed_impl(struct llama_sampling * smpl, uint32_t seed) {
     smpl->rng.seed(seed);
 }
 
-void llama_sample_softmax_nosort_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, const float * const max_logit)
+void llama_sample_softmax_nosort_impl(
+     struct llama_sampling * smpl,
+    llama_token_data_array * candidates,
+       const float * const   max_logit)
 {
     GGML_ASSERT(candidates->size > 0);
     const int64_t t_start_sample_us = ggml_time_us();
@@ -1073,20 +1076,28 @@ llama_token llama_sample_token_adaptive_p_impl(
     struct llama_sampler_adaptive_p * adapt_p_ctx,
                               float * orig_probs)
 {
-    GGML_ASSERT(smpl);
+    GGML_ASSERT(candidates->size > 0);
     const int64_t t_start_sample_us = ggml_time_us();
 
-    // softmax with known maximum logit
-    llama_sample_softmax_nosort_impl(nullptr, candidates, &(adapt_p_ctx->max_logit));
-
-    // sample
-    std::vector<float> probs;
-    probs.reserve(candidates->size);
+    adapt_p_ctx->probs.reserve(candidates->size);
+    float * const probs = adapt_p_ctx->probs.data();
+    float cum_sum = 0.0f;
     for (size_t i = 0; i < candidates->size; ++i) {
-        probs.emplace_back(candidates->data[i].p);
+        const float p = expf(candidates->data[i].logit - adapt_p_ctx->max_logit);
+        probs[i] = p;
+        cum_sum += p;
+    }    
+    float ran_sum = cum_sum * (float)adapt_p_ctx->rng() / (float)adapt_p_ctx->rng.max();
+
+    // stochastic sampling
+    size_t idx;
+    for (idx = 0; idx < candidates->size - 1; ++idx) {
+        ran_sum -= probs[idx];
+        if (ran_sum <= 0.0f) {
+            break;
+        }
     }
-    std::discrete_distribution<> dist(probs.begin(), probs.end());
-    llama_token id = candidates->data[dist(adapt_p_ctx->rng)].id;
+    llama_token id = candidates->data[idx].id;
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     smpl->n_sample++;
@@ -1131,7 +1142,10 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ct
     adapt_p_ctx->max_logit = max_logit;
 }
 
-struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p_impl(const float target, const float decay, const uint32_t seed)
+struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p_impl(
+       const float target,
+       const float decay,
+    const uint32_t seed)
 {
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
     return new llama_sampler_adaptive_p {
@@ -1141,6 +1155,7 @@ struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p_impl(const float
         /* .weighted_sum    = */ target / (1.0f - clamped_decay),
         /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
         /* .max_logit       = */ 0.0f,
+        /* .probs           = */ {},
     };
 }
 

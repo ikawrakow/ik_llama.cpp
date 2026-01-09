@@ -69,10 +69,11 @@ void llama_sampler_dry_apply(struct llama_sampler_dry* smpl, llama_token_data_ar
 struct llama_sampler_adaptive_p {
     const float target;     // target probability (0.0 - 1.0; negative = disabled)
     const float decay;      // EMA decay; history ≈ 1/(1-decay) tokens (0.0 - 0.99)
-    std::mt19937 rng;
+    std::mt19937 rng;       // RNG
     float weighted_sum;     // sum(p_n * decay^N)
     float total_weight;     // sum(decay^i), converges to 1/(1-decay)
     float max_logit;        // maximum logit found during transform
+    std::vector<float> probs;   // denormalized probabilities for stochastic sampling
 };
 
 void llama_sampler_adaptive_p_apply(
