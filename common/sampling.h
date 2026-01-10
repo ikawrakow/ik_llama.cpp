@@ -18,7 +18,8 @@ enum class llama_sampler_type : char {
     XTC         = 'x',
     TOP_N_SIGMA = 'n',
     TYPICAL_P   = 'y',
-    TEMPERATURE = 't'
+    TEMPERATURE = 't',
+    ADAPTIVE_P  = 'w',
 };
 
 enum common_grammar_trigger_type {
@@ -66,6 +67,8 @@ typedef struct llama_sampling_params {
     float       xtc_probability       = 0.0f;               // xtc probability
     float       xtc_threshold         = 1.0f;               // xtc threshold, disabled if > 0.5
     float       top_n_sigma           = 0.0f;               // top-n-sigma
+    float       adaptive_target       = -1.0f;              // select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
+    float       adaptive_decay        = 0.90f;              // decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
 
@@ -80,7 +83,8 @@ typedef struct llama_sampling_params {
         llama_sampler_type::MIN_P,
         llama_sampler_type::XTC,
         llama_sampler_type::TOP_N_SIGMA,
-        llama_sampler_type::TEMPERATURE
+        llama_sampler_type::TEMPERATURE,
+        llama_sampler_type::ADAPTIVE_P,
     };
 
 
@@ -117,6 +121,8 @@ struct llama_sampling_context {
     std::vector<llama_token>      prev;
     std::vector<llama_token_data> cur;
     llama_sampler_dry* smpl;
+
+    llama_sampler_adaptive_p * adapt_p_ctx;    // adaptive p sampler
 
     size_t n_valid; // Number of correct top tokens with correct probabilities.
 

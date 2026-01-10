@@ -1380,6 +1380,21 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
 
 
+    /// @details Adaptive p sampler initializer
+    /// @param target Select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
+    /// @param decay Decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
+    LLAMA_API struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p(
+           const float target,
+           const float decay,
+        const uint32_t seed);
+
+    /// @details Adaptive p sampler described in https://github.com/MrJackSpade/adaptive-p-docs/blob/main/README.md
+    void llama_sample_adaptive_p(
+            struct llama_context * ctx,
+ struct llama_sampler_adaptive_p * adapt_p_ctx,
+          llama_token_data_array * candidates);
+
+
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
     /// @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.
     /// @param tau  The target cross-entropy (or surprise) value you want to achieve for the generated text. A higher value corresponds to more surprising or less predictable text, while a lower value corresponds to less surprising or more predictable text.
@@ -1416,6 +1431,13 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     LLAMA_API llama_token llama_sample_token(
             struct llama_context * ctx,
           llama_token_data_array * candidates);
+
+    /// @details Randonly selects a token from the candidates following adaptive p sampler.
+    llama_token llama_sample_token_adaptive_p(
+            struct llama_context * ctx,
+          llama_token_data_array * candidates,
+ struct llama_sampler_adaptive_p * adapt_p_ctx,
+                           float * orig_probs);
 
     //
     // Model split
