@@ -484,7 +484,7 @@ bool server_sent_event(httplib::DataSink& sink, const json& data) {
         data.dump(-1, ' ', false, json::error_handler_t::replace) +
         "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
 
-    LOG_VERBOSE("data stream, to_send: %s", str.c_str());
+    //LOG_VERBOSE("data stream, to_send: %s", str.c_str());
 
     return sink.write(str.c_str(), str.size());
 }

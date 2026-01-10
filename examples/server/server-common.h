@@ -336,6 +336,10 @@ public:
 
     llama_pos pos_next() const;
 
+    int n_tokens() const {
+        return tokens.size();
+    }
+
     // for debugging
     std::string str() const;
 

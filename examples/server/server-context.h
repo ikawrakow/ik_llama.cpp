@@ -98,6 +98,11 @@ struct server_slot {
 
     std::string generated_text;
 
+    // idx of draft tokens in the main batch
+    // non-empty if we went to evaluate draft tokens
+    // ref: https://github.com/ggml-org/llama.cpp/pull/17808
+    std::vector<int32_t> i_batch_dft;
+
     std::vector<completion_token_output> generated_token_probs;
     common_chat_msg chat_msg;
 
@@ -122,7 +127,9 @@ struct server_slot {
     void prompt_load(server_prompt_cache& prompt_cache, const server_tokens& tokens);
 
     // sampling
-    llama_token sampled;
+    llama_token sampled; // in speculative mode, this is the last accepted token
+    llama_tokens drafted;
+
     struct llama_sampling_params sparams;
     llama_sampling_context* ctx_sampling = nullptr;
     json json_schema;
@@ -167,6 +174,8 @@ struct server_slot {
     bool is_processing() const;
 
     void add_token_string(const completion_token_output& token);
+
+    int get_n_draft_max() const;
 
     void release();
 
