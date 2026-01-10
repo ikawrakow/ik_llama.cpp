@@ -19,8 +19,8 @@ struct server_queue {
     bool running;
 
     // queues
-    std::vector<server_task> queue_tasks;
-    std::vector<server_task> queue_tasks_deferred;
+    std::deque<server_task> queue_tasks;
+    std::deque<server_task> queue_tasks_deferred;
 
     std::vector<server_task_multi> queue_multitasks;
 
@@ -35,6 +35,10 @@ struct server_queue {
 
     // Add a new task to the end of the queue
     int post(server_task task);
+
+    int post(std::vector<server_task>&& tasks, bool front = false);
+
+    void cleanup_pending_task(int id_target);
 
     // Add a new task, but defer until one slot is available
     void defer(server_task&& task);
@@ -89,11 +93,14 @@ struct server_response {
     typedef std::function<void(int, int, server_task_result&)> callback_multitask_t;
     callback_multitask_t callback_update_multitask;
 
+    bool running = true;
     // for keeping track of all tasks waiting for the result
     std::set<int> waiting_task_ids;
 
-    // the main result queue
-    std::vector<server_task_result> queue_results;
+    // the main result queue (using ptr for polymorphism)
+    std::vector<server_task_result_ptr> queue_results;
+
+    std::vector<server_task_result> queue_results_legacy;
 
     std::mutex mutex_results;
     std::condition_variable condition_results;
@@ -101,11 +108,19 @@ struct server_response {
     // add the id_task to the list of tasks waiting for response
     void add_waiting_task_id(int id_task);
 
+    void add_waiting_tasks(const std::vector<server_task>& tasks);
+
     // when the request is finished, we can remove task associated with it
     void remove_waiting_task_id(int id_task);
 
+    void remove_waiting_task_ids(const std::unordered_set<int>& id_tasks);
+
     // This function blocks the thread until there is a response for this id_task
     server_task_result recv(int id_task);
+
+    // same as recv(), but have timeout in seconds
+// if timeout is reached, nullptr is returned
+    server_task_result_ptr recv_with_timeout(const std::unordered_set<int>& id_tasks, int timeout);
 
     // Register the function to update multitask
     void on_multitask_update(callback_multitask_t callback) {
@@ -114,4 +129,12 @@ struct server_response {
 
     // Send a new result to a waiting id_task
     void send(server_task_result result);
+
+    void send(server_task_result_ptr&& result);
+
+    // terminate the waiting loop
+    void terminate() {
+        running = false;
+        condition_results.notify_all();
+    };
 };

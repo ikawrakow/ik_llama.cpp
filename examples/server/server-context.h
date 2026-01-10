@@ -22,43 +22,6 @@ enum slot_command {
     SLOT_COMMAND_RELEASE,
 };
 
-
-
-
-struct slot_params {
-    bool stream = true;
-    bool include_usage = false;
-    bool cache_prompt = true; // remember the prompt to avoid reprocessing all prompt
-
-    int32_t  n_keep = 0; // number of tokens to keep from initial prompt
-    int32_t  n_discard = 0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
-    int32_t  n_predict = -1; // new tokens to predict
-
-    thinking_tokens think_tokens;
-    
-    std::vector<std::string> antiprompt;
-
-    bool timings_per_token = false;
-    bool post_sampling_probs = false;
-    json input_prefix;
-    json input_suffix;
-
-    // speculative decoding parameters
-    struct {
-        int n_max = 16;  // max drafted tokens
-        int n_min = 0;  // min drafted tokens to accept
-        float p_min = 0.75f; // min probability required to accept a token in the draft
-    } speculative;
-
-    // OAI-compat fields
-    oaicompat_type        oaicompat = OAICOMPAT_TYPE_NONE;
-    std::string           oaicompat_model;
-    std::string           oaicompat_cmpl_id;
-    common_chat_syntax           oaicompat_chat_syntax;
-
-};
-
-
 struct server_slot {
     int id;
     int id_task = -1;

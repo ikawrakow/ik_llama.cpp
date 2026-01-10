@@ -51,7 +51,7 @@ static std::vector<std::vector<float>> encode(llama_context * ctx, const std::ve
         llama_decode(ctx, batch);
 
         // get embedding dimensions
-        uint64_t n_embd = llama_n_embd(mdl);
+        uint64_t n_embd = llama_model_n_embd(mdl);
 
         // allocate embedding output
         std::vector<float> emb_unorm(n_embd, 0.0f);
@@ -74,7 +74,7 @@ static std::vector<std::vector<float>> encode(llama_context * ctx, const std::ve
         }
 
         std::vector<float> emb_norm(emb_unorm.size());
-        llama_embd_normalize(emb_unorm.data(), emb_norm.data(), n_embd);
+        common_embd_normalize(emb_unorm.data(), emb_norm.data(), n_embd);
         result.push_back(emb_norm);
 
 #ifdef GRIT_DEBUG
@@ -191,12 +191,12 @@ int main(int argc, char * argv[]) {
         const std::vector<std::vector<float>> d_rep = encode(ctx, documents, gritlm_instruction(""));
         const std::vector<std::vector<float>> q_rep = encode(ctx, queries,   gritlm_instruction(instruction));
 
-        const int n_embd = llama_n_embd(mdl);
+        const int n_embd = llama_model_n_embd(mdl);
 
-        const float cosine_sim_q0_d0 = llama_embd_similarity_cos(q_rep[0].data(), d_rep[0].data(), n_embd);
-        const float cosine_sim_q0_d1 = llama_embd_similarity_cos(q_rep[0].data(), d_rep[1].data(), n_embd);
-        const float cosine_sim_q1_d0 = llama_embd_similarity_cos(q_rep[1].data(), d_rep[0].data(), n_embd);
-        const float cosine_sim_q1_d1 = llama_embd_similarity_cos(q_rep[1].data(), d_rep[1].data(), n_embd);
+        const float cosine_sim_q0_d0 = common_embd_similarity_cos(q_rep[0].data(), d_rep[0].data(), n_embd);
+        const float cosine_sim_q0_d1 = common_embd_similarity_cos(q_rep[0].data(), d_rep[1].data(), n_embd);
+        const float cosine_sim_q1_d0 = common_embd_similarity_cos(q_rep[1].data(), d_rep[0].data(), n_embd);
+        const float cosine_sim_q1_d1 = common_embd_similarity_cos(q_rep[1].data(), d_rep[1].data(), n_embd);
 
         std::printf("Cosine similarity between \"%.50s\" and \"%.50s\" is: %.3f\n", queries[0].c_str(), documents[0].c_str(), cosine_sim_q0_d0);
         std::printf("Cosine similarity between \"%.50s\" and \"%.50s\" is: %.3f\n", queries[0].c_str(), documents[1].c_str(), cosine_sim_q0_d1);

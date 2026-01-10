@@ -368,9 +368,8 @@ ggml_cgraph * llm_build_context::append_pooling(struct ggml_cgraph * gf) {
         inp = gf->nodes[i];
         if (strcmp(inp->name, "result_norm") == 0 || strcmp(inp->name, "result_embd") == 0) {
             break;
-        } else {
-            inp = nullptr;
         }
+        inp = nullptr;
     }
     GGML_ASSERT(inp != nullptr && "missing result_norm/result_embd tensor");
 
@@ -1751,7 +1750,7 @@ static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml
             if (output_norm) {
                 auto the_norm = split_output_norm ? split_output_norm->splits[id] : output_norm;
                 auto cur_normed = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, the_norm, NULL, LLM_NORM_RMS, cb, -1);
-                cb(cur_normed, "output_normed", 1000*(id+1));
+                cb(cur_normed, "result_norm", 1000*(id+1));
                 o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur_normed));
             } else {
                 o.push_back(llm_build_context::llm_build_lora_mm(lctx, ctx, split, cur));
@@ -1771,7 +1770,7 @@ static ggml_tensor * build_output(llama_context & lctx, ggml_context * ctx, ggml
     } else {
         if (output_norm) {
             cur = llm_build_context::llm_build_norm(ctx, cur, lctx.model.hparams, output_norm, NULL, LLM_NORM_RMS, cb, -1);
-            cb(cur, "output_normed", -1);
+            cb(cur, "result_norm", -1);
         }
         cur = llm_build_context::llm_build_lora_mm(lctx, ctx, output, cur);
     }

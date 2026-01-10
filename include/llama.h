@@ -601,13 +601,12 @@ extern "C" {
     LLAMA_API int32_t llama_n_vocab    (const struct llama_model * model);
     LLAMA_API const struct llama_vocab* llama_get_model_vocab(const struct llama_model* model);
     LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model);
-    LLAMA_API int32_t llama_n_embd     (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_embd     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_embd_inp(const struct llama_model* model);
     
     LLAMA_API int32_t llama_n_layer    (const struct llama_model * model);
 
     // Compat
-    static    int32_t     llama_model_n_embd(const struct llama_model * model) { return llama_n_embd(model); }
     LLAMA_API bool        llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool        llama_vocab_get_add_eos(const struct llama_vocab * vocab);
     LLAMA_API int32_t     llama_vocab_n_tokens(const struct llama_vocab * vocab);
@@ -1516,6 +1515,8 @@ std::vector<llama_grammar_candidate> llama_grammar_reject_candidates_for_stack(
 std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
         const std::string & src,
         llama_partial_utf8 partial_start);
+
+
 
 // Randomly selects a token from the candidates based on their probabilities using given std::mt19937.
 // This is a temporary workaround in order to fix race conditions when sampling with multiple sequences.

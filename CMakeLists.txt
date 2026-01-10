@@ -231,7 +231,7 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
 #
 
 add_subdirectory(common)
-
+add_subdirectory(vendor/cpp-httplib)
 if (LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     include(CTest)
     add_subdirectory(tests)
