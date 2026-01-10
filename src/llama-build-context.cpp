@@ -8452,89 +8452,107 @@ ggml_cgraph * llm_build_context::build_bailingmoe2() {
 
     const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
 
-    auto rope_cache = cparams.rope_cache && (rope_type == LLAMA_ROPE_TYPE_NEOX || rope_type == LLAMA_ROPE_TYPE_NORM) ?
-        ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
-
     for (int il = 0; il < n_transformer_layers; ++il) {
-        ggml_tensor * inpSA = inpL;
+        //ggml_tensor * inpSA = inpL;
 
-        // norm
-        cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_norm", il);
+        //auto wqkv = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? nullptr :
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, KQ_mask,
+                nullptr, nullptr, kq_scale, 0.0f, 0, il, true, false, true);
 
-        // self_attention
-        {
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wqkv, model.layers[il].bqkv,
-                    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-                    model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0.0f, il);
+        //// norm
+        //cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
+        //cb(cur, "attn_norm", il);
 
-            if (rope_cache) {
-                Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
-                Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
-            } else {
-                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-            }
+        //// self_attention
+        //{
+        //    //auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wqkv, model.layers[il].bqkv,
+        //    //        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+        //    //        model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0.0f, il);
+        //    auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, nullptr, nullptr, nullptr, nullptr,
+        //            model.layers[il].wq, nullptr, model.layers[il].wk, nullptr, model.layers[il].wv, nullptr,
+        //            model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0.0f, il);
 
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
+        //    if (rope_cache) {
+        //        Qcur = ggml_rope_fast(ctx0, Qcur, rope_cache);
+        //        Kcur = ggml_rope_fast(ctx0, Kcur, rope_cache);
+        //    } else {
+        //        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+        //                ext_factor, attn_factor, beta_fast, beta_slow);
+        //        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+        //                ext_factor, attn_factor, beta_fast, beta_slow);
+        //    }
 
-            cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, model.layers[il].bo,
-                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
-        }
+        //    cb(Qcur, "Qcur", il);
+        //    cb(Kcur, "Kcur", il);
+        //    cb(Vcur, "Vcur", il);
+
+        //    cur = llm_build_kv(ctx0, lctx, kv_self, gf, model.layers[il].wo, model.layers[il].bo,
+        //            Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
+        //}
         if (il == n_transformer_layers - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            //inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
 
-        ggml_tensor * sa_out = ggml_add(ctx0, cur, inpSA);
-        cb(sa_out, "sa_out", il);
+        //ggml_tensor * sa_out = ggml_add(ctx0, cur, inpSA);
+        //cb(sa_out, "sa_out", il);
 
         // MoE branch
-        cur = llm_build_norm(ctx0, sa_out, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "ffn_norm", il);
+        //cur = llm_build_norm(ctx0, sa_out, hparams, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, cb, il);
+        //cb(cur, "ffn_norm", il);
 
         if (static_cast<uint32_t>(il) < hparams.n_layer_dense_lead) {
-            cur = llm_build_ffn(ctx0, lctx, nullptr, cur,
+            cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
                     model.layers[il].ffn_up,   NULL, NULL,
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
                     NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
             cb(cur, "ffn_out", il);
         } else {
 
-            ggml_tensor * moe_out =
-                llm_build_moe_ffn(ctx0, lctx, cur,
-                        model.layers[il].ffn_gate_inp,
-                        model.layers[il].ffn_up_exps,
-                        model.layers[il].ffn_gate_exps,
-                        model.layers[il].ffn_down_exps,
-                        model.layers[il].ffn_exp_probs_b,
-                        n_expert, n_expert_used,
-                        LLM_FFN_SILU, hparams.expert_weights_norm,
-                        true, hparams.expert_weights_scale,
-                        (llm_expert_gating_func_type) hparams.expert_gating_func,
-                        cb, il, gf);
-            cb(moe_out, "ffn_moe_out", il);
+            cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
+                    model.layers[il].ffn_gate_inp,  nullptr,
+                    model.layers[il].ffn_up_exps,   nullptr,
+                    model.layers[il].ffn_gate_exps, nullptr,
+                    model.layers[il].ffn_down_exps, nullptr,
+                    model.layers[il].ffn_exp_probs_b,
+                    model.layers[il].ffn_up_shexp,   nullptr,
+                    model.layers[il].ffn_gate_shexp, nullptr,
+                    model.layers[il].ffn_down_shexp, nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
+                    (llm_expert_gating_func_type) hparams.expert_gating_func,
+                    LLM_FFN_SILU,
+                    cb, il, gf, true);
 
-            ggml_tensor * ffn_shexp = llm_build_ffn(ctx0, lctx, nullptr, cur,
-                    model.layers[il].ffn_up_shexp,   NULL, NULL,
-                    model.layers[il].ffn_gate_shexp, NULL, NULL,
-                    model.layers[il].ffn_down_shexp, NULL, NULL,
-                    NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
-            cb(ffn_shexp, "ffn_shexp", il);
+            //ggml_tensor * moe_out =
+            //    llm_build_moe_ffn(ctx0, lctx, cur,
+            //            model.layers[il].ffn_gate_inp,
+            //            model.layers[il].ffn_up_exps,
+            //            model.layers[il].ffn_gate_exps,
+            //            model.layers[il].ffn_down_exps,
+            //            model.layers[il].ffn_exp_probs_b,
+            //            n_expert, n_expert_used,
+            //            LLM_FFN_SILU, hparams.expert_weights_norm,
+            //            true, hparams.expert_weights_scale,
+            //            (llm_expert_gating_func_type) hparams.expert_gating_func,
+            //            cb, il, gf);
+            //cb(moe_out, "ffn_moe_out", il);
 
-            cur = ggml_add(ctx0, moe_out, ffn_shexp);
-            cb(cur, "ffn_out", il);
+            //ggml_tensor * ffn_shexp = llm_build_ffn(ctx0, lctx, nullptr, cur,
+            //        model.layers[il].ffn_up_shexp,   NULL, NULL,
+            //        model.layers[il].ffn_gate_shexp, NULL, NULL,
+            //        model.layers[il].ffn_down_shexp, NULL, NULL,
+            //        NULL,
+            //        LLM_FFN_SILU, LLM_FFN_PAR, cb, il);
+            //cb(ffn_shexp, "ffn_shexp", il);
+
+            //cur = ggml_add(ctx0, moe_out, ffn_shexp);
+            //cb(cur, "ffn_out", il);
         }
 
-        cur = ggml_add(ctx0, cur, sa_out);
+        //cur = ggml_add(ctx0, cur, sa_out);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
@@ -8542,16 +8560,20 @@ ggml_cgraph * llm_build_context::build_bailingmoe2() {
         // input for next layer
         inpL = cur;
     }
-    cur = inpL;
 
-    cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
-
-    cb(cur, "result_norm", -1);
-
-    // lm_head
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
-
+    cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
     cb(cur, "result_output", -1);
+
+    //cur = inpL;
+
+    //cur = llm_build_norm(ctx0, cur, hparams, model.output_norm, NULL, LLM_NORM_RMS, cb, -1);
+
+    //cb(cur, "result_norm", -1);
+
+    //// lm_head
+    //cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
+
+    //cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
     return gf;
@@ -9160,7 +9182,9 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     float freq_base_l  = n_swa > 0 ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
     float freq_scale_l = n_swa > 0 ? hparams.rope_freq_scale_train_swa : hparams.rope_freq_scale_train;
 
-    if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&
+    auto wqkv = lctx.model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? nullptr : model.layers[il].wqkv;
+
+    if (!wqkv && !model.layers[il].wqk && cparams.flash_attn &&
          model.layers[il].wq->extra && model.layers[il].wk->extra && model.layers[il].wv->extra && model.layers[il].wo->extra) {
         if (kv_self.k_l[il]->extra && kv_self.v_l[il]->extra) {
             ggml_split_tensor_t * attn_norm = the_attn_norm ? (ggml_split_tensor_t *)the_attn_norm->extra : nullptr;
