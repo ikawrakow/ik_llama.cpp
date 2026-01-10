@@ -1087,7 +1087,7 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ct
     }
     float cum_sum = 0.0f;
     for (size_t i = 0; i < candidates->size; ++i) {
-        float p = expf(candidates->data[i].logit - max_l);
+        const float p = expf(candidates->data[i].logit - max_l);
         candidates->data[i].p = p;
         cum_sum += p;
     }

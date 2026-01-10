@@ -71,7 +71,7 @@ struct llama_sampler_adaptive_p {
     float weighted_sum;     // sum(p_n * decay^N)
     float total_weight;     // sum(decay^i), converges to 1/(1-decay)
     float max_logit;        // maximum logit found during transform
-    std::vector<float> probs;   // denormalized probabilities for stochastic sampling
+    std::vector<float> probs;   // cumulative probabilities
 };
 
 void llama_sampler_adaptive_p_apply(
