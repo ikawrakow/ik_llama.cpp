@@ -34,6 +34,7 @@
 #include <src/llama-impl.h>
 #ifdef SQLITE3_MODERN_CPP_SUPPORT
 #include <sqlite_modern_cpp.h>
+#include <deque>
 
 struct DatabaseHandle {
     sqlite::database db;
@@ -990,9 +991,14 @@ int main(int argc, char ** argv) {
                 }
                 ctx_server.queue_results.remove_waiting_task_id(id_task);
             }
-            else {
-                const auto chunked_content_provider = [id_task, &ctx_server, completion_id, oaicompat, send_done = params.send_done](size_t, httplib::DataSink& sink) {
+else {
+                // Shared state to track the currently running task ID across retries.
+                auto active_task_id = std::make_shared<int>(id_task);
+
+                // Capture 'data' by value to use as a template for retries
+                const auto chunked_content_provider = [id_task, active_task_id, &ctx_server, completion_id, oaicompat, send_done = params.send_done, data](size_t, httplib::DataSink& sink) mutable {
                     bool successful_completion = false;
+                    
                     const auto sse = [oaicompat, &sink](const json &res) {
                         if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
                             return server_sent_anthropic_event(sink, res);
@@ -1000,75 +1006,450 @@ int main(int argc, char ** argv) {
                             return server_sent_event(sink, res);
                         }
                     };
-                    while (true) {
-                        server_task_result result = ctx_server.queue_results.recv(id_task);
-                        if (!result.error) {
-                            result.oaicompat = oaicompat;
-                            result.oaicompat_cmpl_id = completion_id;
-                            json res_json;
-                            if (oaicompat) {
-                                if (result.final_result) {
-                                    res_json = result.to_json_final();
-                                }
-                                else {
-                                    res_json = result.to_json_partial();
-                                }
+
+                    // 1. Parse Configuration from Request
+                    
+                    // Banned Strings
+                    std::vector<std::string> stop_phrases;
+                    if (data.contains("banned_strings") && data["banned_strings"].is_array()) {
+                        for (const auto& val : data["banned_strings"]) {
+                            if (val.is_string()) {
+                                std::string s = val.get<std::string>();
+                                if (!s.empty()) stop_phrases.push_back(s);
                             }
-                            else {
-                                // legacy completions
-                                res_json = result.data;
-                            }
-                            if (res_json.is_array()) {
-                                // chat completions and oai completions
-                                for (const auto& res : res_json) {
-                                    if (!sse(res)) {
-                                        // sending failed (HTTP connection closed), cancel the generation
+                        }
+                    }
+
+                    // Logit Bias Penalty (Default: -999.0)
+                    float ban_bias = -999.0f;
+                    if (data.contains("banned_bias") && data["banned_bias"].is_number()) {
+                        ban_bias = data["banned_bias"].get<float>();
+                    }
+
+                    // Token Limit Tracking
+                    int original_n_predict = -1;
+                    if (data.contains("n_predict") && data["n_predict"].is_number_integer()) {
+                        original_n_predict = data["n_predict"].get<int>();
+                    }
+                    int total_tokens_streamed = 0;
+
+                    // ============================================================
+                    // FAST PATH: No banned strings -> No buffering
+                    // ============================================================
+                    if (stop_phrases.empty()) {
+                        while (true) {
+                            server_task_result result = ctx_server.queue_results.recv(id_task);
+                            if (!result.error) {
+                                result.oaicompat = oaicompat;
+                                result.oaicompat_cmpl_id = completion_id;
+                                json res_json;
+                                if (oaicompat) {
+                                    res_json = result.final_result ? result.to_json_final() : result.to_json_partial();
+                                } else {
+                                    res_json = result.data;
+                                }
+
+                                if (res_json.is_array()) {
+                                    for (const auto& res : res_json) {
+                                        if (!sse(res)) {
+                                            ctx_server.request_cancel(id_task);
+                                            ctx_server.queue_results.remove_waiting_task_id(id_task);
+                                            return false;
+                                        }
+                                    }
+                                    if (result.stop) {
+                                        successful_completion = true;
+                                        break;
+                                    }
+                                } else {
+                                    if (!sse(res_json)) {
+                                        ctx_server.request_cancel(id_task);
                                         ctx_server.queue_results.remove_waiting_task_id(id_task);
                                         return false;
                                     }
+                                    if (result.stop) {
+                                        successful_completion = true;
+                                        break;
+                                    }
                                 }
-                                if (result.stop) {
-                                    successful_completion = true;
-                                    break;
-                                }
-                            }
-                            else {
-                                // legacy completions
-                                if (!sse(res_json)) {
-                                    ctx_server.queue_results.remove_waiting_task_id(id_task);
-                                    return false;
-                                }
-                                if (result.stop) {
-                                    break;
-                                }
-                            }
-                        }
-                        else {
-                            if (!sse(result.data)) {
+                            } else {
+                                sse(result.data);
                                 ctx_server.queue_results.remove_waiting_task_id(id_task);
                                 return false;
                             }
-                            break;
+                        }
+                    } 
+                    // ============================================================
+                    // SLOW PATH: Buffering and Banning Logic
+                    // ============================================================
+                    else {
+                        // Calculate Buffer Size: Exactly the length of the longest banned string
+                        size_t max_banned_char_len = 0;
+                        for (const auto& phrase : stop_phrases) {
+                            if (phrase.length() > max_banned_char_len) {
+                                max_banned_char_len = phrase.length();
+                            }
+                        }
+
+                        // Ensure at least 1 to function as a buffer
+                        const size_t BUFFER_SIZE = std::max((size_t)1, max_banned_char_len);
+                        
+                        // Initialize Buffer & State
+                        std::deque<json> token_buffer;
+                        
+                        int current_task_id = id_task;
+                        
+                        // Track bans specifically for the current "next token" to be generated.
+                        std::set<int> current_step_bans;
+
+                        // Track the text that has been confirmed/sent to the client.
+                        std::string current_prompt_str = "";
+                        if (data.contains("prompt") && data["prompt"].is_string()) {
+                            current_prompt_str = data["prompt"].get<std::string>();
+                        }
+
+                        // Helper to extract text content
+                        auto get_content_str = [](const json& j) -> std::string {
+                            if (j.contains("choices") && j["choices"].is_array() && !j["choices"].empty()) {
+                                const auto& choice = j["choices"][0];
+                                if (choice.contains("delta") && choice["delta"].contains("content")) {
+                                    auto val = choice["delta"]["content"];
+                                    if (val.is_string()) return val.get<std::string>();
+                                }
+                            }
+                            if (j.contains("content")) {
+                                auto val = j["content"];
+                                if (val.is_string()) return val.get<std::string>();
+                            }
+                            return ""; 
+                        };
+
+                        // Helper to extract Token ID
+                        auto get_token_id = [](const json& j) -> int {
+                            if (j.contains("__raw_token_id")) return j["__raw_token_id"].get<int>();
+                            if (j.contains("token")) return j["token"].get<int>();
+                            if (j.contains("id")) return j["id"].get<int>();
+                            return -1;
+                        };
+
+                        // Helper for case-insensitive search
+                        auto to_lower_str = [](std::string s) {
+                            std::transform(s.begin(), s.end(), s.begin(),
+                                [](unsigned char c){ return std::tolower(c); });
+                            return s;
+                        };
+
+                        // Helper to print buffer
+                        auto print_debug_buffer = [&](const std::deque<json>& buf) {
+                            std::cout << "Debug TokenBuffer (Size " << BUFFER_SIZE << "): [";
+                            size_t print_len = std::max(buf.size(), BUFFER_SIZE);
+                            for (size_t i = 0; i < print_len; ++i) {
+                                if (i < buf.size()) {
+                                    std::string content = get_content_str(buf[i]);
+                                    std::string escaped;
+                                    for (char c : content) {
+                                        if (c == '\n') escaped += "\\n";
+                                        else if (c == '"') escaped += "\\\"";
+                                        else escaped += c;
+                                    }
+                                    std::cout << "\"" << escaped << "\"";
+                                } else {
+                                    std::cout << "\"\"";
+                                }
+                                if (i < print_len - 1) std::cout << ", ";
+                            }
+                            std::cout << "]" << std::endl;
+                        };
+
+                        while (true) {
+                            // Ensure shared state matches current local state
+                            *active_task_id = current_task_id;
+
+                            // Receive from the CURRENT task ID
+                            server_task_result result = ctx_server.queue_results.recv(current_task_id);
+                            
+                            std::vector<json> items_to_buffer;
+                            json raw_item = result.data; 
+                            
+                            if (!result.error) {
+                                result.oaicompat = oaicompat;
+                                result.oaicompat_cmpl_id = completion_id;
+                                json res_json;
+                                if (oaicompat) {
+                                    res_json = result.final_result ? result.to_json_final() : result.to_json_partial();
+                                } else {
+                                    res_json = result.data;
+                                }
+
+                                if (res_json.is_array()) {
+                                    for (const auto& r : res_json) {
+                                        json item = r;
+                                        if (raw_item.contains("token")) item["__raw_token_id"] = raw_item["token"];
+                                        items_to_buffer.push_back(item);
+                                    }
+                                } else {
+                                    json item = res_json;
+                                    if (raw_item.contains("token")) item["__raw_token_id"] = raw_item["token"];
+                                    items_to_buffer.push_back(item);
+                                }
+                            } else {
+                                items_to_buffer.push_back(result.data);
+                            }
+
+                            // 2. Process items into buffer
+                            for (const auto& item : items_to_buffer) {
+                                token_buffer.push_back(item);
+                            }
+
+                            print_debug_buffer(token_buffer);
+
+                            // 3. Check for Stop Phrases
+                            std::string buffer_text = "";
+                            std::vector<size_t> token_offsets; 
+                            
+                            for (const auto& item : token_buffer) {
+                                token_offsets.push_back(buffer_text.length());
+                                buffer_text += get_content_str(item);
+                            }
+
+                            std::string buffer_lower = to_lower_str(buffer_text);
+                            
+                            size_t match_pos = std::string::npos;
+                            std::string detected_phrase = "";
+
+                            // Iterate over the dynamic list of stop phrases
+                            for (const auto& phrase : stop_phrases) {
+                                std::string target_lower = to_lower_str(phrase);
+                                size_t pos = buffer_lower.find(target_lower);
+                                if (pos != std::string::npos) {
+                                    if (match_pos == std::string::npos || pos < match_pos) {
+                                        match_pos = pos;
+                                        detected_phrase = phrase;
+                                    }
+                                }
+                            }
+
+                            if (match_pos != std::string::npos) {
+                                std::cout << "Debug: Stop phrase '" << detected_phrase << "' detected. Initiating ban logic." << std::endl;
+
+                                // Find the guilty token
+                                size_t split_index = 0;
+                                bool found_split = false;
+                                for (size_t i = 0; i < token_offsets.size(); ++i) {
+                                    size_t token_start = token_offsets[i];
+                                    std::string content = get_content_str(token_buffer[i]);
+                                    size_t token_end = token_start + content.length();
+
+                                    if (token_end > match_pos) {
+                                        split_index = i;
+                                        found_split = true;
+                                        break;
+                                    }
+                                }
+
+                                if (found_split) {
+                                    // 1. Flush good tokens
+                                    for (size_t i = 0; i < split_index; ++i) {
+                                        json& item = token_buffer[i];
+                                        if (item.contains("__raw_token_id")) item.erase("__raw_token_id");
+                                        
+                                        current_prompt_str += get_content_str(item);
+                                        current_step_bans.clear(); 
+                                        
+                                        if (!sse(item)) {
+                                            ctx_server.request_cancel(current_task_id);
+                                            ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                            return false;
+                                        }
+                                        
+                                        total_tokens_streamed++;
+                                        if (original_n_predict > 0 && total_tokens_streamed >= original_n_predict) {
+                                            ctx_server.request_cancel(current_task_id);
+                                            ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                            successful_completion = true;
+                                            goto cleanup;
+                                        }
+                                    }
+
+                                    // 2. Identify Guilty Token & Add to Bans
+                                    json& guilty_item = token_buffer[split_index];
+                                    int guilty_token_id = get_token_id(guilty_item);
+
+                                    if (guilty_token_id == -1) {
+                                        std::string content = get_content_str(guilty_item);
+                                        auto tokens = ctx_server.tokenize(content, false);
+                                        if (!tokens.empty()) guilty_token_id = tokens[0];
+                                    }
+
+                                    if (guilty_token_id != -1) {
+                                        current_step_bans.insert(guilty_token_id);
+                                        std::cout << "Debug: Banning token ID " << guilty_token_id << " for this spot. Total bans: " << current_step_bans.size() << std::endl;
+
+                                        // 3. Cancel current task
+                                        ctx_server.request_cancel(current_task_id);
+                                        ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+
+                                        // 4. FIX STEP: Generate 1 token with ALL current bans
+                                        json fix_data = data;
+                                        fix_data["prompt"] = current_prompt_str;
+                                        fix_data["n_predict"] = 1; 
+                                        
+                                        if (!fix_data.contains("logit_bias")) fix_data["logit_bias"] = json::array();
+                                        
+                                        for (int banned_id : current_step_bans) {
+                                            fix_data["logit_bias"].push_back(json::array({banned_id, ban_bias}));
+                                        }
+                                        
+                                        int id_fix = ctx_server.queue_tasks.get_new_id();
+                                        *active_task_id = id_fix; // Update shared state for fix task
+                                        ctx_server.queue_results.add_waiting_task_id(id_fix);
+                                        
+                                        std::vector<server_tokens> fix_inputs = tokenize_input_prompts(
+                                            llama_get_vocab(ctx_server.ctx), ctx_server.mctx, fix_data["prompt"], true, true
+                                        );
+                                        ctx_server.request_completion(id_fix, -1, fix_data, false, false, std::move(fix_inputs[0]));
+
+                                        // Wait for the fix token
+                                        server_task_result fix_result = ctx_server.queue_results.recv(id_fix);
+                                        ctx_server.queue_results.remove_waiting_task_id(id_fix);
+
+                                        // Process fix token
+                                        json fix_token_json;
+                                        json raw_fix = fix_result.data;
+                                        
+                                        fix_result.oaicompat = oaicompat;
+                                        fix_result.oaicompat_cmpl_id = completion_id;
+                                        if (oaicompat) {
+                                            fix_token_json = fix_result.final_result ? fix_result.to_json_final() : fix_result.to_json_partial();
+                                            if (fix_token_json.is_array() && !fix_token_json.empty()) fix_token_json = fix_token_json[0];
+                                        } else {
+                                            fix_token_json = fix_result.data;
+                                        }
+                                        
+                                        if (raw_fix.contains("token")) fix_token_json["__raw_token_id"] = raw_fix["token"];
+
+                                        std::string fix_content = get_content_str(fix_token_json);
+
+                                        // 5. RESUME STEP: Continue generation normally
+                                        json resume_data = data;
+                                        bool stop_after_fix = false;
+                                        
+                                        if (original_n_predict > 0) {
+                                            int pending = 1; // The fix token we just generated
+                                            if (total_tokens_streamed + pending >= original_n_predict) {
+                                                stop_after_fix = true;
+                                            } else {
+                                                resume_data["n_predict"] = original_n_predict - (total_tokens_streamed + pending);
+                                            }
+                                        }
+
+                                        if (stop_after_fix) {
+                                            // We reached the limit with the fix token. Flush it and stop.
+                                            token_buffer.clear();
+                                            token_buffer.push_back(fix_token_json);
+                                            
+                                            while (!token_buffer.empty()) {
+                                                json& item = token_buffer.front();
+                                                if (item.contains("__raw_token_id")) item.erase("__raw_token_id");
+                                                if (!sse(item)) {
+                                                    ctx_server.request_cancel(*active_task_id);
+                                                    ctx_server.queue_results.remove_waiting_task_id(*active_task_id);
+                                                    return false;
+                                                }
+                                                total_tokens_streamed++;
+                                                token_buffer.pop_front();
+                                            }
+                                            successful_completion = true;
+                                            goto cleanup;
+                                        }
+
+                                        resume_data["prompt"] = current_prompt_str + fix_content;
+
+                                        current_task_id = ctx_server.queue_tasks.get_new_id();
+                                        *active_task_id = current_task_id; // Update shared state for resume task
+                                        ctx_server.queue_results.add_waiting_task_id(current_task_id);
+                                        
+                                        std::vector<server_tokens> resume_inputs = tokenize_input_prompts(
+                                            llama_get_vocab(ctx_server.ctx), ctx_server.mctx, resume_data["prompt"], true, true
+                                        );
+                                        ctx_server.request_completion(current_task_id, -1, resume_data, false, false, std::move(resume_inputs[0]));
+
+                                        // 6. Update Buffer
+                                        token_buffer.clear();
+                                        token_buffer.push_back(fix_token_json);
+                                        
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            // 4. Standard Flush Logic
+                            bool should_flush_all = result.stop || result.error;
+
+                            if (token_buffer.size() >= BUFFER_SIZE || should_flush_all) {
+                                while (!token_buffer.empty()) {
+                                    if (!should_flush_all && token_buffer.size() < BUFFER_SIZE) {
+                                        break;
+                                    }
+
+                                    json& item_to_send = token_buffer.front();
+                                    if (item_to_send.contains("__raw_token_id")) item_to_send.erase("__raw_token_id");
+
+                                    current_prompt_str += get_content_str(item_to_send);
+                                    current_step_bans.clear(); 
+                                    
+                                    if (!sse(item_to_send)) {
+                                        ctx_server.request_cancel(current_task_id);
+                                        ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                        return false;
+                                    }
+                                    
+                                    total_tokens_streamed++;
+                                    token_buffer.pop_front();
+
+                                    if (original_n_predict > 0 && total_tokens_streamed >= original_n_predict) {
+                                        ctx_server.request_cancel(current_task_id);
+                                        ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                        successful_completion = true;
+                                        goto cleanup;
+                                    }
+                                }
+                            }
+
+                            if (result.error) {
+                                ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                return false;
+                            }
+
+                            if (result.stop) {
+                                successful_completion = true;
+                                break;
+                            }
                         }
                     }
+
+                    cleanup:
                     bool ok = true;
                     if (successful_completion && oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE) {
                         static const std::string done_message = "data: [DONE]\n\n";
                         LOG_VERBOSE("data stream", { {"to_send", done_message} });
                         if (!sink.write(done_message.c_str(), done_message.size())) {
-                            // If writing [DONE] fails, the stream is likely already problematic.
                             ok = false;
                         }
                     }
                     sink.done();
-                    ctx_server.queue_results.remove_waiting_task_id(id_task);
+                    
+                    // Cleanup the active task ID (which might be different from id_task in slow path)
+                    ctx_server.queue_results.remove_waiting_task_id(*active_task_id);
+                    
                     return ok;
                 };
 
-                auto on_complete = [id_task, &ctx_server](bool) {
-                    // cancel request
-                    ctx_server.request_cancel(id_task);
-                    ctx_server.queue_results.remove_waiting_task_id(id_task);
+                auto on_complete = [active_task_id, &ctx_server](bool) {
+                    // Cancel the currently active task ID
+                    int id_to_cancel = *active_task_id;
+                    ctx_server.request_cancel(id_to_cancel);
+                    ctx_server.queue_results.remove_waiting_task_id(id_to_cancel);
                 };
 
                 res.set_chunked_content_provider("text/event-stream", chunked_content_provider, on_complete);
