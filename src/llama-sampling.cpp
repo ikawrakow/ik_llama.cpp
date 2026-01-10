@@ -1044,25 +1044,23 @@ llama_token llama_sample_token_adaptive_p_impl(
     GGML_ASSERT(candidates->size > 0);
     const int64_t t_start_sample_us = ggml_time_us();
 
-    adapt_p_ctx->probs.reserve(candidates->size);
-    float * const probs = adapt_p_ctx->probs.data();
-    float cum_sum = 0.0f;
-    for (size_t i = 0; i < candidates->size; ++i) {
-        const float p = expf(candidates->data[i].logit - adapt_p_ctx->max_logit);
-        probs[i] = p;
-        cum_sum += p;
-    }    
-    float ran_sum = cum_sum * (float)adapt_p_ctx->rng() / (float)adapt_p_ctx->rng.max();
+    const size_t count = candidates->size;
+    adapt_p_ctx->probs.resize(count);
 
-    // stochastic sampling
-    size_t idx;
-    for (idx = 0; idx < candidates->size - 1; ++idx) {
-        ran_sum -= probs[idx];
-        if (ran_sum <= 0.0f) {
-            break;
-        }
+    // cumulative distribution
+    const float max_logit = adapt_p_ctx->max_logit;
+    float cum_prob = 0.0f;
+    for (size_t i = 0; i < count; ++i) {
+        cum_prob += expf(candidates->data[i].logit - max_logit);
+        adapt_p_ctx->probs[i] = cum_prob;
     }
-    llama_token id = candidates->data[idx].id;
+    adapt_p_ctx->probs.back() += 1.0f;  // safety margin in case rng() ~= rng.max()
+
+    // find token with cum_prob > target_cum_prob
+    const float target_cum_prob = cum_prob * (float)adapt_p_ctx->rng() / (float)adapt_p_ctx->rng.max();
+    auto iter = std::upper_bound(adapt_p_ctx->probs.begin(), adapt_p_ctx->probs.end(), target_cum_prob);
+    GGML_ASSERT(iter != adapt_p_ctx->probs.end());
+    llama_token id = candidates->data[std::distance(adapt_p_ctx->probs.begin(), iter)].id;
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     smpl->n_sample++;
