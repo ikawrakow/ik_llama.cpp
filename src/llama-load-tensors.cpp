@@ -185,14 +185,6 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
 create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_model & _model) : ml(_ml), model(_model) {
 
-#if 0
-    for (int i = 0; i < model.hparams.n_layer; ++i) {
-        printf("Layer %2d: %s %s\n", i, ggml_backend_buft_name(model.buft_layer[i].buft_matrix), ggml_backend_buft_name(model.buft_layer[i].buft));
-    }
-    printf("Output: %s %s\n", ggml_backend_buft_name(model.buft_output.buft_matrix), ggml_backend_buft_name(model.buft_output.buft));
-    printf(" Input: %s %s\n", ggml_backend_buft_name(model.buft_input.buft_matrix), ggml_backend_buft_name(model.buft_input.buft));
-#endif
-
     const int n_layer = model.hparams.n_layer;
     buft_layer_count[model.buft_input.buft]++;
     buft_layer_count[model.buft_input.buft_matrix]++;
@@ -229,24 +221,6 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
             split_ctx = it->second;
         }
     }
-#if 0
-    printf("=======================================================================\n");
-    auto n_device = model.device_count();
-    printf(" Model has %d devices:\n", n_device);
-    for (int device = 0; device < n_device; ++device) {
-        auto buft = model.default_buffer_type_offload(device);
-        if (buft) {
-            printf("  %d   %s\n", device, ggml_backend_buft_name(buft));
-        } else {
-            printf("  Oops: null buft for debvice %d\n", device);
-        }
-    }
-    if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-        printf("model.splits:");
-        for (auto s : model.splits) printf(" %g", s);
-        printf("\n");
-    }
-#endif
 }
 
 static std::vector<int> create_split(int nr, int granularity, const std::vector<float> & splits, const std::vector<size_t> & mem_used,
