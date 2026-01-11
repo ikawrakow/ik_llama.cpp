@@ -1,4 +1,5 @@
 //
+
 // Copyright (C) 2023-2024 The ggml authors
 // Copyright (C) 2024 Iwan Kawrakow
 // MIT license
@@ -2487,23 +2488,24 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
 
     if (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
         ggml_is_quantized(src0_1->type) &&
-        ggml_is_quantized(src0_2->type) &&
+        (!src0_2 || ggml_is_quantized(src0_2->type)) &&
         ggml_backend_buffer_is_cuda(src0_1->buffer) &&
-        ggml_backend_buffer_is_cuda(src0_2->buffer) &&
+        (!src0_2 || ggml_backend_buffer_is_cuda(src0_2->buffer)) &&
         ggml_backend_buffer_is_cuda(src1->buffer) &&
         ggml_backend_buffer_is_cuda(dst->buffer) &&
         src1->type == GGML_TYPE_F32) {
         int device_id = ctx.device;
         ggml_backend_cuda_buffer_context * src0_1_ctx = (ggml_backend_cuda_buffer_context *) src0_1->buffer->context;
-        ggml_backend_cuda_buffer_context * src0_2_ctx = (ggml_backend_cuda_buffer_context *) src0_2->buffer->context;
+        ggml_backend_cuda_buffer_context * src0_2_ctx = src0_2 ? (ggml_backend_cuda_buffer_context *) src0_2->buffer->context : nullptr;
         ggml_backend_cuda_buffer_context * src1_ctx   = (ggml_backend_cuda_buffer_context *) src1->buffer->context;
         ggml_backend_cuda_buffer_context * dst_ctx    = (ggml_backend_cuda_buffer_context *) dst->buffer->context;
+        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        return i;
+        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         if (src0_1_ctx->device == device_id &&
-            src0_2_ctx->device == device_id &&
+            (!src0_2_ctx || src0_2_ctx->device == device_id) &&
             src1_ctx->device   == device_id &&
             dst_ctx->device    == device_id) {
-            //printf("%s(%s, %s): %ld x %ld x %ld, %ld x %ld x %ld, %ld x %ld x %ld\n", __func__, src0_1->name, src0_2->name,
-            //        src0->ne[0], src0->ne[1], src0->ne[2], src1->ne[0], src1->ne[1], src1->ne[2], ids->ne[0], ids->ne[1], ids->ne[2]);
             // Fast TG path
             const int64_t n_ids = ids->ne[0];
             auto stream = ctx.stream(device_id, 0);
@@ -2518,7 +2520,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
 
             const int64_t src1_padded_col_size = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
             ggml_cuda_pool_alloc<char> src1_quantized(ctx.pool());
-            if (ggml_is_quantized(src0_1->type) || ggml_is_quantized(src0_2->type)) {
+            if (ggml_is_quantized(src0_1->type) || (src0_2 && ggml_is_quantized(src0_2->type))) {
                 GGML_ASSERT(src1->ne[0] % QK8_1 == 0);
                 auto src_1_ddq_size = src1_padded_col_size*sizeof(block_q8_1)/QK8_1;
                 local_src1.data = src1_quantized.alloc(src_1_ddq_size);
@@ -2540,7 +2542,8 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             auto unary_op = (ggml_unary_op)dst->op_params[0];
             ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, src0_1, &local_src1, ids, &local_dst,
                     dst->src[4], dst->src[5],
-                    (const char *)src0_1->data, (const char *)src0_2->data, (const float *)src1->data, src1_quantized.get(),
+                    (const char *)src0_1->data, src0_2 ? (const char *)src0_2->data : nullptr,
+                    (const float *)src1->data, src1_quantized.get(),
                     (float *)local_dst.data, 0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, stream);
             CUDA_CHECK(cudaGetLastError());
 
@@ -2608,7 +2611,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     // looks like it really depends just on the total number of experts.
     // TODO: verify with more models, or perhaps make the magic constant '32' to be defined via a compile time define.
     if (src1->ne[2] <= ctx.mmq_id_thresh*src0->ne[2] &&
-        ggml_is_quantized(src0_1->type) && src0_1->type == src0_2->type && src1->ne[1] == 1 && src1->ne[3] == 1 &&
+        ggml_is_quantized(src0_1->type) && (!src0_2 || src0_1->type == src0_2->type) && src1->ne[1] == 1 && src1->ne[3] == 1 &&
         ggml_cuda_can_use_mmq_id(src0_1->type, ggml_cuda_info().devices[ctx.device].cc, src1->ne[2])) {
 
         const int64_t ne_get_rows = ne12 * n_ids;
@@ -2631,6 +2634,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 src0_1->type, ne10, src1->nb[1] / ts_src1, src1->nb[2] / ts_src1, src1->nb[2] / ts_src1,
                 ne10_padded, ne11_flat, 1, 1, stream);
 
+        if (src0_2) {
         ggml_cuda_pool_alloc<char> dst_up_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
         ggml_cuda_pool_alloc<char> dst_gate_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
 
@@ -2661,6 +2665,34 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
                     (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
                     (float *)dst->data);
+        }
+        } else {
+
+            ggml_cuda_pool_alloc<char> dst_up_gate_contiguous(ctx.pool(), 2*sizeof(float)*ggml_nelements(dst));
+            dst_row.ne[0] *= 2;
+            dst_row.nb[1] *= 2;
+            dst_row.nb[2] *= 2;
+            dst_row.nb[3] *= 2;
+            dst_row.data = dst_up_gate_contiguous.get();
+            ggml_cuda_mul_mat_q_id(ctx, src0_1, src1, ids, &dst_row, (char *)ids_device.get(), src1_quantized.get());
+            if (dst->src[4]) {
+                GGML_ASSERT(!dst->src[5]);
+                ggml_cuda_add_id((const float *)dst_row.data, (const float *)dst->src[4]->data, (const int32_t *)ids->data,
+                        (float *)dst_row.data, dst_row.ne[0], dst_row.ne[1], dst_row.ne[2], dst_row.ne[0], dst_row.ne[1],
+                        dst_row.nb[1], dst_row.nb[2], dst->src[4]->nb[1], ids->nb[1], stream);
+                CUDA_CHECK(cudaGetLastError());
+            }
+
+            auto unary_op = (ggml_unary_op)dst->op_params[0];
+            if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
+                ggml_swiglu_oai_cuda_f32((const float *)dst_up_gate_contiguous.get(), (const float *)dst_up_gate_contiguous.get() + dst->ne[0],
+                        (float *)dst->data, ggml_nelements(dst), dst->ne[0],  dst->ne[0],  dst->ne[0],
+                        1.702f, 7.0f, stream);
+            } else {
+                ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst), dst->ne[0],
+                        (const float *)dst_up_gate_contiguous.get(),
+                        (float *)dst->data);
+            }
         }
         CUDA_CHECK(cudaGetLastError());
 
@@ -3603,7 +3635,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
             auto src0_2 = node->src[1];
             auto src1   = node->src[2];
             if (src1->ne[1] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || src1->type != GGML_TYPE_F32 ||
-                !ggml_is_quantized(src0_1->type) || !ggml_is_quantized(src0_2->type)) {
+                !ggml_is_quantized(src0_1->type) || (src0_2 && !ggml_is_quantized(src0_2->type))) {
                 use_cuda_graph = false;
             } else {
                 if (i < cgraph->n_nodes-1) {
@@ -3967,8 +3999,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 bool is_fused_up_gate = op->op == GGML_OP_MOE_FUSED_UP_GATE || op->op == GGML_OP_FUSED_UP_GATE;
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = is_fused_up_gate ? op->src[2] : op->src[1];
-                if (is_fused_up_gate && a->type != op->src[1]->type) {
-                    printf("%s: returning false for GGML_OP_MOE_FUSED_UP_GATE because src0->type != src1->type\n", __func__);
+                if (is_fused_up_gate && op->src[1] && a->type != op->src[1]->type) {
+                    fprintf(stderr, "%s: returning false for GGML_OP_MOE_FUSED_UP_GATE because src0->type != src1->type\n", __func__);
                     return false;
                 }
                 //==================================================================

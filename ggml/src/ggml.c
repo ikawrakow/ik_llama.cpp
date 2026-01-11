@@ -7628,13 +7628,13 @@ struct ggml_tensor * ggml_moe_up_gate(
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids,
             enum   ggml_unary_op  op) {
-    if (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate)) {
+    if (as_gate && (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate))) {
         struct ggml_tensor * result_up   = ggml_mul_mat_id(ctx, as_up,   b, ids);
         struct ggml_tensor * result_gate = ggml_mul_mat_id(ctx, as_gate, b, ids);
         return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
     }
     GGML_ASSERT(!ggml_is_transposed(as_up));
-    GGML_ASSERT(!ggml_is_transposed(as_gate));
+    GGML_ASSERT(!as_gate || !ggml_is_transposed(as_gate));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
 
     GGML_ASSERT(as_up->ne[3] == 1); // as is 3d (one matrix per expert)
@@ -7650,7 +7650,7 @@ struct ggml_tensor * ggml_moe_up_gate(
         is_node = true;
     }
 
-    const int64_t ne[4] = { as_up->ne[1], ids->ne[0], b->ne[2], 1 };
+    const int64_t ne[4] = { as_gate ? as_up->ne[1] : as_up->ne[1]/2, ids->ne[0], b->ne[2], 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     result->op   = GGML_OP_MOE_FUSED_UP_GATE;
@@ -7681,7 +7681,7 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
         return ggml_moe_up_gate(ctx, as_up, as_gate, b, ids, op);
     }
 
-    if (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate)) {
+    if (as_gate && (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate))) {
         struct ggml_tensor * result_up   = ggml_mul_mat_id(ctx, as_up,   b, ids);
         if (as_up_b) {
             result_up = ggml_add_id(ctx, result_up, as_up_b, ids);
@@ -7694,7 +7694,7 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
     }
 
     GGML_ASSERT(!ggml_is_transposed(as_up));
-    GGML_ASSERT(!ggml_is_transposed(as_gate));
+    GGML_ASSERT(!as_gate || !ggml_is_transposed(as_gate));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
 
     GGML_ASSERT(as_up->ne[3] == 1); // as is 3d (one matrix per expert)
@@ -7705,10 +7705,10 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
     GGML_ASSERT(ids->ne[0] % b->ne[1] == 0); // can broadcast
 
     GGML_ASSERT(as_up->ne[1] == as_up_b->ne[0]);
-    GGML_ASSERT(as_gate->ne[1] == as_gate_b->ne[0]);
+    GGML_ASSERT(!as_gate || as_gate->ne[1] == as_gate_b->ne[0]);
     bool is_node = false;
 
-    const int64_t ne[4] = { as_up->ne[1], ids->ne[0], b->ne[2], 1 };
+    const int64_t ne[4] = { as_gate ? as_up->ne[1] : as_up->ne[1]/2, ids->ne[0], b->ne[2], 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     result->op   = GGML_OP_MOE_FUSED_UP_GATE;
