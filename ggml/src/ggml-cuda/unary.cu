@@ -70,7 +70,7 @@ static __global__ void fused_mul_silu_f32(const float * x, float * dst, const in
     int row = i / ne0;
     int j   = i % ne0;
     auto x_row = x + 2*row*ne0;
-    dst[i] = x_row[j] * x_row[j + ne0] / (1.0f + expf(-x[j]));
+    dst[i] = x_row[j] * x_row[j + ne0] / (1.0f + expf(-x_row[j + ne0]));
 }
 
 static __global__ void fused_mul_relu_f32(const float * x, const float * y, float * dst, const int k) {
@@ -91,7 +91,7 @@ static __global__ void fused_mul_relu_f32(const float * x, float * dst, const in
     int row = i / ne0;
     int j   = i % ne0;
     auto x_row = x + 2*row*ne0;
-    dst[i] = fmaxf(x_row[j], 0) * x_row[j + ne0];
+    dst[i] = fmaxf(x_row[j + ne0], 0) * x_row[j];
 }
 
 static __global__ void fused_mul_gelu_f32(const float * x, const float * y, float * dst, const int k) {
@@ -117,8 +117,8 @@ static __global__ void fused_mul_gelu_f32(const float * x, float * dst, const in
     int row = i / ne0;
     int j   = i % ne0;
     auto x_row = x + 2*row*ne0;
-    float xi = x_row[j];
-    dst[i] = 0.5f*xi*x_row[j+ne0]*(1.0f + tanhf(SQRT_2_OVER_PI*xi*(1.0f + GELU_COEF_A*xi*xi)));
+    float xi = x_row[j + ne0];
+    dst[i] = 0.5f*xi*x_row[j]*(1.0f + tanhf(SQRT_2_OVER_PI*xi*(1.0f + GELU_COEF_A*xi*xi)));
 }
 
 static __global__ void tanh_f32(const float * x, float * dst, int k) {

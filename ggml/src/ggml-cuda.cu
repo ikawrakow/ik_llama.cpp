@@ -2802,7 +2802,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         }
     }
 
-    bool is_first = true;
     for (int64_t i02 = 0; i02 < n_as; i02++) {
         int64_t num_src1_rows = moe_counts[i02];
 
@@ -2891,17 +2890,12 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             }
         } else {
             if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
-                //if (is_first) {
-                //    printf("Doing ggml_swiglu_oai_cuda_f32: %ld %zu %ld %ld %ld\n", dst->ne[0], ggml_nelements(&dst_row)/2, dst_row.ne[0], src0_1->ne[1], num_src1_rows);
-                //    is_first = false;
-                //}
                 ggml_swiglu_oai_cuda_f32((const float *)dst_up_contiguous.get() + dst->ne[0], (const float *)dst_up_contiguous.get(),
                         (float *)dst_gate_contiguous.get(), ggml_nelements(&dst_row)/2, dst->ne[0], src0_1->ne[1], src0_1->ne[1],
                         1.702f, 7.0f, stream);
             } else {
-                ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
-                        (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
-                        (float *)dst_gate_contiguous.get());
+                ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row)/2, dst->ne[0],
+                        (const float *)dst_up_contiguous.get(), (float *)dst_gate_contiguous.get());
             }
             dst_row.data = dst_gate_contiguous.get();
             dst_row.ne[0] /= 2;
