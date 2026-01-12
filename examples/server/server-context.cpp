@@ -376,7 +376,7 @@ int server_slot::get_n_draft_max() const {
     if (!ctx_dft) {
         return 0;
     }
-    
+
     // determine the max draft that fits the current slot state
     int n_draft_max = params.speculative.n_max;
 
@@ -2218,7 +2218,7 @@ void server_context::update_slots() {
             slot.i_batch_dft.push_back(batch.n_tokens);
             llama_batch_add(batch, slot.sampled, slot.cache_tokens.pos_next(), { slot.id }, true);
             slot.cache_tokens.push_back(slot.sampled);
-            
+
             if (slot.params.speculative.n_min > (int)draft.size()) {
                 SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int)draft.size(), slot.params.speculative.n_min);
                 // fallback to normal decoding
@@ -2248,11 +2248,11 @@ void server_context::update_slots() {
             slot.cache_tokens.push_back(slot.sampled);
 
             SLT_DBG(slot, "slot decode token, n_ctx = %d, n_tokens = %d, truncated = %d\n",
-                slot.n_ctx, slot.cache_tokens.size(), slot.truncated);
+                (int)slot.n_ctx, (int)slot.cache_tokens.size(), (int)slot.truncated);
         }
         slot.n_past = slot.cache_tokens.n_tokens();
     }
-    
+
     // process in chunks of params.n_batch
     int32_t n_batch = llama_n_batch(ctx);
     int32_t n_ubatch = llama_n_ubatch(ctx);
@@ -2391,7 +2391,7 @@ void server_context::update_slots() {
                                 LLAMA_LOG_INFO("After context shift :\n");
                                 print_tokens(slot.prompt_tokens, slot.cache_tokens, prefix.second - back, prefix.first - back, 50);
                             }
-#endif 
+#endif
                         }
                         else {
                             slot.n_discarded_prompt = 0;
