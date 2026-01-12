@@ -199,7 +199,10 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         buft_layer_count[model.buft_layer[i].buft_matrix]++;
     }
 
-    ctx_size = ggml_tensor_overhead()*(ml.n_tensors + 1); // +1 for models where tok_embd is duplicated as output
+    auto n_tensors = ml.n_tensors;
+    if (ml.merge_qkv) n_tensors += n_layer;
+    if (ml.merge_up_gate_exps) n_tensors += n_layer;
+    ctx_size = ggml_tensor_overhead()*(n_tensors + 1); // +1 for models where tok_embd is duplicated as output
     ctx_size += ggml_tensor_overhead()*n_layer*3;         // for moe merged tensors
 
     if (model.splits.size() > 1) {
