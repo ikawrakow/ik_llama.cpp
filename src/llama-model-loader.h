@@ -45,6 +45,7 @@ struct llama_model_loader {
     bool repack_tensors = false;
     bool use_thp = false;
     bool merge_qkv = false;
+    bool merge_up_gate_exps = false;
 
     llama_files files;
     llama_ftype ftype;
@@ -79,7 +80,8 @@ struct llama_model_loader {
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
 
-    llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp, bool merge_qkv,
+    llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors, bool repack_tensors, bool use_thp,
+            bool merge_qkv, bool merge_up_gate_exps,
             const llama_model_kv_override * param_overrides_p,
             const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 

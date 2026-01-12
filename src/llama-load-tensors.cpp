@@ -1176,7 +1176,7 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
         // MoE branch
         const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
 
-        bool merged = merge_up_gate_exps(tn, i, 0);
+        bool merged = ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
         if (merged) {
             use_mmap_buffer = false;
         } else {
@@ -2585,7 +2585,7 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
 
         ggml_context *ctx_ffn_gate, *ctx_ffn_up, *ctx_ffn_down;
         layer.ffn_gate_inp  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {  n_embd, n_expert}, 0);
-        bool merged = merge_up_gate_exps(tn, i, 2);
+        bool merged = ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 2);
         use_mmap_buffer &= !merged;
         if (merged) {
             ctx_ffn_gate = ctx_ffn_up = ctx_split;

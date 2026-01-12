@@ -204,7 +204,7 @@ namespace GGUFMeta {
 }
 
 llama_model_loader::llama_model_loader(const std::string & fname, bool use_mmap, bool check_tensors,
-        bool repack_tensors, bool use_thp, bool merge_qkv,
+        bool repack_tensors, bool use_thp, bool merge_qkv, bool merge_up_gate_exps,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
     int trace = 0;
@@ -497,6 +497,7 @@ llama_model_loader::llama_model_loader(const std::string & fname, bool use_mmap,
     this->repack_tensors = repack_tensors;
     this->use_thp = use_thp;
     this->merge_qkv = merge_qkv;
+    this->merge_up_gate_exps = merge_up_gate_exps;
 }
 
 llama_model_loader::~llama_model_loader() {

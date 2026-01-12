@@ -2107,7 +2107,8 @@ static bool llm_load_tensors(
 static int llama_model_load(const std::string & fname, llama_model & model, llama_model_params & params) {
     try {
         llama_model_loader ml(fname, params.use_mmap, params.check_tensors,
-                params.repack_tensors, params.use_thp, params.merge_qkv, params.kv_overrides, params.tensor_buft_overrides);
+                params.repack_tensors, params.use_thp, params.merge_qkv, params.merge_up_gate_exps,
+                params.kv_overrides, params.tensor_buft_overrides);
 
         model.hparams.vocab_only = params.vocab_only;
 
@@ -4020,6 +4021,7 @@ struct llama_model_params llama_model_default_params() {
         /*.use_thp                     =*/ false,
         /*.validate_quants             =*/ false,
         /*.merge_qkv                   =*/ false,
+        /*.merge_up_gate_exps          =*/ false,
     };
 
 #ifdef GGML_USE_METAL

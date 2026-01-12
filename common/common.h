@@ -287,6 +287,7 @@ struct gpt_params {
     bool validate_quants   = false; // if true, check for NaNs while loading the model
     bool only_active_exps  = true;  // if true, offload only active experts (relevant only for hybrid CPU/GPU)
     bool merge_qkv         = false; // if true, merge separate Q, K, V tensors into a single, contiguous tensor
+    bool merge_up_gate_exps= false; // if true, merge ffn_up_exps and ffn_gate_exps into a single, contiguous tensor
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
     bool split_mode_graph_scheduling = false; // if true, force split mode graph scheduling
     bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
