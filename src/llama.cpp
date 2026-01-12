@@ -4363,59 +4363,6 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
             }
         }
     }
-
-    /*
-    ggml_init_params params{lctx.buf_compute_meta.size(), lctx.buf_compute_meta.data(), true};
-    auto ctx = ggml_init(params);
-
-    auto gf = ggml_new_graph_custom(ctx, model.max_nodes(), false);
-
-    for (int il = 0; il < int(model.layers.size()); ++il) {
-        auto & l = model.layers[il];
-        if (l.ffn_up_gate_exps && l.ffn_up_exps && l.ffn_gate_exps) {
-            GGML_ASSERT(l.ffn_up_gate_exps->type  == l.ffn_up_exps->type  && l.ffn_up_gate_exps->type  == l.ffn_gate_exps->type);
-            GGML_ASSERT(l.ffn_up_gate_exps->ne[0] == l.ffn_up_exps->ne[0] && l.ffn_up_gate_exps->ne[0] == l.ffn_gate_exps->ne[0]);
-            GGML_ASSERT(l.ffn_up_gate_exps->ne[2] == l.ffn_up_exps->ne[2] && l.ffn_up_gate_exps->ne[2] == l.ffn_gate_exps->ne[2]);
-            GGML_ASSERT(l.ffn_up_gate_exps->ne[1] == l.ffn_up_exps->ne[1] + l.ffn_gate_exps->ne[1]);
-            printf("%s: repacking up/gate experts in layer %d\n", __func__, il);
-            auto aux = ggml_dup(ctx, l.ffn_up_exps);
-            auto ffn_up_gate_exps_flat = ggml_reshape_2d(ctx, l.ffn_up_gate_exps,
-                    l.ffn_up_gate_exps->ne[0], l.ffn_up_gate_exps->ne[1]*l.ffn_up_gate_exps->ne[2]);
-            auto ffn_up_flat   = ggml_reshape_2d(ctx, aux, l.ffn_up_exps->ne[0], l.ffn_up_exps->ne[1]*l.ffn_up_exps->ne[2]);
-            auto ffn_gate_flat = ggml_reshape_2d(ctx, l.ffn_gate_exps, l.ffn_gate_exps->ne[0], l.ffn_gate_exps->ne[1]*l.ffn_gate_exps->ne[2]);
-            size_t offset_up_gate = 0;
-            size_t offset_up = 0;
-            for (int i2 = 0; i2 < (int)l.ffn_up_gate_exps->ne[2]; ++i2) {
-                auto dst = ggml_view_2d(ctx, ffn_up_gate_exps_flat, l.ffn_up_exps->ne[0], l.ffn_up_exps->ne[1],
-                        l.ffn_up_exps->nb[1], offset_up_gate);
-                auto src = ggml_view_2d(ctx, ffn_up_flat, l.ffn_up_exps->ne[0], l.ffn_up_exps->ne[1],
-                        l.ffn_up_exps->nb[1], offset_up);
-                auto cpy1 = ggml_cpy(ctx, src, dst);
-                offset_up_gate += l.ffn_up_exps->ne[1]*l.ffn_up_exps->nb[1];
-                if (i2 < (int)l.ffn_up_gate_exps->ne[2]-1) {
-                    dst = ggml_view_2d(ctx, ffn_up_gate_exps_flat, l.ffn_up_exps->ne[0], l.ffn_up_exps->ne[1],
-                            l.ffn_up_exps->nb[1], offset_up_gate);
-                    src = ggml_view_2d(ctx, ffn_gate_flat, l.ffn_up_exps->ne[0], l.ffn_up_exps->ne[1],
-                            l.ffn_up_exps->nb[1], offset_up);
-                    auto cpy2 = ggml_cpy(ctx, src, dst);
-                    offset_up_gate += l.ffn_up_exps->ne[1]*l.ffn_up_exps->nb[1];
-                    offset_up      += l.ffn_up_exps->ne[1]*l.ffn_up_exps->nb[1];
-                    ggml_build_forward_expand(gf, cpy1);
-                    ggml_build_forward_expand(gf, cpy2);
-                } else {
-                    ggml_build_forward_expand(gf, cpy1);
-                }
-            }
-        }
-    }
-    int n_threads = std::thread::hardware_concurrency()/2;
-    if (n_threads == 0) n_threads = 1;
-    llama_graph_compute(lctx, gf, n_threads);
-    llama_synchronize(&lctx);
-    ggml_backend_sched_reset(lctx.sched);
-    ggml_graph_clear(gf);
-    ggml_free(ctx);
-    */
 }
 
 struct llama_context * llama_new_context_with_model(
