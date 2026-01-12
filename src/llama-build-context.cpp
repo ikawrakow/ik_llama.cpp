@@ -4271,7 +4271,7 @@ ggml_cgraph * llm_build_context::build_qwen3vlmoe() {
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    cb, il, gf);
+                    cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
         cb(cur, "ffn_moe_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
