@@ -2696,18 +2696,23 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     auto u_ctx = get_context_for_tensor(ctx_split, u_name);
     auto g_ctx = get_context_for_tensor(ctx_split, g_name);
 
-    if (u_ctx != ctx_split || g_ctx != ctx_split) {
+    if (u_ctx != g_ctx) {
+        printf("%s: not merging because of context\n", __func__);
+        return false;
+    }
+
+    if (bias && (u_ctx != ctx_split || g_ctx != ctx_split)) {
         printf("%s: not merging because of context\n", __func__);
         return false;
     }
 
     printf("%s: merging up/gate in layer %d\n", __func__, i);
 
-    layer.ffn_up_gate_exps = ggml_new_tensor_3d(ctx_split, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
+    layer.ffn_up_gate_exps = ggml_new_tensor_3d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
     snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_up_gate_exps.weight", i);
-    layer.ffn_up_exps   = ml.create_tensor_as_view(ctx_split, layer.ffn_up_gate_exps, u_name.c_str(),
+    layer.ffn_up_exps   = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, u_name.c_str(),
             { u_meta->ne[0], u_meta->ne[1], u_meta->ne[2] }, 0);
-    layer.ffn_gate_exps = ml.create_tensor_as_view(ctx_split, layer.ffn_up_gate_exps, g_name.c_str(),
+    layer.ffn_gate_exps = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, g_name.c_str(),
             { g_meta->ne[0], g_meta->ne[1], g_meta->ne[2] }, ggml_nbytes(layer.ffn_up_exps) ); //u_meta->ne[1]*u_meta->nb[1] );
 
     if (!bias) return true;
