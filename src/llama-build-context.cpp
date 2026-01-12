@@ -6936,7 +6936,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
                     (llm_expert_gating_func_type) hparams.expert_gating_func,
-                    LLM_FFN_SILU, cb, il, gf, true);
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
         }
 
         // residual and context vector
@@ -8669,7 +8669,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 LLM_FFN_SILU, true,
                 false, 0,
                 (llm_expert_gating_func_type)hparams.expert_gating_func,
-                cb, il, gf);
+                cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
         cb(cur, "ffn_moe_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
