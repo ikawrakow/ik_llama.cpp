@@ -2933,10 +2933,17 @@ bool create_tensors_helper::create_tensors() {
     bool use_mmap_buffer = true;
     if (ml.merge_qkv && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
         LLAMA_LOG_WARN("\n========================================================\n");
-        LLAMA_LOG_WARN("merge_qkv is not compatible with split model 'graph'\n");
+        LLAMA_LOG_WARN("merge_qkv is not compatible with split mode 'graph'\n");
         LLAMA_LOG_WARN("  => turning off merge_qkv\n");
         LLAMA_LOG_WARN("========================================================\n\n");
         ml.merge_qkv = false;
+    }
+    if (ml.merge_up_gate_exps && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
+        LLAMA_LOG_WARN("\n========================================================\n");
+        LLAMA_LOG_WARN("merge_up_gate_exps is not compatible with split mode 'graph'\n");
+        LLAMA_LOG_WARN("  => turning off merge_up_gate_exps\n");
+        LLAMA_LOG_WARN("========================================================\n\n");
+        ml.merge_up_gate_exps = false;
     }
     switch (model.arch) {
         case LLM_ARCH_LLAMA:
