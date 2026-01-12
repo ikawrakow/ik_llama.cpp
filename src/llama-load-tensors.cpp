@@ -31,6 +31,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool merge_qkv(const LLM_TN & tn, int i, int bias, bool ignore_attn_scale = false);
 
+    bool merge_up_gate_exps(const LLM_TN & tn, int i, int bias);
+
     bool create_tensors() override;
 
     bool create_llama_tensors(const LLM_TN & tn);
@@ -141,6 +143,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
     ggml_tensor * create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne, int flags = 0,
             ggml_context ** actual_ctx = nullptr);
 
+    ggml_context * get_context_for_tensor(ggml_context * ctx, const std::string & name);
+
     void create_default_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool norm_bias);
     void create_embd_output(const LLM_TN & tn, int n_embd, int n_vocab, bool has_norm = true, bool use_ctx_split = false);
 
@@ -195,7 +199,10 @@ create_tensors_helper::create_tensors_helper(llama_model_loader & _ml, llama_mod
         buft_layer_count[model.buft_layer[i].buft_matrix]++;
     }
 
-    ctx_size = ggml_tensor_overhead()*(ml.n_tensors + 1); // +1 for models where tok_embd is duplicated as output
+    auto n_tensors = ml.n_tensors;
+    if (ml.merge_qkv) n_tensors += n_layer;
+    if (ml.merge_up_gate_exps) n_tensors += n_layer;
+    ctx_size = ggml_tensor_overhead()*(n_tensors + 1); // +1 for models where tok_embd is duplicated as output
     ctx_size += ggml_tensor_overhead()*n_layer*3;         // for moe merged tensors
 
     if (model.splits.size() > 1) {
@@ -288,9 +295,7 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
     return result;
 }
 
-ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne,
-        int flags, ggml_context ** actual_context) {
-    //auto requested_ctx = ctx;
+ggml_context * create_tensors_helper::get_context_for_tensor(ggml_context * ctx, const std::string & name) {
     if (ml.tensor_buft_overrides) {
         for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
             std::regex pattern(overrides->pattern);
@@ -301,6 +306,12 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
             }
         }
     }
+    return ctx;
+}
+
+ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std::string & name, const std::vector<int64_t> & ne,
+        int flags, ggml_context ** actual_context) {
+    ctx = get_context_for_tensor(ctx, name);
     if (actual_context) *actual_context = ctx;
     auto tensor = ml.create_tensor(ctx, name, ne, flags);
     if (tensor && ctx == split_ctx) {
@@ -1168,9 +1179,14 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
         // MoE branch
         const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
 
-        layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert});
+        bool merged = ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
+        if (merged) {
+            use_mmap_buffer = false;
+        } else {
+            layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert});
+            layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert});
+        }
         layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert});
-        layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert});
     }
     return use_mmap_buffer;
 }
@@ -2572,9 +2588,18 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
 
         ggml_context *ctx_ffn_gate, *ctx_ffn_up, *ctx_ffn_down;
         layer.ffn_gate_inp  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {  n_embd, n_expert}, 0);
-        layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0, &ctx_ffn_gate);
-        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0, &ctx_ffn_down);
-        layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0, &ctx_ffn_up);
+        bool merged = ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 2);
+        use_mmap_buffer &= !merged;
+        if (merged) {
+            ctx_ffn_gate = ctx_ffn_up = ctx_split;
+        } else {
+            layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i),
+                    {  n_embd, n_ff_exp, n_expert}, 0, &ctx_ffn_up);
+            layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i),
+                    {  n_embd, n_ff_exp, n_expert}, 0, &ctx_ffn_gate);
+        }
+        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i),
+                {n_ff_exp, n_embd, n_expert}, 0, &ctx_ffn_down);
 
         // bias
         layer.ffn_gate_inp_b  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "bias", i), {n_expert}, 0);
@@ -2582,15 +2607,17 @@ bool create_tensors_helper::create_openai_moe_tensors(const LLM_TN & tn) {
         auto ctx_gate_b = ctx_ffn_gate == ctx_split ? ctx_split : ctx_layer;
         auto ctx_down_b = ctx_ffn_down == ctx_split ? ctx_split : ctx_layer;
         auto ctx_up_b   = ctx_ffn_up   == ctx_split ? ctx_split : ctx_layer;
-        layer.ffn_gate_exps_b = create_tensor(ctx_gate_b, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_gate_b);
+        if (!merged) {
+            layer.ffn_up_exps_b   = create_tensor(ctx_up_b,   tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_up_b);
+            layer.ffn_gate_exps_b = create_tensor(ctx_gate_b, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_gate_b);
+        }
         layer.ffn_down_exps_b = create_tensor(ctx_down_b, tn(LLM_TENSOR_FFN_DOWN_EXPS, "bias", i), {  n_embd, n_expert}, 0, &ctx_ffn_down_b);
-        layer.ffn_up_exps_b   = create_tensor(ctx_up_b,   tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert}, 0, &ctx_ffn_up_b);
 
-        if (ctx_ffn_gate_b != ctx_ffn_gate) {
+        if (!merged && ctx_ffn_gate_b != ctx_ffn_gate) {
             layer.ffn_gate_exps_b_dup = create_tensor(ctx_ffn_gate, tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i), {n_ff_exp, n_expert},
                     llama_model_loader::TENSOR_DUPLICATED);
         }
-        if (ctx_ffn_up_b != ctx_ffn_up) {
+        if (!merged && ctx_ffn_up_b != ctx_ffn_up) {
             layer.ffn_up_exps_b_dup = create_tensor(ctx_ffn_up, tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i), {n_ff_exp, n_expert},
                     llama_model_loader::TENSOR_DUPLICATED);
         }
@@ -2652,6 +2679,71 @@ bool create_tensors_helper::create_smollm3_tensors(const LLM_TN & tn) {
         create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
     return use_mmap_buffer;
+}
+
+bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bias) {
+    ggml_context * ctx_split = ctx_for_layer_split(i);
+
+    auto & layer = model.layers[i];
+
+    auto u_name = tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i);
+    auto g_name = tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i);
+    auto u_meta = ml.require_tensor_meta(u_name.c_str());
+    auto g_meta = ml.require_tensor_meta(g_name.c_str());
+
+    if (u_meta->type != g_meta->type || u_meta->ne[0] != g_meta->ne[0] || u_meta->ne[2] != g_meta->ne[2]) {
+        printf("%s: not merging because up/fate meta info is different\n", __func__);
+        return false;
+    }
+
+    auto u_ctx = get_context_for_tensor(ctx_split, u_name);
+    auto g_ctx = get_context_for_tensor(ctx_split, g_name);
+
+    if (u_ctx != g_ctx) {
+        printf("%s: not merging because of context\n", __func__);
+        return false;
+    }
+
+    if (bias && (u_ctx != ctx_split || g_ctx != ctx_split)) {
+        printf("%s: not merging because of context\n", __func__);
+        return false;
+    }
+
+    printf("%s: merging up/gate in layer %d\n", __func__, i);
+
+    layer.ffn_up_gate_exps = ggml_new_tensor_3d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
+    snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_up_gate_exps.weight", i);
+    layer.ffn_up_exps   = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, u_name.c_str(),
+            { u_meta->ne[0], u_meta->ne[1], u_meta->ne[2] }, 0);
+    layer.ffn_gate_exps = ml.create_tensor_as_view(u_ctx, layer.ffn_up_gate_exps, g_name.c_str(),
+            { g_meta->ne[0], g_meta->ne[1], g_meta->ne[2] }, ggml_nbytes(layer.ffn_up_exps) ); //u_meta->ne[1]*u_meta->nb[1] );
+
+    if (!bias) return true;
+
+    auto u_name_b = tn(LLM_TENSOR_FFN_UP_EXPS,   "bias", i);
+    auto g_name_b = tn(LLM_TENSOR_FFN_GATE_EXPS, "bias", i);
+    auto u_meta_b = ml.get_tensor_meta(u_name_b.c_str());
+    auto g_meta_b = ml.get_tensor_meta(g_name_b.c_str());
+    if (bias == 2) {
+        GGML_ASSERT(u_meta_b && g_meta_b);
+        GGML_ASSERT(u_meta_b->type == g_meta_b->type);
+        GGML_ASSERT(u_meta_b->ne[1] == g_meta_b->ne[1]);
+    } else {
+        GGML_ASSERT(!u_meta_b && !g_meta_b);
+        return true;
+    }
+
+    GGML_ASSERT(u_meta->ne[1] == u_meta_b->ne[0]);
+    GGML_ASSERT(g_meta->ne[1] == g_meta_b->ne[0]);
+
+    layer.ffn_up_gate_exps_b = ggml_new_tensor_2d(ctx_split, u_meta_b->type, u_meta_b->ne[0] + g_meta_b->ne[0], u_meta->ne[1]);
+    snprintf(layer.ffn_up_gate_exps_b->name, GGML_MAX_NAME, "blk.%d.ffn_up_gate_exps.bias", i);
+    layer.ffn_up_exps_b   = ml.create_tensor_as_view(ctx_split, layer.ffn_up_gate_exps_b, u_name_b.c_str(),
+            { u_meta_b->ne[0], u_meta_b->ne[1] }, 0);
+    layer.ffn_gate_exps_b = ml.create_tensor_as_view(ctx_split, layer.ffn_up_gate_exps_b, g_name_b.c_str(),
+            { g_meta_b->ne[0], g_meta_b->ne[1] }, ggml_nbytes(layer.ffn_up_exps_b) ); //u_meta->nb[1]);
+
+    return true;
 }
 
 bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool ignore_attn_scale) {
@@ -2849,10 +2941,17 @@ bool create_tensors_helper::create_tensors() {
     bool use_mmap_buffer = true;
     if (ml.merge_qkv && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
         LLAMA_LOG_WARN("\n========================================================\n");
-        LLAMA_LOG_WARN("merge_qkv is not compatible with split model 'graph'\n");
+        LLAMA_LOG_WARN("merge_qkv is not compatible with split mode 'graph'\n");
         LLAMA_LOG_WARN("  => turning off merge_qkv\n");
         LLAMA_LOG_WARN("========================================================\n\n");
         ml.merge_qkv = false;
+    }
+    if (ml.merge_up_gate_exps && (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN)) {
+        LLAMA_LOG_WARN("\n========================================================\n");
+        LLAMA_LOG_WARN("merge_up_gate_exps is not compatible with split mode 'graph'\n");
+        LLAMA_LOG_WARN("  => turning off merge_up_gate_exps\n");
+        LLAMA_LOG_WARN("========================================================\n\n");
+        ml.merge_up_gate_exps = false;
     }
     switch (model.arch) {
         case LLM_ARCH_LLAMA:

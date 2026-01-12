@@ -7628,13 +7628,13 @@ struct ggml_tensor * ggml_moe_up_gate(
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids,
             enum   ggml_unary_op  op) {
-    if (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate)) {
+    if (as_gate && (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate))) {
         struct ggml_tensor * result_up   = ggml_mul_mat_id(ctx, as_up,   b, ids);
         struct ggml_tensor * result_gate = ggml_mul_mat_id(ctx, as_gate, b, ids);
         return ggml_fused_mul_unary(ctx, result_gate, result_up, op);
     }
     GGML_ASSERT(!ggml_is_transposed(as_up));
-    GGML_ASSERT(!ggml_is_transposed(as_gate));
+    GGML_ASSERT(!as_gate || !ggml_is_transposed(as_gate));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
 
     GGML_ASSERT(as_up->ne[3] == 1); // as is 3d (one matrix per expert)
@@ -7646,11 +7646,11 @@ struct ggml_tensor * ggml_moe_up_gate(
 
     bool is_node = false;
 
-    if (as_up->grad || as_gate->grad || b->grad) {
+    if (as_up->grad || (as_gate && as_gate->grad) || b->grad) {
         is_node = true;
     }
 
-    const int64_t ne[4] = { as_up->ne[1], ids->ne[0], b->ne[2], 1 };
+    const int64_t ne[4] = { as_gate ? as_up->ne[1] : as_up->ne[1]/2, ids->ne[0], b->ne[2], 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     result->op   = GGML_OP_MOE_FUSED_UP_GATE;
@@ -7681,7 +7681,7 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
         return ggml_moe_up_gate(ctx, as_up, as_gate, b, ids, op);
     }
 
-    if (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate)) {
+    if (as_gate && (as_up->type != as_gate->type || !ggml_are_same_shape(as_up, as_gate))) {
         struct ggml_tensor * result_up   = ggml_mul_mat_id(ctx, as_up,   b, ids);
         if (as_up_b) {
             result_up = ggml_add_id(ctx, result_up, as_up_b, ids);
@@ -7694,7 +7694,7 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
     }
 
     GGML_ASSERT(!ggml_is_transposed(as_up));
-    GGML_ASSERT(!ggml_is_transposed(as_gate));
+    GGML_ASSERT(!as_gate || !ggml_is_transposed(as_gate));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
 
     GGML_ASSERT(as_up->ne[3] == 1); // as is 3d (one matrix per expert)
@@ -7705,10 +7705,10 @@ struct ggml_tensor * ggml_moe_up_gate_ext(
     GGML_ASSERT(ids->ne[0] % b->ne[1] == 0); // can broadcast
 
     GGML_ASSERT(as_up->ne[1] == as_up_b->ne[0]);
-    GGML_ASSERT(as_gate->ne[1] == as_gate_b->ne[0]);
+    GGML_ASSERT(!as_gate || as_gate->ne[1] == as_gate_b->ne[0]);
     bool is_node = false;
 
-    const int64_t ne[4] = { as_up->ne[1], ids->ne[0], b->ne[2], 1 };
+    const int64_t ne[4] = { as_gate ? as_up->ne[1] : as_up->ne[1]/2, ids->ne[0], b->ne[2], 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     result->op   = GGML_OP_MOE_FUSED_UP_GATE;
@@ -16571,8 +16571,8 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
 
-    GGML_ASSERT(dst->src[0]->type == dst->src[1]->type);
-    GGML_ASSERT(ggml_are_same_shape(dst->src[0], dst->src[1]));
+    GGML_ASSERT(!dst->src[1] || dst->src[0]->type == dst->src[1]->type);
+    GGML_ASSERT(!dst->src[1] || ggml_are_same_shape(dst->src[0], dst->src[1]));
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     const struct ggml_tensor * src1 = dst->src[2];
@@ -16604,7 +16604,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
     GGML_ASSERT(ne13 == 1);
 
     const size_t nb41 = up_b ? up_b->nb[1] : 0;
-    const size_t nb51 = up_b ? gate_b->nb[1] : 0;
+    const size_t nb51 = up_b && gate_b ? gate_b->nb[1] : 0;
 
     // row groups
     const int n_ids = ids->ne[0]; // n_expert_used
@@ -16692,16 +16692,20 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
         }
 
         const char * src0_1_cur = (const char *) src0_1->data + cur_a*nb02;
-        const char * src0_2_cur = (const char *) src0_2->data + cur_a*nb02;
+        const char * src0_2_cur = src0_2 ? (const char *) src0_2->data + cur_a*nb02 : src0_1_cur + nb02/2;
         const char * up_b_cur   = up_b   ? (const char *)up_b->data + cur_a*nb41 : NULL;
         const char * gate_b_cur = gate_b ? (const char *)gate_b->data + cur_a*nb51 : NULL;
+        if (up_b_cur && !gate_b_cur) {
+            gate_b_cur = up_b_cur + nb41/2;
+        }
 
         const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
-        const int64_t nr0 = ne01; // src0 rows
+        const int64_t nr0 = src0_2 ? ne01 : ne01/2; // src0 rows
         const int64_t nr1 = cne1; // src1 rows
-                                  //
+
+        //if (ith == 0) printf("Calling iqk_moe_fused_up_gate with nr0 = %d, nr1 = %d, ne00 = %d, ne11 = %d\n", (int)nr0, (int)nr1, (int)ne00, (int)ne11);
         if (!iqk_moe_fused_up_gate(nr0, nr1, ne00, ne11, dst->op_params[0],
                             type, src0_1_cur, src0_2_cur, nb01,
                             vec_dot_type, (const char *)wdata, row_size,
@@ -16709,27 +16713,6 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             (float *)dst->data, nb1, nb2,
                             matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
 
-//        if (nth%2 == 0) {
-//            const char * src0_d = ith%2 == 0 ? src0_1_cur : src0_2_cur;
-//            void *        dst_d = ith%2 == 0 ? dst1->data : dst2->data;
-//            if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11,
-//                        type, src0_d, nb01,
-//                        vec_dot_type, (const char *)wdata, row_size,
-//                        (float *)dst_d, nb1, nb2,
-//                        matrix_rows + cur_a*ne12, ith/2, nth/2)) GGML_ABORT("fatal error");
-//
-//        } else {
-//            if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11,
-//                        src0_1->type, (const char *)src0_1_cur, nb01,
-//                        vec_dot_type, (const char *)wdata, row_size,
-//                        (float *)dst1->data, nb1, nb2,
-//                        matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
-//            if (!iqk_mul_mat_moe(nr0, nr1, ne00, ne11,
-//                        src0_2->type, (const char *)src0_2_cur, nb01,
-//                        vec_dot_type, (const char *)wdata, row_size,
-//                        (float *)dst2->data, nb1, nb2,
-//                        matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
-//        }
     }
 
 #undef MMID_MATRIX_ROW
@@ -25193,10 +25176,11 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                 {
                     cur = 0;
                     const struct ggml_tensor * src0 = node->src[0];
+                    const struct ggml_tensor * src1 = node->src[1];
                     const struct ggml_tensor * src2 = node->src[2];
                     const enum ggml_type vec_dot_type = type_traits[src0->type].vec_dot_type;
-                    if (src2->type != vec_dot_type) {
-                        cur += ggml_row_size(vec_dot_type, node->src[1]->ne[0]) * ggml_nrows(node->src[1]);
+                    if (src1 && src1->type != vec_dot_type) {
+                        cur += ggml_row_size(vec_dot_type, src2->ne[0]) * ggml_nrows(src2);
                     }
                     const int n_as = src0->ne[2];
                     cur += GGML_PAD(cur, sizeof(int64_t));       // align
