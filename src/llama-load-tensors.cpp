@@ -33,6 +33,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool merge_up_gate_exps(const LLM_TN & tn, int i, int bias);
 
+    bool create_std_ffn_exps(int64_t n_embd, const LLM_TN & tn, int i, int flags = 0, int n_ff_exps_input = 0);
+
     bool create_tensors() override;
 
     bool create_llama_tensors(const LLM_TN & tn);
@@ -532,9 +534,7 @@ bool create_tensors_helper::create_llama4_tensors(const LLM_TN & tn) {
             int n_ff_exp = hparams.n_ff_exp;
 
             layer.ffn_gate_inp  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
-            layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
-            layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd, n_expert}, 0);
-            layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
 
             // Shared expert
             const int64_t n_ff_shexp = n_ff_exp;
@@ -639,9 +639,7 @@ bool create_tensors_helper::create_dbrx_tensors(const LLM_TN & tn) {
         layer.attn_out_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT_NORM, "weight", i), {n_embd});
 
         layer.ffn_gate_inp  = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert});
-        layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff,   n_expert});
-        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff,   n_embd, n_expert});
-        layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff,   n_expert});
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
     }
     return use_mmap_buffer;
 }
@@ -1082,13 +1080,8 @@ bool create_tensors_helper::create_qwen2_moe_tensors(const LLM_TN & tn) {
             throw std::runtime_error("n_expert_used must be > 0 for QWEN2MOE");
         }
 
-
         // MoE branch
-        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
-
-        layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert});
-        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert});
-        layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert});
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
 
         // Shared expert branch
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
@@ -1176,17 +1169,8 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
             throw std::runtime_error("n_expert_used must be > 0 for QWEN3MOE");
         }
 
-        // MoE branch
-        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
 
-        bool merged = ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
-        if (merged) {
-            use_mmap_buffer = false;
-        } else {
-            layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert});
-            layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert});
-        }
-        layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert});
     }
     return use_mmap_buffer;
 }
@@ -1224,12 +1208,13 @@ bool create_tensors_helper::create_mimo2_tensors(const LLM_TN & tn) {
         layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
         // MoE branch
-        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
-        layer.ffn_gate_inp  = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_exp_probs_b = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_gate_inp  = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert},
+                llama_model_loader::TENSOR_NOT_REQUIRED);
+        if (layer.ffn_gate_inp) {
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
+            layer.ffn_exp_probs_b = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+        }
     }
     return use_mmap_buffer;
 }
@@ -1860,9 +1845,7 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
             GGML_ASSERT(n_expert_used > 0);
 
             // MoE branch
-            layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert});
-            layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert});
-            layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert});
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
 
             // Shared expert branch
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp * n_expert_shared});
@@ -1935,17 +1918,11 @@ bool create_tensors_helper::create_glm4_moe_tensors(const LLM_TN & tn) {
             layer.ffn_exp_probs_b = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, flags);
 
             // MoE branch
-            const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
-
-            layer.ffn_gate_exps = create_tensor(ffn_ctx,
-                    tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, flags);
-            layer.ffn_down_exps = create_tensor(ffn_ctx,
-                    tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd, n_expert }, flags);
-            layer.ffn_up_exps = create_tensor(ffn_ctx,
-                    tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, flags);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, flags);
 
             // Shared expert
             if (n_expert_shared > 0) {
+                const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
                 const int64_t n_ff_shexp = n_ff_exp * n_expert_shared;
                 layer.ffn_gate_shexp     = create_tensor(ffn_ctx,
                         tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), { n_embd, n_ff_shexp }, flags);
@@ -2396,9 +2373,7 @@ bool create_tensors_helper::create_dots1_tensors(const LLM_TN & tn) {
                 throw std::runtime_error("n_expert_used must be > 0");
             }
             // MoE branch
-            layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
-            layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
-            layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
             // Shared expert branch
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
             layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, 0);
@@ -2451,9 +2426,7 @@ bool create_tensors_helper::create_bailingmoe2_tensors(const LLM_TN & tn) {
             layer.ffn_exp_probs_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert},
                     llama_model_loader::TENSOR_NOT_REQUIRED | flags);
 
-            layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
-            layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, flags);
-            layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, flags);
 
             layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp}, flags);
             layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, flags);
@@ -2549,9 +2522,7 @@ bool create_tensors_helper::create_hunyuan_tensors(const LLM_TN & tn) {
         layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
         layer.ffn_gate_inp  = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
-        layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff, n_expert}, 0);
-        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff, n_embd, n_expert}, 0);
-        layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff, n_expert}, 0);
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff);
 
         layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
         layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
@@ -2651,9 +2622,7 @@ bool create_tensors_helper::create_minimaxm2_tensors(const LLM_TN & tn) {
         layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
 
         layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
-        layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd, n_ff,   n_expert }, 0);
-        layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff,   n_embd, n_expert }, 0);
-        layer.ffn_up_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), { n_embd, n_ff,   n_expert }, 0);
+        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff);
         layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, 0);
     }
     return use_mmap_buffer;
@@ -2744,6 +2713,25 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
             { g_meta_b->ne[0], g_meta_b->ne[1] }, ggml_nbytes(layer.ffn_up_exps_b) ); //u_meta->nb[1]);
 
     return true;
+}
+
+bool create_tensors_helper::create_std_ffn_exps(int64_t n_embd, const LLM_TN & tn, int i, int flags, int n_ff_exps_input) {
+    const int64_t n_expert      = model.hparams.n_expert;
+    const int64_t n_expert_used = model.hparams.n_expert_used;
+    const int64_t n_ff     = model.hparams.n_ff();
+    const int64_t n_ff_exp = n_ff_exps_input > 0 ? n_ff_exps_input : model.hparams.n_ff_exp ? model.hparams.n_ff_exp : n_ff / n_expert_used;
+
+    auto & layer = model.layers[i];
+    auto ffn_ctx = ctx_for_layer_split(i);
+
+    bool merged = flags == 0 && ml.merge_up_gate_exps && merge_up_gate_exps(tn, i, 0);
+    if (!merged) {
+        layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
+        layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, flags);
+    }
+    layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, flags);
+
+    return merged;
 }
 
 bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool ignore_attn_scale) {
