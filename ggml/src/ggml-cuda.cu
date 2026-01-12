@@ -2689,13 +2689,9 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 ggml_swiglu_oai_cuda_f32((const float *)dst_up_gate_contiguous.get() + dst->ne[0], (const float *)dst_up_gate_contiguous.get(),
                         (float *)dst->data, ggml_nelements(dst), dst->ne[0], src0_1->ne[1], src0_1->ne[1],
                         1.702f, 7.0f, stream);
-                //ggml_swiglu_oai_cuda_f32((const float *)dst_up_gate_contiguous.get(), (const float *)dst_up_gate_contiguous.get() + dst->ne[0],
-                //        (float *)dst->data, ggml_nelements(dst), dst->ne[0],  src0_1->ne[0],  src0_1->ne[0],
-                //        1.702f, 7.0f, stream);
             } else {
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst), dst->ne[0],
-                        (const float *)dst_up_gate_contiguous.get(),
-                        (float *)dst->data);
+                        (const float *)dst_up_gate_contiguous.get(), (float *)dst->data);
             }
         }
         CUDA_CHECK(cudaGetLastError());
