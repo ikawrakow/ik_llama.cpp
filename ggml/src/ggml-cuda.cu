@@ -2669,6 +2669,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         } else {
 
             ggml_cuda_pool_alloc<char> dst_up_gate_contiguous(ctx.pool(), 2*sizeof(float)*ggml_nelements(dst));
+            ggml_cuda_pool_alloc<char> dst_gate_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
             dst_row.ne[0] *= 2;
             dst_row.nb[1] *= 2;
             dst_row.nb[2] *= 2;
@@ -2685,9 +2686,12 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
 
             auto unary_op = (ggml_unary_op)dst->op_params[0];
             if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
-                ggml_swiglu_oai_cuda_f32((const float *)dst_up_gate_contiguous.get(), (const float *)dst_up_gate_contiguous.get() + dst->ne[0],
-                        (float *)dst->data, ggml_nelements(dst), dst->ne[0],  dst->ne[0],  dst->ne[0],
+                ggml_swiglu_oai_cuda_f32((const float *)dst_up_gate_contiguous.get() + dst->ne[0], (const float *)dst_up_gate_contiguous.get(),
+                        (float *)dst->data, ggml_nelements(dst), dst->ne[0], src0_1->ne[1], src0_1->ne[1],
                         1.702f, 7.0f, stream);
+                //ggml_swiglu_oai_cuda_f32((const float *)dst_up_gate_contiguous.get(), (const float *)dst_up_gate_contiguous.get() + dst->ne[0],
+                //        (float *)dst->data, ggml_nelements(dst), dst->ne[0],  src0_1->ne[0],  src0_1->ne[0],
+                //        1.702f, 7.0f, stream);
             } else {
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst), dst->ne[0],
                         (const float *)dst_up_gate_contiguous.get(),
@@ -2798,6 +2802,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         }
     }
 
+    bool is_first = true;
     for (int64_t i02 = 0; i02 < n_as; i02++) {
         int64_t num_src1_rows = moe_counts[i02];
 
@@ -2827,8 +2832,8 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
 
         auto nb1l = nb1;
         if (!src0_2) {
-            nb1l *= 2;
-            dst_row.ne[0] *= 2;
+            nb1l = nb1*2;
+            dst_row.ne[0] = dst->ne[0] * 2;
         }
 
         src1_row.ne[1] = num_src1_rows;
@@ -2850,6 +2855,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         CUDA_CHECK(cudaGetLastError());
 
         if (dst->src[4]) {
+            GGML_ASSERT(dst_row.ne[0] == dst->src[4]->ne[0]);
             dim3 block_dims(std::min(uint32_t(dst_row.ne[0]), 768u));
             dim3 grid_dims(num_src1_rows);
             k_quick_add<<<grid_dims, block_dims, 0, stream>>>(dst_row.ne[0], (const float *)dst_row.data,
@@ -2857,45 +2863,51 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             CUDA_CHECK(cudaGetLastError());
         }
 
-        if (src0_2) {
-        dst_row.data  = dst_gate_contiguous.get();
-        if (use_quantized_src1) {
-            ggml_cuda_mul_mat_q_id(ctx, &src0_2_row, &src1_row, nullptr, &dst_row, nullptr, src1_quantized.get());
-        } else {
-            ggml_cuda_mul_mat(ctx, &src0_2_row, &src1_row, &dst_row, nullptr, 0);
-        }
-        CUDA_CHECK(cudaGetLastError());
-
-        if (dst->src[5]) {
-            dim3 block_dims(std::min(uint32_t(dst_row.ne[0]), 768u));
-            dim3 grid_dims(num_src1_rows);
-            k_quick_add<<<grid_dims, block_dims, 0, stream>>>(dst_row.ne[0], (const float *)dst_row.data,
-                    (const float *)((const char *)dst->src[5]->data + i02*dst->src[5]->nb[1]), (float *)dst_row.data);
-            CUDA_CHECK(cudaGetLastError());
-        }
-        }
-
         auto unary_op = (ggml_unary_op)dst->op_params[0];
         if (src0_2) {
-        if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
-            ggml_swiglu_oai_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
-                        (float *)dst_gate_contiguous.get(), ggml_nelements(&dst_row), dst_row.ne[0],  dst_row.ne[0],  dst_row.ne[0],
-                        1.702f, 7.0f, stream);
-        } else {
-            ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
-                    (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
-                    (float *)dst_gate_contiguous.get());
-        }
-        } else {
+            dst_row.data  = dst_gate_contiguous.get();
+            if (use_quantized_src1) {
+                ggml_cuda_mul_mat_q_id(ctx, &src0_2_row, &src1_row, nullptr, &dst_row, nullptr, src1_quantized.get());
+            } else {
+                ggml_cuda_mul_mat(ctx, &src0_2_row, &src1_row, &dst_row, nullptr, 0);
+            }
+            CUDA_CHECK(cudaGetLastError());
+
+            if (dst->src[5]) {
+                dim3 block_dims(std::min(uint32_t(dst_row.ne[0]), 768u));
+                dim3 grid_dims(num_src1_rows);
+                k_quick_add<<<grid_dims, block_dims, 0, stream>>>(dst_row.ne[0], (const float *)dst_row.data,
+                        (const float *)((const char *)dst->src[5]->data + i02*dst->src[5]->nb[1]), (float *)dst_row.data);
+                CUDA_CHECK(cudaGetLastError());
+            }
             if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
-                ggml_swiglu_oai_cuda_f32((const float *)dst_up_contiguous.get() + dst->ne[0], (const float *)dst_up_contiguous.get(),
-                        (float *)dst_gate_contiguous.get(), ggml_nelements(dst), dst->ne[0],  dst->ne[0],  dst->ne[0],
+                ggml_swiglu_oai_cuda_f32((const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
+                        (float *)dst_gate_contiguous.get(), ggml_nelements(&dst_row), dst_row.ne[0],  dst_row.ne[0],  dst_row.ne[0],
                         1.702f, 7.0f, stream);
             } else {
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
                         (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
                         (float *)dst_gate_contiguous.get());
             }
+        } else {
+            if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
+                //if (is_first) {
+                //    printf("Doing ggml_swiglu_oai_cuda_f32: %ld %zu %ld %ld %ld\n", dst->ne[0], ggml_nelements(&dst_row)/2, dst_row.ne[0], src0_1->ne[1], num_src1_rows);
+                //    is_first = false;
+                //}
+                ggml_swiglu_oai_cuda_f32((const float *)dst_up_contiguous.get() + dst->ne[0], (const float *)dst_up_contiguous.get(),
+                        (float *)dst_gate_contiguous.get(), ggml_nelements(&dst_row)/2, dst->ne[0], src0_1->ne[1], src0_1->ne[1],
+                        1.702f, 7.0f, stream);
+            } else {
+                ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
+                        (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
+                        (float *)dst_gate_contiguous.get());
+            }
+            dst_row.data = dst_gate_contiguous.get();
+            dst_row.ne[0] /= 2;
+            dst_row.nb[1] /= 2;
+            dst_row.nb[2] /= 2;
+            dst_row.nb[3] /= 2;
         }
         CUDA_CHECK(cudaGetLastError());
 

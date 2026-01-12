@@ -4063,7 +4063,8 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, true, false, 0.0f,
                 LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                LLM_FFN_SILU, cb, il, gf, true);
+                LLM_FFN_SILU, cb, il, gf, true,
+                model.layers[il].ffn_up_gate_exps);
 
         //printf("%s: ffn = %s(%s)\n", __func__, cur->name, ggml_op_name(cur->op));
 

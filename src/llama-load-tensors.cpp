@@ -1176,9 +1176,14 @@ bool create_tensors_helper::create_qwen3_moe_tensors(const LLM_TN & tn) {
         // MoE branch
         const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
 
-        layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert});
+        bool merged = merge_up_gate_exps(tn, i, 0);
+        if (merged) {
+            use_mmap_buffer = false;
+        } else {
+            layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert});
+            layer.ffn_gate_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert});
+        }
         layer.ffn_down_exps = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert});
-        layer.ffn_up_exps   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert});
     }
     return use_mmap_buffer;
 }
@@ -2696,14 +2701,14 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
         return false;
     }
 
-    printf("%s: mergin up/gate in layer %d\n", __func__, i);
+    printf("%s: merging up/gate in layer %d\n", __func__, i);
 
     layer.ffn_up_gate_exps = ggml_new_tensor_3d(ctx_split, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
     snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_up_gate_exps.weight", i);
     layer.ffn_up_exps   = ml.create_tensor_as_view(ctx_split, layer.ffn_up_gate_exps, u_name.c_str(),
             { u_meta->ne[0], u_meta->ne[1], u_meta->ne[2] }, 0);
     layer.ffn_gate_exps = ml.create_tensor_as_view(ctx_split, layer.ffn_up_gate_exps, g_name.c_str(),
-            { g_meta->ne[0], g_meta->ne[1], g_meta->ne[2] }, u_meta->ne[1]*u_meta->nb[1] );
+            { g_meta->ne[0], g_meta->ne[1], g_meta->ne[2] }, ggml_nbytes(layer.ffn_up_exps) ); //u_meta->ne[1]*u_meta->nb[1] );
 
     if (!bias) return true;
 
@@ -2728,7 +2733,7 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     layer.ffn_up_exps_b   = ml.create_tensor_as_view(ctx_split, layer.ffn_up_gate_exps_b, u_name_b.c_str(),
             { u_meta_b->ne[0], u_meta_b->ne[1] }, 0);
     layer.ffn_gate_exps_b = ml.create_tensor_as_view(ctx_split, layer.ffn_up_gate_exps_b, g_name_b.c_str(),
-            { g_meta_b->ne[0], g_meta_b->ne[1] }, u_meta->nb[1]);
+            { g_meta_b->ne[0], g_meta_b->ne[1] }, ggml_nbytes(layer.ffn_up_exps_b) ); //u_meta->nb[1]);
 
     return true;
 }
