@@ -2499,9 +2499,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         ggml_backend_cuda_buffer_context * src0_2_ctx = src0_2 ? (ggml_backend_cuda_buffer_context *) src0_2->buffer->context : nullptr;
         ggml_backend_cuda_buffer_context * src1_ctx   = (ggml_backend_cuda_buffer_context *) src1->buffer->context;
         ggml_backend_cuda_buffer_context * dst_ctx    = (ggml_backend_cuda_buffer_context *) dst->buffer->context;
-        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        return i;
-        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         if (src0_1_ctx->device == device_id &&
             (!src0_2_ctx || src0_2_ctx->device == device_id) &&
             src1_ctx->device   == device_id &&
@@ -2540,11 +2537,37 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 ((ggml_backend_cuda_buffer_context *)next->buffer->context)->device == device_id;
 
             auto unary_op = (ggml_unary_op)dst->op_params[0];
+            if (src0_2) {
+            auto gate_bias = dst->src[4] && src0_2 ? dst->src[5] : nullptr;
             ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, src0_1, &local_src1, ids, &local_dst,
                     dst->src[4], dst->src[5],
                     (const char *)src0_1->data, src0_2 ? (const char *)src0_2->data : nullptr,
                     (const float *)src1->data, src1_quantized.get(),
                     (float *)local_dst.data, 0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, stream);
+            } else {
+                auto local_src0_1 = *src0_1;
+                local_src0_1.ne[1] /= 2;
+                auto local_src0_2 = local_src0_1;
+                local_src0_2.data = (char *)local_src0_1.data + local_src0_1.ne[1]*local_src0_1.nb[1];
+                if (!dst->src[4]) {
+                    ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, &local_src0_1, &local_src1, ids, &local_dst,
+                            nullptr, nullptr,
+                            (const char *)local_src0_1.data, (const char *)local_src0_2.data,
+                            (const float *)src1->data, src1_quantized.get(),
+                            (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, stream);
+                } else {
+                    GGML_ASSERT(!dst->src[5]);
+                    auto local_bias_1 = *dst->src[4];
+                    local_bias_1.ne[0] /= 2;
+                    auto local_bias_2 = local_bias_1;
+                    local_bias_2.data = (char *)local_bias_1.data + local_bias_1.ne[0]*local_bias_1.nb[0];
+                    ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, &local_src0_1, &local_src1, ids, &local_dst,
+                            &local_bias_1, &local_bias_2,
+                            (const char *)local_src0_1.data, (const char *)local_src0_2.data,
+                            (const float *)src1->data, src1_quantized.get(),
+                            (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, stream);
+                }
+            }
             CUDA_CHECK(cudaGetLastError());
 
             if (!fuse_next) return i;
