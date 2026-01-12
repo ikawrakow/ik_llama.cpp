@@ -100,6 +100,9 @@ struct server_slot {
     common_chat_format chat_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     std::vector<std::string> generated_tool_call_ids;
 
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
+
     int32_t ga_i = 0;   // group-attention state
     int32_t ga_n = 1;   // group-attention factor
     int32_t ga_w = 512; // group-attention width
