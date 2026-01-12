@@ -1482,7 +1482,7 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
     res->content = tkn.text_to_send;
     res->post_sampling_probs = slot.params.post_sampling_probs;
     res->oaicompat = slot.params.oaicompat;
-    res->oaicompat_model = slot.params.oaicompat_model;
+    res->oaicompat_model = slot.task->params.oaicompat_model;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
     res->n_decoded = slot.n_decoded;
     res->n_prompt_tokens = slot.n_prompt_tokens;
