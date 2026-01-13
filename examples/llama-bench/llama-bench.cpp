@@ -271,6 +271,7 @@ struct cmd_params {
     bool muge = false;
     bool rcache = false;
     bool sas = false;
+    bool print_overrides = false;
     output_formats output_format;
     output_formats output_format_stderr;
 };
@@ -315,6 +316,7 @@ static const cmd_params cmd_params_defaults = {
     /* muge                 */ false,
     /* rcache               */ false,
     /* sas                  */ false,
+    /* print_overrides      */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -367,6 +369,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -no-fug, --no-fused-up-gate <0|1>   (default: %s)\n", cmd_params_defaults.no_fug? "1" : "0");
     printf("  -no-ooae, --no-offload-only-active-experts <0|1>   (default: %s)\n", cmd_params_defaults.no_ooae? "1" : "0");
     printf("  -sas, --scheduler-async <0|1>       (default: %s)\n", cmd_params_defaults.sas ? "1" : "0");
+    printf("        --print-overrides <0|1>       (default: %s)\n", cmd_params_defaults.print_overrides ? "1" : "0");
     printf("\n");
     printf("Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.\n");
 }
@@ -862,6 +865,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 invalid_param = true;
                 break;
             }
+        } else if (arg == "--print-overrides") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params.print_overrides = std::stoi(argv[i]);
         } else {
             invalid_param = true;
             break;
@@ -1603,6 +1612,7 @@ struct json_printer : public printer {
 
 struct markdown_printer : public printer {
     std::vector<std::string> fields;
+    bool skipped_overrides = false;
 
     static int get_field_width(const std::string & field) {
         if (field == "model") {
@@ -1830,7 +1840,11 @@ struct markdown_printer : public printer {
             fields.emplace_back("cuda_params");
         }
         if (!(params.buft_overrides == cmd_params_defaults.buft_overrides)) {
-            fields.emplace_back("override_tensor");
+            if (params.print_overrides) {
+                fields.emplace_back("override_tensor");
+            } else {
+                skipped_overrides = true;
+            }
         }
         if (params.repack != cmd_params_defaults.repack) {
             fields.emplace_back("repack");
@@ -1883,6 +1897,9 @@ struct markdown_printer : public printer {
 
         fprintf(fout, "|");
         for (const auto & field : fields) {
+            if (skipped_overrides && field == "override_tensor") {
+                continue;
+            }
             std::string value;
             char buf[128];
             if (field == "model") {
