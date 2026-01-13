@@ -266,6 +266,17 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
                 if (data.format == COMMON_CHAT_FORMAT_KIMI_K2) {
                     quoted_name = "\"functions.\" " + quoted_name + " \":\" [0-9]+";
                 }
+                // MiroThinker uses {{ name_part_1 }}</server_name>\n<tool_name>{{ name_part_2 }} as function name
+                if (data.format == COMMON_CHAT_FORMAT_MIROTHINKER) {
+                    auto server_split_pos = name.find("_");
+                    if (std::string::npos == server_split_pos) {
+                        quoted_name = "\"system_default</server_name>\\n<tool_name>\" " + quoted_name;
+                    } else {
+                        quoted_name = gbnf_format_literal(name.substr(0, server_split_pos)) +
+                                      " \"</server_name>\\n<tool_name>\" " +
+                                      gbnf_format_literal(name.substr(server_split_pos + 1));
+                    }
+                }
                 tool_rules.push_back(builder.add_rule(name + "-call",
                         gbnf_format_literal(form.tool_start) + " " +
                         quoted_name + " " +
@@ -422,6 +433,10 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
             auto [sz, tc] = try_find_tool_end();
             func_name = tc;
         }
+        // Skip when tool_sep may be partial
+        if (builder.pos() == builder.input().size()) {
+            throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.key_start));
+        }
 
         // Parse tool name
         builder.move_to(all_space(form.tool_sep) ? func_name->groups[0].begin : func_name->groups[0].end);
@@ -432,6 +447,17 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                 static const std::regex re(":\\d+$");
                 if (std::regex_search(function_name, re)) {
                     function_name = function_name.substr(10, function_name.rfind(":") - 10);
+                }
+            }
+        }
+        // MiroThinker uses {{ name_part_1 }}</server_name>\n<tool_name>{{ name_part_2 }} as function name
+        if (builder.syntax().format == COMMON_CHAT_FORMAT_MIROTHINKER) {
+            if (string_starts_with(function_name, "system_default</server_name>\n<tool_name>")) {
+                function_name = function_name.substr(14 + 26);
+            } else {
+                auto server_split_pos = function_name.find("</server_name>\n<tool_name>");
+                if (std::string::npos != server_split_pos) {
+                    function_name = function_name.substr(0, server_split_pos) + "_" + function_name.substr(server_split_pos + 26);
                 }
             }
         }

@@ -354,7 +354,8 @@ struct llm_build_context {
                        bool   scale_w,
                       float   w_scale,
 llm_expert_gating_func_type   gating_op,
-         const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr, bool add_input = false);
+         const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr, bool add_input = false,
+         ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr);
 
     static ggml_tensor * llm_build_moe_ffn(ggml_context * ctx, llama_context & lctx,
          ggml_tensor * cur,
@@ -370,7 +371,8 @@ llm_expert_gating_func_type   gating_op,
                        bool   scale_w,
                       float   w_scale,
 llm_expert_gating_func_type   gating_op,
-         const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr, bool add_input = false) {
+         const llm_build_cb & cb, int il, ggml_cgraph * graph = nullptr, bool add_input = false,
+         ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr) {
         return llm_build_moe_ffn(ctx, lctx, cur,
                 gate_inp,   nullptr,
                 up_exps,    nullptr,
@@ -379,7 +381,7 @@ llm_expert_gating_func_type   gating_op,
                 exp_probs_b,
                 n_expert, n_expert_used,
                 type_op, norm_w, scale_w, w_scale,
-                gating_op, cb, il, graph, add_input);
+                gating_op, cb, il, graph, add_input, up_gate_exps, up_gate_exps_b);
     }
 
     static ggml_tensor * llm_build_std_moe_ffn(ggml_context * ctx, llama_context & lctx,
@@ -401,7 +403,8 @@ llm_expert_gating_func_type   gating_op,
                       float   w_scale,
 llm_expert_gating_func_type   gating_op,
             llm_ffn_op_type   type_op_shexp,
-         const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input = false);
+         const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input = false,
+         ggml_tensor * up_gate_exps = nullptr, ggml_tensor * up_gate_exps_b = nullptr);
 
     static ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids);
 

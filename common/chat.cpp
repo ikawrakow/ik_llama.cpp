@@ -649,6 +649,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
+        case COMMON_CHAT_FORMAT_: return "";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -696,7 +697,8 @@ static std::string apply(
     const struct templates_params & inputs,
     const std::optional<json> & messages_override = std::nullopt,
     const std::optional<json> & tools_override = std::nullopt,
-    const std::optional<json> & additional_context = std::nullopt)
+    const std::optional<json> & additional_context = std::nullopt,
+    const std::optional<minja::chat_template_options> & tmpl_opts = std::nullopt)
 {
     minja::chat_template_inputs tmpl_inputs;
     tmpl_inputs.messages = messages_override ? *messages_override : inputs.messages;
@@ -713,11 +715,11 @@ static std::string apply(
     // TODO: add flag to control date/time, if only for testing purposes.
     // tmpl_inputs.now = std::chrono::system_clock::now();
 
-    minja::chat_template_options tmpl_opts;
+    minja::chat_template_options default_tmpl_opts;
     // To avoid double BOS / EOS tokens, we're manually removing begining / trailing tokens
     // instead of using `chat_template_options.use_bos_token = false`, since these tokens
     // may be needed inside the template / between messages too.
-    auto result = tmpl.apply(tmpl_inputs, tmpl_opts);
+    auto result = tmpl.apply(tmpl_inputs, tmpl_opts ? *tmpl_opts : default_tmpl_opts);
     if (inputs.add_bos && string_starts_with(result, tmpl.bos_token())) {
         result = result.substr(tmpl.bos_token().size());
     }
@@ -1350,6 +1352,53 @@ static common_chat_params common_chat_params_init_xiaomi_mimo(const common_chat_
         form.val_end     = ", ";
         form.tool_end    = "}\n</tool_call>";
         form.scope_end   = "";
+        form.raw_argval  = false;
+        form.last_val_end = "}";
+        return form;
+    })();
+    build_grammar_xml_tool_call(data, params.tools, form);
+
+    return data;
+}
+
+static common_chat_params common_chat_params_init_(const common_chat_template & tmpl, const struct templates_params & params) {
+    common_chat_params data;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+
+    // Disable every Minja polyfill
+    minja::chat_template_options topts;
+    topts.apply_polyfills = true;
+    topts.polyfill_tools = false;
+    topts.polyfill_tool_call_examples = false;
+    topts.polyfill_tool_calls = false;
+    topts.polyfill_tool_responses = false;
+    topts.polyfill_system_role = false;
+    topts.polyfill_object_arguments = true;
+    topts.polyfill_typed_content = false;
+    topts.use_bos_token = true;
+    topts.use_eos_token = true;
+
+    data.prompt = apply(tmpl, params, std::nullopt, std::nullopt, std::nullopt, topts);
+    data.format = COMMON_CHAT_FORMAT_;
+
+    data.preserved_tokens = {
+        "<use_mcp_tool>", "</use_mcp_tool>",
+        "<server_name>", "</server_name>",
+        "<tool_name>", "</tool_name>",
+        "<arguments>", "</arguments>",
+    };
+
+    // build grammar for tool call
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "<use_mcp_tool>\n";
+        form.tool_start  = "<server_name>\n";
+        form.tool_sep    = "</tool_name>\n<arguments>\n{";
+        form.key_start   = "\"";
+        form.key_val_sep = "\": ";
+        form.val_end     = ", ";
+        form.tool_end    = "}\n</arguments>";
+        form.scope_end   = "</use_mcp_tool>";
         form.raw_argval  = false;
         form.last_val_end = "";
         return form;
@@ -2030,6 +2079,14 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("</tool_calls>") != std::string::npos &&
         src.find("<tool_response>") != std::string::npos) {
         return common_chat_params_init_xiaomi_mimo(tmpl, params);
+    }
+
+    // MiroThinker format detection (must come before Hermes 2 Pro)
+    if (src.find("</use_mcp_tool>") != std::string::npos &&
+        src.find("</server_name>") != std::string::npos &&
+        src.find("</tool_name>") != std::string::npos &&
+        src.find("</arguments>") != std::string::npos) {
+        return common_chat_params_init_mirothinker(tmpl, params);
     }
 
     // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)

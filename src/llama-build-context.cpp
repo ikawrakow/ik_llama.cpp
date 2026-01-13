@@ -909,7 +909,8 @@ ggml_tensor * llm_build_context::llm_build_moe_ffn(
                        bool   scale_w,
                       float   w_scale,
 llm_expert_gating_func_type   gating_op,
-         const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input) {
+         const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
+         ggml_tensor * up_gate_exps, ggml_tensor * up_gate_exps_b) {
 
     auto input = cur;
 
@@ -1024,6 +1025,19 @@ llm_expert_gating_func_type   gating_op,
     bool can_use_fmoe = type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU || type_op == LLM_FFN_SWIGLU_OAI_MOE;
 
     ggml_tensor * par;
+    if (can_use_fmoe && up_gate_exps) {
+        if (up_gate_exps_b) {
+            par = ggml_moe_up_gate_ext(ctx, up_gate_exps, nullptr, cur, selected_experts, up_gate_exps_b, nullptr,
+                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
+                    type_op == LLM_FFN_GELU ? GGML_UNARY_OP_GELU : GGML_UNARY_OP_SWIGLU_OAI);
+        } else {
+            GGML_ASSERT(type_op != LLM_FFN_SWIGLU_OAI_MOE);
+            par = ggml_moe_up_gate(ctx, up_gate_exps, nullptr, cur, selected_experts,
+                    type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+        }
+    } else {
+    GGML_ASSERT(!up_gate_exps && !up_gate_exps_b);
+
     if (can_use_fmoe && lctx.cparams.fused_moe_up_gate && up_exps->type == gate_exps->type) {
         if (up_exps_b || gate_exps_b) {
             par = ggml_moe_up_gate_ext(ctx, up_exps, gate_exps, cur, selected_experts, up_exps_b, gate_exps_b,
@@ -1068,6 +1082,7 @@ llm_expert_gating_func_type   gating_op,
             GGML_ABORT("fatal error");
         }
 
+    }
     }
     cb(par, "ffn_moe_gate_par", il);
 
@@ -1129,7 +1144,8 @@ ggml_tensor * llm_build_context::llm_build_std_moe_ffn(ggml_context * ctx, llama
                       float   w_scale,
 llm_expert_gating_func_type   gating_op,
             llm_ffn_op_type   type_op_shexp,
-         const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input) {
+         const llm_build_cb & cb, int il, ggml_cgraph * graph, bool add_input,
+         ggml_tensor * up_gate_exps, ggml_tensor * up_gate_exps_b) {
 
     auto split_up_exps    = (ggml_split_tensor_t *)up_exps->extra;
     auto split_gate_exps  = (ggml_split_tensor_t *)gate_exps->extra;
@@ -1163,7 +1179,7 @@ llm_expert_gating_func_type   gating_op,
                     the_exp_probs_b,
                     n_expert, n_expert_used,
                     type_op, norm_w, scale_w, w_scale,
-                    gating_op, cb, il, graph, false);
+                    gating_op, cb, il, graph, false, up_gate_exps, up_gate_exps_b);
         cb(routed_out, "routed_out", il);
         if (add_input) {
             routed_out = ggml_add(ctx, routed_out, input);
@@ -1924,7 +1940,7 @@ ggml_cgraph * llm_build_context::build_llama() {
                     LLM_FFN_SILU, false,
                     false, 0.0,
                     LLM_EXPERT_GATING_FUNC_SIGMOID,
-                    cb, il, gf, true);
+                    cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
 
             // Shared experts
             ggml_tensor * shexp_out = llm_build_ffn(ctx0, lctx, nullptr, ffn_inp_normed,
@@ -2757,7 +2773,7 @@ ggml_cgraph * llm_build_context::build_dbrx() {
                 LLM_FFN_SILU, true,
                 false, 0.0,
                 LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                cb, il, gf);
+                cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
         cb(cur, "ffn_moe_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
@@ -3845,7 +3861,7 @@ ggml_cgraph * llm_build_context::build_qwen2moe() {
                     LLM_FFN_SILU, false,
                     false, 0.0,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    cb, il, gf);
+                    cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
         cb(cur, "ffn_moe_out", il);
 
         // FFN shared expert
@@ -4046,7 +4062,8 @@ ggml_cgraph * llm_build_context::build_qwen3moe() {
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, true, false, 0.0f,
                 LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                LLM_FFN_SILU, cb, il, gf, true);
+                LLM_FFN_SILU, cb, il, gf, true,
+                model.layers[il].ffn_up_gate_exps);
 
         //printf("%s: ffn = %s(%s)\n", __func__, cur->name, ggml_op_name(cur->op));
 
@@ -4253,7 +4270,7 @@ ggml_cgraph * llm_build_context::build_qwen3vlmoe() {
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                    cb, il, gf);
+                    cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
         cb(cur, "ffn_moe_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
@@ -6766,7 +6783,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                         LLM_FFN_SILU, hparams.expert_weights_norm,
                         true, hparams.expert_weights_scale,
                         (enum llm_expert_gating_func_type) hparams.expert_gating_func,
-                        cb, il, gf);
+                        cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
             cb(moe_out, "ffn_moe_out", il);
 
             // FFN shared expert
@@ -6918,7 +6935,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
                     (llm_expert_gating_func_type) hparams.expert_gating_func,
-                    LLM_FFN_SILU, cb, il, gf, true);
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
         }
 
         // residual and context vector
@@ -7999,7 +8016,7 @@ ggml_cgraph * llm_build_context::build_dots1() {
                         LLM_FFN_SILU, hparams.expert_weights_norm,
                         true, hparams.expert_weights_scale,
                         (enum llm_expert_gating_func_type) hparams.expert_gating_func,
-                        cb, il, gf);
+                        cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
             cb(moe_out, "ffn_moe_out", il);
 
             {
@@ -8269,7 +8286,7 @@ ggml_cgraph * llm_build_context::build_hunyuan_moe() {
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, true, false, 0.0f,
                 LLM_EXPERT_GATING_FUNC_SOFTMAX,
-                LLM_FFN_SILU, cb, il, gf, true);
+                LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
@@ -8342,7 +8359,7 @@ ggml_cgraph * llm_build_context::build_mimo2() {
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, true, false, 0.0f,
                     LLM_EXPERT_GATING_FUNC_SIGMOID,
-                    LLM_FFN_SILU, cb, il, gf, true);
+                    LLM_FFN_SILU, cb, il, gf, true, model.layers[il].ffn_up_gate_exps);
         }
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
@@ -8409,7 +8426,8 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
                 n_expert, n_expert_used,
                 LLM_FFN_SWIGLU_OAI_MOE, false, false, 0.0f,
                 LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT,
-                LLM_FFN_SWIGLU_OAI_MOE, cb, il, gf, true);
+                LLM_FFN_SWIGLU_OAI_MOE, cb, il, gf, true,
+                model.layers[il].ffn_up_gate_exps, model.layers[il].ffn_up_gate_exps_b);
 
         cur = lctx.cvec.apply_to(ctx0, cur, il);
         cb(cur, "l_out", il);
@@ -8518,7 +8536,7 @@ ggml_cgraph * llm_build_context::build_bailingmoe2() {
                         LLM_FFN_SILU, hparams.expert_weights_norm,
                         true, hparams.expert_weights_scale,
                         (llm_expert_gating_func_type) hparams.expert_gating_func,
-                        cb, il, gf);
+                        cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
             cb(moe_out, "ffn_moe_out", il);
 
             ggml_tensor * ffn_shexp = llm_build_ffn(ctx0, lctx, nullptr, cur,
@@ -8650,7 +8668,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 LLM_FFN_SILU, true,
                 false, 0,
                 (llm_expert_gating_func_type)hparams.expert_gating_func,
-                cb, il, gf);
+                cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
         cb(cur, "ffn_moe_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);

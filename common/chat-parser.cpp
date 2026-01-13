@@ -967,6 +967,24 @@ static void common_chat_parse_xiaomi_mimo(common_chat_msg_parser & builder) {
     builder.consume_reasoning_with_xml_tool_calls(form);
 }
 
+static void common_chat_parse_mirothinker(common_chat_msg_parser & builder) {
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start = "<use_mcp_tool>";
+        form.tool_start  = "<server_name>";
+        form.tool_sep    = "</tool_name>\n<arguments>\n{";
+        form.key_start   = "\"";
+        form.key_val_sep = "\":";
+        form.val_end     = ",";
+       form.tool_end    = "}\n</arguments>";
+        form.scope_end   = "</use_mcp_tool>";
+        form.raw_argval  = false;
+        form.last_val_end = "";
+        return form;
+    })();
+    builder.consume_reasoning_with_xml_tool_calls(form);
+}
+
 static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     static const std::string constraint = "(?: (<\\|constrain\\|>)?([a-zA-Z0-9_-]+))";
     static const std::string recipient("(?: to=functions\\.([^<\\s]+))");
@@ -1479,6 +1497,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO:
             common_chat_parse_xiaomi_mimo(builder);
+            break;
+        case COMMON_CHAT_FORMAT_MIROTHINKER:
+            common_chat_parse_mirothinker(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));

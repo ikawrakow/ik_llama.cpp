@@ -1442,6 +1442,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.merge_qkv = true;
         return true;
     }
+    if (arg == "-muge" || arg == "--merge-up-gate-expsrts") {
+        params.merge_up_gate_exps = true;
+        return true;
+    }
     if (arg == "-khad" || arg == "--k-cache-hadamard") {
         params.k_cache_hadamard = true;
         return true;
@@ -2148,6 +2152,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-no-gr, --no-graph-reuse",      "disable graph reuse (default: %s)", !params.graph_reuse ? "enabled" : "disabled" });
     options.push_back({ "*",         "-ser,  --smart-expert-reduction", "experts reduction (default: %d,%g)", params.min_experts, params.thresh_experts});
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
+    options.push_back({ "*",         "-muge,  --merge-up-gate-experts,","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard,",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
     options.push_back({ "*",         "-smf16, --split-mode-f16,",       "Use f16 for data exchange between GPUs (default: %d)", params.split_mode_f16});
     options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", !params.split_mode_f16});
@@ -3088,6 +3093,7 @@ struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & 
     mparams.use_thp         = params.use_thp;
     mparams.validate_quants = params.validate_quants;
     mparams.merge_qkv       = params.merge_qkv;
+    mparams.merge_up_gate_exps = params.merge_up_gate_exps;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -4134,6 +4140,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "use_thp: %s # default: false\n", params.use_thp ? "true" : "false");
     fprintf(stream, "validate_quants: %s # default: false\n", params.validate_quants ? "true" : "false");
     fprintf(stream, "merge_qkv: %s # default: false\n", params.merge_qkv ? "true" : "false");
+    fprintf(stream, "merge_up_gate_exps: %s # default: false\n", params.merge_up_gate_exps ? "true" : "false");
     fprintf(stream, "max_extra_alloc: %d # default: 256\n", params.max_extra_alloc_MiB);
     fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
     fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
