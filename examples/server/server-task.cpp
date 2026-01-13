@@ -1,6 +1,5 @@
 #include "server-task.h"
 
-
 json result_timings::to_json() const {
     json base = {
         {"prompt_n",               prompt_n},
@@ -26,83 +25,63 @@ json result_timings::to_json() const {
 }
 
 
-json server_task_result::to_json_final() {
-    switch (oaicompat) {
-    case OAICOMPAT_TYPE_NONE:
-        return to_json_non_oaicompat_final();
-    case OAICOMPAT_TYPE_COMPLETION:
-        return to_json_oaicompat_final();
-    case OAICOMPAT_TYPE_CHAT:
-        return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat_final();
-    case OAICOMPAT_TYPE_ANTHROPIC:
-        return stream ? to_json_anthropic_stream() : to_json_anthropic_final();
-    default:
-        GGML_ASSERT(false && "Invalid oaicompat_type");
-    }
-}
+//json server_task_result_cmpl_partial::to_json_non_oaicompat_partial() {
+//    // non-OAI-compat JSON
+//    json res = json{
+//        {"index",            index},
+//        {"content",          content},
+//        {"tokens",           tokens},
+//        {"stop",             false},
+//        {"id_slot",          id_multi},
+//        {"tokens_predicted", n_decoded},
+//        {"tokens_evaluated", n_prompt_tokens},
+//    };
+//    // populate the timings object when needed (usually for the last response or with timings_per_token enabled)
+//    if (timings.prompt_n > 0) {
+//        res.push_back({ "timings", timings.to_json() });
+//    }
+//    if (!probs_output.empty()) {
+//        res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
+//    }
+//    return res;
+//}
 
-json server_task_result::to_json_partial() {
-    switch (oaicompat) {
-    case OAICOMPAT_TYPE_NONE:
-        return to_json_non_oaicompat_partial();
-    case OAICOMPAT_TYPE_COMPLETION:
-        return to_json_oaicompat_partial();
-    case OAICOMPAT_TYPE_CHAT:
-        return to_json_oaicompat_chat_partial();
-    case OAICOMPAT_TYPE_ANTHROPIC:
-        return to_json_anthropic_partial();
-    default:
-        GGML_ASSERT(false && "Invalid oaicompat_type");
-    }
-}
+//json server_task_result_cmpl_final::to_json_non_oaicompat_final() {
+//    json res = json{
+//        {"index",               index},
+//        {"content",             stream ? "" : content}, // in stream mode, content is already in last partial chunk
+//        {"tokens",              stream ? std::vector<llama_token> {} : tokens},
+//        {"id_slot",             id_multi},
+//        {"stop",                true},
+//        {"model",               oaicompat_model},
+//        {"tokens_predicted",    n_decoded},
+//        {"tokens_evaluated",    n_prompt_tokens},
+//        //{"generation_settings", default_generation_settings_for_props.to_json()},
+//        {"prompt",              prompt},
+//        {"has_new_line",        has_new_line},
+//        {"truncated",           truncated},
+//        //{"stop_type",           stop_type_to_str(STOP_TYPE_EOS)},
+//        {"stopping_word",       stopping_word},
+//        {"tokens_cached",       n_tokens_cached},
+//        {"timings",             timings.to_json()},
+//    };
+//    if (!stream && !probs_output.empty()) {
+//        res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
+//    }
+//    return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
+//}
 
-json server_task_result::to_json_non_oaicompat_partial() {
+json server_task_result_cmpl_partial::to_json_non_oaicompat_partial() {
     // non-OAI-compat JSON
-    json res = json{
-        {"index",            index},
-        {"content",          content},
-        {"tokens",           tokens},
-        {"stop",             false},
-        {"id_slot",          id_multi},
-        {"tokens_predicted", n_decoded},
-        {"tokens_evaluated", n_prompt_tokens},
-    };
-    // populate the timings object when needed (usually for the last response or with timings_per_token enabled)
-    if (timings.prompt_n > 0) {
-        res.push_back({ "timings", timings.to_json() });
-    }
-    if (!probs_output.empty()) {
-        res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
-    }
-    return res;
+    return data;
 }
 
-json server_task_result::to_json_non_oaicompat_final() {
-    json res = json{
-        {"index",               index},
-        {"content",             stream ? "" : content}, // in stream mode, content is already in last partial chunk
-        {"tokens",              stream ? std::vector<llama_token> {} : tokens},
-        {"id_slot",             id_multi},
-        {"stop",                true},
-        {"model",               oaicompat_model},
-        {"tokens_predicted",    n_decoded},
-        {"tokens_evaluated",    n_prompt_tokens},
-        //{"generation_settings", default_generation_settings_for_props.to_json()},
-        {"prompt",              prompt},
-        {"has_new_line",        has_new_line},
-        {"truncated",           truncated},
-        //{"stop_type",           stop_type_to_str(STOP_TYPE_EOS)},
-        {"stopping_word",       stopping_word},
-        {"tokens_cached",       n_tokens_cached},
-        {"timings",             timings.to_json()},
-    };
-    if (!stream && !probs_output.empty()) {
-        res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
-    }
-    return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
+json server_task_result_cmpl_final::to_json_non_oaicompat_final() {
+    // non-OAI-compat JSON
+    return data;
 }
 
-json server_task_result::to_json_oaicompat_partial() {
+json server_task_result_cmpl_partial::to_json_oaicompat_partial() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
     if (probs_output.size() > 0) {
@@ -141,7 +120,7 @@ json server_task_result::to_json_oaicompat_partial() {
     return res;
 }
 
-json server_task_result::to_json_oaicompat_final() {
+json server_task_result_cmpl_final::to_json_oaicompat_final() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
     if (!stream && probs_output.size() > 0) {
@@ -184,7 +163,7 @@ json server_task_result::to_json_oaicompat_final() {
     return res;
 }
 
-json server_task_result::to_json_oaicompat_chat_partial() {
+json server_task_result_cmpl_partial::to_json_oaicompat_chat_partial() {
     bool first = n_decoded == 1;
     std::time_t t = std::time(0);
     json choices;
@@ -239,7 +218,7 @@ json server_task_result::to_json_oaicompat_chat_partial() {
     return deltas;
 }
 
-json server_task_result::to_json_oaicompat_chat_final() {
+json server_task_result_cmpl_final::to_json_oaicompat_chat_final() {
     std::string finish_reason = "length";
     common_chat_msg msg;
     if (!oaicompat_msg.empty()) {
@@ -292,7 +271,7 @@ json server_task_result::to_json_oaicompat_chat_final() {
     return res;
 }
 
-json server_task_result::to_json_oaicompat_chat_stream() {
+json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     std::time_t t = std::time(0);
     std::string finish_reason = "length";
     if (stop) {
@@ -357,7 +336,7 @@ json server_task_result::to_json_oaicompat_chat_stream() {
     return deltas;
 }
 
-json server_task_result::to_json_anthropic_final() {
+json server_task_result_cmpl_final::to_json_anthropic_final() {
     std::string stop_reason = "max_tokens";
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
@@ -416,7 +395,7 @@ json server_task_result::to_json_anthropic_final() {
     return res;
 }
 
-json server_task_result::to_json_anthropic_stream() {
+json server_task_result_cmpl_final::to_json_anthropic_stream() {
     json events = json::array();
 
     std::string stop_reason = "max_tokens";
@@ -552,7 +531,7 @@ json server_task_result::to_json_anthropic_stream() {
     return events;
 }
 
-json server_task_result::to_json_anthropic_partial() {
+json server_task_result_cmpl_partial::to_json_anthropic_partial() {
     json events = json::array();
     bool first = n_decoded == 1;
     static bool text_block_started = false;

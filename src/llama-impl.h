@@ -229,3 +229,6 @@ struct llama_split_tensor {
     std::vector<ggml_tensor *> tensor_splits;
     ggml_split_tensor_t        ggml;
 };
+
+void  llama_decode_reset();
+void  llama_decode_stop();

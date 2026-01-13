@@ -142,6 +142,15 @@ static std::string trim(const std::string & str) {
     return str.substr(start, end - start);
 }
 
+static bool stop_internal_decode = false;
+
+void  llama_decode_reset() {
+    stop_internal_decode = false;
+}
+
+void  llama_decode_stop() {
+    stop_internal_decode = true;
+}
 
 static std::vector<std::string> string_split(const std::string& str, const std::string& delimiter) {
     std::vector<std::string> parts;
@@ -3077,6 +3086,10 @@ static int llama_decode_internal(
                 //kv_self.n = llama_kv_cache_cell_max(kv_self);
             }
         }
+        if (stop_internal_decode) {
+            return -3;
+        }
+
 #if IK_PRINT_TIMING
         auto tim2 = ggml_time_us();
         printf("prelude(...): %d us\n", int(tim2-tim1));
@@ -5039,7 +5052,7 @@ int32_t llama_n_ctx_train(const struct llama_model * model) {
     return model->hparams.n_ctx_train;
 }
 
-int32_t llama_n_embd(const struct llama_model * model) {
+int32_t llama_model_n_embd(const struct llama_model * model) {
     return model->hparams.n_embd;
 }
 

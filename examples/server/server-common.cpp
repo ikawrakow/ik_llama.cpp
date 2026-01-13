@@ -478,15 +478,31 @@ json probs_vector_to_json(const llama_context* ctx, const std::vector<completion
     return out;
 }
 
+
+// note: if data is a json array, it will be sent as multiple events, one per item
 bool server_sent_event(httplib::DataSink& sink, const json& data) {
-    const std::string str =
-        "data: " +
-        data.dump(-1, ' ', false, json::error_handler_t::replace) +
-        "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
+    static auto send_single = [](httplib::DataSink& sink, const json& data) -> bool {
+        const std::string str =
+            "data: " +
+            data.dump(-1, ' ', false, json::error_handler_t::replace) +
+            "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
 
-    //LOG_VERBOSE("data stream, to_send: %s", str.c_str());
+        LOG_DBG("data stream, to_send: %s", str.c_str());
+        return sink.write(str.c_str(), str.size());
+    };
 
-    return sink.write(str.c_str(), str.size());
+    if (data.is_array()) {
+        for (const auto& item : data) {
+            if (!send_single(sink, item)) {
+                return false;
+            }
+        }
+    }
+    else {
+        return send_single(sink, data);
+    }
+
+    return true;
 }
 
 bool server_sent_anthropic_event(httplib::DataSink& sink, const json& data) {
@@ -2196,4 +2212,8 @@ bool prompt_cache_equal(llama_context* ctx, const server_tokens& cache_tokens,
     std::string common_prompt = prompt_tokens.detokenize(ctx, true, start, prefix.second);
     bool equal = common_cache == common_prompt;
     return equal;
+}
+
+std::string safe_json_to_str(const json& data) {
+    return data.dump(-1, ' ', false, json::error_handler_t::replace);
 }

@@ -586,9 +586,9 @@ void llama_kv_cache_dump_view_seqs(const llama_kv_cache_view & view, int row_siz
 // Embedding utils
 //
 
-void llama_embd_normalize(const float * inp, float * out, int n, int embd_norm = 2);
+void common_embd_normalize(const float * inp, float * out, int n, int embd_norm = 2);
 
-float llama_embd_similarity_cos(const float * embd1, const float * embd2, int n);
+float common_embd_similarity_cos(const float * embd1, const float * embd2, int n);
 
 //
 // Control vector utils

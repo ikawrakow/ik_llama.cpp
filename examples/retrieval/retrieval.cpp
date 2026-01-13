@@ -106,7 +106,7 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         }
 
         float * out = output + batch.seq_id[i][0] * n_embd;
-        llama_embd_normalize(embd, out, n_embd);
+        common_embd_normalize(embd, out, n_embd);
     }
 }
 
@@ -215,7 +215,7 @@ int main(int argc, char ** argv) {
     struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
     // allocate output
-    const int n_embd = llama_n_embd(model);
+    const int n_embd = llama_model_n_embd(model);
     std::vector<float> embeddings(n_chunks * n_embd, 0);
     float * emb = embeddings.data();
 
@@ -272,7 +272,7 @@ int main(int argc, char ** argv) {
         {
             std::vector<std::pair<int, float>> similarities;
             for (int i = 0; i < n_chunks; i++) {
-                float sim = llama_embd_similarity_cos(chunks[i].embedding.data(), query_emb.data(), n_embd);
+                float sim = common_embd_similarity_cos(chunks[i].embedding.data(), query_emb.data(), n_embd);
                 similarities.push_back(std::make_pair(i, sim));
             }
 

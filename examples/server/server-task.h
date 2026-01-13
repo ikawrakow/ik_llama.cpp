@@ -42,13 +42,53 @@ enum oaicompat_type {
 };
 
 
+struct slot_params {
+    bool stream = true;
+    bool include_usage = false;
+    bool cache_prompt = true; // remember the prompt to avoid reprocessing all prompt
+
+    int32_t  n_keep = 0; // number of tokens to keep from initial prompt
+    int32_t  n_discard = 0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
+    int32_t  n_predict = -1; // new tokens to predict
+
+    thinking_tokens think_tokens;
+
+    std::vector<std::string> antiprompt;
+
+    bool timings_per_token = false;
+    bool post_sampling_probs = false;
+    json input_prefix;
+    json input_suffix;
+
+    // speculative decoding parameters
+    struct {
+        int n_max = 16;  // max drafted tokens
+        int n_min = 0;  // min drafted tokens to accept
+        float p_min = 0.75f; // min probability required to accept a token in the draft
+    } speculative;
+
+    // OAI-compat fields
+    oaicompat_type        oaicompat = OAICOMPAT_TYPE_NONE;
+    std::string           oaicompat_model;
+    std::string           oaicompat_cmpl_id;
+    common_chat_syntax           oaicompat_chat_syntax;
+
+    // Embeddings
+    int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
+};
+
 struct server_task {
     int id = -1; // to be filled by server_queue
     int id_multi = -1;
+
+    int index = -1; // used when there are multiple prompts (batch request)
+
+    // used by SERVER_TASK_TYPE_CANCEL
     int id_target = -1;
-    //int id_slot = -1;
+    int id_slot = -1;
 
     // used by SERVER_TASK_TYPE_INFERENCE
+    struct slot_params params;
     server_tokens tokens;
 
     server_task_type type;
@@ -60,6 +100,18 @@ struct server_task {
     server_task() = default;
     server_task(server_task_type type) : type(type) {}
 
+    int32_t n_tokens() const {
+        return tokens.size();
+    }
+
+    // utility function
+    static std::unordered_set<int> get_list_id(const std::vector<server_task>& tasks) {
+        std::unordered_set<int> ids(tasks.size());
+        for (size_t i = 0; i < tasks.size(); i++) {
+            ids.insert(tasks[i].id);
+        }
+        return ids;
+    }
 };
 
 struct result_timings {
@@ -126,40 +178,142 @@ struct server_task_result {
 
     bool                  verbose = false;
 
+    virtual bool is_error() {
+        // only used by server_task_result_error
+        return false;
+    }
+
+    virtual bool is_stop() {
+        // only used by server_task_result_cmpl_*
+        // in stream mode, final responses are considered stop
+        return true;
+    }
+
+    virtual json to_json() {
+        return {};
+    };
 
     int get_index() {
         return index;
     }
 
-    bool is_stop() {
-        return true; // in stream mode, final responses are considered stop
+};
+
+struct server_task_result_cmpl_partial : server_task_result {
+    virtual bool is_stop() override {
+        return false; // in stream mode, partial responses are not considered stop
     }
-
-    json to_json_final();
-
-    json to_json_partial();
 
     json to_json_non_oaicompat_partial();
 
-    json to_json_non_oaicompat_final();
-
     json to_json_oaicompat_partial();
 
-    json to_json_oaicompat_final();
+    json to_json_anthropic_partial();
 
     json to_json_oaicompat_chat_partial();
 
-    json to_json_oaicompat_chat_final();
+    virtual json to_json() override {
+        switch (oaicompat) {
+        case OAICOMPAT_TYPE_NONE:
+            return to_json_non_oaicompat_partial();
+        case OAICOMPAT_TYPE_COMPLETION:
+            return to_json_oaicompat_partial();
+        case OAICOMPAT_TYPE_CHAT:
+            return to_json_oaicompat_chat_partial();
+        case OAICOMPAT_TYPE_ANTHROPIC:
+            return to_json_anthropic_partial();
+        default:
+            GGML_ASSERT(false && "Invalid oaicompat_type");
+        };
+    }
+};
 
-    json to_json_oaicompat_chat_stream();
+struct server_task_result_cmpl_final : server_task_result {
+    virtual bool is_stop() override {
+        return true;
+    }
+
+    json to_json_non_oaicompat_final();
+
+    json to_json_oaicompat_final();
+
+    json to_json_oaicompat_chat_final();
 
     json to_json_anthropic_final();
 
     json to_json_anthropic_stream();
 
-    json to_json_anthropic_partial();
+    json to_json_oaicompat_chat_stream();
+
+    virtual json to_json() override {
+        switch (oaicompat) {
+        case OAICOMPAT_TYPE_NONE:
+            return to_json_non_oaicompat_final();
+        case OAICOMPAT_TYPE_COMPLETION:
+            return to_json_oaicompat_final();
+        case OAICOMPAT_TYPE_CHAT:
+            return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat_final();
+        case OAICOMPAT_TYPE_ANTHROPIC:
+            return stream ? to_json_anthropic_stream() : to_json_anthropic_final();
+        default:
+            GGML_ASSERT(false && "Invalid oaicompat_type");
+        }
+    }
 };
 
+struct server_task_result_error : server_task_result {
+    int index = 0;
+    error_type err_type = ERROR_TYPE_SERVER;
+    std::string err_msg;
+
+    // for ERROR_TYPE_EXCEED_CONTEXT_SIZE
+    int32_t n_prompt_tokens = 0;
+    int32_t n_ctx = 0;
+
+    virtual bool is_error() override {
+        return true;
+    }
+
+    virtual json to_json() override {
+        json res = format_error_response(err_msg, err_type);
+        return res;
+    }
+};
+
+struct server_task_result_embd : server_task_result {
+    int index = 0;
+    std::vector<std::vector<float>> embedding;
+
+    int32_t n_tokens;
+
+    // OAI-compat fields
+    oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
+
+    virtual json to_json() override {
+        return oaicompat == OAICOMPAT_TYPE_EMBEDDING
+            ? to_json_oaicompat()
+            : to_json_non_oaicompat();
+    }
+
+    json to_json_non_oaicompat() {
+        return json{
+            {"index",     index},
+            {"embedding", embedding},
+        };
+    }
+
+    json to_json_oaicompat() {
+        return json{
+            {"index",            index},
+            {"embedding",        embedding[0]},
+            {"tokens_evaluated", n_tokens},
+        };
+    }
+};
+
+
+// using shared_ptr for polymorphism of server_task_result
+using server_task_result_ptr = std::unique_ptr<server_task_result>;
 
 struct server_prompt_checkpoint {
     llama_pos pos_min;

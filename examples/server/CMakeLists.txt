@@ -12,7 +12,7 @@ endif()
 
 set(TARGET_SRCS
     server.cpp
-    httplib.h
+    # httplib.h
     server-task.cpp
     server-task.h
     server-queue.cpp
@@ -78,7 +78,7 @@ target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PRIVATE common ${CMAKE_THREAD_LIBS_INIT})
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
-target_link_libraries(${TARGET} PRIVATE common mtmd ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PRIVATE common mtmd cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 
 if (LLAMA_SERVER_SSL)
     find_package(OpenSSL REQUIRED)

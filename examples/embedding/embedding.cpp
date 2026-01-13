@@ -72,7 +72,7 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         }
 
         float * out = output + embd_pos * n_embd;
-        llama_embd_normalize(embd, out, n_embd, embd_norm);
+        common_embd_normalize(embd, out, n_embd, embd_norm);
     }
 }
 
@@ -187,7 +187,7 @@ int main(int argc, char ** argv) {
     }
 
     // allocate output
-    const int n_embd = llama_n_embd(model);
+    const int n_embd = llama_model_n_embd(model);
     std::vector<float> embeddings(n_embd_count * n_embd, 0);
     float * emb = embeddings.data();
 
@@ -265,7 +265,7 @@ int main(int argc, char ** argv) {
                 fprintf(stdout, "\n");
                 for (int i = 0; i < n_prompts; i++) {
                     for (int j = 0; j < n_prompts; j++) {
-                        float sim = llama_embd_similarity_cos(emb + i * n_embd, emb + j * n_embd, n_embd);
+                        float sim = common_embd_similarity_cos(emb + i * n_embd, emb + j * n_embd, n_embd);
                         fprintf(stdout, "%6.2f ", sim);
                     }
                     fprintf(stdout, "%1.10s", prompts[i].c_str());
@@ -298,7 +298,7 @@ int main(int argc, char ** argv) {
             for (int i = 0;;) { // at least two iteration (n_embd_count > 1)
                 fprintf(stdout, "    [");
                 for (int j = 0;;) { // at least two iteration (n_embd_count > 1)
-                    float sim = llama_embd_similarity_cos(emb + i * n_embd, emb + j * n_embd, n_embd);
+                    float sim = common_embd_similarity_cos(emb + i * n_embd, emb + j * n_embd, n_embd);
                     fprintf(stdout, "%6.2f", sim);
                     j++;
                     if (j < n_embd_count) fprintf(stdout, ", "); else break;
