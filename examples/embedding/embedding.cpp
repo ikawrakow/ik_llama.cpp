@@ -26,7 +26,7 @@ static std::vector<std::string> split_lines(const std::string & s, const std::st
 static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id) {
     size_t n_tokens = tokens.size();
     for (size_t i = 0; i < n_tokens; i++) {
-        llama_batch_add(batch, tokens[i], i, { seq_id }, true);
+        common_batch_add(batch, tokens[i], i, { seq_id }, true);
     }
 }
 
@@ -35,7 +35,7 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
     const struct llama_model * model = llama_get_model(ctx);
 
     // clear previous kv_cache values (irrelevant for embeddings)
-    llama_kv_cache_clear(ctx);
+    llama_memory_clear(ctx);
 
     // run model
     fprintf(stderr, "%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
@@ -166,7 +166,7 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "%s: prompt %d: '%s'\n", __func__, i, prompts[i].c_str());
             fprintf(stderr, "%s: number of tokens in prompt = %zu\n", __func__, inputs[i].size());
             for (int j = 0; j < (int) inputs[i].size(); j++) {
-                fprintf(stderr, "%6d -> '%s'\n", inputs[i][j], llama_token_to_piece(ctx, inputs[i][j]).c_str());
+                fprintf(stderr, "%6d -> '%s'\n", inputs[i][j], common_token_to_piece(ctx, inputs[i][j]).c_str());
             }
             fprintf(stderr, "\n\n");
         }
@@ -206,7 +206,7 @@ int main(int argc, char ** argv) {
             batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
             e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens : s;
             s = 0;
-            llama_batch_clear(batch);
+            common_batch_clear(batch);
         }
 
         // add to batch

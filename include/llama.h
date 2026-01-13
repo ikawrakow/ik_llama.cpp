@@ -763,7 +763,7 @@ extern "C" {
     LLAMA_API int32_t llama_get_kv_cache_used_cells(const struct llama_context * ctx);
 
     // Clear the KV cache - both cell info is erased and KV data is zeroed
-    LLAMA_API void llama_kv_cache_clear(
+    LLAMA_API void llama_memory_clear(
             struct llama_context * ctx);
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
@@ -771,7 +771,7 @@ extern "C" {
     // seq_id < 0 : match any sequence
     // p0 < 0     : [0,  p1]
     // p1 < 0     : [p0, inf)
-    LLAMA_API bool llama_kv_cache_seq_rm(
+    LLAMA_API bool llama_memory_seq_rm(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,
                        llama_pos   p0,
@@ -781,7 +781,7 @@ extern "C" {
     // Note that this does not allocate extra KV cache memory - it simply assigns the tokens to the new sequence
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
-    LLAMA_API void llama_kv_cache_seq_cp(
+    LLAMA_API void llama_memory_seq_cp(
             struct llama_context * ctx,
                     llama_seq_id   seq_id_src,
                     llama_seq_id   seq_id_dst,
@@ -799,7 +799,7 @@ extern "C" {
     //   - explicitly with llama_kv_cache_update()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
-    LLAMA_API void llama_kv_cache_seq_add(
+    LLAMA_API void llama_memory_seq_add(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,
                        llama_pos   p0,
@@ -812,7 +812,7 @@ extern "C" {
     //   - explicitly with llama_kv_cache_update()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
-    LLAMA_API void llama_kv_cache_seq_div(
+    LLAMA_API void llama_memory_seq_div(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,
                        llama_pos   p0,
@@ -1124,7 +1124,7 @@ extern "C" {
                                int32_t   lstrip,
                                   bool   special);
 
-    /// @details Convert the provided tokens into text (inverse of llama_tokenize()).
+    /// @details Convert the provided tokens into text (inverse of common_tokenize()).
     /// @param text The char pointer must be large enough to hold the resulting text.
     /// @return Returns the number of chars/bytes on success, no more than text_len_max.
     /// @return Returns a negative number on failure - the number of chars/bytes that would have been returned.

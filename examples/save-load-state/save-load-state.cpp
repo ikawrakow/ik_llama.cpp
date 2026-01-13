@@ -74,7 +74,7 @@ int main(int argc, char ** argv) {
         }
         llama_token_data_array candidates_p = { candidates.data(), candidates.size(), false };
         auto next_token = llama_sample_token(ctx, &candidates_p);
-        auto next_token_str = llama_token_to_piece(ctx, next_token);
+        auto next_token_str = common_token_to_piece(ctx, next_token);
 
         printf("%s", next_token_str.c_str());
         result0 += next_token_str;
@@ -133,7 +133,7 @@ int main(int argc, char ** argv) {
         }
         llama_token_data_array candidates_p = { candidates.data(), candidates.size(), false };
         auto next_token = llama_sample_token(ctx2, &candidates_p);
-        auto next_token_str = llama_token_to_piece(ctx2, next_token);
+        auto next_token_str = common_token_to_piece(ctx2, next_token);
 
         printf("%s", next_token_str.c_str());
         result1 += next_token_str;
@@ -199,7 +199,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s : seq 0 copied, %zd bytes\n", __func__, ncopy);
 
         // erase whole kv
-        llama_kv_cache_clear(ctx3);
+        llama_memory_clear(ctx3);
         fprintf(stderr, "%s : kv cache cleared\n", __func__);
 
         // restore kv into seq 1
@@ -224,7 +224,7 @@ int main(int argc, char ** argv) {
         }
         llama_token_data_array candidates_p = { candidates.data(), candidates.size(), false };
         auto next_token = llama_sample_token(ctx3, &candidates_p);
-        auto next_token_str = llama_token_to_piece(ctx3, next_token);
+        auto next_token_str = common_token_to_piece(ctx3, next_token);
 
         printf("%s", next_token_str.c_str());
         result2 += next_token_str;

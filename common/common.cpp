@@ -3054,7 +3054,7 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         if (llama_model_has_decoder(model)) {
             llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch), 0, 0));
         }
-        llama_kv_cache_clear(lctx);
+        llama_memory_clear(lctx);
         llama_synchronize(lctx);
         llama_reset_timings(lctx);
     }
@@ -3564,11 +3564,11 @@ struct llama_model * llama_load_model_from_hf(
 // Batch utils
 //
 
-void llama_batch_clear(struct llama_batch & batch) {
+void common_batch_clear(struct llama_batch & batch) {
     batch.n_tokens = 0;
 }
 
-void llama_batch_add(
+void common_batch_add(
                  struct llama_batch & batch,
                         llama_token   id,
                           llama_pos   pos,
@@ -3595,10 +3595,10 @@ std::vector<llama_token> llama_tokenize(
            const std::string & text,
                         bool   add_special,
                         bool   parse_special) {
-    return llama_tokenize(llama_get_model(ctx), text, add_special, parse_special);
+    return common_tokenize(llama_get_model(ctx), text, add_special, parse_special);
 }
 
-std::vector<llama_token> llama_tokenize(
+std::vector<llama_token> common_tokenize(
     const struct llama_model * model,
            const std::string & text,
                         bool   add_special,
@@ -3640,7 +3640,7 @@ std::vector<llama_token> llama_tokenize(
     return result;
 }
 
-std::string llama_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
+std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
     std::string piece;
     piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
     const int n_chars = llama_token_to_piece(llama_get_model(ctx), token, &piece[0], piece.size(), 0, special);
@@ -3672,7 +3672,7 @@ std::string llama_token_to_piece(const struct llama_model* model, llama_token to
     return piece;
 }
 
-std::string llama_detokenize(const llama_context * ctx, const std::vector<llama_token> & tokens, bool special) {
+std::string common_token_to_piece(const llama_context * ctx, const std::vector<llama_token> & tokens, bool special) {
     std::string text;
     text.resize(std::max(text.capacity(), tokens.size()));
     int32_t n_chars = llama_detokenize(llama_get_model(ctx), tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);

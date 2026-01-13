@@ -511,9 +511,9 @@ void llama_lora_adapters_apply(struct llama_context * ctx, std::vector<llama_lor
 
 // Batch utils
 
-void llama_batch_clear(struct llama_batch & batch);
+void common_batch_clear(struct llama_batch & batch);
 
-void llama_batch_add(
+void common_batch_add(
                  struct llama_batch & batch,
                         llama_token   id,
                           llama_pos   pos,
@@ -532,7 +532,7 @@ std::vector<llama_token> llama_tokenize(
                         bool   add_special,
                         bool   parse_special = false);
 
-std::vector<llama_token> llama_tokenize(
+std::vector<llama_token> common_tokenize(
     const struct llama_model * model,
            const std::string & text,
                         bool   add_special,
@@ -546,7 +546,7 @@ std::vector<llama_token> llama_tokenize(
 
 // tokenizes a token into a piece, optionally renders special/control tokens
 // should work similar to Python's `tokenizer.id_to_piece`
-std::string llama_token_to_piece(
+std::string common_token_to_piece(
         const struct llama_context * ctx,
                        llama_token   token,
                        bool          special = true);
@@ -559,7 +559,7 @@ std::string llama_token_to_piece(
 // detokenizes a vector of tokens into a string
 // should work similar to Python's `tokenizer.decode`
 // optionally renders special/control tokens
-std::string llama_detokenize(
+std::string common_token_to_piece(
         const llama_context * ctx,
         const std::vector<llama_token> & tokens,
                                   bool   special = true);

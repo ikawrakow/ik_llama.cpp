@@ -84,7 +84,7 @@ int main(int argc, char ** argv){
     fprintf(stderr, "\n\n");
 
     for (auto id : inp) {
-        fprintf(stderr, "%s", llama_token_to_piece(ctx, id).c_str());
+        fprintf(stderr, "%s", common_token_to_piece(ctx, id).c_str());
     }
 
     fflush(stderr);
@@ -106,7 +106,7 @@ int main(int argc, char ** argv){
 
     bool has_eos = false;
 
-    struct llama_sampling_context * ctx_sampling = llama_sampling_init(llama_get_model_vocab(model), params.sparams);
+    struct llama_sampling_context * ctx_sampling = common_sampler_init(llama_get_model_vocab(model), params.sparams);
 
     std::vector<llama_token> draft;
 
@@ -130,11 +130,11 @@ int main(int argc, char ** argv){
         int i_dft = 0;
         while (true) {
             // sample from the target model
-            llama_token id = llama_sampling_sample(ctx_sampling, ctx, NULL, i_dft);
+            llama_token id = common_sampler_sample(ctx_sampling, ctx, NULL, i_dft);
 
-            llama_sampling_accept(ctx_sampling, ctx, id, true);
+            common_sampler_accept(ctx_sampling, ctx, id, true);
 
-            const std::string token_str = llama_token_to_piece(ctx, id);
+            const std::string token_str = common_token_to_piece(ctx, id);
 
             if (!params.use_color) {
                 printf("%s", token_str.c_str());
@@ -194,10 +194,10 @@ int main(int argc, char ** argv){
 
         // KV cache management
         // clean the cache of draft tokens that weren't accepted
-        llama_kv_cache_seq_rm(ctx, 0, n_past, -1);
+        llama_memory_seq_rm(ctx, 0, n_past, -1);
 
-        llama_batch_clear(batch_tgt);
-        llama_batch_add(batch_tgt, draft[0], n_past, { 0 }, true);
+        common_batch_clear(batch_tgt);
+        common_batch_add(batch_tgt, draft[0], n_past, { 0 }, true);
 
         // Draft already contains a single token sampled from the model:
         GGML_ASSERT(draft.size() == 1);
@@ -207,7 +207,7 @@ int main(int argc, char ** argv){
         llama_ngram_cache_draft(inp, draft, n_draft, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX, ngram_cache_context, ngram_cache_dynamic, ngram_cache_static);
 
         for (size_t i = 1; i < draft.size(); ++i) {
-            llama_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
+            common_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
         }
 
         t_draft_us += ggml_time_us() - t_start_draft_us;
@@ -243,7 +243,7 @@ int main(int argc, char ** argv){
     LOG_TEE("\ntarget:\n");
     llama_print_timings(ctx);
 
-    llama_sampling_free(ctx_sampling);
+    common_sampler_free(ctx_sampling);
     llama_batch_free(batch_tgt);
 
     llama_free(ctx);

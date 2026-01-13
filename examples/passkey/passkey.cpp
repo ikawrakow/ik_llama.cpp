@@ -126,17 +126,17 @@ int main(int argc, char ** argv) {
             const int ib = i/n_batch - 1;
             const int bd = n_batch_grp*(n_grp - 1);
 
-            llama_kv_cache_seq_add (ctx, 0, n_past - n_batch,         n_past,         ib*bd);
-            llama_kv_cache_seq_div (ctx, 0, n_past - n_batch + ib*bd, n_past + ib*bd, n_grp);
+            llama_memory_seq_add (ctx, 0, n_past - n_batch,         n_past,         ib*bd);
+            llama_memory_seq_div (ctx, 0, n_past - n_batch + ib*bd, n_past + ib*bd, n_grp);
             llama_kv_cache_update  (ctx);
 
             n_past = llama_kv_cache_seq_pos_max(ctx, 0) + 1;
         }
 
-        llama_batch_clear(batch);
+        common_batch_clear(batch);
 
         for (int j = 0; j < n_batch && i + j < n_tokens_all; j++) {
-            llama_batch_add(batch, tokens_list[i + j], n_past++, { 0 }, false);
+            common_batch_add(batch, tokens_list[i + j], n_past++, { 0 }, false);
         }
 
         if (i + n_batch >= n_tokens_all) {
@@ -160,17 +160,17 @@ int main(int argc, char ** argv) {
 
         LOG_TEE("%s: shifting KV cache with %d\n", __func__, n_discard);
 
-        llama_kv_cache_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
-        llama_kv_cache_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
+        llama_memory_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
+        llama_memory_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
       //llama_kv_cache_defrag (ctx);
         llama_kv_cache_update (ctx);
 
         n_past = llama_kv_cache_seq_pos_max(ctx, 0) + 1;
 
-        llama_batch_clear(batch);
+        common_batch_clear(batch);
 
         for (int j = 0; j < n_batch && i + j < n_tokens_all; j++) {
-            llama_batch_add(batch, tokens_list[i + j], n_past++, { 0 }, false);
+            common_batch_add(batch, tokens_list[i + j], n_past++, { 0 }, false);
         }
 
         if (i + n_batch >= n_tokens_all) {
@@ -191,8 +191,8 @@ int main(int argc, char ** argv) {
         if (n_discard > 0) {
             LOG_TEE("%s: shifting KV cache with %d to free space for the answer\n", __func__, n_discard);
 
-            llama_kv_cache_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
-            llama_kv_cache_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
+            llama_memory_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
+            llama_memory_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
           //llama_kv_cache_defrag (ctx);
             llama_kv_cache_update (ctx);
 
@@ -239,16 +239,16 @@ int main(int argc, char ** argv) {
                 break;
             }
 
-            LOG_TEE("%s", llama_token_to_piece(ctx, new_token_id).c_str());
+            LOG_TEE("%s", common_token_to_piece(ctx, new_token_id).c_str());
             fflush(stdout);
 
             n_decode += 1;
 
             // prepare the next batch
-            llama_batch_clear(batch);
+            common_batch_clear(batch);
 
             // push this new token for next evaluation
-            llama_batch_add(batch, new_token_id, n_past++, { 0 }, true);
+            common_batch_add(batch, new_token_id, n_past++, { 0 }, true);
         }
 
         n_cur += 1;

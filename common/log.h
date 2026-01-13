@@ -756,7 +756,7 @@ inline std::string LOG_TOKENS_TOSTR_PRETTY(const C & ctx, const T & tokens)
             first = false;
         }
 
-        auto detokenized = llama_token_to_piece(ctx, token);
+        auto detokenized = common_token_to_piece(ctx, token);
 
         detokenized.erase(
             std::remove_if(

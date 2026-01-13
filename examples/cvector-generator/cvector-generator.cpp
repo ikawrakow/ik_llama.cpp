@@ -29,7 +29,7 @@ template <class Iter>
 static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
     std::string ret;
     for (; begin != end; ++begin) {
-        ret += llama_token_to_piece(ctx, *begin);
+        ret += common_token_to_piece(ctx, *begin);
     }
 
     return ret;
@@ -338,7 +338,7 @@ static bool cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
 }
 
 static bool get_hidden_layers(llama_context * ctx, std::vector<llama_token> & tokens) {
-    llama_kv_cache_clear(ctx);
+    llama_memory_clear(ctx);
     if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size(), 0, 0))) {
         fprintf(stderr, "%s : failed to eval\n", __func__);
         return false;

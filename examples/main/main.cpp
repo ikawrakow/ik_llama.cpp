@@ -366,7 +366,7 @@ int main(int argc, char ** argv) {
         }
 
         // remove any "future" tokens that we might have inherited from the previous session
-        llama_kv_cache_seq_rm(ctx, -1, n_matching_session_tokens, -1);
+        llama_memory_seq_rm(ctx, -1, n_matching_session_tokens, -1);
     }
 
     LOGLN(
@@ -402,7 +402,7 @@ int main(int argc, char ** argv) {
         LOG_TEE("%s: prompt: '%s'\n", __func__, params.prompt.c_str());
         LOG_TEE("%s: number of tokens in prompt = %zu\n", __func__, embd_inp.size());
         for (int i = 0; i < (int) embd_inp.size(); i++) {
-            LOG_TEE("%6d -> '%s'\n", embd_inp[i], llama_token_to_piece(ctx, embd_inp[i]).c_str());
+            LOG_TEE("%6d -> '%s'\n", embd_inp[i], common_token_to_piece(ctx, embd_inp[i]).c_str());
         }
 
         if (ctx_guidance) {
@@ -410,14 +410,14 @@ int main(int argc, char ** argv) {
             LOG_TEE("%s: negative prompt: '%s'\n", __func__, sparams.cfg_negative_prompt.c_str());
             LOG_TEE("%s: number of tokens in negative prompt = %zu\n", __func__, guidance_inp.size());
             for (int i = 0; i < (int) guidance_inp.size(); i++) {
-                LOG_TEE("%6d -> '%s'\n", guidance_inp[i], llama_token_to_piece(ctx, guidance_inp[i]).c_str());
+                LOG_TEE("%6d -> '%s'\n", guidance_inp[i], common_token_to_piece(ctx, guidance_inp[i]).c_str());
             }
         }
 
         if (params.n_keep > add_bos) {
             LOG_TEE("%s: static prompt based on n_keep: '", __func__);
             for (int i = 0; i < params.n_keep; i++) {
-                LOG_TEE("%s", llama_token_to_piece(ctx, embd_inp[i]).c_str());
+                LOG_TEE("%s", common_token_to_piece(ctx, embd_inp[i]).c_str());
             }
             LOG_TEE("'\n");
         }
@@ -449,7 +449,7 @@ int main(int argc, char ** argv) {
                 if (params.verbose_prompt) {
                     auto tmp = ::llama_tokenize(ctx, antiprompt, false, true);
                     for (int i = 0; i < (int) tmp.size(); i++) {
-                        LOG_TEE("%6d -> '%s'\n", tmp[i], llama_token_to_piece(ctx, tmp[i]).c_str());
+                        LOG_TEE("%6d -> '%s'\n", tmp[i], common_token_to_piece(ctx, tmp[i]).c_str());
                     }
                 }
             }
@@ -464,7 +464,7 @@ int main(int argc, char ** argv) {
             if (params.verbose_prompt) {
                 auto tmp = ::llama_tokenize(ctx, params.input_prefix, true, true);
                 for (int i = 0; i < (int) tmp.size(); i++) {
-                    LOG_TEE("%6d -> '%s'\n", tmp[i], llama_token_to_piece(ctx, tmp[i]).c_str());
+                    LOG_TEE("%6d -> '%s'\n", tmp[i], common_token_to_piece(ctx, tmp[i]).c_str());
                 }
             }
         }
@@ -474,7 +474,7 @@ int main(int argc, char ** argv) {
             if (params.verbose_prompt) {
                 auto tmp = ::llama_tokenize(ctx, params.input_suffix, false, true);
                 for (int i = 0; i < (int) tmp.size(); i++) {
-                    LOG_TEE("%6d -> '%s'\n", tmp[i], llama_token_to_piece(ctx, tmp[i]).c_str());
+                    LOG_TEE("%6d -> '%s'\n", tmp[i], common_token_to_piece(ctx, tmp[i]).c_str());
                 }
             }
         }
@@ -549,7 +549,7 @@ int main(int argc, char ** argv) {
         antiprompt_ids.emplace_back(::llama_tokenize(ctx, antiprompt, false, true));
     }
 
-    struct llama_sampling_context * ctx_sampling = llama_sampling_init(llama_get_model_vocab(model), sparams);
+    struct llama_sampling_context * ctx_sampling = common_sampler_init(llama_get_model_vocab(model), sparams);
     if (!ctx_sampling) {
         fprintf(stderr, "%s: failed to initialize sampling subsystem\n", __func__);
         exit(1);
@@ -608,8 +608,8 @@ int main(int argc, char ** argv) {
                     LOG("context full, swapping: n_past = %d, n_left = %d, n_ctx = %d, n_keep = %d, n_discard = %d\n",
                             n_past, n_left, n_ctx, params.n_keep, n_discard);
 
-                    llama_kv_cache_seq_rm (ctx, 0, params.n_keep            , params.n_keep + n_discard);
-                    llama_kv_cache_seq_add(ctx, 0, params.n_keep + n_discard, n_past, -n_discard);
+                    llama_memory_seq_rm (ctx, 0, params.n_keep            , params.n_keep + n_discard);
+                    llama_memory_seq_add(ctx, 0, params.n_keep + n_discard, n_past, -n_discard);
 
                     n_past -= n_discard;
 
@@ -636,9 +636,9 @@ int main(int argc, char ** argv) {
                     LOG("div:   [%6d, %6d] / %6d -> [%6d, %6d]\n", ga_i + ib*bd, ga_i + ib*bd + ga_w, ga_n, (ga_i + ib*bd)/ga_n, (ga_i + ib*bd + ga_w)/ga_n);
                     LOG("shift: [%6d, %6d] + %6d -> [%6d, %6d]\n", ga_i + ib*bd + ga_w, n_past + ib*bd, dd, ga_i + ib*bd + ga_w + dd, n_past + ib*bd + dd);
 
-                    llama_kv_cache_seq_add(ctx, 0, ga_i,                n_past,              ib*bd);
-                    llama_kv_cache_seq_div(ctx, 0, ga_i + ib*bd,        ga_i + ib*bd + ga_w, ga_n);
-                    llama_kv_cache_seq_add(ctx, 0, ga_i + ib*bd + ga_w, n_past + ib*bd,      dd);
+                    llama_memory_seq_add(ctx, 0, ga_i,                n_past,              ib*bd);
+                    llama_memory_seq_div(ctx, 0, ga_i + ib*bd,        ga_i + ib*bd + ga_w, ga_n);
+                    llama_memory_seq_add(ctx, 0, ga_i + ib*bd + ga_w, n_past + ib*bd,      dd);
 
                     n_past -= bd;
 
@@ -750,9 +750,9 @@ int main(int argc, char ** argv) {
                 LOG("saved session to %s\n", path_session.c_str());
             }
 
-            const llama_token id = llama_sampling_sample(ctx_sampling, ctx, ctx_guidance);
+            const llama_token id = common_sampler_sample(ctx_sampling, ctx, ctx_guidance);
 
-            llama_sampling_accept(ctx_sampling, ctx, id, /* apply_grammar= */ true);
+            common_sampler_accept(ctx_sampling, ctx, id, /* apply_grammar= */ true);
 
             LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, ctx_sampling->prev).c_str());
 
@@ -773,7 +773,7 @@ int main(int argc, char ** argv) {
 
                 // push the prompt in the sampling context in order to apply repetition penalties later
                 // for the prompt, we don't apply grammar rules
-                llama_sampling_accept(ctx_sampling, ctx, embd_inp[n_consumed], /* apply_grammar= */ false);
+                common_sampler_accept(ctx_sampling, ctx, embd_inp[n_consumed], /* apply_grammar= */ false);
 
                 ++n_consumed;
                 if ((int) embd.size() >= params.n_batch) {
@@ -785,7 +785,7 @@ int main(int argc, char ** argv) {
         // display text
         if (input_echo && display) {
             for (auto id : embd) {
-                const std::string token_str = llama_token_to_piece(ctx, id, params.special);
+                const std::string token_str = common_token_to_piece(ctx, id, params.special);
 
                 // Console/Stream Output
                 fprintf(stdout, "%s", token_str.c_str());
@@ -877,7 +877,7 @@ int main(int argc, char ** argv) {
             // if current token is not EOG, we add it to current assistant message
             if (params.conversation && !waiting_for_first_input) {
                 auto id = llama_sampling_last(ctx_sampling);
-                assistant_ss << llama_token_to_piece(ctx, id, false);
+                assistant_ss << common_token_to_piece(ctx, id, false);
             }
 
             if ((n_past > 0 || waiting_for_first_input) && is_interacting) {
@@ -955,7 +955,7 @@ int main(int argc, char ** argv) {
                     for (size_t i = original_size; i < embd_inp.size(); ++i) {
                         const llama_token token = embd_inp[i];
                         output_tokens.push_back(token);
-                        output_ss << llama_token_to_piece(ctx, token);
+                        output_ss << common_token_to_piece(ctx, token);
                     }
 
                     // reset assistant message
@@ -973,7 +973,7 @@ int main(int argc, char ** argv) {
             if (n_past > 0 || waiting_for_first_input) {
                 if (is_interacting) {
                     
-                    llama_sampling_reset(llama_get_model_vocab(model), ctx_sampling);
+                    common_sampler_reset(llama_get_model_vocab(model), ctx_sampling);
                 }
                 is_interacting = false;
                 waiting_for_first_input = false;
@@ -1006,7 +1006,7 @@ int main(int argc, char ** argv) {
     llama_free(ctx);
     llama_free_model(model);
 
-    llama_sampling_free(ctx_sampling);
+    common_sampler_free(ctx_sampling);
     llama_backend_free();
 
 #ifndef LOG_DISABLE_LOGS

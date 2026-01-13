@@ -76,13 +76,13 @@ static std::vector<chunk> chunk_file(const std::string & filename, int chunk_siz
 static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id) {
     size_t n_tokens = tokens.size();
     for (size_t i = 0; i < n_tokens; i++) {
-        llama_batch_add(batch, tokens[i], i, { seq_id }, true);
+        common_batch_add(batch, tokens[i], i, { seq_id }, true);
     }
 }
 
 static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd) {
     // clear previous kv_cache values (irrelevant for embeddings)
-    llama_kv_cache_clear(ctx);
+    llama_memory_clear(ctx);
 
     // run model
     fprintf(stderr, "%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
@@ -204,7 +204,7 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "%s: prompt %d: '%s'\n", __func__, i, chunks[i].textdata.c_str());
             fprintf(stderr, "%s: number of tokens in prompt = %zu\n", __func__, chunks[i].tokens.size());
             for (int j = 0; j < (int) chunks[i].tokens.size(); j++) {
-                fprintf(stderr, "%6d -> '%s'\n", chunks[i].tokens[j], llama_token_to_piece(ctx, chunks[i].tokens[j]).c_str());
+                fprintf(stderr, "%6d -> '%s'\n", chunks[i].tokens[j], common_token_to_piece(ctx, chunks[i].tokens[j]).c_str());
             }
             fprintf(stderr, "\n\n");
         }
@@ -232,7 +232,7 @@ int main(int argc, char ** argv) {
         if (batch.n_tokens + n_toks > n_batch) {
             float * out = emb + p * n_embd;
             batch_decode(ctx, batch, out, s, n_embd);
-            llama_batch_clear(batch);
+            common_batch_clear(batch);
             p += s;
             s = 0;
         }
@@ -266,7 +266,7 @@ int main(int argc, char ** argv) {
         std::vector<float> query_emb(n_embd, 0);
         batch_decode(ctx, query_batch, query_emb.data(), 1, n_embd);
 
-        llama_batch_clear(query_batch);
+        common_batch_clear(query_batch);
 
         // compute cosine similarities
         {

@@ -955,7 +955,7 @@ size_t tokenize_file(
             }
 
             if (sample_size > 0) {
-                // llama_tokenize expects zero terminated string,
+                // common_tokenize expects zero terminated string,
                 // copy sample into buffer and zero terminate it.
                 buf_sample.resize(sample_size);
                 memcpy(buf_sample.data(), data_str.data() + sample_begin, sample_size);

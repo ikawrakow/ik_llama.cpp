@@ -164,7 +164,7 @@ size_t common_part(const std::string& a, const std::string& b);
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
 size_t validate_utf8(const std::string& text);
 
-// TODO: reuse llama_detokenize
+// TODO: reuse common_token_to_piece
 
 std::string tokens_to_str(llama_context* ctx, const llama_tokens& tokens);
 

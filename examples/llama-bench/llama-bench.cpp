@@ -2136,7 +2136,7 @@ int main(int argc, char ** argv) {
 
         test t(inst, lmodel, ctx);
 
-        llama_kv_cache_clear(ctx);
+        llama_memory_clear(ctx);
 
         // warmup run
         if (params.warmup) {
@@ -2150,7 +2150,7 @@ int main(int argc, char ** argv) {
         }
 
         for (int i = 0; i < params.reps; i++) {
-            llama_kv_cache_clear(ctx);
+            llama_memory_clear(ctx);
 
             uint64_t t_start = get_time_ns();
 
