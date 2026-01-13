@@ -1088,6 +1088,7 @@ int main(int argc, char ** argv) {
                     // OAI-compat
                     task.params.oaicompat = oaicompat;
                     task.params.oaicompat_cmpl_id = completion_id;
+                    task.params.oaicompat_model = get_model_name(ctx_server.params.model);
                     tasks.push_back(std::move(task));
                 }
 
@@ -1141,9 +1142,17 @@ int main(int argc, char ** argv) {
                 // next responses are streamed
                 json first_result_json = first_result->to_json();
                 const auto chunked_content_provider = [first_result_json, rd, oaicompat](size_t, httplib::DataSink& sink) mutable -> bool {
+                    const auto sse = [oaicompat, &sink](const json& res) {
+                        if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                            return server_sent_anthropic_event(sink, res);
+                        }
+                        else {
+                            return server_sent_event(sink, res);
+                        }
+                    };
                     // flush the first result as it's not an error
                     if (!first_result_json.empty()) {
-                        if (!server_sent_event(sink, first_result_json)) {
+                        if (!sse(first_result_json)) {
                             sink.done();
                             return false; // sending failed, go to on_complete()
                         }
@@ -1161,7 +1170,7 @@ int main(int argc, char ** argv) {
                     json res_json = result->to_json();
                     bool ok = false;
                     if (result->is_error()) {
-                        ok = server_sent_event(sink, json{ { "error", result->to_json() } });
+                        ok = sse(json{ { "error", result->to_json() } });
                         sink.done();
                         return false; // go to on_complete()
                     }
@@ -1170,7 +1179,7 @@ int main(int argc, char ** argv) {
                             dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr
                             || dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr
                         );
-                        ok = server_sent_event(sink, res_json);
+                        ok = sse(res_json);
                     }
 
                     if (!ok) {
@@ -1180,7 +1189,7 @@ int main(int argc, char ** argv) {
 
                     // check if there is more data
                     if (!rd->has_next()) {
-                        if (oaicompat != OAICOMPAT_TYPE_NONE) {
+                        if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE) {
                             static const std::string ev_done = "data: [DONE]\n\n";
                             sink.write(ev_done.data(), ev_done.size());
                         }

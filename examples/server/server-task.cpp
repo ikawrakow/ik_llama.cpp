@@ -353,6 +353,13 @@ json server_task_result_cmpl_final::to_json_anthropic_final() {
         msg.content = content;
     }
 
+    if (!msg.reasoning_content.empty()) {
+        content_blocks.push_back({
+            {"type", "thinking"},
+            {"thinking", msg.reasoning_content},
+            {"signature", ""}
+        });
+    }
 
     if (!msg.content.empty()) {
         content_blocks.push_back({
@@ -403,13 +410,46 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
     }
 
+    bool has_thinking = !oaicompat_msg.reasoning_content.empty();
     bool has_text = !oaicompat_msg.content.empty();
     size_t num_tool_calls = oaicompat_msg.tool_calls.size();
 
+    size_t thinking_block_index = 0;
+    size_t text_block_index = has_thinking ? 1 : 0;
+
+    bool thinking_block_started = false;
     bool text_block_started = false;
     std::set<size_t> tool_calls_started;
 
     for (const auto& diff : oaicompat_msg_diffs) {
+        if (!diff.reasoning_content_delta.empty()) {
+            if (!thinking_block_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", thinking_block_index},
+                        {"content_block", {
+                            {"type", "thinking"},
+                            {"thinking", ""}
+                        }}
+                    }}
+                    });
+                thinking_block_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", thinking_block_index},
+                    {"delta", {
+                        {"type", "thinking_delta"},
+                        {"thinking", diff.reasoning_content_delta}
+                    }}
+                }}
+                });
+        }
 
         if (!diff.content_delta.empty()) {
             if (!text_block_started) {
@@ -417,7 +457,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
                     {"event", "content_block_start"},
                     {"data", {
                         {"type", "content_block_start"},
-                        {"index", 0},
+                        {"index", text_block_index},
                         {"content_block", {
                             {"type", "text"},
                             {"text", ""}
@@ -431,7 +471,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
                 {"event", "content_block_delta"},
                 {"data", {
                     {"type", "content_block_delta"},
-                    {"index", 0},
+                    {"index", text_block_index},
                     {"delta", {
                         {"type", "text_delta"},
                         {"text", diff.content_delta}
@@ -441,7 +481,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         }
 
         if (diff.tool_call_index != std::string::npos) {
-            size_t content_block_index = (has_text ? 1 : 0) + diff.tool_call_index;
+            size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + diff.tool_call_index;
 
             if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
                 const auto& full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
@@ -477,18 +517,39 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         }
     }
 
+    if (has_thinking) {
+        events.push_back({
+            {"event", "content_block_delta"},
+            {"data", {
+                {"type", "content_block_delta"},
+                {"index", thinking_block_index},
+                {"delta", {
+                    {"type", "signature_delta"},
+                    {"signature", ""}
+                }}
+            }}
+            });
+        events.push_back({
+            {"event", "content_block_stop"},
+            {"data", {
+                {"type", "content_block_stop"},
+                {"index", thinking_block_index}
+            }}
+            });
+    }
+
     if (has_text) {
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
                 {"type", "content_block_stop"},
-                {"index", 0}
+                {"index", text_block_index}
             }}
             });
     }
 
     for (size_t i = 0; i < num_tool_calls; i++) {
-        size_t content_block_index = (has_text ? 1 : 0) + i;
+        size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + i;
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
@@ -534,11 +595,14 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 json server_task_result_cmpl_partial::to_json_anthropic_partial() {
     json events = json::array();
     bool first = n_decoded == 1;
-    static bool text_block_started = false;
+
+    size_t thinking_block_index = 0;
+    size_t text_block_index = anthropic_has_reasoning ? 1 : 0;
+
+    bool thinking_started = anthropic_thinking_block_started;
+    bool text_started = anthropic_text_block_started;
 
     if (first) {
-        text_block_started = false;
-
         events.push_back({
             {"event", "message_start"},
             {"data", {
@@ -561,27 +625,56 @@ json server_task_result_cmpl_partial::to_json_anthropic_partial() {
     }
 
     for (const auto& diff : oaicompat_msg_diffs) {
-        if (!diff.content_delta.empty()) {
-            if (!text_block_started) {
+        if (!diff.reasoning_content_delta.empty()) {
+            if (!thinking_started) {
                 events.push_back({
                     {"event", "content_block_start"},
                     {"data", {
                         {"type", "content_block_start"},
-                        {"index", 0},
+                        {"index", thinking_block_index},
                         {"content_block", {
-                            {"type", "text"},
-                            {"text", ""}
+                            {"type", "thinking"},
+                            {"thinking", ""}
                         }}
                     }}
                     });
-                text_block_started = true;
+                thinking_started = true;
             }
 
             events.push_back({
                 {"event", "content_block_delta"},
                 {"data", {
                     {"type", "content_block_delta"},
-                    {"index", 0},
+                    {"index", thinking_block_index},
+                    {"delta", {
+                        {"type", "thinking_delta"},
+                        {"thinking", diff.reasoning_content_delta}
+                    }}
+                }}
+                });
+        }
+
+        if (!diff.content_delta.empty()) {
+            if (!text_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", text_block_index},
+                        {"content_block", {
+                            {"type", "text"},
+                            {"text", ""}
+                        }}
+                    }}
+                    });
+                text_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", text_block_index},
                     {"delta", {
                         {"type", "text_delta"},
                         {"text", diff.content_delta}
@@ -591,7 +684,7 @@ json server_task_result_cmpl_partial::to_json_anthropic_partial() {
         }
 
         if (diff.tool_call_index != std::string::npos) {
-            size_t content_block_index = (text_block_started ? 1 : 0) + diff.tool_call_index;
+            size_t content_block_index = (anthropic_has_reasoning ? 1 : 0) + (text_started ? 1 : 0) + diff.tool_call_index;
 
             if (!diff.tool_call_delta.name.empty()) {
                 events.push_back({

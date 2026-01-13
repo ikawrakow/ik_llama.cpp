@@ -1482,7 +1482,7 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
     res->content = tkn.text_to_send;
     res->post_sampling_probs = slot.params.post_sampling_probs;
     res->oaicompat = slot.params.oaicompat;
-    res->oaicompat_model = slot.params.oaicompat_model;
+    res->oaicompat_model = slot.task->params.oaicompat_model;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
     res->n_decoded = slot.n_decoded;
     res->n_prompt_tokens = slot.n_prompt_tokens;
@@ -1493,6 +1493,20 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
         {"multimodal", false}
     };
     slot.update_chat_msg(res->oaicompat_msg_diffs);
+
+    res->anthropic_has_reasoning = !slot.chat_msg.reasoning_content.empty();
+
+    res->anthropic_thinking_block_started = slot.anthropic_thinking_block_started;
+    res->anthropic_text_block_started = slot.anthropic_text_block_started;
+
+    for (const auto& diff : res->oaicompat_msg_diffs) {
+        if (!diff.reasoning_content_delta.empty() && !slot.anthropic_thinking_block_started) {
+            slot.anthropic_thinking_block_started = true;
+        }
+        if (!diff.content_delta.empty() && !slot.anthropic_text_block_started) {
+            slot.anthropic_text_block_started = true;
+        }
+    }
 
     // populate res->probs_output
     if (slot.sparams.n_probs > 0) {

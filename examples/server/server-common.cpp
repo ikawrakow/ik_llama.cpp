@@ -506,15 +506,29 @@ bool server_sent_event(httplib::DataSink& sink, const json& data) {
 }
 
 bool server_sent_anthropic_event(httplib::DataSink& sink, const json& data) {
-    const std::string str =
-        (data.contains("event") && data.contains("data")) ?
-        ("event: " + data.at("event").get<std::string>() + "\n" +
-            "data: " + data.at("data").dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n") :
-        ("data: " + data.at("data").dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n");
+    static auto send_single = [](httplib::DataSink& sink, const json& data) -> bool {
+        const std::string str =
+            (data.contains("event") && data.contains("data")) ?
+            ("event: " + data.at("event").get<std::string>() + "\n" +
+                "data: " + data.at("data").dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n") :
+            ("data: " + data.at("data").dump(-1, ' ', false, json::error_handler_t::replace) + "\n\n");
 
-    LOG_VERBOSE("data stream, to_send: %s", str.c_str());
+        LOG_DBG("data stream, to_send: %s", str.c_str());
+        return sink.write(str.c_str(), str.size());
+    };
 
-    return sink.write(str.c_str(), str.size());
+    if (data.is_array()) {
+        for (const auto& item : data) {
+            if (!send_single(sink, item)) {
+                return false;
+            }
+        }
+    }
+    else {
+        return send_single(sink, data);
+    }
+
+    return true;
 }
 
 //

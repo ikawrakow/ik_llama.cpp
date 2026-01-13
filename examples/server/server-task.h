@@ -200,6 +200,10 @@ struct server_task_result {
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
+    bool anthropic_has_reasoning = false;
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
+
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
     }
