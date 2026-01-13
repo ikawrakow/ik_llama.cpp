@@ -649,7 +649,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
-        case COMMON_CHAT_FORMAT_MIROTHINKER: return "MiroThinker";
+        case COMMON_CHAT_FORMAT_: return "";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1361,7 +1361,7 @@ static common_chat_params common_chat_params_init_xiaomi_mimo(const common_chat_
     return data;
 }
 
-static common_chat_params common_chat_params_init_mirothinker(const common_chat_template & tmpl, const struct templates_params & params) {
+static common_chat_params common_chat_params_init_(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
@@ -1379,7 +1379,7 @@ static common_chat_params common_chat_params_init_mirothinker(const common_chat_
     topts.use_eos_token = true;
 
     data.prompt = apply(tmpl, params, std::nullopt, std::nullopt, std::nullopt, topts);
-    data.format = COMMON_CHAT_FORMAT_MIROTHINKER;
+    data.format = COMMON_CHAT_FORMAT_;
 
     data.preserved_tokens = {
         "<use_mcp_tool>", "</use_mcp_tool>",
@@ -2080,7 +2080,7 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<tool_response>") != std::string::npos) {
         return common_chat_params_init_xiaomi_mimo(tmpl, params);
     }
- 
+
     // MiroThinker format detection (must come before Hermes 2 Pro)
     if (src.find("</use_mcp_tool>") != std::string::npos &&
         src.find("</server_name>") != std::string::npos &&
