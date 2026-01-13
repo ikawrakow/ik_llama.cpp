@@ -1059,15 +1059,10 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         }
     }
 
-    {
-        slot.sparams.logit_bias.clear();
-
-        if (json_value(data, "ignore_eos", false) && has_eos_token) {
-            slot.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
-        }
-
+    {  // apply logit bias
         const auto& logit_bias = data.find("logit_bias");
         if (logit_bias != data.end() && logit_bias->is_array()) {
+            slot.sparams.logit_bias.clear(); // only clear if user sets it
             const int n_vocab = llama_n_vocab(model);
             for (const auto& el : *logit_bias) {
                 // TODO: we may want to throw errors here, in case "el" is incorrect
@@ -1098,13 +1093,16 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 }
             }
         }
+        if (json_value(data, "ignore_eos", false) && has_eos_token) {
+            slot.sparams.logit_bias[llama_token_eos(model)] = -INFINITY;
+        }
+
     }
 
     {
-        slot.params.antiprompt.clear();
-
         const auto& stop = data.find("stop");
         if (stop != data.end() && stop->is_array()) {
+            slot.params.antiprompt.clear();
             for (const auto& word : *stop) {
                 if (!word.empty()) {
                     slot.params.antiprompt.push_back(word);
