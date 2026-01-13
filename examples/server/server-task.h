@@ -193,10 +193,8 @@ struct server_task_result {
         return {};
     };
 
-    virtual bool is_stop() {
-        // only used by server_task_result_cmpl_*
-        // in stream mode, final responses are considered stop
-        return true;
+    int get_index() {
+        return index;
     }
 
 };
