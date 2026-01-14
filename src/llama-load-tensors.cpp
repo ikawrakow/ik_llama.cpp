@@ -3189,25 +3189,7 @@ bool create_tensors_helper::create_tensors() {
                 }
             }
 
-            //bool any_ffn_split = false;
-            if (layer.ffn_down_shexp && layer.ffn_up_shexp && layer.ffn_gate_shexp) {
-                bool use_split = split_tensors.find(layer.ffn_down_shexp) != split_tensors.end() &&
-                                 split_tensors.find(layer.ffn_gate_shexp) != split_tensors.end() &&
-                                 split_tensors.find(layer.ffn_up_shexp)   != split_tensors.end();
-                if (use_split) {
-                    //any_ffn_split = true;
-                    int ffn_granularity = 16;
-                    if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
-                        auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
-                        if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
-                    }
-                    auto split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, cur_splits, mem_used);
-                    prepare_split_tensors(0, ctx_split, layer.ffn_down_shexp, layer.split_ffn_down_shexp, split, mem_used);
-                    prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
-                    prepare_split_tensors(1, ctx_split, layer.ffn_gate_shexp, layer.split_ffn_gate_shexp, split, mem_used);
-                }
-            }
-
+            std::vector<int> ffn_split;
             if (layer.ffn_down_exps && layer.ffn_up_exps && layer.ffn_gate_exps) {
                 bool use_split = split_tensors.find(layer.ffn_down_exps) != split_tensors.end() &&
                                  split_tensors.find(layer.ffn_gate_exps) != split_tensors.end() &&
@@ -3220,20 +3202,62 @@ bool create_tensors_helper::create_tensors() {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_exps->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
-                    auto split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, cur_splits, mem_used);
+                    ffn_split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, cur_splits, mem_used);
                     //printf("split(%2d):", il); for (auto & s : split) printf(" %d", s); printf("\n");
-                    prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, split, mem_used);
-                    prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   split, mem_used);
-                    prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, split, mem_used);
+                    prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, ffn_split, mem_used);
+                    prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   ffn_split, mem_used);
+                    prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, ffn_split, mem_used);
                     if (layer.ffn_down_exps_b) {
-                        prepare_split_tensors(-1, ctx_split, layer.ffn_down_exps_b, layer.split_ffn_down_exps_b, split, mem_used);
+                        prepare_split_tensors(-1, ctx_split, layer.ffn_down_exps_b, layer.split_ffn_down_exps_b, ffn_split, mem_used);
                     }
                     if (layer.ffn_up_exps_b) {
-                        prepare_split_tensors( 0, ctx_split, layer.ffn_up_exps_b, layer.split_ffn_up_exps_b, split, mem_used);
+                        prepare_split_tensors( 0, ctx_split, layer.ffn_up_exps_b, layer.split_ffn_up_exps_b, ffn_split, mem_used);
                     }
                     if (layer.ffn_gate_exps_b) {
-                        prepare_split_tensors( 0, ctx_split, layer.ffn_gate_exps_b, layer.split_ffn_gate_exps_b, split, mem_used);
+                        prepare_split_tensors( 0, ctx_split, layer.ffn_gate_exps_b, layer.split_ffn_gate_exps_b, ffn_split, mem_used);
                     }
+                }
+            }
+
+            if (layer.ffn_down_shexp && layer.ffn_up_shexp && layer.ffn_gate_shexp) {
+                bool use_split = split_tensors.find(layer.ffn_down_shexp) != split_tensors.end() &&
+                                 split_tensors.find(layer.ffn_gate_shexp) != split_tensors.end() &&
+                                 split_tensors.find(layer.ffn_up_shexp)   != split_tensors.end();
+                if (use_split) {
+                    int ffn_granularity = 16;
+                    if (ggml_is_quantized(layer.ffn_down_shexp->type)) {
+                        auto tt = ggml_internal_get_type_traits(layer.ffn_down_shexp->type);
+                        if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
+                    }
+                    auto split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, cur_splits, mem_used);
+                    bool ok = true;
+                    if (!ffn_split.empty()) {
+                        ok = split.size() == ffn_split.size();
+                        if (ok) {
+                            for (int j = 0; j < int(ffn_split.size()); ++j) {
+                                if ((split[j] == 0 && ffn_split[j] > 0) || (split[j] > 0 && ffn_split[j] == 0)) {
+                                    ok = false; break;
+                                }
+                            }
+                        }
+                    }
+                    if (!ok) {
+                        printf("=== exp/shexp mismatch in layer %d\n", il);
+                        printf("    experts:"); for (auto& s : ffn_split) printf(" %d", s); printf("\n");
+                        printf(" sh_experts:"); for (auto& s : split    ) printf(" %d", s); printf("\n");
+                        std::vector<float> aux(ffn_split.size());
+                        float sum = 0;
+                        for (int j = 0; j < int(ffn_split.size()); ++j) {
+                            sum += ffn_split[j];
+                            aux[j] = sum;
+                        }
+                        for (auto& s : aux) s /= sum;
+                        split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, aux, mem_used);
+                        printf("        new:"); for (auto& s : split    ) printf(" %d", s); printf("\n");
+                    }
+                    prepare_split_tensors(0, ctx_split, layer.ffn_down_shexp, layer.split_ffn_down_shexp, split, mem_used);
+                    prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
+                    prepare_split_tensors(1, ctx_split, layer.ffn_gate_shexp, layer.split_ffn_gate_shexp, split, mem_used);
                 }
             }
 
