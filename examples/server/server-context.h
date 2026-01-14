@@ -311,8 +311,6 @@ struct server_context {
 
     void extend_context(const int32_t n_tokens);
 
-    void handle_decode_result(const int ret);
-
     void speculative_decoding_accept();
 
     bool accept_special_token(const server_slot& slot, const llama_token token);

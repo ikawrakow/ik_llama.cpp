@@ -2587,10 +2587,6 @@ void server_context::extend_context(const int32_t n_tokens) {
     }
 }
 
-void server_context::handle_decode_result(const int ret) {
-
-}
-
 void server_context::speculative_decoding_accept() {
     for (auto& slot : slots) {
         if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch_dft.empty()) {
@@ -2676,15 +2672,11 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
         if (ret != 0) {
             if (n_batch == 1 || ret < 0) {
                 int user_cancel = -3;
-                // if you get here, it means the KV cache is full - try increasing it via the context size
                 if (ret == user_cancel) {
-                    LOG_ERROR("Decode process is cancelled by user", {
-                        {"i",   i},
-                        {"n_batch",  ret},
-                        {"ret",   ret},
-                        });
+                    LLAMA_LOG_INFO("Decode process is cancelled by user.\n");
                 }
                 else {
+                    // if you get here, it means the KV cache is full - try increasing it via the context size
                     LOG_ERROR("failed to decode the batch: KV cache is full - try increasing it via the context size", {
                         {"i",   i},
                         {"n_batch",  ret},
