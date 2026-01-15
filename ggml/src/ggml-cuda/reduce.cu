@@ -270,9 +270,15 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                             (const char *)dst->src[peer]->data + ichunk*nelem_per_device*elem_size, info.all_ctx[peer]->device,
                             this_nelem*elem_size, info.all_ctx[peer]->stream()));
                 CUDA_CHECK(cudaEventRecord(info.all_ctx[peer]->copy_event, info.all_ctx[peer]->stream()));
+                //ggml_cuda_set_device(info.all_ctx[i]->device);
+                //CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
+                ichunk = (ichunk + 1)%nhave;
+            }
+            for (int ii = 0; ii < nhave; ++ii) {
+                int i = idx[ii];
+                int peer = idx[(ii+1)%nhave];
                 ggml_cuda_set_device(info.all_ctx[i]->device);
                 CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
-                ichunk = (ichunk + 1)%nhave;
             }
         }
         ggml_cuda_set_device(ctx.device);
@@ -357,7 +363,9 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         }
         //printf("Recorded events\n");
         auto nelem = ggml_nelements(dst);
-        auto nelem_per_device = (nelem + nhave - 1)/nhave;
+        auto nelem8 = (nelem + 7)/8;
+        auto nelem_per_device = 8*((nelem8 + nhave - 1)/nhave);
+        //auto nelem_per_device = (nelem + nhave - 1)/nhave;
         auto elem_size = ggml_element_size(dst);
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];

@@ -3105,9 +3105,9 @@ bool create_tensors_helper::create_tensors() {
                 }
                 printf("\n");
             }
-            //printf("=== Layer %2d. Mem used so far:", il);
-            //for (auto mem : mem_used) printf(" %g", mem/1024./1024.);
-            //printf("\n");
+            printf("=== Layer %2d. Mem used so far:", il);
+            for (auto mem : mem_used) printf(" %g", mem/1024./1024.);
+            printf("\n");
             auto & layer = model.layers[il];
             auto ctx_split = ctx_for_layer_split(il);
             if (layer.attn_norm) {
@@ -3128,10 +3128,10 @@ bool create_tensors_helper::create_tensors() {
                 }
                 auto split_vo = create_split(layer.wo->ne[0], granularity_vo, cur_splits, mem_used); //, true);
                 auto split_kq = create_split(layer.wq->ne[1], granularity_kq, cur_splits, mem_used); //, true);
-                //printf("  split_vo:"); for (auto s : split_vo) printf(" %d", s);
-                //printf("\n");
-                //printf("  split_kq:"); for (auto s : split_kq) printf(" %d", s);
-                //printf("\n");
+                printf("  split_vo:"); for (auto s : split_vo) printf(" %d", s);
+                printf("\n");
+                printf("  split_kq:"); for (auto s : split_kq) printf(" %d", s);
+                printf("\n");
                 prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split_vo, mem_used);
                 prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                 if (layer.bo) {
@@ -3183,6 +3183,7 @@ bool create_tensors_helper::create_tensors() {
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
                     auto split = create_split(layer.ffn_down->ne[0], ffn_granularity, cur_splits, mem_used);
+                    printf("  split_ffn:"); for (auto s : split) printf(" %d", s); printf("\n");
                     prepare_split_tensors(0, ctx_split, layer.ffn_down, layer.split_ffn_down, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up,   layer.split_ffn_up,   split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_gate, layer.split_ffn_gate, split, mem_used);
@@ -3196,14 +3197,13 @@ bool create_tensors_helper::create_tensors() {
                                  split_tensors.find(layer.ffn_up_exps)   != split_tensors.end();
 
                 if (use_split) {
-                    //any_ffn_split = true;
                     int ffn_granularity = 16;
                     if (ggml_is_quantized(layer.ffn_down_exps->type)) {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_exps->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
                     ffn_split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, cur_splits, mem_used);
-                    //printf("split(%2d):", il); for (auto & s : split) printf(" %d", s); printf("\n");
+                    printf("  split_ffn_exps:"); for (auto s : ffn_split) printf(" %d", s); printf("\n");
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, ffn_split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   ffn_split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, ffn_split, mem_used);
@@ -3254,6 +3254,8 @@ bool create_tensors_helper::create_tensors() {
                         for (auto& s : aux) s /= sum;
                         split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, aux, mem_used);
                         printf("        new:"); for (auto& s : split    ) printf(" %d", s); printf("\n");
+                    } else {
+                        printf("  split_ffn_shexps:"); for (auto s : split) printf(" %d", s); printf("\n");
                     }
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_shexp, layer.split_ffn_down_shexp, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
