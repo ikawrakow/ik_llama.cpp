@@ -2180,11 +2180,20 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
-        if (false && !has_cpu_work) {
+        int first_reduce = -1;
+        for (int i = 0; i < sched->n_splits; i++) {
+            auto split = &sched->splits[i];
+            if (split->graph.n_nodes == 1 && split->graph.nodes[0]->op == GGML_OP_REDUCE) {
+                first_reduce = split->backend_id;
+                break;
+            }
+        }
+
+        if (!has_cpu_work) {
         #pragma omp parallel num_threads(sched->n_backends)
         {
 
-            int last_reduce = -1;
+            int last_reduce = first_reduce;
             int ith = omp_get_thread_num();
 
             struct ggml_backend_sched_split * splits = sched->splits;
@@ -2217,6 +2226,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 if (ith == split_backend_id) {
 
+                    sched->statuses[ith] = ggml_backend_sched_eval(sched, split_backend, split);
+
                     if (split->n_inputs > 0 && !sched->own_cpy[split_backend_id]) {
                         sched->needs_sync[split_backend_id] = true;
                     } else {
@@ -2226,7 +2237,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             }
                         }
                     }
-                    sched->statuses[ith] = ggml_backend_sched_eval(sched, split_backend, split);
                 }
 
                 if (split->graph.nodes[0]->op == GGML_OP_REDUCE) {
@@ -2246,14 +2256,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 #endif
         if (!work_done) {
-        int first_reduce = -1;
-        for (int i = 0; i < sched->n_splits; i++) {
-            auto split = &sched->splits[i];
-            if (split->graph.n_nodes == 1 && split->graph.nodes[0]->op == GGML_OP_REDUCE) {
-                first_reduce = split->backend_id;
-                break;
-            }
-        }
 
         std::barrier barrier(sched->n_backends);
         auto compute = [sched, &barrier, first_reduce] (int ith) {
