@@ -2180,7 +2180,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
-        if (!has_cpu_work) {
+        if (false && !has_cpu_work) {
         #pragma omp parallel num_threads(sched->n_backends)
         {
 
@@ -2216,8 +2216,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
 
                 if (ith == split_backend_id) {
-                    // copy the input tensors to the split backend
-                    //ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
 
                     if (split->n_inputs > 0 && !sched->own_cpy[split_backend_id]) {
                         sched->needs_sync[split_backend_id] = true;
@@ -2248,14 +2246,25 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 #endif
         if (!work_done) {
-        std::barrier barrier(sched->n_backends, [] () noexcept {});
-        auto compute = [sched, &barrier] (int ith) {
+        int first_reduce = -1;
+        for (int i = 0; i < sched->n_splits; i++) {
+            auto split = &sched->splits[i];
+            if (split->graph.n_nodes == 1 && split->graph.nodes[0]->op == GGML_OP_REDUCE) {
+                first_reduce = split->backend_id;
+                break;
+            }
+        }
+
+        std::barrier barrier(sched->n_backends);
+        auto compute = [sched, &barrier, first_reduce] (int ith) {
 
             struct ggml_backend_sched_split * splits = sched->splits;
 
             std::vector<int32_t> ids;
             std::vector<uint32_t> unique_ids;
             ggml_tensor * last_ids_tensor = nullptr;
+
+            int last_reduce = first_reduce;
 
             for (int i = 0; i < sched->n_splits; i++) {
 #if IK_PRINT_TIMING
@@ -2271,10 +2280,17 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     barrier.arrive_and_wait();
                 }
 
-                if (ith == split_backend_id) {
-                    // copy the input tensors to the split backend
-                    ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+                if (split->n_inputs > 0) {
+                    int copy_thread = last_reduce >= 0 ? last_reduce : 0;
+                    if (ith == copy_thread) {
+                        ggml_backend_sched_copy_inputs(sched, split, sched->needs_sync, ids, unique_ids, last_ids_tensor);
+                    }
+                    barrier.arrive_and_wait();
+                }
 
+                if (ith == split_backend_id) {
+
+                    sched->statuses[ith] = ggml_backend_sched_eval(sched, split_backend, split);
                     if (split->n_inputs > 0 && !sched->own_cpy[split_backend_id]) {
                         sched->needs_sync[split_backend_id] = true;
                     } else {
@@ -2284,10 +2300,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             }
                         }
                     }
-                    sched->statuses[ith] = ggml_backend_sched_eval(sched, split_backend, split);
                 }
 
                 if (split->graph.nodes[0]->op == GGML_OP_REDUCE) {
+                    last_reduce = split_backend_id;
                     barrier.arrive_and_wait();
                 }
                 //if (needs_barrier) {
@@ -2297,6 +2313,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 // record the event of this copy
                 if (split->n_inputs > 0) {
                     if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                        printf("Recording event %d, %d\n", split_backend_id, sched->cur_copy);
                         ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy]);
                     }
                 }

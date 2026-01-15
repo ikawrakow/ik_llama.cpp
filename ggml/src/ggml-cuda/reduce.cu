@@ -350,7 +350,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         ggml_cuda_set_device(ctx.device);
         return;
     }
-    if (dst->ne[1] <= 8 && ctx.p2p_enabled) {
+    if (dst->ne[1] < 32 && ctx.p2p_enabled) {
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             GGML_ASSERT(dst->src[i]->type == dst->type);
@@ -479,6 +479,12 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         ggml_cuda_set_device(i);
         CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), ctx.copy_event, 0));
         CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, i, dst->data, ctx.device, nbytes, info.all_ctx[i]->stream()));
+        CUDA_CHECK(cudaEventRecord(info.all_ctx[i]->copy_event, info.all_ctx[i]->stream()));
     }
     ggml_cuda_set_device(ctx.device);
+    for (int ii = 0; ii < nhave; ++ii) {
+        int i = idx[ii];
+        if (i == ctx.device) continue;
+        CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), info.all_ctx[i]->copy_event, 0));
+    }
 }
