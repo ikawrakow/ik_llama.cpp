@@ -3061,6 +3061,12 @@ extern "C" {
             struct ggml_tensor          * dst,
             struct ggml_tensor          * src);
 
+    GGML_API struct ggml_tensor * ggml_migrate(
+            struct ggml_context         * ctx,
+            struct ggml_tensor          * a,
+            ggml_split_tensor_t         * split);
+
+
 #ifdef  __cplusplus
 }
 #endif

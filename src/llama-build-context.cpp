@@ -619,16 +619,26 @@ ggml_tensor * llm_build_context::llm_build_norm(
     return cur;
 }
 
-static ggml_tensor * get_input_tensor_sm_graph(ggml_tensor * input, int id) {
+static ggml_tensor * get_input_tensor_sm_graph(ggml_context * ctx, ggml_tensor * input, int id) {
     auto cur = input;
     if (input->op == GGML_OP_REDUCE) {
         auto view_src = input->view_src;
-        GGML_ASSERT(view_src);
         cur = input->src[id];
-        if (cur == view_src || !cur) {
-            //printf("%s: Setting input to %s for id = %d\n", __func__, view_src->name, id);
+        if (!cur) {
+            GGML_ASSERT((input->op_params[4] & (1u << id)) == 0);
+            cur = ggml_dup_tensor(ctx, input);
+            input->src[id] = cur;
+            input->op_params[4] |= (1u << id);
+        }
+        else if (cur == view_src) {
             cur = input;
         }
+        //GGML_ASSERT(view_src);
+        //cur = input->src[id];
+        //if (cur == view_src || !cur) {
+        //    //printf("%s: Setting input to %s for id = %d\n", __func__, view_src->name, id);
+        //    cur = input;
+        //}
     }
     return cur;
 }
@@ -672,7 +682,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             auto split_d = d->splits[id];
             GGML_ASSERT((!split_u && !split_g && !split_d) || (split_u && split_g && split_d));
             if (!split_u) continue;
-            auto cur = get_input_tensor_sm_graph(input, id);
+            auto cur = get_input_tensor_sm_graph(ctx, input, id);
             if (ffn_norm && ffn_norm->extra) {
                 auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
                 GGML_ASSERT(norm->splits[id]);
@@ -1268,7 +1278,7 @@ llm_expert_gating_func_type   gating_op,
                     (!split_up_exps->splits[id] && !split_gate_exps->splits[id] && !split_down_exps->splits[id]));
         if (!split_up_exps->splits[id]) continue;
         int il_cb = 1000*(id + 1) + il;
-        auto cur = get_input_tensor_sm_graph(input, id);
+        auto cur = get_input_tensor_sm_graph(ctx, input, id);
         if (ffn_norm) {
             auto split_ffn_norm = (ggml_split_tensor_t *)ffn_norm->extra;
             GGML_ASSERT(split_ffn_norm && split_ffn_norm->n_device == split_up_exps->n_device);
@@ -9220,7 +9230,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 GGML_ASSERT((!split_wq && !split_wk && !split_wv && !split_wo && !split_kl && !split_vl) ||
                         (split_wq && split_wk && split_wv && split_wo && split_kl && split_vl));
                 if (!split_wq) continue;
-                auto cur = get_input_tensor_sm_graph(input, id);
+                auto cur = get_input_tensor_sm_graph(ctx0, input, id);
                 if (attn_norm) {
                     if (is_norm) {
                         cur = ggml_fused_norm(ctx0, cur, attn_norm->splits[id], lctx.model.hparams.f_norm_eps);

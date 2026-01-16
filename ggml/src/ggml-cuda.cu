@@ -506,6 +506,8 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     if (info->all_ctx[device]) {
         GGML_CUDA_LOG_WARN("%s: a context for device %d already exists?\n", __func__, device);
     }
+    CUDA_CHECK(cudaEventCreateWithFlags(&copy_event, cudaEventDisableTiming));
+    CUDA_CHECK(cudaEventCreateWithFlags(&compute_event, cudaEventDisableTiming));
     info->all_ctx[device] = this;
 }
 
@@ -2239,6 +2241,7 @@ static inline bool prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n
     const char * ids_dev = (const char *) ids->data;
     CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
+    ctx.n_launch = 0;
 
     std::vector<mmid_row_mapping> rmapping(ids->ne[1]*n_ids);
     moe_counts.resize(n_as, 0);
@@ -2732,6 +2735,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     const char * ids_dev = (const char *) ids->data;
     CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
+    ctx.n_launch = 0;
 
     ggml_tensor src0_1_row = *src0_1;
     ggml_tensor src0_2_row; if (src0_2) src0_2_row = *src0_2;
@@ -3056,6 +3060,8 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
     if (ggml_is_noop(dst)) {
         return true;
     }
+
+    ++ctx.n_launch;
 
     // In case we forget to do that in some kernel.
     ggml_cuda_set_device(ctx.device);
@@ -3643,6 +3649,7 @@ GGML_CALL static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 
     ggml_cuda_set_device(cuda_ctx->device);
     CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
+    cuda_ctx->n_launch = 0;
 
     GGML_UNUSED(backend);
 }
@@ -4498,6 +4505,7 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         return nullptr;
     }
 
+    ggml_cuda_set_device(device);
     ggml_backend_cuda_context * ctx = new ggml_backend_cuda_context(device);
     if (ctx == nullptr) {
         GGML_CUDA_LOG_ERROR("%s: failed to allocate context\n", __func__);

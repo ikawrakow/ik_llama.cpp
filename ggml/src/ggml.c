@@ -6093,6 +6093,48 @@ struct ggml_tensor * ggml_reduce(
     return result;
 }
 
+struct ggml_tensor * ggml_migrate(struct ggml_context * ctx,
+                           struct ggml_tensor         * a,
+                          ggml_split_tensor_t         * split) {
+    GGML_ASSERT(a && a->op == GGML_OP_REDUCE);
+    GGML_ASSERT(split && split->n_device > 1);
+    int n_have = 0;
+    int n_need = 0;
+    int last_id = -1;
+    for (int j = 0; j < split->n_device; ++j) {
+        if (split->splits[j]) {
+            ++n_have;
+            last_id = j;
+            if (!a->src[j]) ++n_need;
+        }
+    }
+    GGML_ASSERT(n_have > 1);
+    if (!n_need) return a;
+
+    struct ggml_tensor * last = a->src[last_id];
+    if (!last) {
+        last = ggml_dup_tensor(ctx, a);
+    }
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, last);
+    for (int j = 0; j < split->n_device; ++j) {
+        if (split->splits[j]) {
+            if (a->src[j]) {
+                result->src[j] = a->src[j];
+            } else if (j != last_id) {
+                result->src[j] = ggml_dup_tensor(ctx, a);
+            }
+        }
+    }
+    result->src[last_id] = last;
+    result->op = GGML_OP_REDUCE;
+    result->op_params[0] = (int)GGML_OP_CPY;
+    result->op_params[1] = split->n_device;
+    result->op_params[2] = n_have;
+    return result;
+}
+
+
 struct ggml_tensor * ggml_fake_cpy(
             struct ggml_context         * ctx,
             struct ggml_tensor          * dst,

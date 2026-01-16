@@ -844,6 +844,7 @@ struct ggml_backend_cuda_context {
     std::string name;
     cudaEvent_t copy_event = nullptr;
     cudaEvent_t compute_event = nullptr;
+    int  n_launch = 0;
     bool p2p_enabled = false;
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
