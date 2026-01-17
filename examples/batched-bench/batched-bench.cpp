@@ -164,7 +164,7 @@ int main(int argc, char ** argv) {
 
                 if (is_pp_shared) {
                     for (int32_t i = 1; i < pl; ++i) {
-                        llama_memory_seq_cp(ctx, 0, i, -1, -1);
+                        llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
                     }
                 }
 

@@ -258,14 +258,14 @@ std::vector<llama_token> llama_speculative_gen_draft(
         }
 
         if (reuse_i > 0) {
-            llama_memory_seq_rm (ctx_dft, 0, 0, reuse_i);
-            llama_memory_seq_add(ctx_dft, 0, reuse_i, -1, -reuse_i);
+            llama_kv_cache_seq_rm (ctx_dft, 0, 0, reuse_i);
+            llama_kv_cache_seq_add(ctx_dft, 0, reuse_i, -1, -reuse_i);
 
             prompt_dft.erase(prompt_dft.begin(), prompt_dft.begin() + reuse_i);
         }
 
         if (reuse_n < (int) prompt_dft.size()) {
-            llama_memory_seq_rm (ctx_dft, 0, reuse_n, -1);
+            llama_kv_cache_seq_rm (ctx_dft, 0, reuse_n, -1);
 
             prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
         }

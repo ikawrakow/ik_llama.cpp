@@ -117,7 +117,7 @@ int main(int argc, char ** argv) {
     }
     if (params.batch_warmup) {
         // clean up KV cache after generation
-        llama_memory_seq_rm(ctx, 0, params.n_ubatch, -1);
+        llama_kv_cache_seq_rm(ctx, 0, params.n_ubatch, -1);
 
         // prepare batch of pp size for prompt processing performance measurement
         common_batch_clear(batch);
@@ -137,7 +137,7 @@ int main(int argc, char ** argv) {
 
     for (unsigned int n_kv = 0; n_kv < n_kv_max; n_kv += params.n_ubatch) {
         // clean up KV cache before generation
-        llama_memory_seq_rm(ctx, 0, n_kv, -1);
+        llama_kv_cache_seq_rm(ctx, 0, n_kv, -1);
 
         // first measure token generation performance at this context size
         const auto t_tg_start = ggml_time_us();
@@ -155,7 +155,7 @@ int main(int argc, char ** argv) {
         const auto t_tg_end = ggml_time_us();
 
         // clean up KV cache after generation
-        llama_memory_seq_rm(ctx, 0, n_kv, -1);
+        llama_kv_cache_seq_rm(ctx, 0, n_kv, -1);
 
         // prepare batch of pp size for prompt processing performance measurement
         common_batch_clear(batch);

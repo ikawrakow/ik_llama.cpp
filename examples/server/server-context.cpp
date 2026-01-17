@@ -1173,7 +1173,7 @@ void server_context::system_prompt_update() {
 
         // assign the system KV cache to all parallel sequences
         for (int32_t i = 1; i <= params_base.n_parallel; ++i) {
-            llama_memory_seq_cp(ctx, 0, i, -1, -1);
+            llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
         }
     }
 
@@ -1935,7 +1935,7 @@ void server_context::process_single_task(server_task&& task) {
 
         // Erase token cache
         const size_t n_erased = slot->cache_tokens.size();
-        llama_memory_seq_rm(ctx, slot->id + 1, -1, -1);
+        llama_kv_cache_seq_rm(ctx, slot->id + 1, -1, -1);
         slot->cache_tokens.clear();
 
         server_task_result result;
@@ -1992,8 +1992,8 @@ void server_context::print_tokens(const server_tokens& prompt, const server_toke
 }
 
 void server_context::discard_n_kv_and_cache_tokens(llama_context* ctx, server_slot& slot, int32_t n_keep, int32_t n_discard) {
-    llama_memory_seq_rm(ctx, slot.id, n_keep, n_keep + n_discard);
-    llama_memory_seq_add(ctx, slot.id, n_keep + n_discard, system_tokens.size() + slot.n_past, -n_discard);
+    llama_kv_cache_seq_rm(ctx, slot.id, n_keep, n_keep + n_discard);
+    llama_kv_cache_seq_add(ctx, slot.id, n_keep + n_discard, system_tokens.size() + slot.n_past, -n_discard);
     if (slot.params.cache_prompt) {
         slot.cache_tokens.discard_n_tokens(n_keep, n_discard);
     }
@@ -2426,14 +2426,14 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                 slot.cache_tokens.keep_first(slot.n_past);
                 int p0 = (int)system_tokens.size() + slot.n_past;
                 p0 = system_tokens.size() + slot.cache_tokens.pos_next();
-                if (!llama_memory_seq_rm(ctx, slot.id, p0, -1)) {
+                if (!llama_kv_cache_seq_rm(ctx, slot.id, p0, -1)) {
                     // could not partially delete (likely using a non-Transformer model)
-                    llama_memory_seq_rm(ctx, slot.id, -1, -1);
+                    llama_kv_cache_seq_rm(ctx, slot.id, -1, -1);
 
                     p0 = (int)system_tokens.size();
                     if (p0 != 0) {
                         // copy over the system prompt when there is one
-                        llama_memory_seq_cp(ctx, 0, slot.id, -1, -1);
+                        llama_kv_cache_seq_cp(ctx, 0, slot.id, -1, -1);
                     }
 
                     // there is no common part left (except for the system prompt)
@@ -2571,9 +2571,9 @@ void server_context::extend_context(const int32_t n_tokens) {
                 LOG_TEE("div:   [%6d, %6d] / %6d -> [%6d, %6d]\n", slot.ga_i + ib * bd, slot.ga_i + ib * bd + slot.ga_w, slot.ga_n, (slot.ga_i + ib * bd) / slot.ga_n, (slot.ga_i + ib * bd + slot.ga_w) / slot.ga_n);
                 LOG_TEE("shift: [%6d, %6d] + %6d -> [%6d, %6d]\n", slot.ga_i + ib * bd + slot.ga_w, slot.n_past_se + ib * bd, dd, slot.ga_i + ib * bd + slot.ga_w + dd, slot.n_past_se + ib * bd + dd);
 
-                llama_memory_seq_add(ctx, slot.id, slot.ga_i, slot.n_past_se, ib * bd);
-                llama_memory_seq_div(ctx, slot.id, slot.ga_i + ib * bd, slot.ga_i + ib * bd + slot.ga_w, slot.ga_n);
-                llama_memory_seq_add(ctx, slot.id, slot.ga_i + ib * bd + slot.ga_w, slot.n_past_se + ib * bd, dd);
+                llama_kv_cache_seq_add(ctx, slot.id, slot.ga_i, slot.n_past_se, ib * bd);
+                llama_kv_cache_seq_div(ctx, slot.id, slot.ga_i + ib * bd, slot.ga_i + ib * bd + slot.ga_w, slot.ga_n);
+                llama_kv_cache_seq_add(ctx, slot.id, slot.ga_i + ib * bd + slot.ga_w, slot.n_past_se + ib * bd, dd);
 
                 slot.n_past_se -= bd;
 
@@ -2614,7 +2614,7 @@ void server_context::speculative_decoding_accept() {
         slot.cache_tokens.insert({ ids.begin(), ids.end() - 1 });
         slot.sampled = ids.back(); // last accepted token
         slot.n_past = slot.cache_tokens.n_tokens();
-        llama_memory_seq_rm(ctx, slot.id, slot.n_past, -1);
+        llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
 
         for (size_t i = 0; i < ids.size(); ++i) {
             completion_token_output result;

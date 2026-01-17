@@ -5389,11 +5389,11 @@ void llama_memory_clear(struct llama_context * ctx) {
     llama_kv_cache_clear(ctx->kv_self);
 }
 
-bool llama_memory_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+bool llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     return llama_kv_cache_seq_rm(ctx->kv_self, seq_id, p0, p1);
 }
 
-void llama_memory_seq_cp(struct llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+void llama_kv_cache_seq_cp(struct llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     if (seq_id_src == seq_id_dst) {
         return;
     }
@@ -5404,7 +5404,7 @@ void llama_kv_cache_seq_keep(struct llama_context * ctx, llama_seq_id seq_id) {
     llama_kv_cache_seq_keep(ctx->kv_self, seq_id);
 }
 
-void llama_memory_seq_add(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
+void llama_kv_cache_seq_add(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
     if (delta == 0) {
         return;
     }
@@ -5412,7 +5412,7 @@ void llama_memory_seq_add(struct llama_context * ctx, llama_seq_id seq_id, llama
     llama_kv_cache_seq_add(ctx->kv_self, seq_id, p0, p1, delta);
 }
 
-void llama_memory_seq_div(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
+void llama_kv_cache_seq_div(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
     if (d == 1) {
         return;
     }
@@ -6041,7 +6041,7 @@ struct llama_data_read {
             if (seq_id == -1) {
                 llama_memory_clear(ctx);
             } else {
-                llama_memory_seq_rm(ctx, seq_id, -1, -1);
+                llama_kv_cache_seq_rm(ctx, seq_id, -1, -1);
             }
             throw std::runtime_error("failed to restore kv cache");
         }
