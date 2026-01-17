@@ -244,14 +244,14 @@ static std::vector<int> create_split(int nr, int granularity, const std::vector<
     std::vector<int> result(splits.size());
     float last_split = 0;
     int sum = 0;
-    if (verbose) printf("--- %s: %d chunks\n", __func__, nchunk);
+    if (verbose) LLAMA_LOG_INFO("--- %s: %d chunks\n", __func__, nchunk);
     for (int i = 0; i < (int)splits.size(); ++i) {
         float p = splits[i] - last_split;
         float p0 = p;
         p += (p - 1.f*mem_used[i]/tot_memory_used);
         result[i] = roundf(p*nchunk);
         if (result[i] < 0) result[i] = 0;
-        if (verbose) printf("i = %d, p0 = %g, p = %g, result = %d\n", i, p0, p, result[i]);
+        if (verbose) LLAMA_LOG_INFO("i = %d, p0 = %g, p = %g, result = %d\n", i, p0, p, result[i]);
         sum += result[i];
         last_split = splits[i];
     }
@@ -317,7 +317,6 @@ ggml_tensor * create_tensors_helper::create_tensor(ggml_context * ctx, const std
     if (actual_context) *actual_context = ctx;
     auto tensor = ml.create_tensor(ctx, name, ne, flags);
     if (tensor && ctx == split_ctx) {
-        //printf("%s: adding tensor %s to split tensors\n", __func__, tensor->name);
         split_tensors.insert(tensor);
     }
     return tensor;
@@ -1184,7 +1183,6 @@ bool create_tensors_helper::create_mimo2_tensors(const LLM_TN & tn) {
         uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i);
         uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i);
         uint32_t n_head = hparams.n_head(i);
-        //printf("Layer %2d: n_head = %u, n_embd_head_k = %d, n_embd_head_v = %d, n_embd_k_gqa = %d, n_embd_v_gqa = %d\n", i, n_head, (int)n_embd_head_k, (int)n_embd_head_v, n_embd_k_gqa, n_embd_v_gqa);
 
         ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
@@ -1800,7 +1798,7 @@ bool create_tensors_helper::create_deepseek2_tensors(const LLM_TN & tn) {
                 layer.wkv_a_mqa = ml.create_tensor_as_view(ctx_split, layer.wkq_a_mqa, k_name.c_str(), { wk->ne[0], wk->ne[1] }, wq->ne[1]*wq->nb[1]);
                 merged = true;
                 use_mmap_buffer = false;
-                printf("============== Merged %s (%ld x %ld) and %s (%ld x %ld)\n", q_name.c_str(),
+                LLAMA_LOG_DEBUG("============== Merged %s (%ld x %ld) and %s (%ld x %ld)\n", q_name.c_str(),
                         wq->ne[0], wq->ne[1], k_name.c_str(), wk->ne[0], wk->ne[1]);
             }
         }
@@ -2661,7 +2659,7 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     auto g_meta = ml.require_tensor_meta(g_name.c_str());
 
     if (u_meta->type != g_meta->type || u_meta->ne[0] != g_meta->ne[0] || u_meta->ne[2] != g_meta->ne[2]) {
-        printf("%s: not merging because up/fate meta info is different\n", __func__);
+        LLAMA_LOG_INFO("%s: not merging because up/fate meta info is different\n", __func__);
         return false;
     }
 
@@ -2669,16 +2667,16 @@ bool create_tensors_helper::merge_up_gate_exps(const LLM_TN & tn, int i, int bia
     auto g_ctx = get_context_for_tensor(ctx_split, g_name);
 
     if (u_ctx != g_ctx) {
-        printf("%s: not merging because of context\n", __func__);
+        LLAMA_LOG_INFO("%s: not merging because of context\n", __func__);
         return false;
     }
 
     if (bias && (u_ctx != ctx_split || g_ctx != ctx_split)) {
-        printf("%s: not merging because of context\n", __func__);
+        LLAMA_LOG_INFO("%s: not merging because of context\n", __func__);
         return false;
     }
 
-    printf("%s: merging up/gate in layer %d\n", __func__, i);
+    LLAMA_LOG_INFO("%s: merging up/gate in layer %d\n", __func__, i);
 
     layer.ffn_up_gate_exps = ggml_new_tensor_3d(u_ctx, u_meta->type, u_meta->ne[0], u_meta->ne[1] + g_meta->ne[1], u_meta->ne[2]);
     snprintf(layer.ffn_up_gate_exps->name, GGML_MAX_NAME, "blk.%d.ffn_up_gate_exps.weight", i);
@@ -2803,7 +2801,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
         layer.wq = ml.create_tensor_as_view(ctx_split, layer.wqk, wq_name.c_str(), { wq->ne[0], wq->ne[1] }, 0);
         layer.wk = ml.create_tensor_as_view(ctx_split, layer.wqk, wk_name.c_str(), { wk->ne[0], wk->ne[1] }, wq->ne[1]*wq->nb[1]);
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
-        printf("====================== Merged only Q and K in layer %d because V is of different type\n", i);
+        LLAMA_LOG_INFO("====================== Merged only Q and K in layer %d because V is of different type\n", i);
         fused_qkv = true;
         if (bias) {
             auto bq_name = tn(LLM_TENSOR_ATTN_Q, "bias", i);
@@ -2832,7 +2830,7 @@ bool create_tensors_helper::merge_qkv(const LLM_TN & tn, int i, int bias, bool i
 
     if (!fused_qkv) {
         if (ml.merge_qkv) {
-            printf("%s: did not merge Q, K, V in layer %d because %d, %d, %d\n", __func__, i,
+            LLAMA_LOG_INFO("%s: did not merge Q, K, V in layer %d because %d, %d, %d\n", __func__, i,
                     wq->type == wk->type, wq->type == wv->type, (ignore_attn_scale || hparams.f_attention_scale == 0.0f));
         }
         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head});
@@ -3066,7 +3064,7 @@ bool create_tensors_helper::create_tensors() {
     }
     if (model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) {
         const int n_layer = model.layers.size() - model.hparams.nextn_predict_layers;
-        printf("================================ max_gpu = %d\n", model.max_gpu);
+        LLAMA_LOG_INFO("================================ max_gpu = %d\n", model.max_gpu);
         std::vector<size_t> mem_used(model.splits.size(), 0);
         const auto & hparams = model.hparams;
         auto cur_splits = model.splits;
@@ -3097,17 +3095,17 @@ bool create_tensors_helper::create_tensors() {
             if (model.max_gpu > 0 && model.max_gpu < int(model.splits.size()) && il % adjust_step == 0) {
                 cur_splits = model.splits;
                 adjust_split(cur_splits, mem_used, model.max_gpu);
-                printf("Adjusted split at layer %2d:", il);
+                LLAMA_LOG_INFO("Adjusted split at layer %2d:", il);
                 float last_split = 0;
                 for (auto & p : cur_splits) {
-                    printf(" %g", p - last_split);
+                    LLAMA_LOG_INFO(" %g", p - last_split);
                     last_split = p;
                 }
-                printf("\n");
+                LLAMA_LOG_INFO("\n");
             }
-            //printf("=== Layer %2d. Mem used so far:", il);
-            //for (auto mem : mem_used) printf(" %g", mem/1024./1024.);
-            //printf("\n");
+            LLAMA_LOG_DEBUG("=== Layer %2d. Mem used so far:", il);
+            for ([[maybe_unused]] auto mem : mem_used) LLAMA_LOG_DEBUG(" %g", mem/1024./1024.);
+            LLAMA_LOG_DEBUG("\n");
             auto & layer = model.layers[il];
             auto ctx_split = ctx_for_layer_split(il);
             if (layer.attn_norm) {
@@ -3128,10 +3126,10 @@ bool create_tensors_helper::create_tensors() {
                 }
                 auto split_vo = create_split(layer.wo->ne[0], granularity_vo, cur_splits, mem_used); //, true);
                 auto split_kq = create_split(layer.wq->ne[1], granularity_kq, cur_splits, mem_used); //, true);
-                //printf("  split_vo:"); for (auto s : split_vo) printf(" %d", s);
-                //printf("\n");
-                //printf("  split_kq:"); for (auto s : split_kq) printf(" %d", s);
-                //printf("\n");
+                LLAMA_LOG_DEBUG("  split_vo:"); for ([[maybe_unused]] auto s : split_vo) LLAMA_LOG_DEBUG(" %d", s);
+                LLAMA_LOG_DEBUG("\n");
+                LLAMA_LOG_DEBUG("  split_kq:"); for ([[maybe_unused]] auto s : split_kq) LLAMA_LOG_DEBUG(" %d", s);
+                LLAMA_LOG_DEBUG("\n");
                 prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split_vo, mem_used);
                 prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                 if (layer.bo) {
@@ -3183,6 +3181,7 @@ bool create_tensors_helper::create_tensors() {
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
                     auto split = create_split(layer.ffn_down->ne[0], ffn_granularity, cur_splits, mem_used);
+                    LLAMA_LOG_DEBUG("  split_ffn:"); for ([[maybe_unused]] auto s : split) LLAMA_LOG_DEBUG(" %d", s); LLAMA_LOG_DEBUG("\n");
                     prepare_split_tensors(0, ctx_split, layer.ffn_down, layer.split_ffn_down, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up,   layer.split_ffn_up,   split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_gate, layer.split_ffn_gate, split, mem_used);
@@ -3196,14 +3195,14 @@ bool create_tensors_helper::create_tensors() {
                                  split_tensors.find(layer.ffn_up_exps)   != split_tensors.end();
 
                 if (use_split) {
-                    //any_ffn_split = true;
                     int ffn_granularity = 16;
                     if (ggml_is_quantized(layer.ffn_down_exps->type)) {
                         auto tt = ggml_internal_get_type_traits(layer.ffn_down_exps->type);
                         if (tt.blck_size > ffn_granularity) ffn_granularity = tt.blck_size;
                     }
                     ffn_split = create_split(layer.ffn_down_exps->ne[0], ffn_granularity, cur_splits, mem_used);
-                    //printf("split(%2d):", il); for (auto & s : split) printf(" %d", s); printf("\n");
+                    LLAMA_LOG_DEBUG("  split_ffn_exps:"); for ([[maybe_unused]] auto s : ffn_split) LLAMA_LOG_DEBUG(" %d", s);
+                    LLAMA_LOG_DEBUG("\n");
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_exps, layer.split_ffn_down_exps, ffn_split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up_exps,   layer.split_ffn_up_exps,   ffn_split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_gate_exps, layer.split_ffn_gate_exps, ffn_split, mem_used);
@@ -3242,9 +3241,9 @@ bool create_tensors_helper::create_tensors() {
                         }
                     }
                     if (!ok) {
-                        printf("=== exp/shexp mismatch in layer %d\n", il);
-                        printf("    experts:"); for (auto& s : ffn_split) printf(" %d", s); printf("\n");
-                        printf(" sh_experts:"); for (auto& s : split    ) printf(" %d", s); printf("\n");
+                        LLAMA_LOG_INFO("=== exp/shexp mismatch in layer %d\n", il);
+                        LLAMA_LOG_INFO("    experts:"); for (auto& s : ffn_split) LLAMA_LOG_INFO(" %d", s); LLAMA_LOG_INFO("\n");
+                        LLAMA_LOG_INFO(" sh_experts:"); for (auto& s : split    ) LLAMA_LOG_INFO(" %d", s); LLAMA_LOG_INFO("\n");
                         std::vector<float> aux(ffn_split.size());
                         float sum = 0;
                         for (int j = 0; j < int(ffn_split.size()); ++j) {
@@ -3253,7 +3252,10 @@ bool create_tensors_helper::create_tensors() {
                         }
                         for (auto& s : aux) s /= sum;
                         split = create_split(layer.ffn_down_shexp->ne[0], ffn_granularity, aux, mem_used);
-                        printf("        new:"); for (auto& s : split    ) printf(" %d", s); printf("\n");
+                        LLAMA_LOG_INFO("        new:"); for (auto& s : split    ) LLAMA_LOG_INFO(" %d", s); LLAMA_LOG_INFO("\n");
+                    } else {
+                        LLAMA_LOG_DEBUG("  split_ffn_shexps:"); for ([[maybe_unused]] auto s : split) LLAMA_LOG_DEBUG(" %d", s);
+                        LLAMA_LOG_DEBUG("\n");
                     }
                     prepare_split_tensors(0, ctx_split, layer.ffn_down_shexp, layer.split_ffn_down_shexp, split, mem_used);
                     prepare_split_tensors(1, ctx_split, layer.ffn_up_shexp,   layer.split_ffn_up_shexp,   split, mem_used);
