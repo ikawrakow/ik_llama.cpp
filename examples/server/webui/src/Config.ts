@@ -12,6 +12,7 @@ export const CONFIG_DEFAULT = {
   // Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
   // Do not use nested objects, keep it single level. Prefix the key if you need to group them.
   apiKey: '',
+  completionType: 'Chat',
   systemMessage: 'You are a helpful assistant.',
   showTokensPerSecond: false, 
   showThoughtInProgress: false, 
@@ -21,7 +22,7 @@ export const CONFIG_DEFAULT = {
   pdfAsImage: false,
   reasoning_format: 'auto',
   // make sure these default values are in sync with `common.h`
-  samplers: 'dkypmxnt',
+  samplers: 'kdypmxntw',
   temperature: 0.8,
   dynatemp_range: 0.0,
   dynatemp_exponent: 1.0,
@@ -30,6 +31,8 @@ export const CONFIG_DEFAULT = {
   min_p: 0.05,
   xtc_probability: 0.0,
   xtc_threshold: 0.1,
+  adaptive_target: -1.0,
+  adaptive_decay: 0.9,
   top_n_sigma: 0.0,
   typical_p: 1.0,
   repeat_last_n: 64,
@@ -41,6 +44,8 @@ export const CONFIG_DEFAULT = {
   dry_allowed_length: 2,
   dry_penalty_last_n: -1,
   max_tokens: -1,
+  stop_string: '\\n\\n,\\nUser:',
+  prefix_role:'true',
   custom: '', // custom json-stringified object
   // experimental features
   pyIntepreterEnabled: false,
@@ -48,11 +53,12 @@ export const CONFIG_DEFAULT = {
 export const CONFIG_INFO: Record<string, string> = {
   reasoning_format : 'Specify how to parse reasoning content. none: reasoning content in content block. auto: reasoning content in reasoning_content. ',
   apiKey: 'Set the API Key if you are using --api-key option for the server.',
+  completionType:'Set completion type to be either chat or text',
   systemMessage: 'The starting message that defines how model should behave.',
   pasteLongTextToFileLen:
     'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
   samplers:
-    'The order at which samplers are applied, in simplified way. Default is "dkypmxnt": dry->top_k->typ_p->top_p->min_p->xtc->top_sigma->temperature',
+    'The order at which samplers are applied, in simplified way. Default is "kdypmxntw": top_k->dry->typ_p->top_p->min_p->xtc->top_sigma->temperature->adaptive_p',
   temperature:
     'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
   dynatemp_range:
@@ -89,6 +95,10 @@ export const CONFIG_INFO: Record<string, string> = {
     'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets DRY penalty for the last n tokens.',
   max_tokens: 'The maximum number of token per output.',
   useServerDefaults: 'When enabled, skip sending WebUI defaults (e.g., temperature) and use the server\'s default values instead.',
+  stop_string: 'List of stop string separated by comma. Not applied to chat completions.',
+  prefix_role: 'Whether to add Role at the start of each message. Not applied to chat completions.',
+  adaptive_target: 'Select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)',
+  adaptive_decay: 'Decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)',
   custom: '', // custom json-stringified object
 };
 // config keys having numeric value (i.e. temperature, top_k, top_p, etc)

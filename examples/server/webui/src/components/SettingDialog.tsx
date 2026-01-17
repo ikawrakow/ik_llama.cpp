@@ -1,4 +1,4 @@
-import { useState, useRef} from 'react';
+import { useState, useRef } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
 import StorageUtils from '../utils/storage';
@@ -20,7 +20,10 @@ import toast from 'react-hot-toast'
 
 type SettKey = keyof typeof CONFIG_DEFAULT;
 
+
 const BASIC_KEYS: SettKey[] = [
+  'prefix_role',
+  'stop_string',
   'reasoning_format',
   'temperature',
   'top_k',
@@ -29,28 +32,32 @@ const BASIC_KEYS: SettKey[] = [
   'max_tokens',
 ];
 const SAMPLER_KEYS: SettKey[] = [
-  'dynatemp_range',
-  'dynatemp_exponent',
-  'typical_p',
+  'top_n_sigma',
+  'adaptive_target',
+  'adaptive_decay',
   'xtc_probability',
   'xtc_threshold',
-  'top_n_sigma'
+  'dynatemp_range',
+  'dynatemp_exponent',
+  'typical_p'
 ];
 const PENALTY_KEYS: SettKey[] = [
-  'repeat_last_n',
-  'repeat_penalty',
-  'presence_penalty',
-  'frequency_penalty',
   'dry_multiplier',
   'dry_base',
   'dry_allowed_length',
   'dry_penalty_last_n',
+  'repeat_last_n',
+  'repeat_penalty',
+  'presence_penalty',
+  'frequency_penalty',
+
 ];
 
 enum SettingInputType {
   SHORT_INPUT,
   LONG_INPUT,
   CHECKBOX,
+  DROPDOWN,
   CUSTOM,
 }
 
@@ -59,6 +66,7 @@ interface SettingFieldInput {
   label: string | React.ReactElement;
   help?: string | React.ReactElement;
   key: SettKey;
+  options?:string;
 }
 
 interface SettingFieldCustom {
@@ -265,6 +273,12 @@ const SETTING_SECTIONS = (
         type: SettingInputType.LONG_INPUT,
         label: 'System Message (will be disabled if left empty)',
         key: 'systemMessage',
+      },
+      {
+        type: SettingInputType.DROPDOWN,
+        label: 'Completion Type',
+        key: 'completionType',    
+        options: 'Chat|Text'    
       },
       ...BASIC_KEYS.map(
         (key) =>
@@ -693,7 +707,19 @@ export default function SettingDialog({
                     label={field.label as string}
                   />
                 );
-              } else if (field.type === SettingInputType.CUSTOM) {
+              } else if (field.type === SettingInputType.DROPDOWN) {
+                return (
+                  <SettingsModalDropdown
+                    key={key}
+                    configKey={field.key}
+                    value={localConfig[field.key].toString()}
+                    onChange={onChange(field.key)}
+                    label={field.label as string}
+                    options={field.options?field.options:''}
+                  />
+                );
+              } 
+                else if (field.type === SettingInputType.CUSTOM) {
                 return (
                   <div key={key} className="mb-2">
                     {typeof field.component === 'string'
@@ -820,6 +846,44 @@ function SettingsModalCheckbox({
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="ml-4">{label || configKey}</span>
+    </div>
+  );
+}
+
+function SettingsModalDropdown({
+  configKey,
+  value,
+  onChange,
+  label,
+  options,
+}: {
+  configKey: SettKey;
+  value: string; // This should be one of the option values like "Text" or "Chat"
+  onChange: (value: string) => void;
+  label: string; 
+  options:string; // Format: "Display Label|Text|Chat"
+}) {
+   const parts = options.split('|');  
+  const selectedValue = options.includes(value) ? value : (options[0] || "");
+  
+  return (
+    <div className="flex flex-row items-center mb-2">
+      <div className="flex flex-col w-full">
+        <label className="mb-1 text-sm font-medium text-gray-700">
+          {label || configKey}
+        </label>
+        <select
+          className="select select-bordered w-full max-w-xs"
+          value={selectedValue}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          {parts .map((opt) => (
+            <option key={opt} value={opt}>
+              {opt}
+            </option>
+          ))}
+        </select>
+      </div>
     </div>
   );
 }

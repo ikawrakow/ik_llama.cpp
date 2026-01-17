@@ -95,7 +95,6 @@ export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
         throw new Error('Unknown extra type');
       }
     }
-
     // add user message to the end
     contentArr.push({
       type: 'text',
@@ -107,6 +106,61 @@ export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
       content: contentArr,
     };
   }) as APIMessage[];
+}
+
+export function GetFileContentForTextAPI(msg: APIMessage) {
+      let content=msg.content;
+      if (typeof msg.content !=='string') {
+        let content_list=msg.content as APIMessageContentPart[];
+        let extra_list=content_list.map((extr)=>{
+          if (extr.type==='text') {
+              return extr.text;
+          } else {
+              return '';
+          }       
+        })
+        content = extra_list.join('\n');
+      }
+      return content;
+}
+
+export function normalizeMsgsForTextAPI(messages: Readonly<APIMessage[]>, append: boolean) {
+  let prompt = '';
+  if (append) {
+      let newMessages = messages.map((msg) => {
+      let content= GetFileContentForTextAPI(msg);
+      if (msg.role==='system') {
+        return content+'\n***';
+      }
+      else if (msg.role==='assistant') {
+        return 'Assistant:'+ content;
+      }
+      else if (msg.role==='user') {
+        return 'User:'+ content;
+      }
+      return  msg.role+":"+ content;
+    });
+    prompt = newMessages.join('\n');
+    prompt=prompt+'\nAssistant:';
+  }
+  else {
+    let newMessages = messages.map((msg) => {
+      let content= GetFileContentForTextAPI(msg);
+      if (msg.role==='system') {
+        return content+'\n***';
+      }
+      else if (msg.role==='assistant') {
+        return content;
+      }
+      else if (msg.role==='user') {
+        return content;
+      }
+      return content;
+
+    });
+    prompt = newMessages.join('');
+  }
+  return prompt as string;
 }
 
 /**
