@@ -5385,7 +5385,7 @@ int32_t llama_get_kv_cache_used_cells(const struct llama_context * ctx) {
     return ctx->kv_self.used;
 }
 
-void llama_memory_clear(struct llama_context * ctx) {
+void llama_kv_cache_clear(struct llama_context * ctx) {
     llama_kv_cache_clear(ctx->kv_self);
 }
 
@@ -6039,7 +6039,7 @@ struct llama_data_read {
 
         if (!res) {
             if (seq_id == -1) {
-                llama_memory_clear(ctx);
+                llama_kv_cache_clear(ctx);
             } else {
                 llama_kv_cache_seq_rm(ctx, seq_id, -1, -1);
             }

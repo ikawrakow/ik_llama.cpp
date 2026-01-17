@@ -1138,7 +1138,7 @@ void server_context::kv_cache_clear() {
     LOG_VERBOSE("clearing KV cache", {});
 
     // clear the entire KV cache
-    llama_memory_clear(ctx);
+    llama_kv_cache_clear(ctx);
     clean_kv_cache = false;
 }
 

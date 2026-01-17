@@ -763,7 +763,7 @@ extern "C" {
     LLAMA_API int32_t llama_get_kv_cache_used_cells(const struct llama_context * ctx);
 
     // Clear the KV cache - both cell info is erased and KV data is zeroed
-    LLAMA_API void llama_memory_clear(
+    LLAMA_API void llama_kv_cache_clear(
             struct llama_context * ctx);
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)

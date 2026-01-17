@@ -239,7 +239,7 @@ std::vector<llama_token> llama_speculative_gen_draft(
     result.reserve(params.n_draft);
 
     if (reuse_n == 0) {
-        llama_memory_clear(ctx_dft);
+        llama_kv_cache_clear(ctx_dft);
 
         prompt_dft.clear();
     } else {

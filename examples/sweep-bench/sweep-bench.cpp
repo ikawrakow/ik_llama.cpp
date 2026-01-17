@@ -133,7 +133,7 @@ int main(int argc, char ** argv) {
     }
 
     common_batch_clear(batch);
-    llama_memory_clear(ctx);
+    llama_kv_cache_clear(ctx);
 
     for (unsigned int n_kv = 0; n_kv < n_kv_max; n_kv += params.n_ubatch) {
         // clean up KV cache before generation
