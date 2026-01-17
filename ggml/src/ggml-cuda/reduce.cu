@@ -6,19 +6,20 @@
 //
 
 #include "reduce.cuh"
+#include "binbcast.cuh"
 #include "ggml-common.h"
 
 #include <chrono>
 
 template <typename T, int block_size>
-static __global__ void k_add(int nelem, const T * src, T * dst) {
+static __global__ void k_add(int nelem, const T * __restrict__ src, T * __restrict__ dst) {
     int i = blockIdx.x*block_size + threadIdx.x;
     if (i >= nelem) return;
     dst[i] += src[i];
 }
 
 template <int block_size>
-static __global__ void k_add(int nelem, const block_q8_0 * src, block_q8_0 * dst) {
+static __global__ void k_add(int nelem, const block_q8_0 * __restrict__ src, block_q8_0 * __restrict__ dst) {
     int i = blockIdx.x*block_size + threadIdx.x;
     if (i >= nelem) return;
     int ib = i / QK8_0;
@@ -101,7 +102,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     // It does not work at all if not all GPUs participate in the reduce op, and we
     // get suboptimal prompt processing performance when we have more than 2 GPUs.
     // Hence, if enabled, we use NCCL only for the cases where it works and performs well.
-    if (false && info.have_nccl && dst->type != GGML_TYPE_Q8_0 && nhave == nreduce && (nhave == 2 || dst->ne[1] < 32)) {
+    if (info.have_nccl && dst->type != GGML_TYPE_Q8_0 && nhave == nreduce && (nhave == 2 || dst->ne[1] < 32)) {
         GGML_ASSERT(info.have_nccl);
         GGML_ASSERT(info.device_count == nreduce);
         auto data_type = dst->type == GGML_TYPE_F32 ? ncclFloat : dst->type == GGML_TYPE_BF16 ? ncclBfloat16 : ncclHalf;
@@ -276,6 +277,8 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
                 ggml_cuda_set_device(info.all_ctx[i]->device);
                 CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
+                //ggml_op_add_same_type(ctx, dst->type, this_nelem, info.all_ctx[i]->copy_buffer,
+                //        (const char *)dst->src[i]->data + ichunk*size_per_device, (char *)dst->src[i]->data + ichunk*size_per_device);
                 int num_blocks = (this_nelem + CUDA_REDUCE_BLOCK_SIZE - 1)/CUDA_REDUCE_BLOCK_SIZE;
                 if (dst->type == GGML_TYPE_F16) {
                     k_add<half, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(this_nelem,

@@ -244,7 +244,11 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
             const float xi = (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
             tmp += xi * xi;
         }
-
+    } else if constexpr (std::is_same_v<src_t, nv_bfloat16>) {
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = __bfloat162float(x[row*ncols + col]);
+            tmp += xi * xi;
+        }
     } else {
         for (int col = tid; col < ncols; col += block_size) {
             const float xi = (float)x[row*ncols + col];
@@ -273,6 +277,10 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
         auto xr = x + (row*ncols)/QK8_0;
         for (int col = tid; col < ncols; col += block_size) {
             dst[row*ncols + col] = scale * y[col] * (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
+        }
+    } else if constexpr (std::is_same_v<src_t, nv_bfloat16>) {
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * __bfloat162float(x[row*ncols + col]);
         }
     } else {
         for (int col = tid; col < ncols; col += block_size) {

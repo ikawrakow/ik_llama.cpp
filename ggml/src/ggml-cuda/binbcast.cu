@@ -330,7 +330,92 @@ static __global__ void k_fast_add_2(int64_t ne0, int64_t nelem, const src1_t * x
     z[i] = (dst_t)((float)x[i] + (float)y[i]);
 }
 
+template <int block_size, typename data_t>
+static __global__ void k_add_same(int64_t nelem, const data_t * x, const data_t * y, data_t * z) {
+    int64_t i = block_size*blockIdx.x + threadIdx.x;
+    if (i >= nelem) {
+        return;
+    }
+    z[i] = x[i] + y[i];
+}
+
+template <int block_size>
+static __global__ void k_add_same_q8_0(int nelem, const block_q8_0 * x, const block_q8_0 * y, block_q8_0 * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK8_0;
+    int iq = i % QK8_0;
+    float sum = (float)x[ib].d * x[ib].qs[iq] + (float)y[ib].d * y[ib].qs[iq];
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 127;
+    float id = d > 0 ? 1/d : 0;
+    z[ib].qs[iq] = roundf(sum * id);
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
+template <int block_size>
+static __global__ void k_add_same_q8_0(int nelem, const block_q8_0 * x, const float * y, block_q8_0 * z) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK8_0;
+    int iq = i % QK8_0;
+    float sum = (float)x[ib].d * x[ib].qs[iq] + y[i];
+    float asum = fabsf(sum);
+    float max = warp_reduce_max(asum);
+    float d = max / 127;
+    float id = d > 0 ? 1/d : 0;
+    z[ib].qs[iq] = roundf(sum * id);
+    if (threadIdx.x % WARP_SIZE == 0) {
+        z[ib].d = (half)d;
+    }
+}
+
+//static __global__ void k_add_same_q8_0(const block_q8_0 * x, const block_q8_0 * y, block_q8_0 * z) {
+//    int ib = blockIdx.x;
+//    int iq = threadIdx.x;
+//    float s  = (float)x[ib].d * x[ib].qs[iq] + (float)y[ib].d * y[ib].qs[iq];
+//    float as = fabsf(s);
+//    as = warp_reduce_max(as);
+//    float d = as / 127;
+//    float id = d > 0 ? 1/d : 0;
+//    z[ib].qs[iq] = roundf(s * id);
+//    if (threadIdx.x == 0) {
+//        z[ib].d = (half)d;
+//    }
+//}
+
+void ggml_op_add_same_type(ggml_backend_cuda_context & ctx, enum ggml_type type, size_t nelem,
+        const void * x, const void * y, void * z) {
+    constexpr int kBlockSize = 256;
+    int nblocks = (nelem + kBlockSize - 1)/kBlockSize;
+    if (type == GGML_TYPE_F32) {
+        k_add_same<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                (const float *)x, (const float *)y, (float *)z);
+    } else if (type == GGML_TYPE_F16) {
+        k_add_same<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                (const half *)x, (const half *)y, (half *)z);
+    } else if (type == GGML_TYPE_BF16) {
+        k_add_same<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                (const nv_bfloat16 *)x, (const nv_bfloat16 *)y, (nv_bfloat16 *)z);
+    } else if (type == GGML_TYPE_Q8_0) {
+        k_add_same_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                (const block_q8_0 *)x, (const block_q8_0 *)y, (block_q8_0 *)z);
+    } else {
+        GGML_ABORT("Unsupported add operation");
+    }
+}
+
 void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    if (dst->src[0]->type == dst->src[1]->type && dst->src[0]->type == dst->type &&
+        ggml_is_contiguous(dst->src[0]) && ggml_is_contiguous(dst->src[1]) && ggml_is_contiguous(dst) &&
+        ggml_are_same_shape(dst->src[0], dst->src[1])) {
+        //printf("%s(%s, %s): using fast same\n", __func__, dst->name, ggml_type_name(dst->type));
+        ggml_op_add_same_type(ctx, dst->type, ggml_nelements(dst), dst->src[0]->data, dst->src[1]->data, dst->data);
+        return;
+    }
     if (ggml_nrows(dst->src[1]) == 1 && dst->src[0]->ne[0] == dst->src[1]->ne[0] &&
         dst->type == GGML_TYPE_F32 && dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_F32 &&
         ggml_are_same_shape(dst, dst->src[0]) && ggml_is_contiguous(dst)) {
@@ -361,6 +446,26 @@ void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                 k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
                         (const float *)dst->src[0]->data, (const half *)dst->src[1]->data, (half *)dst->data);
             }
+        } else if (dst->type == GGML_TYPE_BF16) {
+            if (dst->src[0]->type == GGML_TYPE_BF16 && dst->src[1]->type == GGML_TYPE_BF16) {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const nv_bfloat16 *)dst->src[0]->data, (const nv_bfloat16 *)dst->src[1]->data, (nv_bfloat16 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_BF16 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const nv_bfloat16 *)dst->src[0]->data, (const float *)dst->src[1]->data, (nv_bfloat16 *)dst->data);
+            }
+            else if (dst->src[0]->type == GGML_TYPE_F32 && dst->src[1]->type == GGML_TYPE_F32) {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const float *)dst->src[0]->data, (const float *)dst->src[1]->data, (nv_bfloat16 *)dst->data);
+            } else {
+                k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
+                        (const float *)dst->src[0]->data, (const nv_bfloat16 *)dst->src[1]->data, (nv_bfloat16 *)dst->data);
+            }
+        } else if (dst->type == GGML_TYPE_Q8_0) {
+            GGML_ASSERT(dst->src[0]->type == GGML_TYPE_Q8_0 && dst->src[1]->type == GGML_TYPE_F32);
+            k_add_same_q8_0<kBlockSize><<<nblocks, kBlockSize, 0, ctx.stream()>>>(nelem,
+                        (const block_q8_0 *)dst->src[0]->data, (const float *)dst->src[1]->data, (block_q8_0 *)dst->data);
         } else {
             if (dst->src[0]->type == GGML_TYPE_F16 && dst->src[1]->type == GGML_TYPE_F16) {
                 k_fast_add_2<<<nblocks, kBlockSize, 0, ctx.stream()>>>(dst->ne[0], nelem,
