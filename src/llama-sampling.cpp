@@ -1035,44 +1035,61 @@ struct llama_sampler_dry* llama_sampler_init_dry_impl(const struct llama_vocab& 
 
 // adaptive p
 
-llama_token llama_sample_token_adaptive_p_impl(
-              struct llama_sampling * smpl,
-             llama_token_data_array * candidates,
-    struct llama_sampler_adaptive_p * adapt_p_ctx,
-                              float * orig_probs)
+struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(
+       const float target,
+       const float decay,
+    const uint32_t seed)
 {
-    GGML_ASSERT(candidates->size > 0);
-    const int64_t t_start_sample_us = ggml_time_us();
-
-    const size_t count = candidates->size;
-    adapt_p_ctx->probs.resize(count);
-
-    // cumulative distribution
-    const float max_logit = adapt_p_ctx->max_logit;
-    float cum_prob = 0.0f;
-    for (size_t i = 0; i < count; ++i) {
-        cum_prob += expf(candidates->data[i].logit - max_logit);
-        adapt_p_ctx->probs[i] = cum_prob;
-    }
-    adapt_p_ctx->probs.back() += 1.0f;  // safety margin in case rng() ~= rng.max()
-
-    // find token with cum_prob > target_cum_prob
-    const float target_cum_prob = cum_prob * (float)adapt_p_ctx->rng() / (float)adapt_p_ctx->rng.max();
-    auto iter = std::upper_bound(adapt_p_ctx->probs.begin(), adapt_p_ctx->probs.end(), target_cum_prob);
-    GGML_ASSERT(iter != adapt_p_ctx->probs.end());
-    llama_token id = candidates->data[std::distance(adapt_p_ctx->probs.begin(), iter)].id;
-
-    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
-    smpl->n_sample++;
-
-    // update history with original probability of selected token
-    adapt_p_ctx->weighted_sum = adapt_p_ctx->decay * adapt_p_ctx->weighted_sum + orig_probs[id];
-    adapt_p_ctx->total_weight = adapt_p_ctx->decay * adapt_p_ctx->total_weight + 1.0f;
-
-    return id;
+    const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
+    return new llama_sampler_adaptive_p {
+        /* .target          = */ target,
+        /* .decay           = */ clamped_decay,
+        /* .rng             = */ std::mt19937(seed),
+        /* .weighted_sum    = */ target / (1.0f - clamped_decay),
+        /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
+        /* .orig_logit_map  = */ {},
+        /* .cum_orig_prob   = */ 0.0f,
+        /* .max_xform_logit = */ -INFINITY,
+        /* .cum_probs       = */ {},
+    };
 }
 
-void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ctx, llama_token_data_array * candidates)
+void llama_prep_adaptive_p_impl(
+             llama_token_data_array * candidates,
+    struct llama_sampler_adaptive_p * adapt_p_ctx)
+{
+    if (!candidates->sorted) {
+        std::sort(candidates->data, candidates->data + candidates->size,
+            [](const llama_token_data & a, const llama_token_data & b) {
+                return a.logit > b.logit;
+            });
+        candidates->sorted = true;
+    }
+    const float max_logit = candidates->data[0].logit;
+
+    // decide how many tokens to track based on logit delta
+    // i.e. do not track unlikely tokens
+    auto iter = std::lower_bound(
+        candidates->data,
+        candidates->data + candidates->size,
+        max_logit - 16.6f,  // delta
+        [](const llama_token_data & data, const float delta) {
+            return data.logit > delta;
+        });
+    const size_t n_track = std::distance(candidates->data, iter);
+
+    // store orig_prob_map and cum_orig_prob to estimate original probability later
+    float cum_prob = 0.0f;
+    adapt_p_ctx->orig_prob_map.clear();
+    for (size_t i = 0; i < n_track; ++i) {
+        const float prob = expf(candidates->data[i].logit - max_logit);
+        cum_prob += prob;
+        adapt_p_ctx->orig_prob_map[candidates->data[i].id] = prob;
+    }
+    adapt_p_ctx->cum_orig_prob = cum_prob;
+}
+
+void llama_sample_adaptive_p_impl(llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx)
 {
     if (adapt_p_ctx->target < 0.0f) {
         // sampler is disabled
@@ -1082,14 +1099,16 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ct
 
     // incomplete softmax because final division can be fused
     float max_l = candidates->data[0].logit;
-    for (size_t i = 1; i < candidates->size; ++i) {
-        max_l = std::max(max_l, candidates->data[i].logit);
+    if (!candidates->sorted) {
+        for (size_t i = 1; i < candidates->size; ++i) {
+            max_l = std::max(max_l, candidates->data[i].logit);
+        }
     }
     float cum_sum = 0.0f;
     for (size_t i = 0; i < candidates->size; ++i) {
-        const float p = expf(candidates->data[i].logit - max_l);
-        candidates->data[i].p = p;
-        cum_sum += p;
+        const float prob = expf(candidates->data[i].logit - max_l);
+        candidates->data[i].p = prob;
+        cum_sum += prob;
     }
 
     // compute adapted target probability
@@ -1117,26 +1136,51 @@ void llama_sampler_adaptive_p_apply(struct llama_sampler_adaptive_p * adapt_p_ct
         max_logit = std::max(max_logit, logit);
     }
     candidates->sorted = false;
-    adapt_p_ctx->max_logit = max_logit;
+    adapt_p_ctx->max_xform_logit = max_logit;
 }
 
-struct llama_sampler_adaptive_p * llama_sampler_init_adaptive_p_impl(
-       const float target,
-       const float decay,
-    const uint32_t seed)
+llama_token llama_sample_token_adaptive_p_impl(
+              struct llama_sampling * smpl,
+             llama_token_data_array * candidates,
+    struct llama_sampler_adaptive_p * adapt_p_ctx)
 {
-    const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
-    return new llama_sampler_adaptive_p {
-        /* .target          = */ target,
-        /* .decay           = */ clamped_decay,
-        /* .rng             = */ std::mt19937(seed),
-        /* .weighted_sum    = */ target / (1.0f - clamped_decay),
-        /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
-        /* .max_logit       = */ 0.0f,
-        /* .probs           = */ {},
-    };
-}
+    GGML_ASSERT(candidates->size > 0);
+    const int64_t t_start_sample_us = ggml_time_us();
 
+    struct llama_sampler_adaptive_p * ctx = adapt_p_ctx;
+    ctx->cum_probs.resize(candidates->size);
+
+    // compute cumulative probability distribution
+    const float max_logit = ctx->max_xform_logit;
+    float cum_prob = 0.0f;
+    for (size_t i = 0; i < candidates->size; ++i) {
+        cum_prob += expf(candidates->data[i].logit - max_logit);
+        ctx->cum_probs[i] = cum_prob;
+    }
+    ctx->cum_probs.back() += 1.0f;  // safety margin in case rng() ~= rng.max()
+
+    // select first token whose cum_prob > target_cum_prob
+    const float target_cum_prob = cum_prob * (float)ctx->rng() / (float)ctx->rng.max();
+    auto iter = std::upper_bound(ctx->cum_probs.begin(), ctx->cum_probs.end(), target_cum_prob);
+    GGML_ASSERT(iter != ctx->cum_probs.end());
+    const size_t idx = std::distance(ctx->cum_probs.begin(), iter);
+    llama_token id = candidates->data[idx].id;
+
+    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+    smpl->n_sample++;
+
+    float update_prob = candidates->data[idx].p;    // not ideal
+    if (ctx->orig_prob_map.contains(id)) {
+        // selected token id is among tracked ids
+        update_prob = ctx->orig_prob_map[id] / ctx->cum_orig_prob;
+    }
+
+    // update history with original probability of selected token
+    ctx->weighted_sum = ctx->decay * ctx->weighted_sum + update_prob;
+    ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
+
+    return id;
+}
 
 // grammar
 
