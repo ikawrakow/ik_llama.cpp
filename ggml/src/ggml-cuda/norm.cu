@@ -43,10 +43,20 @@ static __global__ void fused_norm_f32(const T * x, const float * c, float * dst,
 
     float2 mean_var = make_float2(0.f, 0.f);
 
-    for (int col = tid; col < ncols; col += block_size) {
-        const float xi = (float)x[row*ncols + col];
-        mean_var.x += xi;
-        mean_var.y += xi * xi;
+    if constexpr (std::is_same_v<T, block_q8_0>) {
+        static_assert(block_size % QK8_0 == 0);
+        auto xr = x + (row*ncols)/QK8_0;
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
+            mean_var.x += xi;
+            mean_var.y += xi * xi;
+        }
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = (float)x[row*ncols + col];
+            mean_var.x += xi;
+            mean_var.y += xi * xi;
+        }
     }
 
     // sum up partial sums
@@ -67,8 +77,16 @@ static __global__ void fused_norm_f32(const T * x, const float * c, float * dst,
     const float var = mean_var.y / ncols - mean * mean;
     const float inv_std = rsqrtf(var + eps);
 
-    for (int col = tid; col < ncols; col += block_size) {
-        dst[row*ncols + col] = (T)(((float)x[row*ncols + col] - mean) * inv_std * c[col]);
+    if constexpr (std::is_same_v<T, block_q8_0>) {
+        static_assert(block_size % QK8_0 == 0);
+        auto xr = x + (row*ncols)/QK8_0;
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = ((float)xr[col/QK8_0].d*xr[col/QK8_0].qs[col%QK8_0] - mean) * inv_std * c[col];
+        }
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = ((float)x[row*ncols + col] - mean) * inv_std * c[col];
+        }
     }
 }
 
@@ -219,9 +237,19 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
 
     float tmp = 0.0f; // partial sum for thread in warp
 
-    for (int col = tid; col < ncols; col += block_size) {
-        const float xi = (float)x[row*ncols + col];
-        tmp += xi * xi;
+    if constexpr (std::is_same_v<src_t, block_q8_0>) {
+        static_assert(block_size % QK8_0 == 0);
+        auto xr = x + (row*ncols)/QK8_0;
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
+            tmp += xi * xi;
+        }
+
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            const float xi = (float)x[row*ncols + col];
+            tmp += xi * xi;
+        }
     }
 
     // sum up partial sums
@@ -241,8 +269,15 @@ static __global__ void fused_rms_norm_f32(const src_t * x, const float * y, floa
     const float mean = tmp / ncols;
     const float scale = rsqrtf(mean + eps);
 
-    for (int col = tid; col < ncols; col += block_size) {
-        dst[row*ncols + col] = scale * y[col] * (float)x[row*ncols + col];
+    if constexpr (std::is_same_v<src_t, block_q8_0>) {
+        auto xr = x + (row*ncols)/QK8_0;
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * (float)xr[col / QK8_0].d * xr[col / QK8_0].qs[col % QK8_0];
+        }
+    } else {
+        for (int col = tid; col < ncols; col += block_size) {
+            dst[row*ncols + col] = scale * y[col] * (float)x[row*ncols + col];
+        }
     }
 }
 
@@ -496,7 +531,8 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
     float * dst_d = (float *)dst->data;
     cudaStream_t stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 ||
+               (ggml_is_contiguous(src0) && src0->type == GGML_TYPE_Q8_0));
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     GGML_ASSERT(src0->ne[0] == src1->ne[0]);
@@ -511,8 +547,12 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
         const int64_t nrows = ggml_nrows(src0);
         if (src0->type == GGML_TYPE_F32) {
             fused_rms_norm_f32_cuda(src0_d, src1_d, dst_d, ne00, nrows, eps, is_norm, stream);
-        } else {
+        } else if (src0->type == GGML_TYPE_F16) {
             fused_rms_norm_f32_cuda((const half *)src0_d, src1_d, dst_d, ne00, nrows, eps, is_norm, stream);
+        } else if (src0->type == GGML_TYPE_Q8_0) {
+            fused_rms_norm_f32_cuda((const block_q8_0 *)src0_d, src1_d, dst_d, ne00, nrows, eps, is_norm, stream);
+        } else {
+            fused_rms_norm_f32_cuda((const nv_bfloat16 *)src0_d, src1_d, dst_d, ne00, nrows, eps, is_norm, stream);
         }
     } else {
         if (is_norm) {
@@ -525,6 +565,8 @@ void ggml_cuda_op_fused_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * 
         auto s03 = src0->nb[3] / ts0;
         if (src0->type == GGML_TYPE_F32) {
             fused_rms_norm_f32_nc_cuda(src0_d, src1_d, dst_d, ne00, src0->ne[1], src0->ne[2], src0->ne[3], s01, s02, s03, eps, stream);
+        } else if (src0->type == GGML_TYPE_BF16) {
+            fused_rms_norm_f32_nc_cuda((const nv_bfloat16 *)src0_d, src1_d, dst_d, ne00, src0->ne[1], src0->ne[2], src0->ne[3], s01, s02, s03, eps, stream);
         } else {
             fused_rms_norm_f32_nc_cuda((const half *)src0_d, src1_d, dst_d, ne00, src0->ne[1], src0->ne[2], src0->ne[3], s01, s02, s03, eps, stream);
         }

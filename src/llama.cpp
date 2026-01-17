@@ -4070,6 +4070,7 @@ struct llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.type_reduce                 =*/ GGML_TYPE_F16,
         /*.logits_all                  =*/ false,
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
@@ -4087,7 +4088,7 @@ struct llama_context_params llama_context_default_params() {
         /*.only_active_experts         =*/ false,
         /*.k_cache_hadamard            =*/ false,
         /*.split_mode_graph_scheduling =*/ false,
-        /*.split_mode_f16              =*/ true,
+        // /*.split_mode_f16              =*/ true,
         /*.scheduler_async             =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
@@ -4382,6 +4383,8 @@ struct llama_context * llama_new_context_with_model(
                  struct llama_model * model,
         struct llama_context_params   params) {
 
+    printf("===================================== %s: %s\n", __func__, ggml_type_name(params.type_reduce));
+
     if (!model) {
         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
         return nullptr;
@@ -4452,12 +4455,13 @@ struct llama_context * llama_new_context_with_model(
     cparams.graph_reuse      = params.graph_reuse;
     cparams.k_cache_hadamard = params.k_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
-    cparams.split_mode_f16   = params.split_mode_f16;
+    //cparams.split_mode_f16   = params.split_mode_f16;
     cparams.scheduler_async  = params.scheduler_async;
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
 
+    cparams.reduce_type      = params.type_reduce;
     cparams.pooling_type     = params.pooling_type;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
@@ -4527,12 +4531,19 @@ struct llama_context * llama_new_context_with_model(
         cparams.mla_attn = 0;
     }
     if (model->arch == LLM_ARCH_OPENAI_MOE && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
-        if (cparams.split_mode_f16) {
+        //if (cparams.split_mode_f16) {
+        //    LLAMA_LOG_WARN("=====================================================================\n");
+        //    LLAMA_LOG_WARN("GPT-OSS with split mode graph requires f32 precision\n");
+        //    LLAMA_LOG_WARN("    => changing cparams.split_mode_f16 to 'false'\n");
+        //    LLAMA_LOG_WARN("=====================================================================\n");
+        //    cparams.split_mode_f16 = false;
+        //}
+        if (cparams.reduce_type == GGML_TYPE_F16) {
             LLAMA_LOG_WARN("=====================================================================\n");
             LLAMA_LOG_WARN("GPT-OSS with split mode graph requires f32 precision\n");
             LLAMA_LOG_WARN("    => changing cparams.split_mode_f16 to 'false'\n");
             LLAMA_LOG_WARN("=====================================================================\n");
-            cparams.split_mode_f16 = false;
+            cparams.reduce_type = GGML_TYPE_F32;
         }
     }
 
@@ -4552,7 +4563,8 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: graph_reuse   = %d\n",     __func__, cparams.graph_reuse);
     LLAMA_LOG_INFO("%s: k_cache_hadam = %d\n",     __func__, cparams.k_cache_hadamard);
     LLAMA_LOG_INFO("%s: split_mode_graph_scheduling = %d\n",   __func__, cparams.split_mode_graph_scheduling);
-    LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
+    //LLAMA_LOG_INFO("%s: split_mode_f16= %d\n",     __func__, cparams.split_mode_f16);
+    LLAMA_LOG_INFO("%s: reduce_type   = %s\n",     __func__, ggml_type_name(cparams.reduce_type));
     LLAMA_LOG_INFO("%s: sched_async   = %d\n",     __func__, cparams.scheduler_async);
     LLAMA_LOG_INFO("%s: ser           = %d, %g\n", __func__, cparams.min_experts, cparams.thresh_experts);
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n",   __func__, cparams.rope_freq_base);
