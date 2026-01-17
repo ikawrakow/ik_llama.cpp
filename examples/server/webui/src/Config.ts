@@ -58,7 +58,7 @@ export const CONFIG_INFO: Record<string, string> = {
   pasteLongTextToFileLen:
     'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
   samplers:
-    'The order at which samplers are applied, in simplified way. Default is "dkypmxnt": dry->top_k->typ_p->top_p->min_p->xtc->top_sigma->temperature',
+    'The order at which samplers are applied, in simplified way. Default is "kdypmxntw": top_k->dry->typ_p->top_p->min_p->xtc->top_sigma->temperature->adaptive_p',
   temperature:
     'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
   dynatemp_range:
