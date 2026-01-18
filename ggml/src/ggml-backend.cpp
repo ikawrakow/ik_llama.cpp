@@ -2244,7 +2244,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
                 }
 
-                if (split->graph.nodes[0]->op == GGML_OP_REDUCE) {
+                if (split->graph.nodes[0]->op == GGML_OP_REDUCE && i < sched->n_splits - 1) {
                     last_reduce = split_backend_id;
                     if (ith == split_backend_id) {
                         auto node = split->graph.nodes[0];
@@ -2318,7 +2318,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
                 }
 
-                if (split->graph.nodes[0]->op == GGML_OP_REDUCE) {
+                if (split->graph.nodes[0]->op == GGML_OP_REDUCE && i < sched->n_splits - 1) {
                     last_reduce = split_backend_id;
                     barrier.arrive_and_wait();
                     if (ith == split_backend_id) {
