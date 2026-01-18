@@ -12,6 +12,7 @@ import StorageUtils from './storage';
 import {
   filterThoughtFromMsgs,
   normalizeMsgsForAPI,
+  normalizeMsgsForTextAPI,
   getSSEStreamAsync,
   getServerProps,
 } from './misc';
@@ -231,14 +232,24 @@ export const AppContextProvider = ({
           : [{ role: 'system', content: config.systemMessage } as APIMessage]),
         ...normalizeMsgsForAPI(currMessages),
       ];
+      let prompt='';
       if (config.excludeThoughtOnReq) {
         messages = filterThoughtFromMsgs(messages);
       }
+      let isText = config.completionType==='Text';
+      if (isText) {
+        prompt = normalizeMsgsForTextAPI(messages, config.prefix_role==='true');
+      } 
       if (isDev) console.log({ messages });
 
       // prepare params
+      const jsonString = `"${config.stop_string}"`;
+      let stop_list=JSON.parse(jsonString).split(',');
+      if (stop_list.length===1&&stop_list[0]=='') {
+        stop_list='\n\n,\nUser:'.split(',');
+      }
       const params = {
-        messages,
+        ...(isText?{prompt:prompt}:{messages:messages}),
         stream: true,
         cache_prompt: true,
         reasoning_format: config.reasoning_format===''?'auto':config.reasoning_format,
@@ -257,7 +268,10 @@ export const AppContextProvider = ({
         dry_allowed_length: config.dry_allowed_length,
         dry_penalty_last_n: config.dry_penalty_last_n,
         max_tokens: config.max_tokens,
+        adaptive_target:config.adaptive_target,
+        adaptive_decay: config.adaptive_decay,
         timings_per_token: !!config.showTokensPerSecond,
+        ...(isText?{stop:stop_list}:{}),
 	      ...(config.useServerDefaults ? {} :{
 	          temperature: config.temperature,
 	          top_k: config.top_k,
@@ -269,7 +283,11 @@ export const AppContextProvider = ({
       };
 
       // send request
-      const fetchResponse = await fetch(`${BASE_URL}/v1/chat/completions`, {
+      let url = `${BASE_URL}/v1/chat/completions`;
+      if (isText) {
+        url = `${BASE_URL}/v1/completions`;
+      }
+      const fetchResponse = await fetch(`${url}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -291,23 +309,29 @@ export const AppContextProvider = ({
         if (chunk.error) {
           throw new Error(chunk.error?.message || 'Unknown error');
         }
-        
-        const reasoningContent = chunk.choices?.[0]?.delta?.reasoning_content;
-        if (reasoningContent) {
-          if (pendingMsg.content === null || pendingMsg.content === '') {
-            thinkingTagOpen = true;
-            pendingMsg = {
-              ...pendingMsg,
-              content: '<think>' + reasoningContent,
-            };
-          } else {
-            pendingMsg = {
-              ...pendingMsg,
-              content: pendingMsg.content + reasoningContent,
-            };
+        let addedContent = '';
+        if (!isText) {
+          const reasoningContent = chunk.choices?.[0]?.delta?.reasoning_content;
+          if (reasoningContent) {
+            if (pendingMsg.content === null || pendingMsg.content === '') {
+              thinkingTagOpen = true;
+              pendingMsg = {
+                ...pendingMsg,
+                content: '<think>' + reasoningContent,
+              };
+            } else {
+              pendingMsg = {
+                ...pendingMsg,
+                content: pendingMsg.content + reasoningContent,
+              };
+            }
           }
+          addedContent = chunk.choices?.[0]?.delta?.content;
+         }
+        else { 
+          addedContent=chunk.choices?.[0]?.text;
         }
-        const addedContent = chunk.choices?.[0]?.delta?.content;
+        
         let lastContent = pendingMsg.content || '';
         if (addedContent) {
             if (thinkingTagOpen) {

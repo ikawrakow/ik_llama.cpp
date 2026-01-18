@@ -396,7 +396,7 @@ static void sampler_queue(
     const float         top_n_sigma = params.top_n_sigma;
 
     const std::vector<llama_sampler_type> & samplers_sequence = params.samplers_sequence;
-
+    bool use_adaptive_p = false; // see below
     for (auto sampler_type : samplers_sequence) {
         switch (sampler_type) {
             case llama_sampler_type::DRY        : llama_sample_dry      (ctx_main, ctx_sampling->smpl, &cur_p); break;
@@ -416,9 +416,14 @@ static void sampler_queue(
                     llama_sample_temp(ctx_main, &cur_p, temp);
                 }
                 break;
-            case llama_sampler_type::ADAPTIVE_P: llama_sample_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx); break;
+            case llama_sampler_type::ADAPTIVE_P:  use_adaptive_p = true; break;
             default : break;
         }
+        
+    }
+    if (use_adaptive_p) {
+        // adaptive p should be put to the last, so we ignore the order in the sampler
+        llama_sample_adaptive_p(ctx_main, ctx_sampling->adapt_p_ctx, &cur_p);
     }
 }
 
@@ -464,7 +469,7 @@ static llama_token llama_sampling_sample_impl(
         } else if (mirostat == 2) {
             llama_sample_temp(ctx_main, &cur_p, temp);
             id = llama_sample_token_mirostat_v2(ctx_main, &cur_p, mirostat_tau, mirostat_eta, &ctx_sampling->mirostat_mu);
-        } else if (adaptive_target >= 0.0f) {
+        } else if (adaptive_target >= 0.0f && ctx_sampling->adapt_p_ctx!=nullptr) {
             // adaptive p sampling
             llama_prep_adaptive_p(&cur_p, ctx_sampling->adapt_p_ctx);
             sampler_queue(ctx_main, params, ctx_sampling, cur_p, std::max(1, params.min_keep));
