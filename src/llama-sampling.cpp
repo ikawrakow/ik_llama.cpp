@@ -1083,8 +1083,7 @@ llama_token llama_sample_token_adaptive_p_impl(
     return id;
 }
 
-void llama_sample_adaptive_p_impl(llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx)
-{
+void llama_sample_adaptive_p_impl(llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx) {
     if (adapt_p_ctx->target < 0.0f) {
         // sampler is disabled
         llama_sample_softmax_impl(nullptr, candidates);
@@ -1205,8 +1204,7 @@ void llama_prep_adaptive_p_impl(
 struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(
        const float target,
        const float decay,
-    const uint32_t seed)
-{
+    const uint32_t seed) {
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
     return new llama_sampler_adaptive_p {
         /* .target          = */ target,
