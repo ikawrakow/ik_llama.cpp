@@ -1459,11 +1459,18 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         return true;
     }
     if (arg == "-smf16" || arg == "--split-mode-f16") {
-        params.split_mode_f16 = true;
+        params.reduce_type = "f16";
+        //params.split_mode_f16 = true;
         return true;
     }
     if (arg == "-smf32" || arg == "--split-mode-f32") {
-        params.split_mode_f16 = false;
+        params.reduce_type = "f32";
+        //params.split_mode_f16 = false;
+        return true;
+    }
+    if (arg == "-grt" || arg == "--graph-reduce-type") {
+        CHECK_ARG
+        params.reduce_type = argv[i];
         return true;
     }
     if (arg == "--numa") {
@@ -2154,8 +2161,9 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",         "-mqkv,  --merge-qkv,",            "merge Q,K,V (default: %d)", params.merge_qkv});
     options.push_back({ "*",         "-muge,  --merge-up-gate-experts,","merge ffn_up/gate_exps (default: %d)", params.merge_up_gate_exps});
     options.push_back({ "*",         "-khad,  --k-cache-hadamard,",     "Use Hadamard transform for K-cache (default: %d)", params.k_cache_hadamard});
-    options.push_back({ "*",         "-smf16, --split-mode-f16,",       "Use f16 for data exchange between GPUs (default: %d)", params.split_mode_f16});
-    options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", !params.split_mode_f16});
+    options.push_back({ "*",         "-smf16, --split-mode-f16,",       "Use f16 for data exchange between GPUs (default: %d)", true});
+    options.push_back({ "*",         "-smf32, --split-mode-f32,",       "Use f32 for data exchange between GPUs (default: %d)", false});
+    options.push_back({ "*",         "-grt, --graph-reduce-type",       "Type for data exchange between GPUs (default: %s)", "f32"});
     options.push_back({ "*",         "-smgs, --split-mode-graph-scheduling,", "Force Split Mode Graph Scheduling (default: %d)", params.split_mode_graph_scheduling});
     options.push_back({ "*",         "-sas,  ==scheduler_async,",       "Async evaluation of compute graphs: %d)", params.scheduler_async});
     options.push_back({ "*",         "-vq, --validate-quants",          "validate quantized data while loading the model (default: %d)", params.validate_quants});
@@ -3148,6 +3156,22 @@ static ggml_type kv_cache_type_from_str(const std::string & s) {
     throw std::runtime_error("Invalid cache type: " + s);
 }
 
+static ggml_type ggml_type_from_str(const std::string & s) {
+    if (s == "f32") {
+        return GGML_TYPE_F32;
+    }
+    if (s == "f16") {
+        return GGML_TYPE_F16;
+    }
+    if (s == "bf16") {
+        return GGML_TYPE_BF16;
+    }
+    if (s == "q8_0") {
+        return GGML_TYPE_Q8_0;
+    }
+    throw std::runtime_error("Invalid graph reduce type: " + s);
+}
+
 struct llama_context_params llama_context_params_from_gpt_params(const gpt_params & params) {
     auto cparams = llama_context_default_params();
     int n_batch = params.n_batch;
@@ -3194,7 +3218,7 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.graph_reuse       = params.graph_reuse;
     cparams.k_cache_hadamard  = params.k_cache_hadamard;
     cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
-    cparams.split_mode_f16    = params.split_mode_f16;
+    //cparams.split_mode_f16    = params.split_mode_f16;
     cparams.scheduler_async   = params.scheduler_async;
     cparams.min_experts       = params.min_experts;
     cparams.thresh_experts    = params.thresh_experts;
@@ -3203,6 +3227,7 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
+    cparams.type_reduce = ggml_type_from_str(params.reduce_type);
 
     if (!params.offload_policy.empty()) cparams.offload_policy = (void *)&params.offload_policy;
     if (!params.cuda_params.empty()) cparams.cuda_params = (void *)params.cuda_params.data();
@@ -4180,7 +4205,8 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "graph_reuse: %s # default: false\n", params.graph_reuse ? "true" : "false");
     fprintf(stream, "k_cache_hadamard: %s # default: false\n", params.k_cache_hadamard ? "true" : "false");
     fprintf(stream, "split_mode_graph_scheduling: %s # default: false\n", params.split_mode_graph_scheduling ? "true" : "false");
-    fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
+    //fprintf(stream, "split_mode_f16: %s # default: true\n", params.split_mode_f16 ? "true" : "false");
+    fprintf(stream, "reduce_type: %s # default f16\n", params.reduce_type.c_str());
     fprintf(stream, "scheduler_async: %s # default: false\n", params.scheduler_async ? "true" : "false");
     fprintf(stream, "ser: %d,%g # defaulr: -1,0\n", params.min_experts, params.thresh_experts);
     fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);

@@ -290,13 +290,15 @@ struct gpt_params {
     bool merge_up_gate_exps= false; // if true, merge ffn_up_exps and ffn_gate_exps into a single, contiguous tensor
     bool k_cache_hadamard  = false; // if true, use Hadamard transform for the K-cache (only makes sense with quantized cache)
     bool split_mode_graph_scheduling = false; // if true, force split mode graph scheduling
-    bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
+    //bool split_mode_f16    = true;  // if true, intermediate results will be cast to f16 before copying to other GPUs to perform reduce ops
     bool scheduler_async   = false; // if true, in split mode graph the scheduler will use multiple threads to evaluate the graph
 
     std::string cache_type_k = "f16"; // KV cache data type for the K
     std::string cache_type_v = "f16"; // KV cache data type for the V
     std::string cache_type_k_draft = ""; // KV cache data type for K for the draft model
     std::string cache_type_v_draft = ""; // KV cache data type for V for the draft model
+
+    std::string reduce_type = "f16";
 
     // multimodal models (see examples/mtmd)
     model_paths mmproj;

@@ -633,6 +633,27 @@ static ggml_tensor * get_input_tensor_sm_graph(ggml_tensor * input, int id) {
     return cur;
 }
 
+static inline ggml_tensor * do_split_norm(ggml_context * ctx, ggml_tensor * cur, ggml_tensor * the_norm, const llama_hparams & hparams,
+        const llm_build_cb & cb, int id, int il_cb, bool is_norm) {
+    if (the_norm && the_norm->extra) {
+        auto norm = (ggml_split_tensor_t *)the_norm->extra;
+        GGML_ASSERT(norm->splits[id]);
+        //if (cur->type != GGML_TYPE_F16 && cur->type != GGML_TYPE_F32) {
+        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+        //}
+        if (is_norm) {
+            cur = ggml_fused_norm(ctx, cur, norm->splits[id], hparams.f_norm_eps);
+        } else {
+            cur = llm_build_context::llm_build_norm(ctx, cur, hparams, norm->splits[id], NULL, LLM_NORM_RMS, cb, il_cb);
+        }
+        cb(cur, "inp_normed", il_cb);
+    }
+    if (cur->type != GGML_TYPE_F32) {
+        cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+    }
+    return cur;
+}
+
 ggml_tensor * llm_build_context::llm_build_ffn(
         ggml_context * ctx,
        llama_context & lctx,
@@ -673,19 +694,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
             GGML_ASSERT((!split_u && !split_g && !split_d) || (split_u && split_g && split_d));
             if (!split_u) continue;
             auto cur = get_input_tensor_sm_graph(input, id);
-            if (ffn_norm && ffn_norm->extra) {
-                auto norm = (ggml_split_tensor_t *)ffn_norm->extra;
-                GGML_ASSERT(norm->splits[id]);
-                if (is_norm) {
-                    cur = ggml_fused_norm(ctx, cur, norm->splits[id], lctx.model.hparams.f_norm_eps);
-                } else {
-                    cur = llm_build_norm(ctx, cur, lctx.model.hparams, norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
-                }
-                cb(cur, "ffn_inp_normed", il_cb);
-            }
-            else if (cur->type != GGML_TYPE_F32) {
-                cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-            }
+            cur = do_split_norm(ctx, cur, ffn_norm, lctx.model.hparams, cb, id, il_cb, is_norm);
             cur = ggml_fused_up_gate(ctx, split_u, split_g, cur, unary_op);
             cb(cur, "ffn_up_gate", il_cb);
             cur = llm_build_lora_mm(lctx, ctx, split_d, cur);
@@ -694,8 +703,8 @@ ggml_tensor * llm_build_context::llm_build_ffn(
                 // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
                 ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
             }
-            if (cur->ne[1] > 32 && lctx.cparams.split_mode_f16) {
-                cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
+            if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+                cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
             }
             if (add_extra && add_extra->op == GGML_OP_REDUCE && add_extra->op_params[3] == 1) {
                 // When the reduce op is turned off via op_params[3] == 1, we need to add each src
@@ -1205,8 +1214,8 @@ llm_expert_gating_func_type   gating_op,
                             split_down_shexp->splits[id], split_down_b_shexp ? split_down_b_shexp->splits[id] : nullptr, nullptr,
                             nullptr, type_op_shexp, LLM_FFN_PAR, cb, il);
                     cb(shared_out, "ffn_shexp_out", il_cb);
-                    if (shared_out->ne[1] > 32 && lctx.cparams.split_mode_f16) {
-                        shared_out = ggml_cast(ctx, shared_out, GGML_TYPE_F16);
+                    if (shared_out->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+                        shared_out = ggml_cast(ctx, shared_out, lctx.cparams.reduce_type);
                     }
                     results.push_back(shared_out);
                 }
@@ -1222,8 +1231,8 @@ llm_expert_gating_func_type   gating_op,
                         cb(cur, "ffn_shared_combined", il);
                     }
                 }
-                if (routed_out->ne[1] > 32 && lctx.cparams.split_mode_f16) {
-                    auto routed_out_f16 = ggml_cast(ctx, routed_out, GGML_TYPE_F16);
+                if (routed_out->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+                    auto routed_out_f16 = ggml_cast(ctx, routed_out, lctx.cparams.reduce_type);
                     cur = ggml_add(ctx, routed_out_f16, cur);
                 } else {
                     cur = ggml_add(ctx, routed_out, cur);
@@ -1269,15 +1278,16 @@ llm_expert_gating_func_type   gating_op,
         if (!split_up_exps->splits[id]) continue;
         int il_cb = 1000*(id + 1) + il;
         auto cur = get_input_tensor_sm_graph(input, id);
-        if (ffn_norm) {
-            auto split_ffn_norm = (ggml_split_tensor_t *)ffn_norm->extra;
-            GGML_ASSERT(split_ffn_norm && split_ffn_norm->n_device == split_up_exps->n_device);
-            cur = llm_build_norm(ctx, cur, lctx.model.hparams, split_ffn_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il);
-            cb(cur, "ffn_inp_normed", il_cb);
-        }
-        if (cur->type != GGML_TYPE_F32) {
-            cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
-        }
+        cur = do_split_norm(ctx, cur, ffn_norm, lctx.model.hparams, cb, id, il_cb, false);
+        //if (ffn_norm) {
+        //    auto split_ffn_norm = (ggml_split_tensor_t *)ffn_norm->extra;
+        //    GGML_ASSERT(split_ffn_norm && split_ffn_norm->n_device == split_up_exps->n_device);
+        //    cur = llm_build_norm(ctx, cur, lctx.model.hparams, split_ffn_norm->splits[id], nullptr, LLM_NORM_RMS, cb, il);
+        //    cb(cur, "ffn_inp_normed", il_cb);
+        //}
+        //if (cur->type != GGML_TYPE_F32) {
+        //    cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
+        //}
         GGML_ASSERT(!split_gate_inp_b  || split_gate_inp_b->splits[id]);
         GGML_ASSERT(!split_exps_down_b || split_exps_down_b->splits[id]);
         GGML_ASSERT(!split_exps_gate_b || split_exps_gate_b->splits[id]);
@@ -1309,8 +1319,8 @@ llm_expert_gating_func_type   gating_op,
         } else {
             cur = routed_out;
         }
-        if (cur->ne[1] > 32 && lctx.cparams.split_mode_f16) {
-            cur = ggml_cast(ctx, cur, GGML_TYPE_F16);
+        if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+            cur = ggml_cast(ctx, cur, lctx.cparams.reduce_type);
             cb(cur, "ffn_out_f16", il_cb);
         }
         ggml_build_forward_expand(graph, cur);
@@ -9180,7 +9190,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
     if (!model.layers[il].wqkv && !model.layers[il].wqk && cparams.flash_attn &&
          model.layers[il].wq->extra && model.layers[il].wk->extra && model.layers[il].wv->extra && model.layers[il].wo->extra) {
         if (kv_self.k_l[il]->extra && kv_self.v_l[il]->extra) {
-            ggml_split_tensor_t * attn_norm = the_attn_norm ? (ggml_split_tensor_t *)the_attn_norm->extra : nullptr;
+            //ggml_split_tensor_t * attn_norm = the_attn_norm ? (ggml_split_tensor_t *)the_attn_norm->extra : nullptr;
             auto wq = (ggml_split_tensor_t *)model.layers[il].wq->extra;
             auto wk = (ggml_split_tensor_t *)model.layers[il].wk->extra;
             auto wv = (ggml_split_tensor_t *)model.layers[il].wv->extra;
@@ -9221,16 +9231,17 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         (split_wq && split_wk && split_wv && split_wo && split_kl && split_vl));
                 if (!split_wq) continue;
                 auto cur = get_input_tensor_sm_graph(input, id);
-                if (attn_norm) {
-                    if (is_norm) {
-                        cur = ggml_fused_norm(ctx0, cur, attn_norm->splits[id], lctx.model.hparams.f_norm_eps);
-                    } else {
-                        cur = llm_build_norm(ctx0, cur, lctx.model.hparams, attn_norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
-                    }
-                }
-                if (cur->type != GGML_TYPE_F32) {
-                    cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
-                }
+                cur = do_split_norm(ctx0, cur, the_attn_norm, lctx.model.hparams, cb, id, il_cb, is_norm);
+                //if (attn_norm) {
+                //    if (is_norm) {
+                //        cur = ggml_fused_norm(ctx0, cur, attn_norm->splits[id], lctx.model.hparams.f_norm_eps);
+                //    } else {
+                //        cur = llm_build_norm(ctx0, cur, lctx.model.hparams, attn_norm->splits[id], NULL, LLM_NORM_RMS, cb, il);
+                //    }
+                //}
+                //if (cur->type != GGML_TYPE_F32) {
+                //    cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
+                //}
                 auto the_q_norm = model.layers[il].attn_q_norm ? model.layers[il].attn_q_norm->extra ?
                     ((ggml_split_tensor_t *)model.layers[il].attn_q_norm->extra)->splits[id] : model.layers[il].attn_q_norm : nullptr;
                 auto the_k_norm = model.layers[il].attn_k_norm ? model.layers[il].attn_k_norm->extra ?
@@ -9368,8 +9379,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     cb(cur, "kqv_wo_biased", il_cb);
                     output_bias_added = true;
                 }
-                if (cur->ne[1] > 32 && lctx.cparams.split_mode_f16) {
-                    cur = ggml_cast(ctx0, cur, GGML_TYPE_F16);
+                if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
+                    cur = ggml_cast(ctx0, cur, lctx.cparams.reduce_type);
                 }
                 ggml_build_forward_expand(gf, cur);
                 attn[id] = cur;

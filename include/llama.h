@@ -426,6 +426,7 @@ extern "C" {
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
+        enum ggml_type type_reduce; // data type for reduce operations
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool logits_all;  // the llama_decode() call computes all logits, not just the last one (DEPRECATED - set llama_batch.logits instead)
@@ -445,7 +446,7 @@ extern "C" {
         bool only_active_experts;
         bool k_cache_hadamard;  // if true, apply Hadamard transfrom to K-cache
         bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
-        bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
+        //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
 
         // Abort callback

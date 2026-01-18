@@ -6,14 +6,33 @@
 //
 
 #include "reduce.cuh"
+#include "binbcast.cuh"
+#include "ggml-common.h"
 
 #include <chrono>
 
 template <typename T, int block_size>
-static __global__ void k_add(int nelem, const T * src, T * dst) {
+static __global__ void k_add(int nelem, const T * __restrict__ src, T * __restrict__ dst) {
     int i = blockIdx.x*block_size + threadIdx.x;
     if (i >= nelem) return;
     dst[i] += src[i];
+}
+
+template <int block_size>
+static __global__ void k_add(int nelem, const block_q8_0 * __restrict__ src, block_q8_0 * __restrict__ dst) {
+    int i = blockIdx.x*block_size + threadIdx.x;
+    if (i >= nelem) return;
+    int ib = i / QK8_0;
+    int iq = i % QK8_0;
+    float x = (float)src[ib].d * src[ib].qs[iq] + (float)dst[ib].d * dst[ib].qs[iq];
+    float ax = fabsf(x);
+    float max = warp_reduce_max(ax);
+    float d = max / 127;
+    float id = d > 0 ? 1/d : 0;
+    dst[ib].qs[iq] = roundf(x * id);
+    if (threadIdx.x % WARP_SIZE == 0) {
+        dst[ib].d = (half)d;
+    }
 }
 
 template <typename T, int block_size>
@@ -68,7 +87,8 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     GGML_ASSERT(op == GGML_OP_ADD);
     int nreduce = dst->op_params[1];
     int nhave   = dst->op_params[2];
-    GGML_ASSERT(dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32 ||
+                dst->type == GGML_TYPE_Q8_0 || dst->type == GGML_TYPE_BF16);
     GGML_ASSERT(ggml_is_contiguous(dst));
     GGML_ASSERT(nhave >=2 && nhave <= nreduce);
     if (dst->op_params[3] == 1) {
@@ -82,10 +102,10 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     // It does not work at all if not all GPUs participate in the reduce op, and we
     // get suboptimal prompt processing performance when we have more than 2 GPUs.
     // Hence, if enabled, we use NCCL only for the cases where it works and performs well.
-    if (info.have_nccl && nhave == nreduce && (nhave == 2 || dst->ne[1] < 32)) {
+    if (info.have_nccl && dst->type != GGML_TYPE_Q8_0 && nhave == nreduce && (nhave == 2 || dst->ne[1] < 32)) {
         GGML_ASSERT(info.have_nccl);
         GGML_ASSERT(info.device_count == nreduce);
-        auto data_type = dst->type == GGML_TYPE_F32 ? ncclFloat : ncclHalf;
+        auto data_type = dst->type == GGML_TYPE_F32 ? ncclFloat : dst->type == GGML_TYPE_BF16 ? ncclBfloat16 : ncclHalf;
         ncclGroupStart();
         for (int i = 0; i < nreduce; ++i) {
             ggml_cuda_set_device(i);
@@ -198,13 +218,25 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     //
     if (dst->ne[1] >= 32) {
         auto nelem = ggml_nelements(dst);
-        auto elem_size = ggml_element_size(dst);
-        auto nelem_per_device = (nelem + nhave - 1)/nhave;
-        auto required_size = nelem_per_device*elem_size;
+        auto tt = ggml_internal_get_type_traits(dst->type);
+        GGML_ASSERT(nelem % tt.blck_size == 0);
+        auto nblocks = nelem / tt.blck_size;
+        auto nblocks_per_device = (nblocks + nhave - 1)/nhave;
+        auto nelem_per_device = nblocks_per_device * tt.blck_size;
+        auto size_per_device  = nblocks_per_device * tt.type_size;
+        //size_t nelem_per_device, required_size;
+        //if (dst->type == GGML_TYPE_Q8_0) {
+        //    GGML_ASSERT(nelem % QK8_0 == 0);
+        //    nelem_per_device = QK8_0*((nelem/QK8_0 + nhave - 1)/nhave);
+        //    required_size nelem_per_device/QK8_0 * sizeof(ggml_block_q8_0);
+        //}
+        //auto elem_size = ggml_element_size(dst);
+        //auto nelem_per_device = (nelem + nhave - 1)/nhave;
+        //auto required_size = nelem_per_device*elem_size;
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             auto this_ctx = info.all_ctx[i];
-            if (!this_ctx->copy_event || !this_ctx->compute_event || required_size > this_ctx->copy_size) {
+            if (!this_ctx->copy_event || !this_ctx->compute_event || size_per_device > this_ctx->copy_size) {
                 ggml_cuda_set_device(this_ctx->device);
                 if (!this_ctx->copy_event) {
                     CUDA_CHECK(cudaEventCreateWithFlags(&this_ctx->copy_event, cudaEventDisableTiming));
@@ -212,12 +244,12 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 if (!this_ctx->compute_event) {
                     CUDA_CHECK(cudaEventCreateWithFlags(&this_ctx->compute_event, cudaEventDisableTiming));
                 }
-                if (required_size > this_ctx->copy_size) {
+                if (size_per_device > this_ctx->copy_size) {
                     if (this_ctx->copy_buffer) {
                         CUDA_CHECK(cudaFree(this_ctx->copy_buffer));
                     }
-                    CUDA_CHECK(ggml_cuda_device_malloc(&this_ctx->copy_buffer, required_size, this_ctx->device));
-                    this_ctx->copy_size = required_size;
+                    CUDA_CHECK(ggml_cuda_device_malloc(&this_ctx->copy_buffer, size_per_device, this_ctx->device));
+                    this_ctx->copy_size = size_per_device;
                 }
             }
         }
@@ -227,13 +259,14 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 int i = idx[ii];
                 int peer = idx[(ii+1)%nhave];
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
+                auto this_size  = (this_nelem / tt.blck_size) * tt.type_size;
                 ggml_cuda_set_device(info.all_ctx[peer]->device);
                 if (stage > 0) {
                     CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[peer]->stream(), info.all_ctx[i]->compute_event, 0));
                 }
                 CUDA_CHECK(cudaMemcpyPeerAsync(info.all_ctx[i]->copy_buffer, info.all_ctx[i]->device,
-                            (const char *)dst->src[peer]->data + ichunk*nelem_per_device*elem_size, info.all_ctx[peer]->device,
-                            this_nelem*elem_size, info.all_ctx[peer]->stream()));
+                            (const char *)dst->src[peer]->data + ichunk*size_per_device, info.all_ctx[peer]->device,
+                            this_size, info.all_ctx[peer]->stream()));
                 CUDA_CHECK(cudaEventRecord(info.all_ctx[peer]->copy_event, info.all_ctx[peer]->stream()));
                 ichunk = (ichunk + 1)%nhave;
             }
@@ -244,10 +277,19 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
                 ggml_cuda_set_device(info.all_ctx[i]->device);
                 CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
+                //ggml_op_add_same_type(ctx, dst->type, this_nelem, info.all_ctx[i]->copy_buffer,
+                //        (const char *)dst->src[i]->data + ichunk*size_per_device, (char *)dst->src[i]->data + ichunk*size_per_device);
                 int num_blocks = (this_nelem + CUDA_REDUCE_BLOCK_SIZE - 1)/CUDA_REDUCE_BLOCK_SIZE;
                 if (dst->type == GGML_TYPE_F16) {
                     k_add<half, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(this_nelem,
                             (const half *)info.all_ctx[i]->copy_buffer, (half *)dst->src[i]->data + ichunk*nelem_per_device);
+                } else if (dst->type == GGML_TYPE_Q8_0) {
+                    k_add<CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(this_nelem,
+                            (const block_q8_0 *)info.all_ctx[i]->copy_buffer, (block_q8_0 *)dst->src[i]->data + ichunk*nelem_per_device/tt.blck_size);
+                } else if (dst->type == GGML_TYPE_BF16) {
+                    k_add<nv_bfloat16, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(
+                            this_nelem, (const nv_bfloat16 *)info.all_ctx[i]->copy_buffer,
+                            (nv_bfloat16 *)dst->src[i]->data + ichunk*nelem_per_device);
                 } else {
                     k_add<float, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(this_nelem,
                             (const float *)info.all_ctx[i]->copy_buffer, (float *)dst->src[i]->data + ichunk*nelem_per_device);
@@ -262,13 +304,14 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 int i = idx[ii];
                 int peer = idx[(ii+1)%nhave];
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
+                auto this_size  = (this_nelem / tt.blck_size) * tt.type_size;
                 ggml_cuda_set_device(info.all_ctx[peer]->device);
                 if (stage == 0) {
                     CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[peer]->stream(), info.all_ctx[i]->compute_event, 0));
                 }
-                CUDA_CHECK(cudaMemcpyPeerAsync((char *)dst->src[i]->data + ichunk*nelem_per_device*elem_size, info.all_ctx[i]->device,
-                            (const char *)dst->src[peer]->data + ichunk*nelem_per_device*elem_size, info.all_ctx[peer]->device,
-                            this_nelem*elem_size, info.all_ctx[peer]->stream()));
+                CUDA_CHECK(cudaMemcpyPeerAsync((char *)dst->src[i]->data + ichunk*size_per_device, info.all_ctx[i]->device,
+                            (const char *)dst->src[peer]->data + ichunk*size_per_device, info.all_ctx[peer]->device,
+                            this_size, info.all_ctx[peer]->stream()));
                 CUDA_CHECK(cudaEventRecord(info.all_ctx[peer]->copy_event, info.all_ctx[peer]->stream()));
                 //ggml_cuda_set_device(info.all_ctx[i]->device);
                 //CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
@@ -351,6 +394,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         return;
     }
     if (dst->ne[1] < 32 && ctx.p2p_enabled) {
+        GGML_ASSERT(dst->type != GGML_TYPE_Q8_0);
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             GGML_ASSERT(dst->src[i]->type == dst->type);
@@ -464,6 +508,12 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), info.all_ctx[i]->copy_event, 0));
         if (dst->type == GGML_TYPE_F16) {
             k_add<half, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, ctx.stream()>>>(nelem, (const half *)ptr, (half *)dst->data);
+        } else if (dst->type == GGML_TYPE_BF16) {
+            k_add<nv_bfloat16, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, ctx.stream()>>>(nelem,
+                    (const nv_bfloat16*)ptr, (nv_bfloat16 *)dst->data);
+        } else if (dst->type == GGML_TYPE_Q8_0) {
+            k_add<CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, ctx.stream()>>>(nelem, (const block_q8_0 *)ptr,
+                    (block_q8_0 *)dst->data);
         } else {
             k_add<float, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, ctx.stream()>>>(nelem, (const float *)ptr, (float *)dst->data);
         }
