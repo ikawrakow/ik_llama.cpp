@@ -134,14 +134,14 @@ struct llama_sampling_context {
 
 
 // Create a new sampling context instance.
-struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vocab, const struct llama_sampling_params & params);
+struct llama_sampling_context * common_sampler_init(const struct llama_vocab* vocab, const struct llama_sampling_params & params);
 
-void llama_sampling_free(struct llama_sampling_context * ctx);
+void common_sampler_free(struct llama_sampling_context * ctx);
 
 // Reset the sampler context
 // - clear prev tokens
 // - reset grammar
-void llama_sampling_reset(const struct llama_vocab* vocab, llama_sampling_context * ctx);
+void common_sampler_reset(const struct llama_vocab* vocab, llama_sampling_context * ctx);
 
 // Set the sampler seed
 void llama_sampling_set_rng_seed(struct llama_sampling_context * ctx, uint32_t seed);
@@ -169,7 +169,7 @@ std::vector<llama_sampler_type> llama_sampling_types_from_chars(const std::strin
 // this is a common sampling function used across the examples for convenience
 // it can serve as a starting point for implementing your own sampling function
 // Note: When using multiple sequences, it is the caller's responsibility to call
-//       llama_sampling_reset when a sequence ends
+//       common_sampler_reset when a sequence ends
 //
 // required:
 //  - ctx_main:     context to use for sampling
@@ -183,7 +183,7 @@ std::vector<llama_sampler_type> llama_sampling_types_from_chars(const std::strin
 //  - token:      sampled token
 //  - candidates: vector of candidate tokens
 //
-llama_token llama_sampling_sample(
+llama_token common_sampler_sample(
         struct llama_sampling_context * ctx_sampling,
         struct llama_context * ctx_main,
         struct llama_context * ctx_cfg,
@@ -198,7 +198,7 @@ llama_token_data_array llama_sampling_prepare(
         bool apply_grammar = true,
         std::vector<float> * original_logits = nullptr);
 
-void llama_sampling_accept(
+void common_sampler_accept(
         struct llama_sampling_context * ctx_sampling,
         struct llama_context * ctx_main,
         llama_token id,
@@ -206,11 +206,11 @@ void llama_sampling_accept(
 
 // returns at least 1 token, up to draft.size()
 // access the internal list of current candidate tokens
-llama_token_data_array * llama_sampling_get_candidates(struct llama_sampling_context * ctx_sampling);
+llama_token_data_array * common_sampler_get_candidates(struct llama_sampling_context * ctx_sampling);
 
 std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<llama_token> & draft);
 
-std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft);
+std::vector<llama_token> common_sampler_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft);
 
 llama_grammar* llama_sampler_init_llg(const llama_vocab* vocab,
     const char* grammar_kind, const char* grammar_data);

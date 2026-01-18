@@ -72,30 +72,12 @@ using common_params = gpt_params;
 inline common_init_result common_init_from_params(gpt_params & params) {
     return llama_init_from_gpt_params(params);
 }
-inline llama_sampling_context * common_sampler_init(const llama_model * model, const llama_sampling_params & sparams) {
-    return llama_sampling_init(llama_get_model_vocab(model), sparams);
-}
+
 inline std::vector<llama_token> common_tokenize(const llama_context * ctx, const std::string & text, bool add_special, bool parse_special = false) {
     return llama_tokenize(ctx, text, add_special, parse_special);
 }
-inline void common_sampler_free(common_sampler * smpl) {
-    llama_sampling_free(smpl);
-}
-inline llama_token common_sampler_sample(common_sampler * gsmpl, llama_context * ctx, int idx, [[maybe_unused]] bool grammar_first = false) {
-    return llama_sampling_sample(gsmpl, ctx, nullptr, idx);
-}
-inline void common_sampler_accept(common_sampler * gsmpl, llama_context * ctx, llama_token token, bool accept_grammar) {
-    llama_sampling_accept(gsmpl, ctx, token, accept_grammar);
-}
-inline std::string common_token_to_piece(const llama_context * ctx, llama_token token, bool special = true) {
-    return llama_token_to_piece(ctx, token, special);
-}
-inline void common_batch_clear(llama_batch & batch) {
-    llama_batch_clear(batch);
-}
-inline void common_batch_add(llama_batch & batch, llama_token id, llama_pos pos, const std::vector<llama_seq_id> & seq_ids, bool logits) {
-    llama_batch_add(batch, id, pos, seq_ids, logits);
-}
+
+
 void common_init() {
 #ifdef NDEBUG
     const char * build_type = "";
@@ -143,8 +125,7 @@ struct mtmd_cli_context {
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
         model = llama_init.model; //.get();
         lctx = llama_init.context; //.get();
-        vocab = llama_model_get_vocab(model);
-        smpl = common_sampler_init(model, params.sparams); //sampling);
+        smpl = common_sampler_init(vocab, params.sparams); //sampling);
         n_threads = params.n_threads;
         batch = llama_batch_init(1, 0, 1); // batch for next token generation
         n_batch = params.n_batch;
@@ -225,7 +206,7 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
             break;
         }
 
-        llama_token token_id = common_sampler_sample(ctx.smpl, ctx.lctx, -1);
+        llama_token token_id = common_sampler_sample(ctx.smpl, ctx.lctx, nullptr, -1);
         generated_tokens.push_back(token_id);
         common_sampler_accept(ctx.smpl, ctx.lctx, token_id, true);
 
@@ -403,7 +384,7 @@ int main(int argc, char ** argv) {
             if (line == "/clear") {
                 ctx.n_past = 0;
                 llama_kv_cache_seq_rm(ctx.lctx, 0, 1, -1);
-                //llama_memory_seq_rm(llama_get_memory(ctx.lctx), 0, 1, -1); // keep BOS
+                //llama_kv_cache_seq_rm(llama_get_memory(ctx.lctx), 0, 1, -1); // keep BOS
                 LOG_TEE("Chat history cleared\n\n");
                 continue;
             }

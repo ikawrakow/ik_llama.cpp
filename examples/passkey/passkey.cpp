@@ -133,10 +133,10 @@ int main(int argc, char ** argv) {
             n_past = llama_kv_cache_seq_pos_max(ctx, 0) + 1;
         }
 
-        llama_batch_clear(batch);
+        common_batch_clear(batch);
 
         for (int j = 0; j < n_batch && i + j < n_tokens_all; j++) {
-            llama_batch_add(batch, tokens_list[i + j], n_past++, { 0 }, false);
+            common_batch_add(batch, tokens_list[i + j], n_past++, { 0 }, false);
         }
 
         if (i + n_batch >= n_tokens_all) {
@@ -167,10 +167,10 @@ int main(int argc, char ** argv) {
 
         n_past = llama_kv_cache_seq_pos_max(ctx, 0) + 1;
 
-        llama_batch_clear(batch);
+        common_batch_clear(batch);
 
         for (int j = 0; j < n_batch && i + j < n_tokens_all; j++) {
-            llama_batch_add(batch, tokens_list[i + j], n_past++, { 0 }, false);
+            common_batch_add(batch, tokens_list[i + j], n_past++, { 0 }, false);
         }
 
         if (i + n_batch >= n_tokens_all) {
@@ -239,16 +239,16 @@ int main(int argc, char ** argv) {
                 break;
             }
 
-            LOG_TEE("%s", llama_token_to_piece(ctx, new_token_id).c_str());
+            LOG_TEE("%s", common_token_to_piece(ctx, new_token_id).c_str());
             fflush(stdout);
 
             n_decode += 1;
 
             // prepare the next batch
-            llama_batch_clear(batch);
+            common_batch_clear(batch);
 
             // push this new token for next evaluation
-            llama_batch_add(batch, new_token_id, n_past++, { 0 }, true);
+            common_batch_add(batch, new_token_id, n_past++, { 0 }, true);
         }
 
         n_cur += 1;

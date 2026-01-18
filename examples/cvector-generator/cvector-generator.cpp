@@ -29,7 +29,7 @@ template <class Iter>
 static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
     std::string ret;
     for (; begin != end; ++begin) {
-        ret += llama_token_to_piece(ctx, *begin);
+        ret += common_token_to_piece(ctx, *begin);
     }
 
     return ret;

@@ -59,7 +59,7 @@ struct llama_speculative * llama_speculative_init(
             llama_sampler_type::TOP_K,
         };
         const auto *model_dft = llama_get_model(ctx_dft);
-        result->smpl = llama_sampling_init(llama_get_model_vocab(model_dft), params);
+        result->smpl = common_sampler_init(llama_get_model_vocab(model_dft), params);
     }
 #endif
 
@@ -74,7 +74,7 @@ void llama_speculative_free(struct llama_speculative * spec) {
         return;
     }
 
-    llama_sampling_free(spec->smpl);
+    common_sampler_free(spec->smpl);
 
     llama_batch_free(spec->batch);
 
@@ -133,8 +133,8 @@ bool llama_speculative_are_compatible(
             if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
                 LLAMA_LOG_INFO("%s: draft model vocab must match target model to use speculation but ", __func__);
                 LLAMA_LOG_INFO("token %d content differs - target '%s', draft '%s'\n", i,
-                        llama_token_to_piece(ctx_tgt, i).c_str(),
-                        llama_token_to_piece(ctx_dft, i).c_str());
+                        common_token_to_piece(ctx_tgt, i).c_str(),
+                        common_token_to_piece(ctx_dft, i).c_str());
                 return false;
             }
         }
@@ -201,14 +201,14 @@ std::vector<llama_token> llama_speculative_gen_draft(
     std::vector<llama_token> prompt_tgt_draft_model;
     if (!spec->vocab_dft_compatible) {
         std::string text;
-        text = llama_detokenize(ctx_tgt, prompt_tgt_main_model, true);
+        text = common_token_to_piece(ctx_tgt, prompt_tgt_main_model, true);
         text = replace_to_dft(spec, text);
         LLAMA_LOG_DEBUG("%s: main->draft detokenized string: '%s'\n", __func__, text.c_str());
         prompt_tgt_draft_model = llama_tokenize(ctx_dft, text, false, true);
 
         // convert id_last to draft vocab
         std::vector<llama_token> id_last_vec(1, id_last);
-        text = llama_detokenize(ctx_tgt, id_last_vec);
+        text = common_token_to_piece(ctx_tgt, id_last_vec);
         LLAMA_LOG_DEBUG("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
         id_last = llama_tokenize(ctx_dft, text, false, true)[0];
     }
@@ -272,11 +272,11 @@ std::vector<llama_token> llama_speculative_gen_draft(
     }
 
     // prepare a batch to evaluate any new tokens in the prompt
-    llama_batch_clear(batch);
+    common_batch_clear(batch);
 
     for (size_t i = i_start + reuse_n; i < prompt_tgt.size(); ++i) {
         //LLAMA_LOG_INFO("i = %d, i_start = %d, reuse_n = %d, i - i_start = %d, id = %6d\n", i, i_start, reuse_n, i - i_start, prompt_tgt[i]);
-        llama_batch_add(batch, prompt_tgt[i], i - i_start, { 0 }, false);
+        common_batch_add(batch, prompt_tgt[i], i - i_start, { 0 }, false);
 
         prompt_dft.push_back(prompt_tgt[i]);
     }
@@ -292,8 +292,8 @@ std::vector<llama_token> llama_speculative_gen_draft(
 
     // LLAMA_LOG_INFO("%s: n_past = %d\n", __func__, n_past);
 
-    llama_batch_clear(batch);
-    llama_batch_add  (batch, id_last, n_past, { 0 }, true);
+    common_batch_clear(batch);
+    common_batch_add  (batch, id_last, n_past, { 0 }, true);
 
     prompt_dft.push_back(id_last);
 
@@ -301,25 +301,25 @@ std::vector<llama_token> llama_speculative_gen_draft(
 
     llama_decode(ctx_dft, batch);
 
-    llama_sampling_reset(llama_get_vocab(ctx_dft), smpl);
+    common_sampler_reset(llama_get_vocab(ctx_dft), smpl);
 
     // sample n_draft tokens from the draft model
     for (int i = 0; i < params.n_draft; ++i) {
-        llama_batch_clear(batch);
+        common_batch_clear(batch);
 
-        llama_sampling_sample(smpl, ctx_dft, nullptr, 0);
+        common_sampler_sample(smpl, ctx_dft, nullptr, 0);
 
-        const auto * cur_p = llama_sampling_get_candidates(smpl);
+        const auto * cur_p = common_sampler_get_candidates(smpl);
 
         // for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
         //     LLAMA_LOG_INFO(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-        //             k, i, cur_p->data[k].id, cur_p->data[k].p, llama_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+        //             k, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
         // }
 
         // add drafted token for each sequence
         const llama_token id = cur_p->data[0].id;
 
-        llama_sampling_accept(smpl, ctx_dft, id, true);
+        common_sampler_accept(smpl, ctx_dft, id, true);
 
         result.push_back(id);
 
@@ -332,7 +332,7 @@ std::vector<llama_token> llama_speculative_gen_draft(
             break;
         }
 
-        llama_batch_add(batch, id, n_past + i + 1, { 0 }, true);
+        common_batch_add(batch, id, n_past + i + 1, { 0 }, true);
 
         // evaluate the drafted tokens on the draft model
         llama_decode(ctx_dft, batch);
@@ -341,7 +341,7 @@ std::vector<llama_token> llama_speculative_gen_draft(
     }
 
     if (!spec->vocab_dft_compatible) {
-        std::string detokenized = llama_detokenize(ctx_dft, result, true);
+        std::string detokenized = common_token_to_piece(ctx_dft, result, true);
         detokenized = replace_to_tgt(spec, detokenized);
         LLAMA_LOG_DEBUG("draft->main detokenized string: '%s'\n", detokenized.c_str());
         result = llama_tokenize(ctx_tgt, detokenized, false, true);

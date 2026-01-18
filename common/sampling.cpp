@@ -6,7 +6,7 @@
 #include <nlohmann/json.hpp>
 using json = nlohmann::ordered_json;
 
-struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vocab, const struct llama_sampling_params & params) {
+struct llama_sampling_context * common_sampler_init(const struct llama_vocab* vocab, const struct llama_sampling_params & params) {
     struct llama_sampling_context * result = new llama_sampling_context();
 
     result->params  = params;
@@ -129,7 +129,7 @@ struct llama_sampling_context * llama_sampling_init(const struct llama_vocab* vo
     return result;
 }
 
-void llama_sampling_free(struct llama_sampling_context * ctx) {
+void common_sampler_free(struct llama_sampling_context * ctx) {
     if (ctx->grammar != NULL) {
         llama_grammar_free(ctx->grammar);
     }
@@ -138,7 +138,7 @@ void llama_sampling_free(struct llama_sampling_context * ctx) {
     delete ctx;
 }
 
-void llama_sampling_reset(const struct llama_vocab* vocab, llama_sampling_context * ctx) {
+void common_sampler_reset(const struct llama_vocab* vocab, llama_sampling_context * ctx) {
 
     if (ctx->grammar != NULL) {
         llama_grammar_free(ctx->grammar);
@@ -239,7 +239,7 @@ std::string llama_sampling_prev_str(llama_sampling_context * ctx_sampling, llama
     std::string result;
 
     for (int i = size - n; i < size; i++) {
-        result += llama_token_to_piece(ctx_main, ctx_sampling->prev[i]);
+        result += common_token_to_piece(ctx_main, ctx_sampling->prev[i]);
     }
 
     return result;
@@ -495,11 +495,11 @@ static llama_token llama_sampling_sample_impl(
             //    for (int i = 0; i < n_top; i++) {
             //        const llama_token id = cur_p.data[i].id;
             //        (void)id; // To avoid a warning that id is unused when logging is disabled.
-            //        LOG(" - %5d: '%12s' (%.3f)\n", id, llama_token_to_piece(ctx_main, id).c_str(), cur_p.data[i].p);
+            //        LOG(" - %5d: '%12s' (%.3f)\n", id, common_token_to_piece(ctx_main, id).c_str(), cur_p.data[i].p);
             //    }
             //}
 
-            //LOG("sampled token: %5d: '%s'\n", id, llama_token_to_piece(ctx_main, id).c_str());
+            //LOG("sampled token: %5d: '%s'\n", id, common_token_to_piece(ctx_main, id).c_str());
         }
     }
 
@@ -519,7 +519,7 @@ static llama_token llama_sampling_sample_impl(
 
         // If the token is not valid according to the grammar, perform resampling
         if (!is_valid) {
-            LOG("Resampling because token %d: '%s' does not meet grammar rules\n", id, llama_token_to_piece(ctx_main, id).c_str());
+            LOG("Resampling because token %d: '%s' does not meet grammar rules\n", id, common_token_to_piece(ctx_main, id).c_str());
 
             // Restore logits from the copy
             std::copy(original_logits.begin(), original_logits.end(), logits);
@@ -611,7 +611,7 @@ static llama_token_data_array llama_sampling_prepare_impl(
     return cur_p;
 }
 
-llama_token llama_sampling_sample(
+llama_token common_sampler_sample(
                   struct llama_sampling_context * ctx_sampling,
                   struct llama_context * ctx_main,
                   struct llama_context * ctx_cfg,
@@ -630,7 +630,7 @@ llama_token_data_array llama_sampling_prepare(
     return llama_sampling_prepare_impl(ctx_sampling,ctx_main, ctx_cfg, idx, apply_grammar, original_logits);
 }
 
-void llama_sampling_accept(
+void common_sampler_accept(
         struct llama_sampling_context * ctx_sampling,
         struct llama_context * ctx_main,
         llama_token id,
@@ -649,7 +649,7 @@ void llama_sampling_accept(
     }
 }
 
-llama_token_data_array * llama_sampling_get_candidates(struct llama_sampling_context * ctx_sampling) {
+llama_token_data_array * common_sampler_get_candidates(struct llama_sampling_context * ctx_sampling) {
     return &ctx_sampling->cur_p;
 }
 
@@ -659,10 +659,10 @@ std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_samplin
         idxs[i] = i;
     }
 
-    return llama_sampling_sample_and_accept_n(gsmpl, ctx, idxs, draft);
+    return common_sampler_sample_and_accept_n(gsmpl, ctx, idxs, draft);
 }
 
-std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft) {
+std::vector<llama_token> common_sampler_sample_and_accept_n(struct llama_sampling_context * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const std::vector<llama_token> & draft) {
     GGML_ASSERT(idxs.size() == draft.size() + 1 && "idxs.size() must be draft.size() + 1");
 
     std::vector<llama_token> result;
@@ -670,9 +670,9 @@ std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_samplin
 
     size_t i = 0;
     for (; i < draft.size(); i++) {
-        const llama_token id = llama_sampling_sample(gsmpl, ctx, nullptr, idxs[i]);
+        const llama_token id = common_sampler_sample(gsmpl, ctx, nullptr, idxs[i]);
 
-        llama_sampling_accept(gsmpl, ctx, id, true);
+        common_sampler_accept(gsmpl, ctx, id, true);
 
         result.push_back(id);
 
@@ -682,9 +682,9 @@ std::vector<llama_token> llama_sampling_sample_and_accept_n(struct llama_samplin
     }
 
     if (i == draft.size()) {
-        const llama_token id = llama_sampling_sample(gsmpl, ctx, nullptr, idxs[i]);
+        const llama_token id = common_sampler_sample(gsmpl, ctx, nullptr, idxs[i]);
 
-        llama_sampling_accept(gsmpl, ctx, id, true);
+        common_sampler_accept(gsmpl, ctx, id, true);
 
         result.push_back(id);
     }

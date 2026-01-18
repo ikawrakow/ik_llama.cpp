@@ -211,12 +211,12 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-// TODO: reuse llama_detokenize
+// TODO: reuse common_token_to_piece
 template <class Iter>
 static std::string tokens_to_str(llama_context* ctx, Iter begin, Iter end) {
     std::string ret;
     for (; begin != end; ++begin) {
-        ret += llama_token_to_piece(ctx, *begin);
+        ret += common_token_to_piece(ctx, *begin);
     }
 
     return ret;
@@ -228,7 +228,7 @@ std::string tokens_to_str(llama_context* ctx, const llama_tokens& tokens) {
 
 // format incomplete utf-8 multibyte character for output
  std::string tokens_to_output_formatted_string(const llama_context* ctx, const llama_token token) {
-    std::string out = token == -1 ? "" : llama_token_to_piece(ctx, token);
+    std::string out = token == -1 ? "" : common_token_to_piece(ctx, token);
 
     // if the size is 1 and first bit is 1, meaning it's a partial character
     //   (size > 1 meaning it's already a known token)
@@ -372,8 +372,8 @@ common_prefix find_common_text_token_prefix(const llama_context* ctx, const llam
     llama_tokens a_sub(a.begin() + start, a.end());
     llama_tokens b_sub(b.begin() + start, b.end());
 
-    std::string a_str = llama_detokenize(ctx, a_sub, true);
-    std::string b_str = llama_detokenize(ctx, b_sub, true);
+    std::string a_str = common_token_to_piece(ctx, a_sub, true);
+    std::string b_str = common_token_to_piece(ctx, b_sub, true);
     common_prefix string_prefix;
 
     std::vector<size_t> a_list;
@@ -1722,7 +1722,7 @@ server_tokens::server_tokens(const llama_tokens& tokens, bool has_mtmd) : has_mt
                 text_tokens.push_back(t);
             }
         }
-        return llama_detokenize(ctx, text_tokens, special);
+        return common_token_to_piece(ctx, text_tokens, special);
     }
 
     std::string server_tokens::detokenize(const llama_context* ctx, bool special, size_t start, size_t length) const {
@@ -1744,7 +1744,7 @@ server_tokens::server_tokens(const llama_tokens& tokens, bool has_mtmd) : has_mt
             }
             ++i;
         }
-        return llama_detokenize(ctx, text_tokens, special);
+        return common_token_to_piece(ctx, text_tokens, special);
     }
 
     size_t server_tokens::find_n_from_tokens(const llama_context* ctx, const server_tokens& b, bool special,
@@ -1812,7 +1812,7 @@ server_tokens::server_tokens(const llama_tokens& tokens, bool has_mtmd) : has_mt
         std::string endStr = think_token.end;
 
         llama_tokens tokens = get_text_tokens();
-        std::string str = llama_detokenize(ctx, tokens, true);
+        std::string str = common_token_to_piece(ctx, tokens, true);
 
         std::vector<std::pair<size_t, size_t>> results;
         // Find all positions of start and end

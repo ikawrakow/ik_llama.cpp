@@ -593,7 +593,7 @@ int main(int argc, char ** argv) {
     });
 
     LOG_INFO("chat template", {
-        {"chat_example", common_chat_format_example(ctx_server.chat_templates.get(), ctx_server.params.use_jinja, {}).c_str()
+        {"chat_example", common_chat_format_example(ctx_server.chat_templates.get(), ctx_server.params_base.use_jinja, {}).c_str()
         },
             {"built_in",     params.chat_template.empty()},
         });
@@ -990,15 +990,15 @@ int main(int argc, char ** argv) {
         }
         json data = {
             { "system_prompt",               ctx_server.system_prompt.c_str() },
-            { "model_alias",                 ctx_server.params.model_alias },
-            { "model_path",                  ctx_server.params.model},
+            { "model_alias",                 ctx_server.params_base.model_alias },
+            { "model_path",                  ctx_server.params_base.model},
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
-            { "total_slots",                 ctx_server.params.n_parallel },
-            { "model_name",                  get_model_name(ctx_server.params.model)},
+            { "total_slots",                 ctx_server.params_base.n_parallel },
+            { "model_name",                  get_model_name(ctx_server.params_base.model)},
             { "chat_template",               common_chat_templates_source(ctx_server.chat_templates.get()) },
-            { "bos_token",                   llama_token_to_piece(ctx_server.ctx, llama_token_bos(ctx_server.model), /* special= */ true)},
-            { "eos_token",                   llama_token_to_piece(ctx_server.ctx, llama_token_eos(ctx_server.model), /* special= */ true)},
-            { "model_path",                  ctx_server.params.model },
+            { "bos_token",                   common_token_to_piece(ctx_server.ctx, llama_token_bos(ctx_server.model), /* special= */ true)},
+            { "eos_token",                   common_token_to_piece(ctx_server.ctx, llama_token_eos(ctx_server.model), /* special= */ true)},
+            { "model_path",                  ctx_server.params_base.model },
             { "modalities",                  json {
                 {"vision", ctx_server.oai_parser_opt.allow_image},
                 {"audio",  ctx_server.oai_parser_opt.allow_audio},
@@ -1007,7 +1007,7 @@ int main(int argc, char ** argv) {
 
         };
 
-        if (ctx_server.params.use_jinja) {
+        if (ctx_server.params_base.use_jinja) {
             if (auto tool_use_src = common_chat_templates_source(ctx_server.chat_templates.get(), "tool_use")) {
                 data["chat_template_tool_use"] = tool_use_src;
             }
@@ -1026,8 +1026,8 @@ int main(int argc, char ** argv) {
             }
         }
         json data = {
-            { "model_name",                  get_model_name(ctx_server.params.model)},
-            { "model_path",                  ctx_server.params.model },
+            { "model_name",                  get_model_name(ctx_server.params_base.model)},
+            { "model_path",                  ctx_server.params_base.model },
             { "modalities",                  json {
                 {"vision", ctx_server.oai_parser_opt.allow_image},
                 {"audio",  ctx_server.oai_parser_opt.allow_audio},
@@ -1088,7 +1088,7 @@ int main(int argc, char ** argv) {
                     // OAI-compat
                     task.params.oaicompat = oaicompat;
                     task.params.oaicompat_cmpl_id = completion_id;
-                    task.params.oaicompat_model = get_model_name(ctx_server.params.model);
+                    task.params.oaicompat_model = get_model_name(ctx_server.params_base.model);
                     tasks.push_back(std::move(task));
                 }
 
@@ -1350,7 +1350,7 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_embeddings_impl = [&ctx_server](const httplib::Request& req, httplib::Response& res, oaicompat_type oaicompat) {
-        if (!ctx_server.params.embedding) {
+        if (!ctx_server.params_base.embedding) {
             res_err(res, format_error_response("This server does not support embeddings. Start it with `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }

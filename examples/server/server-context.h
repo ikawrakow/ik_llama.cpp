@@ -184,7 +184,7 @@ struct server_context {
     llama_context* ctx = nullptr;
     std::vector<llama_lora_adapter_container> lora_adapters;
 
-    gpt_params params;
+    gpt_params params_base;
 
     llama_batch batch;
 
@@ -296,6 +296,24 @@ struct server_context {
     void context_shift_prompt(llama_context* ctx, server_slot& slot, bool exact = false);
 
     void update_slots();
+
+    void release_slots();
+
+    bool slots_idle();
+
+    void context_shift();
+
+    void add_sampled_tokens();
+
+    void batch_pending_prompt(const int32_t n_ubatch, const int32_t n_batch,  int32_t & batch_type);
+
+    void process_batch_tokens(int32_t & n_batch);
+
+    void extend_context(const int32_t n_tokens);
+
+    void speculative_decoding_accept();
+
+    bool accept_special_token(const server_slot& slot, const llama_token token);
 
     json model_meta() const;
 };

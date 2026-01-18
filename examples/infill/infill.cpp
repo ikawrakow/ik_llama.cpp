@@ -264,13 +264,13 @@ int main(int argc, char ** argv) {
         LOG_TEE("%s: prompt: '%s'\n", __func__, params.prompt.c_str());
         LOG_TEE("%s: number of tokens in prompt = %zu\n", __func__, embd_inp.size());
         for (int i = 0; i < (int) embd_inp.size(); i++) {
-            LOG_TEE("%6d -> '%s'\n", embd_inp[i], llama_token_to_piece(ctx, embd_inp[i]).c_str());
+            LOG_TEE("%6d -> '%s'\n", embd_inp[i], common_token_to_piece(ctx, embd_inp[i]).c_str());
         }
 
         if (params.n_keep > 0) {
         LOG_TEE("%s: static prompt based on n_keep: '", __func__);
             for (int i = 0; i < params.n_keep; i++) {
-                LOG_TEE("%s", llama_token_to_piece(ctx, embd_inp[i]).c_str());
+                LOG_TEE("%s", common_token_to_piece(ctx, embd_inp[i]).c_str());
             }
             LOG_TEE("'\n");
         }
@@ -349,7 +349,7 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> embd;
 
-    struct llama_sampling_context * ctx_sampling = llama_sampling_init(llama_get_model_vocab(model), sparams);
+    struct llama_sampling_context * ctx_sampling = common_sampler_init(llama_get_model_vocab(model), sparams);
 
     while (n_remain != 0 || params.interactive) {
         // predict
@@ -421,9 +421,9 @@ int main(int argc, char ** argv) {
         embd.clear();
 
         if ((int) embd_inp.size() <= n_consumed && !is_interacting) {
-            const llama_token id = llama_sampling_sample(ctx_sampling, ctx, nullptr);
+            const llama_token id = common_sampler_sample(ctx_sampling, ctx, nullptr);
 
-            llama_sampling_accept(ctx_sampling, ctx, id, true);
+            common_sampler_accept(ctx_sampling, ctx, id, true);
 
             LOG("last: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, ctx_sampling->prev).c_str());
 
@@ -444,7 +444,7 @@ int main(int argc, char ** argv) {
 
                 // push the prompt in the sampling context in order to apply repetition penalties later
                 // for the prompt, we don't apply grammar rules
-                llama_sampling_accept(ctx_sampling, ctx, embd_inp[n_consumed], false);
+                common_sampler_accept(ctx_sampling, ctx, embd_inp[n_consumed], false);
 
                 ++n_consumed;
                 if ((int) embd.size() >= params.n_batch) {
@@ -456,7 +456,7 @@ int main(int argc, char ** argv) {
         // display text
         if (input_echo) {
             for (auto id : embd) {
-                const std::string token_str = llama_token_to_piece(ctx, id);
+                const std::string token_str = common_token_to_piece(ctx, id);
                 printf("%s", token_str.c_str());
 
                 if (embd.size() > 1) {
@@ -479,7 +479,7 @@ int main(int argc, char ** argv) {
             if ((llama_sampling_last(ctx_sampling) == llama_token_eot(model) || is_interacting) && params.interactive){
                 if (is_interacting && !params.interactive_first) {
                     // print an eot token
-                    printf("%s", llama_token_to_piece(ctx, llama_token_eot(model)).c_str());
+                    printf("%s", common_token_to_piece(ctx, llama_token_eot(model)).c_str());
                 }
                 fflush(stdout);
                 printf("\n");
@@ -601,7 +601,7 @@ int main(int argc, char ** argv) {
                     for (size_t i = original_size; i < embd_inp.size(); ++i) {
                         const llama_token token = embd_inp[i];
                         output_tokens.push_back(token);
-                        output_ss << llama_token_to_piece(ctx, token);
+                        output_ss << common_token_to_piece(ctx, token);
                     }
 
                     n_remain -= line_inp.size();
@@ -615,7 +615,7 @@ int main(int argc, char ** argv) {
 
             if (n_past > 0) {
                 if (is_interacting) {
-                    llama_sampling_reset(llama_get_model_vocab(model), ctx_sampling);
+                    common_sampler_reset(llama_get_model_vocab(model), ctx_sampling);
                 }
                 is_interacting = false;
             }
@@ -634,7 +634,7 @@ int main(int argc, char ** argv) {
         }
     }
     if (!params.interactive && n_remain <= 0) {
-        printf("%s", llama_token_to_piece(ctx, llama_token_eot(model)).c_str());
+        printf("%s", common_token_to_piece(ctx, llama_token_eot(model)).c_str());
         fflush(stdout);
     }
 
@@ -644,7 +644,7 @@ int main(int argc, char ** argv) {
     llama_free(ctx);
     llama_free_model(model);
 
-    llama_sampling_free(ctx_sampling);
+    common_sampler_free(ctx_sampling);
     llama_backend_free();
 
 #ifndef LOG_DISABLE_LOGS

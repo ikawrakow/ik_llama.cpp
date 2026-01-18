@@ -108,7 +108,7 @@ int main(int argc, char ** argv) {
 
     // warm up
     if (params.warmup) {
-        llama_batch_add(batch, bos, 0, { 0 }, false);
+        common_batch_add(batch, bos, 0, { 0 }, false);
 
         if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
             LOG_TEE("%s: llama_decode() failed\n", __func__);
@@ -120,10 +120,10 @@ int main(int argc, char ** argv) {
         llama_kv_cache_seq_rm(ctx, 0, params.n_ubatch, -1);
 
         // prepare batch of pp size for prompt processing performance measurement
-        llama_batch_clear(batch);
+        common_batch_clear(batch);
 
         for (unsigned int i = 0; i < params.n_ubatch; ++i) {
-            llama_batch_add(batch, std::rand() % n_vocab, i, { 0 }, false);
+            common_batch_add(batch, std::rand() % n_vocab, i, { 0 }, false);
         }
 
         if (!decode_helper(ctx, batch, ctx_params.n_ubatch)) {
@@ -132,7 +132,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    llama_batch_clear(batch);
+    common_batch_clear(batch);
     llama_kv_cache_clear(ctx);
 
     for (unsigned int n_kv = 0; n_kv < n_kv_max; n_kv += params.n_ubatch) {
@@ -143,8 +143,8 @@ int main(int argc, char ** argv) {
         const auto t_tg_start = ggml_time_us();
 
         for (unsigned int i = 0; i < tg; ++i) {
-            llama_batch_clear(batch);
-            llama_batch_add(batch, std::rand() % n_vocab, n_kv + i, { 0 }, true);
+            common_batch_clear(batch);
+            common_batch_add(batch, std::rand() % n_vocab, n_kv + i, { 0 }, true);
 
             if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
                 LOG_TEE("%s: llama_decode() failed\n", __func__);
@@ -158,10 +158,10 @@ int main(int argc, char ** argv) {
         llama_kv_cache_seq_rm(ctx, 0, n_kv, -1);
 
         // prepare batch of pp size for prompt processing performance measurement
-        llama_batch_clear(batch);
+        common_batch_clear(batch);
 
         for (unsigned int i = 0; i < pp; ++i) {
-            llama_batch_add(batch, std::rand() % n_vocab, n_kv + i, { 0 }, false);
+            common_batch_add(batch, std::rand() % n_vocab, n_kv + i, { 0 }, false);
         }
         batch.logits[batch.n_tokens - 1] = true;
 

@@ -1576,7 +1576,7 @@ struct llama_vocab::impl {
     std::vector<token_data>                      id_to_token;
 
     std::vector<llama_token> cache_special_tokens;
-    std::vector<std::string> cache_token_to_piece; // llama_token_to_piece(special = true);
+    std::vector<std::string> cache_token_to_piece; // common_token_to_piece(special = true);
     struct pair_hash {
         size_t operator()(const std::pair<std::string, std::string> & p) const {
             return std::hash<std::string>{}(p.first) ^  //create some hash for pair
@@ -3639,7 +3639,7 @@ int32_t llama_vocab_token_to_piece(
     return vocab->token_to_piece(token, buf, length, lstrip, special);
 }
 
-//int32_t llama_detokenize(
+//int32_t common_token_to_piece(
 //    const struct llama_vocab * vocab,
 //           const llama_token * tokens,
 //                     int32_t   n_tokens,

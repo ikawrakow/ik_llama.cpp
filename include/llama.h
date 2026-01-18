@@ -1125,7 +1125,7 @@ extern "C" {
                                int32_t   lstrip,
                                   bool   special);
 
-    /// @details Convert the provided tokens into text (inverse of llama_tokenize()).
+    /// @details Convert the provided tokens into text (inverse of common_tokenize()).
     /// @param text The char pointer must be large enough to hold the resulting text.
     /// @return Returns the number of chars/bytes on success, no more than text_len_max.
     /// @return Returns a negative number on failure - the number of chars/bytes that would have been returned.
