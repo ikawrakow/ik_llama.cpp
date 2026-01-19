@@ -73,7 +73,7 @@ struct llama_sampler_adaptive_p {
     float total_weight;     // sum(decay^i), converges to 1/(1-decay)
 
     // first referenced in prep
-    std::unordered_map<llama_token, float> orig_prob_map;  // probabilities before sampler_queue
+    std::vector<float>  orig_prob; // for storing the original proibabilities
     float cum_orig_prob;    // for normalizing orig_prob in sample_token
 
     // first referenced in sample
@@ -83,7 +83,7 @@ struct llama_sampler_adaptive_p {
     std::vector<float> cum_probs;   // cumulative probability distribution
 };
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(
+struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
        const float target,
        const float decay,
     const uint32_t seed);
