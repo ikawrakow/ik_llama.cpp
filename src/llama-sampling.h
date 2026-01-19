@@ -75,7 +75,6 @@ struct llama_sampler_adaptive_p {
     // first referenced in prep
     std::vector<float>  orig_prob; // for storing the original proibabilities
     float cum_orig_prob;    // for normalizing orig_prob in sample_token
-    int   n_warn = 0;       // for warnings
 
     // first referenced in sample
     float max_xform_logit;  // maximum logit found during transform
@@ -84,7 +83,7 @@ struct llama_sampler_adaptive_p {
     std::vector<float> cum_probs;   // cumulative probability distribution
 };
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(
+struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
        const float target,
        const float decay,
     const uint32_t seed);

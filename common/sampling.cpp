@@ -118,7 +118,9 @@ struct llama_sampling_context * common_sampler_init(const struct llama_vocab* vo
             }
             case llama_sampler_type::ADAPTIVE_P:
             {
-                result->adapt_p_ctx = llama_init_adaptive_p(params.adaptive_target, params.adaptive_decay, result->rng());
+                GGML_ASSERT(vocab);
+                auto n_vocab = llama_vocab_n_tokens(vocab);
+                result->adapt_p_ctx = llama_init_adaptive_p(n_vocab, params.adaptive_target, params.adaptive_decay, result->rng());
                 break;
             }
             default:
