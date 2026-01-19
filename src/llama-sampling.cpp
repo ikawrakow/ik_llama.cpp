@@ -1061,24 +1061,27 @@ llama_token llama_sample_token_adaptive_p_impl(
     const size_t idx = std::distance(ctx->cum_probs.begin(), iter);
     llama_token id = candidates->data[idx].id;
 
-    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
-    smpl->n_sample++;
-
     GGML_ASSERT(id < int(ctx->orig_prob.size()));
     if (auto update_prob = ctx->orig_prob[id]; update_prob > 0) {
         ctx->weighted_sum = ctx->decay * ctx->weighted_sum + update_prob;
         ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
     }
 
+    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+    smpl->n_sample++;
+
     return id;
 }
 
-void llama_sample_adaptive_p_impl(llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx) {
+void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_array * candidates,
+        struct llama_sampler_adaptive_p * adapt_p_ctx) {
     if (adapt_p_ctx->target < 0.0f) {
         // sampler is disabled
         llama_sample_softmax_impl(nullptr, candidates);
         return;
     }
+
+    auto t_start = ggml_time_us();
 
     // incomplete softmax because final division can be fused
     float max_l = candidates->data[0].logit;
@@ -1120,12 +1123,16 @@ void llama_sample_adaptive_p_impl(llama_token_data_array * candidates, struct ll
     }
     candidates->sorted = false;
     adapt_p_ctx->max_xform_logit = max_logit;
+
+    ctx->t_sample_us += ggml_time_us() - t_start;
 }
 
 void llama_prep_adaptive_p_impl(
+              struct llama_sampling * smpl,
              llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx) {
     constexpr float kDelta = 16.6f;
+    auto t_start = ggml_time_us();
     auto & orig_prob = adapt_p_ctx->orig_prob;
     if (candidates->size != orig_prob.size() || candidates->sorted) {
         LLAMA_LOG_ERROR("%s: this function must be called before any other sampler has been applied\n", __func__);
@@ -1146,6 +1153,7 @@ void llama_prep_adaptive_p_impl(
         orig_prob[j] = prob;
     }
     adapt_p_ctx->cum_orig_prob = cum_prob;
+    if (smpl) smpl->t_sample_us += ggml_time_us() - t_start;
 }
 
 struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,

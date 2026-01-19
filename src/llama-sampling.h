@@ -89,10 +89,12 @@ struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
     const uint32_t seed);
 
 void llama_prep_adaptive_p_impl(
+              struct llama_sampling * smpl,
              llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx);
 
 void llama_sample_adaptive_p_impl(
+              struct llama_sampling * smpl,
              llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx);
 
