@@ -6,7 +6,6 @@
 //
 
 #include "reduce.cuh"
-#include "binbcast.cuh"
 #include "ggml-common.h"
 
 #include <chrono>
@@ -81,6 +80,35 @@ static __global__ void k_reduce_add_T(copy_task task) {
     }
 }
 
+static void copy_missing_tensors(ggml_backend_cuda_context & ctx, ggml_tensor * dst,
+        int nhave, int ncopy, const int * idx, const int * copy_idx) {
+
+    if (ncopy < 1) return;
+
+    auto & info = ggml_cuda_info();
+    auto size = ggml_nbytes(dst);
+    int isrc = 0;
+    for (int ii = 0; ii < ncopy; ++ii) {
+        int i = copy_idx[ii];
+        int j = idx[isrc];
+        isrc = (isrc + 1)%nhave;
+        //printf("%s: copying from device %d to device %d: %p -> %p\n", __func__, j, i, dst->src[j]->data, dst->src[i]->data);
+        ggml_cuda_set_device(j);
+        CUDA_CHECK(cudaMemcpyPeerAsync(dst->src[i]->data, info.all_ctx[i]->device, dst->src[j]->data, info.all_ctx[j]->device,
+                            size, info.all_ctx[j]->stream()));
+        CUDA_CHECK(cudaEventRecord(info.all_ctx[j]->copy_event, info.all_ctx[j]->stream()));
+    }
+    isrc = 0;
+    for (int ii = 0; ii < ncopy; ++ii) {
+        int i = copy_idx[ii];
+        int j = idx[isrc];
+        isrc = (isrc + 1)%nhave;
+        ggml_cuda_set_device(i);
+        CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[j]->copy_event, 0));
+    }
+    ggml_cuda_set_device(ctx.device);
+}
+
 void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     auto op = (ggml_op)dst->op_params[0];
@@ -90,7 +118,7 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     GGML_ASSERT(dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32 ||
                 dst->type == GGML_TYPE_Q8_0 || dst->type == GGML_TYPE_BF16);
     GGML_ASSERT(ggml_is_contiguous(dst));
-    GGML_ASSERT(nhave >=2 && nhave <= nreduce);
+    GGML_ASSERT(nhave >= 2 && nhave <= nreduce);
     if (dst->op_params[3] == 1) {
         // The dst tensor is just a container for the sources and the reduce op is turned off
         return;
@@ -125,13 +153,20 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     GGML_ASSERT(dst->data == dst->src[ctx.device]->data);
     auto nbytes = ggml_nbytes(dst);
     int idx[GGML_CUDA_MAX_DEVICES];
+    int copy_idx[GGML_CUDA_MAX_DEVICES];
+    int ncopy = 0;
     {
         int ii = 0;
         bool have_this_device = false;
         for (int i = 0; i < nreduce; ++i) {
-            if (dst->src[i]) {
-                idx[ii++] = i;
-                if (i == ctx.device) have_this_device = true;
+            if (dst->op_params[4] & (1u << i)) {
+                copy_idx[ncopy++] = i;
+            }
+            else {
+                if (dst->src[i]) {
+                    idx[ii++] = i;
+                    if (i == ctx.device) have_this_device = true;
+                }
             }
         }
         GGML_ASSERT(ii == nhave);
@@ -224,15 +259,6 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         auto nblocks_per_device = (nblocks + nhave - 1)/nhave;
         auto nelem_per_device = nblocks_per_device * tt.blck_size;
         auto size_per_device  = nblocks_per_device * tt.type_size;
-        //size_t nelem_per_device, required_size;
-        //if (dst->type == GGML_TYPE_Q8_0) {
-        //    GGML_ASSERT(nelem % QK8_0 == 0);
-        //    nelem_per_device = QK8_0*((nelem/QK8_0 + nhave - 1)/nhave);
-        //    required_size nelem_per_device/QK8_0 * sizeof(ggml_block_q8_0);
-        //}
-        //auto elem_size = ggml_element_size(dst);
-        //auto nelem_per_device = (nelem + nhave - 1)/nhave;
-        //auto required_size = nelem_per_device*elem_size;
         for (int ii = 0; ii < nhave; ++ii) {
             int i = idx[ii];
             auto this_ctx = info.all_ctx[i];
@@ -277,8 +303,6 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                 auto this_nelem = std::min(nelem_per_device, nelem - ichunk*nelem_per_device);
                 ggml_cuda_set_device(info.all_ctx[i]->device);
                 CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
-                //ggml_op_add_same_type(ctx, dst->type, this_nelem, info.all_ctx[i]->copy_buffer,
-                //        (const char *)dst->src[i]->data + ichunk*size_per_device, (char *)dst->src[i]->data + ichunk*size_per_device);
                 int num_blocks = (this_nelem + CUDA_REDUCE_BLOCK_SIZE - 1)/CUDA_REDUCE_BLOCK_SIZE;
                 if (dst->type == GGML_TYPE_F16) {
                     k_add<half, CUDA_REDUCE_BLOCK_SIZE><<<num_blocks, CUDA_REDUCE_BLOCK_SIZE, 0, info.all_ctx[i]->stream()>>>(this_nelem,
@@ -313,8 +337,6 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
                             (const char *)dst->src[peer]->data + ichunk*size_per_device, info.all_ctx[peer]->device,
                             this_size, info.all_ctx[peer]->stream()));
                 CUDA_CHECK(cudaEventRecord(info.all_ctx[peer]->copy_event, info.all_ctx[peer]->stream()));
-                //ggml_cuda_set_device(info.all_ctx[i]->device);
-                //CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[peer]->copy_event, 0));
                 ichunk = (ichunk + 1)%nhave;
             }
             for (int ii = 0; ii < nhave; ++ii) {
@@ -325,6 +347,9 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             }
         }
         ggml_cuda_set_device(ctx.device);
+        if (ncopy > 0) {
+            copy_missing_tensors(ctx, dst, nhave, ncopy, idx, copy_idx);
+        }
         return;
     }
     if (false && nhave == 4 && dst->ne[1] <= 8 && ctx.p2p_enabled) {
@@ -391,6 +416,9 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             CUDA_CHECK(cudaStreamWaitEvent(info.all_ctx[i]->stream(), info.all_ctx[j]->copy_event));
         }
         ggml_cuda_set_device(ctx.device);
+        if (ncopy > 0) {
+            copy_missing_tensors(ctx, dst, nhave, ncopy, idx, copy_idx);
+        }
         return;
     }
     if (dst->ne[1] < 32 && ctx.p2p_enabled) {
@@ -474,6 +502,9 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
             }
         }
         ggml_cuda_set_device(ctx.device);
+        if (ncopy > 0) {
+            copy_missing_tensors(ctx, dst, nhave, ncopy, idx, copy_idx);
+        }
         return;
     }
     auto required_size = nbytes*(nhave-1);
@@ -536,5 +567,8 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
         int i = idx[ii];
         if (i == ctx.device) continue;
         CUDA_CHECK(cudaStreamWaitEvent(ctx.stream(), info.all_ctx[i]->copy_event, 0));
+    }
+    if (ncopy > 0) {
+        copy_missing_tensors(ctx, dst, nhave, ncopy, idx, copy_idx);
     }
 }

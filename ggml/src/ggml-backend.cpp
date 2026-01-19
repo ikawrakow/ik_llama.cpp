@@ -1973,6 +1973,7 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
     int split_backend_id = split->backend_id;
     ggml_backend_t split_backend = sched->backends[split_backend_id];
     ggml_backend_t last_input_backend = nullptr;
+    bool synced_on_input = false;
     for (int j = 0; j < split->n_inputs; j++) {
         ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[j]);
         struct ggml_tensor * input = split->inputs[j];
@@ -1980,10 +1981,14 @@ static void ggml_backend_sched_copy_inputs(ggml_backend_sched_t sched, ggml_back
 
         if (input->flags & GGML_TENSOR_FLAG_INPUT) {
             // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
-            if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-            } else {
-                ggml_backend_synchronize(split_backend);
+            // if there are multiple inputs for the split, and we have already synchronized this backend, no need to do it again.
+            if (!synced_on_input) {
+                if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                    ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                } else {
+                    ggml_backend_synchronize(split_backend);
+                }
+                synced_on_input = true;
             }
             ggml_backend_tensor_copy(input, input_cpy);
         } else {
@@ -2162,7 +2167,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         bool work_done = false;
 #ifdef GGML_USE_OPENMP
-        //This maty not be available in old OpenMP versions
+        //This may not be available in old OpenMP versions
         //if (int nlevels = omp_get_max_active_levels(); nlevels < 2) {
         //    omp_set_max_active_levels(nlevels+1);
         //    //printf("%s: Setting omp max active levels to 2\n", __func__);
@@ -2241,6 +2246,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 if (split->graph.nodes[0]->op == GGML_OP_REDUCE) {
                     last_reduce = split_backend_id;
+                    if (ith == split_backend_id) {
+                        auto node = split->graph.nodes[0];
+                        int n = node->op_params[1];
+                        for (int j = 0; j < n; ++j) {
+                            if (node->src[j]) {
+                                sched->needs_sync[j] = false;
+                            }
+                        }
+                    }
                     #pragma omp barrier
                 }
 
@@ -2307,6 +2321,15 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (split->graph.nodes[0]->op == GGML_OP_REDUCE) {
                     last_reduce = split_backend_id;
                     barrier.arrive_and_wait();
+                    if (ith == split_backend_id) {
+                        auto node = split->graph.nodes[0];
+                        int n = node->op_params[1];
+                        for (int j = 0; j < n; ++j) {
+                            if (node->src[j]) {
+                                sched->needs_sync[j] = false;
+                            }
+                        }
+                    }
                 }
                 //if (needs_barrier) {
                 //    barrier.arrive_and_wait();
