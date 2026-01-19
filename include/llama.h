@@ -1384,7 +1384,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     /// @details Adaptive p sampler initializer
     /// @param target Select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
     /// @param decay Decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
-    LLAMA_API struct llama_sampler_adaptive_p * llama_init_adaptive_p(
+    LLAMA_API struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab,
            const float target,
            const float decay,
         const uint32_t seed);
@@ -1394,10 +1394,9 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
         struct llama_sampler_adaptive_p * adapt_p_ctx);
 
     /// @details Adaptive p sampler described in https://github.com/MrJackSpade/adaptive-p-docs/blob/main/README.md
-    void llama_sample_adaptive_p(
-                   struct llama_context * ctx,
-                 llama_token_data_array * candidates,
-        struct llama_sampler_adaptive_p * adapt_p_ctx);
+    void llama_sample_adaptive_p(struct llama_context * ctx,
+                               llama_token_data_array * candidates,
+                      struct llama_sampler_adaptive_p * adapt_p_ctx);
 
 
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.

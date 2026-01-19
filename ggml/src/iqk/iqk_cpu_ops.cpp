@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+//#include <thread>
 
 #ifdef __ARM_NEON
 #include <arm_neon.h>
@@ -502,4 +503,50 @@ void iqk_hadamard(struct ggml_tensor * dst, int ith, int nth) {
         std::memcpy(y, x, nh*sizeof(float));
         fast_ht(nh, y);
     }
+}
+
+namespace {
+float iqk_exp_with_thresh_impl(int n, float * logits, float max, float min) {
+    float sum = 0;
+#ifdef __AVX2__
+    auto vmax = _mm256_set1_ps(max);
+    auto vmin = _mm256_set1_ps(min);
+    auto vsum = _mm256_setzero_ps();
+    for (int j = 0; j < n/8; ++j) {
+        auto x = _mm256_loadu_ps(logits);
+        auto mask = _mm256_cmp_ps(x, vmin, _CMP_GE_OQ);
+        auto exp_x = v_expf(_mm256_sub_ps(x, vmax));
+        exp_x = _mm256_and_ps(exp_x, mask);
+        vsum = _mm256_add_ps(vsum, exp_x);
+        _mm256_storeu_ps(logits, exp_x);
+        logits += 8;
+    }
+    sum = hsum_float_8(vsum);
+    for (int j = 0; j < n - 8*(n/8); ++j) {
+        float p = logits[j] > min ? expf(logits[j] - max) : 0;
+        sum += p;
+        logits[j] = p;
+    }
+#else
+    for (int j = 0; j < n; ++j) {
+        float p = logits[j] > min ? expf(logits[j] - max) : 0;
+        sum += p;
+        logits[j] = p;
+    }
+#endif
+    return sum;
+}
+}
+
+float iqk_exp_with_thresh(int n, float * logits, float max, float min) {
+    return iqk_exp_with_thresh_impl(n, logits, max, min);
+    //if (n < (1 << 16)) return iqk_exp_with_thresh_impl(n, logits, max, min);
+    //std::array<float, 2> result;
+    //auto compute = [logits, max, min, &result] (int first, int last, int ith) {
+    //    result[ith] = iqk_exp_with_thresh_impl(last - first, logits + first, max, min);
+    //};
+    //auto t = std::thread(compute, 0, n/2, 0);
+    //compute(n/2, n, 1);
+    //t.join();
+    //return result[0] + result[1];
 }

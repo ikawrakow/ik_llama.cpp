@@ -2,6 +2,8 @@
 #include "llama-vocab.h"
 #include "llama-grammar.h"
 
+#include "iqk/iqk_cpu_ops.h"
+
 #include <algorithm>
 #include <cstring>
 #include <ctime>
@@ -1061,24 +1063,14 @@ llama_token llama_sample_token_adaptive_p_impl(
     const size_t idx = std::distance(ctx->cum_probs.begin(), iter);
     llama_token id = candidates->data[idx].id;
 
-    if (auto it = ctx->orig_prob_map.find(id); it != ctx->orig_prob_map.end()) {
-        float update_prob = it->second / ctx->cum_orig_prob;
+    GGML_ASSERT(id < int(ctx->orig_prob.size()));
+    if (auto update_prob = ctx->orig_prob[id]; update_prob > 0) {
         ctx->weighted_sum = ctx->decay * ctx->weighted_sum + update_prob;
         ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
     }
 
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
     smpl->n_sample++;
-
-    //float update_prob = candidates->data[idx].p;    // not ideal
-    //if (ctx->orig_prob_map.contains(id)) {
-    //    // selected token id is among tracked ids
-    //    update_prob = ctx->orig_prob_map[id] / ctx->cum_orig_prob;
-    //}
-
-    //// update history with original probability of selected token
-    //ctx->weighted_sum = ctx->decay * ctx->weighted_sum + update_prob;
-    //ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
 
     return id;
 }
@@ -1137,94 +1129,49 @@ void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_
     ctx->t_sample_us += ggml_time_us() - t_start;
 }
 
-void llama_prep_adaptive_p_impl(struct llama_sampling * smpl,
+void llama_prep_adaptive_p_impl(
+              struct llama_sampling * smpl,
              llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx) {
-    constexpr float kDelta = 16.6f;
+    constexpr float kDelta = 30.0f; //16.6f;
     auto t_start = ggml_time_us();
-    if (!candidates->sorted) {
-        float max_logit = candidates->data[0].logit;
-        for (int j = 1; j < int(candidates->size); ++j) {
-            max_logit = std::max(max_logit, candidates->data[j].logit);
-        }
-        float min_logit = max_logit - kDelta;
-        float cum_prob = 0.0f;
-        adapt_p_ctx->orig_prob_map.clear();
-        for (int j = 0; j < int(candidates->size); ++j) {
-            if (candidates->data[j].logit > min_logit) {
-                float prob = expf(candidates->data[j].logit - max_logit);
-                cum_prob += prob;
-                adapt_p_ctx->orig_prob_map[candidates->data[j].id] = prob;
-            }
-        }
-        adapt_p_ctx->cum_orig_prob = cum_prob;
-        if (smpl) smpl->t_sample_us += ggml_time_us() - t_start;
-        return;
+    auto & orig_prob = adapt_p_ctx->orig_prob;
+    if (candidates->size != orig_prob.size() || candidates->sorted) {
+        LLAMA_LOG_ERROR("%s: this function must be called before any other sampler has been applied\n", __func__);
+        LLAMA_LOG_ERROR("%s: the sampler has been initialized with a vocabulary of %zu, but is being called with %zu candidates\n",
+                __func__, orig_prob.size(), candidates->size);
+        GGML_ABORT("Bad candidates in adaptive_p sampler");
     }
 
-    float max_logit = candidates->data[0].logit;
-    float min_logit = max_logit - kDelta;
-    float cum_prob = 0.0f;
-    adapt_p_ctx->orig_prob_map.clear();
+    float max_logit = -INFINITY;
     for (int j = 0; j < int(candidates->size); ++j) {
-        auto logit = candidates->data[j].logit;
-        if (logit <= min_logit) {
-            break;
-        }
-        float prob = expf(logit - max_logit);
-        cum_prob += prob;
-        adapt_p_ctx->orig_prob_map[candidates->data[j].id] = prob;
+        orig_prob[j] = candidates->data[j].logit;
+        max_logit = std::max(max_logit, orig_prob[j]);
     }
-    adapt_p_ctx->cum_orig_prob = cum_prob;
+    adapt_p_ctx->cum_orig_prob = iqk_exp_with_thresh(orig_prob.size(), orig_prob.data(), max_logit, max_logit - kDelta);
+
     if (smpl) smpl->t_sample_us += ggml_time_us() - t_start;
-
-    //if (!candidates->sorted) {
-    //    std::sort(candidates->data, candidates->data + candidates->size,
-    //        [](const llama_token_data & a, const llama_token_data & b) {
-    //            return a.logit > b.logit;
-    //        });
-    //    candidates->sorted = true;
-    //}
-    //const float max_logit = candidates->data[0].logit;
-
-    //// decide how many tokens to track based on logit delta
-    //// i.e. do not track unlikely tokens
-    //auto iter = std::lower_bound(
-    //    candidates->data,
-    //    candidates->data + candidates->size,
-    //    max_logit - kDelta,  // delta
-    //    [](const llama_token_data & data, const float delta) {
-    //        return data.logit > delta;
-    //    });
-    //const size_t n_track = std::distance(candidates->data, iter);
-
-    //// store orig_prob_map and cum_orig_prob to estimate original probability later
-    //float cum_prob = 0.0f;
-    //adapt_p_ctx->orig_prob_map.clear();
-    //for (size_t i = 0; i < n_track; ++i) {
-    //    const float prob = expf(candidates->data[i].logit - max_logit);
-    //    cum_prob += prob;
-    //    adapt_p_ctx->orig_prob_map[candidates->data[i].id] = prob;
-    //}
-    //adapt_p_ctx->cum_orig_prob = cum_prob;
 }
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(
+struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
        const float target,
        const float decay,
     const uint32_t seed) {
+    GGML_ASSERT(n_vocab > 0);
     const float clamped_decay = std::clamp(decay, 0.0f, 0.99f);
-    return new llama_sampler_adaptive_p {
+    auto result = new llama_sampler_adaptive_p {
         /* .target          = */ target,
         /* .decay           = */ clamped_decay,
         /* .rng             = */ std::mt19937(seed),
         /* .weighted_sum    = */ target / (1.0f - clamped_decay),
         /* .total_weight    = */ 1.0f / (1.0f - clamped_decay),
-        /* .orig_logit_map  = */ {},
+        /* .orig_prob       = */ {},
         /* .cum_orig_prob   = */ 0.0f,
         /* .max_xform_logit = */ -INFINITY,
         /* .cum_probs       = */ {},
     };
+    result->orig_prob.resize(n_vocab);
+    return result;
 }
 
 // grammar
