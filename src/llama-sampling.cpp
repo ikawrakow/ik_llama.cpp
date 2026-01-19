@@ -311,10 +311,9 @@ void llama_sample_typical_impl(struct llama_sampling * smpl, llama_token_data_ar
     }
 
     // Compute the absolute difference between negative log probability and entropy for each candidate
-    std::vector<float> shifted_scores;
+    std::vector<float> shifted_scores(candidates->size);
     for (size_t i = 0; i < candidates->size; ++i) {
-        float shifted_score = fabsf(-logf(candidates->data[i].p) - entropy);
-        shifted_scores.push_back(shifted_score);
+        shifted_scores[i] = fabsf(-logf(candidates->data[i].p) - entropy);
     }
 
     // Sort tokens based on the shifted_scores and their corresponding indices
@@ -341,10 +340,10 @@ void llama_sample_typical_impl(struct llama_sampling * smpl, llama_token_data_ar
     }
 
     // Resize the output vector to keep only the locally typical tokens
-    std::vector<llama_token_data> new_candidates;
+    std::vector<llama_token_data> new_candidates(last_idx);
     for (size_t i = 0; i < last_idx; ++i) {
         size_t idx = indices[i];
-        new_candidates.push_back(candidates->data[idx]);
+        new_candidates[i] = candidates->data[idx];
     }
 
     // Replace the data in candidates with the new_candidates data
