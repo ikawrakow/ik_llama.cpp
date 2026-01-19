@@ -125,7 +125,7 @@ struct llama_sampling_context * common_sampler_init(const struct llama_vocab* vo
                 break;
         }
     }
-    
+
     return result;
 }
 
@@ -419,7 +419,7 @@ static void sampler_queue(
             case llama_sampler_type::ADAPTIVE_P:  use_adaptive_p = true; break;
             default : break;
         }
-        
+
     }
     if (use_adaptive_p) {
         // adaptive p should be put to the last, so we ignore the order in the sampler
@@ -451,7 +451,7 @@ static llama_token llama_sampling_sample_impl(
     if (ctx_sampling->grammar != NULL && is_resampling) {
         float* logits = llama_get_logits_ith(ctx_main, idx);
         // Apply grammar constraints to all candidates
-        llama_grammar_sample(ctx_sampling->grammar, ctx_main, &cur_p);        
+        llama_grammar_sample(ctx_sampling->grammar, ctx_main, &cur_p);
     }
 
     if (temp < 0.0) {
@@ -471,7 +471,7 @@ static llama_token llama_sampling_sample_impl(
             id = llama_sample_token_mirostat_v2(ctx_main, &cur_p, mirostat_tau, mirostat_eta, &ctx_sampling->mirostat_mu);
         } else if (adaptive_target >= 0.0f && ctx_sampling->adapt_p_ctx!=nullptr) {
             // adaptive p sampling
-            llama_prep_adaptive_p(&cur_p, ctx_sampling->adapt_p_ctx);
+            llama_prep_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx);
             sampler_queue(ctx_main, params, ctx_sampling, cur_p, std::max(1, params.min_keep));
             id = llama_sample_token_adaptive_p(ctx_main, &cur_p, ctx_sampling->adapt_p_ctx);
         } else {
