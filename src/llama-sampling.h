@@ -73,8 +73,9 @@ struct llama_sampler_adaptive_p {
     float total_weight;     // sum(decay^i), converges to 1/(1-decay)
 
     // first referenced in prep
-    std::unordered_map<llama_token, float> orig_prob_map;  // probabilities before sampler_queue
+    std::vector<float>  orig_prob; // for storing the original proibabilities
     float cum_orig_prob;    // for normalizing orig_prob in sample_token
+    int   n_warn = 0;       // for warnings
 
     // first referenced in sample
     float max_xform_logit;  // maximum logit found during transform
