@@ -1150,19 +1150,6 @@ void llama_prep_adaptive_p_impl(
     }
     adapt_p_ctx->cum_orig_prob = iqk_exp_with_thresh(orig_prob.size(), orig_prob.data(), max_logit, max_logit - kDelta);
 
-    //float max_logit = candidates->data[0].logit;
-    //for (int j = 1; j < int(candidates->size); ++j) {
-    //    max_logit = std::max(max_logit, candidates->data[j].logit);
-    //}
-    //float min_logit = max_logit - kDelta;
-    //float cum_prob = 0.0f;
-    //for (int j = 0; j < int(candidates->size); ++j) {
-    //    float prob = candidates->data[j].logit > min_logit ? expf(candidates->data[j].logit - max_logit) : 0.0f;
-    //    cum_prob += prob;
-    //    orig_prob[j] = prob;
-    //}
-    //adapt_p_ctx->cum_orig_prob = cum_prob;
-
     if (smpl) smpl->t_sample_us += ggml_time_us() - t_start;
 }
 

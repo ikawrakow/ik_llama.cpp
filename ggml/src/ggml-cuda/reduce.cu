@@ -14,7 +14,15 @@ template <typename T, int block_size>
 static __global__ void k_add(int nelem, const T * __restrict__ src, T * __restrict__ dst) {
     int i = blockIdx.x*block_size + threadIdx.x;
     if (i >= nelem) return;
-    dst[i] += src[i];
+    if constexpr (std::is_same_v<T, nv_bfloat16>) {
+#if __CUDA_ARCH__ >= CC_AMPERE
+        dst[i] += src[i];
+#else
+        dst[i] = __float2bfloat16((float)src[i] + (float)dst[i]);
+#endif
+    } else {
+        dst[i] += src[i];
+    }
 }
 
 template <int block_size>
@@ -130,7 +138,13 @@ void ggml_cuda_op_reduce([[maybe_unused]] ggml_backend_cuda_context & ctx, ggml_
     // It does not work at all if not all GPUs participate in the reduce op, and we
     // get suboptimal prompt processing performance when we have more than 2 GPUs.
     // Hence, if enabled, we use NCCL only for the cases where it works and performs well.
-    if (info.have_nccl && dst->type != GGML_TYPE_Q8_0 && nhave == nreduce && (nhave == 2 || dst->ne[1] < 32)) {
+#if __CUDA_ARCH__ >= CC_AMPERE
+    constexpr bool bf16_supported = true;
+#else
+    constexpr bool bf16_supported = false;
+#endif
+    if (info.have_nccl && dst->type != GGML_TYPE_Q8_0 && nhave == nreduce && (nhave == 2 || dst->ne[1] < 32) &&
+       (dst->type != GGML_TYPE_BF16 || bf16_supported)) {
         GGML_ASSERT(info.have_nccl);
         GGML_ASSERT(info.device_count == nreduce);
         auto data_type = dst->type == GGML_TYPE_F32 ? ncclFloat : dst->type == GGML_TYPE_BF16 ? ncclBfloat16 : ncclHalf;
