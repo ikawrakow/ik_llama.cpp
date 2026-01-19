@@ -7691,11 +7691,11 @@ void llama_sample_adaptive_p(
     [[maybe_unused]] struct llama_context * ctx,
                    llama_token_data_array * candidates,
           struct llama_sampler_adaptive_p * adapt_p_ctx) {
-    llama_sample_adaptive_p_impl(candidates, adapt_p_ctx);
+    llama_sample_adaptive_p_impl(&ctx->sampling, candidates, adapt_p_ctx);
 }
 
-void llama_prep_adaptive_p(llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx) {
-    llama_prep_adaptive_p_impl(candidates, adapt_p_ctx);
+void llama_prep_adaptive_p(struct llama_context * ctx, llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx) {
+    llama_prep_adaptive_p_impl(&ctx->sampling, candidates, adapt_p_ctx);
 }
 
 

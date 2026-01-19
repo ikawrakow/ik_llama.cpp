@@ -1389,7 +1389,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
            const float decay,
         const uint32_t seed);
 
-    void llama_prep_adaptive_p(
+    void llama_prep_adaptive_p(struct llama_context * ctx,
                  llama_token_data_array * candidates,
         struct llama_sampler_adaptive_p * adapt_p_ctx);
 

@@ -1061,14 +1061,14 @@ llama_token llama_sample_token_adaptive_p_impl(
     const size_t idx = std::distance(ctx->cum_probs.begin(), iter);
     llama_token id = candidates->data[idx].id;
 
-    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
-    smpl->n_sample++;
-
     if (auto it = ctx->orig_prob_map.find(id); it != ctx->orig_prob_map.end()) {
         float update_prob = it->second / ctx->cum_orig_prob;
         ctx->weighted_sum = ctx->decay * ctx->weighted_sum + update_prob;
         ctx->total_weight = ctx->decay * ctx->total_weight + 1.0f;
     }
+
+    smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
+    smpl->n_sample++;
 
     //float update_prob = candidates->data[idx].p;    // not ideal
     //if (ctx->orig_prob_map.contains(id)) {
@@ -1083,12 +1083,15 @@ llama_token llama_sample_token_adaptive_p_impl(
     return id;
 }
 
-void llama_sample_adaptive_p_impl(llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx) {
+void llama_sample_adaptive_p_impl(struct llama_sampling * ctx, llama_token_data_array * candidates,
+        struct llama_sampler_adaptive_p * adapt_p_ctx) {
     if (adapt_p_ctx->target < 0.0f) {
         // sampler is disabled
         llama_sample_softmax_impl(nullptr, candidates);
         return;
     }
+
+    auto t_start = ggml_time_us();
 
     // incomplete softmax because final division can be fused
     float max_l = candidates->data[0].logit;
@@ -1130,12 +1133,15 @@ void llama_sample_adaptive_p_impl(llama_token_data_array * candidates, struct ll
     }
     candidates->sorted = false;
     adapt_p_ctx->max_xform_logit = max_logit;
+
+    ctx->t_sample_us += ggml_time_us() - t_start;
 }
 
-void llama_prep_adaptive_p_impl(
+void llama_prep_adaptive_p_impl(struct llama_sampling * smpl,
              llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx) {
     constexpr float kDelta = 16.6f;
+    auto t_start = ggml_time_us();
     if (!candidates->sorted) {
         float max_logit = candidates->data[0].logit;
         for (int j = 1; j < int(candidates->size); ++j) {
@@ -1152,6 +1158,7 @@ void llama_prep_adaptive_p_impl(
             }
         }
         adapt_p_ctx->cum_orig_prob = cum_prob;
+        if (smpl) smpl->t_sample_us += ggml_time_us() - t_start;
         return;
     }
 
@@ -1169,6 +1176,7 @@ void llama_prep_adaptive_p_impl(
         adapt_p_ctx->orig_prob_map[candidates->data[j].id] = prob;
     }
     adapt_p_ctx->cum_orig_prob = cum_prob;
+    if (smpl) smpl->t_sample_us += ggml_time_us() - t_start;
 
     //if (!candidates->sorted) {
     //    std::sort(candidates->data, candidates->data + candidates->size,
