@@ -336,7 +336,15 @@ static __global__ void k_add_same(int64_t nelem, const data_t * x, const data_t 
     if (i >= nelem) {
         return;
     }
-    z[i] = x[i] + y[i];
+    if constexpr (std::is_same_v<data_t, nv_bfloat16>) {
+#if __CUDA_ARCH__ >= CC_AMPERE
+        z[i] = x[i] + y[i];
+#else
+        z[i] = __float2bfloat16((float)x[i] + (float)y[i]);
+#endif
+    } else {
+        z[i] = x[i] + y[i];
+    }
 }
 
 template <int block_size>
@@ -372,20 +380,6 @@ static __global__ void k_add_same_q8_0(int nelem, const block_q8_0 * x, const fl
         z[ib].d = (half)d;
     }
 }
-
-//static __global__ void k_add_same_q8_0(const block_q8_0 * x, const block_q8_0 * y, block_q8_0 * z) {
-//    int ib = blockIdx.x;
-//    int iq = threadIdx.x;
-//    float s  = (float)x[ib].d * x[ib].qs[iq] + (float)y[ib].d * y[ib].qs[iq];
-//    float as = fabsf(s);
-//    as = warp_reduce_max(as);
-//    float d = as / 127;
-//    float id = d > 0 ? 1/d : 0;
-//    z[ib].qs[iq] = roundf(s * id);
-//    if (threadIdx.x == 0) {
-//        z[ib].d = (half)d;
-//    }
-//}
 
 void ggml_op_add_same_type(ggml_backend_cuda_context & ctx, enum ggml_type type, size_t nelem,
         const void * x, const void * y, void * z) {

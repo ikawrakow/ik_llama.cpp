@@ -14,7 +14,15 @@ template <typename T, int block_size>
 static __global__ void k_add(int nelem, const T * __restrict__ src, T * __restrict__ dst) {
     int i = blockIdx.x*block_size + threadIdx.x;
     if (i >= nelem) return;
-    dst[i] += src[i];
+    if constexpr (std::is_same_v<T, nv_bfloat16>) {
+#if __CUDA_ARCH__ >= CC_AMPERE
+        dst[i] += src[i];
+#else
+        dst[i] = __float2bfloat16((float)src[i] + (float)dst[i]);
+#endif
+    } else {
+        dst[i] += src[i];
+    }
 }
 
 template <int block_size>
