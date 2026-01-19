@@ -2,6 +2,8 @@
 #include "llama-vocab.h"
 #include "llama-grammar.h"
 
+#include "iqk/iqk_cpu_ops.h"
+
 #include <algorithm>
 #include <cstring>
 #include <ctime>
@@ -1131,7 +1133,7 @@ void llama_prep_adaptive_p_impl(
               struct llama_sampling * smpl,
              llama_token_data_array * candidates,
     struct llama_sampler_adaptive_p * adapt_p_ctx) {
-    constexpr float kDelta = 16.6f;
+    constexpr float kDelta = 30.0f; //16.6f;
     auto t_start = ggml_time_us();
     auto & orig_prob = adapt_p_ctx->orig_prob;
     if (candidates->size != orig_prob.size() || candidates->sorted) {
@@ -1141,18 +1143,26 @@ void llama_prep_adaptive_p_impl(
         GGML_ABORT("Bad candidates in adaptive_p sampler");
     }
 
-    float max_logit = candidates->data[0].logit;
-    for (int j = 1; j < int(candidates->size); ++j) {
-        max_logit = std::max(max_logit, candidates->data[j].logit);
-    }
-    float min_logit = max_logit - kDelta;
-    float cum_prob = 0.0f;
+    float max_logit = -INFINITY;
     for (int j = 0; j < int(candidates->size); ++j) {
-        float prob = candidates->data[j].logit > min_logit ? expf(candidates->data[j].logit - max_logit) : 0.0f;
-        cum_prob += prob;
-        orig_prob[j] = prob;
+        orig_prob[j] = candidates->data[j].logit;
+        max_logit = std::max(max_logit, orig_prob[j]);
     }
-    adapt_p_ctx->cum_orig_prob = cum_prob;
+    adapt_p_ctx->cum_orig_prob = iqk_exp_with_thresh(orig_prob.size(), orig_prob.data(), max_logit, max_logit - kDelta);
+
+    //float max_logit = candidates->data[0].logit;
+    //for (int j = 1; j < int(candidates->size); ++j) {
+    //    max_logit = std::max(max_logit, candidates->data[j].logit);
+    //}
+    //float min_logit = max_logit - kDelta;
+    //float cum_prob = 0.0f;
+    //for (int j = 0; j < int(candidates->size); ++j) {
+    //    float prob = candidates->data[j].logit > min_logit ? expf(candidates->data[j].logit - max_logit) : 0.0f;
+    //    cum_prob += prob;
+    //    orig_prob[j] = prob;
+    //}
+    //adapt_p_ctx->cum_orig_prob = cum_prob;
+
     if (smpl) smpl->t_sample_us += ggml_time_us() - t_start;
 }
 
