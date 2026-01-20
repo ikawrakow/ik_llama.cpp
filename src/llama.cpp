@@ -2316,9 +2316,12 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
 #if IK_PRINT_TIMING == 2
         auto tim1 = ggml_time_us();
 #endif
-        GGML_ASSERT(lctx.inp_out_ids && "every model that can must skip unused outputs");
         const int64_t n_tokens = batch.n_tokens;
+        if (n_tokens > 1) {
+            GGML_ASSERT(lctx.inp_out_ids && "every model that can must skip unused outputs");
+        }
 
+        if (lctx.inp_out_ids && lctx.inp_out_ids->buffer) {
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_out_ids->buffer));
         int32_t * data = (int32_t *) lctx.inp_out_ids->data;
 
@@ -2340,6 +2343,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
             data[0] = n_tokens - 1;
         } else {
             GGML_ASSERT(lctx.n_outputs == 0);
+        }
         }
 #if IK_PRINT_TIMING == 2
         auto tim2 = ggml_time_us();
