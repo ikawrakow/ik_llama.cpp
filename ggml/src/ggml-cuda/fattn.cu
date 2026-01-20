@@ -178,6 +178,10 @@ bool ggml_cuda_fattn_is_supported(ggml_backend_cuda_context & ctx, const ggml_te
     }
 
     if (new_mma_available(cc) && (Q->ne[0] == 576 || (K->ne[0] == 192 && V->ne[0] == 128 && mma_better_than_turing(cc)))) {
+        if (Q->ne[0] == 576) {
+            int gqa_ratio = Q->ne[2]/K->ne[2];
+            return (gqa_ratio % 16) == 0;
+        }
         return true;
     }
 
