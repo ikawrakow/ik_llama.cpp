@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ggml.h"
+
 struct ggml_graph_node_properties {
     void * node_address;
     ggml_op node_op;
