@@ -750,7 +750,7 @@ void llm_load_hparams(
             {
                 if (hparams.n_head_kv() == 1) {
                     int n_nead_kv = hparams.n_gqa();
-                    if (n_nead_kv%16 != 0 || hparams.n_embd_head_k != 576 || hparams.n_embd_head_v != 512 ||
+                    if (n_nead_kv%4 != 0 || hparams.n_embd_head_k != 576 || hparams.n_embd_head_v != 512 ||
                         hparams.n_rot != 64) {
                         printf("==========================================================================\n");
                         printf("Detected incompatible DeepSeek model without a known way to fixc it.\n");
@@ -788,6 +788,7 @@ void llm_load_hparams(
 
                 switch (hparams.n_layer) {
                     case 27: model.type = e_model::MODEL_16B; break;
+                    case 47: model.type = e_model::MODEL_30B_A3B; break; // GLM-4.7-Flash
                     case 60: model.type = e_model::MODEL_236B; break;
                     case 61: model.type = e_model::MODEL_671B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
