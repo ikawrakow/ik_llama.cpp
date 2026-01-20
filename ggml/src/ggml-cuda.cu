@@ -3342,7 +3342,19 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_diag_mask_inf(ctx, dst);
             break;
         case GGML_OP_SOFT_MAX:
-            if (fusion && i + 4 < cgraph->n_nodes &&
+            if (fusion && i + 8 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_RESHAPE  &&
+                cgraph->nodes[i+2]->op == GGML_OP_ADD &&
+                cgraph->nodes[i+3]->op == GGML_OP_ARGSORT &&
+                cgraph->nodes[i+4]->op == GGML_OP_VIEW     &&
+                cgraph->nodes[i+5]->op == GGML_OP_GET_ROWS &&
+                cgraph->nodes[i+6]->op == GGML_OP_RESHAPE  &&
+                cgraph->nodes[i+7]->op == GGML_OP_SUM_ROWS &&
+                cgraph->nodes[i+8]->op == GGML_OP_DIV) {
+                ggml_cuda_op_topk_moe(ctx, cgraph->nodes[i], cgraph->nodes[i+8], cgraph->nodes[i+4], cgraph->nodes[i+2]->src[1]);
+                i += 8;
+            }
+            else if (fusion && i + 4 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_RESHAPE  &&
                 cgraph->nodes[i+2]->op == GGML_OP_ARGSORT  &&
                 cgraph->nodes[i+3]->op == GGML_OP_VIEW     &&
