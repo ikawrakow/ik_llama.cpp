@@ -788,6 +788,7 @@ void llm_load_hparams(
 
                 switch (hparams.n_layer) {
                     case 27: model.type = e_model::MODEL_16B; break;
+                    case 47: model.type = e_model::MODEL_30B_A3B; break; // GLM-4.7-Flash
                     case 60: model.type = e_model::MODEL_236B; break;
                     case 61: model.type = e_model::MODEL_671B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
