@@ -27,6 +27,14 @@ const char * llama_hparams::rope_scaling_type_name(llama_rope_scaling_type type)
     return LLAMA_ROPE_SCALING_TYPES.at(type);
 }
 
+static inline const char * llm_expert_gating_func_name(llm_expert_gating_func_type type) {
+    switch (type) {
+        case LLM_EXPERT_GATING_FUNC_SOFTMAX: return "softmax";
+        case LLM_EXPERT_GATING_FUNC_SIGMOID: return "sigmoid";
+        case LLM_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT: return "weight";
+        default: return "none";
+    }
+}
 
 
 void llm_load_hparams(
@@ -778,11 +786,17 @@ void llm_load_hparams(
                 ml.get_key(LLM_KV_EXPERT_SHARED_COUNT, hparams.n_expert_shared);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE, hparams.expert_weights_scale);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM, hparams.expert_weights_norm, false);
+                hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_TYPE_NONE;
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func, false);
-	            if (hparams.expert_gating_func == 0) {
-                    // for compatibility with existing DeepSeek V2 and V2.5 GGUFs
-                    // that have no expert_gating_func model parameter set
-                    hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SOFTMAX;
+                if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {
+                    // Some models don't have the experts gating function recorded in the GGUF
+                    // Hence, we make the LLM_KV_EXPERT_GATING_FUNC entry optional, and set here if missing.
+                    // DeepSeek models normally have softmax as gating function, but there is GLM-4.7-Flash now
+                    // (identified via number of layers being 47 or 48), which uses sigmoid.
+                    hparams.expert_gating_func = hparams.n_layer == 47 || hparams.n_layer == 48 ?
+                        LLM_EXPERT_GATING_FUNC_SIGMOID : LLM_EXPERT_GATING_FUNC_SOFTMAX;
+                    printf("================= Missing experts gating function -> set to %s\n",
+                            llm_expert_gating_func_name(llm_expert_gating_func_type(hparams.expert_gating_func)));
                 }
                 ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false);
 
