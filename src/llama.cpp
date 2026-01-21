@@ -4627,7 +4627,7 @@ struct llama_context * llama_new_context_with_model(
             // LLAMA_SPLIT_MODE_LAYER and LLAMA_SPLIT_MODE_GRAPH require a backend for each GPU
             auto params = cparams.cuda_params;
             std::string new_params;
-            if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
+            if (false && model->split_mode == LLAMA_SPLIT_MODE_GRAPH) {
                 static const std::string extra_string{"graphs=0"};
                 if (params) new_params = std::string{(const char *)params} + ',';
                 new_params += extra_string;
