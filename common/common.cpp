@@ -786,6 +786,11 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.max_extra_alloc_MiB = std::stoi(argv[i]);
         return true;
     }
+    if (arg == "-nrep" || arg == "--n-repetitions") {
+        CHECK_ARG
+        params.nrep = std::stoi(argv[i]);
+        return true;
+    }
     if (arg == "--samplers") {
         CHECK_ARG
         const auto sampler_names = string_split(argv[i], ";");
