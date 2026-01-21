@@ -789,10 +789,13 @@ void llm_load_hparams(
                 hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_TYPE_NONE;
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func, false);
                 if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {
-                    // Some models don't have the experts gating function recorded in the GGUF
+                    // Older DeepSeek models from the 2.0/2.5 series may not have the experts gating function recorded in the GGUF.
+                    // Such models use SOFTMAX as the experts gating function.
+                    // The new (new as of this commit) GLM-4.7-Flash may also be missing the experts gating function.
+                    // GLM-4.7-Flash uses SIGMOID as the experts gating function.
                     // Hence, we make the LLM_KV_EXPERT_GATING_FUNC entry optional, and set here if missing.
-                    // DeepSeek models normally have softmax as gating function, but there is GLM-4.7-Flash now
-                    // (identified via number of layers being 47 or 48), which uses sigmoid.
+                    // We distinguish between GLM-4.7-Flash and DeepSeek-2/2.5 models by the number of layers.
+                    // GLM-4.7-Flash has 47 layers (or 48, if an MTP layer is included in the GGUF).
                     hparams.expert_gating_func = hparams.n_layer == 47 || hparams.n_layer == 48 ?
                         LLM_EXPERT_GATING_FUNC_SIGMOID : LLM_EXPERT_GATING_FUNC_SOFTMAX;
                     printf("================= Missing experts gating function -> set to %s\n",
