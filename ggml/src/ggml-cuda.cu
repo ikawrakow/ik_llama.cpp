@@ -512,7 +512,11 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
+#ifdef USE_CUDA_GRAPH
+    // Let's leave this debug log in for now, so we have a trace in case
+    // number of CUDA graphs goes crazy
     printf("%s: have %d graphs\n", __func__, int(cuda_graphs.size()));
+#endif
 
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter == 0; });
