@@ -25,6 +25,7 @@
 #include <cfloat>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #if defined(GGML_USE_HIPBLAS)
 #include "vendors/hip.h"
@@ -849,13 +850,16 @@ struct ggml_backend_cuda_context {
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
 
-    std::unique_ptr<ggml_cuda_graph> cuda_graph;
-
     int  fusion = GGML_CUDA_FUSION;
     int  offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
     int  mmq_id_thresh = 32;
 #ifdef USE_CUDA_GRAPH
     bool use_cuda_graph = true;
+
+    ggml_cuda_graph * cur_graph = nullptr;
+
+    std::unordered_map<const void *, std::unique_ptr<ggml_cuda_graph>> cuda_graphs;
+
 #endif
 
     void * copy_buffer = nullptr;
