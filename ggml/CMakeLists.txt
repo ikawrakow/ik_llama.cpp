@@ -112,7 +112,6 @@ option(GGML_ACCELERATE                      "ggml: enable Accelerate framework" 
 option(GGML_BLAS                            "ggml: use BLAS"                                  ${GGML_BLAS_DEFAULT})
 set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
-option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             OFF)
 option(GGML_IQK_MUL_MAT                     "ggml: use optimized iqk matrix multiplications"  ON)
 
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)

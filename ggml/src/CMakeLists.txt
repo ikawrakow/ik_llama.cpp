@@ -299,15 +299,6 @@ if (GGML_IQK_MUL_MAT)
     endif()
 endif()
 
-if (GGML_LLAMAFILE)
-    message(STATUS "Using llamafile")
-
-    add_compile_definitions(GGML_USE_LLAMAFILE)
-
-    set(GGML_HEADERS_LLAMAFILE llamafile/sgemm.h)
-    set(GGML_SOURCES_LLAMAFILE llamafile/sgemm.cpp)
-endif()
-
 if (GGML_CUDA)
     cmake_minimum_required(VERSION 3.18)  # for CMAKE_CUDA_ARCHITECTURES
 
@@ -1534,7 +1525,6 @@ add_library(ggml
             ${GGML_SOURCES_VULKAN}    ${GGML_HEADERS_VULKAN}
             ${GGML_SOURCES_ROCM}      ${GGML_HEADERS_ROCM}
             ${GGML_SOURCES_BLAS}      ${GGML_HEADERS_BLAS}
-            ${GGML_SOURCES_LLAMAFILE} ${GGML_HEADERS_LLAMAFILE}
             ${GGML_SOURCES_IQK_MM}    ${GGML_HEADERS_IQK_MM}
             ${GGML_SOURCES_IQK}       ${GGML_HEADERS_IQK}
             ${GGML_SOURCES_CANN}      ${GGML_HEADERS_CANN}
