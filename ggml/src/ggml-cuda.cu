@@ -498,7 +498,8 @@ std::unique_ptr<ggml_cuda_pool> ggml_backend_cuda_context::new_pool_for_device(i
 
 static std::mutex ggml_cuda_lock;
 static std::condition_variable ggml_cuda_lock_cv;
-static std::atomic<int> ggml_cuda_lock_counter;
+//static std::atomic<int> ggml_cuda_lock_counter;
+static int ggml_cuda_lock_counter = 0;
 
 ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
     device(device), name(GGML_CUDA_NAME + std::to_string(device)) {
@@ -511,14 +512,19 @@ ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
 
 ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
+    printf("%s: have %d graphs\n", __func__, int(cuda_graphs.size()));
+
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
-    ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
+    ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter == 0; });
 
     auto info = const_cast<ggml_cuda_device_info*>(&ggml_cuda_info());
     info->all_ctx[this->device] = nullptr;
 
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
+    }
+    if (compute_event != nullptr) {
+        CUDA_CHECK(cudaEventDestroy(compute_event));
     }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
@@ -3769,6 +3775,11 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 
         if (ggml_is_noop(node)) continue;
 
+        if (node->op == GGML_OP_REDUCE) {
+            use_cuda_graph = false;
+            break;
+        }
+
         if (node->op == GGML_OP_MUL_MAT_ID && (node->ne[2] != 1 || node->src[2]->ne[0] != 1)) {
             use_cuda_graph = false; // This node type is not supported by CUDA graph capture
 #ifndef NDEBUG
@@ -3988,7 +3999,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
             graph_evaluated_or_captured = true; // CUDA graph has been captured
 
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);
-            if (ggml_cuda_lock_counter.fetch_sub(1, std::memory_order_relaxed) == 1) {
+            if (--ggml_cuda_lock_counter == 0) {
                 ggml_cuda_lock_cv.notify_all();
             }
         } else {
@@ -4026,7 +4037,11 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
     // Also disable for multi-gpu for now. TO DO investigate
     bool use_cuda_graph = !disable_cuda_graphs_due_to_env && cuda_ctx->use_cuda_graph;
 
-    auto graph = ggml_cuda_get_graph(*cuda_ctx, ggml_cuda_graph_get_key(cgraph));
+    ggml_cuda_graph * graph = nullptr;
+    if (use_cuda_graph) {
+        auto graph_key = ggml_cuda_graph_get_key(cgraph);
+        graph = ggml_cuda_get_graph(*cuda_ctx, graph_key);
+    }
     cuda_ctx->cur_graph = graph;
 
     bool cuda_graph_update_required = false;
@@ -4053,14 +4068,18 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
         use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(graph, cgraph, use_cuda_graph, cuda_ctx->stream());
 
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
-        if (use_cuda_graph && cuda_graph_update_required) {
-            graph->number_consecutive_updates++;
-        } else {
-            graph->number_consecutive_updates = 0;
+        if (use_cuda_graph) {
+            if (cuda_graph_update_required) {
+                graph->number_consecutive_updates++;
+            } else {
+                graph->number_consecutive_updates = 0;
+            }
         }
 
         if (graph->number_consecutive_updates >= 4) {
             graph->disable_due_to_too_many_updates = true;
+            use_cuda_graph = false;
+            cuda_ctx->cur_graph = nullptr;
 #ifndef NDEBUG
             GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
 #endif
@@ -4069,15 +4088,16 @@ GGML_CALL static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t
 
     if (use_cuda_graph && cuda_graph_update_required) {
         // Start CUDA graph capture
+        // Why are we protecting an atomic_int with a mutex?
         {
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);
-            ggml_cuda_lock_counter.fetch_add(1, std::memory_order_relaxed);
+            ++ggml_cuda_lock_counter;
         }
 
         CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
     }
 
-    if (!use_cuda_graph) {
+    if (graph && !use_cuda_graph) {
         graph->use_cpy_indirection = false;
     }
 
