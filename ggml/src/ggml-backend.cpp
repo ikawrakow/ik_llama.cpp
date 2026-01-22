@@ -2165,6 +2165,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         for (auto & s : sched->statuses) s = GGML_STATUS_SUCCESS;
 
+        int first_reduce = -1;
         bool work_done = false;
 #ifdef GGML_USE_OPENMP
         //This may not be available in old OpenMP versions
@@ -2185,7 +2186,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
-        int first_reduce = -1;
         for (int i = 0; i < sched->n_splits; i++) {
             auto split = &sched->splits[i];
             if (split->graph.n_nodes == 1 && split->graph.nodes[0]->op == GGML_OP_REDUCE) {
