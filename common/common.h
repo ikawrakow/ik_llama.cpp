@@ -145,38 +145,39 @@ struct gpt_params {
 
     int32_t n_threads             = cpu_get_num_math();
     int32_t n_threads_draft       =    -1;
-    int32_t n_threads_batch       =    -1; // number of threads to use for batch processing (-1 = use n_threads)
+    int32_t n_threads_batch       =    -1;  // number of threads to use for batch processing (-1 = use n_threads)
     int32_t n_threads_batch_draft =    -1;
-    int32_t n_predict             =    -1; // new tokens to predict
-    int32_t n_ctx                 =     0; // context size
-    int32_t n_ctx_draft           =     0; // context size for draft model
-    int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
-    int32_t n_ubatch              =   512; // physical batch size for prompt processing (must be >=32 to use BLAS)
-    int32_t n_keep                =     0; // number of tokens to keep from initial prompt
-    int32_t n_draft               =    16; // number of tokens to draft during speculative decoding
-    int32_t n_draft_min           =     1; // minimum number of tokens to draft during speculative decoding
-    float   p_draft_min           =  0.8f; // minimum speculative decoding probability (greedy)
-    int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
-    int32_t n_parallel            =     1; // number of parallel sequences to decode
-    int32_t n_sequences           =     1; // number of sequences to decode
-    float   p_split               =  0.1f; // speculative decoding split probability
-    int32_t n_gpu_layers          =    -1; // number of layers to store in VRAM (-1 - use default)
-    int32_t n_gpu_layers_draft    =    -1; // number of layers to store in VRAM for the draft model (-1 - use default)
-    int32_t main_gpu              =     0; // the GPU that is used for scratch and small tensors
-    int32_t max_gpu               =     0; // max number of GPUs to use at a time for split mode "graph"
-    float   tensor_split[128]     =   {0}; // how split tensors should be distributed across GPUs
-    int32_t grp_attn_n            =     1; // group-attention factor
-    int32_t grp_attn_w            =   512; // group-attention width
-    int32_t n_print               =    -1; // print token count every n tokens (-1 = disabled)
-    float   rope_freq_base        =  0.0f; // RoPE base frequency
-    float   rope_freq_scale       =  0.0f; // RoPE frequency scaling factor
-    float   yarn_ext_factor       = -1.0f; // YaRN extrapolation mix factor
+    int32_t n_predict             =    -1;  // new tokens to predict
+    int32_t n_ctx                 =     0;  // context size
+    int32_t n_ctx_draft           =     0;  // context size for draft model
+    int32_t n_batch               =  2048;  // logical batch size for prompt processing (must be >=32 to use BLAS)
+    int32_t n_ubatch              =   512;  // physical batch size for prompt processing (must be >=32 to use BLAS)
+    int32_t n_keep                =     0;  // number of tokens to keep from initial prompt
+    int32_t n_draft               =    16;  // number of tokens to draft during speculative decoding
+    int32_t n_draft_min           =     1;  // minimum number of tokens to draft during speculative decoding
+    float   p_draft_min           =  0.8f;  // minimum speculative decoding probability (greedy)
+    int32_t n_chunks              =    -1;  // max number of chunks to process (-1 = unlimited)
+    int32_t n_parallel            =     1;  // number of parallel sequences to decode
+    int32_t n_sequences           =     1;  // number of sequences to decode
+    float   p_split               =  0.1f;  // speculative decoding split probability
+    int32_t n_gpu_layers          =    -1;  // number of layers to store in VRAM (-1 - use default)
+    int32_t n_gpu_layers_draft    =    -1;  // number of layers to store in VRAM for the draft model (-1 - use default)
+    int32_t main_gpu              =     0;  // the GPU that is used for scratch and small tensors
+    int32_t max_gpu               =     0;  // max number of GPUs to use at a time for split mode "graph"
+    float   tensor_split[128]     =   {0};  // how split tensors should be distributed across GPUs
+    int32_t grp_attn_n            =     1;  // group-attention factor
+    int32_t grp_attn_w            =   512;  // group-attention width
+    int32_t n_print               =    -1;  // print token count every n tokens (-1 = disabled)
+    float   rope_freq_base        =  0.0f;  // RoPE base frequency
+    float   rope_freq_scale       =  0.0f;  // RoPE frequency scaling factor
+    float   yarn_ext_factor       = -1.0f;  // YaRN extrapolation mix factor
     float   yarn_attn_factor      =  -1.0f; // YaRN magnitude scaling factor
-    float   yarn_beta_fast        = -1.0f; // YaRN low correction dim
+    float   yarn_beta_fast        = -1.0f;  // YaRN low correction dim
     float   yarn_beta_slow        =  -1.0f; // YaRN high correction dim
-    int32_t yarn_orig_ctx         =     0; // YaRN original context length
-    float   defrag_thold          = -1.0f; // KV cache defragmentation threshold
-    int32_t max_extra_alloc_MiB   = 256;   // additional VRAM per GPU the scheduler may allocate for more efficient compute graph evaluation
+    int32_t yarn_orig_ctx         =     0;  // YaRN original context length
+    float   defrag_thold          = -1.0f;  // KV cache defragmentation threshold
+    int32_t max_extra_alloc_MiB   = 256;    // extra VRAM per GPU the scheduler may allocate for more efficient compute graph evaluation
+    int32_t nrep                  = 1;      // number of repetitions used in sweep bench
 
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
