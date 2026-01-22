@@ -54,13 +54,6 @@
 #if defined(__ARM_FEATURE_SVE)
 int ggml_sve_cnt_b = 0;
 #endif
-#if defined(__ARM_FEATURE_SVE) || defined(__ARM_FEATURE_MATMUL_INT8)
-#undef GGML_USE_LLAMAFILE
-#endif
-
-#ifdef GGML_USE_LLAMAFILE
-#include <llamafile/sgemm.h>
-#endif
 
 #if defined(_MSC_VER)
 // disable "possible loss of data" to avoid hundreds of casts
@@ -28664,14 +28657,6 @@ int ggml_cpu_has_rpc(void) {
 
 int ggml_cpu_has_cann(void) {
 #if defined(GGML_USE_CANN)
-    return 1;
-#else
-    return 0;
-#endif
-}
-
-int ggml_cpu_has_llamafile(void) {
-#if defined(GGML_USE_LLAMAFILE)
     return 1;
 #else
     return 0;
