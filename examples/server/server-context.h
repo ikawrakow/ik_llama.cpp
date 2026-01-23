@@ -103,6 +103,14 @@ struct server_slot {
     bool anthropic_thinking_block_started = false;
     bool anthropic_text_block_started = false;
 
+    bool oai_resp_thinking_block_started = false;
+    bool oai_resp_text_block_started = false;
+
+    std::string oai_resp_id;
+    std::string oai_resp_reasoning_id;
+    std::string oai_resp_message_id;
+    std::string oai_resp_fc_id;
+
     int32_t ga_i = 0;   // group-attention state
     int32_t ga_n = 1;   // group-attention factor
     int32_t ga_w = 512; // group-attention width

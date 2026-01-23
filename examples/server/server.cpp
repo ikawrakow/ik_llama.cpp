@@ -1146,9 +1146,10 @@ int main(int argc, char ** argv) {
                         if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
                             return server_sent_anthropic_event(sink, res);
                         }
-                        else {
-                            return server_sent_event(sink, res);
+                        if (oaicompat == OAICOMPAT_TYPE_RESP) {
+                            return server_sent_oai_resp_event(sink, res);
                         }
+                        return server_sent_event(sink, res);
                     };
                     // flush the first result as it's not an error
                     if (!first_result_json.empty()) {
@@ -1170,7 +1171,7 @@ int main(int argc, char ** argv) {
                     json res_json = result->to_json();
                     bool ok = false;
                     if (result->is_error()) {
-                        ok = sse(json{ { "error", result->to_json() } });
+                        ok = server_sent_event(sink, json{ { "error", result->to_json() } });
                         sink.done();
                         return false; // go to on_complete()
                     }
@@ -1189,7 +1190,7 @@ int main(int argc, char ** argv) {
 
                     // check if there is more data
                     if (!rd->has_next()) {
-                        if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE) {
+                        if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE && oaicompat != OAICOMPAT_TYPE_RESP) {
                             static const std::string ev_done = "data: [DONE]\n\n";
                             sink.write(ev_done.data(), ev_done.size());
                         }
@@ -1263,6 +1264,20 @@ int main(int argc, char ** argv) {
             req.is_connection_closed,
             res,
             OAICOMPAT_TYPE_CHAT);
+    };
+
+    const auto handle_responses = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+        auto body = json::parse(req.body);
+        std::vector<raw_buffer> files;
+        json body_parsed = convert_responses_to_chatcmpl(body);
+        json data = oaicompat_chat_params_parse(ctx_server.model, body_parsed, ctx_server.oai_parser_opt, files);
+        handle_completions_impl(
+            SERVER_TASK_TYPE_COMPLETION,
+            data,
+            files,
+            req.is_connection_closed,
+            res,
+            OAICOMPAT_TYPE_RESP);
     };
 
     const auto handle_anthropic_messages = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
@@ -1913,6 +1928,7 @@ int main(int argc, char ** argv) {
     svr->Post("/v1/completions",     handle_completions_oai);
     svr->Post("/chat/completions",    handle_chat_completions);
     svr->Post("/v1/chat/completions", handle_chat_completions);
+    svr->Post("/v1/responses",        handle_responses);
     svr->Post("/v1/messages",         handle_anthropic_messages);
     svr->Post("/v1/messages/count_tokens", handle_anthropic_count_tokens);
     svr->Post("/infill",              handle_infill);

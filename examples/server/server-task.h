@@ -39,6 +39,7 @@ enum oaicompat_type {
     OAICOMPAT_TYPE_COMPLETION,
     OAICOMPAT_TYPE_EMBEDDING,
     OAICOMPAT_TYPE_ANTHROPIC,
+    OAICOMPAT_TYPE_RESP,
 };
 
 
@@ -204,6 +205,14 @@ struct server_task_result_cmpl_partial : server_task_result {
     bool anthropic_thinking_block_started = false;
     bool anthropic_text_block_started = false;
 
+    bool oai_resp_thinking_block_started = false;
+    bool oai_resp_text_block_started = false;
+
+    std::string oai_resp_id;
+    std::string oai_resp_reasoning_id;
+    std::string oai_resp_message_id;
+    std::string oai_resp_fc_id;
+
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
     }
@@ -216,6 +225,8 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     json to_json_oaicompat_chat_partial();
 
+    json to_json_oaicompat_resp_partial();
+
     virtual json to_json() override {
         switch (oaicompat) {
         case OAICOMPAT_TYPE_NONE:
@@ -226,6 +237,8 @@ struct server_task_result_cmpl_partial : server_task_result {
             return to_json_oaicompat_chat_partial();
         case OAICOMPAT_TYPE_ANTHROPIC:
             return to_json_anthropic_partial();
+        case OAICOMPAT_TYPE_RESP:
+            return to_json_oaicompat_resp_partial();
         default:
             GGML_ASSERT(false && "Invalid oaicompat_type");
         };
@@ -233,6 +246,10 @@ struct server_task_result_cmpl_partial : server_task_result {
 };
 
 struct server_task_result_cmpl_final : server_task_result {
+    std::string oai_resp_id;
+    std::string oai_resp_reasoning_id;
+    std::string oai_resp_message_id;
+
     virtual bool is_stop() override {
         return true;
     }
@@ -249,6 +266,10 @@ struct server_task_result_cmpl_final : server_task_result {
 
     json to_json_oaicompat_chat_stream();
 
+    json to_json_oaicompat_resp_final();
+
+    json to_json_oaicompat_resp_stream();
+
     virtual json to_json() override {
         switch (oaicompat) {
         case OAICOMPAT_TYPE_NONE:
@@ -259,6 +280,8 @@ struct server_task_result_cmpl_final : server_task_result {
             return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat_final();
         case OAICOMPAT_TYPE_ANTHROPIC:
             return stream ? to_json_anthropic_stream() : to_json_anthropic_final();
+        case OAICOMPAT_TYPE_RESP:
+            return stream ? to_json_oaicompat_resp_stream() : to_json_oaicompat_resp_final();
         default:
             GGML_ASSERT(false && "Invalid oaicompat_type");
         }
