@@ -1441,11 +1441,11 @@ static ggml_tensor * llm_build_kqv(
                     0);
         cb(v, "v", il);
 
-        if (q->ne[1] == 1 && k->ne[1] >= 8192 && q->ne[2] / k->ne[2] == 12 && !sinks && n_swa == 0 &&
-            k->view_src && k->view_src->buffer && !ggml_backend_buffer_is_host(k->view_src->buffer) &&
-            k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16) {
-            cur = build_glm45_fa(ctx, q, k, v, kq_mask, kq_scale, should_use_f32_precision);
-        } else {
+        //if (q->ne[1] == 1 && k->ne[1] >= 8192 && q->ne[2] / k->ne[2] == 12 && !sinks && n_swa == 0 &&
+        //    k->view_src && k->view_src->buffer && !ggml_backend_buffer_is_host(k->view_src->buffer) &&
+        //    k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16) {
+        //    cur = build_glm45_fa(ctx, q, k, v, kq_mask, kq_scale, should_use_f32_precision);
+        //} else {
 
             cur = ggml_flash_attn_ext(ctx, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                     hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
@@ -1461,7 +1461,7 @@ static ggml_tensor * llm_build_kqv(
                 ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
             }
             //ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
-        }
+        //}
 
         cur = ggml_reshape_2d(ctx, cur, n_embd_head_v*n_head, n_tokens);
     } else {
@@ -9390,11 +9390,11 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                              ggml_row_size(split_vl->type, n_embd_head_v), 0);
                 cb(v, "v", il_cb);
 
-                if (q->ne[1] == 1 && k->ne[1] >= 65536/k->ne[2] && q->ne[2] / k->ne[2] == 12 && !sinks && n_swa == 0 &&
-                    k->view_src && k->view_src->buffer && !ggml_backend_buffer_is_host(k->view_src->buffer) &&
-                    k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16) {
-                    cur = build_glm45_fa(ctx0, q, k, v, KQ_mask, KQ_scale, should_use_f32_precision);
-                } else {
+                //if (q->ne[1] == 1 && k->ne[1] >= 65536/k->ne[2] && q->ne[2] / k->ne[2] == 12 && !sinks && n_swa == 0 &&
+                //    k->view_src && k->view_src->buffer && !ggml_backend_buffer_is_host(k->view_src->buffer) &&
+                //    k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16) {
+                //    cur = build_glm45_fa(ctx0, q, k, v, KQ_mask, KQ_scale, should_use_f32_precision);
+                //} else {
                     cur = ggml_flash_attn_ext(ctx0, q, k, v, KQ_mask, KQ_scale, hparams.f_max_alibi_bias,
                             hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
                     cb(cur, "flash_attn", il_cb);
@@ -9413,7 +9413,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     if (should_use_f32_precision) {
                         ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
                     }
-                }
+                //}
 
                 cur = ggml_reshape_2d(ctx0, cur, split_wo->ne[0], n_tokens);
                 cb(cur, "flash_attn_reshaped", il_cb);
