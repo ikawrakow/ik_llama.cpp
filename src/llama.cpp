@@ -1687,6 +1687,34 @@ static void llm_prepare_mla(llama_model & model, int mla) {
         printf("Computed %s as %ld x %ld and stored in buffer %s\n", name.c_str(), wkv_b->ne[0], wkv_b->ne[1],
                     ggml_backend_buffer_name(l.computed_wkv_b->buffer));
 
+        if (int n_device = model.devices.size(); n_device > 1) {
+            l.wkv_b_per_device.reserve(n_device);
+            int nh_per_device = (n_head + n_device - 1)/n_device;
+            int n_per_head = wkv_b->ne[1] / n_head;
+            auto ptr = (const char *)wkv_b->data;
+            for (int id = 0; id < int(model.devices.size()); ++id) {
+                int this_nh = std::min(nh_per_device, n_head - id*nh_per_device);
+                if (this_nh <= 0) break;
+                auto wkv_b_id = std::make_unique<ggml_tensor>(*wkv_b);
+                wkv_b_id->ne[1] = this_nh * n_per_head;
+                wkv_b_id->nb[2] = wkv_b_id->nb[3] = wkv_b_id->ne[1]*wkv_b_id->nb[1];
+                auto buft = llama_default_buffer_type_offload(model, model.devices[id]);
+                auto nbytes = ggml_nbytes(wkv_b_id.get());
+                wkv_b_id->buffer = ggml_backend_buft_alloc_buffer(buft, nbytes);
+                wkv_b_id->data   = ggml_backend_buffer_get_base(wkv_b_id->buffer);
+                wkv_b_id->op     = GGML_OP_NONE;
+                for (int j = 0; j < GGML_MAX_SRC; ++j) wkv_b_id->src[j] = nullptr;
+                auto this_name = name + '.' + std::to_string(id);
+                ggml_set_name(wkv_b_id.get(), this_name.c_str());
+                ggml_backend_buffer_set_usage(wkv_b_id->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                ggml_backend_tensor_set(wkv_b_id.get(), ptr, 0, nbytes);
+                printf("   Stored %s (%ld x %ld) on device %s\n", wkv_b_id->name, wkv_b_id->ne[0], wkv_b_id->ne[1],
+                        ggml_backend_buffer_name(wkv_b_id->buffer));
+                l.wkv_b_per_device.emplace_back(std::move(wkv_b_id));
+                ptr += nbytes;
+            }
+        }
+
         ggml_graph_clear(graph);
     }
     ggml_free(ctx);

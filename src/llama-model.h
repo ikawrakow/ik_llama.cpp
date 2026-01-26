@@ -317,6 +317,8 @@ struct llama_layer {
     std::unique_ptr<ggml_tensor> computed_wk_b;
     std::unique_ptr<ggml_tensor> computed_wv_b;
     std::unique_ptr<ggml_tensor> computed_wkv_b;
+
+    std::vector<std::unique_ptr<ggml_tensor>> wkv_b_per_device;
 };
 
 struct llama_lora_adapter;

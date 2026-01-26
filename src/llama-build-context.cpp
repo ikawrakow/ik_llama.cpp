@@ -6489,17 +6489,6 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                     auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank, n_kv, kv_self.k_l[il]->nb[1],
                             ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
 
-                    auto kv_f32_size = model.layers[il].wkv_b->ne[1] * kv_cache_nope->ne[1] * sizeof(float) / (1024*1024);
-                    int n_max_head = n_head;
-                    if (cparams.attn_max_batch > 0 && kv_f32_size > cparams.attn_max_batch) {
-                        while (n_max_head%2 == 0 && kv_f32_size > cparams.attn_max_batch) {
-                            n_max_head /= 2; kv_f32_size /= 2;
-                        }
-                    }
-                    GGML_ASSERT(n_head % n_max_head == 0);
-
-                    auto n_per_head = model.layers[il].wkv_b->ne[1] / n_head;
-
                     auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.k_l[il], n_embd_head_qk_rope, n_kv, 1,
                             kv_self.k_l[il]->nb[1], kv_self.k_l[il]->nb[2], 0); //ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank));
 
@@ -6508,6 +6497,109 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                     // The downside of the following line is that fp16 will be used even if attention is computed on the CPU
                     // if the build is with CUDA enabled.
                     auto kv_type = lctx.backends.size() == 1 && lctx.backends.front() == lctx.backend_cpu ? kv_self.k_l[il]->type : GGML_TYPE_F16;
+
+                    //if (kv_cache_rope->type != kv_type) {
+                    //    kv_cache_rope = ggml_cast(ctx0, kv_cache_rope, GGML_TYPE_F16);
+                    //}
+
+                    //auto q = ggml_concat(ctx0, q_nope, q_rope, 0);
+                    auto q = ggml_concat(ctx0, q_rope, q_nope, 0);
+                    q = ggml_permute(ctx0, q, 0, 2, 1, 3);
+                    cb(q, "q_concat", il);
+                    ggml_build_forward_expand(gf, q);
+
+                    auto n_per_head = model.layers[il].wkv_b->ne[1] / n_head;
+
+                    if (auto & wkv_b_per_device = model.layers[il].wkv_b_per_device; wkv_b_per_device.size() > 1) {
+                        ggml_tensor repeater;
+                        repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_kv; repeater.ne[3] = 1;
+                        repeater.ne[2] = wkv_b_per_device[0]->ne[1] / n_per_head;
+                        ggml_tensor * k_rope;
+                        if (kv_cache_rope->type == kv_type) {
+                            k_rope = ggml_repeat(ctx0, kv_cache_rope, &repeater);
+                        } else {
+                            auto kv_cache_rope_f16 = ggml_cast(ctx0, kv_cache_rope, GGML_TYPE_F16);
+                            k_rope = ggml_repeat(ctx0, kv_cache_rope_f16, &repeater);
+                        }
+                        cb(k_rope, "k_rope", il);
+                        std::vector<ggml_tensor *> results(wkv_b_per_device.size());
+                        for (int id = 0; id < int(wkv_b_per_device.size()); ++id) {
+                            int il_id = 1000*il + id;
+                            auto wkv_b = wkv_b_per_device[id].get();
+                            GGML_ASSERT(wkv_b);
+                            GGML_ASSERT(wkv_b->ne[1] % n_per_head == 0);
+                            auto this_nhead = wkv_b->ne[1] / n_per_head;
+
+                            auto kv_f32 = ggml_mul_mat(ctx0, wkv_b, kv_cache_nope);
+                            cb(kv_f32, "kv_f32", il_id);
+                            kv_f32->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+
+                            auto v_f32 = ggml_view_3d(ctx0, kv_f32, hparams.n_embd_head_v, n_kv, this_nhead,
+                                    ggml_row_size(kv_f32->type, this_nhead* (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope));
+                            cb(v_f32, "v_f32", il);
+
+                            auto k_nope_f32 = ggml_view_3d(ctx0, kv_f32, n_embd_head_qk_nope, n_kv, this_nhead,
+                                    ggml_row_size(kv_f32->type, this_nhead* (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                                    ggml_row_size(kv_f32->type, n_embd_head_qk_nope + hparams.n_embd_head_v), 0);
+                            cb(k_nope_f32, "k_nope_f32", il_id);
+
+                            auto v = ggml_cast(ctx0, v_f32, kv_type);
+                            cb(v, "v", il_id);
+
+                            auto k_nope = ggml_cast(ctx0, k_nope_f32, kv_type);
+                            cb(k_nope, "k_nope", il_id);
+
+                            //ggml_build_forward_expand(gf, k_nope);
+                            //ggml_build_forward_expand(gf, v);
+
+                            if (repeater.ne[2] != this_nhead) {
+                                repeater.ne[2] = this_nhead;
+                                if (kv_cache_rope->type == kv_type) {
+                                    k_rope = ggml_repeat(ctx0, kv_cache_rope, &repeater);
+                                } else {
+                                    auto kv_cache_rope_f16 = ggml_cast(ctx0, kv_cache_rope, GGML_TYPE_F16);
+                                    k_rope = ggml_repeat(ctx0, kv_cache_rope_f16, &repeater);
+                                }
+                                cb(k_rope, "k_rope", il_id);
+                            }
+
+                            auto k = ggml_concat(ctx0, k_rope, k_nope, 0);
+                            cb(k, "k", il_id);
+
+                            //ggml_build_forward_expand(gf, k);
+
+                            auto q_iter = ggml_view_3d(ctx0, q, q->ne[0], q->ne[1], this_nhead,
+                                    q->nb[1], q->nb[2], q->nb[2]*this_nhead*id);
+
+                            kqv = ggml_flash_attn_ext(ctx0, q_iter, k, v, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
+                            if (use_f32_attn_precision || q->ne[1] <= 8) {
+                                ggml_flash_attn_ext_set_prec(kqv, GGML_PREC_F32);
+                            }
+                            cb(kqv, "kqv", il_id);
+
+                            results[id] = ggml_reshape_2d(ctx0, kqv, n_embd_head_v*this_nhead, n_tokens);
+                            //results[id] = ggml_cast(ctx0, results[id], GGML_TYPE_F16);
+                            ggml_build_forward_expand(gf, results[id]);
+
+                        }
+                        cur = ggml_concat(ctx0, results[0], results[1], 0);
+                        cur->op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1] = 0xff;
+                        for (int id = 2; id < int(wkv_b_per_device.size()); ++id) {
+                            cur = ggml_concat(ctx0, cur, results[id], 0);
+                        }
+
+                    } else {
+
+                    auto kv_f32_size = model.layers[il].wkv_b->ne[1] * kv_cache_nope->ne[1] * sizeof(float) / (1024*1024);
+                    int n_max_head = n_head;
+                    if (cparams.attn_max_batch > 0 && kv_f32_size > cparams.attn_max_batch) {
+                        while (n_max_head%2 == 0 && kv_f32_size > cparams.attn_max_batch) {
+                            n_max_head /= 2; kv_f32_size /= 2;
+                        }
+                    }
+                    GGML_ASSERT(n_head % n_max_head == 0);
 
                     ggml_tensor repeater;
                     repeater.ne[0] = n_embd_head_qk_rope; repeater.ne[1] = n_kv; repeater.ne[2] = n_max_head; repeater.ne[3] = 1;
@@ -6519,13 +6611,6 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                         k_rope = ggml_repeat(ctx0, kv_cache_rope_f16, &repeater);
                     }
                     cb(k_rope, "k_rope", il);
-
-                    //auto q = ggml_concat(ctx0, q_nope, q_rope, 0);
-                    auto q = ggml_concat(ctx0, q_rope, q_nope, 0);
-                    q = ggml_permute(ctx0, q, 0, 2, 1, 3);
-                    cb(q, "q_concat", il);
-
-                    ggml_build_forward_expand(gf, q);
 
                     for (int iter = 0; iter < n_head/n_max_head; ++iter) {
 
@@ -6576,6 +6661,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                             cur = ggml_concat(ctx0, cur, ggml_reshape_2d(ctx0, kqv, n_embd_head_v*n_max_head, n_tokens), 0);
                         }
 
+                    }
                     }
 
                 }
