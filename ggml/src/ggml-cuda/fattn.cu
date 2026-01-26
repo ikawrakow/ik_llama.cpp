@@ -107,7 +107,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     // Hence, we use it only for DeepSeek with MLA enabled, where head sizes are 576, 512,
     // so no other implementation works.
     //
-    if (new_mma_available(cc) && K->ne[0] == 576 && V->ne[0] == 512 && Q->ne[1] == 1 &&
+    if (false && new_mma_available(cc) && K->ne[0] == 576 && V->ne[0] == 512 && Q->ne[1] == 1 &&
             Q->ne[2]/K->ne[2] == 20 && K->ne[1] > 8192) {
         // GLM-4.7-Flash TG hack: split 20 heads into 16+4 heads
         auto local_Q   = *Q;
