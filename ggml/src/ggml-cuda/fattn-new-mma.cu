@@ -2155,7 +2155,11 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
     }
     GGML_ASSERT(Q->ne[0] == 576 && K->ne[0] == 576 && V->ne[0] == 512);
     if (gqa_ratio == 20 && Q->ne[1] <= 4 && K->ne[1] >= 2048) {
-        ggml_cuda_flash_attn_ext_mma_f16_case<576, 512, 1, 32>(ctx, dst);
+        if (ggml_cuda_info().devices[ctx.device].cc >= CC_ADA_LOVELACE) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<576, 512, 1, 16>(ctx, dst);
+        } else {
+            ggml_cuda_flash_attn_ext_mma_f16_case<576, 512, 1, 32>(ctx, dst);
+        }
         return;
     }
     if (gqa_ratio % 16 == 0) {
