@@ -6467,8 +6467,8 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                     cb(kv_cache_trans, "kv_cache_trans", il);
                 }
 
-                //ggml_tensor * kvr = ggml_concat(ctx0, kv_compressed, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), 0);
-                ggml_tensor * kvr = ggml_concat(ctx0, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), kv_compressed, 0);
+                ggml_tensor * kvr = ggml_concat(ctx0, kv_compressed, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), 0);
+                //ggml_tensor * kvr = ggml_concat(ctx0, ggml_permute(ctx0, k_rope, 0, 2, 1, 3), kv_compressed, 0);
                 cb(kvr, "kvr", il);
 
                 auto row_size = ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope);
@@ -6487,7 +6487,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                 if (lctx.cparams.mla_attn > 1 && lctx.cparams.flash_attn && pp_opt) { // PP for mla=2,3
 
                     auto kv_cache_nope = ggml_view_2d(ctx0, kv_self.k_l[il], kv_lora_rank, n_kv, kv_self.k_l[il]->nb[1],
-                            ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
+                            0); //ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
 
                     auto kv_f32_size = model.layers[il].wkv_b->ne[1] * kv_cache_nope->ne[1] * sizeof(float) / (1024*1024);
                     int n_max_head = n_head;
@@ -6501,7 +6501,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                     auto n_per_head = model.layers[il].wkv_b->ne[1] / n_head;
 
                     auto kv_cache_rope = ggml_view_3d(ctx0, kv_self.k_l[il], n_embd_head_qk_rope, n_kv, 1,
-                            kv_self.k_l[il]->nb[1], kv_self.k_l[il]->nb[2], 0); //ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank));
+                            kv_self.k_l[il]->nb[1], kv_self.k_l[il]->nb[2], ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank));
 
                     // There is still an issue with one or more of the ops GGML_OP_REPEAT, GGML_OP_CONCAT, GGML_OP_CPY on CUDA when
                     // the KV cache is quantized. Hence, in that case we will simply use fp16 for now.
@@ -6520,8 +6520,8 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                     }
                     cb(k_rope, "k_rope", il);
 
-                    //auto q = ggml_concat(ctx0, q_nope, q_rope, 0);
-                    auto q = ggml_concat(ctx0, q_rope, q_nope, 0);
+                    auto q = ggml_concat(ctx0, q_nope, q_rope, 0);
+                    //auto q = ggml_concat(ctx0, q_rope, q_nope, 0);
                     q = ggml_permute(ctx0, q, 0, 2, 1, 3);
                     cb(q, "q_concat", il);
 
@@ -6555,8 +6555,8 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                         ggml_build_forward_expand(gf, k_nope);
                         ggml_build_forward_expand(gf, v);
 
-                        //auto k = ggml_concat(ctx0, k_nope, k_rope, 0);
-                        auto k = ggml_concat(ctx0, k_rope, k_nope, 0);
+                        auto k = ggml_concat(ctx0, k_nope, k_rope, 0);
+                        //auto k = ggml_concat(ctx0, k_rope, k_nope, 0);
                         cb(k, "k", il);
 
                         ggml_build_forward_expand(gf, k);
@@ -6593,15 +6593,15 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
                     struct ggml_tensor * q_nope2 = ggml_mul_mat(ctx0, wk_b, q_nope);
                     cb(q_nope2, "q_nope2", il);
 
-                    //ggml_tensor * q = ggml_concat(ctx0, q_nope2, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), 0);
-                    ggml_tensor * q = ggml_concat(ctx0, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), q_nope2, 0);
+                    ggml_tensor * q = ggml_concat(ctx0, q_nope2, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), 0);
+                    //ggml_tensor * q = ggml_concat(ctx0, ggml_permute(ctx0, q_rope, 0, 2, 1, 3), q_nope2, 0);
                     cb(q, "q", il);
 
                     if (lctx.cparams.flash_attn && (lctx.cparams.mla_attn == 1 || lctx.cparams.mla_attn == 3)) {
                         ggml_tensor * kv_cache_lora = ggml_view_2d(ctx0, kv_self.k_l[il],
                                 kv_lora_rank, n_kv,
                                 ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope),
-                                ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
+                                0); //ggml_row_size(kv_self.k_l[il]->type, n_embd_head_qk_rope));
                         cb(kv_cache_lora, "kv_cache_lora", il);
 
                         kqv_compressed = ggml_flash_attn_ext(ctx0, q, kv_cache, kv_cache_lora, KQ_mask, kq_scale, hparams.f_max_alibi_bias, 0.f);
