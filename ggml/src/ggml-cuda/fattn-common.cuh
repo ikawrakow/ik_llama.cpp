@@ -810,7 +810,12 @@ void launch_fattn(
     cudaStream_t main_stream = ctx.stream();
     const int id  = ggml_cuda_get_device();
     const int cc  = ggml_cuda_info().devices[id].cc;
-    const int nsm = ggml_cuda_info().devices[id].nsm;
+    const int nsm_actual = ggml_cuda_info().devices[id].nsm;
+    int nsm = nsm_actual;
+    if (Q->ne[1] == 1) {
+        nsm = 1; while (nsm*2 <= nsm_actual) nsm *= 2;
+        if (K->ne[1] <= 16384 && nsm > 32) nsm /= 2;
+    }
 
     ggml_cuda_pool_alloc<half>   K_f16(pool);
     ggml_cuda_pool_alloc<half>   V_f16(pool);
