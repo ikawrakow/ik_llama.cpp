@@ -10,7 +10,8 @@
 #include "llama.h"
 #include "llama-vocab.h"
 #include <fstream>
-       
+#include <deque>
+#include <regex>
 
 // mime type for sending response
 #define MIMETYPE_JSON "application/json; charset=utf-8"
@@ -1038,7 +1039,9 @@ int main(int argc, char ** argv) {
     };
 
 
-    // handle completion-like requests (completion, chat, infill)
+
+
+// handle completion-like requests (completion, chat, infill)
     // we can optionally provide a custom format for partial results and final results
     const auto handle_completions_impl = [&ctx_server, &params](
         server_task_type type,
@@ -1049,164 +1052,903 @@ int main(int argc, char ** argv) {
         oaicompat_type oaicompat) -> void {
             GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
 
+            // ----------------------------------------------------------------
+            // 1. Regex Validation
+            // ----------------------------------------------------------------
+            auto validate_regex_list = [&](const std::string& field_name) -> std::string {
+                if (data.contains(field_name) && data[field_name].is_array()) {
+                    for (const auto& val : data[field_name]) {
+                        if (val.is_string()) {
+                            std::string s = val.get<std::string>();
+                            if (!s.empty()) {
+                                try {
+                                    std::regex re(s);
+                                } catch (const std::regex_error& e) {
+                                    return s;
+                                }
+                            }
+                        }
+                    }
+                }
+                return "";
+            };
+
+            std::string invalid_re = validate_regex_list("banned_regex");
+            if (invalid_re.empty()) invalid_re = validate_regex_list("banned_regex_case_insensitive");
+
+            if (!invalid_re.empty()) {
+                res_err(res, format_error_response("Invalid regex: " + invalid_re, ERROR_TYPE_INVALID_REQUEST));
+                return;
+            }
+
             const auto completion_id = gen_chatcmplid();
-            // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
-            // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
-            const auto rd = std::make_shared<server_response_reader>(ctx_server);
-
+            
+            // Process prompt / inputs
+            std::vector<server_tokens> inputs;
             try {
-                std::vector<server_task> tasks;
-
                 const auto& prompt = data.at("prompt");
-
-                // process prompt
-                std::vector<server_tokens> inputs;
-
                 if (oaicompat && ctx_server.mctx != nullptr) {
-                    // This is the case used by OAI compatible chat path with MTMD. TODO It can be moved to the path below.
                     inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
                 }
                 else {
-                    // Everything else, including multimodal completions.
                     inputs = tokenize_input_prompts(llama_get_vocab(ctx_server.ctx), ctx_server.mctx, prompt, true, true);
                 }
-                tasks.reserve(inputs.size());              
-                for (size_t i = 0; i < inputs.size(); i++) {
-                    server_task task = server_task(type);
-
-                    task.id = ctx_server.queue_tasks.get_new_id();
-                    task.index = i;
-
-                    task.tokens = std::move(inputs[i]);
-                    task.data = data;
-                    //task.params = server_task::params_from_json_cmpl(
-                    //    ctx_server.ctx,
-                    //    ctx_server.params,
-                    //    data);
-                    task.id_slot = json_value(data, "id_slot", -1);
-
-                    // OAI-compat
-                    task.params.oaicompat = oaicompat;
-                    task.params.oaicompat_cmpl_id = completion_id;
-                    task.params.oaicompat_model = get_model_name(ctx_server.params_base.model);
-                    tasks.push_back(std::move(task));
-                }
-
-                rd->post_tasks(std::move(tasks));
             }
             catch (const std::exception& e) {
                 res_err(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
                 return;
             }
-            bool stream = json_value(data, "stream", false);
-            if (!stream) {
-                // non-stream, wait for the results
-                auto all_results = rd->wait_for_all(is_connection_closed);
-                if (all_results.is_terminated) {
-                    llama_decode_stop(); // send a signal to stop decode process
-                    return; // connection is closed
-                }
-                else if (all_results.error) {
-                    res_err(res, all_results.error->to_json());
-                    return;
-                }
-                else {
-                    json arr = json::array();
-                    for (auto& res : all_results.results) {
-                        GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(res.get()) != nullptr);
-                        arr.push_back(res->to_json());
+
+            // ----------------------------------------------------------------
+            // Check if we need the complex "Banned String" logic
+            // Only enable if the lists are present AND contain actual strings.
+            // ----------------------------------------------------------------
+            auto list_has_content = [&](const std::string& key) {
+                if (data.contains(key) && data[key].is_array()) {
+                    for (const auto& item : data[key]) {
+                        if (item.is_string() && !item.get<std::string>().empty()) {
+                            return true;
+                        }
                     }
-                    // if single request, return single object instead of array
-                    res_ok(res, arr.size() == 1 ? arr[0] : arr);              
-                }                       
-            }
-            else {
-                // in streaming mode, the first error must be treated as non-stream response
-                // this is to match the OAI API behavior
-                // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
-                server_task_result_ptr first_result = rd->next(is_connection_closed);
-                if (first_result == nullptr) {
-                    llama_decode_stop(); // send a signal to stop decode process
-                    return; // connection is closed
                 }
-                else if (first_result->is_error()) {
-                    res_err(res, first_result->to_json());
-                    return;
-                }
-                else {
-                    GGML_ASSERT(
-                        dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr
-                        || dynamic_cast<server_task_result_cmpl_final*>(first_result.get()) != nullptr
-                    );
-                }
-                // next responses are streamed
-                json first_result_json = first_result->to_json();
-                const auto chunked_content_provider = [first_result_json, rd, oaicompat](size_t, httplib::DataSink& sink) mutable -> bool {
-                    const auto sse = [oaicompat, &sink](const json& res) {
-                        if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
-                            return server_sent_anthropic_event(sink, res);
-                        }
-                        else {
-                            return server_sent_event(sink, res);
-                        }
-                    };
-                    // flush the first result as it's not an error
-                    if (!first_result_json.empty()) {
-                        if (!sse(first_result_json)) {
-                            sink.done();
-                            return false; // sending failed, go to on_complete()
-                        }
-                        first_result_json.clear(); // mark as sent
+                return false;
+            };
+
+            bool has_banned_content = list_has_content("banned_strings") || 
+                                      list_has_content("banned_regex") || 
+                                      list_has_content("banned_regex_case_insensitive");
+
+            if (!has_banned_content) {
+                // ----------------------------------------------------------------
+                // PATH A: Standard Logic (server_response_reader)
+                // ----------------------------------------------------------------
+                
+                // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
+                // use shared_ptr as it's shared between the chunked_content_provider() and on_complete()
+                const auto rd = std::make_shared<server_response_reader>(ctx_server);
+
+                try {
+                    std::vector<server_task> tasks;
+                    tasks.reserve(inputs.size());              
+                    for (size_t i = 0; i < inputs.size(); i++) {
+                        server_task task = server_task(type);
+
+                        task.id = ctx_server.queue_tasks.get_new_id();
+                        task.index = i;
+
+                        task.tokens = std::move(inputs[i]);
+                        task.data = data;
+                        task.id_slot = json_value(data, "id_slot", -1);
+
+                        // OAI-compat
+                        task.params.oaicompat = oaicompat;
+                        task.params.oaicompat_cmpl_id = completion_id;
+                        task.params.oaicompat_model = get_model_name(ctx_server.params_base.model);
+                        tasks.push_back(std::move(task));
                     }
 
-                    // receive subsequent results
-                    auto result = rd->next([&sink] { return !sink.is_writable(); });
-                    if (result == nullptr) {
-                        sink.done();
-                        return false; // connection is closed, go to on_complete()
+                    rd->post_tasks(std::move(tasks));
+                }
+                catch (const std::exception& e) {
+                    res_err(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+                    return;
+                }
+                bool stream = json_value(data, "stream", false);
+                if (!stream) {
+                    // non-stream, wait for the results
+                    auto all_results = rd->wait_for_all(is_connection_closed);
+                    if (all_results.is_terminated) {
+                        llama_decode_stop(); // send a signal to stop decode process
+                        return; // connection is closed
                     }
-
-                    // send the results
-                    json res_json = result->to_json();
-                    bool ok = false;
-                    if (result->is_error()) {
-                        ok = sse(json{ { "error", result->to_json() } });
-                        sink.done();
-                        return false; // go to on_complete()
+                    else if (all_results.error) {
+                        res_err(res, all_results.error->to_json());
+                        return;
+                    }
+                    else {
+                        json arr = json::array();
+                        for (auto& res : all_results.results) {
+                            GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(res.get()) != nullptr);
+                            if (oaicompat) {
+                                arr.push_back(format_final_response_oaicompat(data, res->data, completion_id, false));
+                            } else {
+                                arr.push_back(res->to_json());
+                            }
+                        }
+                        // if single request, return single object instead of array
+                        res_ok(res, arr.size() == 1 ? arr[0] : arr);              
+                    }                       
+                }
+                else {
+                    // in streaming mode, the first error must be treated as non-stream response
+                    // this is to match the OAI API behavior
+                    // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
+                    server_task_result_ptr first_result = rd->next(is_connection_closed);
+                    if (first_result == nullptr) {
+                        llama_decode_stop(); // send a signal to stop decode process
+                        return; // connection is closed
+                    }
+                    else if (first_result->is_error()) {
+                        res_err(res, first_result->to_json());
+                        return;
                     }
                     else {
                         GGML_ASSERT(
-                            dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr
-                            || dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr
+                            dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr
+                            || dynamic_cast<server_task_result_cmpl_final*>(first_result.get()) != nullptr
                         );
-                        ok = sse(res_json);
+                    }
+                    
+                    // Prepare first result JSON (handling OAI format if needed)
+                    std::vector<json> first_result_parts;
+                    if (oaicompat) {
+                        first_result_parts = format_partial_response_oaicompat(*first_result, completion_id);
+                    } else {
+                        first_result_parts.push_back(first_result->to_json());
                     }
 
-                    if (!ok) {
-                        sink.done();
-                        return false; // sending failed, go to on_complete()
-                    }
-
-                    // check if there is more data
-                    if (!rd->has_next()) {
-                        if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE) {
-                            static const std::string ev_done = "data: [DONE]\n\n";
-                            sink.write(ev_done.data(), ev_done.size());
+                    const auto chunked_content_provider = [first_result_parts, rd, oaicompat, completion_id](size_t, httplib::DataSink& sink) mutable -> bool {
+                        const auto sse = [oaicompat, &sink](const json& res) {
+                            if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                                return server_sent_anthropic_event(sink, res);
+                            }
+                            else {
+                                return server_sent_event(sink, res);
+                            }
+                        };
+                        
+                        // flush the first result parts
+                        for (auto& part : first_result_parts) {
+                            if (!part.empty()) {
+                                if (!sse(part)) {
+                                    sink.done();
+                                    return false; // sending failed, go to on_complete()
+                                }
+                                part.clear(); // mark as sent
+                            }
                         }
-                        sink.done();
-                        return false; // no more data, go to on_complete()
+
+                        // receive subsequent results
+                        auto result = rd->next([&sink] { return !sink.is_writable(); });
+                        if (result == nullptr) {
+                            sink.done();
+                            return false; // connection is closed, go to on_complete()
+                        }
+
+                        // send the results
+                        bool ok = false;
+                        if (result->is_error()) {
+                            ok = sse(json{ { "error", result->to_json() } });
+                            sink.done();
+                            return false; // go to on_complete()
+                        }
+                        else {
+                            GGML_ASSERT(
+                                dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr
+                                || dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr
+                            );
+                            
+                            if (oaicompat) {
+                                std::vector<json> parts = format_partial_response_oaicompat(*result, completion_id);
+                                for (const auto& part : parts) {
+                                    ok = sse(part);
+                                    if (!ok) break;
+                                }
+                            } else {
+                                ok = sse(result->to_json());
+                            }
+                        }
+
+                        if (!ok) {
+                            sink.done();
+                            return false; // sending failed, go to on_complete()
+                        }
+
+                        // check if there is more data
+                        if (!rd->has_next()) {
+                            if (oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE) {
+                                static const std::string ev_done = "data: [DONE]\n\n";
+                                sink.write(ev_done.data(), ev_done.size());
+                            }
+                            sink.done();
+                            return false; // no more data, go to on_complete()
+                        }
+
+                        // has next data, continue
+                        return true;
+                    };
+
+                    auto on_complete = [rd](bool) {
+                        rd->stop();
+                    };
+                    res.set_chunked_content_provider("text/event-stream", chunked_content_provider, on_complete);
+                }
+
+            } else {
+                // ----------------------------------------------------------------
+                // PATH B: Banned Content Logic (Slow Path with Buffering & Rewind)
+                // ----------------------------------------------------------------
+                auto buffer_and_check_string_ban_and_rewind_logic = [&]() {
+                    // Helper to mimic request_cancel using the task queue directly
+                    auto request_cancel = [&ctx_server](int id_target) {
+                        server_task task(SERVER_TASK_TYPE_CANCEL);
+                        task.id_target = id_target;
+                        std::vector<server_task> tasks;
+                        tasks.push_back(std::move(task));
+                        ctx_server.queue_tasks.post(std::move(tasks), true);
+                    };
+
+                    // Helper to post a completion task with correct OAI params
+                    auto post_task_with_params = [&ctx_server, oaicompat, completion_id](int id_task, json& task_data, server_tokens& tokens) {
+                        server_task task(SERVER_TASK_TYPE_COMPLETION);
+                        task.id = id_task;
+                        task.index = 0;
+                        task.tokens = std::move(tokens);
+                        task.data = task_data;
+                        task.id_slot = json_value(task_data, "id_slot", -1);
+                        
+                        // Critical: Set OAI params so worker generates correct output format
+                        task.params.oaicompat = oaicompat;
+                        task.params.oaicompat_cmpl_id = completion_id;
+                        task.params.oaicompat_model = get_model_name(ctx_server.params_base.model);
+
+                        std::vector<server_task> tasks;
+                        tasks.push_back(std::move(task));
+                        ctx_server.queue_tasks.post(std::move(tasks));
+                    };
+
+                    const int id_task = ctx_server.queue_tasks.get_new_id();
+                    ctx_server.queue_results.add_waiting_task_id(id_task);
+                    
+                    // Use helper instead of request_completion
+                    post_task_with_params(id_task, data, inputs[0]);
+                    
+                    bool stream = json_value(data, "stream", false);
+                    
+                    if (!stream) {
+                        // Non-streaming: wait for result (using pointer to avoid slicing)
+                        std::unordered_set<int> ids = { id_task };
+                        server_task_result_ptr result = nullptr;
+                        
+                        // Simple blocking wait
+                        while (!result) {
+                            result = ctx_server.queue_results.recv_with_timeout(ids, 1);
+                            if (!result && is_connection_closed()) {
+                                request_cancel(id_task);
+                                ctx_server.queue_results.remove_waiting_task_id(id_task);
+                                return;
+                            }
+                        }
+
+                        if (!result->is_error()) {
+                            json result_json;
+                            if (oaicompat) {
+                                result_json = format_final_response_oaicompat(data, result->data, completion_id, false);
+                            } else {
+                                result_json = result->to_json();
+                            }
+                            res.set_content(result_json.dump(-1, ' ', false, json::error_handler_t::replace), "application/json; charset=utf-8");
+                        }
+                        else {
+                            res_err(res, result->to_json());
+                        }
+                        ctx_server.queue_results.remove_waiting_task_id(id_task);
                     }
+                    else {
+                        // Shared state to track the currently running task ID across retries.
+                        auto active_task_id = std::make_shared<int>(id_task);
 
-                    // has next data, continue
-                    return true;
-                };
+                        // Capture 'data' by value to use as a template for retries
+                        const auto chunked_content_provider = [id_task, active_task_id, &ctx_server, completion_id, oaicompat, send_done = params.send_done, data, request_cancel, post_task_with_params](size_t, httplib::DataSink& sink) mutable {
+                            // Define sse here so it's visible to both try and catch blocks
+                            const auto sse = [oaicompat, &sink](const json &res) {
+                                if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
+                                    return server_sent_anthropic_event(sink, res);
+                                } else {
+                                    return server_sent_event(sink, res);
+                                }
+                            };
 
-                auto on_complete = [rd](bool) {
-                    rd->stop();
+                            try {
+                                bool successful_completion = false;
+
+                                // 1. Parse Configuration from Request
+
+                                // Banned Strings
+                                std::vector<std::string> stop_phrases;
+                                if (data.contains("banned_strings") && data["banned_strings"].is_array()) {
+                                    for (const auto& val : data["banned_strings"]) {
+                                        if (val.is_string()) {
+                                            std::string s = val.get<std::string>();
+                                            if (!s.empty()) stop_phrases.push_back(s);
+                                        }
+                                    }
+                                }
+
+                                // Sort banned strings by length (descending)
+                                std::sort(stop_phrases.begin(), stop_phrases.end(), [](const std::string& a, const std::string& b) {
+                                    return a.length() > b.length();
+                                });
+
+                                // Banned Regex (Case Sensitive & Insensitive)
+                                std::vector<std::string> regex_patterns; // For buffer size calculation
+                                std::vector<std::regex> stop_regexes;    // Compiled regexes
+
+                                auto add_regex_list = [&](const std::string& field_name, bool case_insensitive) {
+                                    if (data.contains(field_name) && data[field_name].is_array()) {
+                                        for (const auto& val : data[field_name]) {
+                                            if (val.is_string()) {
+                                                std::string s = val.get<std::string>();
+                                                if (!s.empty()) {
+                                                    auto flags = std::regex_constants::ECMAScript;
+                                                    if (case_insensitive) flags |= std::regex_constants::icase;
+                                                    stop_regexes.emplace_back(s, flags);
+                                                    regex_patterns.push_back(s);
+                                                }
+                                            }
+                                        }
+                                    }
+                                };
+
+                                // We assume validation passed in handle_completions_impl, so no try-catch needed here
+                                add_regex_list("banned_regex", false);
+                                add_regex_list("banned_regex_case_insensitive", true);
+
+                                // Logit Bias Penalty (Default: -10000.0)
+                                float ban_bias = -10000.0f;
+                                if (data.contains("banned_bias") && data["banned_bias"].is_number()) {
+                                    ban_bias = data["banned_bias"].get<float>();
+                                }
+
+                                // Manual Buffer Size
+                                size_t manual_buffer_size = 0;
+                                if (data.contains("banbuffer_size") && data["banbuffer_size"].is_number_unsigned()) {
+                                    manual_buffer_size = data["banbuffer_size"].get<size_t>();
+                                }
+
+                                // Token Limit Tracking
+                                int original_n_predict = -1;
+                                if (data.contains("n_predict") && data["n_predict"].is_number_integer()) {
+                                    original_n_predict = data["n_predict"].get<int>();
+                                }
+                                int total_tokens_streamed = 0;
+
+                                // ============================================================
+                                // FAST PATH: No banned strings AND No regex -> No buffering
+                                // ============================================================
+                                if (stop_phrases.empty() && stop_regexes.empty()) {
+                                    while (true) {
+                                        std::unordered_set<int> ids = { *active_task_id };
+                                        server_task_result_ptr result = nullptr;
+                                        while (!result) {
+                                            result = ctx_server.queue_results.recv_with_timeout(ids, 1);
+                                            if (!result && !sink.is_writable()) {
+                                                request_cancel(*active_task_id);
+                                                ctx_server.queue_results.remove_waiting_task_id(*active_task_id);
+                                                return false;
+                                            }
+                                        }
+
+                                        if (!result->is_error()) {
+                                            // Use format_partial_response_oaicompat to get the correct chunks
+                                            std::vector<json> parts;
+                                            if (oaicompat) {
+                                                parts = format_partial_response_oaicompat(*result, completion_id);
+                                            } else {
+                                                parts.push_back(result->data);
+                                            }
+                                            
+                                            for (const auto& item : parts) {
+                                                if (!sse(item)) {
+                                                    request_cancel(*active_task_id);
+                                                    ctx_server.queue_results.remove_waiting_task_id(*active_task_id);
+                                                    return false;
+                                                }
+                                            }
+                                            
+                                            if (result->is_stop()) {
+                                                successful_completion = true;
+                                                break;
+                                            }
+                                        } else {
+                                            sse(result->to_json());
+                                            ctx_server.queue_results.remove_waiting_task_id(*active_task_id);
+                                            return false;
+                                        }
+                                    }
+                                }
+                                // ============================================================
+                                // SLOW PATH: Buffering and Banning Logic
+                                // ============================================================
+                                else {
+                                    // Calculate Buffer Size
+                                    size_t BUFFER_SIZE;
+                                    if (manual_buffer_size > 0) {
+                                        BUFFER_SIZE = manual_buffer_size;
+                                    } else {
+                                        size_t max_len = 0;
+                                        // Check strings
+                                        if (!stop_phrases.empty()) {
+                                            max_len = stop_phrases[0].length(); // First is longest due to sort
+                                        }
+                                        // Check regex patterns
+                                        for (const auto& pat : regex_patterns) {
+                                            if (pat.length() > max_len) max_len = pat.length();
+                                        }
+
+                                        // Default: Longest string/regex + 1
+                                        BUFFER_SIZE = std::max((size_t)1, max_len + 1);
+                                    }
+
+                                    // Initialize Buffer & State
+                                    std::deque<json> token_buffer;
+
+                                    int current_task_id = id_task;
+
+                                    // Track bans specifically for the current "next token" to be generated.
+                                    std::set<int> current_step_bans;
+                                    int ban_slot_index = -1;
+
+                                    // Track the text that has been confirmed/sent to the client.
+                                    std::string current_prompt_str = "";
+                                    if (data.contains("prompt") && data["prompt"].is_string()) {
+                                        current_prompt_str = data["prompt"].get<std::string>();
+                                    }
+
+                                    // Helper to extract text content
+                                    auto get_content_str = [](const json& j) -> std::string {
+                                        if (j.contains("choices") && j["choices"].is_array() && !j["choices"].empty()) {
+                                            const auto& choice = j["choices"][0];
+                                            if (choice.contains("delta") && choice["delta"].contains("content")) {
+                                                auto val = choice["delta"]["content"];
+                                                if (val.is_string()) return val.get<std::string>();
+                                            }
+                                        }
+                                        if (j.contains("content")) {
+                                            auto val = j["content"];
+                                            if (val.is_string()) return val.get<std::string>();
+                                        }
+                                        return "";
+                                    };
+
+                                    // Helper to extract Token ID
+                                    auto get_token_id = [](const json& j) -> int {
+                                        if (j.contains("__raw_token_id")) return j["__raw_token_id"].get<int>();
+                                        if (j.contains("token")) return j["token"].get<int>();
+                                        if (j.contains("id")) return j["id"].get<int>();
+                                        return -1;
+                                    };
+
+                                    // Helper for case-insensitive search
+                                    auto to_lower_str = [](std::string s) {
+                                        std::transform(s.begin(), s.end(), s.begin(),
+                                            [](unsigned char c){ return std::tolower(c); });
+                                        return s;
+                                    };
+
+                                    // Helper to print buffer
+                                    auto print_debug_buffer = [&](const std::deque<json>& buf) {
+                                        std::cout << "Debug TokenBuffer (Size " << BUFFER_SIZE << "): [";
+                                        size_t print_len = std::max(buf.size(), BUFFER_SIZE);
+                                        for (size_t i = 0; i < print_len; ++i) {
+                                            if (i < buf.size()) {
+                                                std::string content = get_content_str(buf[i]);
+                                                std::string escaped;
+                                                for (char c : content) {
+                                                    if (c == '\n') escaped += "\\n";
+                                                    else if (c == '"') escaped += "\\\"";
+                                                    else escaped += c;
+                                                }
+                                                std::cout << "\"" << escaped << "\"";
+                                            } else {
+                                                std::cout << "\"\"";
+                                            }
+                                            if (i < print_len - 1) std::cout << ", ";
+                                        }
+                                        std::cout << "]" << std::endl;
+                                    };
+
+                                    while (true) {
+                                        // Ensure shared state matches current local state
+                                        *active_task_id = current_task_id;
+
+                                        // 0. Check connection status explicitly
+                                        if (!sink.is_writable()) {
+                                            request_cancel(current_task_id);
+                                            ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                            return false;
+                                        }
+
+                                        // Receive from the CURRENT task ID using pointer to avoid slicing
+                                        std::unordered_set<int> ids = { current_task_id };
+                                        server_task_result_ptr result = nullptr;
+                                        while (!result) {
+                                            result = ctx_server.queue_results.recv_with_timeout(ids, 1);
+                                            if (!result && !sink.is_writable()) {
+                                                request_cancel(current_task_id);
+                                                ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                                return false;
+                                            }
+                                        }
+
+                                        std::vector<json> items_to_buffer;
+                                        
+                                        if (!result->is_error()) {
+                                            // Use format_partial_response_oaicompat to get the correct chunks
+                                            std::vector<json> parts;
+                                            if (oaicompat) {
+                                                parts = format_partial_response_oaicompat(*result, completion_id);
+                                            } else {
+                                                parts.push_back(result->data);
+                                            }
+
+                                            json raw_data = result->data; // Access raw data for token ID
+
+                                            for (const auto& r : parts) {
+                                                json item = r;
+                                                // Attach raw token ID for banning logic
+                                                if (raw_data.contains("token")) item["__raw_token_id"] = raw_data["token"];
+                                                items_to_buffer.push_back(item);
+                                            }
+                                        } else {
+                                            items_to_buffer.push_back(result->to_json());
+                                        }
+
+                                        // 2. Process items into buffer
+                                        for (const auto& item : items_to_buffer) {
+                                            token_buffer.push_back(item);
+                                        }
+
+                                        print_debug_buffer(token_buffer);
+
+                                        // 3. Check for Stop Phrases (Strings & Regex)
+                                        std::string buffer_text = "";
+                                        std::vector<size_t> token_offsets;
+
+                                        for (const auto& item : token_buffer) {
+                                            token_offsets.push_back(buffer_text.length());
+                                            buffer_text += get_content_str(item);
+                                        }
+
+                                        std::string buffer_lower = to_lower_str(buffer_text);
+
+                                        size_t match_pos = std::string::npos;
+                                        std::string detected_phrase = "";
+
+                                        // A. Check Strings (Case Insensitive)
+                                        for (const auto& phrase : stop_phrases) {
+                                            std::string target_lower = to_lower_str(phrase);
+                                            size_t pos = buffer_lower.find(target_lower);
+                                            if (pos != std::string::npos) {
+                                                if (match_pos == std::string::npos || pos < match_pos) {
+                                                    match_pos = pos;
+                                                    detected_phrase = phrase;
+                                                }
+                                            }
+                                        }
+
+                                        // B. Check Regex
+                                        for (size_t i = 0; i < stop_regexes.size(); ++i) {
+                                            std::smatch match;
+                                            // We search the raw buffer_text
+                                            if (std::regex_search(buffer_text, match, stop_regexes[i])) {
+                                                size_t pos = match.position(0);
+                                                if (match_pos == std::string::npos || pos < match_pos) {
+                                                    match_pos = pos;
+                                                    detected_phrase = "REGEX:" + regex_patterns[i];
+                                                }
+                                            }
+                                        }
+
+                                        if (match_pos != std::string::npos) {
+                                            std::cout << "Debug: Stop phrase '" << detected_phrase << "' detected. Initiating ban logic." << std::endl;
+
+                                            // Find the guilty token
+                                            size_t split_index = 0;
+                                            bool found_split = false;
+                                            for (size_t i = 0; i < token_offsets.size(); ++i) {
+                                                size_t token_start = token_offsets[i];
+                                                std::string content = get_content_str(token_buffer[i]);
+                                                size_t token_end = token_start + content.length();
+
+                                                if (token_end > match_pos) {
+                                                    split_index = i;
+                                                    found_split = true;
+                                                    break;
+                                                }
+                                            }
+
+                                            if (found_split) {
+                                                // 1. Construct prompt from good tokens (DO NOT FLUSH)
+                                                std::string temp_prompt_suffix = "";
+                                                std::deque<json> good_tokens;
+
+                                                for (size_t i = 0; i < split_index; ++i) {
+                                                    json& item = token_buffer[i];
+                                                    if (item.contains("__raw_token_id")) item.erase("__raw_token_id");
+                                                    temp_prompt_suffix += get_content_str(item);
+                                                    good_tokens.push_back(item);
+                                                }
+
+                                                // 2. Identify Guilty Token & Add to Bans
+                                                json& guilty_item = token_buffer[split_index];
+                                                int guilty_token_id = get_token_id(guilty_item);
+
+                                                if (guilty_token_id == -1) {
+                                                    std::string content = get_content_str(guilty_item);
+                                                    auto tokens = ctx_server.tokenize(content, false);
+                                                    if (!tokens.empty()) guilty_token_id = tokens[0];
+                                                }
+
+                                                if (guilty_token_id != -1) {
+                                                    // Check if we are banning a different slot than before
+                                                    if (ban_slot_index != (int)split_index) {
+                                                        current_step_bans.clear();
+                                                        ban_slot_index = (int)split_index;
+                                                    }
+
+                                                    current_step_bans.insert(guilty_token_id);
+                                                    std::cout << "Debug: Banning token ID " << guilty_token_id << " at slot " << split_index << ". Total bans: " << current_step_bans.size() << std::endl;
+
+                                                    // 3. Cancel current task
+                                                    request_cancel(current_task_id);
+                                                    ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+
+                                                    // 4. FIX STEP: Generate 1 token with ALL current bans
+                                                    json fix_data = data;
+                                                    fix_data["prompt"] = current_prompt_str + temp_prompt_suffix;
+                                                    fix_data["n_predict"] = 1;
+
+                                                    // Robust logit_bias handling
+                                                    if (!fix_data.contains("logit_bias")) {
+                                                        fix_data["logit_bias"] = json::array();
+                                                    }
+
+                                                    if (fix_data["logit_bias"].is_array()) {
+                                                        for (int banned_id : current_step_bans) {
+                                                            fix_data["logit_bias"].push_back(json::array({banned_id, ban_bias}));
+                                                        }
+                                                    } else if (fix_data["logit_bias"].is_object()) {
+                                                        for (int banned_id : current_step_bans) {
+                                                            fix_data["logit_bias"][std::to_string(banned_id)] = ban_bias;
+                                                        }
+                                                    }
+                                                    
+                                                    std::cout << "Debug: Fix Data Logit Bias: " << fix_data["logit_bias"].dump() << std::endl;
+
+                                                    int id_fix = ctx_server.queue_tasks.get_new_id();
+                                                    *active_task_id = id_fix; // Update shared state for fix task
+                                                    ctx_server.queue_results.add_waiting_task_id(id_fix);
+
+                                                    std::vector<server_tokens> fix_inputs = tokenize_input_prompts(
+                                                        llama_get_vocab(ctx_server.ctx), ctx_server.mctx, fix_data["prompt"], true, true
+                                                    );
+                                                    
+                                                    // Use helper
+                                                    post_task_with_params(id_fix, fix_data, fix_inputs[0]);
+
+                                                    // Wait for the fix token
+                                                    std::unordered_set<int> fix_ids = { id_fix };
+                                                    server_task_result_ptr fix_result = nullptr;
+                                                    while (!fix_result) {
+                                                        fix_result = ctx_server.queue_results.recv_with_timeout(fix_ids, 1);
+                                                        if (!fix_result && !sink.is_writable()) {
+                                                            request_cancel(id_fix);
+                                                            ctx_server.queue_results.remove_waiting_task_id(id_fix);
+                                                            return false;
+                                                        }
+                                                    }
+                                                    ctx_server.queue_results.remove_waiting_task_id(id_fix);
+
+                                                    // Check for error in fix result
+                                                    if (fix_result->is_error()) {
+                                                        std::cout << "Debug: Fix task failed with error." << std::endl;
+                                                        sse(fix_result->to_json());
+                                                        return false;
+                                                    }
+
+                                                    // Process fix token
+                                                    json fix_token_json;
+                                                    json raw_fix = fix_result->data;
+
+                                                    // Use format_partial_response_oaicompat for fix token too
+                                                    if (oaicompat) {
+                                                        std::vector<json> parts = format_partial_response_oaicompat(*fix_result, completion_id);
+                                                        if (!parts.empty()) fix_token_json = parts[0];
+                                                    } else {
+                                                        fix_token_json = fix_result->data;
+                                                    }
+
+                                                    if (raw_fix.contains("token")) fix_token_json["__raw_token_id"] = raw_fix["token"];
+
+                                                    std::string fix_content = get_content_str(fix_token_json);
+
+                                                    // 5. RESUME STEP: Continue generation normally
+                                                    json resume_data = data;
+                                                    bool stop_after_fix = false;
+
+                                                    if (original_n_predict > 0) {
+                                                        int pending = good_tokens.size() + 1;
+                                                        if (total_tokens_streamed + pending >= original_n_predict) {
+                                                            stop_after_fix = true;
+                                                        } else {
+                                                            resume_data["n_predict"] = original_n_predict - (total_tokens_streamed + pending);
+                                                        }
+                                                    }
+
+                                                    if (stop_after_fix) {
+                                                        token_buffer = good_tokens;
+                                                        token_buffer.push_back(fix_token_json);
+
+                                                        while (!token_buffer.empty()) {
+                                                            json& item = token_buffer.front();
+                                                            if (item.contains("__raw_token_id")) item.erase("__raw_token_id");
+                                                            if (!sse(item)) {
+                                                                request_cancel(*active_task_id);
+                                                                ctx_server.queue_results.remove_waiting_task_id(*active_task_id);
+                                                                return false;
+                                                            }
+                                                            total_tokens_streamed++;
+                                                            token_buffer.pop_front();
+                                                        }
+                                                        successful_completion = true;
+                                                        goto cleanup;
+                                                    }
+
+                                                    resume_data["prompt"] = current_prompt_str + temp_prompt_suffix + fix_content;
+
+                                                    current_task_id = ctx_server.queue_tasks.get_new_id();
+                                                    *active_task_id = current_task_id; // Update shared state for resume task
+                                                    ctx_server.queue_results.add_waiting_task_id(current_task_id);
+
+                                                    std::vector<server_tokens> resume_inputs = tokenize_input_prompts(
+                                                        llama_get_vocab(ctx_server.ctx), ctx_server.mctx, resume_data["prompt"], true, true
+                                                    );
+                                                    
+                                                    // Use helper
+                                                    post_task_with_params(current_task_id, resume_data, resume_inputs[0]);
+
+                                                    // 6. Update Buffer: Good Tokens + Fix Token
+                                                    token_buffer = good_tokens;
+                                                    token_buffer.push_back(fix_token_json);
+
+                                                    // REMOVED continue; to allow flush logic to run
+                                                }
+                                            }
+                                        }
+
+                                        // 4. Standard Flush Logic
+                                        bool should_flush_all = result->is_stop() || result->is_error();
+
+                                        if (token_buffer.size() >= BUFFER_SIZE || should_flush_all) {
+                                            while (!token_buffer.empty()) {
+                                                if (!should_flush_all && token_buffer.size() < BUFFER_SIZE) {
+                                                    break;
+                                                }
+
+                                                json& item_to_send = token_buffer.front();
+                                                if (item_to_send.contains("__raw_token_id")) item_to_send.erase("__raw_token_id");
+
+                                                current_prompt_str += get_content_str(item_to_send);
+
+                                                // SMART BAN CLEARING LOGIC
+                                                if (ban_slot_index != -1) {
+                                                    if (0 == ban_slot_index) {
+                                                        // We are flushing the slot that had bans. 
+                                                        // This means it's now accepted (or we are forced to flush).
+                                                        current_step_bans.clear();
+                                                        ban_slot_index = -1;
+                                                    } else {
+                                                        // We are flushing a preceding token.
+                                                        // The banned slot shifts left.
+                                                        ban_slot_index--;
+                                                    }
+                                                }
+
+                                                if (!sse(item_to_send)) {
+                                                    request_cancel(current_task_id);
+                                                    ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                                    return false;
+                                                }
+
+                                                total_tokens_streamed++;
+                                                token_buffer.pop_front();
+
+                                                if (original_n_predict > 0 && total_tokens_streamed >= original_n_predict) {
+                                                    request_cancel(current_task_id);
+                                                    ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                                    successful_completion = true;
+                                                    goto cleanup;
+                                                }
+                                            }
+                                        }
+
+                                        if (result->is_error()) {
+                                            ctx_server.queue_results.remove_waiting_task_id(current_task_id);
+                                            return false;
+                                        }
+
+                                        if (result->is_stop()) {
+                                            successful_completion = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                cleanup:
+                                bool ok = true;
+                                if (successful_completion && oaicompat != OAICOMPAT_TYPE_ANTHROPIC && oaicompat != OAICOMPAT_TYPE_NONE) {
+                                    static const std::string done_message = "data: [DONE]\n\n";
+                                    LOG_VERBOSE("data stream", { {"to_send", done_message} });
+                                    if (!sink.write(done_message.c_str(), done_message.size())) {
+                                        ok = false;
+                                    }
+                                }
+                                sink.done();
+
+                                // Cleanup the active task ID (which might be different from id_task in slow path)
+                                ctx_server.queue_results.remove_waiting_task_id(*active_task_id);
+
+                                return ok;
+                            } catch (const std::exception& e) {
+                                // Catch any exceptions to prevent crashing the server
+                                std::cerr << "Exception in streaming handler: " << e.what() << std::endl;
+                                sse(json{{"error", {{"message", e.what()}, {"type", "server_error"}, {"code", 500}}}});
+                                sink.done();
+                                if (active_task_id) {
+                                    request_cancel(*active_task_id);
+                                    ctx_server.queue_results.remove_waiting_task_id(*active_task_id);
+                                }
+                                return false;
+                            } catch (...) {
+                                std::cerr << "Unknown exception in streaming handler" << std::endl;
+                                sse(json{{"error", {{"message", "Unknown error"}, {"type", "server_error"}, {"code", 500}}}});
+                                sink.done();
+                                if (active_task_id) {
+                                    request_cancel(*active_task_id);
+                                    ctx_server.queue_results.remove_waiting_task_id(*active_task_id);
+                                }
+                                return false;
+                            }
+                        };
+
+                        auto on_complete = [active_task_id, &ctx_server, request_cancel](bool) {
+                            // Cancel the currently active task ID
+                            int id_to_cancel = *active_task_id;
+                            request_cancel(id_to_cancel);
+                            ctx_server.queue_results.remove_waiting_task_id(id_to_cancel);
+                        };
+
+                        res.set_chunked_content_provider("text/event-stream", chunked_content_provider, on_complete);
+                    }
                 };
-                res.set_chunked_content_provider("text/event-stream", chunked_content_provider, on_complete);
+                
+                // Execute the complex logic
+                buffer_and_check_string_ban_and_rewind_logic();
             }
     };
+
+
 
     const auto handle_completions = [&handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         auto data = json::parse(req.body);
