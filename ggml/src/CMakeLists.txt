@@ -343,7 +343,7 @@ if (GGML_CUDA)
 
         file(GLOB   GGML_SOURCES_CUDA "ggml-cuda/*.cu")
         list(APPEND GGML_SOURCES_CUDA "ggml-cuda.cu")
-        file(GLOB   SRCS "ggml-cuda/template-instances/fattn-wmma*.cu")
+        file(GLOB   SRCS "ggml-cuda/template-instances/fattn-tile*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
         file(GLOB   SRCS "ggml-cuda/template-instances/fattn-mma*.cu")
         list(APPEND GGML_SOURCES_CUDA ${SRCS})

@@ -274,11 +274,101 @@ static __device__ void no_device_code(
     GGML_UNUSED(no_device_code); // suppress unused function warning
 }
 
+static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
+#if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
+    return 64;
+#else
+    return 32;
+#endif // defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
+}
+
 #ifdef __CUDA_ARCH__
 #define NO_DEVICE_CODE no_device_code(__FILE__, __LINE__, __FUNCTION__, __CUDA_ARCH__, STRINGIZE(__CUDA_ARCH_LIST__))
 #else
 #define NO_DEVICE_CODE //GGML_ABORT("NO_DEVICE_CODE not valid in host code.")
 #endif // __CUDA_ARCH__
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ int warp_reduce_sum(int x) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= CC_AMPERE
+    return __reduce_add_sync(0xffffffff, x);
+#else
+#pragma unroll
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        x += __shfl_xor_sync(0xffffffff, x, offset, width);
+    }
+    return x;
+#endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= CC_AMPERE
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ float warp_reduce_sum(float x) {
+#pragma unroll
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        x += __shfl_xor_sync(0xffffffff, x, offset, width);
+    }
+    return x;
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
+#pragma unroll
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        a.x += __shfl_xor_sync(0xffffffff, a.x, offset, width);
+        a.y += __shfl_xor_sync(0xffffffff, a.y, offset, width);
+    }
+    return a;
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
+#ifdef FP16_AVAILABLE
+#pragma unroll
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        a = __hadd2(a, __shfl_xor_sync(0xffffffff, a, offset, width));
+    }
+    return a;
+
+#else
+    NO_DEVICE_CODE;
+    return a;
+#endif // FP16_AVAILABLE
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ int warp_reduce_all(int x) {
+    if (width == ggml_cuda_get_physical_warp_size()) {
+        return __all_sync(0xffffffff, x);
+    } else {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x = __shfl_xor_sync(0xffffffff, x, offset, width) && x;
+        }
+        return x;
+    }
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ int warp_reduce_any(int x) {
+    if (width == ggml_cuda_get_physical_warp_size()) {
+        return __any_sync(0xffffffff, x);
+    } else {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x = __shfl_xor_sync(0xffffffff, x, offset, width) || x;
+        }
+        return x;
+    }
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ float warp_reduce_max(float x) {
+#pragma unroll
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, width));
+    }
+    return x;
+}
 
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
 #pragma unroll

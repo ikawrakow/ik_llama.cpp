@@ -224,59 +224,11 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 }
 template<int width = WARP_SIZE>
 
-static __device__ __forceinline__ int warp_reduce_any(int x) {
-    if (width == ggml_cuda_get_physical_warp_size()) {
-        return __any_sync(0xffffffff, x);
-    } else {
-#pragma unroll
-        for (int offset = width/2; offset > 0; offset >>= 1) {
-            x = __shfl_xor_sync(0xffffffff, x, offset, width) || x;
-        }
-        return x;
-    }
-}
-template<int width = WARP_SIZE>
-static __device__ __forceinline__ int warp_reduce_sum(int x) {
-#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
-    return __reduce_add_sync(0xffffffff, x);
-#else
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, offset, width);
-    }
-    return x;
-#endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
-}
-template<int width = WARP_SIZE>
-static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        a.x += __shfl_xor_sync(0xffffffff, a.x, offset, width);
-        a.y += __shfl_xor_sync(0xffffffff, a.y, offset, width);
-    }
-    return a;
-}
-template<int width = WARP_SIZE>
-static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
-#ifdef FP16_AVAILABLE
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        a = __hadd2(a, __shfl_xor_sync(0xffffffff, a, offset, width));
-    }
-    return a;
-
-#else
-    NO_DEVICE_CODE;
-    return a;
-#endif // FP16_AVAILABLE
-}
-
 static bool fp16_mma_hardware_available(const int cc) {
     return (GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_VOLTA) ||
         GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc) ||
         (GGML_CUDA_CC_IS_MTHREADS(cc) && cc >= GGML_CUDA_CC_QY2);
 }
-
 
 static constexpr __device__ int get_mmq_x_max_device() {
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
