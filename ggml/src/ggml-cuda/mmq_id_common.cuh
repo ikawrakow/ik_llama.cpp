@@ -141,22 +141,10 @@ struct tile_x_sizes {
 #define GGML_CUDA_CC_RDNA3      (GGML_CUDA_CC_OFFSET_AMD + 0x1100) // RX 7000, minimum for WMMA
 #define GGML_CUDA_CC_RDNA4      (GGML_CUDA_CC_OFFSET_AMD + 0x1200) // RX 9000
 
-#define GGML_CUDA_CC_IS_RDNA(cc)  (cc >= GGML_CUDA_CC_RDNA1)
-#define GGML_CUDA_CC_IS_RDNA1(cc) (cc >= GGML_CUDA_CC_RDNA1 && cc < GGML_CUDA_CC_RDNA2)
-#define GGML_CUDA_CC_IS_RDNA2(cc) (cc >= GGML_CUDA_CC_RDNA2 && cc < GGML_CUDA_CC_RDNA3)
-#define GGML_CUDA_CC_IS_RDNA3(cc) (cc >= GGML_CUDA_CC_RDNA3 && cc < GGML_CUDA_CC_RDNA4)
-#define GGML_CUDA_CC_IS_RDNA4(cc) (cc >= GGML_CUDA_CC_RDNA4)
-#define GGML_CUDA_CC_IS_GCN(cc)   (cc > GGML_CUDA_CC_OFFSET_AMD && cc < GGML_CUDA_CC_CDNA1)
-#define GGML_CUDA_CC_IS_CDNA(cc)  (cc >= GGML_CUDA_CC_CDNA1 && cc < GGML_CUDA_CC_RDNA1)
-#define GGML_CUDA_CC_IS_CDNA3(cc) (cc >= GGML_CUDA_CC_CDNA3 && cc < GGML_CUDA_CC_RDNA1)
-
 #define GGML_CUDA_CC_QY1 (GGML_CUDA_CC_OFFSET_MTHREADS + 0x210) // MTT S80, MTT S3000
 #define GGML_CUDA_CC_QY2 (GGML_CUDA_CC_OFFSET_MTHREADS + 0x220) // MTT S4000
 #define GGML_CUDA_CC_NG  (GGML_CUDA_CC_OFFSET_MTHREADS + 0x310) // TBD
 
-#define GGML_CUDA_CC_IS_MTHREADS(cc) (cc >= GGML_CUDA_CC_OFFSET_MTHREADS && cc < GGML_CUDA_CC_OFFSET_AMD)
-#define GGML_CUDA_CC_IS_QY1(cc)      (cc >= GGML_CUDA_CC_QY1 && cc < GGML_CUDA_CC_QY2)
-#define GGML_CUDA_CC_IS_QY2(cc)      (cc >= GGML_CUDA_CC_QY2 && cc < GGML_CUDA_CC_NG)
 #define GGML_CUDA_CC_IS_NG(cc)       (cc >= GGML_CUDA_CC_NG)
 
 #if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA)
@@ -193,23 +181,12 @@ struct tile_x_sizes {
 #define CP_ASYNC_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
-#ifdef __CUDACC__
-template<typename... Args>
-__host__ __device__ constexpr inline void ggml_unused_vars_impl(Args&&...) noexcept {}
-#define GGML_UNUSED_VARS(...) ggml_unused_vars_impl(__VA_ARGS__)
-#else
-#define GGML_UNUSED_VARS(...) do { (void)sizeof((__VA_ARGS__, 0)); } while(0)
-#endif // __CUDACC__
-
 static bool amd_mfma_available(const int cc) {
 #if !defined(GGML_HIP_NO_MMQ_MFMA)
     return GGML_CUDA_CC_IS_CDNA(cc);
 #else
     return false;
 #endif //!defined(GGML_HIP_NO_MMQ_MFMA)
-}
-static bool turing_mma_available(const int cc) {
-    return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= CC_TURING;
 }
 
 static int get_mmq_x_max_host(const int cc) {
@@ -220,13 +197,6 @@ static int get_mmq_x_max_host(const int cc) {
 #else
             MMQ_DP4A_MAX_BATCH_SIZE : 64;
 #endif // GGML_CUDA_FORCE_MMQ
-}
-static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
-#if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
-    return 64;
-#else
-    return 32;
-#endif // defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
 }
 static constexpr int ggml_cuda_get_physical_warp_size_host() {
 #if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))

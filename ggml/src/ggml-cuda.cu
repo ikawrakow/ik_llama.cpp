@@ -230,8 +230,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
 
-        info.devices[id].nsm   = prop.multiProcessorCount;
-        info.devices[id].smpb  = prop.sharedMemPerBlock;
+        info.devices[id].nsm        = prop.multiProcessorCount;
+        info.devices[id].smpb       = prop.sharedMemPerBlock;
+        info.devices[id].warp_size  = prop.warpSize;
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
         info.devices[id].cc = 100*prop.major + 10*prop.minor + CC_OFFSET_AMD;
@@ -4376,7 +4377,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
             return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;
 #else
-            return ggml_cuda_fattn_is_supported(*cuda_ctx, op);
+            return ggml_cuda_flash_attn_ext_supported(cuda_ctx->device, op);
 #endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
         default:
             return false;

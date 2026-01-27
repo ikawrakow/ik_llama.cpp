@@ -52,13 +52,46 @@
 #define CC_TURING     750
 #define CC_AMPERE     800
 #define CC_ADA_LOVELACE 890
+#define CC_BLACKWELL  1200
+#define CC_RUBIN      1300
 #define CC_OFFSET_AMD 1000000
 #define CC_OFFSET_MTHREADS 0x0100000
 #define CC_RDNA1      (CC_OFFSET_AMD + 1010)
 #define CC_RDNA2      (CC_OFFSET_AMD + 1030)
 #define CC_RDNA3      (CC_OFFSET_AMD + 1100)
+#define CC_RDNA3_5    (CC_OFFSET_AMD + 0x1150) // AI 370, AI Max 395 laptops.
+#define CC_RDNA4      (CC_OFFSET_AMD + 0x1200) // RX 9000
+#define CC_GCN4       (CC_OFFSET_AMD + 0x803)  // Tonga, Fiji, Polaris, minimum for fast fp16
+#define CC_VEGA       (CC_OFFSET_AMD + 0x900)  // Vega56/64, minimum for fp16 dual issue
+#define CC_VEGA20     (CC_OFFSET_AMD + 0x906)  // MI50/Radeon VII, minimum for dp4a
+#define CC_CDNA1      (CC_OFFSET_AMD + 0x908)  // MI100, minimum for MFMA, acc registers
+#define CC_CDNA2      (CC_OFFSET_AMD + 0x910)  // MI210, minimum acc register renameing
+#define CC_CDNA3      (CC_OFFSET_AMD + 0x942)  // MI300
+
 #define GGML_CUDA_CC_IS_NVIDIA(cc)   (cc < CC_OFFSET_MTHREADS)
 #define GGML_CUDA_CC_IS_AMD(cc)   (cc >= CC_OFFSET_AMD)
+#define GGML_CUDA_CC_IS_RDNA(cc)    (cc >= CC_RDNA1)
+#define GGML_CUDA_CC_IS_RDNA1(cc)   (cc >= CC_RDNA1 && cc < CC_RDNA2)
+#define GGML_CUDA_CC_IS_RDNA2(cc)   (cc >= CC_RDNA2 && cc < CC_RDNA3)
+#define GGML_CUDA_CC_IS_RDNA3_0(cc) (cc >= CC_RDNA3 && cc < CC_RDNA3_5)
+#define GGML_CUDA_CC_IS_RDNA3_5(cc) (cc >= CC_RDNA3_5 && cc < CC_RDNA4)
+#define GGML_CUDA_CC_IS_RDNA3(cc)   (GGML_CUDA_CC_IS_RDNA3_0(cc) || GGML_CUDA_CC_IS_RDNA3_5(cc))
+#define GGML_CUDA_CC_IS_RDNA4(cc)   (cc >= CC_RDNA4)
+#define GGML_CUDA_CC_IS_GCN(cc)     (cc >  CC_OFFSET_AMD && cc < CC_CDNA1)
+#define GGML_CUDA_CC_IS_CDNA(cc)    (cc >= CC_CDNA1 && cc < CC_RDNA1)
+#define GGML_CUDA_CC_IS_CDNA1(cc)   (cc >= CC_CDNA1 && cc < CC_CDNA2)
+#define GGML_CUDA_CC_IS_CDNA2(cc)   (cc >= CC_CDNA2 && cc < CC_CDNA3)
+#define GGML_CUDA_CC_IS_CDNA3(cc)   (cc >= CC_CDNA3 && cc < CC_RDNA1)
+
+
+#define CC_QY1 (CC_OFFSET_MTHREADS + 0x210) // MTT S80, MTT S3000
+#define CC_QY2 (CC_OFFSET_MTHREADS + 0x220) // MTT S4000
+#define CC_PH1 (CC_OFFSET_MTHREADS + 0x310) // MTT S5000
+
+#define GGML_CUDA_CC_IS_MTHREADS(cc) (cc >= CC_OFFSET_MTHREADS && cc < CC_OFFSET_AMD)
+#define GGML_CUDA_CC_IS_QY1(cc)      (cc >= CC_QY1 && cc < CC_QY2)
+#define GGML_CUDA_CC_IS_QY2(cc)      (cc >= CC_QY2 && cc < CC_PH1)
+#define GGML_CUDA_CC_IS_PH1(cc)      (cc >= CC_PH1)
 
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
@@ -756,6 +789,7 @@ struct ggml_cuda_device_info {
         bool    vmm;                // virtual memory support
         size_t  vmm_granularity;    // granularity of virtual memory
         size_t  total_vram;
+        int     warp_size;
     };
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
