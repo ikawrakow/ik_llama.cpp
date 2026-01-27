@@ -1041,9 +1041,7 @@ int main(int argc, char ** argv) {
 
 
 
-// handle completion-like requests (completion, chat, infill)
-    // we can optionally provide a custom format for partial results and final results
-    const auto handle_completions_impl = [&ctx_server, &params](
+const auto handle_completions_impl = [&ctx_server, &params](
         server_task_type type,
         json& data,
         const std::vector<raw_buffer>& files,
@@ -1053,7 +1051,7 @@ int main(int argc, char ** argv) {
             GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
 
             // ----------------------------------------------------------------
-            // 1. Regex Validation
+            // 1. Regex Validation (Common)
             // ----------------------------------------------------------------
             auto validate_regex_list = [&](const std::string& field_name) -> std::string {
                 if (data.contains(field_name) && data[field_name].is_array()) {
@@ -1082,26 +1080,9 @@ int main(int argc, char ** argv) {
             }
 
             const auto completion_id = gen_chatcmplid();
-            
-            // Process prompt / inputs
-            std::vector<server_tokens> inputs;
-            try {
-                const auto& prompt = data.at("prompt");
-                if (oaicompat && ctx_server.mctx != nullptr) {
-                    inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
-                }
-                else {
-                    inputs = tokenize_input_prompts(llama_get_vocab(ctx_server.ctx), ctx_server.mctx, prompt, true, true);
-                }
-            }
-            catch (const std::exception& e) {
-                res_err(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
-                return;
-            }
 
             // ----------------------------------------------------------------
             // Check if we need the complex "Banned String" logic
-            // Only enable if the lists are present AND contain actual strings.
             // ----------------------------------------------------------------
             auto list_has_content = [&](const std::string& key) {
                 if (data.contains(key) && data[key].is_array()) {
@@ -1120,7 +1101,7 @@ int main(int argc, char ** argv) {
 
             if (!has_banned_content) {
                 // ----------------------------------------------------------------
-                // PATH A: Standard Logic (server_response_reader)
+                // PATH A: Standard Logic (The "Old Way")
                 // ----------------------------------------------------------------
                 
                 // need to store the reader as a pointer, so that it won't be destroyed when the handle returns
@@ -1129,6 +1110,18 @@ int main(int argc, char ** argv) {
 
                 try {
                     std::vector<server_task> tasks;
+
+                    const auto& prompt = data.at("prompt");
+
+                    // process prompt
+                    std::vector<server_tokens> inputs;
+
+                    if (oaicompat && ctx_server.mctx != nullptr) {
+                        inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
+                    }
+                    else {
+                        inputs = tokenize_input_prompts(llama_get_vocab(ctx_server.ctx), ctx_server.mctx, prompt, true, true);
+                    }
                     tasks.reserve(inputs.size());              
                     for (size_t i = 0; i < inputs.size(); i++) {
                         server_task task = server_task(type);
@@ -1289,6 +1282,22 @@ int main(int argc, char ** argv) {
                 // PATH B: Banned Content Logic (Slow Path with Buffering & Rewind)
                 // ----------------------------------------------------------------
                 auto buffer_and_check_string_ban_and_rewind_logic = [&]() {
+                    // Process prompt / inputs (Duplicated here to keep Path A isolated)
+                    std::vector<server_tokens> inputs;
+                    try {
+                        const auto& prompt = data.at("prompt");
+                        if (oaicompat && ctx_server.mctx != nullptr) {
+                            inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
+                        }
+                        else {
+                            inputs = tokenize_input_prompts(llama_get_vocab(ctx_server.ctx), ctx_server.mctx, prompt, true, true);
+                        }
+                    }
+                    catch (const std::exception& e) {
+                        res_err(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+                        return;
+                    }
+
                     // Helper to mimic request_cancel using the task queue directly
                     auto request_cancel = [&ctx_server](int id_target) {
                         server_task task(SERVER_TASK_TYPE_CANCEL);
@@ -1947,6 +1956,7 @@ int main(int argc, char ** argv) {
                 buffer_and_check_string_ban_and_rewind_logic();
             }
     };
+
 
 
 
