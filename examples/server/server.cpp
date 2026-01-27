@@ -1039,8 +1039,8 @@ int main(int argc, char ** argv) {
     };
 
 
-
-
+    // handle completion-like requests (completion, chat, infill)
+    // we can optionally provide a custom format for partial results and final results
 const auto handle_completions_impl = [&ctx_server, &params](
         server_task_type type,
         json& data,
