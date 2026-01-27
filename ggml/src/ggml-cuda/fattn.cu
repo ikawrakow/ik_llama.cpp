@@ -85,6 +85,24 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
         return;
     }
 
+    if constexpr (DKQ == 128 && DV == 128) {
+        if (use_gqa_opt && gqa_ratio == 12) {
+            if ((turing_mma_available(cc) || amd_wmma_available(cc)) && Q->ne[1] <= 1) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, 16>(ctx, dst);
+                return;
+            }
+
+            if (ggml_cuda_highest_compiled_arch(cc) == CC_TURING || amd_wmma_available(cc) || Q->ne[1] <= 2) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 2, 16>(ctx, dst);
+                return;
+            }
+
+            ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 4, 16>(ctx, dst);
+            //ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 16>(ctx, dst);
+            return;
+        }
+    }
+
     if (use_gqa_opt && gqa_ratio > 4) {
         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8>(ctx, dst);
         return;
