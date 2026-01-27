@@ -154,6 +154,10 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
             GGML_ASSERT(V->ne[0] == 256);
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<256, 256>(ctx, dst);
             break;
+        case 192:
+            GGML_ASSERT(V->ne[0] == 128);
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<192, 128>(ctx, dst);
+            break;
         case 576: {
             // For Deepseek, go straight to the ncols1 switch to avoid compiling unnecessary kernels.
             GGML_ASSERT(V->ne[0] == 512);
@@ -327,6 +331,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         case 112:
         case 256:
             if (V->ne[0] != K->ne[0]) {
+                return BEST_FATTN_KERNEL_NONE;
+            }
+            break;
+        case 192:
+            if (V->ne[0] != 128) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
