@@ -8819,7 +8819,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
                 model.layers[il].ffn_up_exps,   nullptr,
                 model.layers[il].ffn_gate_exps, nullptr,
                 model.layers[il].ffn_down_exps, nullptr,
-                nullptr,
+                model.layers[il].ffn_exp_probs_b,
                 nullptr,  nullptr, nullptr,  nullptr, nullptr,  nullptr, // no shared experts
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, true, false, 0.0f,
