@@ -805,7 +805,10 @@ static bool llama_kv_cache_init(
                         auto split = use_V_for_K ? extra_V->splits[is] : extra_K->splits[is];
                         if (!split) continue;
                         int nhead_kv = use_V_for_K ? split->ne[1] / n_embd_head_v : split->ne[1]/n_embd_head_k;
-                        if (use_V_for_K) printf("K_cache(%d, %d): using %d instead of %ld heads\n", i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
+                        if (use_V_for_K) {
+                            LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
+                                    i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
+                        }
                         split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
                         auto split_name = k_name + '.' + std::to_string(is);
                         ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());

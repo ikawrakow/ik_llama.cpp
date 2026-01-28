@@ -3129,12 +3129,6 @@ bool create_tensors_helper::create_tensors() {
                 LLAMA_LOG_DEBUG("\n");
                 LLAMA_LOG_DEBUG("  split_kq:"); for ([[maybe_unused]] auto s : split_kq) LLAMA_LOG_DEBUG(" %d", s);
                 LLAMA_LOG_DEBUG("\n");
-                if (layer.attn_q_norm) {
-                    printf("Layer %2d: q_norm = %ld x %ld, wq = %ld x %ld\n", il, layer.attn_q_norm->ne[0], layer.attn_q_norm->ne[1], layer.wq->ne[0], layer.wq->ne[1]);
-                }
-                if (layer.attn_k_norm) {
-                    printf("Layer %2d: k_norm = %ld x %ld, wq = %ld x %ld\n", il, layer.attn_k_norm->ne[0], layer.attn_k_norm->ne[1], layer.wk->ne[0], layer.wk->ne[1]);
-                }
 
                 if (layer.attn_q_norm && layer.attn_q_norm->ne[0] == layer.wq->ne[1]) {
                     // If RMS norm is not applied per attention head, as it is usually the case, but is applied to the
@@ -3145,7 +3139,7 @@ bool create_tensors_helper::create_tensors() {
                     if (layer.bq) {
                         prepare_split_tensors(-1, ctx_split, layer.bq, layer.split_bq, split_vo, mem_used);
                     }
-                    printf("  Not splitting wq, attn_q_norm for layer %d\n", il);
+                    LLAMA_LOG_DEBUG("Not splitting wq, attn_q_norm in layer layer %d because of RMS norm\n", il);
                 } else {
                     prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                     if (layer.attn_q_norm) {
@@ -3177,7 +3171,7 @@ bool create_tensors_helper::create_tensors() {
                     if (layer.bk) {
                         prepare_split_tensors(-1, ctx_split, layer.bk, layer.split_bk, split_vo, mem_used);
                     }
-                    printf("  Not splitting wk, attn_k_norm for layer %d\n", il);
+                    LLAMA_LOG_DEBUG("Not splitting wk, attn_k_norm in layer layer %d because of RMS norm\n", il);
                 } else {
                     prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split_kq, mem_used);
                     if (layer.bk) {
