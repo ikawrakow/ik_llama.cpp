@@ -4526,6 +4526,7 @@ struct cuda_params {
     int  fusion = GGML_CUDA_FUSION;
     int  offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
     int  mmq_id_thresh = 32;
+    float fa_offset = 0;
 #ifdef USE_CUDA_GRAPH
     bool use_cuda_graph = true;
 #else
@@ -4581,6 +4582,17 @@ static cuda_params ggml_cuda_parse_params(const char * params_string) {
             else if (parsed[0] == "enable-p2p") {
                 is_good = read_value(parsed[1], params.enable_p2p);
             }
+            else if (parsed[0] == "fa-offset") {
+                float tmp;
+                is_good = read_value(parsed[1], tmp);
+                if (is_good) {
+                    if (tmp < 0.0f || tmp > 3.0f) {
+                        GGML_CUDA_LOG_WARN("%s: bad value for %s. It is %g, but must be in [0...3]\n", __func__, parsed[0].c_str(), tmp);
+                    } else {
+                        params.fa_offset = tmp;
+                    }
+                }
+            }
 #ifdef USE_CUDA_GRAPH
             else if (parsed[0] == "graphs") {
                 is_good = read_value(parsed[1], params.use_cuda_graph);
@@ -4626,6 +4638,10 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
         if (params.mmq_id_thresh != ctx->mmq_id_thresh) {
             GGML_CUDA_LOG_INFO(" =========================== %s: setting mmq_id_thresh to %d\n", __func__, params.mmq_id_thresh);
             ctx->mmq_id_thresh      = params.mmq_id_thresh;
+        }
+        if (params.fa_offset != ctx->fa_offset) {
+            GGML_CUDA_LOG_INFO(" =========================== %s: setting fa_offset to %g\n", __func__, params.fa_offset);
+            ctx->fa_offset = params.fa_offset;
         }
         enable_p2p = params.enable_p2p;
 #ifdef USE_CUDA_GRAPH
