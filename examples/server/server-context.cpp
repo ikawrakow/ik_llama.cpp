@@ -338,6 +338,13 @@ void server_slot::reset() {
     json_schema = json();
     generated_tool_call_ids.clear();
 
+    oai_resp_thinking_block_started = false;
+    oai_resp_text_block_started = false;
+    oai_resp_id.clear();
+    oai_resp_reasoning_id.clear();
+    oai_resp_message_id.clear();
+    oai_resp_fc_id.clear();
+
     task.reset();
 }
 
@@ -793,6 +800,13 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     }
     slot.params.oaicompat = task.params.oaicompat;
     slot.params.oaicompat_cmpl_id =task.params.oaicompat_cmpl_id;
+
+    slot.oai_resp_thinking_block_started = false;
+    slot.oai_resp_text_block_started = false;
+    slot.oai_resp_id = "resp_" + random_string();
+    slot.oai_resp_reasoning_id = "rs_" + random_string();
+    slot.oai_resp_message_id = "msg_" + random_string();
+    slot.oai_resp_fc_id.clear();
     slot.params.timings_per_token = json_value(data, "timings_per_token", false);
     slot.params.stream = json_value(data, "stream", false);
     auto stream_opt = json_value(data, "stream_options", json::object());
@@ -1467,6 +1481,10 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
     res->oaicompat = slot.params.oaicompat;
     res->oaicompat_model = slot.task->params.oaicompat_model;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
+    res->oai_resp_id = slot.oai_resp_id;
+    res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
+    res->oai_resp_message_id = slot.oai_resp_message_id;
+    res->oai_resp_fc_id = slot.oai_resp_fc_id;
     res->n_decoded = slot.n_decoded;
     res->n_prompt_tokens = slot.n_prompt_tokens;
     res->data = json{
@@ -1482,12 +1500,24 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
     res->anthropic_thinking_block_started = slot.anthropic_thinking_block_started;
     res->anthropic_text_block_started = slot.anthropic_text_block_started;
 
+    res->oai_resp_thinking_block_started = slot.oai_resp_thinking_block_started;
+    res->oai_resp_text_block_started = slot.oai_resp_text_block_started;
+
     for (const auto& diff : res->oaicompat_msg_diffs) {
         if (!diff.reasoning_content_delta.empty() && !slot.anthropic_thinking_block_started) {
             slot.anthropic_thinking_block_started = true;
         }
         if (!diff.content_delta.empty() && !slot.anthropic_text_block_started) {
             slot.anthropic_text_block_started = true;
+        }
+        if (!diff.reasoning_content_delta.empty() && !slot.oai_resp_thinking_block_started) {
+            slot.oai_resp_thinking_block_started = true;
+        }
+        if (!diff.content_delta.empty() && !slot.oai_resp_text_block_started) {
+            slot.oai_resp_text_block_started = true;
+        }
+        if (!diff.tool_call_delta.name.empty()) {
+            slot.oai_resp_fc_id = diff.tool_call_delta.id;
         }
     }
 
@@ -1525,6 +1555,9 @@ void server_context::send_final_response(server_slot& slot) {
     res->oaicompat_model = slot.params.oaicompat_model;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
     res->oaicompat_msg = slot.update_chat_msg(res->oaicompat_msg_diffs);
+    res->oai_resp_id = slot.oai_resp_id;
+    res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
+    res->oai_resp_message_id = slot.oai_resp_message_id;
     res->n_decoded = slot.n_decoded;
     res->n_prompt_tokens = slot.n_prompt_tokens;
     res->oaicompat_model = slot.oaicompat_model;
