@@ -1231,7 +1231,7 @@ struct FlashQKV {
 
 template <int D, int q_step, int k_step>
 struct FlashQKfp32 {
-    static_assert(D%F16::block_size == 0 && D <= 576);
+    static_assert(D%F16::block_size == 0 && D <= 1088);
     static_assert(k_step%F16::block_size == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
@@ -1523,8 +1523,8 @@ char * get_q_storage(size_t size) {
 // q_step-1 versions of these functions for us, which I though was too much with q_step = 8.
 template <int Dk, int Dv, int q_step, int k_step>
 struct FlashAttn {
-    static_assert(Dk%F16::block_size == 0 && Dk <= 576);
-    static_assert(Dv%F16::block_size == 0 && Dv <= 512);
+    static_assert(Dk%F16::block_size == 0 && Dk <= 1088);
+    static_assert(Dv%F16::block_size == 0 && Dv <= 1024);
     static_assert(k_step%F16::block_size == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
@@ -1635,7 +1635,7 @@ struct HelperBF16 final : public BaseHelper {
 template <int D, int q_step, int k_step>
 struct FlashQKbf16 {
     //static_assert(D%32 == 0 && D <= 256);
-    static_assert(D%32 == 0 && D <= 576);
+    static_assert(D%32 == 0 && D <= 1088);
     static_assert(k_step%32 == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
@@ -1947,8 +1947,8 @@ template <int Dk, int Dv, int q_step, int k_step>
 struct FlashAttnBF16 {
     //static_assert(Dk%32 == 0 && Dk <= 256);
     //static_assert(Dv%32 == 0 && Dv <= 256);
-    static_assert(Dk%32 == 0 && Dk <= 576);
-    static_assert(Dv%32 == 0 && Dv <= 512);
+    static_assert(Dk%32 == 0 && Dk <= 1088);
+    static_assert(Dv%32 == 0 && Dv <= 1024);
     static_assert(k_step%32 == 0);
     static_assert(q_step <= 4 || q_step%4 == 0);
 
@@ -2240,6 +2240,7 @@ IQK_FA_CASE(iqk_fa_256_256);
 IQK_FA_CASE(iqk_fa_128_128);
 IQK_FA_CASE(iqk_fa_96_96);
 IQK_FA_CASE(iqk_fa_64_64);
+IQK_FA_CASE(iqk_fa_1088_1024);
 
 #endif
 
