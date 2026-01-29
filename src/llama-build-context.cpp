@@ -8833,17 +8833,7 @@ ggml_cgraph* llm_build_context::build_minimaxm2() {
         inpL = cur;
     }
 
-    cur = inpL;
-
-    cur = llm_build_norm(ctx0, cur,
-        hparams, model.output_norm, NULL,
-        LLM_NORM_RMS, cb, -1);
-
-    cb(cur, "result_norm", -1);
-
-    // lm_head
-    cur = llm_build_lora_mm(lctx, ctx0, model.output, cur);
-
+    cur = build_output(lctx, ctx0, inpL, model.output, model.output_norm, cb);
     cb(cur, "result_output", -1);
 
     ggml_build_forward_expand(gf, cur);
