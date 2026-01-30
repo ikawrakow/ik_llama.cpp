@@ -5481,6 +5481,12 @@ bool llama_save_session_file(struct llama_context * ctx, const char * path_sessi
     return llama_state_save_file(ctx, path_session, tokens, n_token_count);
 }
 
+static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor, const llama_layer & l) {
+    bool use_V_for_K = l.attn_k_norm && l.attn_k_norm->ne[0] == l.wk->ne[1] ? true : false;
+    auto kv = tensor->ne[1] > 1 && !use_V_for_K ? l.wk : l.wv;
+    return kv;
+}
+
 // TODO: replace all non-fatal assertions with returned errors or exceptions
 struct llama_data_write {
     virtual void write(const void * src, size_t size) = 0;
@@ -5883,7 +5889,7 @@ struct llama_data_read {
     void read_kv_cache_data_split(llama_context * ctx, ggml_tensor * tensor, const uint8_t * data, size_t head, size_t row_size, int nrows, int il) {
         GGML_ASSERT(il >= 0 && il < int(ctx->model.layers.size()));
         GGML_ASSERT(ggml_internal_get_type_traits(tensor->type).row_meta_size == 0);
-        auto kv = tensor->ne[1] > 1 ? ctx->model.layers[il].wk : ctx->model.layers[il].wv;
+        auto kv = get_kv_cache_split_tensor(tensor, ctx->model.layers[il]);
         auto extra = (ggml_split_tensor_t *)tensor->extra;
         auto kv_extra = (ggml_split_tensor_t *)kv->extra;
         GGML_ASSERT(extra && kv_extra);
@@ -6131,7 +6137,7 @@ struct llama_data_write_buffer : llama_data_write {
             throw std::runtime_error(std::string{"Split cache for type "} + ggml_type_name(tensor->type) + " is not supported");
         }
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        auto kv = tensor->ne[1] > 1 ? model.layers[il].wk : model.layers[il].wv;
+        auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
         get_tensor_data_split(ptr, tensor, kv, aux_buffer, offset, size);
     }
 
@@ -6230,7 +6236,7 @@ struct llama_data_write_file : llama_data_write {
 
     void get_tensor_data_split(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) {
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        auto kv = tensor->ne[1] > 1 ? model.layers[il].wk : model.layers[il].wv;
+        auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
         temp_buffer.resize(size);
         llama_data_write_buffer::get_tensor_data_split(temp_buffer.data(), tensor, kv, aux_buffer, offset, size);
     }
