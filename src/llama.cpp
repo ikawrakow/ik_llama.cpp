@@ -6131,7 +6131,9 @@ struct llama_data_write_buffer : llama_data_write {
             throw std::runtime_error(std::string{"Split cache for type "} + ggml_type_name(tensor->type) + " is not supported");
         }
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        auto kv = tensor->ne[1] > 1 ? model.layers[il].wk : model.layers[il].wv;
+        const auto & l = model.layers[il];
+        bool use_V_for_K = l.attn_k_norm && l.attn_k_norm->ne[0] == l.wk->ne[1] ? true : false;
+        auto kv = tensor->ne[1] > 1 && !use_V_for_K ? l.wk : l.wv;
         get_tensor_data_split(ptr, tensor, kv, aux_buffer, offset, size);
     }
 
