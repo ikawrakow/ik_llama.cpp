@@ -6139,13 +6139,38 @@ struct llama_data_write_buffer : llama_data_write {
             std::vector<uint8_t> & aux_buffer, size_t offset, size_t size) {
         auto ne = kv->ne[1];
         auto full_row_size = ggml_row_size(tensor->type, ne);
+        auto extra = (const ggml_split_tensor_t *)tensor->extra;
+        auto kv_extra = (const ggml_split_tensor_t *)kv->extra;
+        GGML_ASSERT(extra && kv_extra);
+
+        // Special case: Sub-row read (e.g., Transposed V-cache)
+        // If size is smaller than a full row, we find the specific split containing the offset
+        if (size < full_row_size || (offset % full_row_size != 0)) {
+            size_t current_split_start = 0;
+            for (int id = 0; id < extra->n_device; ++id) {
+                auto split = extra->splits[id];
+                if (!split) continue;
+
+                // For KV cache, the split tensors are often concatenated blocks of heads
+                // We check if the requested global offset falls into this device's head-block
+                size_t split_full_size = ggml_nbytes(split);
+
+                // If the global offset is within the bounds of how this tensor is split
+                // (This logic assumes a concatenated split for 1D/Transposed KV)
+                if (offset >= current_split_start && offset < current_split_start + split_full_size) {
+                    GGML_ASSERT(offset + size <= current_split_start + split_full_size);
+                    ggml_backend_tensor_get(split, ptr, offset - current_split_start, size);
+                    return;
+                }
+                current_split_start += split_full_size;
+            }
+            // If we didn't find the split via concatenation logic, fall back to row-based but allow sub-rows
+        }
+
         GGML_ASSERT(offset % full_row_size == 0);
         GGML_ASSERT(size   % full_row_size == 0);
         auto first_row = offset / full_row_size;
         auto num_rows  = size / full_row_size;
-        auto extra = (const ggml_split_tensor_t *)tensor->extra;
-        auto kv_extra = (const ggml_split_tensor_t *)kv->extra;
-        GGML_ASSERT(extra && kv_extra);
         size_t split_offset = 0;
         size_t total_size   = 0;
         for (int id = 0; id < extra->n_device; ++id) {
