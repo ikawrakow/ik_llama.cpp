@@ -38,14 +38,17 @@ inline void iqk_deepseek_helper(KHelper& kh, VHelper& vh,
         fa.compute(kh, vh, 4*n_step, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv, M, S);
         if (update(4*n_step)) return;
     }
-    if (nq1 >= 2) {
-        int n_step = nq1/2;
-        FlashAttn<576, 512, 2, step_k> fa(scale, softcap, sinkf);
-        fa.compute(kh, vh, 2*n_step, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv, M, S);
-        if (update(2*n_step)) return;
+    if (nq1 == 3) {
+        FlashAttn<576, 512, 3, step_k> fa(scale, softcap, sinkf);
+        fa.compute(kh, vh, 3, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv, M, S);
     }
-    FlashAttn<576, 512, 1, step_k> fa(scale, softcap, sinkf);
-    fa.compute(kh, vh, nq1, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv, M, S);
+    else if (nq1 == 2) {
+        FlashAttn<576, 512, 2, step_k> fa(scale, softcap, sinkf);
+        fa.compute(kh, vh, 2, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv, M, S);
+    } else {
+        FlashAttn<576, 512, 1, step_k> fa(scale, softcap, sinkf);
+        fa.compute(kh, vh, 1, nk1, stride_q, stride_m, stride_qkv, q, mask, qkv, M, S);
+    }
 }
 
 template <int step_k>
