@@ -7758,8 +7758,9 @@ llama_token llama_sample_token(struct llama_context * ctx, llama_token_data_arra
 llama_token llama_sample_token_adaptive_p(
                struct llama_context * ctx,
              llama_token_data_array * candidates,
-    struct llama_sampler_adaptive_p * adapt_p_ctx) {
-    return llama_sample_token_adaptive_p_impl(&ctx->sampling, candidates, adapt_p_ctx);
+    struct llama_sampler_adaptive_p * adapt_p_ctx,
+                        const float   temp) {
+    return llama_sample_token_adaptive_p_impl(&ctx->sampling, candidates, adapt_p_ctx, temp);
 }
 
 int llama_split_path(char * split_path, size_t maxlen, const char * path_prefix, int split_no, int split_count) {

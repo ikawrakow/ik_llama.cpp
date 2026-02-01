@@ -1440,7 +1440,8 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     llama_token llama_sample_token_adaptive_p(
             struct llama_context * ctx,
           llama_token_data_array * candidates,
- struct llama_sampler_adaptive_p * adapt_p_ctx);
+ struct llama_sampler_adaptive_p * adapt_p_ctx,
+                     const float   temp);
 
     //
     // Model split
