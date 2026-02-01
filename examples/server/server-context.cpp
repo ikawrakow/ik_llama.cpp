@@ -2848,7 +2848,7 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
         n_rewind = check_ban_phrase(slot);
     }
     // if found string in the ban
-    if (n_rewind > 0 && slot.rewind_count <= 2 * slot.ban_phrases.size()) {
+    if (n_rewind > 0 && (slot.rewind_count <20 || slot.rewind_count <= 2 * slot.ban_phrases.size())) {
         rewind_context(slot, n_rewind);
         slot.rewind_status = true;
     }
