@@ -73,7 +73,8 @@ struct llama_sampler_adaptive_p {
     float total_weight;     // sum(decay^i), converges to 1/(1-decay)
 
     // first referenced in prep
-    std::vector<float>  orig_prob; // for storing the original proibabilities
+    const bool update_w_cur_p;      // update history with current probability vs original
+    std::vector<float> orig_prob;   // for storing the original proibabilities
     float cum_orig_prob;    // for normalizing orig_prob in sample_token
 
     // first referenced in sample
@@ -87,7 +88,8 @@ struct llama_sampler_adaptive_p {
 struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
        const float target,
        const float decay,
-    const uint32_t seed);
+    const uint32_t seed,
+       const float temp);
 
 void llama_prep_adaptive_p_impl(
               struct llama_sampling * smpl,
@@ -120,6 +122,6 @@ llama_token llama_sample_token_mirostat_v2_impl(struct llama_sampling * smpl, ll
 llama_token llama_sample_token_greedy_impl     (struct llama_sampling * smpl, llama_token_data_array * candidates);
 llama_token llama_sample_token_with_rng_impl   (struct llama_sampling * smpl, llama_token_data_array * candidates, std::mt19937 & rng);
 llama_token llama_sample_token_impl            (struct llama_sampling * smpl, llama_token_data_array * candidates);
-llama_token llama_sample_token_adaptive_p_impl (struct llama_sampling * smpl, llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx, const float temp);
+llama_token llama_sample_token_adaptive_p_impl (struct llama_sampling * smpl, llama_token_data_array * candidates, struct llama_sampler_adaptive_p * adapt_p_ctx);
 
 
