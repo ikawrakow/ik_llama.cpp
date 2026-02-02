@@ -257,6 +257,7 @@ struct ggml_tensor_extra_gpu {
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
+    int op_offload_min_batch_size = -1;
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 

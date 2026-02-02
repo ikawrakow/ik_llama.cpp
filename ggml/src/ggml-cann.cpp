@@ -1792,10 +1792,10 @@ GGML_CALL static bool ggml_backend_cann_supports_buft(
  */
 GGML_CALL static bool ggml_backend_cann_offload_op(ggml_backend_t backend,
                                                    const ggml_tensor* op) {
-    const char * env_value = getenv("GGML_OP_OFFLOAD_MIN_BATCH");
-    if (env_value) {
-        int min_batch_size = atoi(env_value);
-        return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
+    ggml_backend_cann_context* ctx = (ggml_backend_cann_context*)backend->context;
+
+    if (ctx->op_offload_min_batch_size >= 0) {
+        return op->ne[1] >= ctx->op_offload_min_batch_size && op->op != GGML_OP_GET_ROWS;
     }
 
     // No env var: use MoE-aware heuristic
@@ -1958,6 +1958,11 @@ GGML_CALL ggml_backend_t ggml_backend_cann_init(int32_t device) {
     if (ctx == nullptr) {
         GGML_CANN_LOG_ERROR("%s: error: failed to allocate context\n", __func__);
         return nullptr;
+    }
+
+    const char * env_value = getenv("GGML_OP_OFFLOAD_MIN_BATCH");
+    if (env_value) {
+        ctx->op_offload_min_batch_size = atoi(env_value);
     }
 
     ggml_backend_t cann_backend =

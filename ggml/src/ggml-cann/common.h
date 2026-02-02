@@ -212,6 +212,7 @@ struct ggml_backend_cann_context {
     int32_t device;                  /**< Device ID. */
     std::string name;                /**< Name of the device. */
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
+    int op_offload_min_batch_size = -1;
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {
         {nullptr}}; /**< Array of streams for the device. */

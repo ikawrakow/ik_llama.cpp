@@ -4410,10 +4410,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_buft(ggml_backend_t backend, gg
 GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const ggml_tensor * op) {
     auto ctx = (const ggml_backend_cuda_context *)backend->context;
 
-    const char * env_value = getenv("GGML_OP_OFFLOAD_MIN_BATCH");
-    if (env_value) {
-        int min_batch_size = atoi(env_value);
-        return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
+    if (ctx->op_offload_min_batch_size >= 0) {
+        return op->ne[1] >= ctx->op_offload_min_batch_size && op->op != GGML_OP_GET_ROWS;
     }
 
     // No env var: use MoE-aware heuristic
@@ -4620,6 +4618,11 @@ GGML_CALL ggml_backend_t ggml_backend_cuda_init(int device, [[maybe_unused]] con
     if (ctx == nullptr) {
         GGML_CUDA_LOG_ERROR("%s: failed to allocate context\n", __func__);
         return nullptr;
+    }
+
+    const char * env_value = getenv("GGML_OP_OFFLOAD_MIN_BATCH");
+    if (env_value) {
+        ctx->op_offload_min_batch_size = atoi(env_value);
     }
 
     ggml_backend_t cuda_backend = new ggml_backend {
