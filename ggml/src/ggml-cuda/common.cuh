@@ -851,7 +851,7 @@ struct ggml_backend_cuda_context {
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
 
     int   fusion = GGML_CUDA_FUSION;
-    int   offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
+    int   offload_batch_size = GGML_OP_OFFLOAD_HEURISTIC_MIN;
     int   mmq_id_thresh = 32;
     float fa_offset = 0.0f;
 #ifdef USE_CUDA_GRAPH

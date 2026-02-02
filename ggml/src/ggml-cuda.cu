@@ -4409,8 +4409,14 @@ GGML_CALL static bool ggml_backend_cuda_supports_buft(ggml_backend_t backend, gg
 
 GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const ggml_tensor * op) {
     auto ctx = (const ggml_backend_cuda_context *)backend->context;
-    int min_batch_size = ctx->offload_batch_size; //originally: GGML_CUDA_MIN_BATCH_OFFLOAD;
 
+    const char * env_value = getenv("GGML_OP_OFFLOAD_MIN_BATCH");
+    if (env_value) {
+        int min_batch_size = atoi(env_value);
+        return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
+    }
+
+    // No env var: use MoE-aware heuristic
     // Why do we want to do this? The heuristics that the batch must have more than min_batch_size tokens to be worth it
     // offloading the required model weights comes from dense models. For MoE models, the average number of tokens
     // each expert deals with in a batch is (active_experts / total_experts) * batch_size. Hence, according to the
@@ -4421,6 +4427,8 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
     //
     // as the condition for offloading model weights resinding in RAM to the GPU.
     // In this case, the number of tokens is not as usual in op->ne[1] but rather in op->ne[2].
+    int min_batch_size = ctx->offload_batch_size;
+
     if (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE) {
         auto ids = op->op == GGML_OP_MUL_MAT_ID ? op->src[2] : op->src[3];
         int64_t batch_size = op->ne[2];
@@ -4433,10 +4441,6 @@ GGML_CALL static bool ggml_backend_cuda_offload_op(ggml_backend_t backend, const
     }
 
     return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
-
-    // Original:
-    //return (op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS) ||
-    //       (op->ne[2] >= min_batch_size && (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE));
 
     GGML_UNUSED(backend);
 }
@@ -4524,7 +4528,7 @@ static ggml_guid_t ggml_backend_cuda_guid() {
 
 struct cuda_params {
     int  fusion = GGML_CUDA_FUSION;
-    int  offload_batch_size = GGML_CUDA_MIN_BATCH_OFFLOAD;
+    int  offload_batch_size = GGML_OP_OFFLOAD_HEURISTIC_MIN;
     int  mmq_id_thresh = 32;
     float fa_offset = 0;
 #ifdef USE_CUDA_GRAPH

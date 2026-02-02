@@ -127,8 +127,8 @@ set   (GGML_CUDA_KQUANTS_ITER "2" CACHE STRING
                                             "ggml: iters./thread per block for Q2_K/Q6_K")
 set   (GGML_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
                                             "ggml: min batch size for GPU offload")
-set   (GGML_CUDA_MIN_BATCH_OFFLOAD "32" CACHE STRING
-                                            "ggml: max. batch size for using peer access")
+set   (GGML_OP_OFFLOAD_HEURISTIC_MIN "32" CACHE STRING
+                                            "ggml: min. batch size for offload heuristic")
 option(GGML_CUDA_NO_PEER_COPY               "ggml: do not use peer to peer copies"            OFF)
 option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"                OFF)
 option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashAttention"     OFF)

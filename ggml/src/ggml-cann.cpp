@@ -1792,10 +1792,26 @@ GGML_CALL static bool ggml_backend_cann_supports_buft(
  */
 GGML_CALL static bool ggml_backend_cann_offload_op(ggml_backend_t backend,
                                                    const ggml_tensor* op) {
-    const int min_batch_size = 32;
-    GGML_UNUSED(backend);
+    const char * env_value = getenv("GGML_OP_OFFLOAD_MIN_BATCH");
+    if (env_value) {
+        int min_batch_size = atoi(env_value);
+        return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
+    }
+
+    // No env var: use MoE-aware heuristic
+    int min_batch_size = GGML_OP_OFFLOAD_HEURISTIC_MIN;
+
+    if (op->op == GGML_OP_MUL_MAT_ID || op->op == GGML_OP_MOE_FUSED_UP_GATE) {
+        auto ids = op->op == GGML_OP_MUL_MAT_ID ? op->src[2] : op->src[3];
+        int64_t batch_size = op->ne[2];
+        if (batch_size < min_batch_size) return false;
+        int64_t n_experts_tot = op->src[0]->ne[2];
+        int64_t n_experts_active = ids->ne[0];
+        return batch_size * n_experts_active >= min_batch_size * n_experts_tot;
+    }
 
     return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
+    GGML_UNUSED(backend);
 }
 
 /**
