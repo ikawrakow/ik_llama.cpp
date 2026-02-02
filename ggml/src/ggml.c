@@ -16673,6 +16673,38 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     ggml_barrier(params->shared);
 
+    if (dst->ne[2] == 1 && ids->ne[1] == 1) {
+        int gcd = simple_gcd(nth, n_ids);
+        if (gcd == n_ids) {
+
+            int id    = ith % gcd;
+            int i02 = *(const int32_t *) ((const char *) ids->data + id*ids->nb[0]);
+
+            const char * src0_1_cur = (const char *) src0_1->data + i02*nb02;
+            const char * src0_2_cur = src0_2 ? (const char *) src0_2->data + i02*nb02 : src0_1_cur + nb02/2;
+            const char * up_b_cur   = up_b   ? (const char *)up_b->data + i02*nb41 : NULL;
+            const char * gate_b_cur = gate_b ? (const char *)gate_b->data + i02*nb51 : NULL;
+            if (up_b_cur && !gate_b_cur) {
+                gate_b_cur = up_b_cur + nb41/2;
+            }
+
+            const void * wdata    = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+            const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+
+            const int64_t nr0 = src0_2 ? ne01 : ne01/2; // src0 rows
+            const int64_t nr1 = 1; // src1 rows
+
+            //if (ith == 0) printf("Calling iqk_moe_fused_up_gate with nr0 = %d, nr1 = %d, ne00 = %d, ne11 = %d\n", (int)nr0, (int)nr1, (int)ne00, (int)ne11);
+            if (!iqk_moe_fused_up_gate(nr0, nr1, ne00, ne11, dst->op_params[0],
+                                type, src0_1_cur, src0_2_cur, nb01,
+                                vec_dot_type, (const char *)wdata, row_size,
+                                up_b_cur, gate_b_cur,
+                                (float *)dst->data, nb1, nb2,
+                                matrix_rows + i02*ne12, ith/gcd, nth/gcd)) GGML_ABORT("fatal error");
+            return;
+        }
+    }
+
 
     // so GGML_TENSOR_BINARY_OP_LOCALS works
 
