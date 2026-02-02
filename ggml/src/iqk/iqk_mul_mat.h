@@ -7,6 +7,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "iqk_config.h"
 #ifdef __cplusplus
 extern "C" {
@@ -36,6 +37,10 @@ IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int ne11, int un
         float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth);
 
 IQK_API int iqk_dequant_type(int type, int Ny);
+
+struct ggml_tensor;
+
+IQK_API size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nthread);
 
 typedef void (*barrier_t) (void *);
 
