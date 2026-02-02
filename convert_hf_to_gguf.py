@@ -4196,6 +4196,9 @@ class SmolLM3Model(LlamaModel):
             chat_template = tokenizer.chat_template.replace("[:]", "")
             self.gguf_writer.add_chat_template(chat_template)
 
+@Model.register("SeedOssForCausalLM")
+class SeedOssModel(Model):
+    model_arch = gguf.MODEL_ARCH.SEED_OSS
 
 @Model.register("Dots1ForCausalLM")
 class Dots1Model(Qwen2MoeModel):
