@@ -31,7 +31,7 @@ static std::pair<uint32_t, const char*> decode_utf8(const char* src) {
 
 // Decodes a UTF-8 string which may end in an incomplete sequence. Adds a terminating 0 for use as
 // pointer. If an invalid sequence is encountered, returns `llama_partial_utf8.n_remain == -1`.
-std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
+static std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
         const std::string & src,
         llama_partial_utf8 partial_start) {
     static const int      lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 3, 4 };
@@ -300,7 +300,7 @@ static void print_rule_binary(FILE* file, const llama_grammar_rule& rule) {
     fprintf(file, "\n");
 }
 
-void print_rule(
+static void print_rule(
     FILE* file,
     uint32_t   rule_id,
     const llama_grammar_rule& rule,
@@ -1437,17 +1437,17 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, const struct llam
     smpl->t_sample_us += ggml_time_us() - t_start_sample_us;
 }
 
-void llama_grammar_accept_str(struct llama_grammar* grammar, const std::string& piece) {
+void llama_grammar_accept_str(struct llama_grammar & grammar, const std::string & piece) {
     // Note terminating 0 in decoded string
-    const auto   decoded = decode_utf8(piece, grammar->partial_utf8);
+    const auto   decoded = decode_utf8(piece, grammar.partial_utf8);
     const auto& code_points = decoded.first;
 
     for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
-        llama_grammar_accept(grammar, *it);
+        llama_grammar_accept(&grammar, *it);
     }
 
-    grammar->partial_utf8 = decoded.second;
-    if (grammar->stacks.empty()) {
+    grammar.partial_utf8 = decoded.second;
+    if (grammar.stacks.empty()) {
         throw std::runtime_error("Unexpected empty grammar stack after accepting piece: " + piece);
     }
 }
