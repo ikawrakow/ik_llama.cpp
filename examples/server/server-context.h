@@ -84,7 +84,7 @@ struct server_slot {
     stop_type stop;
 
     // For context rewind/ token buffer
-    int32_t n_buffer = 0;
+    size_t n_buffer = 0;
     int32_t rewind_count = 0;
     bool rewind_status = false;
     std::unordered_map<llama_token, float> logit_bias;

@@ -216,9 +216,9 @@ struct gpt_params {
 
     std::vector<std::string> in_files;     // all input files
     std::vector<std::string> antiprompt;   // strings upon which more user input is prompted (a.k.a. reverse prompts)
-    std::vector<std::string> ban_phrases;  //strings that are banned in generation
-    int32_t banned_n = 1;                 // number of tokens that are banned in the phrase
-    int32_t n_buffer;					   // number of token buffers for string ban
+    std::vector<std::string> ban_phrases;  // strings that are banned in generation
+    int32_t banned_n                 =  1; // number of tokens that are banned in the phrase
+    size_t n_buffer 				 =  0; // number of token buffers for string ban
 
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;

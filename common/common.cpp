@@ -1532,9 +1532,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
                 ban_phrases.push_back(str);
             }
         }
-        std::sort(ban_phrases.begin(), ban_phrases.end(), [](const std::string& a, const std::string& b) {
-            return a.length() > b.length();
-            });
         params.ban_phrases = ban_phrases;
         return true;
     }

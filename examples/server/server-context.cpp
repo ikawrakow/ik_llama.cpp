@@ -1143,21 +1143,28 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             std::sort(slot.ban_phrases.begin(), slot.ban_phrases.end(), [](const std::string& a, const std::string& b) {
                 return a.length() > b.length();
                 });
-        }
-        else if (params_base.ban_phrases.size()>0 && params_base.n_buffer == 0) { 
-			slot.ban_phrases.clear();
-            for (const auto & val : params_base.ban_phrases) {
-                if (!val.empty()) {
-                    std::string s = string_lower(val);
-                    auto ban_tokens = common_tokenize(llama_get_model(ctx), s, false, true);
-                    if (ban_tokens.size() > slot.n_buffer) {
-                        slot.n_buffer = ban_tokens.size();
+        } else if (params_base.ban_phrases.size() > 0) {
+            if (params_base.n_buffer == 0) {
+                slot.ban_phrases.clear();
+                std::sort(params_base.ban_phrases.begin(), params_base.ban_phrases.end(), [](const std::string & a, const std::string & b) {
+                    return a.length() > b.length();
+                    });
+                for (auto & val : params_base.ban_phrases) {
+                    if (!val.empty()) {
+                        val = string_lower(val);
+                        auto ban_tokens = common_tokenize(llama_get_model(ctx), val, false, true);
+                        if (ban_tokens.size() > slot.n_buffer) {
+                            slot.n_buffer = ban_tokens.size();
+                        }
+                        slot.ban_phrases.push_back(val);
                     }
-                    slot.ban_phrases.push_back(s);
-                }
+                }              
+                slot.n_buffer = slot.n_buffer + 3; // extra buffer in case
+                params_base.n_buffer = slot.n_buffer;
+            } else {
+                slot.ban_phrases = params_base.ban_phrases;
+                slot.n_buffer = params_base.n_buffer;
             }
-            params_base.n_buffer = slot.n_buffer + 3;
-            slot.n_buffer = slot.n_buffer + 3; // extra buffer in case
         }
 		slot.logit_bias = slot.sparams.logit_bias; // keep a copy to restore
         slot.ban_phrases_bias = json_value(data, "banned_bias", params_base.ban_phrases_bias);
