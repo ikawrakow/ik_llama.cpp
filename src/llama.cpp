@@ -224,6 +224,7 @@ enum llm_chat_template {
     LLM_CHAT_TEMPLATE_BAILING,
     LLM_CHAT_TEMPLATE_BAILING_THINK,
     LLM_CHAT_TEMPLATE_BAILING2,
+    LLM_CHAT_TEMPLATE_SEED_OSS,
     LLM_CHAT_TEMPLATE_UNKNOWN,
 };
 
@@ -269,6 +270,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
     { "bailing-think",     LLM_CHAT_TEMPLATE_BAILING_THINK     },
     { "bailing2",          LLM_CHAT_TEMPLATE_BAILING2          },
+    { "seed_oss",          LLM_CHAT_TEMPLATE_SEED_OSS          },
 
 };
 
@@ -5047,6 +5049,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_BAILINGMOE2:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MIMO2:
+        case LLM_ARCH_SEED_OSS:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -7004,6 +7007,8 @@ static llm_chat_template llama_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_GROK_2;
     } else if (tmpl_contains("<|start|>") && tmpl_contains("<|channel|>")) {
         return LLM_CHAT_TEMPLATE_OPENAI_MOE;
+    } else if (tmpl_contains("<seed:bos>")) {
+        return LLM_CHAT_TEMPLATE_SEED_OSS;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -7532,6 +7537,14 @@ static int32_t llama_chat_apply_template_internal(
         }
         if (add_ass) {
             ss << "Assistant:";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_SEED_OSS) {
+        for (auto message: chat) {
+            std::string role(message->role);
+            ss << "<seed:bos>" << role << "\n" << (role == "assistant" ? trim(message->content) : message->content) << "<seed:eos>";
+        }
+        if (add_ass) {
+            ss << "<seed:bos>assistant\n";
         }
     } else {
         // template not supported
