@@ -1217,7 +1217,7 @@ static const char* llama_sampler_grammar_name(const struct llama_sampler* /*smpl
 static void llama_sampler_grammar_accept_impl(struct llama_sampler* smpl, llama_token token) {
     auto* ctx = (llama_sampler_grammar*)smpl->ctx;
     if (ctx->grammar) {
-        llama_grammar_accept_token_impl(ctx->grammar,ctx->vocab ,nullptr, token);
+        llama_grammar_accept_impl(*ctx->grammar,ctx->vocab ,nullptr, token);
     }
 }
 

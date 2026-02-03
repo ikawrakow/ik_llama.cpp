@@ -7611,36 +7611,13 @@ int32_t llama_chat_builtin_templates(const char ** output, size_t len) {
 // grammar
 //
 
-struct llama_grammar * llama_grammar_init(
-        const llama_grammar_element ** rules,
-        size_t    n_rules,
-        size_t    start_rule_index) {
-    return llama_grammar_init_impl(rules, n_rules, start_rule_index);
-}
-
 void llama_grammar_free(struct llama_grammar * grammar) {
     llama_grammar_free_impl(grammar);
 }
-//
-//void llama_grammar_init_lazy(struct llama_sampler* smpl) {
-//
-//    if (!grammar) {
-//        return;
-//    }
-//    std::vector<const char*>  trigger_patterns_c;
-//    trigger_patterns_c.reserve(grammar.grammar->trigger_patterns.size());
-//    for (auto& trigger_pattern : grammar.grammar->trigger_patterns) {
-//        trigger_patterns_c.push_back(trigger_pattern.pattern.c_str());
-//    }
-//    //auto* grammar_new = llama_grammar_init_impl(grammar->vocab, "", "root",
-//    //    grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
-//    //    grammar->trigger_tokens.data(), grammar->trigger_tokens.size());
-//
-//}
 
 
 struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar) {
-    return llama_grammar_copy_impl(grammar);
+    return llama_grammar_clone_impl(*grammar);
 }
 
 void llama_grammar_sample(
@@ -7661,7 +7638,7 @@ void llama_grammar_accept_token(
             struct llama_grammar * grammar,
             struct llama_context * ctx,
                      llama_token   token) {
-    llama_grammar_accept_token_impl(grammar, &ctx->model.vocab, &ctx->sampling, token);
+    llama_grammar_accept_impl(*grammar, &ctx->model.vocab, &ctx->sampling, token);
 }
 
 //

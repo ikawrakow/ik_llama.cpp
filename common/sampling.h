@@ -1,7 +1,7 @@
 #pragma once
 
 #include "llama.h"
-#include "grammar-parser.h"
+#include "llama-grammar.h"
 #include <set>
 #include <random>
 #include <string>
@@ -113,10 +113,10 @@ struct llama_sampling_context {
     // mirostat sampler state
     float mirostat_mu;
 
-    llama_grammar * grammar;
+    std::string grammar_str;
+    std::string grammar_root;
 
-    // internal
-    grammar_parser::parse_state parsed_grammar;
+    llama_grammar * grammar;
 
     // TODO: replace with ring-buffer
     std::vector<llama_token>      prev;
@@ -148,7 +148,7 @@ void common_sampler_reset(const struct llama_vocab* vocab, llama_sampling_contex
 void llama_sampling_set_rng_seed(struct llama_sampling_context * ctx, uint32_t seed);
 
 // Copy the sampler context
-void llama_sampling_cp(llama_sampling_context * src, llama_sampling_context * dst);
+void common_sampler_clone(llama_sampling_context * src, llama_sampling_context * dst);
 
 // Get the last sampled token
 llama_token llama_sampling_last(llama_sampling_context * ctx);
