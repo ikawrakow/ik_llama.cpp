@@ -69,6 +69,7 @@ typedef struct llama_sampling_params {
     float       top_n_sigma           = 0.0f;               // top-n-sigma
     float       adaptive_target       = -1.0f;              // select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
     float       adaptive_decay        = 0.90f;              // decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
+    bool        adaptive_updt_w_cur   = false;              // update state with current probability
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
 
