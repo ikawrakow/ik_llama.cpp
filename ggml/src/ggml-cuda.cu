@@ -2773,9 +2773,11 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                         (float *)dst->data, ggml_nelements(dst), dst_row.ne[0],  dst_row.ne[0],  dst_row.ne[0],
                         1.702f, 7.0f, stream);
         } else {
+            float limit = *((const float *)(dst->op_params + 1));
+            //printf("%s: using limit = %g\n", __func__, limit);
             ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
                     (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
-                    (float *)dst->data);
+                    (float *)dst->data, limit);
         }
         } else {
 
@@ -2801,8 +2803,10 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                         (float *)dst->data, ggml_nelements(dst), dst->ne[0], src0_1->ne[1], src0_1->ne[1],
                         1.702f, 7.0f, stream);
             } else {
+                float limit = *((const float *)(dst->op_params + 1));
+                //printf("%s: using limit = %g\n", __func__, limit);
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst), dst->ne[0],
-                        (const float *)dst_up_gate_contiguous.get(), (float *)dst->data);
+                        (const float *)dst_up_gate_contiguous.get(), (float *)dst->data, limit);
             }
         }
         CUDA_CHECK(cudaGetLastError());
@@ -2970,6 +2974,8 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         }
 
         auto unary_op = (ggml_unary_op)dst->op_params[0];
+        float limit = *(const float *)(dst->op_params + 1);
+        //printf("%s: using limit = %g\n", __func__, limit);
         if (src0_2) {
             dst_row.data  = dst_gate_contiguous.get();
             if (use_quantized_src1) {
@@ -2993,7 +2999,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             } else {
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row),
                         (const float *)dst_gate_contiguous.get(), (const float *)dst_up_contiguous.get(),
-                        (float *)dst_gate_contiguous.get());
+                        (float *)dst_gate_contiguous.get(), limit);
             }
         } else {
             if (unary_op == GGML_UNARY_OP_SWIGLU_OAI) {
@@ -3002,7 +3008,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                         1.702f, 7.0f, stream);
             } else {
                 ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(&dst_row)/2, dst->ne[0],
-                        (const float *)dst_up_contiguous.get(), (float *)dst_gate_contiguous.get());
+                        (const float *)dst_up_contiguous.get(), (float *)dst_gate_contiguous.get(), limit);
             }
             dst_row.data = dst_gate_contiguous.get();
             dst_row.ne[0] /= 2;
@@ -3116,8 +3122,10 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         }
     }
 
+    float limit = *(const float *)(dst->op_params + 1);
+    //printf("%s: using limit = %g\n", __func__, limit);
     ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
-                    (const float *)dst->data, dst_up.get(), (float *)dst->data);
+                    (const float *)dst->data, dst_up.get(), (float *)dst->data, limit);
     CUDA_CHECK(cudaGetLastError());
 
 }

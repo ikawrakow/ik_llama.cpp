@@ -87,9 +87,9 @@ void ggml_swiglu_oai_cuda_f32(const float * x, const float * g, float * dst, con
 void ggml_cuda_op_fused_mul_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
 void ggml_fused_mul_unary(ggml_backend_cuda_context & ctx, ggml_unary_op op,
-        int64_t nelements, const float * x, const float * y, float * z);
+        int64_t nelements, const float * x, const float * y, float * z, float limit = 0);
 
 void ggml_fused_mul_unary(ggml_backend_cuda_context & ctx, ggml_unary_op op,
-        int64_t nelements,int64_t ne0,  const float * x, float * z);
+        int64_t nelements,int64_t ne0,  const float * x, float * z, float limit = 0);
 
 void ggml_cuda_op_multi_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
