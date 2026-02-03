@@ -15140,6 +15140,8 @@ static void ggml_compute_forward_fused_mul_unary_f32(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
     enum ggml_unary_op op = (enum ggml_unary_op)dst->op_params[0];
+    const float limit = *(const float *)(dst->op_params + 1);
+    if (params->ith == 0) printf("%s(%s) using limit = %g\n", __func__, dst->name, (double)limit);
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
@@ -15167,7 +15169,19 @@ static void ggml_compute_forward_fused_mul_unary_f32(
         switch (op) {
             case GGML_UNARY_OP_GELU: ggml_vec_gelu_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
             case GGML_UNARY_OP_RELU: ggml_vec_relu_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
-            case GGML_UNARY_OP_SILU: ggml_vec_mul_silu_f32(nc, z, x, y); break;
+            case GGML_UNARY_OP_SILU: {
+                if (limit < 1e-6f) {
+                    ggml_vec_mul_silu_f32(nc, z, x, y);
+                } else {
+                    // TODO: simdify this
+                    for (int i = 0; i < nc; ++i) {
+                        float gate = ggml_silu_f32(x[i]);
+                        gate = MIN(gate, limit);
+                        float up = MAX(-limit, MIN(limit, y[i]));
+                        z[i] = up * gate;
+                    }
+                }
+            } break;
             default: GGML_ABORT("fatal error");
         }
     }
@@ -16673,6 +16687,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     ggml_barrier(params->shared);
 
+    const float limit = *(const float *)(dst->op_params + 1);
 
     // so GGML_TENSOR_BINARY_OP_LOCALS works
 
@@ -16704,7 +16719,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata, row_size,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*ne12, limit, ith, nth)) GGML_ABORT("fatal error");
 
     }
 
@@ -16769,6 +16784,8 @@ static void ggml_compute_forward_mul_mat_up_gate(
 
     ggml_barrier(params->shared);
 
+    float limit = *(const float *)(dst->op_params + 1);
+
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
     if (!iqk_moe_fused_up_gate(ne01, ne11, ne00, ne11, dst->op_params[0],
@@ -16776,7 +16793,7 @@ static void ggml_compute_forward_mul_mat_up_gate(
                          vec_dot_type, (const char *)wdata, row_size,
                          NULL, NULL,
                          (float *)dst->data, nb1, nb2,
-                         NULL, ith, nth)) GGML_ABORT("fatal error");
+                         NULL, limit, ith, nth)) GGML_ABORT("fatal error");
 
 }
 #endif
