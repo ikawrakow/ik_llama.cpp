@@ -748,7 +748,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         cur = ggml_cast(ctx, cur, GGML_TYPE_F32);
     }
 
-    if (lctx.cparams.fused_up_gate &&
+    if (lctx.cparams.fused_up_gate && lctx.model.arch != LLM_ARCH_STEP35 &&
         up && gate && !up_b && !up_s && !gate_b && !gate_s && type_gate == LLM_FFN_PAR &&
         (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
         auto unary_op = type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
@@ -824,7 +824,7 @@ ggml_tensor * llm_build_context::llm_build_ffn(
         cur = tmp;
     }
 
-    if (type_gate == LLM_FFN_PAR &&
+    if (type_gate == LLM_FFN_PAR && lctx.model.arch != LLM_ARCH_STEP35 &&
        (type_op == LLM_FFN_SILU || type_op == LLM_FFN_RELU || (type_op == LLM_FFN_GELU && !act_scales))) {
         cur = ggml_fused_mul_unary(ctx, cur, tmp, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU :
                                                   type_op == LLM_FFN_RELU ? GGML_UNARY_OP_RELU : GGML_UNARY_OP_GELU);
@@ -834,6 +834,25 @@ ggml_tensor * llm_build_context::llm_build_ffn(
     switch (type_op) {
         case LLM_FFN_SILU:
             {
+                if (lctx.model.arch == LLM_ARCH_STEP35) {
+                    // TODO: fix this. It can remain like that.
+                    constexpr float eps = 1e-6f;
+                    float limit = lctx.model.hparams.swiglu_limits_shared[il];
+                    if (limit > eps) {
+                        ggml_tensor * gate_act = ggml_silu(ctx, cur);
+                        cb(gate_act, "ffn_silu", il);
+                        gate_act = ggml_clamp(ctx, gate_act, -INFINITY, limit);
+                        cb(gate_act, "ffn_silu_clamped", il);
+
+                        ggml_tensor * up_clamped = ggml_clamp(ctx, tmp, -limit, limit);
+                        cb(up_clamped, "ffn_up_clamped", il);
+
+                        cur = ggml_mul(ctx, gate_act, up_clamped);
+                        cb(cur, "ffn_swiglu_limited", il);
+                        type_gate = LLM_FFN_SEQ;
+                        break;
+                    }
+                }
                 cur = ggml_silu(ctx, cur);
                 cb(cur, "ffn_silu", il);
             } break;
@@ -1003,7 +1022,7 @@ llm_expert_gating_func_type   gating_op,
         ggml_tensor * weights_sum = ggml_sum_rows(ctx, weights); // [1, n_tokens]
         cb(weights_sum, "ffn_moe_weights_sum", il);
 
-        if (lctx.model.arch == LLM_ARCH_BAILINGMOE2) {
+        if (lctx.model.arch == LLM_ARCH_BAILINGMOE2 || lctx.model.arch == LLM_ARCH_STEP35) {
             weights_sum = ggml_scale_bias(ctx, weights_sum, 1.0, 1e-20);
             cb(weights_sum, "ffn_moe_weights_sum_biased", il);
         }
@@ -1036,7 +1055,8 @@ llm_expert_gating_func_type   gating_op,
     // Hence, if we have biases, we cannot use fmoe.
     //
     //bool can_use_fmoe = !up_exps_b && !gate_exps_b && (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU);
-    bool can_use_fmoe = type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU || type_op == LLM_FFN_SWIGLU_OAI_MOE;
+    bool can_use_fmoe = (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU || type_op == LLM_FFN_SWIGLU_OAI_MOE) &&
+                        lctx.model.arch != LLM_ARCH_STEP35;
 
     ggml_tensor * par;
     if (can_use_fmoe && up_gate_exps) {
@@ -1086,7 +1106,24 @@ llm_expert_gating_func_type   gating_op,
         }
 
         if (type_op == LLM_FFN_SILU || type_op == LLM_FFN_GELU) {
-            par = ggml_fused_mul_unary(ctx, gate, up, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+            if (lctx.model.arch != LLM_ARCH_STEP35) {
+                par = ggml_fused_mul_unary(ctx, gate, up, type_op == LLM_FFN_SILU ? GGML_UNARY_OP_SILU : GGML_UNARY_OP_GELU);
+            } else {
+                constexpr float eps = 1e-6f;
+                float limit = lctx.model.hparams.swiglu_limits[il];
+                if (limit > eps) {
+                    auto gate_act = ggml_silu(ctx, gate);
+                    cb(gate_act, "ffn_moe_silu", il);
+                    gate_act = ggml_clamp(ctx, gate_act, -INFINITY, limit);
+                    cb(gate_act, "ffn_moe_silu_clamped", il);
+                    auto up_clamped = ggml_clamp(ctx, up, -limit, limit);
+                    cb(up_clamped, "ffn_moe_up_clamped", il);
+                    par = ggml_mul(ctx, gate_act, up_clamped);
+                    cb(par, "ffn_moe_swiglu_limited", il);
+                } else {
+                    par = ggml_fused_mul_unary(ctx, gate, up, GGML_UNARY_OP_SILU);
+                }
+            }
         } else if (type_op == LLM_FFN_SWIGLU_OAI_MOE) {
             constexpr float alpha = 1.702f;
             constexpr float limit = 7.0f;
@@ -3634,7 +3671,7 @@ ggml_cgraph * llm_build_context::build_step35() {
                 cb(Qcur, "Qcur_normed", il);
             }
             if (model.layers[il].attn_k_norm) {
-                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
+                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
                 cb(Kcur, "Kcur_normed", il);
             }
 
@@ -3657,7 +3694,8 @@ ggml_cgraph * llm_build_context::build_step35() {
 
             const float kq_scale = 1.0f / sqrtf(float(n_embd_head_k));
             auto attn_out = llm_build_kv(ctx0, lctx, kv_self, gf, nullptr, nullptr, // i.e., do not multiply with wo
-                    Kcur, Vcur, Qcur, is_swa ? KQ_mask_swa : KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il);
+                    Kcur, Vcur, Qcur, is_swa ? KQ_mask_swa : KQ_mask, n_tokens, kv_head, n_kv, kq_scale, cb, il,
+                    nullptr, is_swa ? hparams.n_swa : 0);
             cb(attn_out, "attn_out", il);
 
             // head-wise attention gate: sigmoid(g_proj(x)) in torch
@@ -3710,7 +3748,7 @@ ggml_cgraph * llm_build_context::build_step35() {
                     model.layers[il].ffn_up_exps,
                     model.layers[il].ffn_gate_exps,
                     model.layers[il].ffn_down_exps,
-                    nullptr,
+                    model.layers[il].ffn_exp_probs_b,
                     n_expert, n_expert_used,
                     LLM_FFN_SILU, norm_w, scale_w, w_scale,
                     LLM_EXPERT_GATING_FUNC_SIGMOID,
