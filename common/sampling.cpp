@@ -120,7 +120,7 @@ struct llama_sampling_context * common_sampler_init(const struct llama_vocab* vo
             {
                 GGML_ASSERT(vocab);
                 auto n_vocab = llama_vocab_n_tokens(vocab);
-                result->adapt_p_ctx = llama_init_adaptive_p(n_vocab, params.adaptive_target, params.adaptive_decay, params.adaptive_ema_w_cur_p, result->rng());
+                result->adapt_p_ctx = llama_init_adaptive_p(n_vocab, params.adaptive_target, params.adaptive_decay, params.adaptive_updt_w_cur, result->rng());
                 break;
             }
             default:
