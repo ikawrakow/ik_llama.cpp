@@ -224,6 +224,7 @@ enum llm_chat_template {
     LLM_CHAT_TEMPLATE_BAILING,
     LLM_CHAT_TEMPLATE_BAILING_THINK,
     LLM_CHAT_TEMPLATE_BAILING2,
+    LLM_CHAT_TEMPLATE_SEED_OSS,
     LLM_CHAT_TEMPLATE_UNKNOWN,
 };
 
@@ -269,6 +270,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
     { "bailing-think",     LLM_CHAT_TEMPLATE_BAILING_THINK     },
     { "bailing2",          LLM_CHAT_TEMPLATE_BAILING2          },
+    { "seed_oss",          LLM_CHAT_TEMPLATE_SEED_OSS          },
 
 };
 
@@ -779,6 +781,7 @@ static bool llama_kv_cache_init(
             n_mla++;
         }
         else {
+            int n_embd_head_v = hparams.n_embd_head_v;
             k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
             v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
             auto k_name = std::string{"cache_k_l"} + std::to_string(i);
@@ -793,6 +796,7 @@ static bool llama_kv_cache_init(
                 auto K = model.layers[i].wk;
                 auto V = model.layers[i].wv;
                 if (K && V && K->extra && V->extra) {
+                    bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
                     auto extra_K = (const ggml_split_tensor_t *)K->extra;
                     auto extra_V = (const ggml_split_tensor_t *)V->extra;
                     auto & split_k_l = cache.split_k_l.emplace_back();
@@ -800,9 +804,14 @@ static bool llama_kv_cache_init(
                     split_k_l.tensor_splits.resize(extra_K->n_device, nullptr);
                     split_v_l.tensor_splits.resize(extra_V->n_device, nullptr);
                     for (int is = 0; is < extra_K->n_device; ++is) {
-                        auto split = extra_K->splits[is];
+                        auto split = use_V_for_K ? extra_V->splits[is] : extra_K->splits[is];
                         if (!split) continue;
-                        split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, split->ne[1]/n_embd_head_k * kv_size);
+                        int nhead_kv = use_V_for_K ? split->ne[1] / n_embd_head_v : split->ne[1]/n_embd_head_k;
+                        if (use_V_for_K) {
+                            LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
+                                    i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
+                        }
+                        split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
                         auto split_name = k_name + '.' + std::to_string(is);
                         ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
                         mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
@@ -1745,6 +1754,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_HUNYUAN_MOE,
         LLM_ARCH_OPENAI_MOE,
         LLM_ARCH_ERNIE4_5_MOE,
+        LLM_ARCH_MINIMAX_M2,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -5039,6 +5049,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_BAILINGMOE2:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MIMO2:
+        case LLM_ARCH_SEED_OSS:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -5473,6 +5484,12 @@ bool llama_save_session_file(struct llama_context * ctx, const char * path_sessi
     return llama_state_save_file(ctx, path_session, tokens, n_token_count);
 }
 
+static inline ggml_tensor * get_kv_cache_split_tensor(const ggml_tensor * tensor, const llama_layer & l) {
+    bool use_V_for_K = l.attn_k_norm && l.attn_k_norm->ne[0] == l.wk->ne[1] ? true : false;
+    auto kv = tensor->ne[1] > 1 && !use_V_for_K ? l.wk : l.wv;
+    return kv;
+}
+
 // TODO: replace all non-fatal assertions with returned errors or exceptions
 struct llama_data_write {
     virtual void write(const void * src, size_t size) = 0;
@@ -5875,7 +5892,7 @@ struct llama_data_read {
     void read_kv_cache_data_split(llama_context * ctx, ggml_tensor * tensor, const uint8_t * data, size_t head, size_t row_size, int nrows, int il) {
         GGML_ASSERT(il >= 0 && il < int(ctx->model.layers.size()));
         GGML_ASSERT(ggml_internal_get_type_traits(tensor->type).row_meta_size == 0);
-        auto kv = tensor->ne[1] > 1 ? ctx->model.layers[il].wk : ctx->model.layers[il].wv;
+        auto kv = get_kv_cache_split_tensor(tensor, ctx->model.layers[il]);
         auto extra = (ggml_split_tensor_t *)tensor->extra;
         auto kv_extra = (ggml_split_tensor_t *)kv->extra;
         GGML_ASSERT(extra && kv_extra);
@@ -6123,7 +6140,7 @@ struct llama_data_write_buffer : llama_data_write {
             throw std::runtime_error(std::string{"Split cache for type "} + ggml_type_name(tensor->type) + " is not supported");
         }
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        auto kv = tensor->ne[1] > 1 ? model.layers[il].wk : model.layers[il].wv;
+        auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
         get_tensor_data_split(ptr, tensor, kv, aux_buffer, offset, size);
     }
 
@@ -6222,7 +6239,7 @@ struct llama_data_write_file : llama_data_write {
 
     void get_tensor_data_split(const struct ggml_tensor * tensor, size_t offset, size_t size, int il) {
         GGML_ASSERT(il >= 0 && il < int(model.layers.size()));
-        auto kv = tensor->ne[1] > 1 ? model.layers[il].wk : model.layers[il].wv;
+        auto kv = get_kv_cache_split_tensor(tensor, model.layers[il]);
         temp_buffer.resize(size);
         llama_data_write_buffer::get_tensor_data_split(temp_buffer.data(), tensor, kv, aux_buffer, offset, size);
     }
@@ -6990,6 +7007,8 @@ static llm_chat_template llama_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_GROK_2;
     } else if (tmpl_contains("<|start|>") && tmpl_contains("<|channel|>")) {
         return LLM_CHAT_TEMPLATE_OPENAI_MOE;
+    } else if (tmpl_contains("<seed:bos>")) {
+        return LLM_CHAT_TEMPLATE_SEED_OSS;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -7519,6 +7538,14 @@ static int32_t llama_chat_apply_template_internal(
         if (add_ass) {
             ss << "Assistant:";
         }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_SEED_OSS) {
+        for (auto message: chat) {
+            std::string role(message->role);
+            ss << "<seed:bos>" << role << "\n" << (role == "assistant" ? trim(message->content) : message->content) << "<seed:eos>";
+        }
+        if (add_ass) {
+            ss << "<seed:bos>assistant\n";
+        }
     } else {
         // template not supported
         return -1;
@@ -7584,36 +7611,13 @@ int32_t llama_chat_builtin_templates(const char ** output, size_t len) {
 // grammar
 //
 
-struct llama_grammar * llama_grammar_init(
-        const llama_grammar_element ** rules,
-        size_t    n_rules,
-        size_t    start_rule_index) {
-    return llama_grammar_init_impl(rules, n_rules, start_rule_index);
-}
-
 void llama_grammar_free(struct llama_grammar * grammar) {
     llama_grammar_free_impl(grammar);
 }
-//
-//void llama_grammar_init_lazy(struct llama_sampler* smpl) {
-//
-//    if (!grammar) {
-//        return;
-//    }
-//    std::vector<const char*>  trigger_patterns_c;
-//    trigger_patterns_c.reserve(grammar.grammar->trigger_patterns.size());
-//    for (auto& trigger_pattern : grammar.grammar->trigger_patterns) {
-//        trigger_patterns_c.push_back(trigger_pattern.pattern.c_str());
-//    }
-//    //auto* grammar_new = llama_grammar_init_impl(grammar->vocab, "", "root",
-//    //    grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
-//    //    grammar->trigger_tokens.data(), grammar->trigger_tokens.size());
-//
-//}
 
 
 struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar) {
-    return llama_grammar_copy_impl(grammar);
+    return llama_grammar_clone_impl(*grammar);
 }
 
 void llama_grammar_sample(
@@ -7634,7 +7638,7 @@ void llama_grammar_accept_token(
             struct llama_grammar * grammar,
             struct llama_context * ctx,
                      llama_token   token) {
-    llama_grammar_accept_token_impl(grammar, &ctx->model.vocab, &ctx->sampling, token);
+    llama_grammar_accept_impl(*grammar, &ctx->model.vocab, &ctx->sampling, token);
 }
 
 //
@@ -7800,8 +7804,8 @@ void llama_sampler_dry_accept(struct llama_sampler_dry* smpl, llama_token token)
 }
 
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float target, const float decay, const uint32_t seed) {
-    return llama_init_adaptive_p_impl(n_vocab, target, decay, seed);
+struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float target, const float decay, const bool updt_w_cur, const uint32_t seed) {
+    return llama_init_adaptive_p_impl(n_vocab, target, decay, updt_w_cur, seed);
 }
 
 

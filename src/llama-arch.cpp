@@ -70,6 +70,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_SMOLLM3,         "smollm3"      },
     { LLM_ARCH_MISTRAL3,        "mistral3"     },
     { LLM_ARCH_MIMO2,           "mimo2"        },
+    { LLM_ARCH_SEED_OSS,        "seed_oss"     },
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 

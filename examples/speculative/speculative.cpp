@@ -434,7 +434,7 @@ int main(int argc, char ** argv) {
             break;
         }
 
-        llama_sampling_cp(ctx_sampling, drafts[0].ctx_sampling);
+        common_sampler_clone(ctx_sampling, drafts[0].ctx_sampling);
 
         int n_seq_cur  = 1;
         int n_past_cur = n_past_dft;
@@ -503,7 +503,7 @@ int main(int argc, char ** argv) {
                         drafts[n_seq_cur].i_batch_dft = drafts[s].i_batch_dft;
                         drafts[n_seq_cur].i_batch_tgt = drafts[s].i_batch_tgt;
 
-                        llama_sampling_cp(drafts[s].ctx_sampling, drafts[n_seq_cur].ctx_sampling);
+                        common_sampler_clone(drafts[s].ctx_sampling, drafts[n_seq_cur].ctx_sampling);
 
                         sa.push_back(n_seq_cur);
 

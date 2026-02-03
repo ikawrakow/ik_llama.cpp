@@ -7,6 +7,7 @@
 #include "iqk_config.h"
 #include "iqk_mul_mat.h"
 #include "iqk_flash_impl.h"
+#include "ggml.h"
 
 #if defined IQK_IMPLEMENT && defined GGML_IQK_FLASH_ATTENTION
 
@@ -43,6 +44,66 @@ inline void accumulate_qkv(int Dv, float& M, float& S, float Mj, float Sj, float
         for (int i = 0; i < Dv; ++i) Racc[i] += c*R[i];
     }
 }
+}
+
+size_t iqk_fa_work_buffer_size(const struct ggml_tensor * dst, int nth) {
+    auto Q = dst->src[0];
+    auto K = dst->src[1];
+    auto V = dst->src[2];
+    int rk2 = Q->ne[2]/K->ne[2];
+    size_t size = 0;
+    if (Q->ne[1] >= 8 && K->type == GGML_TYPE_Q8_0) {
+        size = ggml_row_size(GGML_TYPE_Q8_0, K->ne[0]) * K->ne[1]*K->ne[2]*K->ne[3];
+    }
+    if (Q->ne[1] == 1 && Q->ne[3] == 1 && Q->ne[2]/K->ne[2] > 1 && nth >= 1 && K->ne[1]/32 > 1) {
+        if (K->ne[2] > 1) {
+            int gcd = simple_gcd(K->ne[2], nth);
+            int nth_k  = nth/gcd;
+            int nek2_k = K->ne[2]/gcd;
+            int nchunk = nek2_k*K->ne[1]/32;
+            int npt = (nchunk + nth_k - 1)/nth_k;
+            int nk;
+            if (npt*nth_k == nchunk) {
+                nk = 32 * (K->ne[1]*K->ne[2]/(32*nth));
+            } else {
+                //int nm = std::max(1, npt/8);
+                int nm = 1;
+                while (true) {
+                    if (nm*4 >= npt) break;
+                    nm *= 2;
+                }
+                nk = 32*nm;
+            }
+            int nkk = (K->ne[1] + nk - 1)/nk;
+            int nstep_k = K->ne[2]*nkk;
+            size_t result_size = (V->ne[0] + 16)*Q->ne[2]/K->ne[2]*sizeof(float);
+            size += nstep_k*result_size;
+            return size;
+        }
+        int nstep_k = K->ne[1]/32;
+        if (nstep_k >= 4*nth) {
+            auto size_thread = (V->ne[0] + 16)*rk2*sizeof(float);
+            size += size_thread*nth;
+            return size;
+        }
+        int gcd_k   = simple_gcd(nstep_k, nth);
+        if (gcd_k >= 1) {
+            int nth_k = nth/gcd_k;
+            int nq_per_thread = (rk2 + nth_k - 1)/nth_k;
+            if (nq_per_thread > 1) {
+                auto size_thread = (V->ne[0] + 16)*nq_per_thread*sizeof(float);
+                size += size_thread*nth;
+                return size;
+            }
+        }
+        int rv2 = Q->ne[2] / V->ne[2];
+        if (Q->ne[1] == 1 && Q->ne[3] == 1 && rk2 > 1 && rk2 == rv2 && K->ne[1]*K->ne[2] >= 32*nth) {
+            auto result_size = (V->ne[0] + 16)*rk2*sizeof(float);
+            size += result_size*nth;
+        }
+        return size;
+    }
+    return size;
 }
 
 // TODO: get the ggml_type enum here without polution
@@ -118,7 +179,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
 
     int int_type_k = int_type_k_in;
     auto work_buffer = work_buffer_in;
-    if (neq1 >= 8 || (rk2 >= 8 && nek2 > 1)) {
+    if (neq1 >= 8) {
         uint64_t row_size = 0;
         work_buffer = iqk_repack_k(int_type_k, Dk, nek1, nek2, nek3, stride_k, nbk2, nbk3, k, work_buffer_in, ith, nth, int_type_k, row_size);
         if (int_type_k != int_type_k_in) {
@@ -145,6 +206,52 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
     // I think it would also speed up things for GQA, but I'm leaving this for another day.
     if (neq3 == 1 && rk2 > 1 && neq1 == 1 && nth >= 1 && nek1/32 > 1 && nek2 == 1) {
         int nstep_k = nek1/32;
+        if (nstep_k >= 4*nth) {
+            int nstep_k_per_thread = (nstep_k + nth - 1)/nth;
+            int ith_mid = nth;
+            int nstep_k_this_thread = nstep_k_per_thread;
+            if (nstep_k_per_thread*nth > nstep_k) {
+                ith_mid = nstep_k - nth*(nstep_k_per_thread - 1);
+                if (ith >= ith_mid) --nstep_k_this_thread;
+            }
+            //if (ith == 0) fprintf(stderr, "nstep_k = %d, nstep_k_per_thread = %d, ith_mid = %d\n", nstep_k, nstep_k_per_thread, ith_mid);
+            nstep_k_per_thread *= 32;
+            nstep_k_this_thread *= 32;
+
+            auto kv_offset = ith <= ith_mid ? ith*nstep_k_per_thread
+                                           : ith_mid*nstep_k_per_thread + (ith - ith_mid)*nstep_k_this_thread;
+            auto kth = (const char *)k + kv_offset*stride_k;
+            auto vth = (const char *)v + kv_offset*stride_v;
+            auto qth = (const char *)q;
+            auto mth = (const char *)mask + kv_offset*sizeof(uint16_t); // we don't have ggml_half available here
+
+            auto work = (char *)work_buffer;
+            auto size_thread = (Dv + 16)*rk2*sizeof(float);
+            auto result_buffer = work;
+            auto work_this_thread = (float *)(result_buffer + ith*size_thread);
+            if (!iqk_flash_attn_impl(int_type_k, int_type_v,
+                     Dk, Dv, rk2, nstep_k_this_thread, nbq2, stride_k, stride_v, 0, Dv, //Dk*sizeof(uint16_t), Dv,
+                     (const float *)qth, (const void *)kth, (const void *)vth, (const void *)mth, nullptr, 0,
+                     scale, softcap,
+                     work_this_thread, work_this_thread + (Dv+0)*rk2, work_this_thread + (Dv+1)*rk2)) return false;
+
+            barrier(barrier_data);
+
+            for (int j = ith; j < rk2; j += nth) {
+                auto Racc = qkv + j*nb1/sizeof(float);
+                float M = -INFINITY, S = 0;
+                for (int jth = 0; jth < nth; ++jth) {
+                    auto R = (const float *)(result_buffer + jth*size_thread);
+                    auto Mj = R + Dv*rk2;
+                    auto Sj = Mj + rk2;
+                    R += j*Dv;
+                    accumulate_qkv(Dv, M, S, Mj[j], Sj[j], Racc, R);
+                }
+                float norm = S > 0 ? 1/S : 1;
+                for (int i = 0; i < Dv; ++i) Racc[i] *= norm;
+            }
+            return true;
+        }
         int gcd_k   = simple_gcd(nstep_k, nth);
         if (gcd_k >= 1) {
             int nth_k = nth/gcd_k;
@@ -312,6 +419,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
             if (counter++ % (nth/ntg) == ith/ntg) {
                 int iq1 = (ith%ntg)*neq1g;
                 int this_neq1 = std::min(neq1g, neq1-iq1);
+                if (this_neq1 > 0) {
                 if (!iqk_flash_attn_impl(int_type_k, int_type_v,
                         Dk, Dv, this_neq1, nek1, stride_q, stride_k, stride_v, stride_m, ne1*nb1/sizeof(float),
                         (const float *)((const char *)q + iq2*nbq2 + iq3*nbq3 + iq1*stride_q),
@@ -320,6 +428,7 @@ extern "C" IQK_API bool iqk_flash_attn_noalibi(int type_q, int type_mask, float 
                         (const void  *)((const char *)mask + iq1*stride_m), sinksf, 1,
                         scale, softcap,
                         (float *)((char *)qkv + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1), nullptr, nullptr)) return false;
+                }
             }
         }
     }

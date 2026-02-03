@@ -63,8 +63,6 @@ add_library(${TARGET} STATIC
     sampling.cpp
     console.h
     console.cpp
-    grammar-parser.h
-    grammar-parser.cpp
     json-partial.h
     json-partial.cpp
     llguidance.cpp

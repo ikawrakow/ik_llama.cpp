@@ -139,6 +139,8 @@ struct create_tensors_helper : public create_tensors_helper_interface {
 
     bool create_mimo2_tensors(const LLM_TN & tn);
 
+    bool create_seedoss_tensors(const LLM_TN & tn);
+
     llama_model_loader & ml;
     llama_model        & model;
 
@@ -975,6 +977,49 @@ bool create_tensors_helper::create_stablelm_tensors(const LLM_TN & tn) {
         // optional FFN norm, not present in StableLM 2 12B which uses parallel residual
         layer.ffn_norm   = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.ffn_norm_b = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "bias", i),   {n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
+    }
+    return use_mmap_buffer;
+}
+
+bool create_tensors_helper::create_seedoss_tensors(const LLM_TN & tn) {
+    LOADING_PRELUDE
+
+    const int64_t n_qo_dim              = n_head * n_embd_head_k;
+    const int64_t n_kv_dim              = n_head_kv * n_embd_head_k;
+
+     model.tok_embd = create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+
+    // output
+    {
+        model.output_norm = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+        model.output      = create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        // if output is NULL, init from the input tok embed
+        if (model.output == NULL) {
+            model.output = create_tensor(ctx_output, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+        }
+    }
+
+    for (int i = 0; i < n_layer; ++i) {
+        ggml_context * ctx_layer = ctx_for_layer(i);
+        ggml_context * ctx_split = ctx_for_layer_split(i);
+
+        auto & layer = model.layers[i];
+
+        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+
+        layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_qo_dim});
+        layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_kv_dim});
+        layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_kv_dim});
+        layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_qo_dim, n_embd});
+
+        // optional bias tensors
+        layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_qo_dim}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_kv_dim}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_kv_dim}, llama_model_loader::TENSOR_NOT_REQUIRED);
+
+        layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd});
 
         create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
@@ -2604,7 +2649,6 @@ bool create_tensors_helper::create_minimaxm2_tensors(const LLM_TN & tn) {
     create_embd_output(tn, n_embd, n_vocab);
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context* ctx_layer = ctx_for_layer(i);
         ggml_context* ctx_split = ctx_for_layer_split(i);
         auto& layer = model.layers[i];
 
@@ -2613,13 +2657,13 @@ bool create_tensors_helper::create_minimaxm2_tensors(const LLM_TN & tn) {
         layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_gqa }, 0);
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
-        layer.attn_q_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k * n_head }, 0);
-        layer.attn_k_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_k_gqa }, 0);
+        layer.attn_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+        layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k * n_head }, 0);
+        layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), { n_embd_k_gqa }, 0);
 
-        layer.ffn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+        layer.ffn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
 
-        layer.ffn_gate_inp = create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
+        layer.ffn_gate_inp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
         use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, 0, n_ff);
         layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, 0);
     }
@@ -3059,6 +3103,8 @@ bool create_tensors_helper::create_tensors() {
             use_mmap_buffer = create_smollm3_tensors(tn); break;
         case LLM_ARCH_MIMO2:
             use_mmap_buffer = create_mimo2_tensors(tn); break;
+        case LLM_ARCH_SEED_OSS:
+            use_mmap_buffer = create_seedoss_tensors(tn); break;
         default:
             throw std::runtime_error("unknown architecture");
     }
@@ -3130,16 +3176,29 @@ bool create_tensors_helper::create_tensors() {
                 LLAMA_LOG_DEBUG("\n");
                 LLAMA_LOG_DEBUG("  split_kq:"); for ([[maybe_unused]] auto s : split_kq) LLAMA_LOG_DEBUG(" %d", s);
                 LLAMA_LOG_DEBUG("\n");
+
+                if (layer.attn_q_norm && layer.attn_q_norm->ne[0] == layer.wq->ne[1]) {
+                    // If RMS norm is not applied per attention head, as it is usually the case, but is applied to the
+                    // entire Q tensor (e.g., MiniMax-2), we need to have a copy of the entire wq and attn_q_norm tensors
+                    // on each participating GPU.
+                    prepare_split_tensors(-1, ctx_split, layer.wq, layer.split_wq, split_vo, mem_used);
+                    prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_vo, mem_used);
+                    if (layer.bq) {
+                        prepare_split_tensors(-1, ctx_split, layer.bq, layer.split_bq, split_vo, mem_used);
+                    }
+                    LLAMA_LOG_DEBUG("Not splitting wq, attn_q_norm in layer layer %d because of RMS norm\n", il);
+                } else {
+                    prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
+                    if (layer.attn_q_norm) {
+                        prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
+                    }
+                    if (layer.bq) {
+                        prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split_kq, mem_used);
+                    }
+                }
                 prepare_split_tensors(0, ctx_split, layer.wo, layer.split_wo, split_vo, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.wq, layer.split_wq, split_kq, mem_used);
                 if (layer.bo) {
                     prepare_split_tensors(-1, ctx_split, layer.bo, layer.split_bo, split_vo, mem_used);
-                }
-                if (layer.bq) {
-                    prepare_split_tensors(0, ctx_split, layer.bq, layer.split_bq, split_kq, mem_used);
-                }
-                if (layer.attn_q_norm) {
-                    prepare_split_tensors(-1, ctx_split, layer.attn_q_norm, layer.split_q_norm, split_kq, mem_used);
                 }
                 if (layer.attn_sinks) {
                     auto split_sinks = split_kq;
@@ -3150,16 +3209,28 @@ bool create_tensors_helper::create_tensors() {
                 }
                 for (auto & s : split_kq) s /= gqa_ratio;
                 for (auto & s : split_vo) s /= gqa_ratio;
-                prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split_kq, mem_used);
-                prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split_vo, mem_used);
-                if (layer.bk) {
-                    prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
+                if (layer.attn_k_norm && layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {
+                    // If RMS norm is not applied per attention head, as it is usually the case, but is applied to the
+                    // entire K tensor (e.g., MiniMax-2), we need to have a copy of the entire wk and attn_k_norm tensors
+                    // on each participating GPU.
+                    prepare_split_tensors(-1, ctx_split, layer.wk, layer.split_wk, split_vo, mem_used);
+                    prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_vo, mem_used);
+                    if (layer.bk) {
+                        prepare_split_tensors(-1, ctx_split, layer.bk, layer.split_bk, split_vo, mem_used);
+                    }
+                    LLAMA_LOG_DEBUG("Not splitting wk, attn_k_norm in layer layer %d because of RMS norm\n", il);
+                } else {
+                    prepare_split_tensors(1, ctx_split, layer.wk, layer.split_wk, split_kq, mem_used);
+                    if (layer.bk) {
+                        prepare_split_tensors(0, ctx_split, layer.bk, layer.split_bk, split_kq, mem_used);
+                    }
+                    if (layer.attn_k_norm) {
+                        prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
+                    }
                 }
+                prepare_split_tensors(1, ctx_split, layer.wv, layer.split_wv, split_vo, mem_used);
                 if (layer.bv) {
                     prepare_split_tensors(0, ctx_split, layer.bv, layer.split_bv, split_vo, mem_used);
-                }
-                if (layer.attn_k_norm) {
-                    prepare_split_tensors(-1, ctx_split, layer.attn_k_norm, layer.split_k_norm, split_kq, mem_used);
                 }
             }
 

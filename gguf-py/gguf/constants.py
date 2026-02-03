@@ -250,6 +250,7 @@ class MODEL_ARCH(IntEnum):
     BAILINGMOE2  = auto()
     MINIMAXM2    = auto()
     SMOLLM3      = auto()
+    SEED_OSS     = auto()
 
 class MODEL_TENSOR(IntEnum):
     TOKEN_EMBD           = auto()
@@ -398,6 +399,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.BAILINGMOE2:    "bailingmoe2",
     MODEL_ARCH.MINIMAXM2:      "minimax-m2",
     MODEL_ARCH.SMOLLM3:        "smollm3",
+    MODEL_ARCH.SEED_OSS:       "seed_oss",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -1362,6 +1364,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.SEED_OSS: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+    ],
     # TODO
 }
 
@@ -1537,78 +1553,90 @@ class ExpertGatingFuncType(IntEnum):
 # from llama_ftype in llama.h
 # ALL VALUES SHOULD BE THE SAME HERE AS THEY ARE OVER THERE.
 class LlamaFileType(IntEnum):
-    ALL_F32                = 0
-    MOSTLY_F16             = 1      #except 1d tensors
-    MOSTLY_Q4_0            = 2      #except 1d tensors
-    MOSTLY_Q4_1            = 3      #except 1d tensors
-    MOSTLY_Q4_1_SOME_F16   = 4      #tok_embeddings.weight and output.weight are F16
-    MOSTLY_Q8_0            = 7      #except 1d tensors
-    MOSTLY_Q5_0            = 8      #except 1d tensors
-    MOSTLY_Q5_1            = 9      #except 1d tensors
-    MOSTLY_Q2_K            = 10     #except 1d tensors
-    MOSTLY_Q3_K            = 11     #except 1d tensors
-    MOSTLY_Q4_K            = 12     #except 1d tensors
-    MOSTLY_Q5_K            = 13     #except 1d tensors
-    MOSTLY_Q6_K            = 14     #except 1d tensors
-    MOSTLY_IQ2_XXS         = 15     #except 1d tensors
-    MOSTLY_IQ2_XS          = 16     #except 1d tensors
-    MOSTLY_IQ3_XXS         = 17     #except 1d tensors
-    MOSTLY_IQ1_S           = 18     #except 1d tensors
-    MOSTLY_IQ4_NL          = 19     #except 1d tensors
-    MOSTLY_IQ3_S           = 20     #except 1d tensors
-    MOSTLY_IQ2_S           = 21     #except 1d tensors
-    MOSTLY_IQ4_XS          = 22     #except 1d tensors
-    MOSTLY_IQ1_M           = 23     #except 1d tensors
-    MOSTLY_BF16            = 24     #except 1d tensors
-    MOSTLY_MXFP4           = 25     #except 1d tensors
-    MOSTLY_Q4_0_4_4        = 26     #except 1d tensors
-    MOSTLY_Q4_0_4_8        = 27     #except 1d tensors
-    MOSTLY_Q4_0_8_8        = 28     #except 1d tensors
-    MOSTLY_Q6_0            = 127    #except 1d tensors
-    MOSTLY_IQ1_BN          = 128    #except 1d tensors
-    MOSTLY_IQ2_BN          = 129    #except 1d tensors
-    MOSTLY_IQ2_K           = 130    #except 1d tensors
-    MOSTLY_IQ3_K           = 131    #except 1d tensors
-    MOSTLY_IQ4_K           = 132    #except 1d tensors
-    MOSTLY_IQ5_K           = 133    #except 1d tensors
-    MOSTLY_IQ6_K           = 134    #except 1d tensors
-    MOSTLY_IQ4_KS          = 137    #except 1d tensors
-    MOSTLY_IQ2_KS          = 138    #except 1d tensors
-    MOSTLY_IQ4_KSS         = 139    #except 1d tensors
-    MOSTLY_Q8_KV           = 140    #except 1d tensors
-    MOSTLY_IQ5_KS          = 141    #except 1d tensors
-    MOSTLY_IQ2_KT          = 142    #except 1d tensors
-    MOSTLY_IQ3_KT          = 143    #except 1d tensors
-    MOSTLY_IQ4_KT          = 144    #except 1d tensors
-    MOSTLY_Q4_0_R8         = 202    #except 1d tensors
-    MOSTLY_Q8_0_R8         = 207    #except 1d tensors
-    MOSTLY_Q5_0_R4         = 208    #except 1d tensors
-    MOSTLY_Q2_K_R4         = 210    #except 1d tensors
-    MOSTLY_Q3_K_R4         = 211    #except 1d tensors
-    MOSTLY_Q4_K_R4         = 212    #except 1d tensors
-    MOSTLY_Q5_K_R4         = 213    #except 1d tensors
-    MOSTLY_Q6_K_R4         = 214    #except 1d tensors
-    MOSTLY_IQ2_XXS_R4      = 215    #except 1d tensors
-    MOSTLY_IQ2_XS_R4       = 216    #except 1d tensors
-    MOSTLY_IQ3_XXS_R4      = 217    #except 1d tensors
-    MOSTLY_IQ1_S_R4        = 218    #except 1d tensors
-    MOSTLY_IQ4_NL_R4       = 219    #except 1d tensors
-    MOSTLY_IQ3_S_R4        = 220    #except 1d tensors
-    MOSTLY_IQ2_S_R4        = 221    #except 1d tensors
-    MOSTLY_IQ4_XS_R8       = 222    #except 1d tensors
-    MOSTLY_IQ1_M_R4        = 223    #except 1d tensors
-    MOSTLY_BF16_R16        = 224    #except 1d tensors
-    MOSTLY_Q6_0_R4         = 227    #except 1d tensors
-    MOSTLY_IQ2_BN_R4       = 329    #except 1d tensors
-    MOSTLY_IQ2_K_R4        = 330    #except 1d tensors
-    MOSTLY_IQ3_K_R4        = 331    #except 1d tensors
-    MOSTLY_IQ4_K_R4        = 332    #except 1d tensors
-    MOSTLY_IQ5_K_R4        = 333    #except 1d tensors
-    MOSTLY_IQ4_KS_R4       = 337    #except 1d tensors
-    MOSTLY_IQ5_KS_R4       = 341    #except 1d tensors
-    MOSTLY_Q8_KV_R8        = 398    #except 1d tensors
-    MOSTLY_Q8_K_R8         = 399    #except 1d tensors
+    ALL_F32              = 0
+    MOSTLY_F16           = 1   #except 1d tensors
+    MOSTLY_Q4_0          = 2   #except 1d tensors
+    MOSTLY_Q4_1          = 3   #except 1d tensors
+    MOSTLY_Q8_0          = 7   #except 1d tensors
+    MOSTLY_Q5_0          = 8   #except 1d tensors
+    MOSTLY_Q5_1          = 9   #except 1d tensors
+    MOSTLY_Q2_K          = 10  #except 1d tensors
+    MOSTLY_Q3_K_S        = 11  #except 1d tensors
+    MOSTLY_Q3_K_M        = 12  #except 1d tensors
+    MOSTLY_Q3_K_L        = 13  #except 1d tensors
+    MOSTLY_Q4_K_S        = 14  #except 1d tensors
+    MOSTLY_Q4_K_M        = 15  #except 1d tensors
+    MOSTLY_Q5_K_S        = 16  #except 1d tensors
+    MOSTLY_Q5_K_M        = 17  #except 1d tensors
+    MOSTLY_Q6_K          = 18  #except 1d tensors
+    MOSTLY_IQ2_XXS       = 19  #except 1d tensors
+    MOSTLY_IQ2_XS        = 20  #except 1d tensors
+    MOSTLY_Q2_K_S        = 21  #except 1d tensors
+    MOSTLY_IQ3_XS        = 22  #except 1d tensors
+    MOSTLY_IQ3_XXS       = 23  #except 1d tensors
+    MOSTLY_IQ1_S         = 24  #except 1d tensors
+    MOSTLY_IQ4_NL        = 25  #except 1d tensors
+    MOSTLY_IQ3_S         = 26  #except 1d tensors
+    MOSTLY_IQ3_M         = 27  #except 1d tensors
+    MOSTLY_IQ2_S         = 28  #except 1d tensors
+    MOSTLY_IQ2_M         = 29  #except 1d tensors
+    MOSTLY_IQ4_XS        = 30  #except 1d tensors
+    MOSTLY_IQ1_M         = 31  #except 1d tensors
+    MOSTLY_BF16          = 32  #except 1d tensors
+    MOSTLY_Q4_0_4_4      = 33  #except 1d tensors
+    MOSTLY_Q4_0_4_8      = 34  #except 1d tensors
+    MOSTLY_Q4_0_8_8      = 35  #except 1d tensors
+    MOSTLY_MXFP4         = 38  #except 1d tensors, 38 to be compatible with mainline
 
+    MOSTLY_Q6_0          = 135 #except 1d tensors
+    MOSTLY_IQ1_BN        = 136 #except 1d tensors
+    MOSTLY_IQ2_BN        = 137 #except 1d tensors
+    MOSTLY_IQ2_K         = 138 #except 1d tensors
+    MOSTLY_IQ3_K         = 139 #except 1d tensors
+    MOSTLY_IQ4_K         = 140 #except 1d tensors
+    MOSTLY_IQ5_K         = 141 #except 1d tensors
+    MOSTLY_IQ6_K         = 142 #except 1d tensors
+    MOSTLY_IQ4_KS        = 145 #except 1d tensors
+    MOSTLY_IQ3_KL        = 146 #except 1d tensors
+    MOSTLY_IQ2_KS        = 147 #except 1d tensors
+    MOSTLY_IQ4_KSS       = 148 #except 1d tensors
+    MOSTLY_Q8_KV         = 149 #except 1d tensors
+    MOSTLY_IQ5_KS        = 150 #except 1d tensors
+    MOSTLY_IQ2_KT        = 151 #except 1d tensors
+    MOSTLY_IQ3_KT        = 152 #except 1d tensors
+    MOSTLY_IQ4_KT        = 153 #except 1d tensors
+    MOSTLY_IQ3_KS        = 154 #except 1d tensors
+    MOSTLY_IQ2_KL        = 155 #except 1d tensors
+    MOSTLY_IQ1_KT        = 156 #except 1d tensors
+
+    MOSTLY_Q4_0_R8       = 202 #except 1d tensors
+    MOSTLY_Q8_0_R8       = 207 #except 1d tensors
+    MOSTLY_Q5_0_R4       = 208 #except 1d tensors
+    MOSTLY_Q2_K_R4       = 210 #except 1d tensors
+    MOSTLY_Q3_K_R4       = 211 #except 1d tensors
+    MOSTLY_Q4_K_R4       = 214 #except 1d tensors
+    MOSTLY_Q5_K_R4       = 216 #except 1d tensors
+    MOSTLY_Q6_K_R4       = 218 #except 1d tensors
+    MOSTLY_IQ2_XXS_R4    = 219 #except 1d tensors
+    MOSTLY_IQ2_XS_R4     = 220 #except 1d tensors
+    MOSTLY_IQ3_XXS_R4    = 223 #except 1d tensors
+    MOSTLY_IQ1_S_R4      = 224 #except 1d tensors
+    MOSTLY_IQ4_NL_R4     = 225 #except 1d tensors
+    MOSTLY_IQ3_S_R4      = 226 #except 1d tensors
+    MOSTLY_IQ2_M_R4      = 229 #except 1d tensors
+    MOSTLY_IQ4_XS_R8     = 230 #except 1d tensors
+    MOSTLY_IQ1_M_R4      = 231 #except 1d tensors
+    MOSTLY_Q6_0_R4       = 335 #except 1d tensors
+    MOSTLY_BF16_R16      = 232 #except 1d tensors
+    MOSTLY_IQ2_BN_R4     = 337 #except 1d tensors
+    MOSTLY_IQ2_K_R4      = 338 #except 1d tensors
+    MOSTLY_IQ3_K_R4      = 339 #except 1d tensors
+    MOSTLY_IQ4_K_R4      = 340 #except 1d tensors
+    MOSTLY_IQ5_K_R4      = 341 #except 1d tensors
+    MOSTLY_IQ4_KS_R4     = 345 #except 1d tensors
+    MOSTLY_IQ5_KS_R4     = 350 #except 1d tensors
+    MOSTLY_Q8_KV_R8      = 398 #except 1d tensors
+    MOSTLY_Q8_K_R8       = 399 #except 1d tensors
 
     GUESSED              = 1024  # not specified in the model file
 
