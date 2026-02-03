@@ -940,6 +940,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.adaptive_decay = std::stof(argv[i]);
         return true;
     }
+    if (arg == "--adaptive-ema-w-cur-p") {
+        sparams.adaptive_ema_w_cur_p = true;
+        return true;
+    }
     if (arg == "--spec-replace") {
         CHECK_ARG
         std::string target = argv[i];

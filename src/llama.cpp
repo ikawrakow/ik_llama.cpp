@@ -7814,8 +7814,8 @@ void llama_sampler_dry_accept(struct llama_sampler_dry* smpl, llama_token token)
 }
 
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float target, const float decay, const uint32_t seed, const float temp) {
-    return llama_init_adaptive_p_impl(n_vocab, target, decay, seed, temp);
+struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float target, const float decay, const bool ema_w_cur_p, const uint32_t seed) {
+    return llama_init_adaptive_p_impl(n_vocab, target, decay, ema_w_cur_p, seed);
 }
 
 
