@@ -2149,21 +2149,6 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
         }
         return;
     }
-    //if (K->ne[0] == 128 && (gqa_ratio == 12 || gqa_ratio == 6)) {
-    //    GGML_ASSERT(Q->ne[0] == 128 && V->ne[0] == 128);
-    //    //GGML_ASSERT(Q->ne[1] <= 4);
-    //    //ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<128, 128, 16>(ctx, dst);
-    //    if (gqa_ratio == 12) {
-    //        ggml_cuda_flash_attn_ext_mma_f16_case<128, 128, 1, 16>(ctx, dst);
-    //    } else {
-    //        ggml_cuda_flash_attn_ext_mma_f16_case<128, 128, 1, 8>(ctx, dst);
-    //    }
-    //    return;
-    //}
-    //if (K->ne[0] == 64 && V->ne[0] == 64) {
-    //    ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<64, 64>(ctx, dst);
-    //    return;
-    //}
     if (K->ne[0] == 192 && V->ne[0] == 128) {
         GGML_ASSERT(Q->ne[0] == 192);
         //GGML_ASSERT(gqa_ratio == 1); // Haha, this assert was for DeepSeek. But now we have Mimo2, which has GQA > 1
