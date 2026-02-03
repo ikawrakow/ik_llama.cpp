@@ -3706,7 +3706,7 @@ ggml_cgraph * llm_build_context::build_step35() {
             cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, attn_out);
             cb(cur, "attn_proj", il);
         }
-        if (il == n_layer - 1 && inp_out_ids) {
+        if (il == n_layer - 1 && inp_out_ids && n_tokens > 1) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -3730,16 +3730,6 @@ ggml_cgraph * llm_build_context::build_step35() {
             const bool  norm_w  = hparams.expert_weights_norm;
             const float w_scale = hparams.expert_weights_scale;
             const bool  scale_w = w_scale != 0.0f;
-            llm_build_moe_ffn(ctx0, lctx, cur,
-                    model.layers[il].ffn_gate_inp,
-                    model.layers[il].ffn_up_exps,
-                    model.layers[il].ffn_gate_exps,
-                    model.layers[il].ffn_down_exps,
-                    model.layers[il].ffn_exp_probs_b,
-                    n_expert, n_expert_used,
-                    LLM_FFN_SILU, norm_w, scale_w, w_scale,
-                    LLM_EXPERT_GATING_FUNC_SIGMOID,
-                    cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
             ggml_tensor * moe_out = llm_build_moe_ffn(ctx0, lctx, cur,
                     model.layers[il].ffn_gate_inp,
                     model.layers[il].ffn_up_exps,
@@ -3750,7 +3740,7 @@ ggml_cgraph * llm_build_context::build_step35() {
                     LLM_FFN_SILU,
                     norm_w, scale_w, w_scale,
                     LLM_EXPERT_GATING_FUNC_SIGMOID,
-                    cb, il, gf);
+                    cb, il, gf, false, model.layers[il].ffn_up_gate_exps);
             cb(moe_out, "ffn_moe_out", il);
             // shared expert MLP (always added on MoE layers in Step35)
             ggml_tensor * sh_out = llm_build_ffn(ctx0, lctx, nullptr, cur,
