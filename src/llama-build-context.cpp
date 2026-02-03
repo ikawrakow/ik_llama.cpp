@@ -9425,7 +9425,6 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 GGML_ASSERT(bv->n_device == wq->n_device);
             }
             std::vector<ggml_tensor*> attn(wq->n_device, nullptr);
-            //int id_last = -1;
             bool output_bias_added = false;
             bool input_added = false;
             for (int id = 0; id < wq->n_device; ++id) {
@@ -9589,17 +9588,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 }
                 ggml_build_forward_expand(gf, cur);
                 attn[id] = cur;
-                //id_last = id;
             }
-            //GGML_ASSERT(id_last >= 0);
-            //if (add_input) {
-            //    if (inp_out_ids) { // && ggml_nrows(inp_out_ids) > 1) {
-            //        input = ggml_get_rows(ctx0, input, inp_out_ids);
-            //        cb(input, "sainp_get_rows", il);
-            //    }
-            //    attn[id_last] = ggml_add(ctx0, attn[id_last], input);
-            //    cb(attn[id_last], "attn_out_with_input", il);
-            //}
             auto cur = ggml_reduce(ctx0, attn.data(), wq->n_device, GGML_OP_ADD);
             ggml_build_forward_expand(gf, cur);
             cb(cur, "attn_combined", il);
