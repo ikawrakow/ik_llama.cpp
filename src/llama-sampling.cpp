@@ -1153,7 +1153,6 @@ void llama_prep_adaptive_p_impl(
     struct llama_sampler_adaptive_p * adapt_p_ctx) {
     if (adapt_p_ctx->updt_w_cur) {
         // update with current probability, original not needed
-        printf("bp ");
         return;
     }
     constexpr float kDelta = 30.0f; //16.6f;
