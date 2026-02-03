@@ -183,6 +183,7 @@ struct server_context {
     llama_model* model = nullptr;
     llama_context* ctx = nullptr;
     std::vector<llama_lora_adapter_container> lora_adapters;
+    std::vector<control_vector_container> control_vectors;
 
     gpt_params params_base;
 
@@ -316,4 +317,7 @@ struct server_context {
     bool accept_special_token(const server_slot& slot, const llama_token token);
 
     json model_meta() const;
+
+    // Re-aggregates all active vectors and updates the model state
+    bool apply_control_vectors_internal();
 };
