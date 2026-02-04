@@ -4539,7 +4539,14 @@ ggml_cgraph * llm_build_context::build_phi3() {
     struct ggml_tensor * inp_pos = build_inp_pos();
 
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
-    struct ggml_tensor * KQ_mask_swa = build_inp_KQ_mask_swa();
+    struct ggml_tensor * KQ_mask;
+    if (hparams.n_swa == 0) {
+        // Phi-4 does not use SWA
+        KQ_mask = build_inp_KQ_mask();
+    }
+    else {
+        KQ_mask = build_inp_KQ_mask_swa();
+    }
 
     for (int il = 0; il < n_layer; ++il) {
         auto residual = inpL;
@@ -4593,7 +4600,7 @@ ggml_cgraph * llm_build_context::build_phi3() {
 
             cur = llm_build_kv(ctx0, lctx, kv_self, gf,
                     model.layers[il].wo, model.layers[il].bo,
-                    Kcur, Vcur, Qcur, KQ_mask_swa, n_tokens, kv_head, n_kv, 1.0f, cb, il);
+                    Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f, cb, il);
         }
 
         if (il == n_layer - 1) {
