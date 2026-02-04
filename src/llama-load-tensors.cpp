@@ -1002,12 +1002,11 @@ bool create_tensors_helper::create_seedoss_tensors(const LLM_TN & tn) {
     }
 
     for (int i = 0; i < n_layer; ++i) {
-        ggml_context * ctx_layer = ctx_for_layer(i);
         ggml_context * ctx_split = ctx_for_layer_split(i);
 
         auto & layer = model.layers[i];
 
-        layer.attn_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+        layer.attn_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
 
         layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_qo_dim});
         layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_kv_dim});
@@ -1015,11 +1014,12 @@ bool create_tensors_helper::create_seedoss_tensors(const LLM_TN & tn) {
         layer.wo = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_qo_dim, n_embd});
 
         // optional bias tensors
-        layer.bq = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_qo_dim}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.bk = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_kv_dim}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.bv = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_kv_dim}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_qo_dim}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_kv_dim}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.bv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_kv_dim}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
-        layer.attn_post_norm = create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd});
+        layer.attn_post_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd});
+        layer.ffn_norm = layer.attn_post_norm;
 
         create_std_ffn(i, tn, layer, n_ff, n_embd, ctx_split);
     }
