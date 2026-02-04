@@ -1676,8 +1676,10 @@ std::tuple<ggml_tensor*, ggml_tensor*, ggml_tensor*> llm_build_context::llm_buil
             ggml_tensor * wk, ggml_tensor * bk,
             ggml_tensor * wv, ggml_tensor * bv,
             ggml_tensor * q_norm, ggml_tensor * k_norm, float attention_scale, int il, bool add_graph_split) const {
+    int n_head    = hparams.n_head(il);
+    int n_head_kv = hparams.n_head_kv(il);
     const int64_t n_embd_head_k = hparams.n_embd_head_k;
-    const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
+    const int64_t n_embd_gqa  = hparams.n_embd_v_gqa(il);
     if (wqkv) {
         auto qkv = llm_build_lora_mm(lctx, ctx0, wqkv, cur);
         if (add_graph_split) {
@@ -3636,7 +3638,6 @@ ggml_cgraph * llm_build_context::build_step35() {
         bool is_swa = hparams.swa_layers[il];
         ggml_tensor * inpSA = inpL;
         const uint32_t n_head_l    = hparams.n_head(il);
-        const uint32_t n_head_kv_l = hparams.n_head_kv(il);
         const float freq_base_l  = hparams.has_rope_freq_base_per_layer ? hparams.rope_freq_base_per_layer[il] :
             is_swa ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
         const float freq_scale_l = is_swa ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
@@ -3646,24 +3647,13 @@ ggml_cgraph * llm_build_context::build_step35() {
             cur = llm_build_norm(ctx0, inpL, hparams, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, cb, il);
             cb(cur, "attn_norm", il);
 
-            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur, model.layers[il].wq, model.layers[il].bq,
+            auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
+                    model.layers[il].wqkv, model.layers[il].bqkv,
+                    model.layers[il].wqk,  model.layers[il].bqk,
+                    model.layers[il].wq, model.layers[il].bq,
                     model.layers[il].wk, model.layers[il].bk,
-                    model.layers[il].wv, model.layers[il].bv, 0.f, il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head_l,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv_l, n_tokens);
-
-            if (model.layers[il].attn_q_norm) {
-                Qcur = llm_build_norm(ctx0, Qcur, hparams, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, cb, il);
-                cb(Qcur, "Qcur_normed", il);
-            }
-            if (model.layers[il].attn_k_norm) {
-                Kcur = llm_build_norm(ctx0, Kcur, hparams, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, cb, il);
-                cb(Kcur, "Kcur_normed", il);
-            }
-
-            //Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head_k, n_head_l,    n_tokens);
-            //Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head_k, n_head_kv_l, n_tokens);
+                    model.layers[il].wv, model.layers[il].bv,
+                    model.layers[il].attn_q_norm, model.layers[il].attn_k_norm, 0.f, il);
 
             ggml_tensor * rope_factors = nullptr;
             const uint32_t apply_mask = hparams.rope_scaling_apply_mask;
