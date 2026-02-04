@@ -1958,7 +1958,203 @@ void server_context::process_single_task(server_task&& task) {
         result.data = json{ { "success", true } };
         queue_results.send(result);
     } break;
+    case SERVER_TASK_TYPE_LOAD_CONTROL_VECTOR:
+    {
+        // Load control vector from file
+        std::string path = task.data.at("path");
+        float scale = task.data.value("scale", 1.0f);
+        int32_t layer_start = task.data.value("layer_start", 1);
+        int32_t layer_end = task.data.value("layer_end", llama_n_layer(model));
+
+        // Check if already loaded
+        int cv_id = -1;
+        for (size_t i = 0; i < control_vectors.size(); i++) {
+            if (control_vectors[i].path == path) {
+                control_vectors[i].scale = scale;
+                control_vectors[i].layer_start = layer_start;
+                control_vectors[i].layer_end = layer_end;
+                cv_id = i;
+                break;
+            }
+        }
+
+        if (cv_id == -1) {
+            control_vector_container new_cv;
+            new_cv.path = path;
+            new_cv.scale = scale;
+            new_cv.layer_start = layer_start;
+            new_cv.layer_end = layer_end;
+            new_cv.applied = false;
+
+            // Load the control vector data
+            llama_control_vector_load_info load_info;
+            load_info.fname = path;
+            load_info.strength = 1.0f;  // Don't pre-scale here, we'll scale when applying
+
+            std::vector<llama_control_vector_load_info> load_infos = { load_info };
+            new_cv.data = llama_control_vector_load(load_infos);
+
+            if (new_cv.data.n_embd == -1) {
+                server_task_result result;
+                result.id = task.id;
+                result.error = true;
+                result.data = json{{ "success", false }, { "error", "Failed to load control vector from " + path }};
+                queue_results.send(result);
+                break;
+            }
+
+            // Validate dimension to prevent heap corruption
+            if (new_cv.data.n_embd != llama_model_n_embd(model)) {
+                server_task_result result;
+                result.id = task.id;
+                result.error = true;
+                result.data = json{{ "success", false },
+                                   { "error", "Vector dimension mismatch" }};
+                queue_results.send(result);
+                break;
+            }
+
+            control_vectors.push_back(new_cv);
+
+            cv_id = control_vectors.size() - 1;
+        }
+
+        // Auto-apply control vectors after loading
+        if (!apply_control_vectors_internal()) {
+            server_task_result result;
+            result.id = task.id;
+            result.error = true;
+            result.data = json{{ "success", false }, { "error", "Failed to apply control vectors" }};
+            queue_results.send(result);
+            break;
+        }
+
+        server_task_result result;
+        result.id = task.id;
+        result.error = false;
+        result.data = json{{ "success", true }, { "id", cv_id }};
+        queue_results.send(result);
+    } break;
+    case SERVER_TASK_TYPE_UNLOAD_CONTROL_VECTOR:
+    {
+        // Validate that "id" field exists and is a number
+        if (!task.data.contains("id") || task.data["id"].is_null() || !task.data["id"].is_number()) {
+            server_task_result result;
+            result.id = task.id;
+            result.error = true;
+            result.data = json{{ "success", false }, { "error", "Missing or invalid 'id' field" }};
+            queue_results.send(result);
+            break;
+        }
+
+        int id = task.data.at("id");
+
+        if (id < 0 || id >= (int)control_vectors.size()) {
+            server_task_result result;
+            result.id = task.id;
+            result.error = true;
+            result.data = json{{ "success", false }, { "error", "Invalid control vector ID" }};
+            queue_results.send(result);
+            break;
+        }
+
+        // Remove the control vector from the list
+        control_vectors.erase(control_vectors.begin() + id);
+
+        // Reapply remaining control vectors
+        if (!apply_control_vectors_internal()) {
+            server_task_result result;
+            result.id = task.id;
+            result.error = true;
+            result.data = json{{ "success", false }, { "error", "Failed to apply control vectors" }};
+            queue_results.send(result);
+            break;
+        }
+
+        server_task_result result;
+        result.id = task.id;
+        result.error = false;
+        result.data = json{{ "success", true }};
+        queue_results.send(result);
+    } break;
+    case SERVER_TASK_TYPE_SET_CONTROL_VECTOR:
+    {
+        if (!apply_control_vectors_internal()) {
+            server_task_result result;
+            result.id = task.id;
+            result.error = true;
+            result.data = json{{ "success", false }, { "error", "Failed to apply control vectors" }};
+            queue_results.send(result);
+            break;
+        }
+
+        server_task_result result;
+        result.id = task.id;
+        result.error = false;
+        result.data = json{{ "success", true }};
+        queue_results.send(result);
+    } break;
     }
+}
+
+bool server_context::apply_control_vectors_internal() {
+    llama_control_vector_data combined_cv = { -1, {} };
+
+    // Check if we have anything to apply
+    bool any_active = false;
+    for (const auto& cv : control_vectors) {
+        if (cv.scale != 0.0f) {
+            any_active = true;
+            break;
+        }
+    }
+
+    if (!any_active) {
+        // Clear control vectors if nothing is active
+        llama_control_vector_apply(ctx, nullptr, 0, 0, 0, 0);
+        return true;
+    }
+
+    // Aggregate control vectors with scaling
+    for (auto& cv : control_vectors) {
+        if (cv.scale == 0.0f) {
+            cv.applied = false;
+            continue;
+        }
+
+        if (combined_cv.n_embd == -1) {
+            combined_cv.n_embd = cv.data.n_embd;
+            combined_cv.data.resize(cv.data.data.size(), 0.0f);
+        }
+
+        for (size_t i = 0; i < cv.data.data.size(); i++) {
+            combined_cv.data[i] += cv.data.data[i] * cv.scale;
+        }
+        cv.applied = true;
+    }
+
+    // Apply combined control vector
+    if (combined_cv.n_embd != -1 && !combined_cv.data.empty()) {
+        int32_t min_layer_start = INT32_MAX;
+        int32_t max_layer_end = 0;
+
+        for (const auto& cv : control_vectors) {
+            if (cv.scale != 0.0f) {
+                min_layer_start = std::min(min_layer_start, cv.layer_start);
+                max_layer_end = std::max(max_layer_end, cv.layer_end);
+            }
+        }
+
+        int err = llama_control_vector_apply(ctx,
+                                            combined_cv.data.data(),
+                                            combined_cv.data.size(),
+                                            combined_cv.n_embd,
+                                            min_layer_start,
+                                            max_layer_end);
+        return (err == 0);
+    }
+
+    return true;
 }
 
 void server_context::on_finish_multitask(const server_task_multi& multitask) {
