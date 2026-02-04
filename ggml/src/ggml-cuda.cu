@@ -2626,12 +2626,13 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                 ((ggml_backend_cuda_buffer_context *)next->buffer->context)->device == device_id;
 
             auto unary_op = (ggml_unary_op)dst->op_params[0];
+            float limit = *(const float *)(dst->op_params + 1);
             if (src0_2) {
                 ggml_cuda_op_fused_mul_mat_vec_q_id(ctx, src0_1, &local_src1, ids, &local_dst,
                         dst->src[4], dst->src[5],
                         (const char *)src0_1->data, src0_2 ? (const char *)src0_2->data : nullptr,
                         (const float *)src1->data, src1_quantized.get(),
-                        (float *)local_dst.data, 0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, stream);
+                        (float *)local_dst.data, 0, src0_1->ne[1], 1, src1_padded_col_size, unary_op, limit, stream);
             } else {
                 auto local_src0_1 = *src0_1;
                 local_src0_1.ne[1] /= 2;
@@ -2642,7 +2643,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                             nullptr, nullptr,
                             (const char *)local_src0_1.data, (const char *)local_src0_2.data,
                             (const float *)src1->data, src1_quantized.get(),
-                            (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, stream);
+                            (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, limit, stream);
                 } else {
                     GGML_ASSERT(!dst->src[5]);
                     auto local_bias_1 = *dst->src[4];
@@ -2653,7 +2654,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
                             &local_bias_1, &local_bias_2,
                             (const char *)local_src0_1.data, (const char *)local_src0_2.data,
                             (const float *)src1->data, src1_quantized.get(),
-                            (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, stream);
+                            (float *)local_dst.data, 0, local_src0_1.ne[1], 1, src1_padded_col_size, unary_op, limit, stream);
                 }
             }
             CUDA_CHECK(cudaGetLastError());
@@ -3071,6 +3072,8 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
 
     auto stream = ctx.stream();
 
+    float limit = *(const float *)(dst->op_params + 1);
+
     auto ne10_padded = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
     auto nb10_padded = ne10_padded*sizeof(block_q8_1)/QK8_1;
     auto quantized_size = nb10_padded*src1->ne[1];
@@ -3089,7 +3092,7 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
                     dst->src[4], dst->src[5],
                     (const char *)src0_1->data, (const char *)src0_2->data, (const float *)src1->data, src1_quantized.get(),
                     (float *)dst->data, 0, src0_1->ne[1], 1, ne10_padded,
-                    (ggml_unary_op)dst->op_params[0], stream);
+                    (ggml_unary_op)dst->op_params[0], limit, stream);
             return;
         }
 
@@ -3122,7 +3125,6 @@ static void ggml_cuda_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_tensor
         }
     }
 
-    float limit = *(const float *)(dst->op_params + 1);
     //printf("%s: using limit = %g\n", __func__, limit);
     ggml_fused_mul_unary(ctx, (ggml_unary_op)dst->op_params[0], ggml_nelements(dst),
                     (const float *)dst->data, dst_up.get(), (float *)dst->data, limit);

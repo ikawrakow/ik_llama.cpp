@@ -13,7 +13,7 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
         const char * src0_dd_u, const char * src0_dd_g, const char * src1_ddq_i, float * dst_dd_i, const char * ids_data,
         const void * bias_u, const void * bias_g,
         const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
-        const int64_t src1_padded_row_size, ggml_unary_op unary_op, cudaStream_t stream) {
+        const int64_t src1_padded_row_size, ggml_unary_op unary_op, float limit, cudaStream_t stream) {
 
     const int64_t row_diff = row_high - row_low;
 
@@ -41,7 +41,8 @@ static void ggml_cuda_op_mul_mat_vec_q_impl(ggml_backend_cuda_context & ctx, ggm
                    /* nb2      */ uint64_t(nb2),
                    /* ids_nb0  */ uint64_t(ids_nb0),
                    /* bias_nb1 */ uint64_t(bias_nb1),
-                   /* unary_op */ unary_op
+                   /* unary_op */ unary_op,
+                   /* limit    */ limit > 1e-6f ? limit : INFINITY
     };
 
     switch (type) {
@@ -163,7 +164,7 @@ void ggml_cuda_op_mul_mat_vec_q_3D(
         src0->nb[2], src1_row_size, dst->nb[2], 0, 0,
         src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, nullptr, nullptr, nullptr,
         row_low, row_high, src1_ncols,
-        src1_padded_row_size, GGML_UNARY_OP_COUNT, stream);
+        src1_padded_row_size, GGML_UNARY_OP_COUNT, 0.0f, stream);
 
     GGML_UNUSED(src1_ddf_i);
 }
@@ -199,7 +200,7 @@ void ggml_cuda_op_mul_mat_vec_q_biased(
         ne00, ne0, 1, 0, 0, 0, 0, 0,
         src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, nullptr, bias ? bias->data : nullptr, nullptr,
         row_low, row_high, src1_ncols,
-        src1_padded_row_size, GGML_UNARY_OP_COUNT, stream);
+        src1_padded_row_size, GGML_UNARY_OP_COUNT, 0.0f, stream);
 
     GGML_UNUSED(src1_ddf_i);
 }
@@ -246,7 +247,7 @@ void ggml_cuda_op_mul_mat_vec_q_id(
         src0->nb[2], src1->nb[2], dst->nb[2], ids->nb[0], bias ? bias->nb[1] : 0,
         src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, (const char *)ids->data, bias ? bias->data : nullptr, nullptr,
         row_low, row_high, src1_ncols,
-        src1_padded_row_size, GGML_UNARY_OP_COUNT, stream);
+        src1_padded_row_size, GGML_UNARY_OP_COUNT, 0.0f, stream);
 
     GGML_UNUSED(src1_ddf_i);
 }
@@ -256,7 +257,7 @@ void ggml_cuda_op_fused_mul_mat_vec_q_id(ggml_backend_cuda_context & ctx,
     const ggml_tensor * bias_u, const ggml_tensor * bias_g,
     const char * src0_dd_u, const char * src0_dd_g, const float * src1_ddf_i,
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
-    const int64_t src1_padded_row_size, ggml_unary_op unary_op, cudaStream_t stream) {
+    const int64_t src1_padded_row_size, ggml_unary_op unary_op, float limit, cudaStream_t stream) {
 
     if (!bias_u && !bias_g) {
         GGML_ASSERT(unary_op == GGML_UNARY_OP_SILU ||
@@ -294,7 +295,7 @@ void ggml_cuda_op_fused_mul_mat_vec_q_id(ggml_backend_cuda_context & ctx,
         src0_dd_u, src0_dd_g, src1_ddq_i, dst_dd_i, ids ? (const char *)ids->data : nullptr,
         bias_u ? bias_u->data : nullptr, bias_g ? bias_g->data : nullptr,
         row_low, row_high, src1_ncols,
-        src1_padded_row_size, unary_op, stream);
+        src1_padded_row_size, unary_op, limit, stream);
 
     GGML_UNUSED(src1_ddf_i);
 }
