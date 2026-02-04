@@ -1048,8 +1048,6 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
         ggml_context * ctx_split = ctx_for_layer_split(i);
         auto & layer = model.layers[i];
         const uint32_t n_head_l      = hparams.n_head(i);
-        const uint32_t n_embd_k_gqa  = hparams.n_embd_k_gqa(i);
-        const uint32_t n_embd_v_gqa  = hparams.n_embd_v_gqa(i);
         layer.attn_norm   = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
         layer.attn_q_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, llama_model_loader::TENSOR_NOT_REQUIRED);
         layer.attn_k_norm = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -1060,7 +1058,7 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
         } else {
             layer.rope_freqs = create_tensor(ctx_split, tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot_max/2}, llama_model_loader::TENSOR_NOT_REQUIRED | (i != 0 ? llama_model_loader::TENSOR_DUPLICATED : 0));
         }
-        use_mmap_buffer &= merge_qkv(tn, i, 0);
+        use_mmap_buffer &= !merge_qkv(tn, i, 0);
         //layer.wq = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head_l}, 0);
         //layer.wk = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
         //layer.wv = create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
@@ -1074,15 +1072,26 @@ bool create_tensors_helper::create_step35_tensors(const LLM_TN & tn) {
         layer.ffn_up   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
         // MoE routed experts + selection bias (router_bias)
         const int64_t n_ff_exp = hparams.n_ff_exp;
-        layer.ffn_gate_inp      = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_gate_exps     = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff_exp,   n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_down_exps     = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_up_exps       = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff_exp,   n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_exp_probs_b   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        if (!layer.ffn_gate) {
+            layer.ffn_gate_inp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, n_ff_exp);
+            //layer.ffn_gate_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff_exp, n_expert},
+            //        llama_model_loader::TENSOR_NOT_REQUIRED);
+            //layer.ffn_down_exps = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd, n_expert},
+            //        llama_model_loader::TENSOR_NOT_REQUIRED);
+            //layer.ffn_up_exps   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff_exp, n_expert},
+            //        llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.ffn_exp_probs_b = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
         // shared expert MLP
-        layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, llama_model_loader::TENSOR_NOT_REQUIRED);
-        layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd},
+                    llama_model_loader::TENSOR_NOT_REQUIRED);
+        }
     }
     return use_mmap_buffer;
 }
