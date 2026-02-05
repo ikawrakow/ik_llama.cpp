@@ -83,6 +83,16 @@ struct server_slot {
     std::string stopping_word;
     stop_type stop;
 
+    // For context rewind/ token buffer
+    size_t n_buffer = 0;
+    int32_t rewind_count = 0;
+    bool rewind_status = false;
+    std::unordered_map<llama_token, float> logit_bias;
+    std::vector<std::string>ban_phrases;
+    completion_token_outputs token_buffer;
+    float ban_phrases_bias = 0;
+    int32_t banned_n = 1;
+
     server_prompt server_cached_prompt;
 
     void prompt_save(server_prompt_cache& prompt_cache) const;
@@ -315,6 +325,12 @@ struct server_context {
     void speculative_decoding_accept();
 
     bool accept_special_token(const server_slot& slot, const llama_token token);
+
+    bool has_next_token(const completion_token_output& result, server_slot& slot);
+
+    void send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n = 0);
+
+    void buffer_and_check_string_ban(server_slot& slot, completion_token_output& result);
 
     json model_meta() const;
 
