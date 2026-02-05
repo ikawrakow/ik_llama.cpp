@@ -1,6 +1,6 @@
 #define LLAMA_API_INTERNAL
 
-#include "grammar-parser.h"
+#include "llama-grammar.h"
 #include "ggml.h"
 #include "llama.h"
 #include "unicode.h"
@@ -77,27 +77,30 @@ int main(int argc, char** argv) {
         grammar_str = buffer.str();
     }
 
+
     // Parse the GBNF grammar
-    auto parsed_grammar = grammar_parser::parse(grammar_str.c_str());
+    llama_grammar_parser parser;
+    auto parsed_grammar = parser.parse(grammar_str.c_str());
 
     // will be empty (default) if there are parse errors
-    if (parsed_grammar.rules.empty()) {
-        fprintf(stdout, "%s: failed to parse grammar\n", __func__);
+    if (!parser.parse(grammar_str.c_str()) || parser.rules.empty()) {
+        fprintf(stderr, "%s: failed to parse grammar\n", __func__);
         return 1;
     }
 
     // Ensure that there is a "root" node.
-    if (parsed_grammar.symbol_ids.find("root") == parsed_grammar.symbol_ids.end()) {
-        fprintf(stdout, "%s: grammar does not contain a 'root' symbol\n", __func__);
+    if (parser.symbol_ids.find("root") == parser.symbol_ids.end()) {
+        fprintf(stderr, "%s: grammar does not contain a 'root' symbol\n", __func__);
         return 1;
     }
 
-    std::vector<const llama_grammar_element *> grammar_rules(parsed_grammar.c_rules());
+    std::vector<const llama_grammar_element*> grammar_rules(parser.c_rules());
 
     // Create the LLAMA grammar
-    auto grammar = llama_grammar_init(
+    auto grammar = llama_grammar_init_impl(
             grammar_rules.data(),
-            grammar_rules.size(), parsed_grammar.symbol_ids.at("root"));
+            grammar_rules.size(), parser.symbol_ids.at("root"));
+
     if (grammar == nullptr) {
         throw std::runtime_error("Failed to initialize llama_grammar");
     }

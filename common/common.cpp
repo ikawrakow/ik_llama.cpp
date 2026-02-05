@@ -940,6 +940,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         sparams.adaptive_decay = std::stof(argv[i]);
         return true;
     }
+    if (arg == "--adaptive-updt-w-cur") {
+        sparams.adaptive_updt_w_cur = true;
+        return true;
+    }
     if (arg == "--spec-replace") {
         CHECK_ARG
         std::string target = argv[i];
@@ -2252,6 +2256,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --adaptive-decay",       "adaptive-p sampling: (default: %.2f)", (double)sparams.adaptive_decay});
     options.push_back({ "*",           "       --banned-string-file",   "file path of the list of banned strings on each line" });
     options.push_back({ "*",           "       --banned-n",             "number of tokens banned in the phrase during rewind. -1 means all tokens: (default: %d)",params.banned_n });
+    options.push_back({ "*",           "       --adaptive-updt-w-cur",  "adaptive-p sampling: (default: %s)", sparams.adaptive_updt_w_cur ? "true" : "false"});
     options.push_back({ "*",           "       -l TOKEN_ID(+/-)BIAS",   "modifies the likelihood of token appearing in the completion,\n"
                                                                         "i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',\n"
                                                                         "or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'" });
@@ -4260,6 +4265,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "typical_p: %f # default: 1.0\n", sparams.typical_p);
     fprintf(stream, "adaptive_target: %f # default: -1.0\n", sparams.adaptive_target);
     fprintf(stream, "adaptive_decay: %f # default: 0.9\n", sparams.adaptive_decay);
+    fprintf(stream, "adaptive_updt_w_cur: %s # default: false\n", sparams.adaptive_updt_w_cur ? "true" : "false");
     fprintf(stream, "verbose_prompt: %s # default: false\n", params.verbose_prompt ? "true" : "false");
     fprintf(stream, "display_prompt: %s # default: true\n", params.display_prompt ? "true" : "false");
 }

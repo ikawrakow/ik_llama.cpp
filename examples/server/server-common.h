@@ -112,6 +112,16 @@ static T json_value(const json& body, const std::string& key, const T& default_v
     }
 }
 
+// Control vector container for dynamic management
+struct control_vector_container {
+    std::string path;
+    float scale;
+    int32_t layer_start;
+    int32_t layer_end;
+    llama_control_vector_data data;
+    bool applied;
+};
+
 // thin wrapper around common_grammar_trigger with (de)serialization functions
 struct server_grammar_trigger {
     common_grammar_trigger value;

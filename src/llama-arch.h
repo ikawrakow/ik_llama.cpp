@@ -69,6 +69,7 @@ enum llm_arch {
     LLM_ARCH_SMOLLM3,
     LLM_ARCH_MISTRAL3,
     LLM_ARCH_MIMO2,
+    LLM_ARCH_SEED_OSS,
     LLM_ARCH_UNKNOWN,
 };
 

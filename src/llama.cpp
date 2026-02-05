@@ -224,6 +224,7 @@ enum llm_chat_template {
     LLM_CHAT_TEMPLATE_BAILING,
     LLM_CHAT_TEMPLATE_BAILING_THINK,
     LLM_CHAT_TEMPLATE_BAILING2,
+    LLM_CHAT_TEMPLATE_SEED_OSS,
     LLM_CHAT_TEMPLATE_UNKNOWN,
 };
 
@@ -269,6 +270,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
     { "bailing-think",     LLM_CHAT_TEMPLATE_BAILING_THINK     },
     { "bailing2",          LLM_CHAT_TEMPLATE_BAILING2          },
+    { "seed_oss",          LLM_CHAT_TEMPLATE_SEED_OSS          },
 
 };
 
@@ -1753,6 +1755,7 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_OPENAI_MOE,
         LLM_ARCH_ERNIE4_5_MOE,
         LLM_ARCH_MINIMAX_M2,
+        LLM_ARCH_SEED_OSS,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -5047,6 +5050,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_BAILINGMOE2:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MIMO2:
+        case LLM_ARCH_SEED_OSS:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -7004,6 +7008,8 @@ static llm_chat_template llama_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_GROK_2;
     } else if (tmpl_contains("<|start|>") && tmpl_contains("<|channel|>")) {
         return LLM_CHAT_TEMPLATE_OPENAI_MOE;
+    } else if (tmpl_contains("<seed:bos>")) {
+        return LLM_CHAT_TEMPLATE_SEED_OSS;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -7533,6 +7539,14 @@ static int32_t llama_chat_apply_template_internal(
         if (add_ass) {
             ss << "Assistant:";
         }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_SEED_OSS) {
+        for (auto message: chat) {
+            std::string role(message->role);
+            ss << "<seed:bos>" << role << "\n" << (role == "assistant" ? trim(message->content) : message->content) << "<seed:eos>";
+        }
+        if (add_ass) {
+            ss << "<seed:bos>assistant\n";
+        }
     } else {
         // template not supported
         return -1;
@@ -7598,36 +7612,13 @@ int32_t llama_chat_builtin_templates(const char ** output, size_t len) {
 // grammar
 //
 
-struct llama_grammar * llama_grammar_init(
-        const llama_grammar_element ** rules,
-        size_t    n_rules,
-        size_t    start_rule_index) {
-    return llama_grammar_init_impl(rules, n_rules, start_rule_index);
-}
-
 void llama_grammar_free(struct llama_grammar * grammar) {
     llama_grammar_free_impl(grammar);
 }
-//
-//void llama_grammar_init_lazy(struct llama_sampler* smpl) {
-//
-//    if (!grammar) {
-//        return;
-//    }
-//    std::vector<const char*>  trigger_patterns_c;
-//    trigger_patterns_c.reserve(grammar.grammar->trigger_patterns.size());
-//    for (auto& trigger_pattern : grammar.grammar->trigger_patterns) {
-//        trigger_patterns_c.push_back(trigger_pattern.pattern.c_str());
-//    }
-//    //auto* grammar_new = llama_grammar_init_impl(grammar->vocab, "", "root",
-//    //    grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
-//    //    grammar->trigger_tokens.data(), grammar->trigger_tokens.size());
-//
-//}
 
 
 struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar) {
-    return llama_grammar_copy_impl(grammar);
+    return llama_grammar_clone_impl(*grammar);
 }
 
 void llama_grammar_sample(
@@ -7648,7 +7639,7 @@ void llama_grammar_accept_token(
             struct llama_grammar * grammar,
             struct llama_context * ctx,
                      llama_token   token) {
-    llama_grammar_accept_token_impl(grammar, &ctx->model.vocab, &ctx->sampling, token);
+    llama_grammar_accept_impl(*grammar, &ctx->model.vocab, &ctx->sampling, token);
 }
 
 //
@@ -7814,8 +7805,8 @@ void llama_sampler_dry_accept(struct llama_sampler_dry* smpl, llama_token token)
 }
 
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float target, const float decay, const uint32_t seed) {
-    return llama_init_adaptive_p_impl(n_vocab, target, decay, seed);
+struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float target, const float decay, const bool updt_w_cur, const uint32_t seed) {
+    return llama_init_adaptive_p_impl(n_vocab, target, decay, updt_w_cur, seed);
 }
 
 

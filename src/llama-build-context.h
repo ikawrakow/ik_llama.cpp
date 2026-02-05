@@ -278,6 +278,8 @@ struct llm_build_context {
 
     ggml_cgraph * build_mimo2();
 
+    ggml_cgraph * build_seedoss();
+
     //
     static ggml_tensor * llm_build_lora_mm(llama_context & lctx, ggml_context * ctx0,
             ggml_tensor * w, ggml_tensor * cur);
