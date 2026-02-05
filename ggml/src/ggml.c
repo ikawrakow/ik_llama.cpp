@@ -15141,7 +15141,6 @@ static void ggml_compute_forward_fused_mul_unary_f32(
     const struct ggml_tensor * src1 = dst->src[1];
     enum ggml_unary_op op = (enum ggml_unary_op)dst->op_params[0];
     const float limit = *(const float *)(dst->op_params + 1);
-    if (params->ith == 0) printf("%s(%s) using limit = %g\n", __func__, dst->name, (double)limit);
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
