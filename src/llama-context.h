@@ -191,8 +191,6 @@ struct llama_context {
     ggml_abort_callback abort_callback      = nullptr;
     void *              abort_callback_data = nullptr;
 
-    ggml_tensor * get_embeddings_tensor();
-
     const float * draft_input_hidden_state = nullptr;
 
     void * kv_cache_data = nullptr; 
@@ -233,6 +231,4 @@ struct llama_context {
     bool update_cache_copies();
     bool prepare_mtp_graph_inputs(
         struct llama_context & lctx, const llama_mtp_params & mtp_params);
-
-    ggml_tensor * embd_tensor = nullptr;
 };

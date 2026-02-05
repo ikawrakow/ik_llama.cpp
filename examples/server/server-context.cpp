@@ -1271,6 +1271,9 @@ void server_context::system_prompt_update() {
                 LOG_ERROR("llama_decode() failed", {});
                 return;
             }
+            if (params.has_mtp) {
+                 mtp_update_kv_cache(ctx, batch, true);
+            }
         }
 
         // assign the system KV cache to all parallel sequences
@@ -2945,26 +2948,16 @@ void server_context::speculative_decoding_accept() {
         slot.drafted.clear();
 
         if (slot.has_mtp) {
-                const float* emb = llama_get_embeddings_ith(ctx, -1);
-                if (emb) {
-                    float sum = 0.0f;
-                    for (int k = 0; k < 10; k++) sum += std::abs(emb[k]);
-                    if (sum < 0.0001f) {
-                        SLT_DBG(slot, "Main Model Embeddings appear to be empty/zero! Sync failed or Embeddings not extracted.\n", 0);
-                    }
-                } else {
-                    SLT_DBG(slot, "Main Model Embeddings are NULL.\n", 0);
-                }         
                 if (!ids.empty()) {
                     // const int n_embd = llama_n_embd(llama_get_model(ctx));
-                    
                     // const float* emb = llama_get_embeddings_ith(ctx, ids.size() - 1);
                     // if (emb) {
                     //      slot.mtp_hidden_state.resize(n_embd);
                     //      memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
                     // }
-                    mtp_accept_tokens(ctx, ids, slot.n_past, slot.id);
 
+                    // LOG_VERBOSE("update MTP KV cache", {});
+                    mtp_accept_tokens(ctx, ids, slot.n_past, slot.id);
                 }
             }
 
@@ -3208,22 +3201,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                     }
                 }
             }
-
-            bool is_prompt_phase = false;
-             for (const auto& slot : slots) {
-                if (slot.state == SLOT_STATE_PROCESSING && 
-                    slot.i_batch >= i && 
-                    slot.i_batch < (i + n_tokens)) {
-                    if (slot.n_decoded == 0) {
-                        is_prompt_phase = true;
-                        break;
-                    }
-                }
-            }
-
-            if (is_prompt_phase) {
-                mtp_update_kv_cache(ctx, batch_view, is_prompt_phase);
-            }
         }
 
         for (auto& slot : slots) {
@@ -3277,6 +3254,24 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             }
 
             slot.i_batch = -1;
+        }
+
+        if (params.has_mtp) {
+            bool is_prompt_phase = false;
+            for (const auto& slot : slots) {
+                if (slot.state == SLOT_STATE_PROCESSING && 
+                    slot.i_batch >= i && 
+                    slot.i_batch < (i + n_tokens)) {
+                    if (slot.n_decoded == 1) {
+                        is_prompt_phase = true;
+                        break;
+                    }
+                }
+            }
+
+            if (is_prompt_phase) {
+                mtp_update_kv_cache(ctx, batch_view, is_prompt_phase);
+            }
         }
 
         // speculative decoding - main model sample and accept

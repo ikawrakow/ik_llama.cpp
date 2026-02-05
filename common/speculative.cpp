@@ -431,11 +431,7 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
     LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);
 
     llama_batch mtp_batch = batch;
-    if (is_prompt_warmup) {
-        mtp_batch.mtp_params.op_type = MTP_OP_WARMUP;
-    } else {
-        mtp_batch.mtp_params.op_type = MTP_OP_UPDATE_ACCEPTED;
-    }
+    mtp_batch.mtp_params.op_type = is_prompt_warmup ? MTP_OP_WARMUP : MTP_OP_UPDATE_ACCEPTED;
 
     for (int i = 0; i < mtp_batch.n_tokens; ++i) {
         mtp_batch.logits[i] = true;

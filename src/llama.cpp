@@ -1815,6 +1815,7 @@ static bool llm_load_tensors(
         const float * tensor_split,
         bool use_mlock,
         bool validate_quants,
+        bool mtp,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     model.t_start_us = ggml_time_us();
@@ -1843,6 +1844,7 @@ static bool llm_load_tensors(
     model.main_gpu     = main_gpu;
     model.max_gpu      = max_gpu;
     model.n_gpu_layers = n_gpu_layers;
+    model.mtp          = mtp;
 
     const int n_layer     = hparams.n_layer;
     const int i_gpu_start = std::max((int) hparams.n_layer - n_gpu_layers, (int) 0);
@@ -2222,7 +2224,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         if (!llm_load_tensors(
             ml, model, params.n_gpu_layers, params.mla, params.split_mode,  params.main_gpu, params.max_gpu, params.tensor_split,
-            params.use_mlock, params.validate_quants,
+            params.use_mlock, params.validate_quants, params.mtp,
             params.progress_callback, params.progress_callback_user_data
         )) {
             return -2;
@@ -2960,11 +2962,13 @@ static void llama_graph_compute(
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
 }
 
-static bool prepare_mtp_graph_inputs(struct llama_context & lctx, const llama_mtp_params & mtp_params) {
+static bool prepare_mtp_graph_inputs(struct llama_context & lctx, 
+                                    const llama_mtp_params & mtp_params,
+                                    size_t offset) {
     ggml_tensor * dst = lctx.inp_mtp_states;
     const float * src = nullptr;
     if (mtp_params.op_type == MTP_OP_WARMUP || mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
-        src = lctx.embd;
+        src = lctx.embd + (offset * lctx.model.hparams.n_embd); 
     } else { 
         src = lctx.draft_input_hidden_state;
     }
@@ -3221,7 +3225,7 @@ static int llama_decode_internal(
         }
 
         if (u_batch.mtp_params.op_type != MTP_OP_NONE) { 
-            if (!prepare_mtp_graph_inputs(lctx, u_batch.mtp_params)) {
+            if (!prepare_mtp_graph_inputs(lctx, u_batch.mtp_params, cur_token)) {
                 return GGML_STATUS_FAILED;
             }
         }
@@ -6810,10 +6814,6 @@ float * llama_get_embeddings(struct llama_context * ctx) {
     llama_synchronize(ctx);
 
     return ctx->embd;
-}
-
-ggml_tensor * llama_context::get_embeddings_tensor() {
-    return embd_tensor;
 }
 
 float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i) {

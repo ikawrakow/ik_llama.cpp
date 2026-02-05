@@ -7244,16 +7244,10 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     int64_t n_embd_head, 
     struct ggml_cgraph * gf
 ) {
-    ggml_tensor * embd_copy = ggml_dup(ctx0, prev_embeddings);
-    cb(embd_copy, "mtp_embd_copy", -1);
-
     const int il = hparams.n_layer - 1;
 
     struct ggml_tensor * inp_pos = build_inp_pos();
-
     struct ggml_tensor * inp_out_ids = build_inp_out_ids();
-
-    // auto * inp_attn = build_attn_inp_kv_unified();
 
     // If nextn.embed_tokens is missing (GLM-4.6), use model.tok_embd
     ggml_tensor * mtp_embd_weights = mtp_layer.nextn.embed_tokens;
@@ -7263,25 +7257,19 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
     ggml_tensor * token_emb = build_inp_embd_mtp(mtp_embd_weights);
 
     ggml_tensor * token_emb_norm = llm_build_norm(ctx0, token_emb, hparams, mtp_layer.nextn.enorm, NULL, LLM_NORM_RMS, cb, il);
-    ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, embd_copy, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
+    ggml_tensor * hidden_state_norm = llm_build_norm(ctx0, prev_embeddings, hparams, mtp_layer.nextn.hnorm, NULL, LLM_NORM_RMS, cb, il);
     
     ggml_tensor * combined = ggml_concat(ctx0, token_emb_norm, hidden_state_norm, 0);
     cb(combined, "mtp_concat", il);
     ggml_tensor* cur = llm_build_lora_mm(lctx, ctx0, mtp_layer.nextn.eh_proj, combined);
 
-    // now proceed through last layer (skipped in main model)
-    ggml_tensor * inpSA = cur;
-    // Pre-attention norm for the MTP block
+    struct ggml_tensor * inpSA = cur;
+
     cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
+    cb(cur, "attn_norm", il);
 
-    // self-attention
+    // Self-Attention
     {
-        struct ggml_tensor * inpSA = cur;
-        
-        // Pre-attn Norm
-        cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_norm, NULL, LLM_NORM_RMS, cb, il);
-        cb(cur, "attn_norm", il);
-
         auto [Qcur, Kcur, Vcur] = llm_build_mul_mat_qkv(gf, cur,
                 nullptr, nullptr, // wqkv, bqkv (not used in GLM usually?)
                 nullptr, nullptr, // wqk, bqk
@@ -7307,20 +7295,18 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
                 1.0f/sqrtf(float(n_embd_head)), cb, il);
     }
 
-    cur = ggml_add(ctx0, cur, inpSA);
-    cb(cur, "mtp_ffn_inp", il);
+    ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+    cb(ffn_inp, "mtp_ffn_inp", il);
 
-    cur = llm_build_norm(ctx0, cur, hparams, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
+    cur = llm_build_norm(ctx0, ffn_inp, hparams, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
+    cb(cur, "attn_post_norm", il);
 
     // moe ffn for nextn block
     {
-        struct ggml_tensor * ffn_inp = cur;
-        
-        // Post-attn Norm
-        cur = llm_build_norm(ctx0, ffn_inp, hparams, mtp_layer.attn_post_norm, NULL, LLM_NORM_RMS, cb, il);
-
-        // MoE FFN
-        ggml_tensor * routed_out = llm_build_std_moe_ffn(ctx0, lctx, NULL, cur,
+        // Routed Experts
+        ggml_tensor * routed_out = llm_build_std_moe_ffn(ctx0, lctx, 
+                        NULL, // Norm handled above
+                        cur,  // Input (Normed)
                         mtp_layer.ffn_gate_inp,  NULL,
                         mtp_layer.ffn_up_exps,   NULL,
                         mtp_layer.ffn_gate_exps, NULL,
@@ -7333,7 +7319,6 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
                         LLM_FFN_SILU, hparams.expert_weights_norm, true, hparams.expert_weights_scale,
                         (llm_expert_gating_func_type) hparams.expert_gating_func,
                         LLM_FFN_SILU, cb, il, gf, true);
-        
         cb(routed_out, "ffn_moe_out", il);
 
         // Shared Expert FFN
@@ -7345,13 +7330,12 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
                 mtp_layer.ffn_down_shexp, NULL, NULL,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, cb, il, gf, true);
-        
         cb(shared_out, "ffn_shexp_out", il);
 
         // Sum and Residual
         cur = ggml_add(ctx0, routed_out, shared_out);
         cb(cur, "ffn_out", il);
-        
+
         cur = ggml_add(ctx0, cur, ffn_inp);
         cb(cur, "mtp_ffn_out_resid", il);
     }
