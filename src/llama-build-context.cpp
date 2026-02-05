@@ -9624,7 +9624,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         split_wq, bq ? bq->splits[id] : nullptr,
                         split_wk, bk ? bk->splits[id] : nullptr,
                         split_wv, bv ? bv->splits[id] : nullptr,
-                        the_q_norm, the_k_norm, f_attn_scale, il_cb, add_graph_split);
+                        the_q_norm, the_k_norm, f_attn_scale, il, add_graph_split);
                 auto rope_factors = rope_factors_in;
                 if (!rope_factors && model.layers[il].rope_freqs && model.layers[il].rope_freqs->extra) {
                     auto extra = (ggml_split_tensor_t *)model.layers[il].rope_freqs->extra;
