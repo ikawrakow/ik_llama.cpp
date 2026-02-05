@@ -9680,13 +9680,10 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     GGML_ASSERT(wqkv_gate && wqkv_gate->splits[id]);
                     auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate->splits[id], input_normed);
                     cb(gate, "attn_gate", il_cb);
-                    gate = ggml_sigmoid(ctx0, gate);
-                    cb(gate, "attn_gate_sigmoid", il_cb);
                     int nh = split_wo->ne[0]/n_embd_head_v;
                     auto attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, nh, n_tokens);
                     auto gate_3d = ggml_reshape_3d(ctx0, gate,            1, nh, n_tokens);
-                    gate_3d = ggml_repeat(ctx0, gate_3d, attn_3d);
-                    cur = ggml_mul(ctx0, attn_3d, gate_3d);
+                    cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SILU);
                     cb(attn_3d, "attn_gated_3d", il_cb);
                 }
 
@@ -9774,17 +9771,12 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
         cb(cur, "wqkv", il);
         auto gate = llm_build_lora_mm(lctx, ctx0, wqkv_gate, input_normed); // [n_head_l, n_tokens]
         cb(gate, "attn_gate", il);
-        gate = ggml_sigmoid(ctx0, gate);
-        cb(gate, "attn_gate_sigmoid", il);
-        // reshape + broadcast to [n_embd_head_v, n_head_l, n_tokens]
         int n_head_l = hparams.n_head(il);
-        ggml_tensor * attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, n_head_l, n_tokens);
-        ggml_tensor * gate_3d = ggml_reshape_3d(ctx0, gate,            1, n_head_l, n_tokens);
-        gate_3d = ggml_repeat(ctx0, gate_3d, attn_3d);
-        cb(gate_3d, "attn_gate_bcast", il);
-        attn_3d = ggml_mul(ctx0, attn_3d, gate_3d);
-        cb(attn_3d, "attn_gated_3d", il);
-        cur = ggml_reshape_2d(ctx0, attn_3d, n_embd_head_v * n_head_l, n_tokens);
+        auto attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, n_head_l, n_tokens);
+        auto gate_3d = ggml_reshape_3d(ctx0, gate,            1, n_head_l, n_tokens);
+        cur = ggml_fused_mul_unary(ctx0, gate_3d, attn_3d, GGML_UNARY_OP_SILU);
+        cb(cur, "attn_gated_3d", il);
+        cur = ggml_reshape_2d(ctx0, cur, n_embd_head_v * n_head_l, n_tokens);
         cb(cur, "attn_gated", il);
         cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
         if (model.layers[il].bo) {

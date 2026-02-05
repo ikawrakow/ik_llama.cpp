@@ -6472,9 +6472,19 @@ static struct ggml_tensor * ggml_fused_mul_unary_impl(
         struct ggml_tensor * b,
         enum ggml_unary_op   op,
         bool inplace) {
-    GGML_ASSERT(ggml_are_same_shape(b, a));
+
     GGML_ASSERT(ggml_is_contiguous(a));
     GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU);
+    if (!ggml_are_same_shape(b, a)) {
+        GGML_ASSERT(a->ne[0] == 1 && a->ne[1] == b->ne[1] && a->ne[2] == b->ne[2] && a->ne[3] == b->ne[3]);
+        struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, b) : ggml_dup_tensor(ctx, b);
+        ggml_set_op_params_i32(result, 0, (int32_t) op);
+        result->op   = GGML_OP_FUSED_MUL_UNARY;
+        result->src[0] = a;
+        result->src[1] = b;
+        return result;
+    }
+    //GGML_ASSERT(ggml_are_same_shape(b, a));
 
     bool is_node = false;
 
@@ -15141,19 +15151,12 @@ static void ggml_compute_forward_fused_mul_unary_f32(
     const struct ggml_tensor * src1 = dst->src[1];
     enum ggml_unary_op op = (enum ggml_unary_op)dst->op_params[0];
     const float limit = *(const float *)(dst->op_params + 1);
-    if (params->ith == 0) printf("%s(%s) using limit = %g\n", __func__, dst->name, (double)limit);
-
-    GGML_ASSERT(ggml_is_contiguous_1(src0));
-    GGML_ASSERT(ggml_are_same_shape(src0, dst));
-    GGML_ASSERT(ggml_are_same_shape(src0, src1));
-    GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU);
 
     const int ith = params->ith;
     const int nth = params->nth;
 
     const int nc = dst->ne[0];
-    const int nr = ggml_nrows(src0);
-
+    const int nr = ggml_nrows(dst);
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -15161,6 +15164,32 @@ static void ggml_compute_forward_fused_mul_unary_f32(
     // row range for this thread
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
+
+    if (!ggml_are_same_shape(src0, src1)) {
+        GGML_ASSERT(src0->ne[0] == 1 && ggml_nrows(src0) == nr);
+        GGML_ASSERT(op == GGML_UNARY_OP_SILU);
+        for (int i1 = ir0; i1 < ir1; i1++) {
+            float * z = (float *) ((char *) dst->data  + i1*( dst->nb[1]));
+            const float * x = (const float *) ((char *) src0->data + i1*(src0->nb[1]));
+            const float * y = (const float *) ((char *) src1->data + i1*(src1->nb[1]));
+            float gate = ggml_silu_f32(x[0]);
+            if (limit < 1e-6f) {
+                for (int i = 0; i < nc; ++i) z[i] = gate * y[i];
+            } else {
+                gate = MIN(gate, limit);
+                for (int i = 0; i < nc; ++i) {
+                    float up = MAX(-limit, MIN(limit, y[i]));
+                    z[i] = up * gate;
+                }
+            }
+        }
+        return;
+    }
+
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, src1));
+    GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU);
 
     for (int i1 = ir0; i1 < ir1; i1++) {
         float * z = (float *) ((char *) dst->data  + i1*( dst->nb[1]));
