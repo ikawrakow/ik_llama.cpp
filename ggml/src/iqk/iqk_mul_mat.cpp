@@ -135,7 +135,7 @@ struct MulMat {
     }
     inline void mul_mat_up_gate_NxM(int n, const void * vx_up, const void * vx_gate, size_t bx,
             const float * up_b, const float * gate_b,
-            DataInfo& info, int nrc_x, int nrc_y, int unary_op) {
+            DataInfo& info, int nrc_x, int nrc_y, int unary_op, float limit) {
 #ifdef __aarch64__
         constexpr int k_x_step = 64; //8192; // Tiling does not seem to help on my M2 Max (but difference to tiling is small)
 #else
@@ -143,7 +143,7 @@ struct MulMat {
 #endif
         auto op = ggml_unary_op(unary_op);
         float tmp[k_x_step*16];
-        auto process = [&tmp, n, op, vx_gate, vx_up, gate_b, up_b, bx, xstep = k_x_step] (mul_mat_t func, const DataInfo& this_info, int ix, int this_nrc_x, int ny) {
+        auto process = [&tmp, n, op, vx_gate, vx_up, gate_b, up_b, bx, xstep = k_x_step, limit] (mul_mat_t func, const DataInfo& this_info, int ix, int this_nrc_x, int ny) {
             func(n, (const void *)((const char *)vx_gate + ix*bx), bx, this_info, this_nrc_x);
             for (int ky = 0; ky < ny; ++ky) {
                 if (gate_b) {
@@ -152,6 +152,9 @@ struct MulMat {
                     for (int j = 0; j < this_nrc_x; ++j) x[j] += b[j];
                 }
                 activate(op, this_nrc_x, this_info.dst_row(ky), tmp + ky*xstep);
+                if (limit > 1e-6f) {
+                    for (int j = 0; j < this_nrc_x; ++j) tmp[ky*xstep + j] = std::min(tmp[ky*xstep + j], limit);
+                }
             }
             func(n, (const void *)((const char *)vx_up + ix*bx), bx, this_info, this_nrc_x);
             for (int ky = 0; ky < ny; ++ky) {
@@ -162,6 +165,8 @@ struct MulMat {
                 }
                 if (op == GGML_UNARY_OP_SWIGLU_OAI) {
                     clamp_oai(this_nrc_x, result);
+                } else if (limit > 1e-6f) {
+                    for (int j = 0; j < this_nrc_x; ++j) result[j] = std::max(-limit, std::min(limit, result[j]));
                 }
                 for (int j = 0; j < this_nrc_x; ++j) result[j] *= tmp[ky*xstep + j];
             }
@@ -738,7 +743,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
         int typeA, const void * Aup, const void * Agate, long strideA,
         int typeB, const void * B, long strideB,
         const char * up_b_c, const char * gate_b_c,
-        float * C, long nb1, long nb2, const void * vrow_mapping, int ith, int nth) {
+        float * C, long nb1, long nb2, const void * vrow_mapping, float limit, int ith, int nth) {
 
     const mmid_row_mapping * row_mapping = (const mmid_row_mapping *)vrow_mapping;
     //assert(row_mapping != nullptr);
@@ -781,7 +786,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
                 }
                 auto up_b   = up_b_c   ? (const float *)up_b_c + first_x + ix : nullptr;
                 auto gate_b = gate_b_c ? (const float *)gate_b_c + first_x + ix : nullptr;
-                mm.mul_mat_up_gate_NxM(ne00, Xu, Xg, row_size_qx, up_b, gate_b, this_info, this_nrc_x, Ny, unary_op);
+                mm.mul_mat_up_gate_NxM(ne00, Xu, Xg, row_size_qx, up_b, gate_b, this_info, this_nrc_x, Ny, unary_op, limit);
             }
 
             return true;
@@ -806,7 +811,7 @@ extern "C" IQK_API bool iqk_moe_fused_up_gate(long Nx, long Ny, long ne00, int n
     auto up_b   = up_b_c   ? (const float *)up_b_c + first_x : nullptr;
     auto gate_b = gate_b_c ? (const float *)gate_b_c + first_x : nullptr;
     mm.mul_mat_up_gate_NxM(ne00, (const char *)Aup + row_size_qx*first_x, (const char *)Agate + row_size_qx*first_x, row_size_qx,
-            up_b, gate_b, info, nrc_x, Ny, unary_op);
+            up_b, gate_b, info, nrc_x, Ny, unary_op, limit);
     return true;
 }
 
@@ -1406,7 +1411,7 @@ extern "C" IQK_API bool iqk_mul_mat_moe(long, long, long, int, int, const void *
 extern "C" IQK_API bool iqk_moe_fused_up_gate(long /*Nx*/, long /*Ny*/, long /*ne00*/, int /*ne11*/, int /*unary_op*/,
         int /*typeA*/, const void * /*Aup*/, const void * /*Agate*/, long /*strideA*/,
         int /*typeB*/, const void * /*B*/, long /*strideB*/,
-        float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, int /*ith*/, int /*nth*/) {
+        float * /*C*/, long /*nb1*/, long /*nb2*/, const void * /*vrow_mapping*/, float, int /*ith*/, int /*nth*/) {
     GGML_ABORT("Unsupported CPU. You may need to manually set compilation flags\n");
     return false;
 }

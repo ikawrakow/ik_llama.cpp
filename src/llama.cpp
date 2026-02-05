@@ -5051,6 +5051,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_SEED_OSS:
+        case LLM_ARCH_STEP35:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
