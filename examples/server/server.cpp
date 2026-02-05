@@ -1509,6 +1509,101 @@ int main(int argc, char ** argv) {
         res.status = 200; // HTTP OK
     };
 
+    // Control vector handlers
+    const auto handle_control_vectors_list = [&](const httplib::Request & req, httplib::Response & res) {
+        json result = json::array();
+        for (size_t i = 0; i < ctx_server.control_vectors.size(); ++i) {
+            auto & cv = ctx_server.control_vectors[i];
+            result.push_back({
+                {"id", i},
+                {"path", cv.path},
+                {"scale", cv.scale},
+                {"layer_start", cv.layer_start},
+                {"layer_end", cv.layer_end},
+                {"applied", cv.applied},
+            });
+        }
+        res.set_content(result.dump(), "application/json");
+        res.status = 200; // HTTP OK
+    };
+
+    const auto handle_control_vectors_load = [&](const httplib::Request & req, httplib::Response & res) {
+        const json body = json::parse(req.body);
+
+        server_task task;
+        task.type = SERVER_TASK_TYPE_LOAD_CONTROL_VECTOR;
+        task.data = body;
+
+        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        ctx_server.queue_results.add_waiting_task_id(id_task);
+
+        server_task_result result = ctx_server.queue_results.recv(id_task);
+        ctx_server.queue_results.remove_waiting_task_id(id_task);
+
+        res.set_content(result.data.dump(), "application/json");
+        res.status = result.error ? 400 : 200;
+    };
+
+    const auto handle_control_vectors_unload = [&](const httplib::Request & req, httplib::Response & res) {
+        const json body = json::parse(req.body);
+
+        server_task task;
+        task.type = SERVER_TASK_TYPE_UNLOAD_CONTROL_VECTOR;
+        task.data = body;
+
+        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        ctx_server.queue_results.add_waiting_task_id(id_task);
+
+        server_task_result result = ctx_server.queue_results.recv(id_task);
+        ctx_server.queue_results.remove_waiting_task_id(id_task);
+
+        res.set_content(result.data.dump(), "application/json");
+        res.status = result.error ? 400 : 200;
+    };
+
+    const auto handle_control_vectors_apply = [&](const httplib::Request & req, httplib::Response & res) {
+        const std::vector<json> body = json::parse(req.body);
+        int max_idx = ctx_server.control_vectors.size();
+
+        // Update scales for existing control vectors
+        for (auto & cv : ctx_server.control_vectors) {
+            cv.scale = 0.0f;  // Reset all scales first
+        }
+
+        // Set new scales
+        for (auto entry : body) {
+            int id = entry.at("id");
+            float scale = entry.at("scale");
+            if (0 <= id && id < max_idx) {
+                ctx_server.control_vectors[id].scale = scale;
+
+                // Optionally update layer range
+                if (entry.contains("layer_start")) {
+                    ctx_server.control_vectors[id].layer_start = entry.at("layer_start");
+                }
+                if (entry.contains("layer_end")) {
+                    ctx_server.control_vectors[id].layer_end = entry.at("layer_end");
+                }
+            } else {
+                res.set_content(json{{ "success", false }, { "error", "Invalid control vector id" }}.dump(), "application/json");
+                res.status = 400;
+                return;
+            }
+        }
+
+        server_task task;
+        task.type = SERVER_TASK_TYPE_SET_CONTROL_VECTOR;
+
+        const int id_task = ctx_server.queue_tasks.post(std::move(task));
+        ctx_server.queue_results.add_waiting_task_id(id_task);
+
+        server_task_result result = ctx_server.queue_results.recv(id_task);
+        ctx_server.queue_results.remove_waiting_task_id(id_task);
+
+        res.set_content(result.data.dump(), "application/json");
+        res.status = result.error ? 400 : 200;
+    };
+
     const auto list_saved_prompts = [&ctx_server, &params](const httplib::Request& req, httplib::Response& res) {
         json response = json::array();
 
@@ -1925,6 +2020,11 @@ int main(int argc, char ** argv) {
     // LoRA adapters hotswap
     svr->Get ("/lora-adapters",       handle_lora_adapters_list);
     svr->Post("/lora-adapters",       handle_lora_adapters_apply);
+    // Control vectors
+    svr->Get ("/control-vectors",       handle_control_vectors_list);
+    svr->Post("/control-vectors/load",   handle_control_vectors_load);
+    svr->Post("/control-vectors/unload", handle_control_vectors_unload);
+    svr->Post("/control-vectors/apply",  handle_control_vectors_apply);
     // Save & load slots
     svr->Get ("/slots",               handle_slots);
     svr->Get ("/slots/list",          list_slot_prompts);
