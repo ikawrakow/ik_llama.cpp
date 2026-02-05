@@ -9840,7 +9840,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     auto attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v, nh, n_tokens);
                     auto gate_3d = ggml_reshape_3d(ctx0, gate,            1, nh, n_tokens);
                     gate_3d = ggml_repeat(ctx0, gate_3d, attn_3d);
-                    attn_3d = ggml_mul(ctx0, attn_3d, gate_3d);
+                    cur = ggml_mul(ctx0, attn_3d, gate_3d);
                     cb(attn_3d, "attn_gated_3d", il_cb);
                 }
 

@@ -3281,7 +3281,12 @@ bool create_tensors_helper::create_tensors() {
                 }
                 if (layer.wqkv_gate) {
                     auto wqkv_gate_split = split_kq;
-                    for (auto & s : wqkv_gate_split) s /= hparams.n_embd_head_k;
+                    printf("=================== wqkv_gate_split:");
+                    for (auto & s : wqkv_gate_split) {
+                        s /= hparams.n_embd_head_k;
+                        printf(" %d", s);
+                    }
+                    printf("\n");
                     prepare_split_tensors(1, ctx_split, layer.wqkv_gate, layer.split_wqkv_gate, wqkv_gate_split, mem_used);
                 }
                 for (auto & s : split_kq) s /= gqa_ratio;
