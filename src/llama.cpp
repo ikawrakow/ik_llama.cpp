@@ -636,6 +636,30 @@ llama_context::~llama_context() {
 // kv cache helpers
 //
 
+static inline bool llama_qwen3next_is_recurrent_layer(
+        const llama_model &   model,
+        const llama_hparams & hparams,
+        uint32_t              il) {
+    return model.arch == LLM_ARCH_QWEN3NEXT && hparams.is_recurrent(il);
+}
+
+static inline uint32_t llama_kv_v_row_embd(
+        const llama_model &   model,
+        const llama_hparams & hparams,
+        uint32_t              il) {
+    // qwen3next recurrent state is stored in a dedicated V-cache tail (per sequence),
+    // so per-token V rows include only attention values.
+    if (model.arch == LLM_ARCH_QWEN3NEXT) {
+        return hparams.n_embd_v_gqa(il);
+    }
+
+    return hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+}
+
+static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams) {
+    return std::max<uint32_t>(1, cparams.n_seq_max);
+}
+
 static bool llama_kv_cache_init(
              struct llama_kv_cache & cache,
                const llama_context * ctx,
@@ -744,18 +768,23 @@ static bool llama_kv_cache_init(
         needs_v_cache = cparams.mla_attn == 1 && !cparams.flash_attn;
     }
     if (needs_v_cache) cache.v_l.reserve(n_layer);
+    cache.s_l.reserve(n_layer);
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
+    const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams);
+
     int n_mla = 0;
     for (int i = 0; i < (int) n_layer; i++) {
-        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
+        const bool qnext_recurrent = llama_qwen3next_is_recurrent_layer(model, hparams, i);
+        const uint32_t n_embd_v_row = llama_kv_v_row_embd(model, hparams, i);
         const uint32_t n_head_kv    = hparams.n_head_kv(i);
         const uint32_t n_embd_head_k= hparams.n_embd_head_k;
 
         struct ggml_context * ctx = split_cache ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
         ggml_tensor * k;
         ggml_tensor * v;
+        ggml_tensor * s = nullptr;
         if (model.arch == LLM_ARCH_DEEPSEEK2 && cparams.mla_attn) {
             // DeepSeek MLA
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
@@ -781,11 +810,21 @@ static bool llama_kv_cache_init(
         else {
             int n_embd_head_v = hparams.n_embd_head_v;
             k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
-            v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
+
+            int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
+            v = ggml_new_tensor_1d(ctx, type_v, v_ne);
+            if (qnext_recurrent) {
+                const int64_t s_ne = int64_t(hparams.n_embd_v_s())*qnext_state_slots;
+                s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, s_ne);
+            }
             auto k_name = std::string{"cache_k_l"} + std::to_string(i);
             auto v_name = std::string{"cache_v_l"} + std::to_string(i);
+            auto s_name = std::string{"cache_s_l"} + std::to_string(i);
             ggml_set_name(k, k_name.c_str());
             ggml_set_name(v, v_name.c_str());
+            if (s) {
+                ggml_set_name(s, s_name.c_str());
+            }
             //ggml_format_name(k, "cache_k_l%d", i);
             //ggml_format_name(v, "cache_v_l%d", i);
             cache.k_l.push_back(k);
@@ -836,6 +875,7 @@ static bool llama_kv_cache_init(
                 //}
             }
         }
+        cache.s_l.push_back(s);
     }
     if (model.arch == LLM_ARCH_DEEPSEEK2 && cparams.mla_attn && n_mla < n_layer && n_mla > 0) {
         LLAMA_LOG_ERROR("%s: unexpected situation with %d out of %d layers having MLA enabled\n", __func__, n_mla, int(n_layer));
@@ -2753,6 +2793,18 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                     }
                 }
             }
+        }
+    }
+
+    if (lctx.inp_s_seq_qnext) {
+        const int64_t n_tokens = batch.n_tokens;
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_s_seq_qnext->buffer));
+        int32_t * data = (int32_t *) lctx.inp_s_seq_qnext->data;
+
+        for (int64_t j = 0; j < n_tokens; ++j) {
+            // qwen3next linear-attention path uses a single local recurrent state slot.
+            data[j] = 0;
         }
     }
 
@@ -5032,6 +5084,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_PHI2:
         case LLM_ARCH_PHI3:
         case LLM_ARCH_GEMMA:
@@ -5625,7 +5678,7 @@ struct llama_data_write {
 
         if (v_state == 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
-                const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+                const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
 
                 // Write value type
                 const int32_t v_type_i = (int32_t)kv_self.v_l[il]->type;
@@ -5647,7 +5700,7 @@ struct llama_data_write {
             // When v is transposed, we also need the element size and get the element ranges from each row
             const uint32_t kv_size = kv_self.size;
             for (uint32_t il = 0; il < n_layer; ++il) {
-                const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+                const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
 
                 // Write value type
                 const int32_t v_type_i = (int32_t)kv_self.v_l[il]->type;
@@ -5985,7 +6038,7 @@ struct llama_data_read {
 
         if (v_state == 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
-                const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+                const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
 
                 // Read type of value
                 int32_t v_type_i_ref;
@@ -6018,7 +6071,7 @@ struct llama_data_read {
         else if (v_state == 1) {
             // For each layer, read the values for each cell (transposed)
             for (uint32_t il = 0; il < n_layer; ++il) {
-                const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+                const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
 
                 // Read type of value
                 int32_t v_type_i_ref;
