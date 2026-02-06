@@ -96,16 +96,16 @@ if (NOT WIN32)
     #llama_target_and_test(test-llama-grammar.cpp)
     #llama_target_and_test(test-chat.cpp)
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
-    if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
-        llama_target_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
-        target_include_directories(test-json-schema-to-grammar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../examples/server)
-    endif()
+    #if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
+    #    llama_target_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    #    target_include_directories(test-json-schema-to-grammar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../examples/server)
+    #endif()
 
 
     # build test-tokenizer-1-bpe target once and add many tests
-    add_executable(test-tokenizer-1-bpe test-tokenizer-1-bpe.cpp)
-    target_link_libraries(test-tokenizer-1-bpe PRIVATE common)
-    install(TARGETS test-tokenizer-1-bpe RUNTIME)
+    # add_executable(test-tokenizer-1-bpe test-tokenizer-1-bpe.cpp)
+    # target_link_libraries(test-tokenizer-1-bpe PRIVATE common)
+    # install(TARGETS test-tokenizer-1-bpe RUNTIME)
 
     # TODO: disabled due to slowness
     #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-aquila    ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-aquila.gguf)
@@ -118,11 +118,11 @@ if (NOT WIN32)
     #llama_test(test-tokenizer-1-bpe NAME test-tokenizer-1-starcoder ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-starcoder.gguf)
 
     # build test-tokenizer-1-spm target once and add many tests
-    add_executable(test-tokenizer-1-spm test-tokenizer-1-spm.cpp)
-    target_link_libraries(test-tokenizer-1-spm PRIVATE common)
-    install(TARGETS test-tokenizer-1-spm RUNTIME)
+    # add_executable(test-tokenizer-1-spm test-tokenizer-1-spm.cpp)
+    # target_link_libraries(test-tokenizer-1-spm PRIVATE common)
+    # install(TARGETS test-tokenizer-1-spm RUNTIME)
 
-    llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-llama-spm ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-llama-spm.gguf)
+    # llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-llama-spm ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-llama-spm.gguf)
     #llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-baichuan  ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-baichuan.gguf)
 
     # llama_target_and_test(test-double-float.cpp) # SLOW

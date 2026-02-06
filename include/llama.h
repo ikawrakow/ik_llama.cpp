@@ -489,39 +489,7 @@ extern "C" {
     // grammar types
     struct llama_grammar;
 
-    // grammar element type
-    enum llama_gretype {
-        // end of rule definition
-        LLAMA_GRETYPE_END            = 0,
 
-        // start of alternate definition for rule
-        LLAMA_GRETYPE_ALT            = 1,
-
-        // non-terminal element: reference to rule
-        LLAMA_GRETYPE_RULE_REF       = 2,
-
-        // terminal element: character (code point)
-        LLAMA_GRETYPE_CHAR           = 3,
-
-        // inverse char(s) ([^a], [^a-b] [^abc])
-        LLAMA_GRETYPE_CHAR_NOT       = 4,
-
-        // modifies a preceding LLAMA_GRETYPE_CHAR or LLAMA_GRETYPE_CHAR_ALT to
-        // be an inclusive range ([a-z])
-        LLAMA_GRETYPE_CHAR_RNG_UPPER = 5,
-
-        // modifies a preceding LLAMA_GRETYPE_CHAR or
-        // LLAMA_GRETYPE_CHAR_RNG_UPPER to add an alternate char to match ([ab], [a-zA])
-        LLAMA_GRETYPE_CHAR_ALT       = 6,
-
-        // any character (.)
-        LLAMA_GRETYPE_CHAR_ANY       = 7,
-    };
-
-    typedef struct llama_grammar_element {
-        enum llama_gretype type;
-        uint32_t           value; // Unicode code point or rule ID
-    } llama_grammar_element;
 
     // performance timing information
     struct llama_timings {
@@ -1194,10 +1162,10 @@ extern "C" {
     /// @param n_rules The number of rules.
     /// @param start_rule_index The index of the root rule (the starting point of the grammar).
     /// @return The initialized llama_grammar or nullptr if initialization failed.
-    LLAMA_API struct llama_grammar * llama_grammar_init(
-            const llama_grammar_element ** rules,
-                                 size_t    n_rules,
-                                 size_t    start_rule_index);
+    //LLAMA_API struct llama_grammar * llama_grammar_init(
+    //        const llama_grammar_element ** rules,
+    //                             size_t    n_rules,
+    //                             size_t    start_rule_index);
 
     struct llama_sampler_grammar;
     LLAMA_API void llama_grammar_init_lazy(struct llama_sampler_grammar * grammar);
@@ -1387,6 +1355,7 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     LLAMA_API struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab,
            const float target,
            const float decay,
+            const bool updt_w_cur,
         const uint32_t seed);
 
     void llama_prep_adaptive_p(struct llama_context * ctx,
@@ -1487,39 +1456,6 @@ struct ggml_tensor;
 const std::vector<std::pair<std::string, struct ggml_tensor *>> & llama_internal_get_tensor_map(
     struct llama_context * ctx
 );
-
-struct llama_partial_utf8 {
-    uint32_t value;    // bit value so far (unshifted)
-    int      n_remain; // num bytes remaining; -1 indicates invalid sequence
-};
-
-struct llama_grammar_candidate {
-    size_t               index;
-    const uint32_t     * code_points;
-    llama_partial_utf8   partial_utf8;
-};
-
-using llama_grammar_rule  = std::vector<      llama_grammar_element>;
-using llama_grammar_stack = std::vector<const llama_grammar_element *>;
-
-using llama_grammar_rules      = std::vector<llama_grammar_rule>;
-using llama_grammar_stacks     = std::vector<llama_grammar_stack>;
-using llama_grammar_candidates = std::vector<llama_grammar_candidate>;
-
-const llama_grammar_rules  & llama_grammar_get_rules (const struct llama_grammar * grammar);
-      llama_grammar_stacks & llama_grammar_get_stacks(      struct llama_grammar * grammar);
-
-void llama_grammar_accept(struct llama_grammar* grammar, uint32_t chr);
-
-std::vector<llama_grammar_candidate> llama_grammar_reject_candidates_for_stack(
-        const llama_grammar_rules & rules,
-        const llama_grammar_stack & stack,
-        const llama_grammar_candidates & candidates);
-
-std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
-        const std::string & src,
-        llama_partial_utf8 partial_start);
-
 
 
 // Randomly selects a token from the candidates based on their probabilities using given std::mt19937.

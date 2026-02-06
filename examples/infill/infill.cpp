@@ -2,7 +2,7 @@
 
 #include "console.h"
 #include "llama.h"
-#include "grammar-parser.h"
+#include "llama-grammar.h"
 
 #include <cassert>
 #include <cinttypes>

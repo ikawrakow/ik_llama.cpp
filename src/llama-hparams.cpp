@@ -1107,7 +1107,46 @@ void llm_load_hparams(
                 }
 
             } break;
-
+        case LLM_ARCH_SEED_OSS:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                switch (hparams.n_layer) {
+                    case 64: model.type = e_model::MODEL_36B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_STEP35:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                //hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                // MoE + SWA parameters
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
+                // Step35 uses sigmoid gating by default (if not set in GGUF)
+                if (hparams.expert_gating_func == LLM_EXPERT_GATING_FUNC_TYPE_NONE) {
+                    hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
+                }
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER, hparams.rope_dim_per_layer, hparams.n_layer);
+                ml.get_key_or_arr(LLM_KV_SWIGLU_LIMITS,        hparams.swiglu_limits,        hparams.n_layer);
+                ml.get_key_or_arr(LLM_KV_SWIGLU_LIMITS_SHARED, hparams.swiglu_limits_shared, hparams.n_layer);
+                // Optional: Step35-only gating for applying rope scaling (HF: yarn_only_types).
+                // Default is 3 (apply on all layers) if the key is absent.
+                //ml.get_key(format("%s.rope.scaling.apply_mask", ml.get_arch_name().c_str()),
+                //    hparams.rope_scaling_apply_mask, false);
+                //hparams.has_rope_freq_base_per_layer = ml.get_key_or_arr(
+                //    format("%s.rope.freq_base_per_layer", ml.get_arch_name().c_str()),
+                //    hparams.rope_freq_base_per_layer, hparams.n_layer, false);
+                ml.get_key(format("%s.rope.scaling.apply_mask", ml.get_arch_name().c_str()),
+                    hparams.rope_scaling_apply_mask, false);
+                hparams.has_rope_freq_base_per_layer = ml.get_key_or_arr(LLM_KV_ROPE_FREQ_BASE_PER_LAYER,
+                    hparams.rope_freq_base_per_layer, hparams.n_layer, false);
+                //type = LLM_TYPE_UNKNOWN; <--- what is this?
+            } break;
         default: (void)0;
     }
 

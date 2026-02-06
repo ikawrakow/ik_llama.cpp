@@ -15140,6 +15140,7 @@ static void ggml_compute_forward_fused_mul_unary_f32(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
     enum ggml_unary_op op = (enum ggml_unary_op)dst->op_params[0];
+    const float limit = *(const float *)(dst->op_params + 1);
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
@@ -15167,7 +15168,19 @@ static void ggml_compute_forward_fused_mul_unary_f32(
         switch (op) {
             case GGML_UNARY_OP_GELU: ggml_vec_gelu_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
             case GGML_UNARY_OP_RELU: ggml_vec_relu_f32(nc, z, x); ggml_vec_mul_f32(nc, z, z, y); break;
-            case GGML_UNARY_OP_SILU: ggml_vec_mul_silu_f32(nc, z, x, y); break;
+            case GGML_UNARY_OP_SILU: {
+                if (limit < 1e-6f) {
+                    ggml_vec_mul_silu_f32(nc, z, x, y);
+                } else {
+                    // TODO: simdify this
+                    for (int i = 0; i < nc; ++i) {
+                        float gate = ggml_silu_f32(x[i]);
+                        gate = MIN(gate, limit);
+                        float up = MAX(-limit, MIN(limit, y[i]));
+                        z[i] = up * gate;
+                    }
+                }
+            } break;
             default: GGML_ABORT("fatal error");
         }
     }
@@ -16673,6 +16686,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
 
     ggml_barrier(params->shared);
 
+    const float limit = *(const float *)(dst->op_params + 1);
 
     // so GGML_TENSOR_BINARY_OP_LOCALS works
 
@@ -16704,7 +16718,7 @@ static void ggml_compute_forward_mul_mat_id_up_gate(
                             vec_dot_type, (const char *)wdata, row_size,
                             up_b_cur, gate_b_cur,
                             (float *)dst->data, nb1, nb2,
-                            matrix_rows + cur_a*ne12, ith, nth)) GGML_ABORT("fatal error");
+                            matrix_rows + cur_a*ne12, limit, ith, nth)) GGML_ABORT("fatal error");
 
     }
 
@@ -16769,6 +16783,8 @@ static void ggml_compute_forward_mul_mat_up_gate(
 
     ggml_barrier(params->shared);
 
+    float limit = *(const float *)(dst->op_params + 1);
+
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
     if (!iqk_moe_fused_up_gate(ne01, ne11, ne00, ne11, dst->op_params[0],
@@ -16776,7 +16792,7 @@ static void ggml_compute_forward_mul_mat_up_gate(
                          vec_dot_type, (const char *)wdata, row_size,
                          NULL, NULL,
                          (float *)dst->data, nb1, nb2,
-                         NULL, ith, nth)) GGML_ABORT("fatal error");
+                         NULL, limit, ith, nth)) GGML_ABORT("fatal error");
 
 }
 #endif
@@ -25253,55 +25269,8 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
 
                     cur = 3*sizeof(float)*D*n_tasks; // 3x head size/thread
 #if GGML_USE_IQK_MULMAT
-                    size_t qsize = 0;
-                    const struct ggml_tensor * q = node->src[0];
-                    const struct ggml_tensor * k = node->src[1];
-                    if (k->type == GGML_TYPE_Q8_0) {
-                        qsize = ggml_nrows(k)*ggml_row_size(k->type, k->ne[0]);
-                    }
-                    if (q->ne[1] == 1 && q->ne[3] == 1 && q->ne[2]/k->ne[2] > 1 && n_tasks > 1 && k->ne[1]/32 > 1) {
-                        if (k->ne[2] > 1) {
-                            int gcd = simple_gcd(k->ne[2], n_tasks);
-                            int nth_k  = n_tasks/gcd;
-                            int nek2_k = k->ne[2]/gcd;
-                            int nchunk = nek2_k*k->ne[1]/32;
-                            int npt = (nchunk + nth_k - 1)/nth_k;
-                            int nk;
-                            if (npt*nth_k == nchunk) {
-                                nk = 32 * (k->ne[1]*k->ne[2]/(32*n_tasks));
-                            } else {
-                                //int nm = std::max(1, npt/8);
-                                int nm = 1;
-                                while (true) {
-                                    if (nm*4 >= npt) break;
-                                    nm *= 2;
-                                }
-                                nk = 32*nm;
-                            }
-                            //int nk = 32 * (k->ne[2]*k->ne[1]/(32*n_tasks));
-                            int nstep_k = k->ne[2]*k->ne[1]/nk;
-                            size_t result_size = (Dv + 16)*q->ne[2]/k->ne[2]*sizeof(float);
-                            size_t size = nstep_k*result_size;
-                            cur = MAX(cur, size+qsize);
-                        } else {
-                            int nstep_k = k->ne[1]/32;
-                            int gcd_k   = simple_gcd(nstep_k, n_tasks);
-                            if (gcd_k > 1) {
-                                int nth_k = n_tasks/gcd_k;
-                                int rk2 = q->ne[2]/k->ne[2];
-                                int nq_per_thread = (rk2 + nth_k - 1)/nth_k;
-                                size_t size = (Dv + 16)*nq_per_thread*sizeof(float)*n_tasks;
-                                if (ggml_is_quantized(k->type)) {
-                                    enum ggml_type vec_dot_type = type_traits[k->type].vec_dot_type;
-                                    size_t row_size = ggml_row_size(vec_dot_type, q->ne[0]);
-                                    size += q->ne[2]*row_size;
-                                }
-                                cur = MAX(cur, size+qsize);
-                            }
-                        }
-                    } else {
-                        cur = MAX(cur, qsize);
-                    }
+                    size_t size = iqk_fa_work_buffer_size(node, n_tasks);
+                    cur = MAX(cur, size);
 #endif
                 } break;
             case GGML_OP_FLASH_ATTN_BACK:
