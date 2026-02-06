@@ -199,3 +199,119 @@ This is substantially improved versus earlier observed TG (`~2` to `~4` t/s) in 
 - Some runs still offload few/no layers depending on available VRAM at run time, which can mask CUDA-path gains.
 - `SCHED_MAX_SPLITS` limits at very aggressive `(b, ub)` settings are still a separate scaling constraint.
 - Additional backend-level profiling is still needed to determine whether remaining gap to top-end mainline numbers is dominated by offload limits, scheduler split overhead, or other kernels.
+
+## 2026-02-06 CUDA MoE/SSM Optimization Update
+
+### Applied changes in this update
+
+1. MoE row mapping in CUDA `mul_mat_id` paths (`ggml/src/ggml-cuda.cu`):
+   - Replaced per-call `ids` device->host copy, host-side count/build, and mapping host->device copy.
+   - Added device-side count + exclusive prefix sum + scatter kernels:
+     - `k_moe_row_count`
+     - `k_moe_row_exclusive_scan`
+     - `k_moe_row_scatter`
+   - Kept existing call-site logic intact by copying only compact metadata back (`moe_counts`, `cum_moe_counts`, invalid-id flag).
+   - Net effect: removes large host round-trip traffic from a hot MoE routing path.
+
+2. Qwen3Next SSM conv path for `n_kv > 1` (`ggml/src/ggml-cuda/ssm-conv.cu`):
+   - Added a guarded fast path for decode-like multi-sequence batches where each token maps to one unique sequence (no multi-sequence fan-out per token).
+   - Added:
+     - `ssm_conv_validate_unique_seq_map`
+     - `ssm_conv_multi_seq_unique_f32_kernel`
+     - `ssm_conv_multi_seq_unique_f32_kernel_nc4`
+   - If the input pattern does not satisfy fast-path constraints, execution falls back to the existing kernel path unchanged.
+
+3. Top-k MoE fusion verification:
+   - No matcher change was required in this update.
+   - Qwen3Next MoE build path still emits the expected `SOFT_MAX -> ... -> ARGSORT -> VIEW -> GET_ROWS` form used by current CUDA fusion checks.
+
+### Parity validation (required checks)
+
+Tests were run in Docker (`iktest-dev:latest`) with:
+- model: `/models/qwen3-next-coder.gguf`
+- text corpus: `/tmp/qnext_ppl.txt` (same file for `ik` and mainline)
+- params: `-c 256 -b 64 -ub 64 --no-warmup`
+
+CPU parity (`-ngl 0`, threshold `<= 5e-4`):
+- `chunks=1`: `ik 1.0041` vs `mainline 1.0037` (`delta=4e-4`) -> PASS
+- `chunks=2`: `ik 1.0025` vs `mainline 1.0023` (`delta=2e-4`) -> PASS
+
+CUDA sanity parity (`-ngl 1`, threshold `<= 1e-3`):
+- `chunks=1`: `ik 1.0041` vs `mainline 1.0037` (`delta=4e-4`) -> PASS
+- `chunks=2`: `ik 1.0025` vs `mainline 1.0023` (`delta=2e-4`) -> PASS
+
+### Quick performance matrix (`llama-sweep-bench`)
+
+Config: `-c 512 -b 1024 -ub 128 -n 16 -ctk f16 -ctv f16 -ngl 999 --cpu-moe`
+
+| Profile | Baseline maxPP | Baseline maxTG | New maxPP | New maxTG | Delta maxPP | Delta maxTG |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16GB a) `CUDA_VISIBLE_DEVICES=0` | 129.83 | 26.45 | 122.91 | 26.79 | -6.92 | +0.34 |
+| 16GB b) `CUDA_VISIBLE_DEVICES=0 -no-ooae` | n/a | n/a | 132.02 | 26.84 | n/a | n/a |
+| 28GB a) `CUDA_VISIBLE_DEVICES=0,1 --tensor-split 0.85,0.15` | 127.66 | 22.95 | 127.48 | 23.97 | -0.18 | +1.02 |
+| 28GB b) `CUDA_VISIBLE_DEVICES=0,1` | n/a | n/a | 104.61 | 21.17 | n/a | n/a |
+
+### Command log (exact forms)
+
+Build:
+
+```bash
+docker run --rm --gpus all \
+  -v /home/yurko/Code/ik_llama.cpp:/ik_llama.cpp \
+  iktest-dev:latest \
+  bash -lc 'cmake --build /ik_llama.cpp/build-cuda13-fresh --config Release -j 56 --target llama-perplexity llama-bench'
+```
+
+Parity (`ik`):
+
+```bash
+docker run --rm --gpus all \
+  -v /home/yurko/Code/ik_llama.cpp:/ik_llama.cpp \
+  -v /home/yurko/.cache/llama.cpp:/models \
+  -v /tmp:/tmp \
+  iktest-dev:latest \
+  bash -lc 'export LD_LIBRARY_PATH=/ik_llama.cpp/build-cuda13-fresh/src:/ik_llama.cpp/build-cuda13-fresh/ggml/src:$LD_LIBRARY_PATH; \
+  /ik_llama.cpp/build-cuda13-fresh/bin/llama-perplexity -m /models/qwen3-next-coder.gguf -f /tmp/qnext_ppl.txt -c 256 -b 64 -ub 64 --no-warmup --chunks {1|2} -ngl {0|1} -ctk f16 -ctv f16'
+```
+
+Parity (mainline):
+
+```bash
+docker run --rm --gpus all \
+  -v /home/yurko/Code/llama.cpp:/llama.cpp \
+  -v /home/yurko/.cache/llama.cpp:/models \
+  -v /tmp:/tmp \
+  iktest-dev:latest \
+  bash -lc 'export LD_LIBRARY_PATH=/llama.cpp/build/src:/llama.cpp/build/ggml/src:$LD_LIBRARY_PATH; \
+  /llama.cpp/build/bin/llama-perplexity -m /models/qwen3-next-coder.gguf -f /tmp/qnext_ppl.txt -c 256 -b 64 -ub 64 --no-warmup --chunks {1|2} -ngl {0|1} -ctk f16 -ctv f16'
+```
+
+Quick matrix:
+
+```bash
+# 16GB a
+CUDA_VISIBLE_DEVICES=0 /ik_llama.cpp/build-cuda13-fresh/bin/llama-sweep-bench \
+  -m /models/qwen3-next-coder.gguf -c 512 -b 1024 -ub 128 -n 16 -ctk f16 -ctv f16 -ngl 999 --cpu-moe
+
+# 16GB b
+CUDA_VISIBLE_DEVICES=0 /ik_llama.cpp/build-cuda13-fresh/bin/llama-sweep-bench \
+  -m /models/qwen3-next-coder.gguf -c 512 -b 1024 -ub 128 -n 16 -ctk f16 -ctv f16 -ngl 999 --cpu-moe -no-ooae
+
+# 28GB a
+CUDA_VISIBLE_DEVICES=0,1 /ik_llama.cpp/build-cuda13-fresh/bin/llama-sweep-bench \
+  -m /models/qwen3-next-coder.gguf -c 512 -b 1024 -ub 128 -n 16 -ctk f16 -ctv f16 -ngl 999 --cpu-moe --tensor-split 0.85,0.15
+
+# 28GB b
+CUDA_VISIBLE_DEVICES=0,1 /ik_llama.cpp/build-cuda13-fresh/bin/llama-sweep-bench \
+  -m /models/qwen3-next-coder.gguf -c 512 -b 1024 -ub 128 -n 16 -ctk f16 -ctv f16 -ngl 999 --cpu-moe
+```
+
+### Status after this update
+
+- Precision parity: PASS on all required checks.
+- Performance:
+  - 16GB profile improved TG but not PP vs baseline.
+  - 28GB split profile improved TG and preserved PP.
+- Remaining likely bottlenecks for 16GB PP:
+  - MoE routing still limited by per-expert launches/host-side per-expert loop in `mul_mat_id`.
+  - Scheduler split / backend-crossing overhead remains visible at this config.
