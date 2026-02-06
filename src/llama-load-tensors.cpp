@@ -3285,6 +3285,16 @@ bool create_tensors_helper::create_tensors() {
                     }
                     prepare_split_tensors(0, ctx_split, layer.attn_sinks, layer.split_sinks, split_sinks, mem_used);
                 }
+                if (layer.wqkv_gate) {
+                    auto wqkv_gate_split = split_kq;
+                    LLAMA_LOG_DEBUG("=================== wqkv_gate_split:");
+                    for (auto & s : wqkv_gate_split) {
+                        s /= hparams.n_embd_head_k;
+                        LLAMA_LOG_DEBUG(" %d", s);
+                    }
+                    LLAMA_LOG_DEBUG("\n");
+                    prepare_split_tensors(1, ctx_split, layer.wqkv_gate, layer.split_wqkv_gate, wqkv_gate_split, mem_used);
+                }
                 for (auto & s : split_kq) s /= gqa_ratio;
                 for (auto & s : split_vo) s /= gqa_ratio;
                 if (layer.attn_k_norm && layer.attn_k_norm->ne[0] == layer.wk->ne[1]) {

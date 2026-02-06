@@ -187,7 +187,7 @@ struct llama_hparams {
         if (il < n_layer) {
             return n_head_arr[il];
         }
-
+        printf("%s: Oops, il = %d\n", __func__, il);
         GGML_ABORT("fatal error");
     }
 
