@@ -9569,7 +9569,6 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     GGML_ASSERT(rope_factors);
                 }
                 else if (model.layers[il].rope_freqs && model.layers[il].rope_freqs->extra) {
-                    printf("%s(%d, %d): using model.layers[il].rope_freqs as rope_factors_in was null\n", __func__, il, id);
                     auto extra = (ggml_split_tensor_t *)model.layers[il].rope_freqs->extra;
                     rope_factors = extra->splits[id];
                 }
