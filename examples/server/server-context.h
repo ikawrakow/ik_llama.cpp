@@ -88,10 +88,13 @@ struct server_slot {
     int32_t rewind_count = 0;
     bool rewind_status = false;
     std::unordered_map<llama_token, float> logit_bias;
-    std::vector<std::string>ban_phrases;
+    std::vector<std::string> ban_phrases;
+    std::vector<std::string> ban_regex;
+    std::vector<std::string> ban_regex_ci;
     completion_token_outputs token_buffer;
     float ban_phrases_bias = 0;
     int32_t banned_n = 1;
+	std::map<int32_t, std::set<llama_token>> positional_bans;
 
     server_prompt server_cached_prompt;
 
