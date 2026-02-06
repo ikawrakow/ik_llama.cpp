@@ -792,7 +792,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     if (data.count("__oaicompat") != 0) {
         slot.oaicompat = true;
-        slot.oaicompat_model = json_value(data, "model", std::string(DEFAULT_OAICOMPAT_MODEL));
+        slot.oaicompat_model = task.params.oaicompat_model;
     }
     else {
         slot.oaicompat = false;

@@ -1070,7 +1070,12 @@ int main(int argc, char ** argv) {
                     // Everything else, including multimodal completions.
                     inputs = tokenize_input_prompts(llama_get_vocab(ctx_server.ctx), ctx_server.mctx, prompt, true, true);
                 }
-                tasks.reserve(inputs.size());              
+                tasks.reserve(inputs.size());
+                const std::string requested_model_name = json_value(data, "model", std::string());
+                const std::string fallback_model_name = get_model_name(ctx_server.params_base.model);
+                const std::string oaicompat_model_name = requested_model_name.empty()
+                    ? fallback_model_name
+                    : requested_model_name;
                 for (size_t i = 0; i < inputs.size(); i++) {
                     server_task task = server_task(type);
 
@@ -1088,7 +1093,7 @@ int main(int argc, char ** argv) {
                     // OAI-compat
                     task.params.oaicompat = oaicompat;
                     task.params.oaicompat_cmpl_id = completion_id;
-                    task.params.oaicompat_model = get_model_name(ctx_server.params_base.model);
+                    task.params.oaicompat_model = oaicompat_model_name;
                     tasks.push_back(std::move(task));
                 }
 
@@ -1146,10 +1151,12 @@ int main(int argc, char ** argv) {
                         if (oaicompat == OAICOMPAT_TYPE_ANTHROPIC) {
                             return server_sent_anthropic_event(sink, res);
                         }
-                        if (oaicompat == OAICOMPAT_TYPE_RESP) {
+                        else if (oaicompat == OAICOMPAT_TYPE_RESP) {
                             return server_sent_oai_resp_event(sink, res);
                         }
-                        return server_sent_event(sink, res);
+                        else {
+                            return server_sent_event(sink, res);
+                        }
                     };
                     // flush the first result as it's not an error
                     if (!first_result_json.empty()) {
