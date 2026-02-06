@@ -94,6 +94,7 @@ struct server_slot {
     completion_token_outputs token_buffer;
     float ban_phrases_bias = 0;
     int32_t banned_n = 1;
+	std::map<int32_t, std::set<llama_token>> positional_bans;
 
     server_prompt server_cached_prompt;
 
