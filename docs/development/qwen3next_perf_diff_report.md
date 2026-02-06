@@ -315,3 +315,70 @@ CUDA_VISIBLE_DEVICES=0,1 /ik_llama.cpp/build-cuda13-fresh/bin/llama-sweep-bench 
 - Remaining likely bottlenecks for 16GB PP:
   - MoE routing still limited by per-expert launches/host-side per-expert loop in `mul_mat_id`.
   - Scheduler split / backend-crossing overhead remains visible at this config.
+
+## 2026-02-06 Follow-up Hotspot Pass (this session)
+
+### Additional code changes
+
+1. `ggml/src/ggml-cuda.cu`
+   - Removed an unused `ids` device->host copy + stream sync in `ggml_cuda_moe_up_gate_unary` fallback path.
+   - Reduced row-mapping host transfer volume by deriving `moe_counts` from host-side prefix bounds (`cum_moe_counts`) instead of copying both arrays from device.
+   - Added `build_active_experts(...)` and switched per-expert loops to iterate only active experts.
+2. `ggml/src/ggml-cuda/ssm-conv.cu`
+   - Removed host-side `cudaMemcpyAsync(...D2H...) + cudaStreamSynchronize` for multi-seq fast-path eligibility.
+   - Made fast/fallback dispatch fully async by gating both kernels with a device-side `fast_path_ok` flag.
+3. `ggml/src/ggml-backend.cpp`
+   - Reduced unnecessary split churn when a weight tensor is on another backend but the current backend can consume that buffer type directly.
+   - Increased `GGML_SCHED_MAX_SPLITS` from `2048` to `4096` for large-graph headroom.
+4. `src/llama.cpp`
+   - Added a Qwen3Next-specific default split guard for heterogeneous dual-GPU layer mode: clamp to at least `75/25` on 2-GPU auto-split when GPU0 has more free memory.
+5. `scripts/qwen3next-eval.sh`
+   - Fixed CLI compatibility (`mainline: llama-completion`, `ik: llama-cli` completion path).
+   - Made evaluation resilient to missing binaries (`gpu_sweep_mainline` is skipped if unavailable).
+   - Fixed complexity-token regex.
+   - Switched PPL corpus generation to a stable deterministic pattern to reduce chunk-level variance.
+
+### Validation rerun
+
+Run artifact: `/tmp/qwen3next-eval/20260206_064339`
+
+- CPU PPL parity:
+  - chunks=1: mainline `1.0009`, ik `1.0009`, delta `0.000000`
+  - chunks=2: mainline `1.0005`, ik `1.0005`, delta `0.000000`
+- CUDA sanity parity:
+  - `gpu_ppl_chunks1_mainline`: `OK`
+  - `gpu_ppl_chunks1_ik`: `OK`
+- Generation smoke:
+  - both mainline and ik contain Fibonacci token(s)
+  - mainline contains complexity token(s), ik did not in this sample output
+- Notes:
+  - `gpu_sweep_mainline` skipped in this environment because `/home/yurko/Code/llama.cpp/build/bin/llama-sweep-bench` is not present.
+  - `gpu_sweep_ik` (`c=2048`, `n=32`) in this run peaked at approximately `maxPP=137.02`, `maxTG=24.81`.
+
+### Quick matrix (exact required configs)
+
+Run artifact: `/tmp/qwen3next-matrix/20260206_063957`
+
+| Profile | Baseline maxPP | Baseline maxTG | New maxPP | New maxTG | Delta maxPP | Delta maxTG |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16GB a) `CUDA_VISIBLE_DEVICES=0 --cpu-moe` | 129.83 | 26.45 | 115.56 | 25.74 | -14.27 | -0.71 |
+| 16GB b) `CUDA_VISIBLE_DEVICES=0 --cpu-moe -no-ooae` | n/a | n/a | 136.21 | 26.00 | n/a | n/a |
+| 28GB a) `CUDA_VISIBLE_DEVICES=0,1 --cpu-moe --tensor-split 0.85,0.15` | 127.66 | 22.95 | 129.70 | 22.72 | +2.04 | -0.23 |
+| 28GB b) `CUDA_VISIBLE_DEVICES=0,1 --cpu-moe` | n/a | n/a | 117.54 | 22.99 | n/a | n/a |
+
+### Variance note for single-GPU default (`--cpu-moe`)
+
+Repeated measurements show substantial run-to-run variance in this environment:
+
+Run artifact: `/tmp/qwen3next-repeat-20260206_064133`
+
+- `single_cpu_moe` maxPP/maxTG:
+  - run1: `113.84 / 25.86`
+  - run2: `135.29 / 26.88`
+  - run3: `113.95 / 23.54`
+- `single_cpu_moe_no_ooae` maxPP/maxTG:
+  - run1: `135.33 / 26.49`
+  - run2: `133.64 / 24.92`
+  - run3: `126.33 / 23.42`
+
+Interpretation: in this setup, `-no-ooae` is currently more stable and generally faster for PP; default OOAE shows large variance and occasional severe PP drops.

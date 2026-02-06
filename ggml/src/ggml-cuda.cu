@@ -2386,6 +2386,19 @@ static __global__ void k_moe_row_scatter(
     }
 }
 
+static inline void build_active_experts(
+        const std::vector<int> & moe_counts,
+        std::vector<int32_t> & active_experts) {
+    active_experts.clear();
+    active_experts.reserve(moe_counts.size());
+
+    for (int32_t i = 0; i < (int32_t) moe_counts.size(); ++i) {
+        if (moe_counts[i] > 0) {
+            active_experts.push_back(i);
+        }
+    }
+}
+
 static inline bool prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n_as, int64_t n_ids,
         const ggml_tensor * ids, std::vector<int>& moe_counts, std::vector<int>& cum_moe_counts,
         ggml_cuda_pool_alloc<mmid_row_mapping>& dev_row_mapping) {
@@ -2436,10 +2449,13 @@ static inline bool prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n
     CUDA_CHECK(cudaGetLastError());
 
     int32_t has_invalid_ids = 0;
-    CUDA_CHECK(cudaMemcpyAsync(moe_counts.data(), dev_moe_counts.get(), n_as*sizeof(int), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaMemcpyAsync(cum_moe_counts.data(), dev_cum_moe_counts.get(), (n_as + 1)*sizeof(int), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaMemcpyAsync(&has_invalid_ids, dev_has_invalid_ids.get(), sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
+
+    for (int32_t i = 0; i < (int32_t) n_as; ++i) {
+        moe_counts[i] = cum_moe_counts[i + 1] - cum_moe_counts[i];
+    }
 
     return has_invalid_ids != 0;
 }
@@ -2558,6 +2574,8 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     if (is_ser) {
         CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
     }
+    std::vector<int32_t> active_experts;
+    build_active_experts(moe_counts, active_experts);
 
     ggml_cuda_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(src1));
     ggml_cuda_pool_alloc<char>  dst_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
@@ -2565,13 +2583,9 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     src1_row.data = src1_contiguous.get();
     dst_row.data  =  dst_contiguous.get();
 
-    for (int64_t i02 = 0; i02 < n_as; i02++) {
+    for (int32_t i02 : active_experts) {
 
         int64_t num_src1_rows = moe_counts[i02];
-
-        if (num_src1_rows == 0) {
-            continue;
-        }
 
         size_t mapping_offset = cum_moe_counts[i02];
 
@@ -2895,11 +2909,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         return i;
     }
 
-    std::vector<char> ids_host(ggml_nbytes(ids));
-    const char * ids_dev = (const char *) ids->data;
-    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-
     ggml_tensor src0_1_row = *src0_1;
     ggml_tensor src0_2_row; if (src0_2) src0_2_row = *src0_2;
     ggml_tensor src1_row   = *src1;
@@ -2986,11 +2995,12 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
         }
     }
+    std::vector<int32_t> active_experts;
+    build_active_experts(moe_counts, active_experts);
 
-    for (int64_t i02 = 0; i02 < n_as; i02++) {
+    for (int32_t i02 : active_experts) {
         int64_t num_src1_rows = moe_counts[i02];
 
-        if (num_src1_rows == 0) continue;
         size_t mapping_offset = cum_moe_counts[i02];
 
         if (use_quantized_src1) {

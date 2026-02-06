@@ -1103,7 +1103,7 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #endif
 
 #ifndef GGML_SCHED_MAX_SPLITS
-#define GGML_SCHED_MAX_SPLITS 2048
+#define GGML_SCHED_MAX_SPLITS 4096
 #endif
 
 #ifndef GGML_SCHED_MAX_SPLIT_INPUTS
@@ -1731,7 +1731,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     // by starting a new split, the memory of the previously offloaded weights can be reused
                     if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                         int src_backend_id = tensor_backend_id(src);
-                        if (src_backend_id != cur_backend_id) {
+                        bool supported = ggml_backend_sched_buffer_supported(sched, src, cur_backend_id);
+                        if (src_backend_id != cur_backend_id && !supported) {
                             need_new_split = true;
                             break;
                         }

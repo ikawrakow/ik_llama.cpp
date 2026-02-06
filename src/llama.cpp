@@ -1861,6 +1861,19 @@ static bool llm_load_tensors(
             for (int i = 0; i < device_count; ++i) {
                 splits[i] = llama_get_device_memory(model, model.devices[i]);
             }
+
+            // For Qwen3Next on heterogeneous dual-GPU setups, pure free-memory split tends to
+            // over-assign layers to the secondary GPU and hurts decode throughput.
+            if (model.arch == LLM_ARCH_QWEN3NEXT && split_mode == LLAMA_SPLIT_MODE_LAYER && device_count == 2 && splits[0] >= splits[1]) {
+                const float split_sum = splits[0] + splits[1];
+                if (split_sum > 0.0f) {
+                    const float primary_share = splits[0] / split_sum;
+                    if (primary_share < 0.75f) {
+                        splits[0] = 0.75f;
+                        splits[1] = 0.25f;
+                    }
+                }
+            }
         } else {
             std::copy(tensor_split, tensor_split + device_count, splits.begin());
         }

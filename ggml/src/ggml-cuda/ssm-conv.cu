@@ -205,12 +205,17 @@ static __global__ void ssm_conv_multi_seq_unique_f32_kernel(
         const float * src1,
         const float * src2,
         const int32_t * seq_ids,
+        const int32_t * fast_path_ok,
         float * dst_x,
         float * dst_state,
         int nc,
         int nr,
         int n_t,
         int src1_nb1) {
+    if (fast_path_ok != nullptr && fast_path_ok[0] == 0) {
+        return;
+    }
+
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     const int t   = blockIdx.y;
 
@@ -241,11 +246,16 @@ static __global__ void ssm_conv_multi_seq_unique_f32_kernel_nc4(
         const float * src1,
         const float * src2,
         const int32_t * seq_ids,
+        const int32_t * fast_path_ok,
         float * dst_x,
         float * dst_state,
         int nr,
         int n_t,
         int src1_nb1) {
+    if (fast_path_ok != nullptr && fast_path_ok[0] == 0) {
+        return;
+    }
+
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     const int t   = blockIdx.y;
 
@@ -276,6 +286,7 @@ static __global__ void ssm_conv_f32_kernel(
         const float * src1,
         const float * src2,
         const int32_t * src3,
+        const int32_t * fast_path_ok,
         float * dst_x,
         float * dst_state,
         int nc,
@@ -284,6 +295,10 @@ static __global__ void ssm_conv_f32_kernel(
         int n_kv,
         int src1_nb1,
         int src3_nb1) {
+    if (fast_path_ok != nullptr && fast_path_ok[0] != 0) {
+        return;
+    }
+
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row >= nr) {
         return;
@@ -338,6 +353,7 @@ static __global__ void ssm_conv_f32_kernel_nc4(
         const float * src1,
         const float * src2,
         const int32_t * src3,
+        const int32_t * fast_path_ok,
         float * dst_x,
         float * dst_state,
         int nr,
@@ -345,6 +361,10 @@ static __global__ void ssm_conv_f32_kernel_nc4(
         int n_kv,
         int src1_nb1,
         int src3_nb1) {
+    if (fast_path_ok != nullptr && fast_path_ok[0] != 0) {
+        return;
+    }
+
     const int row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row >= nr) {
         return;
@@ -441,6 +461,8 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     const dim3 block_dims(CUDA_SSM_CONV_BLOCK_SIZE, 1, 1);
     const dim3 row_grid((nr + CUDA_SSM_CONV_BLOCK_SIZE - 1) / CUDA_SSM_CONV_BLOCK_SIZE, 1, 1);
+    ggml_cuda_pool_alloc<int32_t> fast_path_ok_d(ctx.pool());
+    const int32_t * multi_seq_fast_path_ok = nullptr;
 
     // Fast path for single-sequence recurrent updates (Qwen3Next prompt/decode path).
     // In this case, outputs are independent given the initial conv state, so we parallelize over token blocks.
@@ -499,8 +521,8 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         // one token per unique sequence, no copy-to-multiple-sequences routing.
         ggml_cuda_pool_alloc<int32_t> seq_ids(ctx.pool(), n_t);
         ggml_cuda_pool_alloc<int32_t> seq_seen(ctx.pool(), n_kv);
-        ggml_cuda_pool_alloc<int32_t> fast_path_ok_d(ctx.pool(), 1);
         int32_t fast_path_ok = 1;
+        fast_path_ok_d.alloc(1);
 
         CUDA_CHECK(cudaMemsetAsync(seq_seen.get(), 0, n_kv * sizeof(int32_t), ctx.stream()));
         CUDA_CHECK(cudaMemcpyAsync(fast_path_ok_d.get(), &fast_path_ok, sizeof(int32_t), cudaMemcpyHostToDevice, ctx.stream()));
@@ -515,35 +537,32 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             n_t,
             n_kv,
             src3->nb[1] / sizeof(int32_t));
-
-        CUDA_CHECK(cudaMemcpyAsync(&fast_path_ok, fast_path_ok_d.get(), sizeof(int32_t), cudaMemcpyDeviceToHost, ctx.stream()));
-        CUDA_CHECK(cudaStreamSynchronize(ctx.stream()));
         CUDA_CHECK(cudaGetLastError());
+        multi_seq_fast_path_ok = fast_path_ok_d.get();
 
-        if (fast_path_ok) {
-            const dim3 token_grid(row_grid.x, n_t, 1);
-            if (nc == 4) {
-                ssm_conv_multi_seq_unique_f32_kernel_nc4<<<token_grid, block_dims, 0, ctx.stream()>>>(
-                    (const float *) src0->data,
-                    (const float *) src1->data,
-                    (const float *) src2->data,
-                    seq_ids.get(),
-                    dst_x,
-                    dst_state,
-                    nr, n_t,
-                    src1->nb[1] / sizeof(float));
-            } else {
-                ssm_conv_multi_seq_unique_f32_kernel<<<token_grid, block_dims, 0, ctx.stream()>>>(
-                    (const float *) src0->data,
-                    (const float *) src1->data,
-                    (const float *) src2->data,
-                    seq_ids.get(),
-                    dst_x,
-                    dst_state,
-                    nc, nr, n_t,
-                    src1->nb[1] / sizeof(float));
-            }
-            return;
+        const dim3 token_grid(row_grid.x, n_t, 1);
+        if (nc == 4) {
+            ssm_conv_multi_seq_unique_f32_kernel_nc4<<<token_grid, block_dims, 0, ctx.stream()>>>(
+                (const float *) src0->data,
+                (const float *) src1->data,
+                (const float *) src2->data,
+                seq_ids.get(),
+                multi_seq_fast_path_ok,
+                dst_x,
+                dst_state,
+                nr, n_t,
+                src1->nb[1] / sizeof(float));
+        } else {
+            ssm_conv_multi_seq_unique_f32_kernel<<<token_grid, block_dims, 0, ctx.stream()>>>(
+                (const float *) src0->data,
+                (const float *) src1->data,
+                (const float *) src2->data,
+                seq_ids.get(),
+                multi_seq_fast_path_ok,
+                dst_x,
+                dst_state,
+                nc, nr, n_t,
+                src1->nb[1] / sizeof(float));
         }
     }
 
@@ -554,6 +573,7 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                 (const float *) src1->data,
                 (const float *) src2->data,
                 (const int32_t *) src3->data,
+                multi_seq_fast_path_ok,
                 dst_x,
                 dst_state,
                 nr, n_t, n_kv,
@@ -565,6 +585,7 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                 (const float *) src1->data,
                 (const float *) src2->data,
                 (const int32_t *) src3->data,
+                nullptr,
                 dst_x,
                 dst_state,
                 nr, n_t, n_kv,
@@ -577,6 +598,7 @@ void ggml_cuda_op_ssm_conv(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             (const float *) src1->data,
             (const float *) src2->data,
             (const int32_t *) src3->data,
+            multi_seq_fast_path_ok,
             dst_x,
             dst_state,
             nc, nr, n_t, n_kv,
