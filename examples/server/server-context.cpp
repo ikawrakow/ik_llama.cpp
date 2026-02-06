@@ -11,6 +11,7 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#include <regex>
 
 server_context::~server_context() {
     if (ctx) {
@@ -1123,23 +1124,25 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
 
     {
         // ban string
+        int32_t banbuffer_size = json_value(data, "banbuffer_size", 0);
+        slot.n_buffer = 0; // Ensure buffer calculation starts fresh for this slot
+        
         const auto& banned_strings = data.find("banned_strings");
         if (banned_strings != data.end() && banned_strings->is_array()) {
-            slot.ban_phrases.clear();            
+            slot.ban_phrases.clear();
             for (const auto& val : data["banned_strings"]) {
                 if (val.is_string()) {
                     std::string s = val.get<std::string>();
                     if (!s.empty()) {
                         s = string_lower(s);
-                        auto ban_tokens = common_tokenize(llama_get_model(ctx), s, false, true);
-                        if (ban_tokens.size() > slot.n_buffer) {
-                            slot.n_buffer = ban_tokens.size();
+                        // Use string length instead of token count
+                        if (s.length() > slot.n_buffer) {
+                            slot.n_buffer = s.length();
                         }
                         slot.ban_phrases.push_back(s);
                     }
                 }
             }
-            slot.n_buffer = slot.n_buffer + 3; // extra buffer in case
             std::sort(slot.ban_phrases.begin(), slot.ban_phrases.end(), [](const std::string& a, const std::string& b) {
                 return a.length() > b.length();
                 });
@@ -1149,24 +1152,77 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
                 std::sort(params_base.ban_phrases.begin(), params_base.ban_phrases.end(), [](const std::string & a, const std::string & b) {
                     return a.length() > b.length();
                     });
+                
                 for (auto & val : params_base.ban_phrases) {
                     if (!val.empty()) {
                         val = string_lower(val);
-                        auto ban_tokens = common_tokenize(llama_get_model(ctx), val, false, true);
-                        if (ban_tokens.size() > slot.n_buffer) {
-                            slot.n_buffer = ban_tokens.size();
+                        // Use string length instead of token count
+                        if (val.length() > slot.n_buffer) {
+                            slot.n_buffer = val.length();
                         }
                         slot.ban_phrases.push_back(val);
                     }
                 }              
-                slot.n_buffer = slot.n_buffer + 3; // extra buffer in case
-                params_base.n_buffer = slot.n_buffer;
+                params_base.n_buffer = slot.n_buffer + 1; // buffer is longest string + 1
             } else {
                 slot.ban_phrases = params_base.ban_phrases;
                 slot.n_buffer = params_base.n_buffer;
             }
         }
-		slot.logit_bias = slot.sparams.logit_bias; // keep a copy to restore
+
+        // ban regex
+        slot.ban_regex.clear();
+        const auto& banned_regex = data.find("banned_regex");
+        if (banned_regex != data.end() && banned_regex->is_array()) {
+            for (const auto& val : data["banned_regex"]) {
+                if (val.is_string()) {
+                    std::string s = val.get<std::string>();
+                    if (!s.empty()) {
+                        try {
+                            std::regex re(s);
+                            slot.ban_regex.push_back(s);
+                            if (s.length() > slot.n_buffer) {
+                                slot.n_buffer = s.length();
+                            }
+                        } catch (const std::regex_error& e) {
+                            send_error(task, "Invalid regex in banned_regex: " + s, ERROR_TYPE_INVALID_REQUEST);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ban regex case insensitive
+        slot.ban_regex_ci.clear();
+        const auto& banned_regex_ci = data.find("banned_regex_case_insensitive");
+        if (banned_regex_ci != data.end() && banned_regex_ci->is_array()) {
+            for (const auto& val : data["banned_regex_case_insensitive"]) {
+                if (val.is_string()) {
+                    std::string s = val.get<std::string>();
+                    if (!s.empty()) {
+                        try {
+                            std::regex re(s, std::regex_constants::icase);
+                            slot.ban_regex_ci.push_back(s);
+                            if (s.length() > slot.n_buffer) {
+                                slot.n_buffer = s.length();
+                            }
+                        } catch (const std::regex_error& e) {
+                            send_error(task, "Invalid regex in banned_regex_case_insensitive: " + s, ERROR_TYPE_INVALID_REQUEST);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (banbuffer_size > 0) {
+            slot.n_buffer = banbuffer_size;
+        } else {
+            slot.n_buffer = slot.n_buffer + 1; // buffer is longest string/regex + 1
+        }
+
+        slot.logit_bias = slot.sparams.logit_bias; // keep a copy to restore
         slot.ban_phrases_bias = json_value(data, "banned_bias", params_base.ban_phrases_bias);
         slot.banned_n = json_value(data, "banned_n", params_base.banned_n);
     }
@@ -2958,19 +3014,33 @@ bool server_context::accept_special_token(const server_slot& slot, const  llama_
 
 void server_context::send_token_results(completion_token_outputs& results, server_slot& slot, int32_t n) {
     int count = 0;
+    bool released = false;
     for (auto& it : results) {
         bool has_next = process_token(it, slot);
         count++;
         if (!has_next) {
+            // If stopped by limit, continue processing the buffer to ensure all generated tokens are sent
+            if (slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
+                continue;
+            }
             slot.release();
             slot.print_timings();
             send_final_response(slot);
             metrics.on_prediction(slot);
+            released = true;
             break;
         }
         if (n > 0 && count >= n) {
             break;
         }
+    }
+
+    // If we finished the loop due to limit (and didn't release yet), release now
+    if (!released && slot.stopped_limit && !slot.stopped_eos && !slot.stopped_word) {
+        slot.release();
+        slot.print_timings();
+        send_final_response(slot);
+        metrics.on_prediction(slot);
     }
 
     if (count > 0) {
@@ -2983,7 +3053,7 @@ void server_context::send_token_results(completion_token_outputs& results, serve
 inline int32_t check_ban_phrase(const server_slot& slot) {
     bool found = false;
     size_t n = slot.token_buffer.size();
-    size_t start;
+    size_t best_start = std::string::npos;
     int32_t n_rewind = 0;
     std::string string_buffer;
     llama_tokens tokens;
@@ -2991,19 +3061,56 @@ inline int32_t check_ban_phrase(const server_slot& slot) {
         string_buffer = string_buffer + it.text_to_send;
         tokens.push_back(it.tok);
     }
-    string_buffer = string_lower(string_buffer);
+    std::string string_buffer_lower = string_lower(string_buffer);
+    
+    // Check strings
     for (auto it : slot.ban_phrases) {
-        start = string_buffer.find(it);
-		// has been sorted from longest to shortest
+        size_t start = string_buffer_lower.find(it);
         if (start != std::string::npos) {
-            found = true;
-            break;
+            if (start < best_start) {
+                best_start = start;
+                found = true;
+            }
         }
     }
+
+    // Check regex
+    for (const auto& pattern : slot.ban_regex) {
+        try {
+            std::regex re(pattern);
+            std::smatch match;
+            if (std::regex_search(string_buffer, match, re)) {
+                if (match.position() < best_start) {
+                    best_start = match.position();
+                    found = true;
+                }
+            }
+        } catch (const std::regex_error& e) {
+            // Should be caught during validation, but safe fallback
+            continue;
+        }
+    }
+
+    // Check regex case insensitive
+    for (const auto& pattern : slot.ban_regex_ci) {
+        try {
+            std::regex re(pattern, std::regex_constants::icase);
+            std::smatch match;
+            if (std::regex_search(string_buffer, match, re)) {
+                if (match.position() < best_start) {
+                    best_start = match.position();
+                    found = true;
+                }
+            }
+        } catch (const std::regex_error& e) {
+            continue;
+        }
+    }
+
     if (found) {
         std::vector<size_t> unused;
-        LLAMA_LOG_DEBUG("Banned string dectected: %s\n ", string_buffer.substr(start).c_str());
-        n = find_n_tokens_from_string(slot.ctx, tokens, start, 0, unused);
+        LLAMA_LOG_DEBUG("Banned string/regex dectected: %s\n ", string_buffer.substr(best_start).c_str());
+        n = find_n_tokens_from_string(slot.ctx, tokens, best_start, 0, unused);
         n_rewind = (int32_t) slot.token_buffer.size() - (int32_t) n;
     }
     return n_rewind;
@@ -3035,6 +3142,10 @@ inline void rewind_context(server_slot& slot, int32_t n_rewind) {
     size_t n_keep = slot.cache_tokens.size() - n_rewind;
     slot.sampled = slot.cache_tokens[n_keep];
     slot.cache_tokens.keep_first(n_keep);
+    
+    // Adjust decoded count so user doesn't lose budget on banned tokens
+    slot.n_decoded -= n_rewind;
+    if (slot.n_decoded < 0) slot.n_decoded = 0;
 }
 
 void server_context::buffer_and_check_string_ban(server_slot & slot, completion_token_output & result) {
@@ -3047,11 +3158,11 @@ void server_context::buffer_and_check_string_ban(server_slot & slot, completion_
     if (!slot.rewind_status) {
         slot.ctx_sampling->params.logit_bias = slot.logit_bias; // restore logit bias
     }
-    if (slot.ban_phrases.size() > 0) {
+    if (slot.ban_phrases.size() > 0 || slot.ban_regex.size() > 0 || slot.ban_regex_ci.size() > 0) {
         n_rewind = check_ban_phrase(slot);
     }
     // if found string in the ban
-    if (n_rewind > 0 && (slot.rewind_count <20 || slot.rewind_count <= 2 * slot.ban_phrases.size())) {
+    if (n_rewind > 0) {
         rewind_context(slot, n_rewind);
         slot.rewind_status = true;
     }
