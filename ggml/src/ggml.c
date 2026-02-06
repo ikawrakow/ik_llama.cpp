@@ -6474,9 +6474,9 @@ static struct ggml_tensor * ggml_fused_mul_unary_impl(
         bool inplace) {
 
     GGML_ASSERT(ggml_is_contiguous(a));
-    GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU);
     if (!ggml_are_same_shape(b, a)) {
         GGML_ASSERT(a->ne[0] == 1 && a->ne[1] == b->ne[1] && a->ne[2] == b->ne[2] && a->ne[3] == b->ne[3]);
+        GGML_ASSERT(op == GGML_UNARY_OP_SILU || op == GGML_UNARY_OP_SIGMOID);
         struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, b) : ggml_dup_tensor(ctx, b);
         ggml_set_op_params_i32(result, 0, (int32_t) op);
         result->op   = GGML_OP_FUSED_MUL_UNARY;
@@ -6484,6 +6484,7 @@ static struct ggml_tensor * ggml_fused_mul_unary_impl(
         result->src[1] = b;
         return result;
     }
+    GGML_ASSERT(op == GGML_UNARY_OP_GELU || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU);
     //GGML_ASSERT(ggml_are_same_shape(b, a));
 
     bool is_node = false;
@@ -15183,12 +15184,12 @@ static void ggml_compute_forward_fused_mul_unary_f32(
 
     if (!ggml_are_same_shape(src0, src1)) {
         GGML_ASSERT(src0->ne[0] == 1 && ggml_nrows(src0) == nr);
-        GGML_ASSERT(op == GGML_UNARY_OP_SILU);
+        GGML_ASSERT(op == GGML_UNARY_OP_SILU || op == GGML_UNARY_OP_SIGMOID);
         for (int i1 = ir0; i1 < ir1; i1++) {
             float * z = (float *) ((char *) dst->data  + i1*( dst->nb[1]));
             const float * x = (const float *) ((char *) src0->data + i1*(src0->nb[1]));
             const float * y = (const float *) ((char *) src1->data + i1*(src1->nb[1]));
-            float gate = ggml_silu_f32(x[0]);
+            float gate = op == GGML_UNARY_OP_SILU ? ggml_silu_f32(x[0]) : 1.0f/(1.0f + expf(-x[0]));
             if (limit < 1e-6f) {
                 for (int i = 0; i < nc; ++i) z[i] = gate * y[i];
             } else {
