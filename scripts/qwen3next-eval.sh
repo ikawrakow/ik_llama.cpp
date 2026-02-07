@@ -4,6 +4,8 @@ set -euo pipefail
 IMAGE="${IMAGE:-iktest-dev:latest}"
 MAIN_REPO="${MAIN_REPO:-/home/yurko/Code/llama.cpp}"
 IK_REPO="${IK_REPO:-/home/yurko/Code/ik_llama.cpp}"
+MAIN_BUILD_DIR="${MAIN_BUILD_DIR:-build}"
+IK_BUILD_DIR="${IK_BUILD_DIR:-build}"
 MODEL_HOST="${MODEL_HOST:-/home/yurko/.cache/llama.cpp/qwen3-next-coder.gguf}"
 OUT_ROOT="${OUT_ROOT:-/tmp/qwen3next-eval}"
 WITH_GPU=0
@@ -22,6 +24,8 @@ Options:
   --image IMAGE              Docker image to run checks in (default: iktest-dev:latest).
   --main-repo PATH           Mainline repo path (default: /home/yurko/Code/llama.cpp).
   --ik-repo PATH             ik repo path (default: /home/yurko/Code/ik_llama.cpp).
+  --main-build-dir NAME      Mainline build dir under main repo (default: build).
+  --ik-build-dir NAME        ik build dir under ik repo (default: build).
   --model PATH               Host path to model GGUF file.
   --out-root PATH            Output root directory (default: /tmp/qwen3next-eval).
   --sweep-ctx N              Sweep context size for PP/TG check (default: 2048).
@@ -62,6 +66,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --ik-repo)
             IK_REPO="$2"
+            shift 2
+            ;;
+        --main-build-dir)
+            MAIN_BUILD_DIR="$2"
+            shift 2
+            ;;
+        --ik-build-dir)
+            IK_BUILD_DIR="$2"
             shift 2
             ;;
         --model)
@@ -129,9 +141,13 @@ WITH_GPU="${WITH_GPU:-0}"
 GPU_DEVICE="${GPU_DEVICE:-0}"
 SWEEP_CTX="${SWEEP_CTX:-2048}"
 SWEEP_N="${SWEEP_N:-32}"
+MAIN_BUILD_DIR="${MAIN_BUILD_DIR:-build}"
+IK_BUILD_DIR="${IK_BUILD_DIR:-build}"
 
-MAIN_LD="/mainline/build/bin"
-IK_LD="/ik/build/src:/ik/build/ggml/src:/ik/build/examples/mtmd"
+MAIN_BIN="/mainline/${MAIN_BUILD_DIR}/bin"
+IK_BIN="/ik/${IK_BUILD_DIR}/bin"
+MAIN_LD="/mainline/${MAIN_BUILD_DIR}/bin:/mainline/${MAIN_BUILD_DIR}/src:/mainline/${MAIN_BUILD_DIR}/ggml/src:/mainline/${MAIN_BUILD_DIR}/examples/mtmd"
+IK_LD="/ik/${IK_BUILD_DIR}/bin:/ik/${IK_BUILD_DIR}/src:/ik/${IK_BUILD_DIR}/ggml/src:/ik/${IK_BUILD_DIR}/examples/mtmd"
 MODEL="/model.gguf"
 
 RUN_LOG="/out/run.log"
@@ -294,38 +310,38 @@ has_token() {
 }
 
 main_ppl() {
-    LD_LIBRARY_PATH="$MAIN_LD" /mainline/build/bin/llama-perplexity "$@"
+    LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-perplexity" "$@"
 }
 
 ik_ppl() {
-    LD_LIBRARY_PATH="$IK_LD" /ik/build/bin/llama-perplexity "$@"
+    LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-perplexity" "$@"
 }
 
 main_cli() {
-    LD_LIBRARY_PATH="$MAIN_LD" /mainline/build/bin/llama-cli "$@"
+    LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-cli" "$@"
 }
 
 main_completion() {
-    LD_LIBRARY_PATH="$MAIN_LD" /mainline/build/bin/llama-completion "$@"
+    LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-completion" "$@"
 }
 
 ik_cli() {
-    LD_LIBRARY_PATH="$IK_LD" /ik/build/bin/llama-cli "$@"
+    LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-cli" "$@"
 }
 
 main_sweep() {
-    LD_LIBRARY_PATH="$MAIN_LD" /mainline/build/bin/llama-sweep-bench "$@"
+    LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-sweep-bench" "$@"
 }
 
 ik_sweep() {
-    LD_LIBRARY_PATH="$IK_LD" /ik/build/bin/llama-sweep-bench "$@"
+    LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-sweep-bench" "$@"
 }
 
-require_bin "/mainline/build/bin/llama-perplexity"
-require_bin "/mainline/build/bin/llama-cli"
-require_bin "/mainline/build/bin/llama-completion"
-require_bin "/ik/build/bin/llama-perplexity"
-require_bin "/ik/build/bin/llama-cli"
+require_bin "$MAIN_BIN/llama-perplexity"
+require_bin "$MAIN_BIN/llama-cli"
+require_bin "$MAIN_BIN/llama-completion"
+require_bin "$IK_BIN/llama-perplexity"
+require_bin "$IK_BIN/llama-cli"
 
 if [[ "$WITH_GPU" != "1" ]]; then
     export CUDA_VISIBLE_DEVICES=""
@@ -364,19 +380,19 @@ if [[ "$WITH_GPU" == "1" ]]; then
         ik_ppl -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 1 --no-warmup -ngl 1 || true
 
     # Quick sweep sanity (mainline -> ik)
-    if [[ -x /mainline/build/bin/llama-sweep-bench ]]; then
+    if [[ -x "$MAIN_BIN/llama-sweep-bench" ]]; then
         run_cmd "gpu_sweep_mainline" \
             main_sweep -m "$MODEL" --cpu-moe -ngl 999 -c "$SWEEP_CTX" -b 1024 -ub 128 -n "$SWEEP_N" -ctk f16 -ctv f16 || true
     else
         printf "%s\tSKIP\t0\tNA\tNA\tNA\tNA\tNA\tNA\n" "gpu_sweep_mainline" >> "$STATUS_FILE"
-        log "SKIP: gpu_sweep_mainline (missing /mainline/build/bin/llama-sweep-bench)"
+        log "SKIP: gpu_sweep_mainline (missing $MAIN_BIN/llama-sweep-bench)"
     fi
-    if [[ -x /ik/build/bin/llama-sweep-bench ]]; then
+    if [[ -x "$IK_BIN/llama-sweep-bench" ]]; then
         run_cmd "gpu_sweep_ik" \
             ik_sweep -m "$MODEL" --cpu-moe -ngl 999 -c "$SWEEP_CTX" -b 1024 -ub 128 -n "$SWEEP_N" -ctk f16 -ctv f16 || true
     else
         printf "%s\tSKIP\t0\tNA\tNA\tNA\tNA\tNA\tNA\n" "gpu_sweep_ik" >> "$STATUS_FILE"
-        log "SKIP: gpu_sweep_ik (missing /ik/build/bin/llama-sweep-bench)"
+        log "SKIP: gpu_sweep_ik (missing $IK_BIN/llama-sweep-bench)"
     fi
 fi
 
@@ -444,6 +460,8 @@ docker_cmd=(
     -e GPU_DEVICE="${GPU_DEVICE}"
     -e SWEEP_CTX="${SWEEP_CTX}"
     -e SWEEP_N="${SWEEP_N}"
+    -e MAIN_BUILD_DIR="${MAIN_BUILD_DIR}"
+    -e IK_BUILD_DIR="${IK_BUILD_DIR}"
     -v "${MAIN_REPO}:/mainline"
     -v "${IK_REPO}:/ik"
     -v "${MODEL_HOST}:/model.gguf:ro"

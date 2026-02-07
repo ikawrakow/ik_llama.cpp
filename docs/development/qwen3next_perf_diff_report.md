@@ -382,3 +382,101 @@ Run artifact: `/tmp/qwen3next-repeat-20260206_064133`
   - run3: `126.33 / 23.42`
 
 Interpretation: in this setup, `-no-ooae` is currently more stable and generally faster for PP; default OOAE shows large variance and occasional severe PP drops.
+
+## 2026-02-06 Dual-Build Split + Context Sweep + PP Profiling
+
+### Code updates in this pass
+
+1. `src/llama.cpp`
+   - Added a Qwen3Next-specific guard that disables `only_active_experts` for large-batch hybrid MoE prompt paths:
+     - condition: `arch == QWEN3NEXT`, tensor overrides enabled, `n_batch >= 512`
+   - Rationale: avoid extra scheduling/sync/copy overhead in this PP-heavy path.
+2. `scripts/qwen3next-eval.sh`
+   - Added build-dir selection so CPU and CUDA trees can be reused without rebuild toggling:
+     - `--main-build-dir`
+     - `--ik-build-dir`
+   - Fixed runtime loader paths to include both `bin` and `src` shared-library locations.
+
+### Separate build setup (requested)
+
+Built and validated two persistent trees in `ik_llama.cpp`:
+
+- `build-cpu`: `GGML_CUDA=OFF`, `GGML_BLAS=ON`
+- `build-cuda`: `GGML_CUDA=ON`, `GGML_BLAS=OFF`
+
+Command used:
+
+```bash
+docker run --rm --gpus all \
+  -v /home/yurko/Code/ik_llama.cpp:/ik \
+  -w /ik \
+  iktest-dev:latest \
+  bash -lc '
+    cmake -S /ik -B /ik/build-cpu -DGGML_CUDA=OFF -DGGML_BLAS=ON -DCMAKE_BUILD_TYPE=Release
+    cmake --build /ik/build-cpu --config Release -j 56 --target llama-cli llama-sweep-bench llama-perplexity
+    cmake -S /ik -B /ik/build-cuda -DGGML_CUDA=ON -DGGML_BLAS=OFF -DCMAKE_BUILD_TYPE=Release
+    cmake --build /ik/build-cuda --config Release -j 56 --target llama-cli llama-sweep-bench llama-perplexity
+  '
+```
+
+### Parity rerun after this pass
+
+Run artifact: `/tmp/qwen3next-eval/20260206_191050`
+
+- CPU PPL parity:
+  - chunks=1: mainline `1.0009`, ik `1.0009`, delta `0.000000`
+  - chunks=2: mainline `1.0005`, ik `1.0005`, delta `0.000000`
+- CUDA sanity parity:
+  - `gpu_ppl_chunks1_mainline`: `OK`
+  - `gpu_ppl_chunks1_ik`: `OK`
+
+### Requested runs: CPU `c=512`, CUDA up to `c=8192`
+
+Run artifact: `/tmp/qwen3next-dual-build-20260206_191427`
+
+Config:
+
+- CPU: `build-cpu`, `-c 512 -b 1024 -ub 128 -n 16 -ngl 0`
+- CUDA: `build-cuda`, `-c {512,1024,2048,4096,8192} -b 1024 -ub 128 -n 16 -ngl 999 --cpu-moe`
+
+| Case | maxPP (t/s) | maxTG (t/s) | graph splits |
+| --- | ---: | ---: | ---: |
+| `cpu_c512` | 98.31 | 6.58 | 1 |
+| `cuda_c512` | 137.09 | 25.69 | 530 |
+| `cuda_c1024` | 135.74 | 27.68 | 530 |
+| `cuda_c2048` | 134.87 | 26.71 | 530 |
+| `cuda_c4096` | 136.62 | 27.37 | 530 |
+| `cuda_c8192` | 137.50 | 27.53 | 530 |
+
+Observation: PP remains roughly flat (`~135-137 t/s`) from `c=512` through `c=8192`, so this is not primarily a long-context KV-scaling bottleneck.
+
+### Prompt-processing bottleneck profiling
+
+Run artifact: `/tmp/qwen3next-profile-20260206_192018`
+
+| Case | maxPP (t/s) | maxTG (t/s) | splits | threads | offloaded layers |
+| --- | ---: | ---: | ---: | --- | --- |
+| `single_default` | 125.77 | 24.01 | 530 | `t=8,tb=8` | `49/49` |
+| `single_t16_tb16` | 37.00 | 0.85 | 530 | `t=16,tb=16` | `49/49` |
+| `dual_default` | 128.94 | 22.75 | 531 | `t=8,tb=8` | `49/49` |
+| `dual_t16_tb16` | 37.68 | 0.82 | 531 | `t=16,tb=16` | `49/49` |
+
+Key findings:
+
+1. Increasing CPU threads to 16 for this CPU-MoE path is strongly harmful on this machine.
+2. Dual-GPU (`0,1`) does not materially improve PP over single-GPU for this config.
+3. Main logs still show all expert tensors overridden to CPU and a large CPU expert buffer (`~45.8 GiB`), so PP is dominated by CPU-MoE path behavior rather than GPU-context growth.
+4. Graph splits remain high (`~530`) and stable across contexts, indicating persistent scheduler/backend overhead.
+
+### Additional variance check (`default` vs `-no-ooae`)
+
+Run artifact: `/tmp/qwen3next-ooae-repeat-20260206_192523`
+
+- `default` (with auto Qwen3Next guard): `112.64/23.88`, `135.73/26.40`, `135.30/27.19` (PP/TG)
+- `-no-ooae`: `131.87/25.97`, `113.80/23.77`, `114.25/23.79`
+
+Interpretation: run-to-run variance is still significant in this environment; however, the new auto-guard removes the worst observed OOAE collapse mode in the default path while preserving parity.
+
+### Why this is still below ~400 PP
+
+Given this exact setup, the dominant limiter is CPU-MoE expert execution (large expert tensors on CPU + routing/scheduler overhead), not context length. With `--cpu-moe`, this hardware/config currently lands around `~125-137` PP in stable runs. Reaching `~400` PP on this model likely requires reducing or eliminating CPU-MoE dependence (more VRAM / different placement strategy) rather than only kernel micro-tuning.
