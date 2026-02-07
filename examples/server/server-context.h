@@ -336,4 +336,5 @@ struct server_context {
 
     // Re-aggregates all active vectors and updates the model state
     bool apply_control_vectors_internal();
+
 };
