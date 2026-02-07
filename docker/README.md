@@ -4,7 +4,7 @@ Built on top of [ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.c
 
 All commands are provided for Podman and Docker.
 
-CPU or CUDA sections under [Build](#Build) and [Run]($Run) are enough to get up and running.
+CPU or CUDA sections under [Build](#Build) and [Run]($Run) are enough to get up and running. 
 
 ## Overview
 
@@ -20,6 +20,16 @@ Builds two image tags:
 
 - `swap`: Includes only `llama-swap` and `llama-server`.
 - `full`: Includes `llama-server`, `llama-quantize`, and other utilities.
+
+Start: download the 4 files to a new directory (e.g. `~/ik_llama/`) then follow the next steps.
+
+```
+└── ik_llama
+    ├── ik_llama-cpu.Containerfile
+    ├── ik_llama-cpu-swap.config.yaml
+    ├── ik_llama-cuda.Containerfile
+    └── ik_llama-cuda-swap.config.yaml
+```
 
 ## CPU
 
