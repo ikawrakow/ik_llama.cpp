@@ -4751,7 +4751,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
                 hparams.ssm_d_conv * ggml_element_size(conv_output_raw),
                 (1 + conv_dim * n_tok) * ggml_element_size(conv_output_raw));
         ggml_tensor * new_conv_flat = ggml_reshape_2d(ctx0, ggml_cont(ctx0, new_conv_states), conv_state_dim, 1);
-        ggml_tensor * new_ssm_flat  = ggml_reshape_2d(ctx0, ggml_cont(ctx0, new_state), ssm_state_dim, 1);
+        ggml_tensor * new_ssm_flat  = ggml_reshape_2d(ctx0, new_state, ssm_state_dim, 1);
         ggml_tensor * new_state_flat = ggml_concat(ctx0, new_conv_flat, new_ssm_flat, 0);
 
         ggml_tensor * state_update = new_state_flat;
