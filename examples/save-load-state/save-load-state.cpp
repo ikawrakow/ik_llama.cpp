@@ -39,7 +39,7 @@ int main(int argc, char ** argv) {
     }
 
     // tokenize prompt
-    auto tokens = llama_tokenize(ctx, params.prompt, true);
+    auto tokens = common_tokenize(ctx, params.prompt, true);
 
     // evaluate prompt
     llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size(), n_past, 0));
@@ -94,7 +94,7 @@ int main(int argc, char ** argv) {
     llama_free(ctx);
 
     // make new context
-    auto * ctx2 = llama_new_context_with_model(model, llama_context_params_from_gpt_params(params));
+    auto * ctx2 = llama_init_from_model(model, common_context_params_to_llama(params));
 
     printf("\nsecond run: %s", params.prompt.c_str());
 
@@ -157,7 +157,7 @@ int main(int argc, char ** argv) {
     }
 
     // make new context
-    auto* ctx3 = llama_new_context_with_model(model, llama_context_params_from_gpt_params(params));
+    auto* ctx3 = llama_init_from_model(model, common_context_params_to_llama(params));
 
     printf("\nsingle seq run: %s", params.prompt.c_str());
 

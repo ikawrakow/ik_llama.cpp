@@ -2175,7 +2175,7 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
                 model.ftype == LLAMA_FTYPE_MOSTLY_Q4_1
             )
         )) {
-            // TODO(cebtenzzre): propagate this error outside of llama_load_model_from_file
+            // TODO(cebtenzzre): propagate this error outside of llama_model_load_from_file
             LLAMA_LOG_WARN("%s: disabling Kompute due to unsupported model arch or quantization\n", __func__);
             params.n_gpu_layers = 0;
         }
@@ -4214,7 +4214,7 @@ static std::string create_rpc_name(std::string endpoint, uint32_t device) {
     return dev_name;
 }
 
-struct llama_model * llama_load_model_from_file(
+struct llama_model * llama_model_load_from_file(
         const char * path_model,
         struct llama_model_params   params) {
     ggml_time_init();
@@ -4397,7 +4397,7 @@ static void llama_repack_up_gate_exps(llama_context & lctx) {
     }
 }
 
-struct llama_context * llama_new_context_with_model(
+struct llama_context * llama_init_from_model(
                  struct llama_model * model,
         struct llama_context_params   params) {
 
@@ -4973,8 +4973,8 @@ uint32_t llama_n_seq_max(const struct llama_context * ctx) {
     return ctx->kv_self.size;
 }
 
-enum llama_vocab_type llama_vocab_type(const struct llama_model * model) {
-    return model->vocab.get_type();
+enum llama_vocab_type llama_vocab_type(const struct llama_vocab * vocab) {
+    return vocab->get_type();
 }
 
 const struct llama_vocab* llama_get_model_vocab(const struct llama_model* model) {
@@ -6878,15 +6878,16 @@ int32_t llama_token_to_piece(
     return model->vocab.token_to_piece(token, buf, length, lstrip, special);
 }
 
+
 int32_t llama_detokenize(
-    const struct llama_model * model,
-           const llama_token * tokens,
-                     int32_t   n_tokens,
-                        char * text,
-                     int32_t   text_len_max,
-                        bool   remove_special,
-                        bool   unparse_special) {
-    return model->vocab.detokenize(tokens, n_tokens, text, text_len_max, remove_special, unparse_special);
+    const struct llama_vocab * vocab,
+    const llama_token * tokens,
+    int32_t   n_tokens,
+    char * text,
+    int32_t   text_len_max,
+    bool   remove_special,
+    bool   unparse_special) {
+    return vocab->detokenize(tokens, n_tokens, text, text_len_max, remove_special, unparse_special);
 }
 
 //
@@ -7655,9 +7656,13 @@ void llama_set_rng_seed(struct llama_context * ctx, uint32_t seed) {
 }
 
 void llama_sample_softmax(struct llama_context * ctx, llama_token_data_array * candidates) {
-    llama_sample_softmax_impl(ctx ? &ctx->sampling : nullptr, candidates);
+    llama_sample_softmax_impl(ctx ? &ctx->sampling : nullptr, candidates, /* normalize */ true);
 }
 
+void llama_sample_dist(struct llama_context * ctx, llama_token_data_array * candidates) {
+    llama_sample_softmax_impl(ctx ? &ctx->sampling : nullptr, candidates,  /* normalize */ false);
+
+}
 void llama_sample_top_k(struct llama_context * ctx, llama_token_data_array * candidates, int32_t k, size_t min_keep) {
     llama_sample_top_k_impl(ctx ? &ctx->sampling : nullptr, candidates, k, min_keep);
 }

@@ -29,6 +29,9 @@ struct server_slot {
 
     struct slot_params params;
 
+    llama_batch batch_spec = {};
+    llama_context * ctx_dft = nullptr;
+
     slot_state state = SLOT_STATE_IDLE;
     slot_command command = SLOT_COMMAND_NONE;
 
@@ -103,8 +106,6 @@ struct server_slot {
     llama_token sampled; // in speculative mode, this is the last accepted token
     llama_tokens drafted;
 
-    struct llama_sampling_params sparams;
-    llama_sampling_context* ctx_sampling = nullptr;
     json json_schema;
 
     common_chat_format chat_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
@@ -121,9 +122,9 @@ struct server_slot {
     mtmd_context* mctx = nullptr;
 
     // speculative decoding
-    struct llama_speculative* spec = nullptr;
-    llama_context* ctx_dft = nullptr;
-    llama_batch batch_spec = {};
+    struct common_speculative * spec = nullptr;
+    struct common_params_sampling sparams;
+    common_sampler * ctx_sampling = nullptr;
 
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
@@ -151,6 +152,8 @@ struct server_slot {
 
     void add_token_string(const completion_token_output& token);
 
+    bool can_speculate() const;
+
     int get_n_draft_max() const;
 
     void release();
@@ -164,6 +167,7 @@ struct server_slot {
     size_t find_stopping_strings(const std::string& text, const size_t last_token_size, bool is_full_stop);
 
     void print_timings() const;
+
 };
 
 struct server_metrics {

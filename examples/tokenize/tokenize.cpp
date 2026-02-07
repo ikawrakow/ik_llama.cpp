@@ -335,14 +335,14 @@ int main(int raw_argc, char ** raw_argv) {
 
     llama_model_params model_params = llama_model_default_params();
     model_params.vocab_only = true;
-    llama_model * model = llama_load_model_from_file(model_path, model_params);
+    llama_model * model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         fprintf(stderr, "Error: could not load model from file '%s'.\n", model_path);
         return 1;
     }
 
     llama_context_params ctx_params = llama_context_default_params();
-    llama_context * ctx = llama_new_context_with_model(model, ctx_params);
+    llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr, "Error: could not create context.\n");
         return 1;

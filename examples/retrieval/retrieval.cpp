@@ -185,7 +185,7 @@ int main(int argc, char ** argv) {
 
     // tokenize the prompts and trim
     for (auto & chunk : chunks) {
-        auto inp = ::llama_tokenize(ctx, chunk.textdata, true, false);
+        auto inp = ::common_tokenize(ctx, chunk.textdata, true, false);
         if (inp.size() > n_batch) {
             fprintf(stderr, "%s: error: chunk size (%lld) exceeds batch size (%lld), increase batch size and re-run\n",
                     __func__, (long long int) inp.size(), (long long int) n_batch);
@@ -258,7 +258,7 @@ int main(int argc, char ** argv) {
     while (true) {
         printf("Enter query: ");
         std::getline(std::cin, query);
-        std::vector<int32_t> query_tokens = llama_tokenize(ctx, query, true);
+        std::vector<int32_t> query_tokens = common_tokenize(ctx, query, true);
 
         struct llama_batch query_batch = llama_batch_init(n_batch, 0, 1);
         batch_add_seq(query_batch, query_tokens, 0);

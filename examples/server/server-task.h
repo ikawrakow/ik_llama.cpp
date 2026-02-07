@@ -64,11 +64,7 @@ struct slot_params {
     json input_suffix;
 
     // speculative decoding parameters
-    struct {
-        int n_max = 16;  // max drafted tokens
-        int n_min = 0;  // min drafted tokens to accept
-        float p_min = 0.75f; // min probability required to accept a token in the draft
-    } speculative;
+    struct common_params_speculative speculative;
 
     // OAI-compat fields
     oaicompat_type        oaicompat = OAICOMPAT_TYPE_NONE;
