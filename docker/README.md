@@ -112,6 +112,7 @@ docker run  -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --r
 - To run the container in background, replace `-it` with `-d`: `podman run -d ...` or `docker run -d ...`. To stop it: `podman stop ik_llama` or `docker stop ik_llama`.
 - If you build the image on the same machine where will be used, change `-DGGML_NATIVE=OFF` to `-DGGML_NATIVE=ON` in the `.Containerfile`.
 - For a smaller CUDA build, identify your GPU [CUDA GPU Compute Capability](https://developer.nvidia.com/cuda/gpus) (e.g. `8.6` for RTX30*0) then change `CUDA_DOCKER_ARCH` in `ik_llama-cuda.Containerfile` from `default` to your GPU architecture (e.g. `CUDA_DOCKER_ARCH=86`).
+- If you build only for your GPU architecture and want to make use of more KV quantization types, build with `-DGGML_IQK_FA_ALL_QUANTS=ON`.
 - Get the best (measures kindly provided on each model card) quants from [ubergarm](https://huggingface.co/ubergarm/models) if available.
 - Usefull graphs and numbers on @magikRUKKOLA [Perplexity vs Size Graphs for the recent quants (GLM-4.7, Kimi-K2-Thinking, Deepseek-V3.1-Terminus, Deepseek-R1, Qwen3-Coder, Kimi-K2, Chimera etc.)](https://github.com/ikawrakow/ik_llama.cpp/discussions/715) topic.
 - Build custom quants with [Thireus](https://github.com/Thireus/GGUF-Tool-Suite)'s tools.
