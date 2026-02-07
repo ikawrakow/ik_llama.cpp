@@ -676,6 +676,7 @@ extern "C" {
         GGML_OP_GET_REL_POS,
         GGML_OP_ADD_REL_POS,
         GGML_OP_SOLVE_TRI,
+        GGML_OP_DELTA_NET,
         GGML_OP_UNARY,
 
         GGML_OP_MAP_UNARY,
@@ -2505,6 +2506,15 @@ extern "C" {
             bool                  left,
             bool                  lower,
             bool                  uni);
+
+    GGML_API struct ggml_tensor * ggml_delta_net(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,      // [S_k, n_tokens, H_k, n_seqs]
+            struct ggml_tensor  * k,      // [S_k, n_tokens, H_k, n_seqs]
+            struct ggml_tensor  * v,      // [S_v, n_tokens, H_v, n_seqs]
+            struct ggml_tensor  * g,      // [n_tokens, 1, H_k, n_seqs]
+            struct ggml_tensor  * beta,   // [1, n_tokens, H_k, n_seqs]
+            struct ggml_tensor  * state); // [S_v, S_v*H_v, 1, n_seqs]
 
     // custom operators
 
