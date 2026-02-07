@@ -4773,7 +4773,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * out = llm_build_lora_mm(lctx, ctx0, model.layers[il].ssm_out, final_output);
         cb(out, "linear_attn_out", il);
 
-        return ggml_cont_2d(ctx0, out, n_embd, n_tok);
+        return ggml_reshape_2d(ctx0, out, n_embd, n_tok);
     };
 
     auto build_layer_attn_linear = [&](ggml_tensor * cur, ggml_tensor * causal_mask, ggml_tensor * identity,
