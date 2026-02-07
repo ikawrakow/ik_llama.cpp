@@ -756,12 +756,20 @@ void llm_load_hparams(
             } break;
         case LLM_ARCH_DEEPSEEK2:
             {
+                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK, hparams.n_lora_kv);
                 if (hparams.n_head_kv() == 1) {
                     int n_nead_kv = hparams.n_gqa();
-                    if (n_nead_kv%4 != 0 || hparams.n_embd_head_k != 576 || hparams.n_embd_head_v != 512 ||
+
+                    int expected_n_embd_head_k = hparams.n_embd_head_v + hparams.n_rot;
+                    if (n_nead_kv%4 != 0 ||  hparams.n_embd_head_k != expected_n_embd_head_k || (hparams.n_embd_head_v % 512) != 0 ||
                         hparams.n_rot != 64) {
                         printf("==========================================================================\n");
                         printf("Detected incompatible DeepSeek model without a known way to fixc it.\n");
+                        printf("n_nead_kv = %d\n", n_nead_kv);
+                        printf("hparams.n_embd_head_k = %d\n", hparams.n_embd_head_k);
+                        printf("hparams.n_embd_head_v = %d\n", hparams.n_embd_head_v);
+                        printf("hparams.n_lora_kv = %d\n", hparams.n_lora_kv);
+                        printf("hparams.n_rot = %d\n", hparams.n_rot);
                         printf("Consider making your own ik_llama.cpp compatible model or\n");
                         printf("ask the model provider to make one for you,\n\n");
                         printf("Sorry, uknown model => cannot fix it => bailing out\n");
@@ -781,7 +789,6 @@ void llm_load_hparams(
                 if (!is_lite) {
                     ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK, hparams.n_lora_q);
                 }
-                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK, hparams.n_lora_kv);
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
                 ml.get_key(LLM_KV_EXPERT_SHARED_COUNT, hparams.n_expert_shared);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE, hparams.expert_weights_scale);

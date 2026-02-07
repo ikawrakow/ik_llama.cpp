@@ -378,6 +378,47 @@ struct fattn_mma_f16_config<576, 512> {
     }
 };
 
+template <>
+struct fattn_mma_f16_config<1088, 1024> {
+    static constexpr int  nbatch_fa      = 32;
+    static constexpr int  nwarps_max     = 8;
+    static constexpr bool Q_in_reg       = false;
+    static constexpr int  nstages_target = 1;
+
+    static int get_nbatch_K2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
+        return 64;
+    }
+
+    static constexpr __device__ int get_nbatch_K2_device([[maybe_unused]] int ncols) {
+        return 64;
+    }
+
+    static int get_nbatch_V2_host([[maybe_unused]] const int cc, [[maybe_unused]] const int ncols) {
+        return 64;
+        //if (ggml_cuda_highest_compiled_arch(cc) == CC_TURING) {
+        //    return ncols <= 16 ? 64 : 128;
+        //}
+        //return ncols <= 16 ? 256 : 128;
+    }
+
+    static constexpr __device__ int get_nbatch_V2_device([[maybe_unused]] int ncols) {
+        return 64;
+//#if __CUDA_ARCH__ == CC_TURING
+//        return ncols <= 16 ? 64 : 128;
+//#else
+//        return ncols <= 16 ? 256 : 128;
+//#endif // __CUDA_ARCH__ == CC_TURING
+    }
+
+    static int get_nbatch_combine_host(const int /*cc*/, const int /*ncols*/) {
+        return 64; //128;
+    }
+
+    static constexpr __device__ int get_nbatch_combine_device(int /*ncols*/) {
+        return 64; //128;
+    }
+};
+
 // ------------------------------------------------------------------------------------------------------------------
 
 // The compiler is always able to unroll loops if they contain continue expressions.
@@ -2161,6 +2202,20 @@ void ggml_cuda_flash_attn_ext_mma_new(ggml_backend_cuda_context & ctx, ggml_tens
         GGML_ASSERT(Q->ne[0] == 192);
         GGML_ASSERT(gqa_ratio == 1);
         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 192, 1>(ctx, dst);
+        return;
+    }
+    if (Q->ne[0] == 1088 && K->ne[0] == 1088 && V->ne[0] == 1024) {
+        GGML_ASSERT(gqa_ratio == 20);
+        if (Q->ne[1] <= 4) {
+            if (ggml_cuda_info().devices[ctx.device].cc >= CC_ADA_LOVELACE) {
+                ggml_cuda_flash_attn_ext_mma_f16_case<1088, 1024, 1, 16>(ctx, dst);
+            } else {
+                ggml_cuda_flash_attn_ext_mma_f16_case<1088, 1024, 1, 32>(ctx, dst);
+            }
+            return;
+        }
+        //ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<1088, 1024, 4>(ctx, dst);
+        ggml_cuda_flash_attn_ext_mma_f16_case<1088, 1024, 4, 4>(ctx, dst);
         return;
     }
     GGML_ASSERT(Q->ne[0] == 576 && K->ne[0] == 576 && V->ne[0] == 512);

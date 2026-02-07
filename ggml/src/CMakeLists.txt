@@ -270,6 +270,7 @@ if (GGML_IQK_MUL_MAT)
                             iqk/fa/iqk_fa_128_128.cpp
                             iqk/fa/iqk_fa_96_96.cpp
                             iqk/fa/iqk_fa_64_64.cpp
+                            iqk/fa/iqk_fa_1088_1024.cpp
                             iqk/iqk_gemm_floats.cpp
                             iqk/iqk_gemm_kquants.cpp
                             iqk/iqk_gemm_ktquants.cpp
