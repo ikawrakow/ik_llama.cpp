@@ -4711,12 +4711,14 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * q_conv = ggml_view_2d(ctx0, conv_output_silu, key_dim, n_tok, conv_output_silu->nb[1], 0);
         ggml_tensor * k_conv = ggml_view_2d(ctx0, conv_output_silu, key_dim, n_tok, conv_output_silu->nb[1],
                 key_dim * ggml_element_size(conv_output_silu));
-        ggml_tensor * v_conv = ggml_view_2d(ctx0, conv_output_silu, value_dim, n_tok, conv_output_silu->nb[1],
+        ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_output_silu, head_v_dim, num_v_heads, n_tok, 1,
+                ggml_row_size(conv_output_silu->type, head_v_dim),
+                conv_output_silu->nb[1],
+                conv_output_silu->nb[1] * n_tok,
                 2 * key_dim * ggml_element_size(conv_output_silu));
 
         q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_tok, 1);
         k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_tok, 1);
-        v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_tok, 1);
 
         if (num_k_heads != num_v_heads) {
             GGML_ASSERT(num_v_heads % num_k_heads == 0);
