@@ -375,7 +375,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
 
     for (int i = 0; i < n_draft; ++i) {
         mtp_batch.n_tokens = 0;
-        llama_batch_add(mtp_batch, current_input_id, current_n_past, {seq_id}, true);
+        common_batch_add(mtp_batch, current_input_id, current_n_past, {seq_id}, true);
 
         if (llama_decode(ctx, mtp_batch) != 0) {
             break;
@@ -395,7 +395,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         }
 
         // Only collect very high-confidence draft tokens
-        const auto * cur_p = llama_sampling_get_candidates(smpl);
+        const auto * cur_p = common_sampler_get_candidates(smpl);
         if (cur_p && cur_p->size > 0) {
             float prob = cur_p->data[0].p;
 
@@ -452,7 +452,7 @@ void mtp_accept_tokens(
 
     llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
     for (size_t i = 0; i < ids.size(); ++i) {
-        llama_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
+        common_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
     }
 
     mtp_update_kv_cache(ctx, accepted_batch, false);

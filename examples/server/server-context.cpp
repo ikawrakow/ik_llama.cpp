@@ -159,9 +159,9 @@ bool server_context::load_model(const gpt_params& params_) {
         model_draft = llama_init_dft.model;
         ctx_draft = llama_init_dft.context;
     }
-    else if (params.has_mtp && llama_model_n_nextn_layer(model) == 0) {
+    else if (params_base.has_mtp && llama_model_n_nextn_layer(model) == 0) {
         LOG_WARNING("WARNING: -mtp flag provided, but model has 0 NextN layers. MTP will be disabled.\n", {});
-        params.has_mtp = false;
+        params_base.has_mtp = false;
     }
     return true;
 }
@@ -234,7 +234,7 @@ void server_context::init() {
             }
 
         }
-        else if (params.has_mtp && llama_model_n_nextn_layer(model) > 0) {
+        else if (params_base.has_mtp && llama_model_n_nextn_layer(model) > 0) {
             slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
             SLT_DBG(slot, "batch_spec contains %d tokens\n", slot.batch_spec.n_tokens);
 
@@ -385,6 +385,10 @@ bool server_slot::is_processing() const {
     return (state == SLOT_STATE_IDLE && command == SLOT_COMMAND_LOAD_PROMPT) || state == SLOT_STATE_PROCESSING;
 }
 
+bool server_slot::can_speculate() const {
+    return (ctx_dft || has_mtp);
+}
+
 void server_slot::add_token_string(const completion_token_output& token) {
     if (command == SLOT_COMMAND_RELEASE) {
         return;
@@ -393,7 +397,7 @@ void server_slot::add_token_string(const completion_token_output& token) {
 }
 
 int server_slot::get_n_draft_max() const {
-    if (!ctx_dft) {
+    if (!can_speculate()) {
         return 0;
     }
 
@@ -1271,7 +1275,7 @@ void server_context::system_prompt_update() {
                 LOG_ERROR("llama_decode() failed", {});
                 return;
             }
-            if (params.has_mtp) {
+            if (params_base.has_mtp) {
                  mtp_update_kv_cache(ctx, batch, true);
             }
         }
@@ -2949,6 +2953,7 @@ void server_context::speculative_decoding_accept() {
 
         if (slot.has_mtp) {
                 if (!ids.empty()) {
+                    llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, ids.size() - 1));
                     // const int n_embd = llama_n_embd(llama_get_model(ctx));
                     // const float* emb = llama_get_embeddings_ith(ctx, ids.size() - 1);
                     // if (emb) {
@@ -3186,19 +3191,20 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             continue; // continue loop of n_batch
         }
-
-        if (params.has_mtp) {
+        if (params_base.has_mtp) {
             for (auto& slot : slots) {
                 if (slot.state == SLOT_STATE_PROCESSING && 
                     slot.i_batch >= i && 
                     slot.i_batch < (i + n_tokens)) {
 
-                    const float* emb = llama_get_embeddings_ith(ctx, -1);
-                    if (emb) {
-                        const int n_embd = llama_n_embd(llama_get_model(ctx));
-                        slot.mtp_hidden_state.resize(n_embd);
-                        memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
-                    }
+                    llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, - 1));
+
+                    // const float* emb = llama_get_embeddings_ith(ctx, -1);
+                    // if (emb) {
+                    //     // const int n_embd = llama_n_embd(llama_get_model(ctx));
+                    //     slot.mtp_hidden_state.resize(n_embd);
+                    //     memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                    // }
                 }
             }
         }
@@ -3256,7 +3262,7 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             slot.i_batch = -1;
         }
 
-        if (params.has_mtp) {
+        if (params_base.has_mtp) {
             bool is_prompt_phase = false;
             for (const auto& slot : slots) {
                 if (slot.state == SLOT_STATE_PROCESSING && 
