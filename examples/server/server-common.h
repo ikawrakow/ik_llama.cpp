@@ -233,6 +233,8 @@ json probs_vector_to_json(const llama_context* ctx, const std::vector<completion
 
 bool server_sent_event(httplib::DataSink& sink, const json& data);
 
+bool server_sent_oai_resp_event(httplib::DataSink& sink, const json& data);
+
 bool server_sent_anthropic_event(httplib::DataSink& sink, const json& data);
 
 //
@@ -258,6 +260,9 @@ json oaicompat_chat_params_parse(
     json& body, /* openai api json semantics */
     const oaicompat_parser_options& opt,
     std::vector<raw_buffer>& out_files);
+
+// convert OpenAI Responses API format to OpenAI Chat Completions API format
+json convert_responses_to_chatcmpl(const json& body);
 
 json anthropic_params_from_json(
     const struct llama_model* model,
@@ -474,4 +479,3 @@ bool prompt_cache_equal(llama_context* ctx, const server_tokens& cache_tokens,
     const server_tokens& prompt_tokens, size_t start, const common_prefix& prefix);
 
 std::string safe_json_to_str(const json& data);
-
