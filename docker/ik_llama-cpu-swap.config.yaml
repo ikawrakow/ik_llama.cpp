@@ -1,0 +1,44 @@
+healthCheckTimeout: 1800
+logRequests: true
+metricsMaxInMemory: 1000
+
+models:
+  "qwen3 (you need to download .gguf first)":
+    proxy: "http://127.0.0.1:9999"
+    cmd: >
+      /app/llama-server
+      --model /models/Qwen_Qwen3-0.6B-Q6_K.gguf
+      --alias qwen3
+      --port 9999
+      --parallel 1
+      --webui llamacpp
+      --jinja
+      --ctx-size 12288
+      -fa on
+
+  "qwen3-vl (you need to download .gguf and mmproj first)":
+    proxy: "http://127.0.0.1:9999"
+    cmd: >
+      /app/llama-server
+      --model /models/Qwen_Qwen3-VL-4B-Instruct-IQ4_NL.gguf
+      --mmproj /models/Qwen_Qwen3-VL-4B-Instruct-mmproj-f16.gguf
+      --alias qwen3-vl
+      --port 9999
+      --parallel 1
+      --webui llamacpp
+      --jinja
+      --ctx-size 12288
+      -fa on
+
+  "smollm2 (will be downloaded automatically from huggingface.co)":
+    proxy: "http://127.0.0.1:9999"
+    cmd: >
+      /app/llama-server
+      --hf-repo mradermacher/SmolLM2-135M-i1-GGUF --hf-file SmolLM2-135M.i1-IQ4_NL.gguf
+      --alias smollm2
+      --port 9999
+      --parallel 1
+      --webui llamacpp
+      --jinja
+      --ctx-size 12288
+      -fa on
