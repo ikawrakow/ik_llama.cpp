@@ -1189,10 +1189,8 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
         }
     }
 
-    GGML_ASSERT(n_expert > 0 && "n_expert must be > 0 for QWEN3NEXT");
-    GGML_ASSERT(n_expert_used > 0 && "n_expert_used must be > 0 for QWEN3NEXT");
-
-    const int64_t n_ff_exp   = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+    const bool has_moe_hparams = n_expert > 0 && n_expert_used > 0;
+    const int64_t n_ff_exp   = hparams.n_ff_exp ? hparams.n_ff_exp : (has_moe_hparams ? n_ff / n_expert_used : n_ff);
     const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff_exp;
 
     const int64_t head_k_dim = hparams.ssm_d_state;
@@ -1240,14 +1238,32 @@ bool create_tensors_helper::create_qwen3next_tensors(const LLM_TN & tn) {
         }
 
         auto ffn_ctx = model.split_mode == LLAMA_SPLIT_MODE_GRAPH ? ctx_split : ctx_layer;
-        layer.ffn_gate_inp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert});
 
-        use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i);
+        // Dense FFN path (optional, e.g. mlp_only_layers)
+        layer.ffn_gate = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_up   = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        layer.ffn_down = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
 
-        layer.ffn_gate_inp_shexp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", i), {n_embd});
-        layer.ffn_gate_shexp     = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp});
-        layer.ffn_up_shexp       = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_shexp});
-        layer.ffn_down_shexp     = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd});
+        // MoE path (optional per-layer)
+        layer.ffn_gate_inp = nullptr;
+        if (n_expert > 0) {
+            layer.ffn_gate_inp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        }
+
+        if (layer.ffn_gate_inp != nullptr) {
+            if (n_expert_used == 0) {
+                throw std::runtime_error("n_expert_used must be > 0 when QWEN3NEXT MoE tensors are present");
+            }
+            use_mmap_buffer &= !create_std_ffn_exps(n_embd, tn, i, llama_model_loader::TENSOR_NOT_REQUIRED, n_ff_exp);
+        }
+
+        // Shared expert path (optional per-layer)
+        layer.ffn_gate_inp_shexp = create_tensor(ffn_ctx, tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", i), {n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        if (layer.ffn_gate_inp_shexp != nullptr) {
+            layer.ffn_gate_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp}, llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.ffn_up_shexp   = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_shexp}, llama_model_loader::TENSOR_NOT_REQUIRED);
+            layer.ffn_down_shexp = create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, llama_model_loader::TENSOR_NOT_REQUIRED);
+        }
     }
 
     return use_mmap_buffer;

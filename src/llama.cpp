@@ -660,6 +660,12 @@ static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams
     return std::max<uint32_t>(1, cparams.n_seq_max);
 }
 
+static inline bool llama_kv_has_qnext_state_storage(const llama_kv_cache & cache) {
+    return std::any_of(cache.s_l.begin(), cache.s_l.end(), [](const ggml_tensor * t) {
+        return t != nullptr;
+    });
+}
+
 static bool llama_kv_cache_init(
              struct llama_kv_cache & cache,
                const llama_context * ctx,
@@ -690,7 +696,7 @@ static bool llama_kv_cache_init(
     cache.cells.clear();
     cache.cells.resize(kv_size);
 
-    if (cache.recurrent) {
+    if (cache.recurrent || model.arch == LLM_ARCH_QWEN3NEXT) {
         // init state copy sources
         for (uint32_t i = 0; i < cache.size; ++i) {
             cache.cells[i].src = i;
@@ -814,8 +820,7 @@ static bool llama_kv_cache_init(
             int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
             v = ggml_new_tensor_1d(ctx, type_v, v_ne);
             if (qnext_recurrent) {
-                const int64_t s_ne = int64_t(hparams.n_embd_v_s())*qnext_state_slots;
-                s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, s_ne);
+                s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
             }
             auto k_name = std::string{"cache_k_l"} + std::to_string(i);
             auto v_name = std::string{"cache_v_l"} + std::to_string(i);
@@ -1051,6 +1056,7 @@ static uint32_t llama_kv_cache_cell_max(const struct llama_kv_cache & cache) {
 static void llama_kv_cache_clear(struct llama_kv_cache & cache) {
     for (int32_t i = 0; i < (int32_t) cache.size; ++i) {
         cache.cells[i].pos = -1;
+        cache.cells[i].src = i;
         cache.cells[i].seq_id.clear();
     }
     cache.head = 0;
@@ -1090,6 +1096,8 @@ static bool llama_kv_cache_seq_rm(
         }
     }
 
+    const bool has_qnext_state = llama_kv_has_qnext_state_storage(cache);
+
     for (uint32_t i = 0; i < cache.size; ++i) {
         if (cache.cells[i].pos >= p0 && cache.cells[i].pos < p1) {
             if (seq_id < 0) {
@@ -1104,6 +1112,9 @@ static bool llama_kv_cache_seq_rm(
                 if (cache.cells[i].pos >= 0) cache.used--;
 
                 cache.cells[i].pos = -1;
+                if (has_qnext_state) {
+                    cache.cells[i].src = i;
+                }
                 if (new_head == cache.size) new_head = i;
             }
         }
@@ -1145,6 +1156,17 @@ static void llama_kv_cache_seq_cp(
         }
         return;
     }
+
+    const bool has_qnext_state = llama_kv_has_qnext_state_storage(cache);
+    if (has_qnext_state && (uint32_t) seq_id_dst < cache.size && (uint32_t) seq_id_src < cache.size) {
+        seq_id_src = cache.cells[seq_id_src].src;
+        GGML_ASSERT((uint32_t) seq_id_src < cache.size);
+
+        cache.cells[seq_id_dst].src = seq_id_src;
+        cache.cells[seq_id_dst].pos = cache.cells[seq_id_src].pos;
+        cache.do_copy = true;
+    }
+
     // otherwise, this is the KV cache of a Transformer-like model
 
     cache.head = 0;
@@ -1158,11 +1180,15 @@ static void llama_kv_cache_seq_cp(
 
 static void llama_kv_cache_seq_keep(struct llama_kv_cache & cache, llama_seq_id seq_id) {
     uint32_t new_head = cache.size;
+    const bool has_qnext_state = llama_kv_has_qnext_state_storage(cache);
 
     for (uint32_t i = 0; i < cache.size; ++i) {
         if (!cache.cells[i].has_seq_id(seq_id)) {
             if (cache.cells[i].pos >= 0) cache.used--;
             cache.cells[i].pos = -1;
+            if (has_qnext_state) {
+                cache.cells[i].src = i;
+            }
             cache.cells[i].seq_id.clear();
             if (new_head == cache.size) new_head = i;
         } else {
@@ -3823,7 +3849,7 @@ static int32_t llama_kv_cache_update_internal(struct llama_context & lctx) {
         }
     }
 
-    if (lctx.kv_self.recurrent && lctx.kv_self.do_copy) {
+    if ((lctx.kv_self.recurrent || llama_kv_has_qnext_state_storage(lctx.kv_self)) && lctx.kv_self.do_copy) {
         {
             lctx.reset_scheduler();
 

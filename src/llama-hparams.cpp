@@ -471,7 +471,10 @@ void llm_load_hparams(
                     hparams.recurrent_layer_arr[i] = ((i + 1) % 4 != 0);
                 }
 
-                model.type = e_model::MODEL_UNKNOWN;
+                switch (hparams.n_layer) {
+                    case 48: model.type = e_model::MODEL_80B_A3B; break;
+                    default: model.type = e_model::MODEL_UNKNOWN;
+                }
             } break;
         case LLM_ARCH_QWEN3VLMOE:
             {
