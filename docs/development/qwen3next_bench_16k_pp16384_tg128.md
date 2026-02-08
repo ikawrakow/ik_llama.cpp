@@ -113,3 +113,32 @@ Outcome:
 - No stable speed win in our setup after repeated runs.
 - Autoregressive rewrite specifically hurt TG throughput in non-fused mode and was reverted.
 - Final code keeps only the fused-default safety fix (non-fused by default).
+
+## Decode-Only Fused Mode Trial (`LLAMA_QWEN3NEXT_FUSED_DELTA=2`)
+
+Date: 2026-02-08
+
+Code change:
+
+- Added mode `2` for `LLAMA_QWEN3NEXT_FUSED_DELTA`:
+  - prompt / multi-token path: non-fused
+  - single-token decode path: fused
+
+Perplexity validation (`-c 2048`, GPU config as above):
+
+| Model | `=0` non-fused | `=2` decode-only fused |
+|---|---:|---:|
+| `/models/qwen3-next-coder.gguf` | `3.9378` | `3.9378` |
+| `/models/qwen-3-coder-next-mxfp4.gguf` | `3.9860` | `3.9860` |
+
+`llama-bench` at `-p 8192 -n 128 -b 2048 -ub 512 -r 3 -rtr 1`:
+
+| Mode | PP 8192 (tok/s) | TG 128 (tok/s) |
+|---|---:|---:|
+| `LLAMA_QWEN3NEXT_FUSED_DELTA=0` | `170.090` | `25.465` |
+| `LLAMA_QWEN3NEXT_FUSED_DELTA=2` | `166.212` | `29.599` |
+
+Notes:
+
+- Decode-only fused mode preserves prompt-quality metrics in this test.
+- TG improved significantly in this run; PP variance was higher, so PP delta should be treated as noisy.
