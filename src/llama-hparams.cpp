@@ -1130,7 +1130,7 @@ void llm_load_hparams(
                     hparams.expert_gating_func = LLM_EXPERT_GATING_FUNC_SIGMOID;
                 }
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
-                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,       hparams.rope_freq_base_train_swa);
+                bool have_rfb_train_swa = ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
                 ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
                 if (!ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER, hparams.rope_dim_per_layer, hparams.n_layer, false)) {
                     for (int i = 0; i < hparams.n_layer; ++i) {
@@ -1155,6 +1155,7 @@ void llm_load_hparams(
                     hparams.rope_scaling_apply_mask, false);
                 hparams.has_rope_freq_base_per_layer = ml.get_key_or_arr(LLM_KV_ROPE_FREQ_BASE_PER_LAYER,
                     hparams.rope_freq_base_per_layer, hparams.n_layer, false);
+                GGML_ASSERT(hparams.has_rope_freq_base_per_layer || have_rfb_train_swa);
             } break;
         default: (void)0;
     }
