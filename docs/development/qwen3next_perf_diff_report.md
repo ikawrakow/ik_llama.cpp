@@ -37,7 +37,9 @@ Not directly mirrored yet (by design divergence from mainline model layout):
 
 1. Keep non-fused as the strict safety baseline, and use `LLAMA_QWEN3NEXT_FUSED_DELTA=1` (prefill-only fused) as the practical acceleration mode.
 2. Port selective graph-shape optimizations from PR #19375 into `src/llama-build-context.cpp` where they map cleanly (avoid blind copy due architectural divergence).
-3. Add one dedicated Qwen3Next perf regression target in CI/dev docs (single-GPU 8k proxy + 65k fit sanity).
+3. Added dedicated Qwen3Next regression target for dev/CI-style checks:
+   - `scripts/qwen3next-regression.sh`
+   - combines fused safety regression + single-GPU proxy sweep + long-context fit sanity.
 4. Investigate ik CPU Flash-Attn assertion path for Qwen3Next (`iqk_fa_templates.h`, `S > 0`) before enabling `-fa 1` for CPU benchmark profiles.
 
 ## Strong Points of `ik_llama.cpp` to Preserve
@@ -106,3 +108,6 @@ Relative (`ik` vs mainline):
   - Results are surfaced in `SUMMARY.md` under `IK Fused Delta Regression`.
 - Fused regression now enforces absolute non-fused sanity too:
   - mode0 decode/prefill PPL must stay below configurable thresholds (defaults: `10.0` / `10.0`).
+- Added unified Qwen3Next regression entrypoint for ongoing checks:
+  - `scripts/qwen3next-regression.sh --model /path/to/qwen3-next-coder.gguf`
+  - Outputs `SUMMARY.md` + per-step logs under `/tmp/qwen3next-regression/<timestamp>/`.
