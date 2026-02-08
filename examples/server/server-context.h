@@ -126,7 +126,6 @@ struct server_slot {
     llama_batch batch_spec = {};
 
     bool has_mtp = false;
-    std::vector<float> mtp_hidden_state;
 
     // speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated

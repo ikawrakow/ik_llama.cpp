@@ -429,7 +429,9 @@ llm_expert_gating_func_type   gating_op,
     struct ggml_tensor * build_mtp_tail(
         const struct llama_layer & mtp_layer, 
         struct ggml_tensor * prev_embeddings, 
-        int64_t n_embd_head, 
-        struct ggml_cgraph * gf
+        int64_t n_embd_head,
+        struct ggml_cgraph * gf,
+        struct ggml_tensor * inp_pos,
+        struct ggml_tensor * rope_cache
     );
 };

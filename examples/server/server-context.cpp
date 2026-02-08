@@ -2501,12 +2501,7 @@ void server_context::add_sampled_tokens() {
                 params_spec.n_reuse = 0;
             }
             if (slot.has_mtp) {
-                if (!slot.mtp_hidden_state.empty()) {
-                    llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
-                } else {
-                    LOG_ERROR("MTP hidden state is empty during speculation", {});
-                    llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
-                }
+                llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
 
                 llama_tokens draft = mtp_speculative_gen_draft(
                     slot.ctx_sampling, 
@@ -2952,18 +2947,12 @@ void server_context::speculative_decoding_accept() {
         slot.drafted.clear();
 
         if (slot.has_mtp) {
-                if (!ids.empty()) {
-                    llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, ids.size() - 1));
-                    // const int n_embd = llama_n_embd(llama_get_model(ctx));
-                    // const float* emb = llama_get_embeddings_ith(ctx, ids.size() - 1);
-                    // if (emb) {
-                    //      slot.mtp_hidden_state.resize(n_embd);
-                    //      memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
-                    // }
-
-                    // LOG_VERBOSE("update MTP KV cache", {});
-                    mtp_accept_tokens(ctx, ids, slot.n_past, slot.id);
-                }
+            if (!ids.empty()) {
+                llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, ids.size() - 1));
+            } else {
+                llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, 0));
+            }
+            mtp_accept_tokens(ctx, ids, slot.n_past, slot.id);
             }
 
         slot.n_past += ids.size();
@@ -3198,13 +3187,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                     slot.i_batch < (i + n_tokens)) {
 
                     llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, - 1));
-
-                    // const float* emb = llama_get_embeddings_ith(ctx, -1);
-                    // if (emb) {
-                    //     // const int n_embd = llama_n_embd(llama_get_model(ctx));
-                    //     slot.mtp_hidden_state.resize(n_embd);
-                    //     memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
-                    // }
                 }
             }
         }

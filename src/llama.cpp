@@ -3224,11 +3224,6 @@ static int llama_decode_internal(
             gf = lctx.prev->graph;
         }
 
-        if (u_batch.mtp_params.op_type != MTP_OP_NONE) { 
-            if (!prepare_mtp_graph_inputs(lctx, u_batch.mtp_params, cur_token)) {
-                return GGML_STATUS_FAILED;
-            }
-        }
         // the output is always the last tensor in the graph
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
         struct ggml_tensor * embd = nullptr;
@@ -3290,6 +3285,12 @@ static int llama_decode_internal(
         //if (n_past%100 == 0) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
+
+        if (u_batch.mtp_params.op_type != MTP_OP_NONE) { 
+            if (!prepare_mtp_graph_inputs(lctx, u_batch.mtp_params, cur_token)) {
+                return GGML_STATUS_FAILED;
+            }
+        }
 
         // extract logits
         if (res) {
