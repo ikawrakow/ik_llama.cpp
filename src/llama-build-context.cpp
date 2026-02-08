@@ -4208,6 +4208,13 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
                 return qwen3next_fused_delta_mode::off;
         }
     }();
+    if (fused_delta_mode == qwen3next_fused_delta_mode::all_tokens) {
+        static bool warned_all_tokens = false;
+        if (!warned_all_tokens) {
+            LLAMA_LOG_WARN("%s: LLAMA_QWEN3NEXT_FUSED_DELTA=2 enables fused single-token decode; quality regression is known in this mode\n", __func__);
+            warned_all_tokens = true;
+        }
+    }
 
     auto get_slice_2d = [&](ggml_tensor * t, int64_t c) -> ggml_tensor * {
         return ggml_view_4d(ctx0, t, t->ne[0], t->ne[1], 1, t->ne[3],
