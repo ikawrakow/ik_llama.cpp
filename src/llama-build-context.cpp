@@ -4290,7 +4290,7 @@ ggml_cgraph * llm_build_context::build_qwen3vl() {
     for (int il = 0; il < n_layer; ++il) {
 
         cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
-                inp_pos, n_layer - 1 ? inp_out_ids : nullptr, nullptr, KQ_mask,
+                inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr, KQ_mask,
                 nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), 0.0f, 0, il, true, false, true, false, true);
 
         // feed-forward network
