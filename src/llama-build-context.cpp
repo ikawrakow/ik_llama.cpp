@@ -4256,10 +4256,10 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(beta, "beta_in", il);
         cb(g,    "g_in", il);
 
-        q = ggml_cont_4d(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
-        k = ggml_cont_4d(ctx0, ggml_permute(ctx0, k, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
+        q = ggml_cont_4d(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3), S_k, n_tokens, H_k, n_seqs);
+        k = ggml_cont_4d(ctx0, ggml_permute(ctx0, k, 0, 2, 1, 3), S_k, n_tokens, H_k, n_seqs);
         v = ggml_cont_4d(ctx0, ggml_permute(ctx0, v, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
-        g = ggml_cont_4d(ctx0, ggml_permute(ctx0, g, 2, 0, 3, 1), n_tokens, 1, H_k, n_seqs);
+        g = ggml_cont_4d(ctx0, ggml_permute(ctx0, g, 2, 0, 3, 1), n_tokens, 1, H_v, n_seqs);
 
         beta  = ggml_cont(ctx0, ggml_permute(ctx0, beta, 2, 0, 1, 3));
         cb(q,    "q_perm", il);
@@ -4297,8 +4297,8 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         v      = ggml_reshape_4d(ctx0, v,      S_v, chunk_size, n_chunks, H_v * n_seqs);
         v_beta = ggml_reshape_4d(ctx0, v_beta, S_v, chunk_size, n_chunks, H_v * n_seqs);
 
-        g    = ggml_reshape_4d(ctx0, g, chunk_size, 1, n_chunks, H_k * n_seqs);
-        beta = ggml_reshape_4d(ctx0, beta, 1, chunk_size, n_chunks, H_k * n_seqs);
+        g    = ggml_reshape_4d(ctx0, g, chunk_size, 1, n_chunks, H_v * n_seqs);
+        beta = ggml_reshape_4d(ctx0, beta, 1, chunk_size, n_chunks, H_v * n_seqs);
 
         ggml_tensor * g_cumsum = ggml_cumsum(ctx0, g);
         cb(g_cumsum, "g_cumsum", il);
@@ -4366,8 +4366,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * key_gdiff_t = ggml_cont(ctx0, ggml_transpose(ctx0, key_gdiff));
         cb(key_gdiff_t, "key_gdiff_t", il);
 
-        ggml_tensor * new_state = state;
-        cb(new_state, "new_state", il);
+        cb(state, "new_state", il);
 
         ggml_tensor * core_attn_out = nullptr;
 
@@ -4379,7 +4378,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             ggml_tensor * attn_chunk       = get_slice_2d(attn_kq, chunk);
             cb(attn_chunk, "attn_chunk", il);
 
-            ggml_tensor * state_t = ggml_cont_4d(ctx0, ggml_permute(ctx0, new_state, 1, 0, 2, 3), S_v, S_v, 1, H_v * n_seqs);
+            ggml_tensor * state_t = ggml_cont_4d(ctx0, ggml_permute(ctx0, state, 1, 0, 2, 3), S_v, S_v, 1, H_v * n_seqs);
 
             ggml_tensor * v_prime = ggml_mul_mat(ctx0, state_t, k_cumdecay_chunk);
             cb(v_prime, "v_prime_chunk", il);
@@ -4406,8 +4405,8 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             ggml_tensor * kgdmulvnew = ggml_mul_mat(ctx0, v_new_t, k_gdiff_t);
 
             ggml_tensor * gexp_last_chunk = ggml_cont(ctx0, get_slice_2d(g_last_exp, chunk));
-            new_state = ggml_add(ctx0,
-                ggml_mul(ctx0, new_state, ggml_reshape_4d(ctx0, gexp_last_chunk, gexp_last_chunk->ne[0], gexp_last_chunk->ne[1], H_v, n_seqs)),
+            state = ggml_add(ctx0,
+                ggml_mul(ctx0, state, ggml_reshape_4d(ctx0, gexp_last_chunk, gexp_last_chunk->ne[0], gexp_last_chunk->ne[1], H_v, n_seqs)),
                 ggml_reshape_4d(ctx0, kgdmulvnew, kgdmulvnew->ne[0], kgdmulvnew->ne[1], H_v, n_seqs));
         }
 
@@ -4421,7 +4420,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         output_tokens = ggml_permute(ctx0, output_tokens, 0, 2, 1, 3);
         output_tokens = ggml_cont(ctx0, output_tokens);
 
-        return {output_tokens, new_state};
+        return {output_tokens, state};
     };
 
     auto build_delta_net_autoregressive = [&](ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
