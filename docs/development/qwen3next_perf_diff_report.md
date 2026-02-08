@@ -56,14 +56,14 @@ Single-GPU long-context finding:
 
 8k sweep proxy (single GPU, tuned path):
 
-- `b=2048,ub=512` -> `avg_tg ~27.9 tok/s`
-- `b=3072,ub=768` -> `avg_tg ~28.4 tok/s` (best TG)
-- `b=4096,ub=1024` -> `avg_tg ~26.9 tok/s`
+- `b=2048,ub=512` -> `pp8192=142.85`, `tg128=24.81`
+- `b=3072,ub=768` -> `pp8192=229.31`, `tg128=27.29` (best)
+- `b=4096,ub=1024` -> `pp8192=211.53`, `tg128=23.85`
 
 Recommended serving baseline:
 
 - `CUDA_VISIBLE_DEVICES=0`
-- `-c 65536 -b 3072 -ub 768 -t 8 -fa on -ngl 999 --n-cpu-moe 47 -rtr`
+- `-c 65536 -b 3072 -ub 768 -t 8 -fa on -ngl 999 --n-cpu-moe 47 -rtr --qwen3next-fused-delta 1`
 
 ## Final Benchmark Matrix (8k context proxy)
 
@@ -112,3 +112,54 @@ Relative (`ik` vs mainline):
 - Added CLI plumbing for fused mode control (no raw env required):
   - `--qwen3next-fused-delta {0|1|2}`
   - This sets `LLAMA_QWEN3NEXT_FUSED_DELTA` for the current process.
+- Added experimental CUDA DeltaNet dispatch control:
+  - `GGML_CUDA_DELTA_NET_OPT={0|1|2|3|4}`
+  - `0`: baseline dispatch (default)
+  - `1`: force fp16 recurrent kernel (`head_dim=128`)
+  - `2`: force multiblock kernel
+  - `3`: force Blackwell optimized kernel
+  - `4`: conservative auto mode (pre-Blackwell only)
+- RTX 5060 Ti spot checks (`p=2048,n=64,b=1024,ub=256,--n-cpu-moe 47,-rtr 1`) did not show a reliable win from forced kernels:
+  - mode `2` and mode `3` reduced TG in single-run checks versus baseline.
+  - mode `4` tracks baseline on Blackwell (by design, no forced optimized-kernel switch there).
+
+## Decode Quality Diagnosis (Wikitext-2, `--chunks 1`, CUDA)
+
+Real-data perplexity checks on `/tmp/ppl_wikitext2_test.txt` confirm the decode regression source:
+
+- `qwen3-next-coder.gguf`
+  - mode `0`, opt `0`: `PPL=3.9148`
+  - mode `1`, opt `0`: `PPL=3.9148` (parity with mode 0)
+  - mode `2`, opt `0/1/2/4`: `PPL=6.1277` (consistently regressed)
+  - mode `2`, opt `3`: `PPL=302221.3639` (catastrophic instability)
+- `qwen-3-coder-next-mxfp4.gguf`
+  - mode `0`, opt `0`: `PPL=3.9832`
+  - mode `1`, opt `0`: `PPL=3.9832` (parity with mode 0)
+  - mode `2`, opt `0`: `PPL=6.2362` (same regression pattern)
+  - mode `2`, opt `3`: `PPL=795964.1118` (catastrophic instability)
+
+Conclusion:
+
+- Decode-quality regression is tied to fused-all mode (`LLAMA_QWEN3NEXT_FUSED_DELTA=2`), not fixed by kernel dispatch overrides.
+- `GGML_CUDA_DELTA_NET_OPT=3` should not be used on this path.
+
+## Safe Speed Gain (mode 1)
+
+With decode-safe mode (`LLAMA_QWEN3NEXT_FUSED_DELTA=1`), throughput on the serving proxy profile improved while preserving perplexity:
+
+- Profile:
+  - `llama-bench -m /models/qwen3-next-coder.gguf -p 8192 -n 128 -b 3072 -ub 768 -t 8 -fa 1 -ngl 999 --n-cpu-moe 47 -r 3 -rtr 1 -mmp 0`
+- Mode `0` (`r=3`):
+  - `pp8192 = 175.639 +/- 0.221 tok/s`
+  - `tg128  = 26.393 +/- 1.469 tok/s`
+- Mode `1` (`r=3`):
+  - `pp8192 = 237.014 +/- 1.199 tok/s`
+  - `tg128  = 27.111 +/- 1.395 tok/s`
+- Relative (`mode1` vs `mode0`):
+  - PP: `+34.9%`
+  - TG: `+2.7%`
+
+Additional A/B for `GGML_CUDA_DELTA_NET_OPT=2` under mode `1` (`r=3`) did not improve performance:
+
+- opt `0`: `pp8192=238.352`, `tg128=24.709`
+- opt `2`: `pp8192=237.680`, `tg128=24.566`
