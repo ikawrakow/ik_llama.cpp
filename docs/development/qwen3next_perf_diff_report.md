@@ -97,3 +97,7 @@ Relative (`ik` vs mainline):
   - `0` / unset: non-fused
   - `1`: fused only for `n_tok > 1` (safe mode)
   - `2`: fused on all token counts (experimental; decode-quality regression observed)
+- Added manual regression runner for fused-mode safety checks:
+  - `scripts/qwen3next-fused-regression.sh`
+  - Example:
+    - `BIN=./build-qwen3next-fix/bin/llama-perplexity scripts/qwen3next-fused-regression.sh --model /models/qwen3-next-coder.gguf --ctx 2048 --decode-b 1 --decode-ub 1 --prefill-b 2048 --prefill-ub 512 --ngl 47 --n-cpu-moe 40`
