@@ -4508,6 +4508,13 @@ struct llama_context * llama_new_context_with_model(
         params.flash_attn = false;
     }
 
+    // Qwen3Next currently has a CPU-only flash-attn assertion path in iqk FA kernels.
+    // Keep CPU runs safe by disabling FA when no layers are offloaded.
+    if (params.flash_attn && model->arch == LLM_ARCH_QWEN3NEXT && model->n_gpu_layers == 0) {
+        LLAMA_LOG_WARN("%s: flash_attn is unstable for CPU-only Qwen3Next - forcing off\n", __func__);
+        params.flash_attn = false;
+    }
+
     //if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {
     //    LLAMA_LOG_WARN("%s: flash_attn requires n_embd_head_k == n_embd_head_v - forcing off\n", __func__);
     //    params.flash_attn = false;
