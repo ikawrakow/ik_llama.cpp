@@ -36,10 +36,9 @@ Not directly mirrored yet (by design divergence from mainline model layout):
 ## Required Adjustments (remaining)
 
 1. Keep non-fused as the strict safety baseline in defaults, and use `LLAMA_QWEN3NEXT_FUSED_DELTA=1` (prefill-only fused) as the explicit acceleration mode.
-2. Add a first-class runtime flag/CLI plumb for Qwen3Next fused mode (`LLAMA_QWEN3NEXT_FUSED_DELTA`) so serving does not depend on raw env wiring.
-3. Continue using `scripts/qwen3next-regression.sh` as the release gate for this model path, and wire it into CI or pre-merge checks.
-4. Treat the remaining PR #19375 autoregressive rewrite as deferred: direct porting into current ik graph builder is not layout-compatible without broader contiguity/reshape refactoring.
-5. Revisit PR #18792 (`src/models/delta.cpp`) only if we need unified GDA/KDA support for additional architectures; for Qwen3Next-only it is optional.
+2. Continue using `scripts/qwen3next-regression.sh` as the release gate for this model path, and wire it into CI or pre-merge checks.
+3. Treat the remaining PR #19375 autoregressive rewrite as deferred: direct porting into current ik graph builder is not layout-compatible without broader contiguity/reshape refactoring.
+4. Revisit PR #18792 (`src/models/delta.cpp`) only if we need unified GDA/KDA support for additional architectures; for Qwen3Next-only it is optional.
 
 ## Strong Points of `ik_llama.cpp` to Preserve
 
@@ -110,3 +109,6 @@ Relative (`ik` vs mainline):
 - Added unified Qwen3Next regression entrypoint for ongoing checks:
   - `scripts/qwen3next-regression.sh --model /path/to/qwen3-next-coder.gguf`
   - Outputs `SUMMARY.md` + per-step logs under `/tmp/qwen3next-regression/<timestamp>/`.
+- Added CLI plumbing for fused mode control (no raw env required):
+  - `--qwen3next-fused-delta {0|1|2}`
+  - This sets `LLAMA_QWEN3NEXT_FUSED_DELTA` for the current process.

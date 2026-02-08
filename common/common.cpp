@@ -21,6 +21,7 @@
 #include <climits>
 #include <cmath>
 #include <codecvt>
+#include <cstdlib>
 #include <cstdarg>
 #include <cstring>
 #include <ctime>
@@ -463,6 +464,19 @@ bool gpt_params_parse_ex(int argc, char ** argv, gpt_params & params) {
     return true;
 }
 
+static void gpt_params_apply_runtime_env(const gpt_params & params) {
+    if (params.qwen3next_fused_delta < 0) {
+        return;
+    }
+
+    const std::string value = std::to_string(params.qwen3next_fused_delta);
+#if defined(_WIN32)
+    _putenv_s("LLAMA_QWEN3NEXT_FUSED_DELTA", value.c_str());
+#else
+    setenv("LLAMA_QWEN3NEXT_FUSED_DELTA", value.c_str(), 1);
+#endif
+}
+
 void gpt_params_parse_from_env(gpt_params & params) {
     // we only care about server-related params for now
     get_env("LLAMA_ARG_MODEL",            params.model);
@@ -483,10 +497,13 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_ENDPOINT_SLOTS",   params.endpoint_slots);
     get_env("LLAMA_ARG_EMBEDDINGS",       params.embedding);
     get_env("LLAMA_ARG_FLASH_ATTN",       params.flash_attn);
+    get_env("LLAMA_ARG_QWEN3NEXT_FUSED_DELTA", params.qwen3next_fused_delta);
     get_env("LLAMA_ARG_DEFRAG_THOLD",     params.defrag_thold);
     get_env("LLAMA_ARG_CONT_BATCHING",    params.cont_batching);
     get_env("LLAMA_ARG_HOST",             params.hostname);
     get_env("LLAMA_ARG_PORT",             params.port);
+
+    gpt_params_apply_runtime_env(params);
 }
 
 bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
@@ -504,6 +521,7 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
         return false;
     }
 
+    gpt_params_apply_runtime_env(params);
     return true;
 }
 
@@ -1225,6 +1243,16 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
             params.flash_attn = false;
         }
         else {
+            invalid_param = true;
+        }
+        return true;
+    }
+    if (arg == "--qwen3next-fused-delta") {
+        CHECK_ARG
+        params.qwen3next_fused_delta = std::stoi(argv[i]);
+        if (params.qwen3next_fused_delta < 0 || params.qwen3next_fused_delta > 2) {
+            fprintf(stderr, "error: Invalid value for --qwen3next-fused-delta: %d (must be 0, 1, or 2)\n",
+                    params.qwen3next_fused_delta);
             invalid_param = true;
         }
         return true;
@@ -2153,6 +2181,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --chunks N",             "max number of chunks to process (default: %d, -1 = all)", params.n_chunks });
     options.push_back({ "*",           "-no-fa, --no-flash-attn",       "disable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
     options.push_back({ "*",           "-fa, --flash-attn (auto|on|off|0|1)", "set Flash Attention (default: %s)", params.flash_attn ? "on" : "off" });
+    options.push_back({ "*",           "       --qwen3next-fused-delta {0,1,2}",
+                                                                        "force LLAMA_QWEN3NEXT_FUSED_DELTA mode for Qwen3Next (default: env/model default)" });
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
     options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
@@ -4200,6 +4230,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "simple_io: %s # default: false\n", params.simple_io ? "true" : "false");
     fprintf(stream, "cont_batching: %s # default: false\n", params.cont_batching ? "true" : "false");
     fprintf(stream, "flash_attn: %s # default: false\n", params.flash_attn ? "true" : "false");
+    fprintf(stream, "qwen3next_fused_delta: %d # default: -1 (keep env/model default)\n", params.qwen3next_fused_delta);
     fprintf(stream, "mla_attn: %d # default: 0\n", params.mla_attn);
     fprintf(stream, "attn_max_batch: %d # default: 0\n", params.attn_max_batch);
     fprintf(stream, "fused_moe: %s # default: false\n", params.fused_moe_up_gate ? "true" : "false");
