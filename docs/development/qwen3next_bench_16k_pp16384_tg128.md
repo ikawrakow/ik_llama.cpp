@@ -142,3 +142,41 @@ Notes:
 
 - Decode-only fused mode preserves prompt-quality metrics in this test.
 - TG improved significantly in this run; PP variance was higher, so PP delta should be treated as noisy.
+
+## Fused DeltaNet Safety Update (Superseding)
+
+Date: 2026-02-08
+
+This section supersedes the earlier `LLAMA_QWEN3NEXT_FUSED_DELTA` mode mapping.
+
+Updated env behavior in `src/llama-build-context.cpp`:
+
+- `0` / unset: non-fused for all token counts
+- `1`: fused only for `n_tok > 1` (prefill/chunking), non-fused for single-token decode
+- `2`: fused for all token counts (experimental)
+
+Reason:
+
+- Fused path has a known decode-path quality regression when forced on single-token steps.
+- The safer default acceleration is therefore prefill-only fused mode (`=1`).
+
+Validation (CUDA, `qwen3-next-coder.gguf`, `-c 2048 -b 1 -ub 1 -fa on -ngl 47 --n-cpu-moe 40 --chunks 1 --no-warmup`):
+
+| Mode | PPL |
+|---|---:|
+| `LLAMA_QWEN3NEXT_FUSED_DELTA=0` | `3.9148 +/- 0.31093` |
+| `LLAMA_QWEN3NEXT_FUSED_DELTA=1` | `3.9148 +/- 0.31093` |
+| `LLAMA_QWEN3NEXT_FUSED_DELTA=2` | `6.1277 +/- 0.54810` |
+
+Quick throughput check (`-p 8192 -n 128 -b 2048 -ub 512 -r 1 -rtr 1`, same CUDA settings):
+
+| Mode | PP 8192 (tok/s) | TG 128 (tok/s) |
+|---|---:|---:|
+| `0` | `179.30` | `24.69` |
+| `1` | `252.12` | `22.99` |
+| `2` | `245.71` | `27.94` |
+
+Interpretation:
+
+- Use `=1` for production-safe quality with strong PP gain.
+- Reserve `=2` for experiments only until decode-path correctness is fixed.

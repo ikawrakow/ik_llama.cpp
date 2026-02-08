@@ -35,7 +35,7 @@ Not directly mirrored yet (by design divergence from mainline model layout):
 
 ## Required Adjustments (remaining)
 
-1. Keep fused DeltaNet as default, but preserve safe fallback path (`LLAMA_QWEN3NEXT_FUSED_DELTA=0`) for debugging/regression checks.
+1. Keep non-fused as the strict safety baseline, and use `LLAMA_QWEN3NEXT_FUSED_DELTA=1` (prefill-only fused) as the practical acceleration mode.
 2. Port selective graph-shape optimizations from PR #19375 into `src/llama-build-context.cpp` where they map cleanly (avoid blind copy due architectural divergence).
 3. Add one dedicated Qwen3Next perf regression target in CI/dev docs (single-GPU 8k proxy + 65k fit sanity).
 4. Investigate ik CPU Flash-Attn assertion path for Qwen3Next (`iqk_fa_templates.h`, `S > 0`) before enabling `-fa 1` for CPU benchmark profiles.
@@ -93,3 +93,7 @@ Relative (`ik` vs mainline):
 
 - `ik` CPU benchmark with `-fa 1` currently aborts for this model in `iqk_fa_templates.h` (`GGML_ASSERT(S > 0)`), so CPU matrix uses `-fa 0` for both repos.
 - `ik` benchmark JSON currently includes some non-JSON log lines in stdout around context creation; parsing should tolerate that.
+- Fused DeltaNet mode mapping has been updated in code:
+  - `0` / unset: non-fused
+  - `1`: fused only for `n_tok > 1` (safe mode)
+  - `2`: fused on all token counts (experimental; decode-quality regression observed)
