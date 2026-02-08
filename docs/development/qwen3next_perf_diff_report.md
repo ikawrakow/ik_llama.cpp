@@ -35,12 +35,11 @@ Not directly mirrored yet (by design divergence from mainline model layout):
 
 ## Required Adjustments (remaining)
 
-1. Keep non-fused as the strict safety baseline, and use `LLAMA_QWEN3NEXT_FUSED_DELTA=1` (prefill-only fused) as the practical acceleration mode.
-2. Port selective graph-shape optimizations from PR #19375 into `src/llama-build-context.cpp` where they map cleanly (avoid blind copy due architectural divergence).
-3. Added dedicated Qwen3Next regression target for dev/CI-style checks:
-   - `scripts/qwen3next-regression.sh`
-   - combines fused safety regression + single-GPU proxy sweep + long-context fit sanity.
-4. Investigate ik CPU Flash-Attn assertion path for Qwen3Next (`iqk_fa_templates.h`, `S > 0`) before enabling `-fa 1` for CPU benchmark profiles.
+1. Keep non-fused as the strict safety baseline in defaults, and use `LLAMA_QWEN3NEXT_FUSED_DELTA=1` (prefill-only fused) as the explicit acceleration mode.
+2. Add a first-class runtime flag/CLI plumb for Qwen3Next fused mode (`LLAMA_QWEN3NEXT_FUSED_DELTA`) so serving does not depend on raw env wiring.
+3. Continue using `scripts/qwen3next-regression.sh` as the release gate for this model path, and wire it into CI or pre-merge checks.
+4. Treat the remaining PR #19375 autoregressive rewrite as deferred: direct porting into current ik graph builder is not layout-compatible without broader contiguity/reshape refactoring.
+5. Revisit PR #18792 (`src/models/delta.cpp`) only if we need unified GDA/KDA support for additional architectures; for Qwen3Next-only it is optional.
 
 ## Strong Points of `ik_llama.cpp` to Preserve
 
@@ -93,7 +92,7 @@ Relative (`ik` vs mainline):
 
 ## Notes
 
-- `ik` CPU benchmark with `-fa 1` currently aborts for this model in `iqk_fa_templates.h` (`GGML_ASSERT(S > 0)`), so CPU matrix uses `-fa 0` for both repos.
+- CPU-only Qwen3Next with `-fa 1` is now guarded in ik: FA is auto-disabled with a warning for `n_gpu_layers == 0` to avoid the prior `iqk_fa_templates.h` assert path.
 - `ik` benchmark JSON currently includes some non-JSON log lines in stdout around context creation; parsing should tolerate that.
 - Fused DeltaNet mode mapping has been updated in code:
   - `0` / unset: non-fused

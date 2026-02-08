@@ -77,7 +77,7 @@ Working comparison at `--n-cpu-moe 45`:
 |---|---|---:|---:|
 | `ik_llama.cpp` (`-rtr 1`) | CUDA | 232.340508 | 27.895722 |
 
-## Fused DeltaNet Quality Check (GPU, `-c 2048`, `--chunks 1`)
+## Historical Fused DeltaNet Check (obsolete)
 
 Date: 2026-02-08
 
@@ -97,8 +97,8 @@ Results (Wikitext2 sample file `/tmp/ppl_wikitext2_test.txt`):
 
 Conclusion:
 
-- Fused DeltaNet path is currently numerically bad for both tested quants on CUDA in this setup.
-- Keeping fused path opt-in (`LLAMA_QWEN3NEXT_FUSED_DELTA=1`) and defaulting to non-fused is required for model quality.
+- This run is kept for history only and is superseded by the later `Fused DeltaNet Safety Update (Superseding)` section below.
+- Use the superseding section as source of truth for mode mapping and quality guidance.
 
 ## Upstream PR #19375 Trial (Selective Port) Outcome
 
@@ -111,8 +111,8 @@ What was tried:
 Outcome:
 
 - No stable speed win in our setup after repeated runs.
-- Autoregressive rewrite specifically hurt TG throughput in non-fused mode and was reverted.
-- Final code keeps only the fused-default safety fix (non-fused by default).
+- Direct autoregressive rewrite attempts from PR #19375 were not compatible with current ik graph-layout/contiguity assumptions and were reverted.
+- Final code keeps only safe chunk-shape fixes plus fused-mode safety controls.
 
 ## Decode-Only Fused Mode Trial (`LLAMA_QWEN3NEXT_FUSED_DELTA=2`)
 
