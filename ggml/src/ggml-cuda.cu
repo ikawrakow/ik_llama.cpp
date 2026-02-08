@@ -18,9 +18,11 @@
 #include "ggml-cuda/concat.cuh"
 #include "ggml-cuda/convert.cuh"
 #include "ggml-cuda/cpy.cuh"
+#include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/diagmask.cuh"
 #include "ggml-cuda/dmmv.cuh"
 #include "ggml-cuda/fattn.cuh"
+#include "ggml-cuda/fill.cuh"
 #include "ggml-cuda/getrows.cuh"
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmq.cuh"
@@ -46,10 +48,14 @@
 #include "ggml-cuda/conv2d.cuh"
 #include "ggml-cuda/conv2d-dw.cuh"
 #include "ggml-cuda/set-rows.cuh"
+#include "ggml-cuda/solve_tri.cuh"
+#include "ggml-cuda/ssm-conv.cuh"
+#include "ggml-cuda/delta-net.cuh"
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/multiadd.cuh"
 #include "ggml-cuda/hadamard.cuh"
 #include "ggml-cuda/reduce.cuh"
+#include "ggml-cuda/tri.cuh"
 
 #include <algorithm>
 #include <array>
@@ -2316,54 +2322,143 @@ static __global__ void k_quick_add(uint32_t n_per_row, const float * src1, const
     }
 }
 
+static __global__ void k_moe_row_count(
+        const char * __restrict__ ids,
+        size_t nb0, size_t nb1,
+        int64_t n_ids, int64_t n_rows,
+        int32_t n_as,
+        int32_t * __restrict__ moe_counts,
+        int32_t * __restrict__ has_invalid_ids) {
+    const int64_t idx = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t ne = n_ids * n_rows;
+
+    if (idx >= ne) {
+        return;
+    }
+
+    const int64_t iid1 = idx / n_ids;
+    const int64_t id   = idx - iid1*n_ids;
+    const int32_t row_id_i = *(const int32_t *) (ids + iid1*nb1 + id*nb0);
+
+    if ((uint32_t) row_id_i < (uint32_t) n_as) {
+        atomicAdd(moe_counts + row_id_i, 1);
+    } else {
+        atomicExch(has_invalid_ids, 1);
+    }
+}
+
+static __global__ void k_moe_row_exclusive_scan(
+        const int32_t * __restrict__ moe_counts,
+        int32_t * __restrict__ cum_moe_counts,
+        int32_t n_as) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) {
+        return;
+    }
+
+    int32_t sum = 0;
+    cum_moe_counts[0] = 0;
+    for (int i = 0; i < n_as; ++i) {
+        sum += moe_counts[i];
+        cum_moe_counts[i + 1] = sum;
+    }
+}
+
+static __global__ void k_moe_row_scatter(
+        const char * __restrict__ ids,
+        size_t nb0, size_t nb1,
+        int64_t n_ids, int64_t n_rows,
+        int32_t n_as,
+        int32_t * __restrict__ row_offsets,
+        mmid_row_mapping * __restrict__ row_mapping) {
+    const int64_t idx = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t ne = n_ids * n_rows;
+
+    if (idx >= ne) {
+        return;
+    }
+
+    const int64_t iid1 = idx / n_ids;
+    const int64_t id   = idx - iid1*n_ids;
+    const int32_t row_id_i = *(const int32_t *) (ids + iid1*nb1 + id*nb0);
+
+    if ((uint32_t) row_id_i < (uint32_t) n_as) {
+        const int32_t dst_idx = atomicAdd(row_offsets + row_id_i, 1);
+        row_mapping[dst_idx] = { (int32_t) id, (int32_t) iid1 };
+    }
+}
+
+static inline void build_active_experts(
+        const std::vector<int> & moe_counts,
+        std::vector<int32_t> & active_experts) {
+    active_experts.clear();
+    active_experts.reserve(moe_counts.size());
+
+    for (int32_t i = 0; i < (int32_t) moe_counts.size(); ++i) {
+        if (moe_counts[i] > 0) {
+            active_experts.push_back(i);
+        }
+    }
+}
+
 static inline bool prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n_as, int64_t n_ids,
         const ggml_tensor * ids, std::vector<int>& moe_counts, std::vector<int>& cum_moe_counts,
         ggml_cuda_pool_alloc<mmid_row_mapping>& dev_row_mapping) {
 
     GGML_ASSERT(moe_counts.empty() && cum_moe_counts.empty());
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(n_as  <= (int64_t) std::numeric_limits<int32_t>::max());
+    GGML_ASSERT(n_ids <= (int64_t) std::numeric_limits<int32_t>::max());
+    GGML_ASSERT(ids->ne[1] <= (int64_t) std::numeric_limits<int32_t>::max());
 
     auto stream = ctx.stream();
 
-    std::vector<char> ids_host(ggml_nbytes(ids));
     const char * ids_dev = (const char *) ids->data;
-    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
+    const int64_t n_rows = ids->ne[1];
+    const int64_t n_entries = n_rows*n_ids;
+
+    moe_counts.resize(n_as, 0);
+    cum_moe_counts.resize(n_as + 1, 0);
+
+    if (n_entries == 0 || n_as == 0) {
+        return false;
+    }
+
+    // Build row mapping fully on-device to avoid per-call ids D2H/H2D round-trips.
+    dev_row_mapping.alloc(n_entries);
+
+    ggml_cuda_pool_alloc<int32_t> dev_moe_counts(ctx.pool(), n_as);
+    ggml_cuda_pool_alloc<int32_t> dev_cum_moe_counts(ctx.pool(), n_as + 1);
+    ggml_cuda_pool_alloc<int32_t> dev_row_offsets(ctx.pool(), n_as);
+    ggml_cuda_pool_alloc<int32_t> dev_has_invalid_ids(ctx.pool(), 1);
+
+    CUDA_CHECK(cudaMemsetAsync(dev_moe_counts.get(), 0, n_as*sizeof(int32_t), stream));
+    CUDA_CHECK(cudaMemsetAsync(dev_has_invalid_ids.get(), 0, sizeof(int32_t), stream));
+
+    constexpr int block_size = 256;
+    const dim3 grid_dims((n_entries + block_size - 1) / block_size, 1, 1);
+    k_moe_row_count<<<grid_dims, block_size, 0, stream>>>(
+            ids_dev, ids->nb[0], ids->nb[1], n_ids, n_rows, n_as, dev_moe_counts.get(), dev_has_invalid_ids.get());
+    CUDA_CHECK(cudaGetLastError());
+
+    k_moe_row_exclusive_scan<<<1, 1, 0, stream>>>(dev_moe_counts.get(), dev_cum_moe_counts.get(), n_as);
+    CUDA_CHECK(cudaGetLastError());
+
+    CUDA_CHECK(cudaMemcpyAsync(dev_row_offsets.get(), dev_cum_moe_counts.get(), n_as*sizeof(int32_t), cudaMemcpyDeviceToDevice, stream));
+
+    k_moe_row_scatter<<<grid_dims, block_size, 0, stream>>>(
+            ids_dev, ids->nb[0], ids->nb[1], n_ids, n_rows, n_as, dev_row_offsets.get(), dev_row_mapping.get());
+    CUDA_CHECK(cudaGetLastError());
+
+    int32_t has_invalid_ids = 0;
+    CUDA_CHECK(cudaMemcpyAsync(cum_moe_counts.data(), dev_cum_moe_counts.get(), (n_as + 1)*sizeof(int), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(&has_invalid_ids, dev_has_invalid_ids.get(), sizeof(int32_t), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
-    std::vector<mmid_row_mapping> rmapping(ids->ne[1]*n_ids);
-    moe_counts.resize(n_as, 0);
-    cum_moe_counts.resize(n_as + 1);
-
-    bool is_ser = false;
-    for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
-        for (int64_t id = 0; id < n_ids; id++) {
-            const int32_t row_id_i = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
-            if (row_id_i >= 0 && row_id_i < n_as) ++moe_counts[row_id_i];
-            else is_ser = true;
-        }
-    }
-    cum_moe_counts[0] = 0;
-    for (int i = 0; i < (int)n_as; ++i) {
-        cum_moe_counts[i+1] = cum_moe_counts[i] + moe_counts[i];
+    for (int32_t i = 0; i < (int32_t) n_as; ++i) {
+        moe_counts[i] = cum_moe_counts[i + 1] - cum_moe_counts[i];
     }
 
-    dev_row_mapping.alloc(cum_moe_counts[n_as]);
-
-    for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
-        for (int64_t id = 0; id < n_ids; id++) {
-            const int32_t row_id_i = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
-            if (row_id_i >= 0 && row_id_i < n_as) {
-                rmapping[cum_moe_counts[row_id_i]++] = {(int)id, (int)iid1};
-            }
-        }
-    }
-
-    for (int i = 0; i < (int)n_as; ++i) cum_moe_counts[i] -= moe_counts[i];
-
-    CUDA_CHECK(cudaMemcpyAsync(dev_row_mapping.get(), rmapping.data(),
-                cum_moe_counts[n_as]*sizeof(mmid_row_mapping), cudaMemcpyHostToDevice, stream));
-    //CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    return is_ser;
+    return has_invalid_ids != 0;
 }
 
 static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * next) {
@@ -2480,6 +2575,8 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     if (is_ser) {
         CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
     }
+    std::vector<int32_t> active_experts;
+    build_active_experts(moe_counts, active_experts);
 
     ggml_cuda_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(src1));
     ggml_cuda_pool_alloc<char>  dst_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
@@ -2487,13 +2584,9 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     src1_row.data = src1_contiguous.get();
     dst_row.data  =  dst_contiguous.get();
 
-    for (int64_t i02 = 0; i02 < n_as; i02++) {
+    for (int32_t i02 : active_experts) {
 
         int64_t num_src1_rows = moe_counts[i02];
-
-        if (num_src1_rows == 0) {
-            continue;
-        }
 
         size_t mapping_offset = cum_moe_counts[i02];
 
@@ -2822,11 +2915,6 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
         return i;
     }
 
-    std::vector<char> ids_host(ggml_nbytes(ids));
-    const char * ids_dev = (const char *) ids->data;
-    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids_dev, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-
     ggml_tensor src0_1_row = *src0_1;
     ggml_tensor src0_2_row; if (src0_2) src0_2_row = *src0_2;
     ggml_tensor src1_row   = *src1;
@@ -2913,11 +3001,12 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
         }
     }
+    std::vector<int32_t> active_experts;
+    build_active_experts(moe_counts, active_experts);
 
-    for (int64_t i02 = 0; i02 < n_as; i02++) {
+    for (int32_t i02 : active_experts) {
         int64_t num_src1_rows = moe_counts[i02];
 
-        if (num_src1_rows == 0) continue;
         size_t mapping_offset = cum_moe_counts[i02];
 
         if (use_quantized_src1) {
@@ -3305,6 +3394,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_HARDSWISH:
                     ggml_cuda_op_hardswish(ctx, dst);
                     break;
+                case GGML_UNARY_OP_EXP:
+                    ggml_cuda_op_exp(ctx, dst);
+                    break;
+                case GGML_UNARY_OP_SOFTPLUS:
+                    ggml_cuda_op_softplus(ctx, dst);
+                    break;
                 default:
                     return -1;
             }
@@ -3338,6 +3433,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_GROUP_NORM:
             ggml_cuda_op_group_norm(ctx, dst);
+            break;
+        case GGML_OP_L2_NORM:
+            ggml_cuda_op_l2_norm(ctx, dst);
             break;
         case GGML_OP_CONCAT:
             if (fusion && i + 2 < cgraph->n_nodes &&
@@ -3554,6 +3652,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 ggml_cuda_op_sum_rows(ctx, dst);
             }
             break;
+        case GGML_OP_CUMSUM:
+            ggml_cuda_op_cumsum(ctx, dst);
+            break;
         case GGML_OP_ARGSORT:
             if (fusion && i + 5 < cgraph->n_nodes &&
                 cgraph->nodes[i+1]->op == GGML_OP_VIEW &&
@@ -3572,6 +3673,21 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_GROUPED_TOPK:
             ggml_cuda_op_grouped_topk(ctx, dst);
+            break;
+        case GGML_OP_SSM_CONV:
+            ggml_cuda_op_ssm_conv(ctx, dst);
+            break;
+        case GGML_OP_TRI:
+            ggml_cuda_op_tri(ctx, dst);
+            break;
+        case GGML_OP_FILL:
+            ggml_cuda_op_fill(ctx, dst);
+            break;
+        case GGML_OP_SOLVE_TRI:
+            ggml_cuda_op_solve_tri(ctx, dst);
+            break;
+        case GGML_OP_DELTA_NET:
+            ggml_cuda_op_delta_net(ctx, dst);
             break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cuda_flash_attn_ext(ctx, dst);
@@ -3806,6 +3922,12 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 #ifndef NDEBUG
             GGML_CUDA_LOG_DEBUG("%s(%s): disabling CUDA graphs due to unsupported node type %ld %ld\n",
                     __func__, node->src[0]->name, node->ne[2], node->src[2]->ne[0]);
+#endif
+        }
+        if (node->op == GGML_OP_DELTA_NET) {
+            use_cuda_graph = false;
+#ifndef NDEBUG
+            GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to DELTA_NET recurrent state\n", __func__);
 #endif
         }
         if (node->op == GGML_OP_MOE_FUSED_UP_GATE) {
@@ -4149,6 +4271,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                 case GGML_UNARY_OP_HARDSWISH:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
+                case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_SOFTPLUS:
                     return ggml_is_contiguous(op->src[0]);
                 default:
                     return false;
@@ -4342,6 +4466,8 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_NORM:
         case GGML_OP_RMS_NORM:
             return true;
+        case GGML_OP_L2_NORM:
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_RMS_NORM_BACK:
             return ggml_is_contiguous(op->src[0]) && op->ne[0] % WARP_SIZE == 0;
             break;
@@ -4389,6 +4515,54 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_LEAKY_RELU:
             return true;
+        case GGML_OP_CUMSUM:
+            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        case GGML_OP_TRI:
+            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                   op->src[0]->type == op->type;
+        case GGML_OP_FILL:
+            return ggml_is_contiguous(op) && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
+        case GGML_OP_SOLVE_TRI:
+            return ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op->src[1]) &&
+                   ggml_is_contiguous(op) &&
+                   op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   op->type == GGML_TYPE_F32 &&
+                   op->src[0]->ne[0] == op->src[0]->ne[1] &&
+                   op->src[0]->ne[1] == op->src[1]->ne[1] &&
+                   op->src[0]->ne[2] == op->src[1]->ne[2] &&
+                   op->src[0]->ne[3] == op->src[1]->ne[3];
+        case GGML_OP_SSM_CONV:
+            return op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   op->src[2]->type == GGML_TYPE_F32 &&
+                   op->src[3]->type == GGML_TYPE_I32 &&
+                   op->type == GGML_TYPE_F32 &&
+                   op->src[0]->nb[0] == sizeof(float) &&
+                   op->src[1]->nb[0] == sizeof(float) &&
+                   op->src[2]->nb[0] == sizeof(float) &&
+                   op->src[3]->nb[0] == sizeof(int32_t) &&
+                   op->src[2]->ne[0] == op->src[0]->ne[0] + 1 &&
+                   op->src[2]->ne[1] == op->src[0]->ne[1] &&
+                   op->src[1]->ne[0] == op->src[0]->ne[1] &&
+                   op->src[3]->ne[0] == op->src[0]->ne[2];
+        case GGML_OP_DELTA_NET:
+            return op->src[0]->type == GGML_TYPE_F32 &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   op->src[2]->type == GGML_TYPE_F32 &&
+                   op->src[3]->type == GGML_TYPE_F32 &&
+                   op->src[4]->type == GGML_TYPE_F32 &&
+                   op->src[5]->type == GGML_TYPE_F32 &&
+                   op->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op->src[0]) &&
+                   ggml_is_contiguous(op->src[1]) &&
+                   ggml_is_contiguous(op->src[2]) &&
+                   ggml_is_contiguous(op->src[3]) &&
+                   ggml_is_contiguous(op->src[4]) &&
+                   ggml_is_contiguous(op->src[5]) &&
+                   op->src[0]->ne[0] <= 256 &&
+                   op->src[2]->ne[0] <= 256;
         case GGML_OP_FLASH_ATTN_EXT:
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
             return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;

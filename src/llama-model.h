@@ -107,6 +107,7 @@ enum e_model {
     MODEL_16B_A1B,
     MODEL_21B_A3B, // Ernie MoE small
     MODEL_30B_A3B,
+    MODEL_80B_A3B, // Qwen3-Next
     MODEL_80B_A13B,
     MODEL_100B_A6B,
     MODEL_106B_A12B,
@@ -174,6 +175,7 @@ struct llama_layer {
     struct ggml_tensor * wk_enc = nullptr;
     struct ggml_tensor * wv_enc = nullptr;
     struct ggml_tensor * wo_enc = nullptr;
+    struct ggml_tensor * wqkv_gate = nullptr;
     struct ggml_tensor * attn_sinks = nullptr;
 
     // attention bias
@@ -288,6 +290,8 @@ struct llama_layer {
     struct ggml_tensor * ssm_x = nullptr;
     struct ggml_tensor * ssm_dt = nullptr;
     struct ggml_tensor * ssm_out = nullptr;
+    struct ggml_tensor * ssm_norm = nullptr;
+    struct ggml_tensor * ssm_beta_alpha = nullptr;
 
     // mamba
     struct ggml_tensor * ssm_conv1d = nullptr;
