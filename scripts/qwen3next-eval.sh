@@ -447,11 +447,17 @@ main_has_complexity="$(has_token /out/cpu_gen_mainline.out 'complexity|O\(')"
 ik_has_complexity="$(has_token /out/cpu_gen_ik.out 'complexity|O\(')"
 fused_decode_safe="NA"
 fused_prefill_safe="NA"
+fused_mode0_decode_sane="NA"
+fused_mode0_prefill_sane="NA"
 if [[ -f /out/ik_fused_regression.md ]]; then
     fused_decode_safe="$(sed -nE 's/^- decode safety .*: `([^`]+)`.*/\1/p' /out/ik_fused_regression.md | tail -n1 || true)"
     fused_prefill_safe="$(sed -nE 's/^- prefill safety .*: `([^`]+)`.*/\1/p' /out/ik_fused_regression.md | tail -n1 || true)"
+    fused_mode0_decode_sane="$(sed -nE 's/^- mode0 decode sanity: `([^`]+)`.*/\1/p' /out/ik_fused_regression.md | tail -n1 || true)"
+    fused_mode0_prefill_sane="$(sed -nE 's/^- mode0 prefill sanity: `([^`]+)`.*/\1/p' /out/ik_fused_regression.md | tail -n1 || true)"
     if [[ -z "$fused_decode_safe" ]]; then fused_decode_safe="NA"; fi
     if [[ -z "$fused_prefill_safe" ]]; then fused_prefill_safe="NA"; fi
+    if [[ -z "$fused_mode0_decode_sane" ]]; then fused_mode0_decode_sane="NA"; fi
+    if [[ -z "$fused_mode0_prefill_sane" ]]; then fused_mode0_prefill_sane="NA"; fi
 fi
 
 {
@@ -479,6 +485,8 @@ fi
         if [[ -f /out/ik_fused_regression.md ]]; then
             echo "- decode safety (mode1 ~= mode0): \`$fused_decode_safe\`"
             echo "- prefill safety (mode1 ~= mode0): \`$fused_prefill_safe\`"
+            echo "- mode0 decode sanity: \`$fused_mode0_decode_sane\`"
+            echo "- mode0 prefill sanity: \`$fused_mode0_prefill_sane\`"
             echo "- report: \`/out/ik_fused_regression.md\`"
         else
             echo "- status: \`requested but no report generated\`"

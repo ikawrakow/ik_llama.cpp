@@ -24,6 +24,9 @@ PREFILL_UB="${PREFILL_UB:-512}"
 # 2) mode=1 prefill should stay aligned with mode=0 prefill.
 MAX_DECODE_DELTA_01="${MAX_DECODE_DELTA_01:-0.10}"
 MAX_PREFILL_DELTA_01="${MAX_PREFILL_DELTA_01:-0.10}"
+# 3) mode=0 absolute perplexity should stay in a sane range.
+MAX_MODE0_DECODE_PPL="${MAX_MODE0_DECODE_PPL:-10.0}"
+MAX_MODE0_PREFILL_PPL="${MAX_MODE0_PREFILL_PPL:-10.0}"
 
 usage() {
     cat <<'USAGE'
@@ -48,6 +51,8 @@ Options:
   --prefill-ub N           prefill ubatch size (default: 512)
   --max-decode-delta-01 X  fail threshold for |PPL(mode1)-PPL(mode0)| in decode (default: 0.10)
   --max-prefill-delta-01 X fail threshold for |PPL(mode1)-PPL(mode0)| in prefill (default: 0.10)
+  --max-mode0-decode-ppl X fail threshold for PPL(mode0) in decode (default: 10.0)
+  --max-mode0-prefill-ppl X fail threshold for PPL(mode0) in prefill (default: 10.0)
   -h, --help               show this help
 USAGE
 }
@@ -71,6 +76,8 @@ while [[ $# -gt 0 ]]; do
         --prefill-ub) PREFILL_UB="$2"; shift 2 ;;
         --max-decode-delta-01) MAX_DECODE_DELTA_01="$2"; shift 2 ;;
         --max-prefill-delta-01) MAX_PREFILL_DELTA_01="$2"; shift 2 ;;
+        --max-mode0-decode-ppl) MAX_MODE0_DECODE_PPL="$2"; shift 2 ;;
+        --max-mode0-prefill-ppl) MAX_MODE0_PREFILL_PPL="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *)
             echo "unknown option: $1" >&2
@@ -169,6 +176,8 @@ prefill_delta_02="$(abs_delta "$prefill_0" "$prefill_2")"
 
 decode_ok="$(awk -v d="$decode_delta_01" -v t="$MAX_DECODE_DELTA_01" 'BEGIN { print(d <= t ? "yes" : "no") }')"
 prefill_ok="$(awk -v d="$prefill_delta_01" -v t="$MAX_PREFILL_DELTA_01" 'BEGIN { print(d <= t ? "yes" : "no") }')"
+mode0_decode_ok="$(awk -v p="$decode_0" -v t="$MAX_MODE0_DECODE_PPL" 'BEGIN { print(p <= t ? "yes" : "no") }')"
+mode0_prefill_ok="$(awk -v p="$prefill_0" -v t="$MAX_MODE0_PREFILL_PPL" 'BEGIN { print(p <= t ? "yes" : "no") }')"
 
 {
     echo "# Qwen3Next Fused DeltaNet Regression Report"
@@ -195,6 +204,8 @@ prefill_ok="$(awk -v d="$prefill_delta_01" -v t="$MAX_PREFILL_DELTA_01" 'BEGIN {
     echo
     echo "- decode safety (mode1 ~= mode0): \`${decode_ok}\` (threshold \`${MAX_DECODE_DELTA_01}\`)"
     echo "- prefill safety (mode1 ~= mode0): \`${prefill_ok}\` (threshold \`${MAX_PREFILL_DELTA_01}\`)"
+    echo "- mode0 decode sanity: \`${mode0_decode_ok}\` (PPL \`${decode_0}\`, max \`${MAX_MODE0_DECODE_PPL}\`)"
+    echo "- mode0 prefill sanity: \`${mode0_prefill_ok}\` (PPL \`${prefill_0}\`, max \`${MAX_MODE0_PREFILL_PPL}\`)"
     echo
     echo "## Logs"
     echo
@@ -209,7 +220,7 @@ prefill_ok="$(awk -v d="$prefill_delta_01" -v t="$MAX_PREFILL_DELTA_01" 'BEGIN {
 
 echo "wrote report: $OUT_FILE"
 
-if [[ "$decode_ok" != "yes" || "$prefill_ok" != "yes" ]]; then
+if [[ "$decode_ok" != "yes" || "$prefill_ok" != "yes" || "$mode0_decode_ok" != "yes" || "$mode0_prefill_ok" != "yes" ]]; then
     echo "regression check failed; see report: $OUT_FILE" >&2
     exit 1
 fi

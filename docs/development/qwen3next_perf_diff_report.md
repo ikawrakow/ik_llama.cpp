@@ -104,3 +104,5 @@ Relative (`ik` vs mainline):
 - Also integrated into the broader eval harness:
   - `scripts/qwen3next-eval.sh --with-gpu --with-fused-regression ...`
   - Results are surfaced in `SUMMARY.md` under `IK Fused Delta Regression`.
+- Fused regression now enforces absolute non-fused sanity too:
+  - mode0 decode/prefill PPL must stay below configurable thresholds (defaults: `10.0` / `10.0`).
