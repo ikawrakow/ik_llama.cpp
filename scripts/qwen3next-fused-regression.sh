@@ -98,7 +98,8 @@ if [[ ! -f "$INPUT_FILE" ]]; then
 Regression text for Qwen3Next fused DeltaNet checks.
 This text is deterministic and intentionally repetitive.
 TXT
-    for _ in $(seq 1 500); do
+    # Keep this comfortably above 2*ctx tokenization requirements used by llama-perplexity.
+    for _ in $(seq 1 900); do
         echo "the model should keep stable perplexity under consistent settings" >> "$INPUT_FILE"
     done
 fi

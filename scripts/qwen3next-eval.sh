@@ -9,6 +9,7 @@ IK_BUILD_DIR="${IK_BUILD_DIR:-build}"
 MODEL_HOST="${MODEL_HOST:-/home/yurko/.cache/llama.cpp/qwen3-next-coder.gguf}"
 OUT_ROOT="${OUT_ROOT:-/tmp/qwen3next-eval}"
 WITH_GPU=0
+WITH_FUSED_REGRESSION=0
 GPU_DEVICE="${GPU_DEVICE:-0}"
 SWEEP_CTX="${SWEEP_CTX:-2048}"
 SWEEP_N="${SWEEP_N:-32}"
@@ -20,6 +21,7 @@ Usage:
 
 Options:
   --with-gpu                 Enable GPU checks in addition to CPU checks.
+  --with-fused-regression    Run ik fused-delta regression check and include in summary.
   --gpu-device ID            CUDA device id to use for GPU sanity checks (default: 0).
   --image IMAGE              Docker image to run checks in (default: iktest-dev:latest).
   --main-repo PATH           Mainline repo path (default: /home/yurko/Code/llama.cpp).
@@ -37,6 +39,7 @@ What this script runs (in this order):
   2) CPU perplexity parity (chunks=2)      mainline -> ik
   3) CPU short generation smoke quality    mainline -> ik
   4) Optional GPU sanity checks            mainline -> ik
+  5) Optional ik fused-delta regression    mode0/mode1/mode2 safety check
 
 Output:
   A timestamped folder is created under OUT_ROOT with:
@@ -50,6 +53,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --with-gpu)
             WITH_GPU=1
+            shift
+            ;;
+        --with-fused-regression)
+            WITH_FUSED_REGRESSION=1
             shift
             ;;
         --gpu-device)
@@ -143,6 +150,7 @@ SWEEP_CTX="${SWEEP_CTX:-2048}"
 SWEEP_N="${SWEEP_N:-32}"
 MAIN_BUILD_DIR="${MAIN_BUILD_DIR:-build}"
 IK_BUILD_DIR="${IK_BUILD_DIR:-build}"
+WITH_FUSED_REGRESSION="${WITH_FUSED_REGRESSION:-0}"
 
 MAIN_BIN="/mainline/${MAIN_BUILD_DIR}/bin"
 IK_BIN="/ik/${IK_BUILD_DIR}/bin"
@@ -309,34 +317,6 @@ has_token() {
     fi
 }
 
-main_ppl() {
-    LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-perplexity" "$@"
-}
-
-ik_ppl() {
-    LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-perplexity" "$@"
-}
-
-main_cli() {
-    LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-cli" "$@"
-}
-
-main_completion() {
-    LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-completion" "$@"
-}
-
-ik_cli() {
-    LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-cli" "$@"
-}
-
-main_sweep() {
-    LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-sweep-bench" "$@"
-}
-
-ik_sweep() {
-    LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-sweep-bench" "$@"
-}
-
 require_bin "$MAIN_BIN/llama-perplexity"
 require_bin "$MAIN_BIN/llama-cli"
 require_bin "$MAIN_BIN/llama-completion"
@@ -351,48 +331,98 @@ else
     log "GPU checks enabled on CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 fi
 
+if [[ "$WITH_FUSED_REGRESSION" == "1" && "$WITH_GPU" != "1" ]]; then
+    log "Fused regression requested but GPU mode is disabled; this step will be skipped"
+fi
+
 PPL_INPUT="/out/ppl_input.txt"
 GEN_PROMPT="$(cat /out/gen_prompt.txt)"
 
 # CPU perplexity: chunks=1 (mainline -> ik)
 run_cmd "cpu_ppl_chunks1_mainline" \
-    main_ppl -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 1 --no-warmup -ngl 0 || true
+    env LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-perplexity" \
+        -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 1 --no-warmup -ngl 0 || true
 run_cmd "cpu_ppl_chunks1_ik" \
-    ik_ppl -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 1 --no-warmup -ngl 0 || true
+    env LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-perplexity" \
+        -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 1 --no-warmup -ngl 0 || true
 
 # CPU perplexity: chunks=2 (mainline -> ik)
 run_cmd "cpu_ppl_chunks2_mainline" \
-    main_ppl -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 2 --no-warmup -ngl 0 || true
+    env LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-perplexity" \
+        -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 2 --no-warmup -ngl 0 || true
 run_cmd "cpu_ppl_chunks2_ik" \
-    ik_ppl -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 2 --no-warmup -ngl 0 || true
+    env LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-perplexity" \
+        -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 2 --no-warmup -ngl 0 || true
 
 # CPU short generation smoke quality (mainline -> ik)
 run_cmd "cpu_gen_mainline" \
-    main_completion -m "$MODEL" --cpu-moe -ngl 0 -c 512 -n 64 --seed 123 --temp 0 --top-k 1 --simple-io --no-display-prompt -p "$GEN_PROMPT" || true
+    env LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-completion" \
+        -m "$MODEL" --cpu-moe -ngl 0 -c 512 -n 64 --seed 123 --temp 0 --top-k 1 --simple-io --no-display-prompt -p "$GEN_PROMPT" || true
 run_cmd "cpu_gen_ik" \
-    ik_cli -m "$MODEL" --cpu-moe -ngl 0 -c 512 -n 64 --seed 123 --temp 0 --top-k 1 --simple-io --no-display-prompt -p "$GEN_PROMPT" || true
+    env LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-cli" \
+        -m "$MODEL" --cpu-moe -ngl 0 -c 512 -n 64 --seed 123 --temp 0 --top-k 1 --simple-io --no-display-prompt -p "$GEN_PROMPT" || true
 
 if [[ "$WITH_GPU" == "1" ]]; then
     # CUDA sanity perplexity: chunks=1 (mainline -> ik)
     run_cmd "gpu_ppl_chunks1_mainline" \
-        main_ppl -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 1 --no-warmup -ngl 1 || true
+        env LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-perplexity" \
+            -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 1 --no-warmup -ngl 1 || true
     run_cmd "gpu_ppl_chunks1_ik" \
-        ik_ppl -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 1 --no-warmup -ngl 1 || true
+        env LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-perplexity" \
+            -m "$MODEL" -f "$PPL_INPUT" -c 256 -b 64 -ub 64 --chunks 1 --no-warmup -ngl 1 || true
 
     # Quick sweep sanity (mainline -> ik)
     if [[ -x "$MAIN_BIN/llama-sweep-bench" ]]; then
-        run_cmd "gpu_sweep_mainline" \
-            main_sweep -m "$MODEL" --cpu-moe -ngl 999 -c "$SWEEP_CTX" -b 1024 -ub 128 -n "$SWEEP_N" -ctk f16 -ctv f16 || true
+        if env LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-sweep-bench" --help >/dev/null 2>&1; then
+            run_cmd "gpu_sweep_mainline" \
+                env LD_LIBRARY_PATH="$MAIN_LD" "$MAIN_BIN/llama-sweep-bench" \
+                    -m "$MODEL" --cpu-moe -ngl 999 -c "$SWEEP_CTX" -b 1024 -ub 128 -n "$SWEEP_N" -ctk f16 -ctv f16 || true
+        else
+            printf "%s\tSKIP\t0\tNA\tNA\tNA\tNA\tNA\tNA\n" "gpu_sweep_mainline" >> "$STATUS_FILE"
+            log "SKIP: gpu_sweep_mainline (binary cannot start with current runtime deps)"
+        fi
     else
         printf "%s\tSKIP\t0\tNA\tNA\tNA\tNA\tNA\tNA\n" "gpu_sweep_mainline" >> "$STATUS_FILE"
         log "SKIP: gpu_sweep_mainline (missing $MAIN_BIN/llama-sweep-bench)"
     fi
     if [[ -x "$IK_BIN/llama-sweep-bench" ]]; then
-        run_cmd "gpu_sweep_ik" \
-            ik_sweep -m "$MODEL" --cpu-moe -ngl 999 -c "$SWEEP_CTX" -b 1024 -ub 128 -n "$SWEEP_N" -ctk f16 -ctv f16 || true
+        if env LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-sweep-bench" --help >/dev/null 2>&1; then
+            run_cmd "gpu_sweep_ik" \
+                env LD_LIBRARY_PATH="$IK_LD" "$IK_BIN/llama-sweep-bench" \
+                    -m "$MODEL" --cpu-moe -ngl 999 -c "$SWEEP_CTX" -b 1024 -ub 128 -n "$SWEEP_N" -ctk f16 -ctv f16 || true
+        else
+            printf "%s\tSKIP\t0\tNA\tNA\tNA\tNA\tNA\tNA\n" "gpu_sweep_ik" >> "$STATUS_FILE"
+            log "SKIP: gpu_sweep_ik (binary cannot start with current runtime deps)"
+        fi
     else
         printf "%s\tSKIP\t0\tNA\tNA\tNA\tNA\tNA\tNA\n" "gpu_sweep_ik" >> "$STATUS_FILE"
         log "SKIP: gpu_sweep_ik (missing $IK_BIN/llama-sweep-bench)"
+    fi
+fi
+
+if [[ "$WITH_FUSED_REGRESSION" == "1" ]]; then
+    if [[ "$WITH_GPU" != "1" ]]; then
+        printf "%s\tSKIP\t0\tNA\tNA\tNA\tNA\tNA\tNA\n" "ik_fused_regression" >> "$STATUS_FILE"
+    elif [[ ! -x "/ik/scripts/qwen3next-fused-regression.sh" ]]; then
+        printf "%s\tSKIP\t0\tNA\tNA\tNA\tNA\tNA\tNA\n" "ik_fused_regression" >> "$STATUS_FILE"
+        log "SKIP: ik_fused_regression (missing /ik/scripts/qwen3next-fused-regression.sh)"
+    else
+        run_cmd "ik_fused_regression" \
+            env LD_LIBRARY_PATH="$IK_LD" /ik/scripts/qwen3next-fused-regression.sh \
+                --model "$MODEL" \
+                --bin "$IK_BIN/llama-perplexity" \
+                --out /out/ik_fused_regression.md \
+                --cuda-device "$GPU_DEVICE" \
+                --threads 8 \
+                --ctx 2048 \
+                --fa on \
+                --ngl 47 \
+                --n-cpu-moe 40 \
+                --chunks 1 \
+                --decode-b 1 \
+                --decode-ub 1 \
+                --prefill-b 2048 \
+                --prefill-ub 512 || true
     fi
 fi
 
@@ -415,6 +445,14 @@ main_has_fib="$(has_token /out/cpu_gen_mainline.out 'fibonacci|fibs|fib')"
 ik_has_fib="$(has_token /out/cpu_gen_ik.out 'fibonacci|fibs|fib')"
 main_has_complexity="$(has_token /out/cpu_gen_mainline.out 'complexity|O\(')"
 ik_has_complexity="$(has_token /out/cpu_gen_ik.out 'complexity|O\(')"
+fused_decode_safe="NA"
+fused_prefill_safe="NA"
+if [[ -f /out/ik_fused_regression.md ]]; then
+    fused_decode_safe="$(sed -nE 's/^- decode safety .*: `([^`]+)`.*/\1/p' /out/ik_fused_regression.md | tail -n1 || true)"
+    fused_prefill_safe="$(sed -nE 's/^- prefill safety .*: `([^`]+)`.*/\1/p' /out/ik_fused_regression.md | tail -n1 || true)"
+    if [[ -z "$fused_decode_safe" ]]; then fused_decode_safe="NA"; fi
+    if [[ -z "$fused_prefill_safe" ]]; then fused_prefill_safe="NA"; fi
+fi
 
 {
     echo "# Qwen3Next Eval Summary"
@@ -435,6 +473,19 @@ ik_has_complexity="$(has_token /out/cpu_gen_ik.out 'complexity|O\(')"
     echo "- ik has Fibonacci token(s): \`$ik_has_fib\`"
     echo "- mainline has complexity token(s): \`$main_has_complexity\`"
     echo "- ik has complexity token(s): \`$ik_has_complexity\`"
+    echo
+    echo "## IK Fused Delta Regression"
+    if [[ "$WITH_FUSED_REGRESSION" == "1" ]]; then
+        if [[ -f /out/ik_fused_regression.md ]]; then
+            echo "- decode safety (mode1 ~= mode0): \`$fused_decode_safe\`"
+            echo "- prefill safety (mode1 ~= mode0): \`$fused_prefill_safe\`"
+            echo "- report: \`/out/ik_fused_regression.md\`"
+        else
+            echo "- status: \`requested but no report generated\`"
+        fi
+    else
+        echo "- status: \`not requested\`"
+    fi
     echo
     echo "## Command Status + Memory"
     echo '```'
@@ -460,6 +511,7 @@ docker_cmd=(
     -e GPU_DEVICE="${GPU_DEVICE}"
     -e SWEEP_CTX="${SWEEP_CTX}"
     -e SWEEP_N="${SWEEP_N}"
+    -e WITH_FUSED_REGRESSION="${WITH_FUSED_REGRESSION}"
     -e MAIN_BUILD_DIR="${MAIN_BUILD_DIR}"
     -e IK_BUILD_DIR="${IK_BUILD_DIR}"
     -v "${MAIN_REPO}:/mainline"

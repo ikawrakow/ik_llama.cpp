@@ -101,3 +101,6 @@ Relative (`ik` vs mainline):
   - `scripts/qwen3next-fused-regression.sh`
   - Example:
     - `BIN=./build-qwen3next-fix/bin/llama-perplexity scripts/qwen3next-fused-regression.sh --model /models/qwen3-next-coder.gguf --ctx 2048 --decode-b 1 --decode-ub 1 --prefill-b 2048 --prefill-ub 512 --ngl 47 --n-cpu-moe 40`
+- Also integrated into the broader eval harness:
+  - `scripts/qwen3next-eval.sh --with-gpu --with-fused-regression ...`
+  - Results are surfaced in `SUMMARY.md` under `IK Fused Delta Regression`.
