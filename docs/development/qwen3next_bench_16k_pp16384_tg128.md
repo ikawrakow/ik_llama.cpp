@@ -1,0 +1,115 @@
+# Qwen3Next Benchmark: PP 16384 / TG 128 (`ik_llama.cpp` vs `llama.cpp`)
+
+Date: 2026-02-08
+
+## Setup
+
+- Container: `iktest2`
+- Model: `/models/qwen3-next-coder.gguf`
+- Prompt processing: `-p 16384`
+- Token generation: `-n 128`
+- Batch settings: `-b 3072 -ub 768`
+- Threads: `-t 8`
+- Repetitions: `-r 1`
+- Mmap: `-mmp 0`
+
+CUDA runs:
+
+- `CUDA_VISIBLE_DEVICES=0`
+- `-fa 1 -ngl 999 --n-cpu-moe 47`
+
+CPU-only runs:
+
+- `-fa 0 -ngl 0 --n-cpu-moe 0`
+
+Hardware note:
+
+- GPU0 (bench target): `NVIDIA GeForce RTX 5060 Ti`, `16311 MiB` total (`CUDA_VISIBLE_DEVICES=0` for CUDA runs).
+- GPU1 (not used for these runs): `NVIDIA GeForce RTX 3060`, `12288 MiB` total.
+- Observed during active `ik` CUDA run (`p=8192,b=2048,ub=512,n-cpu-moe=45`): GPU0 memory used `~12074 MiB` (`~3775 MiB` free), from `nvidia-smi`.
+
+## Results
+
+| Build | Backend | PP 16384 (tok/s) | TG 128 (tok/s) |
+|---|---|---:|---:|
+| `ik_llama.cpp` | CUDA | 207.891304 | 27.263562 |
+| `llama.cpp` | CUDA | 185.764649 | 24.145662 |
+| `ik_llama.cpp` | CPU-only | 45.739881 | 12.172113 |
+| `llama.cpp` | CPU-only | 47.835420 | 6.991398 |
+
+## Relative (`ik` vs `llama.cpp`)
+
+- CUDA PP: `+11.91%`
+- CUDA TG: `+12.91%`
+- CPU PP: `-4.38%`
+- CPU TG: `+74.10%`
+
+## Raw outputs
+
+- `/tmp/ik_cuda_bench_16k.json`
+- `/tmp/mainline_cuda_bench_16k.json`
+- `/tmp/ik_cpu_bench_16k.json`
+- `/tmp/mainline_cpu_bench_16k.json`
+
+## Additional CUDA rerun (requested lower `n-cpu-moe` ballpark)
+
+Adjusted config:
+
+- `-p 8192 -n 128 -b 2048 -ub 512 -t 8 -fa 1 -ngl 999 -mmp 0`
+- single GPU: `CUDA_VISIBLE_DEVICES=0`
+
+Fit checks on `ik`:
+
+- `--n-cpu-moe 25` -> fail to load model
+- `--n-cpu-moe 40` -> fail to create context
+- `--n-cpu-moe 45` -> works
+
+Working comparison at `--n-cpu-moe 45`:
+
+| Build | Backend | PP 8192 (tok/s) | TG 128 (tok/s) |
+|---|---|---:|---:|
+| `ik_llama.cpp` | CUDA | 201.613283 | 24.884600 |
+| `llama.cpp` | CUDA | 145.100895 | 24.595058 |
+
+`ik` rerun with `-rtr 1` at the same config (`--n-cpu-moe 45`):
+
+| Build | Backend | PP 8192 (tok/s) | TG 128 (tok/s) |
+|---|---|---:|---:|
+| `ik_llama.cpp` (`-rtr 1`) | CUDA | 232.340508 | 27.895722 |
+
+## Fused DeltaNet Quality Check (GPU, `-c 2048`, `--chunks 1`)
+
+Date: 2026-02-08
+
+Setup:
+
+- Container: `iktest2`
+- Device: `CUDA_VISIBLE_DEVICES=0` (RTX 5060 Ti)
+- Common args: `-c 2048 -b 2048 -ub 512 --chunks 1 --no-warmup -ngl 999 --n-cpu-moe 47 -t 8 -fa on`
+- Switch under test: `LLAMA_QWEN3NEXT_FUSED_DELTA`
+
+Results (Wikitext2 sample file `/tmp/ppl_wikitext2_test.txt`):
+
+| Model | `LLAMA_QWEN3NEXT_FUSED_DELTA=0` | `LLAMA_QWEN3NEXT_FUSED_DELTA=1` |
+|---|---:|---:|
+| `/models/qwen3-next-coder.gguf` | `PPL 3.9378` | `PPL 15.3628` |
+| `/models/qwen-3-coder-next-mxfp4.gguf` | `PPL 3.9860` | `PPL 15.0740` |
+
+Conclusion:
+
+- Fused DeltaNet path is currently numerically bad for both tested quants on CUDA in this setup.
+- Keeping fused path opt-in (`LLAMA_QWEN3NEXT_FUSED_DELTA=1`) and defaulting to non-fused is required for model quality.
+
+## Upstream PR #19375 Trial (Selective Port) Outcome
+
+Date: 2026-02-08
+
+What was tried:
+
+- Ported selected non-fused qwen3next graph changes from `ggml-org/llama.cpp#19375` (broadcast/repeat and autoregressive matmul rewrite), then benchmarked and re-tested perplexity.
+
+Outcome:
+
+- No stable speed win in our setup after repeated runs.
+- Autoregressive rewrite specifically hurt TG throughput in non-fused mode and was reverted.
+- Final code keeps only the fused-default safety fix (non-fused by default).

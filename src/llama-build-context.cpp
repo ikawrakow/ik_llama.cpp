@@ -4178,22 +4178,23 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
     const bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
 
-    // Default to fused DeltaNet path; set LLAMA_QWEN3NEXT_FUSED_DELTA=0 to force legacy graph path.
+    // Keep legacy DeltaNet path as the default for correctness; enable fused path explicitly
+    // with LLAMA_QWEN3NEXT_FUSED_DELTA=1 for controlled testing.
     const bool use_fused_delta_net = []() {
         const char * env = std::getenv("LLAMA_QWEN3NEXT_FUSED_DELTA");
         if (env == nullptr || env[0] == '\0') {
-            return true;
+            return false;
         }
 
         switch (env[0]) {
-            case '0':
-            case 'n':
-            case 'N':
-            case 'f':
-            case 'F':
-                return false;
-            default:
+            case '1':
+            case 'y':
+            case 'Y':
+            case 't':
+            case 'T':
                 return true;
+            default:
+                return false;
         }
     }();
 
