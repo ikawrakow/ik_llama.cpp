@@ -6,7 +6,6 @@
 
 #include "ggml.h"
 
-#include <cstdlib>
 #include <unordered_set>
 
 llm_build_context::llm_build_context(
@@ -48,6 +47,7 @@ llm_build_context::llm_build_context(
         kv_head          (worst_case ? (kv_self.recurrent ? 0 : kv_self.size - n_tokens) : kv_self.head),
         n_ctx_orig       (cparams.n_ctx_orig_yarn),
         flash_attn       (cparams.flash_attn),
+        fused_delta      (cparams.fused_delta),
         mla_attn         (cparams.mla_attn),
         attn_max_batch   (cparams.attn_max_batch),
         fused_moe_up_gate(cparams.fused_moe_up_gate),
@@ -4178,32 +4178,8 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
     const bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
 
-    enum class qwen3next_fused_delta_mode {
-        off,
-        tok_gt1,
-    };
-
-    // Keep legacy DeltaNet path as default for correctness.
-    // LLAMA_QWEN3NEXT_FUSED_DELTA values:
-    //   unset / 0 : off
-    //   1         : fused only for n_tok > 1 (safer; avoids known decode regression)
-    const qwen3next_fused_delta_mode fused_delta_mode = []() {
-        const char * env = std::getenv("LLAMA_QWEN3NEXT_FUSED_DELTA");
-        if (env == nullptr || env[0] == '\0') {
-            return qwen3next_fused_delta_mode::off;
-        }
-
-        switch (env[0]) {
-            case '1':
-            case 'y':
-            case 'Y':
-            case 't':
-            case 'T':
-                return qwen3next_fused_delta_mode::tok_gt1;
-            default:
-                return qwen3next_fused_delta_mode::off;
-        }
-    }();
+    // Keep decode on the legacy DeltaNet path; fused path is used only for n_tok > 1.
+    const bool use_fused_delta_mode = cparams.fused_delta;
 
     auto get_slice_2d = [&](ggml_tensor * t, int64_t c) -> ggml_tensor * {
         return ggml_view_4d(ctx0, t, t->ne[0], t->ne[1], 1, t->ne[3],
@@ -4838,8 +4814,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(v_conv, "v_conv_predelta", il);
 
         std::pair<ggml_tensor *, ggml_tensor *> attn_out;
-        const bool use_fused_delta_net =
-            (fused_delta_mode == qwen3next_fused_delta_mode::tok_gt1 && n_tok > 1);
+        const bool use_fused_delta_net = use_fused_delta_mode && n_tok > 1;
 
         if (use_fused_delta_net) {
             attn_out = build_delta_net_fused(q_conv, k_conv, v_conv, gate, beta, state, il);
