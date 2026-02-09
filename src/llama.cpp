@@ -956,40 +956,28 @@ static bool llama_kv_cache_find_slot(
 
     if (batch.mtp_params.op_type == MTP_OP_WARMUP || 
         batch.mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
+
         const llama_pos target_pos = batch.pos[0];
         const llama_seq_id target_seq = batch.seq_id[0][0]; 
-
-        bool found = false;
 
         if (cache.head < cache.size && 
             cache.cells[cache.head].pos == target_pos && 
             cache.cells[cache.head].has_seq_id(target_seq)) {
-            found = true;
+            return true;
         }
-        else {
-            for (uint32_t i = 0; i < cache.size; ++i) {
-                if (cache.cells[i].pos == target_pos && 
-                    cache.cells[i].has_seq_id(target_seq)) {
-                    
-                    cache.head = i;
-                    found = true;
-                    break;
-                }
+
+        for (uint32_t i = 0; i < cache.size; ++i) {
+            if (cache.cells[i].pos == target_pos && 
+                cache.cells[i].has_seq_id(target_seq)) {
+                
+                cache.head = i;
+                return true;
             }
         }
 
-        if (!found) {
-            LLAMA_LOG_ERROR("%s: MTP Update failed - slot for seq %d pos %d not found\n", 
-                __func__, target_seq, target_pos);
-            return false;
-        }
-
-        if (cache.head + n_tokens > cache.size) {
-             LLAMA_LOG_ERROR("%s: MTP Update out of bounds\n", __func__);
-             return false;
-        }
-
-        return true;
+        LLAMA_LOG_ERROR("%s: MTP Update Panic - Main model did not save pos %d for seq %d\n", 
+            __func__, target_pos, target_seq);
+        return false;
     }
 
     if (n_tokens > cache.size) {
@@ -3147,7 +3135,7 @@ static int llama_decode_internal(
             if (ret != 0) {
                 return ret;
             }
-
+// here?
             // if we have enough unused cells before the current head ->
             //   better to start searching from the beginning of the cache, hoping to fill it
             if (kv_self.head > kv_self.used + 2*n_tokens) {
@@ -4189,6 +4177,7 @@ struct llama_context_params llama_context_default_params() {
         /*.split_mode_graph_scheduling =*/ false,
         // /*.split_mode_f16              =*/ true,
         /*.scheduler_async             =*/ false,
+        /*.mtp                         =*/ false,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
@@ -4559,6 +4548,7 @@ struct llama_context * llama_new_context_with_model(
     cparams.min_experts      = params.min_experts;
     cparams.thresh_experts   = params.thresh_experts;
     cparams.cuda_params      = params.cuda_params;
+    cparams.mtp              = params.mtp;
 
     cparams.reduce_type      = params.type_reduce;
     cparams.pooling_type     = params.pooling_type;
@@ -4644,6 +4634,10 @@ struct llama_context * llama_new_context_with_model(
             LLAMA_LOG_WARN("=====================================================================\n");
             cparams.reduce_type = GGML_TYPE_F32;
         }
+    }
+
+    if (model->arch != LLM_ARCH_GLM4_MOE && cparams.mtp != 0) {
+        cparams.mtp = 0;
     }
 
     LLAMA_LOG_INFO("%s: n_ctx         = %u\n",     __func__, cparams.n_ctx);

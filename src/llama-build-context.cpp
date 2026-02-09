@@ -7136,6 +7136,7 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
             struct ggml_tensor * inpSA = inpL;
 
             // self-attention
+            // maybe i need this?
             if (rope_cache == nullptr) {
                 cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, nullptr,
                         KQ_mask, nullptr, nullptr, kq_scale, 0.0f, 0, il, true, false, true);
@@ -7246,7 +7247,7 @@ struct ggml_tensor * llm_build_context::build_mtp_tail(
 ) {
     const int il = hparams.n_layer - 1;
 
-    struct ggml_tensor * KQ_mask = build_inp_KQ_mask(); 
+    struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
     struct ggml_tensor * inp_out_ids = build_inp_out_ids();
 

@@ -45,6 +45,7 @@ struct llama_cparams {
     bool scheduler_async;
     int  min_experts;
     float thresh_experts;
+    bool mtp;
 
     enum ggml_type reduce_type;
     enum llama_pooling_type pooling_type;

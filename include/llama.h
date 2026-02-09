@@ -460,6 +460,7 @@ extern "C" {
         bool split_mode_graph_scheduling; // if true, force split mode graph scheduling
         //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
+        bool mtp;   // Activate MTP if supported
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted

@@ -449,14 +449,12 @@ void mtp_accept_tokens(
         return;
     }
 
-
     llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
     for (size_t i = 0; i < ids.size(); ++i) {
         common_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
     }
 
     mtp_update_kv_cache(ctx, accepted_batch, false);
-
 
     llama_batch_free(accepted_batch);
 }
