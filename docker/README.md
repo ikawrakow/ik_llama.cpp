@@ -123,7 +123,7 @@ docker run  -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --r
 - If you build the image on the same machine where will be used, change `-DGGML_NATIVE=OFF` to `-DGGML_NATIVE=ON` in the `.Containerfile`.
 - For a smaller CUDA build, identify your GPU [CUDA GPU Compute Capability](https://developer.nvidia.com/cuda/gpus) (e.g. `8.6` for RTX30*0) then change `CUDA_DOCKER_ARCH` in `ik_llama-cuda.Containerfile` from `default` to your GPU architecture (e.g. `CUDA_DOCKER_ARCH=86`).
 - If you build only for your GPU architecture and want to make use of more KV quantization types, build with `-DGGML_IQK_FA_ALL_QUANTS=ON`.
-- Get the best (measures kindly provided on each model card) quants from [ubergarm](https://huggingface.co/ubergarm/models) if available.
+- Look for premade quants (and imatrix files) that work well on most standard systems and are designed around ik_llama.cpp (with helpful metrics in the model card) from [ubergarm](https://huggingface.co/ubergarm/models).
 - Usefull graphs and numbers on @magikRUKKOLA [Perplexity vs Size Graphs for the recent quants (GLM-4.7, Kimi-K2-Thinking, Deepseek-V3.1-Terminus, Deepseek-R1, Qwen3-Coder, Kimi-K2, Chimera etc.)](https://github.com/ikawrakow/ik_llama.cpp/discussions/715) topic.
 - Build custom quants with [Thireus](https://github.com/Thireus/GGUF-Tool-Suite)'s tools.
 - Download from [ik_llama.cpp's Thireus fork with release builds for macOS/Windows/Ubuntu CPU and Windows CUDA](https://github.com/Thireus/ik_llama.cpp) if you cannot build.
@@ -132,7 +132,5 @@ docker run  -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --r
 # Credits
 
 All credits to the awesome community:  
-
-[ikawrakow](https://github.com/ikawrakow/ik_llama.cpp)
 
 [llama-swap](https://github.com/mostlygeek/llama-swap)
