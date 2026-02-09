@@ -408,6 +408,7 @@ int server_slot::get_n_draft_max() const {
     //       also, need to leave space for 1 extra token to allow context shifts
     n_draft_max = std::min(n_draft_max, n_ctx - n_past - 2);
 
+    // int n_remaining = n_predict - n_decoded;
     if (n_remaining > 0) {
         n_draft_max = std::min(n_draft_max, n_remaining - 1);
     }
@@ -2949,9 +2950,7 @@ void server_context::speculative_decoding_accept() {
 
         // the accepted tokens from the speculation
         const auto ids = common_sampler_sample_and_accept_n(slot.ctx_sampling, ctx, slot.i_batch_dft, slot.drafted);
-        slot.i_batch_dft.clear();
-        slot.drafted.clear();
-
+        
         if (slot.has_mtp) {
             const float* emb = llama_get_embeddings_ith(ctx, -1);
             if (emb) {
@@ -2975,6 +2974,9 @@ void server_context::speculative_decoding_accept() {
 
             }
         }
+
+        slot.i_batch_dft.clear();
+        slot.drafted.clear();
 
         slot.n_past += ids.size();
         slot.n_decoded += ids.size();

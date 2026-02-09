@@ -956,28 +956,40 @@ static bool llama_kv_cache_find_slot(
 
     if (batch.mtp_params.op_type == MTP_OP_WARMUP || 
         batch.mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
-
         const llama_pos target_pos = batch.pos[0];
         const llama_seq_id target_seq = batch.seq_id[0][0]; 
+
+        bool found = false;
 
         if (cache.head < cache.size && 
             cache.cells[cache.head].pos == target_pos && 
             cache.cells[cache.head].has_seq_id(target_seq)) {
-            return true;
+            found = true;
         }
-
-        for (uint32_t i = 0; i < cache.size; ++i) {
-            if (cache.cells[i].pos == target_pos && 
-                cache.cells[i].has_seq_id(target_seq)) {
-                
-                cache.head = i;
-                return true;
+        else {
+            for (uint32_t i = 0; i < cache.size; ++i) {
+                if (cache.cells[i].pos == target_pos && 
+                    cache.cells[i].has_seq_id(target_seq)) {
+                    
+                    cache.head = i;
+                    found = true;
+                    break;
+                }
             }
         }
 
-        LLAMA_LOG_ERROR("%s: MTP Update Panic - Main model did not save pos %d for seq %d\n", 
-            __func__, target_pos, target_seq);
-        return false;
+        if (!found) {
+            LLAMA_LOG_ERROR("%s: MTP Update failed - slot for seq %d pos %d not found\n", 
+                __func__, target_seq, target_pos);
+            return false;
+        }
+
+        if (cache.head + n_tokens > cache.size) {
+             LLAMA_LOG_ERROR("%s: MTP Update out of bounds\n", __func__);
+             return false;
+        }
+
+        return true;
     }
 
     if (n_tokens > cache.size) {
@@ -2950,13 +2962,11 @@ static void llama_graph_compute(
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
 }
 
-static bool prepare_mtp_graph_inputs(struct llama_context & lctx, 
-                                    const llama_mtp_params & mtp_params,
-                                    size_t offset) {
+static bool prepare_mtp_graph_inputs(struct llama_context & lctx, const llama_mtp_params & mtp_params) {
     ggml_tensor * dst = lctx.inp_mtp_states;
     const float * src = nullptr;
     if (mtp_params.op_type == MTP_OP_WARMUP || mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
-        src = lctx.embd + (offset * lctx.model.hparams.n_embd); 
+        src = lctx.embd;
     } else { 
         src = lctx.draft_input_hidden_state;
     }
@@ -3212,6 +3222,12 @@ static int llama_decode_internal(
             gf = lctx.prev->graph;
         }
 
+        if (u_batch.mtp_params.op_type != MTP_OP_NONE) { 
+            if (!prepare_mtp_graph_inputs(lctx, u_batch.mtp_params)) {
+                return GGML_STATUS_FAILED;
+            }
+        }
+
         // the output is always the last tensor in the graph
         struct ggml_tensor * res  = gf->nodes[gf->n_nodes - 1];
         struct ggml_tensor * embd = nullptr;
@@ -3273,12 +3289,6 @@ static int llama_decode_internal(
         //if (n_past%100 == 0) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
-
-        if (u_batch.mtp_params.op_type != MTP_OP_NONE) { 
-            if (!prepare_mtp_graph_inputs(lctx, u_batch.mtp_params, cur_token)) {
-                return GGML_STATUS_FAILED;
-            }
-        }
 
         // extract logits
         if (res) {

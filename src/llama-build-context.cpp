@@ -264,12 +264,11 @@ struct ggml_tensor * llm_build_context::build_inp_embd_mtp(struct ggml_tensor * 
         ggml_set_input(lctx.inp_tokens);
 
         cur = ggml_get_rows(ctx0, mtp_tok_embd, lctx.inp_tokens);
-        cb(cur, "inp_embd", -1);
     } else {
         return nullptr; 
     }
 
-    GGML_ASSERT(cur != nullptr);
+    cb(cur, "inp_embd", -1);
     
     return cur;
 }
