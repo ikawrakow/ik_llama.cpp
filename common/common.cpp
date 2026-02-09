@@ -1081,15 +1081,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.speculative.ngram_size_m = value;
         return true;
     }
-    if (arg == "--spec-ngram-check-rate") {
-        CHECK_ARG
-        int value = std::stoi(argv[i]);
-        if (value < 1) {
-            throw std::invalid_argument("ngram check rate must be at least 1");
-        }
-        params.speculative.ngram_check_rate = value;
-        return true;
-    }
     if (arg == "--spec-ngram-min-hits") {
         CHECK_ARG
         int value = std::stoi(argv[i]);
@@ -2486,6 +2477,12 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "number of tokens to draft for speculative decoding (default: %d)", params.speculative.n_max });
     options.push_back({ "*", "--draft-min, --draft-n-min N",   "minimum number of draft tokens to use for speculative decoding" });
     options.push_back({ "*", "--draft-p-min P",                "minimum speculative decoding probability (greedy) (default: %.1f)", (double)params.speculative.p_min });
+    options.push_back({ "*", "--spec-type Name", "[none | ngram - cache | ngram - simple | ngram - map - k | ngram - map - k4v | ngram - mod]", "type of speculative decoding to use when no draft model is provided (default: %s)\n", (double)params.speculative.type});
+    options.push_back({ "*", "--spec-ngram-size-n N", "ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)\n",params.speculative.ngram_size_n });
+
+    options.push_back({ "*", "--spec-ngram-size-m N", "ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)\n", params.speculative.ngram_size_m });
+
+    options.push_back({ "*", "--spec-ngram-min-hits N", "minimum hits for ngram-map speculative decoding (default: %d)\n", params.speculative.ngram_min_hits });
 
     options.push_back({ "retrieval" });
     options.push_back({ "retrieval",   "       --context-file FNAME",   "file to load context from (repeat to specify multiple files)" });
