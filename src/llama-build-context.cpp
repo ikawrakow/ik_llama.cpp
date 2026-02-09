@@ -4178,7 +4178,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
     const bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
 
-    // Keep decode on the legacy DeltaNet path; fused path is used only for n_tok > 1.
+    // Fused DeltaNet path for Qwen3Next (prompt + decode) when enabled.
     const bool use_fused_delta_mode = cparams.fused_delta;
 
     auto get_slice_2d = [&](ggml_tensor * t, int64_t c) -> ggml_tensor * {
@@ -4251,14 +4251,14 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(g,    "g_pad", il);
 
         ggml_tensor * v_beta = ggml_mul(ctx0, v, beta);
-        ggml_tensor * k_beta = ggml_mul(ctx0, k, beta);
+        ggml_tensor * k_beta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, beta, k->ne[0], beta->ne[1], beta->ne[2], beta->ne[3]), k);
 
         cb(v_beta, "v_beta", il);
         cb(k_beta, "k_beta", il);
 
         q      = ggml_reshape_4d(ctx0, q,      S_k, chunk_size, n_chunks, H_k * n_seqs);
         k      = ggml_reshape_4d(ctx0, k,      S_k, chunk_size, n_chunks, H_k * n_seqs);
-        k_beta = ggml_reshape_4d(ctx0, k_beta, S_k, chunk_size, n_chunks, H_k * n_seqs);
+        k_beta = ggml_reshape_4d(ctx0, k_beta, S_k, chunk_size, n_chunks, H_v * n_seqs);
         v      = ggml_reshape_4d(ctx0, v,      S_v, chunk_size, n_chunks, H_v * n_seqs);
         v_beta = ggml_reshape_4d(ctx0, v_beta, S_v, chunk_size, n_chunks, H_v * n_seqs);
 
@@ -4306,8 +4306,8 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(k_cumdecay, "k_cumdecay", il);
 
         ggml_tensor * attn_kq = ggml_mul_mat(ctx0, k, q);
-        attn_kq = ggml_mul(ctx0, attn_kq, decay_mask);
-        attn_kq = ggml_mul(ctx0, attn_kq, diag_mask);
+        attn_kq = ggml_mul(ctx0, decay_mask, attn_kq);
+        attn_kq = ggml_mul(ctx0, attn_kq,    diag_mask);
         cb(attn_kq, "attn_kq", il);
 
         ggml_tensor * g_last = ggml_view_4d(ctx0, g_cumsum, 1, 1, g_cumsum->ne[2], g_cumsum->ne[3],
@@ -4325,7 +4325,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * g_diff_exp = ggml_exp(ctx0, g_diff);
         ggml_tensor * g_diff_exp_t = ggml_reshape_4d(ctx0, g_diff_exp, 1, chunk_size, n_chunks, g_diff_exp->ne[3]);
 
-        ggml_tensor * key_gdiff = ggml_mul(ctx0, k, g_diff_exp_t);
+        ggml_tensor * key_gdiff = ggml_mul(ctx0, ggml_repeat_4d(ctx0, g_diff_exp_t, k->ne[0], g_diff_exp_t->ne[1], g_diff_exp_t->ne[2], g_diff_exp_t->ne[3]), k);
         cb(key_gdiff, "key_gdiff", il);
 
         ggml_tensor * key_gdiff_t = ggml_cont(ctx0, ggml_transpose(ctx0, key_gdiff));
@@ -4352,7 +4352,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             ggml_tensor * v_new_t = ggml_cont(ctx0, ggml_transpose(ctx0, v_new));
             cb(v_new, "v_new_chunk", il);
 
-            ggml_tensor * q_g_exp    = ggml_mul(ctx0, q_chunk, gexp_chunk);
+            ggml_tensor * q_g_exp    = ggml_mul(ctx0, ggml_repeat_4d(ctx0, gexp_chunk, q_chunk->ne[0], gexp_chunk->ne[1], gexp_chunk->ne[2], gexp_chunk->ne[3]), q_chunk);
             ggml_tensor * attn_inter = ggml_mul_mat(ctx0, state_t, q_g_exp);
             cb(attn_inter, "attn_inter_chunk", il);
 
@@ -4814,7 +4814,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(v_conv, "v_conv_predelta", il);
 
         std::pair<ggml_tensor *, ggml_tensor *> attn_out;
-        const bool use_fused_delta_net = use_fused_delta_mode && n_tok > 1;
+        const bool use_fused_delta_net = use_fused_delta_mode;
 
         if (use_fused_delta_net) {
             attn_out = build_delta_net_fused(q_conv, k_conv, v_conv, gate, beta, state, il);

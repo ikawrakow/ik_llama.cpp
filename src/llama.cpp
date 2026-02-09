@@ -4178,7 +4178,7 @@ struct llama_context_params llama_context_default_params() {
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ true,
-        /*.fused_delta                 =*/ false,
+        /*.fused_delta                 =*/ true,
         /*.mla_attn                    =*/ 3,
         /*.attn_max_batch              =*/ 0,
         /*.fused_moe_up_gate           =*/ true,

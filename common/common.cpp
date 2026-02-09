@@ -2163,8 +2163,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --chunks N",             "max number of chunks to process (default: %d, -1 = all)", params.n_chunks });
     options.push_back({ "*",           "-no-fa, --no-flash-attn",       "disable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
     options.push_back({ "*",           "-fa, --flash-attn (auto|on|off|0|1)", "set Flash Attention (default: %s)", params.flash_attn ? "on" : "off" });
-    options.push_back({ "*",           "-fd, --fused-delta",           "enable fused DeltaNet for Qwen3Next (default: %s)", params.fused_delta ? "enabled" : "disabled" });
-    options.push_back({ "*",           "-no-fd, --no-fused-delta",     "disable fused DeltaNet for Qwen3Next (default: %s)", params.fused_delta ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-fd, --fused-delta",           "enable fused DeltaNet for Qwen3Next (prompt + decode paths) (default: %s)", params.fused_delta ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-no-fd, --no-fused-delta",     "disable fused DeltaNet for Qwen3Next (prompt + decode paths) (default: %s)", params.fused_delta ? "enabled" : "disabled" });
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
     options.push_back({ "*",           "-no-fmoe, --no-fused-moe",      "disable fused MoE (default: %s)", params.fused_moe_up_gate ? "enabled" : "disabled" });
@@ -4213,7 +4213,7 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     fprintf(stream, "simple_io: %s # default: false\n", params.simple_io ? "true" : "false");
     fprintf(stream, "cont_batching: %s # default: false\n", params.cont_batching ? "true" : "false");
     fprintf(stream, "flash_attn: %s # default: false\n", params.flash_attn ? "true" : "false");
-    fprintf(stream, "fused_delta: %s # default: false\n", params.fused_delta ? "true" : "false");
+    fprintf(stream, "fused_delta: %s # default: true\n", params.fused_delta ? "true" : "false");
     fprintf(stream, "mla_attn: %d # default: 0\n", params.mla_attn);
     fprintf(stream, "attn_max_batch: %d # default: 0\n", params.attn_max_batch);
     fprintf(stream, "fused_moe: %s # default: false\n", params.fused_moe_up_gate ? "true" : "false");
