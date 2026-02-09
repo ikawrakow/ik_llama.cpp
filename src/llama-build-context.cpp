@@ -4181,14 +4181,12 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
     enum class qwen3next_fused_delta_mode {
         off,
         tok_gt1,
-        all_tokens,
     };
 
     // Keep legacy DeltaNet path as default for correctness.
     // LLAMA_QWEN3NEXT_FUSED_DELTA values:
     //   unset / 0 : off
     //   1         : fused only for n_tok > 1 (safer; avoids known decode regression)
-    //   2         : fused for all token counts (experimental)
     const qwen3next_fused_delta_mode fused_delta_mode = []() {
         const char * env = std::getenv("LLAMA_QWEN3NEXT_FUSED_DELTA");
         if (env == nullptr || env[0] == '\0') {
@@ -4202,19 +4200,10 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             case 't':
             case 'T':
                 return qwen3next_fused_delta_mode::tok_gt1;
-            case '2':
-                return qwen3next_fused_delta_mode::all_tokens;
             default:
                 return qwen3next_fused_delta_mode::off;
         }
     }();
-    if (fused_delta_mode == qwen3next_fused_delta_mode::all_tokens) {
-        static bool warned_all_tokens = false;
-        if (!warned_all_tokens) {
-            LLAMA_LOG_WARN("%s: LLAMA_QWEN3NEXT_FUSED_DELTA=2 enables fused single-token decode; quality regression is known in this mode\n", __func__);
-            warned_all_tokens = true;
-        }
-    }
 
     auto get_slice_2d = [&](ggml_tensor * t, int64_t c) -> ggml_tensor * {
         return ggml_view_4d(ctx0, t, t->ne[0], t->ne[1], 1, t->ne[3],
@@ -4850,8 +4839,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
         std::pair<ggml_tensor *, ggml_tensor *> attn_out;
         const bool use_fused_delta_net =
-            (fused_delta_mode == qwen3next_fused_delta_mode::tok_gt1 && n_tok > 1) ||
-            (fused_delta_mode == qwen3next_fused_delta_mode::all_tokens);
+            (fused_delta_mode == qwen3next_fused_delta_mode::tok_gt1 && n_tok > 1);
 
         if (use_fused_delta_net) {
             attn_out = build_delta_net_fused(q_conv, k_conv, v_conv, gate, beta, state, il);
@@ -4935,16 +4923,14 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
     ggml_tensor * causal_mask = nullptr;
     ggml_tensor * identity    = nullptr;
     ggml_tensor * diag_mask   = nullptr;
-    if (fused_delta_mode != qwen3next_fused_delta_mode::all_tokens) {
-        causal_mask = ggml_tri(ctx0,
-                ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE, QWEN3NEXT_CHUNK_SIZE), 1.0f),
-                GGML_TRI_TYPE_LOWER);
-        identity  = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE), 1.0f));
-        diag_mask = ggml_add(ctx0, causal_mask, identity);
-        ggml_build_forward_expand(gf, causal_mask);
-        ggml_build_forward_expand(gf, identity);
-        ggml_build_forward_expand(gf, diag_mask);
-    }
+    causal_mask = ggml_tri(ctx0,
+            ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE, QWEN3NEXT_CHUNK_SIZE), 1.0f),
+            GGML_TRI_TYPE_LOWER);
+    identity  = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, QWEN3NEXT_CHUNK_SIZE), 1.0f));
+    diag_mask = ggml_add(ctx0, causal_mask, identity);
+    ggml_build_forward_expand(gf, causal_mask);
+    ggml_build_forward_expand(gf, identity);
+    ggml_build_forward_expand(gf, diag_mask);
 
     ggml_tensor * cur = nullptr;
 

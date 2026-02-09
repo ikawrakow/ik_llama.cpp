@@ -1250,8 +1250,8 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--qwen3next-fused-delta") {
         CHECK_ARG
         params.qwen3next_fused_delta = std::stoi(argv[i]);
-        if (params.qwen3next_fused_delta < 0 || params.qwen3next_fused_delta > 2) {
-            fprintf(stderr, "error: Invalid value for --qwen3next-fused-delta: %d (must be 0, 1, or 2)\n",
+        if (params.qwen3next_fused_delta < 0 || params.qwen3next_fused_delta > 1) {
+            fprintf(stderr, "error: Invalid value for --qwen3next-fused-delta: %d (must be 0 or 1)\n",
                     params.qwen3next_fused_delta);
             invalid_param = true;
         }
@@ -2181,7 +2181,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --chunks N",             "max number of chunks to process (default: %d, -1 = all)", params.n_chunks });
     options.push_back({ "*",           "-no-fa, --no-flash-attn",       "disable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled" });
     options.push_back({ "*",           "-fa, --flash-attn (auto|on|off|0|1)", "set Flash Attention (default: %s)", params.flash_attn ? "on" : "off" });
-    options.push_back({ "*",           "       --qwen3next-fused-delta {0,1,2}",
+    options.push_back({ "*",           "       --qwen3next-fused-delta {0,1}",
                                                                         "force LLAMA_QWEN3NEXT_FUSED_DELTA mode for Qwen3Next (default: env/model default)" });
     options.push_back({ "*",           "-mla,  --mla-use",              "enable MLA (default: %d)", params.mla_attn });
     options.push_back({ "*",           "-amb,  --attention-max-batch",  "max batch size for attention computations (default: %d)", params.attn_max_batch});
