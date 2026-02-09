@@ -1891,7 +1891,8 @@ ggml_cgraph * llm_build_context::build_llama() {
 
         // self-attention
         if (use_rope) {
-            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
+            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                    inp_pos, il == n_layer - 1 && n_tokens > 1 ? inp_out_ids : nullptr, nullptr,
                     this_KQ_mask, nullptr, nullptr, kq_scale, hparams.f_attention_scale, this_n_swa, il, true, false, true);
         }
         else {
@@ -3560,8 +3561,9 @@ ggml_cgraph * llm_build_context::build_seedoss() {
 
     for (int il = 0; il < n_layer; ++il) {
 
-        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer-1 ? inp_out_ids : nullptr, nullptr,
-                    KQ_mask, nullptr, nullptr, kq_scale, 0.0f, 0, il, true, false, true);
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                inp_pos, il == n_layer-1 && n_tokens > 1 ? inp_out_ids : nullptr, nullptr,
+                KQ_mask, nullptr, nullptr, kq_scale, 0.0f, 0, il, true, false, true);
 
         cur = llm_build_ffn(ctx0, lctx, model.layers[il].attn_post_norm, cur,
                 model.layers[il].ffn_up,   NULL, NULL,
@@ -3608,7 +3610,8 @@ ggml_cgraph * llm_build_context::build_step35() {
         }
         auto rope_freqs = layer.rope_freqs;
         layer.rope_freqs = nullptr;
-        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr,
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                inp_pos, il == n_layer - 1 && n_tokens > 1 ? inp_out_ids : nullptr,
                 rope_factors, is_swa ? KQ_mask_swa : KQ_mask, nullptr, nullptr, kq_scale, 0.0f, is_swa ? hparams.n_swa : 0,
                 il, true, false, true);
         layer.rope_freqs = rope_freqs;
@@ -4112,7 +4115,8 @@ ggml_cgraph * llm_build_context::build_qwen3() {
         struct ggml_tensor * inpSA = inpL;
 
         if (!rope_cache) {
-            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer-1 ? inp_out_ids : nullptr, nullptr,
+            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                    inp_pos, il == n_layer-1 && n_tokens > 1 ? inp_out_ids : nullptr, nullptr,
                     KQ_mask, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), 0.0f, 0, il, true, false, true);
         } else {
 
@@ -4281,16 +4285,13 @@ ggml_cgraph * llm_build_context::build_qwen3vl() {
     // KQ_mask (mask for 1 head, it will be broadcasted to all heads)
     struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
 
+    auto inp_out_ids = n_tokens > 1 ? build_inp_out_ids() : nullptr;
+
     for (int il = 0; il < n_layer; ++il) {
 
-        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, nullptr, KQ_mask,
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr, KQ_mask,
                 nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), 0.0f, 0, il, true, false, true, false, true);
-
-        if (il == n_layer - 1 && n_tokens > 1) {
-            // skip computing output for unused tokens
-            struct ggml_tensor * inp_out_ids = build_inp_out_ids();
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-        }
 
         // feed-forward network
         cur = llm_build_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
@@ -7033,7 +7034,8 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
 
         // self-attention
         if (rope_cache == nullptr) {
-            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, nullptr,
+            cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                    inp_pos, il == n_transformer_layers - 1 ? inp_out_ids : nullptr, nullptr,
                     KQ_mask, nullptr, nullptr, kq_scale, 0.0f, 0, il, true, false, true);
         } else {
             // Pre-attention norm
@@ -7068,16 +7070,17 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
                     Kcur, Vcur, Qcur, KQ_mask,
                     n_tokens, kv_head, n_kv,
                     1.0f/sqrtf(float(n_embd_head)), cb, il);
+
+            if (il == n_transformer_layers - 1 && inp_out_ids) {
+                // skip computing output for unused tokens
+                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                if (rope_cache) {
+                    inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+                }
+            }
         }
 
         // crop output on last layer
-        if (il == n_transformer_layers - 1 && inp_out_ids) {
-            // skip computing output for unused tokens
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            if (rope_cache) {
-                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-            }
-        }
 
         // residual connection for attention output
         ggml_tensor * ffn_inp;
@@ -8371,12 +8374,9 @@ ggml_cgraph * llm_build_context::build_ernie4_5_moe() {
     GGML_ASSERT(hparams.n_moe_layer_step > 0 && "Ernie 4.5 MoE requires n_moe_layer_step > 0");
     for (int il = 0; il < n_layer; ++il) {
 
-        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, nullptr, KQ_mask, nullptr, nullptr,
-                    1.0f/sqrtf(float(n_embd_head)), 0.0f, 0, il, true, false, true);
-
-        if (il == n_layer - 1 && inp_out_ids) {
-            cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-        }
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr, KQ_mask, nullptr, nullptr,
+                1.0f/sqrtf(float(n_embd_head)), 0.0f, 0, il, true, false, true);
 
         // feed-forward network
         bool is_moe_layer = static_cast<uint32_t>(il) >= hparams.n_layer_dense_lead && (il + 1) % hparams.n_moe_layer_step == 0;
@@ -8443,12 +8443,9 @@ ggml_cgraph * llm_build_context::build_hunyuan_moe() {
 
     for (int il = 0; il < n_layer; ++il) {
 
-        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, nullptr, KQ_mask,
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr, KQ_mask,
                 nullptr, nullptr, kq_scale, 0.0f, 0, il, true, false, true);
-
-        if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-        }
 
         cur = llm_build_std_moe_ffn(ctx0, lctx, model.layers[il].ffn_norm, cur,
                 model.layers[il].ffn_gate_inp,  nullptr,
@@ -8504,14 +8501,10 @@ ggml_cgraph * llm_build_context::build_mimo2() {
         const bool is_sliding = model.hparams.swa_layers[il];
         auto KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
 
-        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, nullptr, nullptr,
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
                 KQ_mask_l, model.layers[il].attn_sinks,
                 nullptr, 1.0f/sqrtf(float(n_embd_head_k)), 0.0f, is_sliding ? hparams.n_swa : 0, il, true, false, true);
-
-        if (il == n_layer - 1 && inp_out_ids) {
-            // skip computing output for unused tokens
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-        }
 
         auto ffn_inp = cur;
 
@@ -8581,13 +8574,9 @@ ggml_cgraph * llm_build_context::build_openai_moe() {
 
         struct ggml_tensor * KQ_mask_l = is_sliding ? KQ_mask_swa : KQ_mask;
 
-        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL, inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr,
-                KQ_mask_l, model.layers[il].attn_sinks, nullptr, kq_scale, 0.0f, is_sliding ? hparams.n_swa : 0, il, true, false, true);
-
-        //if (il == n_layer - 1 && inp_out_ids) {
-        //    // skip computing output for unused tokens
-        //    cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-        //}
+        cur = build_std_attention(gf, model.layers[il].attn_norm, inpL,
+                inp_pos, il == n_layer - 1 ? inp_out_ids : nullptr, nullptr, KQ_mask_l,
+                model.layers[il].attn_sinks, nullptr, kq_scale, 0.0f, is_sliding ? hparams.n_swa : 0, il, true, false, true);
 
         bool use_dup_bias = cur->ne[1] < 32 && model.layers[il].ffn_up_exps_b_dup &&
                                                model.layers[il].ffn_gate_exps_b_dup &&
@@ -9541,7 +9530,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
             }
             std::vector<ggml_tensor*> attn(wq->n_device, nullptr);
             bool output_bias_added = false;
-            bool input_added = false;
+            int last_id = -1;
             for (int id = 0; id < wq->n_device; ++id) {
                 int il_cb = 1000*(id+1) + il;
                 auto split_wq = wq->splits[id];
@@ -9554,7 +9543,6 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                         (split_wq && split_wk && split_wv && split_wo && split_kl && split_vl));
                 if (!split_wq) continue;
                 auto cur = get_input_tensor_sm_graph(ctx0, input, id);
-                auto input_id = cur;
                 cur = do_split_norm(ctx0, cur, the_attn_norm, lctx.model.hparams, cb, id, il_cb, is_norm);
                 auto input_normed = cur;
                 auto the_q_norm = model.layers[il].attn_q_norm ? model.layers[il].attn_q_norm->extra ?
@@ -9693,11 +9681,8 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 cur = ggml_reshape_2d(ctx0, cur, split_wo->ne[0], n_tokens);
                 cb(cur, "flash_attn_reshaped", il_cb);
 
-                if (inp_out_ids) { // && ggml_nrows(inp_out_ids) > 1) {
+                if (inp_out_ids) {
                     cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-                    if (add_input && !input_added) {
-                        input_id = ggml_get_rows(ctx0, input_id, inp_out_ids);
-                    }
                     cb(cur, "fa_get_rows", il_cb);
                 }
 
@@ -9712,16 +9697,23 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                     cb(cur, "kqv_wo_biased", il_cb);
                     output_bias_added = true;
                 }
-                if (add_input && !input_added) {
-                    cur = ggml_add(ctx0, cur, input_id);
-                    input_added = true;
-                }
                 if (cur->ne[1] > 32 && lctx.cparams.reduce_type != GGML_TYPE_F32) {
                     cur = ggml_cast(ctx0, cur, lctx.cparams.reduce_type);
                 }
                 ggml_build_forward_expand(gf, cur);
                 attn[id] = cur;
+                last_id = id;
             }
+            GGML_ASSERT(last_id >= 0);
+            if (add_input) {
+                if (inp_out_ids) {
+                    input = ggml_get_rows(ctx0, input, inp_out_ids);
+                    cb(input, "sainp_get_rows", il);
+                }
+                attn[last_id] = ggml_add(ctx0, attn[last_id], input);
+                cb(attn[last_id], "attn_out_with_input", il);
+            }
+
             auto cur = ggml_reduce(ctx0, attn.data(), wq->n_device, GGML_OP_ADD);
             ggml_build_forward_expand(gf, cur);
             cb(cur, "attn_combined", il);
@@ -9792,7 +9784,7 @@ ggml_tensor * llm_build_context::build_std_attention(ggml_cgraph * gf, ggml_tens
                 Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, KQ_scale, cb, il, sinks, n_swa);
     }
 
-    if (inp_out_ids) { // && ggml_nrows(inp_out_ids) > 1) {
+    if (inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
         cb(cur, "sa_get_rows", il);
         if (add_input) {
