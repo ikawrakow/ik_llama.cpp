@@ -4268,11 +4268,13 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * g_cumsum = ggml_cumsum(ctx0, g);
         cb(g_cumsum, "g_cumsum", il);
 
+        ggml_tensor * gcs_i =
+            ggml_repeat_4d(ctx0, g_cumsum, chunk_size, chunk_size, n_chunks, H_v * n_seqs);
         ggml_tensor * gcs_j = ggml_reshape_4d(ctx0, g_cumsum, 1, chunk_size, n_chunks, H_v * n_seqs);
 
         ggml_tensor * gcs_j_broadcast =
             ggml_repeat_4d(ctx0, gcs_j, chunk_size, chunk_size, n_chunks, H_v * n_seqs);
-        ggml_tensor * decay_mask = ggml_sub(ctx0, gcs_j_broadcast, g_cumsum);
+        ggml_tensor * decay_mask = ggml_sub(ctx0, gcs_j_broadcast, gcs_i);
         cb(decay_mask, "decay_mask", il);
 
         decay_mask = ggml_mul(ctx0, decay_mask, diag_mask);
@@ -4286,7 +4288,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(attn, "attn_pre_solve", il);
 
         ggml_tensor * attn_lower = ggml_mul(ctx0, attn, causal_mask);
-        ggml_tensor * lhs        = ggml_neg(ctx0, ggml_sub(ctx0, attn_lower, identity));
+        ggml_tensor * identity_repeat =
+            ggml_repeat_4d(ctx0, identity, attn_lower->ne[0], attn_lower->ne[1], attn_lower->ne[2], attn_lower->ne[3]);
+        ggml_tensor * lhs        = ggml_neg(ctx0, ggml_sub(ctx0, attn_lower, identity_repeat));
 
         ggml_tensor * lin_solve  = ggml_solve_tri(ctx0, lhs, attn, true, true, false);
         attn                     = ggml_mul(ctx0, lin_solve, causal_mask);
@@ -4319,7 +4323,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * g_last_exp = ggml_exp(ctx0, g_last);
         cb(g_last_exp, "g_last_exp", il);
 
-        ggml_tensor * g_diff = ggml_neg(ctx0, ggml_sub(ctx0, g_cumsum, g_last));
+        ggml_tensor * g_last_repeat =
+            ggml_repeat_4d(ctx0, g_last, chunk_size, 1, n_chunks, H_v * n_seqs);
+        ggml_tensor * g_diff = ggml_neg(ctx0, ggml_sub(ctx0, g_cumsum, g_last_repeat));
         cb(g_diff, "g_diff", il);
 
         ggml_tensor * g_diff_exp = ggml_exp(ctx0, g_diff);
