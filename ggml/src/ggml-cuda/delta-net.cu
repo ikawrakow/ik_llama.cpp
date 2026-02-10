@@ -459,6 +459,7 @@ __global__ void delta_net_fp16_optimized(
     const int64_t output_offset,
     const float eps)
 {
+#ifdef FP16_AVAILABLE
     static_assert(HEAD_DIM == 128, "FP16 kernel requires HEAD_DIM=128");
     static_assert(HEAD_DIM % 2 == 0, "HEAD_DIM must be even for half2");
 
@@ -688,6 +689,21 @@ __global__ void delta_net_fp16_optimized(
     for (int i = tid; i < HEAD_DIM * HEAD_DIM; i += blockDim.x) {
         state_dst[i] = __half2float(state_smem[i]);
     }
+#else
+    GGML_UNUSED(q);
+    GGML_UNUSED(k);
+    GGML_UNUSED(v);
+    GGML_UNUSED(g);
+    GGML_UNUSED(beta_in);
+    GGML_UNUSED(state_in);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(n_tokens);
+    GGML_UNUSED(n_heads);
+    GGML_UNUSED(n_seqs);
+    GGML_UNUSED(output_offset);
+    GGML_UNUSED(eps);
+    NO_DEVICE_CODE;
+#endif // FP16_AVAILABLE
 }
 
 #endif // !defined(GGML_USE_HIP)
@@ -1487,7 +1503,9 @@ static void delta_net_f32_cuda(
         const bool use_multiblock =
             opt_mode == DELTA_NET_OPT_MULTIBLOCK ||
             (sm_major < 12 && opt_mode == DELTA_NET_OPT_AUTO);
-        const bool use_fp16 = opt_mode == DELTA_NET_OPT_FP16;
+        const bool fp16_kernel_available =
+            fast_fp16_available(cc) && ggml_cuda_highest_compiled_arch(cc) >= CC_PASCAL;
+        const bool use_fp16 = opt_mode == DELTA_NET_OPT_FP16 && fp16_kernel_available;
 
         if (use_bw_opt) {
             const int blackwell_num_blocks = n_seqs * n_heads;
