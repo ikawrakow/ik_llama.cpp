@@ -2322,19 +2322,6 @@ static __global__ void k_quick_add(uint32_t n_per_row, const float * src1, const
     }
 }
 
-static inline void build_active_experts(
-        const std::vector<int> & moe_counts,
-        std::vector<int32_t> & active_experts) {
-    active_experts.clear();
-    active_experts.reserve(moe_counts.size());
-
-    for (int32_t i = 0; i < (int32_t) moe_counts.size(); ++i) {
-        if (moe_counts[i] > 0) {
-            active_experts.push_back(i);
-        }
-    }
-}
-
 static inline bool prepare_row_mappigs(ggml_backend_cuda_context& ctx, int64_t n_as, int64_t n_ids,
         const ggml_tensor * ids, std::vector<int>& moe_counts, std::vector<int>& cum_moe_counts,
         ggml_cuda_pool_alloc<mmid_row_mapping>& dev_row_mapping) {
@@ -2499,8 +2486,6 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     if (is_ser) {
         CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
     }
-    std::vector<int32_t> active_experts;
-    build_active_experts(moe_counts, active_experts);
 
     ggml_cuda_pool_alloc<char> src1_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(src1));
     ggml_cuda_pool_alloc<char>  dst_contiguous(ctx.pool(), sizeof(float)*ggml_nelements(dst));
@@ -2508,9 +2493,13 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     src1_row.data = src1_contiguous.get();
     dst_row.data  =  dst_contiguous.get();
 
-    for (int32_t i02 : active_experts) {
+    for (int64_t i02 = 0; i02 < n_as; i02++) {
 
         int64_t num_src1_rows = moe_counts[i02];
+
+        if (num_src1_rows == 0) {
+            continue;
+        }
 
         size_t mapping_offset = cum_moe_counts[i02];
 
@@ -2920,11 +2909,13 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
             CUDA_CHECK(cudaMemsetAsync(dst->data, 0, ggml_nbytes(dst), stream));
         }
     }
-    std::vector<int32_t> active_experts;
-    build_active_experts(moe_counts, active_experts);
 
-    for (int32_t i02 : active_experts) {
+    for (int64_t i02 = 0; i02 < n_as; i02++) {
         int64_t num_src1_rows = moe_counts[i02];
+
+        if (num_src1_rows == 0) {
+            continue;
+        }
 
         size_t mapping_offset = cum_moe_counts[i02];
 

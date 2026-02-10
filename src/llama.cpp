@@ -1887,19 +1887,6 @@ static bool llm_load_tensors(
             for (int i = 0; i < device_count; ++i) {
                 splits[i] = llama_get_device_memory(model, model.devices[i]);
             }
-
-            // For Qwen3Next on heterogeneous dual-GPU setups, pure free-memory split tends to
-            // over-assign layers to the secondary GPU and hurts decode throughput.
-            if (model.arch == LLM_ARCH_QWEN3NEXT && split_mode == LLAMA_SPLIT_MODE_LAYER && device_count == 2 && splits[0] >= splits[1]) {
-                const float split_sum = splits[0] + splits[1];
-                if (split_sum > 0.0f) {
-                    const float primary_share = splits[0] / split_sum;
-                    if (primary_share < 0.75f) {
-                        splits[0] = 0.75f;
-                        splits[1] = 0.25f;
-                    }
-                }
-            }
         } else {
             std::copy(tensor_split, tensor_split + device_count, splits.begin());
         }
@@ -5020,18 +5007,8 @@ struct llama_context * llama_new_context_with_model(
         }
     }
 
-    bool only_active_experts = params.only_active_experts;
-    if (only_active_experts &&
-        model->arch == LLM_ARCH_QWEN3NEXT &&
-        model->has_tensor_overrides() &&
-        cparams.n_batch >= 512) {
-        // In large-batch hybrid CPU/GPU MoE prompt processing, moving only active experts can
-        // add synchronization and copy overhead. Disable this mode for this Qwen3Next path.
-        LLAMA_LOG_INFO("%s: disabling only_active_experts for Qwen3Next large-batch hybrid MoE prompt path\n", __func__);
-        only_active_experts = false;
-    }
-    if (only_active_experts) {
-        LLAMA_LOG_INFO("%s: enabling only_active_experts scheduling\n", __func__);
+    if (params.only_active_experts) {
+        LLAMA_LOG_INFO("XXXXXXXXXXXXXXXXXXXXX Setting only active experts offload\n");
         ggml_backend_sched_set_only_active_experts(ctx->sched, true);
     }
     if (model->split_mode == LLAMA_SPLIT_MODE_GRAPH && (!model->has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
