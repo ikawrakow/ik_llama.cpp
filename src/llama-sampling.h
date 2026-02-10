@@ -68,15 +68,17 @@ void llama_sampler_dry_apply(struct llama_sampler_dry* smpl, llama_token_data_ar
 struct llama_sampler_adaptive_p {
     const float target;     // target probability (0.0 - 1.0; negative = disabled)
     const float decay;      // EMA decay; history ≈ 1/(1-decay) tokens (0.0 - 0.99)
+    const bool updt_w_cur;  // false=original, true=current
     std::mt19937 rng;       // RNG
     float weighted_sum;     // sum(p_n * decay^N)
     float total_weight;     // sum(decay^i), converges to 1/(1-decay)
 
     // first referenced in prep
-    std::vector<float>  orig_prob; // for storing the original proibabilities
+    std::vector<float> orig_prob;   // for storing the original proibabilities
     float cum_orig_prob;    // for normalizing orig_prob in sample_token
 
     // first referenced in sample
+    float cum_cur_p;        // cumulative sum of current probabilities
     float max_xform_logit;  // maximum logit found during transform
 
     // first referenced in sample_token
@@ -86,6 +88,7 @@ struct llama_sampler_adaptive_p {
 struct llama_sampler_adaptive_p * llama_init_adaptive_p_impl(int n_vocab,
        const float target,
        const float decay,
+        const bool updt_w_cur,
     const uint32_t seed);
 
 void llama_prep_adaptive_p_impl(

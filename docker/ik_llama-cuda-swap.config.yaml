@@ -1,0 +1,54 @@
+healthCheckTimeout: 1800
+logRequests: true
+metricsMaxInMemory: 1000
+
+models:
+  "qwen3 (you need to download .gguf first)":
+    proxy: "http://127.0.0.1:9999"
+    cmd: >
+      /app/llama-server
+      --model /models/Qwen_Qwen3-0.6B-Q6_K.gguf
+      --alias qwen3
+      --port 9999
+      --parallel 1
+      --webui llamacpp
+      --jinja
+      --ctx-size 12288
+      -fa on
+      --merge-qkv
+      -ngl 999 --threads-batch 1
+      -ctk q8_0 -ctv q8_0
+
+  "oss-moe (you need to download .gguf first)":
+    proxy: "http://127.0.0.1:9999"
+    cmd: >
+      /app/llama-server
+      --model /models/kldzj_gpt-oss-120b-heretic-MXFP4_MOE-00001-of-00002.gguf
+      --alias gpt-oss
+      --port 9999
+      --parallel 1
+      --webui llamacpp
+      --jinja
+      --ctx-size 12288
+      -fa on
+      --merge-qkv
+      -ngl 999
+      --n-cpu-moe 30
+      -ctk q8_0 -ctv q8_0
+      --grouped-expert-routing
+      --reasoning-format auto --chat-template-kwargs '{"reasoning_effort": "medium"}'
+
+  "smollm2 (will be downloaded automatically from huggingface.co)":
+    proxy: "http://127.0.0.1:9999"
+    cmd: >
+      /app/llama-server
+      --hf-repo mradermacher/SmolLM2-135M-i1-GGUF --hf-file SmolLM2-135M.i1-IQ4_NL.gguf
+      --alias smollm2
+      --port 9999
+      --parallel 1
+      --webui llamacpp
+      --jinja
+      --ctx-size 12288
+      -fa on
+      --merge-qkv
+      -ngl 999 --threads-batch 1

@@ -70,6 +70,8 @@ struct llama_hparams {
     float    rope_freq_base_train_swa;
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa;
+    uint32_t rope_scaling_apply_mask = 0x1;
+    bool     has_rope_freq_base_per_layer = false;
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
 
@@ -79,6 +81,8 @@ struct llama_hparams {
     float    yarn_beta_slow   =  1.0f;
 
     std::array<int, 4> rope_sections;
+    std::array<float,    LLAMA_MAX_LAYERS> rope_freq_base_per_layer;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> rope_dim_per_layer;
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
@@ -127,6 +131,9 @@ struct llama_hparams {
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
     std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
+
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_limits;
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_limits_shared;
 
     bool operator!=(const llama_hparams & other) const {
         if (this->vocab_only    != other.vocab_only)    return true;
@@ -186,7 +193,7 @@ struct llama_hparams {
         if (il < n_layer) {
             return n_head_arr[il];
         }
-
+        printf("%s: Oops, il = %d\n", __func__, il);
         GGML_ABORT("fatal error");
     }
 
@@ -293,6 +300,11 @@ struct llama_hparams {
 
         // Regular comparison using the provided absolute tolerance
         return std::fabs(b - a) <= abs_tol;
+    }
+
+    uint32_t rope_n_rot(uint32_t il) const {
+        const uint32_t v = rope_dim_per_layer[il];
+        return v ? v : n_rot;
     }
 
     static const char * rope_scaling_type_name(llama_rope_scaling_type);

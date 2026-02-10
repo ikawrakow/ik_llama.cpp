@@ -1,7 +1,7 @@
 #pragma once
 
 #include "llama.h"
-#include "grammar-parser.h"
+#include "llama-grammar.h"
 #include <set>
 #include <random>
 #include <string>
@@ -69,6 +69,7 @@ typedef struct llama_sampling_params {
     float       top_n_sigma           = 0.0f;               // top-n-sigma
     float       adaptive_target       = -1.0f;              // select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
     float       adaptive_decay        = 0.90f;              // decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
+    bool        adaptive_updt_w_cur   = false;              // update state with current probability
     bool        penalize_nl           = false;              // consider newlines as a repeatable token
     uint32_t    seed                  = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampling_context
 
@@ -112,10 +113,10 @@ struct llama_sampling_context {
     // mirostat sampler state
     float mirostat_mu;
 
-    llama_grammar * grammar;
+    std::string grammar_str;
+    std::string grammar_root;
 
-    // internal
-    grammar_parser::parse_state parsed_grammar;
+    llama_grammar * grammar;
 
     // TODO: replace with ring-buffer
     std::vector<llama_token>      prev;
@@ -147,7 +148,7 @@ void common_sampler_reset(const struct llama_vocab* vocab, llama_sampling_contex
 void llama_sampling_set_rng_seed(struct llama_sampling_context * ctx, uint32_t seed);
 
 // Copy the sampler context
-void llama_sampling_cp(llama_sampling_context * src, llama_sampling_context * dst);
+void common_sampler_clone(llama_sampling_context * src, llama_sampling_context * dst);
 
 // Get the last sampled token
 llama_token llama_sampling_last(llama_sampling_context * ctx);

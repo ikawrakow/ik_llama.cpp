@@ -224,6 +224,7 @@ enum llm_chat_template {
     LLM_CHAT_TEMPLATE_BAILING,
     LLM_CHAT_TEMPLATE_BAILING_THINK,
     LLM_CHAT_TEMPLATE_BAILING2,
+    LLM_CHAT_TEMPLATE_SEED_OSS,
     LLM_CHAT_TEMPLATE_UNKNOWN,
 };
 
@@ -269,6 +270,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
     { "bailing-think",     LLM_CHAT_TEMPLATE_BAILING_THINK     },
     { "bailing2",          LLM_CHAT_TEMPLATE_BAILING2          },
+    { "seed_oss",          LLM_CHAT_TEMPLATE_SEED_OSS          },
 
 };
 
@@ -568,9 +570,11 @@ bool llama_context::update_cache_copies() {
     int n_layer = model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
     if ((int)kv_self.k_l.size() != n_layer) return false;
     if (!(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer)) return false;
-    if ((model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN) && model.splits.size() > 1) {
-        for (int il = 0; il < n_layer; ++il) {
-            auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
+    for (int il = 0; il < n_layer; ++il) {
+        auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
+        if (kl) {
+            GGML_ASSERT(model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN);
+            GGML_ASSERT(model.splits.size() > 1);
             auto vl = !kv_self.v_l.empty() && kv_self.v_l[il] ? (ggml_split_tensor_t *)kv_self.v_l[il]->extra : nullptr;
             GGML_ASSERT(kl && (!kv_self.v_l[il] || vl));
             if (vl) {
@@ -591,22 +595,22 @@ bool llama_context::update_cache_copies() {
                 c.cpy->src[1]->data = (char *)vl->splits[id]->data + c.cpy->view_offs;
                 c.cpy->data = c.cpy->src[1]->data;
             }
-        }
-    } else {
-        for (int il = 0; il < n_layer; ++il) {
-            auto& c = cache_copies[2*il+0];
-            if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) return false;
-            c.cpy->view_offs = kv_self.head*c.step;
-            c.cpy->src[1]->data = (char *)kv_self.k_l[il]->data + c.cpy->view_offs;
-            c.cpy->data = c.cpy->src[1]->data;
-        }
-        if (kv_self.v_l.empty()) return true;
-        for (int il = 0; il < n_layer; ++il) {
-            auto& c = cache_copies[2*il+1];
-            if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[il]) return false;
-            c.cpy->view_offs = kv_self.head*c.step;
-            c.cpy->src[1]->data = (char *)kv_self.v_l[il]->data + c.cpy->view_offs;
-            c.cpy->data = c.cpy->src[1]->data;
+        } else {
+            for (int il = 0; il < n_layer; ++il) {
+                auto& c = cache_copies[2*il+0];
+                if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)kv_self.k_l[il]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
+            if (kv_self.v_l.empty()) return true;
+            for (int il = 0; il < n_layer; ++il) {
+                auto& c = cache_copies[2*il+1];
+                if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[il]) return false;
+                c.cpy->view_offs = kv_self.head*c.step;
+                c.cpy->src[1]->data = (char *)kv_self.v_l[il]->data + c.cpy->view_offs;
+                c.cpy->data = c.cpy->src[1]->data;
+            }
         }
     }
     return true;
@@ -814,6 +818,13 @@ static bool llama_kv_cache_init(
             n_mla++;
         }
         else {
+            bool split_cache_i = split_cache;
+            auto K = model.layers[i].wk;
+            auto V = model.layers[i].wv;
+            if (split_cache && (!K || !V || !K->extra || !V->extra)) {
+                ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
+                split_cache_i = false;
+            }
             int n_embd_head_v = hparams.n_embd_head_v;
             k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
 
@@ -834,50 +845,43 @@ static bool llama_kv_cache_init(
             //ggml_format_name(v, "cache_v_l%d", i);
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
-            if (split_cache) {
-                auto K = model.layers[i].wk;
-                auto V = model.layers[i].wv;
-                if (K && V && K->extra && V->extra) {
-                    bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
-                    auto extra_K = (const ggml_split_tensor_t *)K->extra;
-                    auto extra_V = (const ggml_split_tensor_t *)V->extra;
-                    auto & split_k_l = cache.split_k_l.emplace_back();
-                    auto & split_v_l = cache.split_v_l.emplace_back();
-                    split_k_l.tensor_splits.resize(extra_K->n_device, nullptr);
-                    split_v_l.tensor_splits.resize(extra_V->n_device, nullptr);
-                    for (int is = 0; is < extra_K->n_device; ++is) {
-                        auto split = use_V_for_K ? extra_V->splits[is] : extra_K->splits[is];
-                        if (!split) continue;
-                        int nhead_kv = use_V_for_K ? split->ne[1] / n_embd_head_v : split->ne[1]/n_embd_head_k;
-                        if (use_V_for_K) {
-                            LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
-                                    i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
-                        }
-                        split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
-                        auto split_name = k_name + '.' + std::to_string(is);
-                        ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
-                        mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
+            if (split_cache_i) {
+                bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
+                auto extra_K = (const ggml_split_tensor_t *)K->extra;
+                auto extra_V = (const ggml_split_tensor_t *)V->extra;
+                auto & split_k_l = cache.split_k_l.emplace_back();
+                auto & split_v_l = cache.split_v_l.emplace_back();
+                split_k_l.tensor_splits.resize(extra_K->n_device, nullptr);
+                split_v_l.tensor_splits.resize(extra_V->n_device, nullptr);
+                for (int is = 0; is < extra_K->n_device; ++is) {
+                    auto split = use_V_for_K ? extra_V->splits[is] : extra_K->splits[is];
+                    if (!split) continue;
+                    int nhead_kv = use_V_for_K ? split->ne[1] / n_embd_head_v : split->ne[1]/n_embd_head_k;
+                    if (use_V_for_K) {
+                        LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
+                                i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
                     }
-                    split_k_l.ggml.n_device  = extra_K->n_device;
-                    split_k_l.ggml.split_dim = 0;
-                    split_k_l.ggml.splits    = split_k_l.tensor_splits.data();
-                    for (int is = 0; is < extra_V->n_device; ++is) {
-                        auto split = extra_V->splits[is];
-                        if (!split) continue;
-                        split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
-                        auto split_name = v_name + '.' + std::to_string(is);
-                        ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
-                        mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
-                    }
-                    split_v_l.ggml.n_device  = extra_V->n_device;
-                    split_v_l.ggml.split_dim = 0;
-                    split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
-                    k->extra = (void *)&split_k_l.ggml;
-                    v->extra = (void *)&split_v_l.ggml;
+                    split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
+                    auto split_name = k_name + '.' + std::to_string(is);
+                    ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
+                    mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
                 }
-                //} else {
-                //    printf("Oops: don't have yet K and V for layer %d\n", i);
-                //}
+                split_k_l.ggml.n_device  = extra_K->n_device;
+                split_k_l.ggml.split_dim = 0;
+                split_k_l.ggml.splits    = split_k_l.tensor_splits.data();
+                for (int is = 0; is < extra_V->n_device; ++is) {
+                    auto split = extra_V->splits[is];
+                    if (!split) continue;
+                    split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
+                    auto split_name = v_name + '.' + std::to_string(is);
+                    ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
+                    mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
+                }
+                split_v_l.ggml.n_device  = extra_V->n_device;
+                split_v_l.ggml.split_dim = 0;
+                split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
+                k->extra = (void *)&split_k_l.ggml;
+                v->extra = (void *)&split_v_l.ggml;
             }
         }
         cache.s_l.push_back(s);
@@ -1819,6 +1823,8 @@ static bool is_model_split_supported(const llama_model & model) {
         LLM_ARCH_OPENAI_MOE,
         LLM_ARCH_ERNIE4_5_MOE,
         LLM_ARCH_MINIMAX_M2,
+        LLM_ARCH_SEED_OSS,
+        LLM_ARCH_STEP35,
     };
     auto it =  k_supported.find(model.arch);
     return it != k_supported.end();
@@ -5136,6 +5142,8 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_BAILINGMOE2:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MIMO2:
+        case LLM_ARCH_SEED_OSS:
+        case LLM_ARCH_STEP35:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
@@ -7093,6 +7101,8 @@ static llm_chat_template llama_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_GROK_2;
     } else if (tmpl_contains("<|start|>") && tmpl_contains("<|channel|>")) {
         return LLM_CHAT_TEMPLATE_OPENAI_MOE;
+    } else if (tmpl_contains("<seed:bos>")) {
+        return LLM_CHAT_TEMPLATE_SEED_OSS;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -7622,6 +7632,14 @@ static int32_t llama_chat_apply_template_internal(
         if (add_ass) {
             ss << "Assistant:";
         }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_SEED_OSS) {
+        for (auto message: chat) {
+            std::string role(message->role);
+            ss << "<seed:bos>" << role << "\n" << (role == "assistant" ? trim(message->content) : message->content) << "<seed:eos>";
+        }
+        if (add_ass) {
+            ss << "<seed:bos>assistant\n";
+        }
     } else {
         // template not supported
         return -1;
@@ -7687,36 +7705,13 @@ int32_t llama_chat_builtin_templates(const char ** output, size_t len) {
 // grammar
 //
 
-struct llama_grammar * llama_grammar_init(
-        const llama_grammar_element ** rules,
-        size_t    n_rules,
-        size_t    start_rule_index) {
-    return llama_grammar_init_impl(rules, n_rules, start_rule_index);
-}
-
 void llama_grammar_free(struct llama_grammar * grammar) {
     llama_grammar_free_impl(grammar);
 }
-//
-//void llama_grammar_init_lazy(struct llama_sampler* smpl) {
-//
-//    if (!grammar) {
-//        return;
-//    }
-//    std::vector<const char*>  trigger_patterns_c;
-//    trigger_patterns_c.reserve(grammar.grammar->trigger_patterns.size());
-//    for (auto& trigger_pattern : grammar.grammar->trigger_patterns) {
-//        trigger_patterns_c.push_back(trigger_pattern.pattern.c_str());
-//    }
-//    //auto* grammar_new = llama_grammar_init_impl(grammar->vocab, "", "root",
-//    //    grammar->lazy, trigger_patterns_c.data(), trigger_patterns_c.size(),
-//    //    grammar->trigger_tokens.data(), grammar->trigger_tokens.size());
-//
-//}
 
 
 struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar) {
-    return llama_grammar_copy_impl(grammar);
+    return llama_grammar_clone_impl(*grammar);
 }
 
 void llama_grammar_sample(
@@ -7737,7 +7732,7 @@ void llama_grammar_accept_token(
             struct llama_grammar * grammar,
             struct llama_context * ctx,
                      llama_token   token) {
-    llama_grammar_accept_token_impl(grammar, &ctx->model.vocab, &ctx->sampling, token);
+    llama_grammar_accept_impl(*grammar, &ctx->model.vocab, &ctx->sampling, token);
 }
 
 //
@@ -7903,8 +7898,8 @@ void llama_sampler_dry_accept(struct llama_sampler_dry* smpl, llama_token token)
 }
 
 
-struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float target, const float decay, const uint32_t seed) {
-    return llama_init_adaptive_p_impl(n_vocab, target, decay, seed);
+struct llama_sampler_adaptive_p * llama_init_adaptive_p(int n_vocab, const float target, const float decay, const bool updt_w_cur, const uint32_t seed) {
+    return llama_init_adaptive_p_impl(n_vocab, target, decay, updt_w_cur, seed);
 }
 
 

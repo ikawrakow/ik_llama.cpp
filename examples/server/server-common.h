@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 #include <cinttypes>
+#include <deque>
 
 
 
@@ -110,6 +111,16 @@ static T json_value(const json& body, const std::string& key, const T& default_v
         return default_value;
     }
 }
+
+// Control vector container for dynamic management
+struct control_vector_container {
+    std::string path;
+    float scale;
+    int32_t layer_start;
+    int32_t layer_end;
+    llama_control_vector_data data;
+    bool applied;
+};
 
 // thin wrapper around common_grammar_trigger with (de)serialization functions
 struct server_grammar_trigger {
@@ -214,6 +225,8 @@ struct completion_token_output {
 
     static json probs_vector_to_json(const std::vector<completion_token_output>& probs, bool post_sampling_probs);
 };
+
+using completion_token_outputs = std::deque<completion_token_output>;
 
 // convert a vector of completion_token_output to json
 json probs_vector_to_json(const llama_context* ctx, const std::vector<completion_token_output>& probs);
