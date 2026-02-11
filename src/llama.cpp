@@ -676,10 +676,32 @@ static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams
     return std::max<uint32_t>(1, cparams.n_seq_max);
 }
 
+static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & cache) {
+    uint32_t n_slots = 0;
+
+    for (const ggml_tensor * t : cache.s_l) {
+        if (t == nullptr) {
+            continue;
+        }
+
+        const uint32_t layer_slots = (uint32_t) t->ne[1];
+        if (n_slots == 0) {
+            n_slots = layer_slots;
+        } else {
+            GGML_ASSERT(n_slots == layer_slots);
+        }
+    }
+
+    return n_slots;
+}
+
 static inline bool llama_kv_has_qnext_state_storage(const llama_kv_cache & cache) {
-    return std::any_of(cache.s_l.begin(), cache.s_l.end(), [](const ggml_tensor * t) {
-        return t != nullptr;
-    });
+    return llama_kv_qnext_state_slots(cache) > 0;
+}
+
+static inline bool llama_kv_qnext_seq_id_in_range(const llama_kv_cache & cache, llama_seq_id seq_id) {
+    const uint32_t n_slots = llama_kv_qnext_state_slots(cache);
+    return n_slots > 0 && seq_id >= 0 && (uint32_t) seq_id < n_slots;
 }
 
 static bool llama_kv_cache_init(
@@ -1178,7 +1200,9 @@ static void llama_kv_cache_seq_cp(
     }
 
     const bool has_qnext_state = llama_kv_has_qnext_state_storage(cache);
-    if (has_qnext_state && (uint32_t) seq_id_dst < cache.size && (uint32_t) seq_id_src < cache.size) {
+    if (has_qnext_state &&
+            llama_kv_qnext_seq_id_in_range(cache, seq_id_dst) &&
+            llama_kv_qnext_seq_id_in_range(cache, seq_id_src)) {
         seq_id_src = cache.cells[seq_id_src].src;
         GGML_ASSERT((uint32_t) seq_id_src < cache.size);
 

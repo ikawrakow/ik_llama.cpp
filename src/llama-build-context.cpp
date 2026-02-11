@@ -8,6 +8,25 @@
 
 #include <unordered_set>
 
+static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & kv_self) {
+    uint32_t n_slots = 0;
+
+    for (const ggml_tensor * t : kv_self.s_l) {
+        if (t == nullptr) {
+            continue;
+        }
+
+        const uint32_t layer_slots = (uint32_t) t->ne[1];
+        if (n_slots == 0) {
+            n_slots = layer_slots;
+        } else {
+            GGML_ASSERT(n_slots == layer_slots);
+        }
+    }
+
+    return n_slots;
+}
+
 llm_build_context::llm_build_context(
         llama_context  & lctx,
     const llama_batch  & batch,
@@ -171,9 +190,8 @@ ggml_cgraph * llm_build_context::build_k_shift() {
 ggml_cgraph * llm_build_context::build_s_copy() {
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(), false);
 
-    const bool has_qnext_state = std::any_of(kv_self.s_l.begin(), kv_self.s_l.end(), [](const ggml_tensor * t) {
-        return t != nullptr;
-    });
+    const uint32_t qnext_state_slots = llama_kv_qnext_state_slots(kv_self);
+    const bool has_qnext_state = qnext_state_slots > 0;
     GGML_ASSERT(kv_self.recurrent || has_qnext_state);
 
     struct ggml_tensor * state_copy = build_inp_s_copy();
@@ -194,7 +212,8 @@ ggml_cgraph * llm_build_context::build_s_copy() {
 
         if (kv_self.s_l.size() > (size_t) il && kv_self.s_l[il] != nullptr) {
             struct ggml_tensor * qnext_states_all = ggml_reshape_2d(ctx0, kv_self.s_l[il], hparams.n_embd_v_s(), kv_self.s_l[il]->ne[1]);
-            struct ggml_tensor * qnext_state_copy = ggml_view_1d(ctx0, state_copy, qnext_states_all->ne[1], 0);
+            GGML_ASSERT((uint32_t) qnext_states_all->ne[1] == qnext_state_slots);
+            struct ggml_tensor * qnext_state_copy = ggml_view_1d(ctx0, state_copy, qnext_state_slots, 0);
             struct ggml_tensor * qnext_states = ggml_get_rows(ctx0, qnext_states_all, qnext_state_copy);
 
             ggml_build_forward_expand(gf, ggml_cpy(ctx0, qnext_states, kv_self.s_l[il]));
@@ -4918,7 +4937,8 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * state_storage = kv_self.s_l[il];
         GGML_ASSERT(state_storage->type == GGML_TYPE_F32);
         GGML_ASSERT(state_storage->ne[0] >= state_dim);
-        state_row_size = state_storage->ne[1] >= qnext_state_slots ? state_storage->nb[1] : ggml_row_size(state_storage->type, state_dim);
+        GGML_ASSERT((uint32_t) state_storage->ne[1] == qnext_state_slots);
+        state_row_size = state_storage->nb[1];
         GGML_ASSERT(ggml_nbytes(state_storage) >= state_row_size * qnext_state_slots);
         state_all = ggml_view_2d(ctx0, state_storage, state_dim, qnext_state_slots, state_row_size, 0);
 
