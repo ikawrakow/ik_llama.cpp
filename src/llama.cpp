@@ -568,9 +568,15 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
 
 bool llama_context::update_cache_copies() {
     int n_layer = model.hparams.n_layer - model.hparams.nextn_predict_layers; //cache_copies.size()/2;
+    auto layer_has_attention_kv = [&](int il) {
+        return !(model.arch == LLM_ARCH_QWEN3NEXT && model.hparams.is_recurrent(il));
+    };
     if ((int)kv_self.k_l.size() != n_layer) return false;
     if (!(kv_self.v_l.empty() || (int)kv_self.v_l.size() == n_layer)) return false;
     for (int il = 0; il < n_layer; ++il) {
+        if (!layer_has_attention_kv(il) || kv_self.k_l[il] == nullptr) {
+            continue;
+        }
         auto kl = (ggml_split_tensor_t *)kv_self.k_l[il]->extra;
         if (kl) {
             GGML_ASSERT(model.split_mode == LLAMA_SPLIT_MODE_GRAPH || model.split_mode == LLAMA_SPLIT_MODE_ATTN);
@@ -597,6 +603,9 @@ bool llama_context::update_cache_copies() {
             }
         } else {
             for (int il = 0; il < n_layer; ++il) {
+                if (!layer_has_attention_kv(il) || kv_self.k_l[il] == nullptr) {
+                    continue;
+                }
                 auto& c = cache_copies[2*il+0];
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.k_l[il]) return false;
                 c.cpy->view_offs = kv_self.head*c.step;
@@ -605,6 +614,9 @@ bool llama_context::update_cache_copies() {
             }
             if (kv_self.v_l.empty()) return true;
             for (int il = 0; il < n_layer; ++il) {
+                if (!layer_has_attention_kv(il) || kv_self.v_l[il] == nullptr) {
+                    continue;
+                }
                 auto& c = cache_copies[2*il+1];
                 if (!c.cpy || c.cpy->op != GGML_OP_CPY || c.cpy->view_src != kv_self.v_l[il]) return false;
                 c.cpy->view_offs = kv_self.head*c.step;
@@ -792,8 +804,8 @@ static bool llama_kv_cache_init(
         const uint32_t n_embd_head_k= hparams.n_embd_head_k;
 
         struct ggml_context * ctx = split_cache ? ctx_map.at(model.buft_layer[i].buft_matrix) : offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
-        ggml_tensor * k;
-        ggml_tensor * v;
+        ggml_tensor * k = nullptr;
+        ggml_tensor * v = nullptr;
         ggml_tensor * s = nullptr;
         if (model.arch == LLM_ARCH_DEEPSEEK2 && cparams.mla_attn) {
             // DeepSeek MLA
@@ -825,64 +837,68 @@ static bool llama_kv_cache_init(
                 ctx = offload ? ctx_map.at(model.buft_layer[i].buft) : cache.ctxs.front();
                 split_cache_i = false;
             }
-            int n_embd_head_v = hparams.n_embd_head_v;
-            k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
-
-            int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
-            v = ggml_new_tensor_1d(ctx, type_v, v_ne);
             if (qnext_recurrent) {
                 s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hparams.n_embd_v_s(), qnext_state_slots);
+                split_cache_i = false;
+            } else {
+                int n_embd_head_v = hparams.n_embd_head_v;
+                k = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, n_head_kv*kv_size);
+
+                int64_t v_ne = int64_t(n_embd_v_row)*kv_size;
+                v = ggml_new_tensor_1d(ctx, type_v, v_ne);
+
+                auto k_name = std::string{"cache_k_l"} + std::to_string(i);
+                auto v_name = std::string{"cache_v_l"} + std::to_string(i);
+                ggml_set_name(k, k_name.c_str());
+                ggml_set_name(v, v_name.c_str());
+                //ggml_format_name(k, "cache_k_l%d", i);
+                //ggml_format_name(v, "cache_v_l%d", i);
+
+                if (split_cache_i) {
+                    bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
+                    auto extra_K = (const ggml_split_tensor_t *)K->extra;
+                    auto extra_V = (const ggml_split_tensor_t *)V->extra;
+                    auto & split_k_l = cache.split_k_l.emplace_back();
+                    auto & split_v_l = cache.split_v_l.emplace_back();
+                    split_k_l.tensor_splits.resize(extra_K->n_device, nullptr);
+                    split_v_l.tensor_splits.resize(extra_V->n_device, nullptr);
+                    for (int is = 0; is < extra_K->n_device; ++is) {
+                        auto split = use_V_for_K ? extra_V->splits[is] : extra_K->splits[is];
+                        if (!split) continue;
+                        int nhead_kv = use_V_for_K ? split->ne[1] / n_embd_head_v : split->ne[1]/n_embd_head_k;
+                        if (use_V_for_K) {
+                            LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
+                                    i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
+                        }
+                        split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
+                        auto split_name = k_name + '.' + std::to_string(is);
+                        ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
+                        mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
+                    }
+                    split_k_l.ggml.n_device  = extra_K->n_device;
+                    split_k_l.ggml.split_dim = 0;
+                    split_k_l.ggml.splits    = split_k_l.tensor_splits.data();
+                    for (int is = 0; is < extra_V->n_device; ++is) {
+                        auto split = extra_V->splits[is];
+                        if (!split) continue;
+                        split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
+                        auto split_name = v_name + '.' + std::to_string(is);
+                        ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
+                        mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
+                    }
+                    split_v_l.ggml.n_device  = extra_V->n_device;
+                    split_v_l.ggml.split_dim = 0;
+                    split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
+                    k->extra = (void *)&split_k_l.ggml;
+                    v->extra = (void *)&split_v_l.ggml;
+                }
             }
-            auto k_name = std::string{"cache_k_l"} + std::to_string(i);
-            auto v_name = std::string{"cache_v_l"} + std::to_string(i);
-            auto s_name = std::string{"cache_s_l"} + std::to_string(i);
-            ggml_set_name(k, k_name.c_str());
-            ggml_set_name(v, v_name.c_str());
             if (s) {
+                auto s_name = std::string{"cache_s_l"} + std::to_string(i);
                 ggml_set_name(s, s_name.c_str());
             }
-            //ggml_format_name(k, "cache_k_l%d", i);
-            //ggml_format_name(v, "cache_v_l%d", i);
             cache.k_l.push_back(k);
             cache.v_l.push_back(v);
-            if (split_cache_i) {
-                bool use_V_for_K = model.layers[i].attn_k_norm && model.layers[i].attn_k_norm->ne[0] == K->ne[1] ? true : false;
-                auto extra_K = (const ggml_split_tensor_t *)K->extra;
-                auto extra_V = (const ggml_split_tensor_t *)V->extra;
-                auto & split_k_l = cache.split_k_l.emplace_back();
-                auto & split_v_l = cache.split_v_l.emplace_back();
-                split_k_l.tensor_splits.resize(extra_K->n_device, nullptr);
-                split_v_l.tensor_splits.resize(extra_V->n_device, nullptr);
-                for (int is = 0; is < extra_K->n_device; ++is) {
-                    auto split = use_V_for_K ? extra_V->splits[is] : extra_K->splits[is];
-                    if (!split) continue;
-                    int nhead_kv = use_V_for_K ? split->ne[1] / n_embd_head_v : split->ne[1]/n_embd_head_k;
-                    if (use_V_for_K) {
-                        LLAMA_LOG_DEBUG("K_cache(%d, %d): using %d instead of %ld heads\n",
-                                i, is, nhead_kv, extra_K->splits[is]->ne[1]/n_embd_head_k);
-                    }
-                    split_k_l.tensor_splits[is] = ggml_new_tensor_2d(ctx, type_k, n_embd_head_k, nhead_kv * kv_size);
-                    auto split_name = k_name + '.' + std::to_string(is);
-                    ggml_set_name(split_k_l.tensor_splits[is], split_name.c_str());
-                    mem_split[is] += ggml_nbytes(split_k_l.tensor_splits[is]);
-                }
-                split_k_l.ggml.n_device  = extra_K->n_device;
-                split_k_l.ggml.split_dim = 0;
-                split_k_l.ggml.splits    = split_k_l.tensor_splits.data();
-                for (int is = 0; is < extra_V->n_device; ++is) {
-                    auto split = extra_V->splits[is];
-                    if (!split) continue;
-                    split_v_l.tensor_splits[is] = ggml_new_tensor_1d(ctx, type_v, split->ne[1] * kv_size);
-                    auto split_name = v_name + '.' + std::to_string(is);
-                    ggml_set_name(split_v_l.tensor_splits[is], split_name.c_str());
-                    mem_split[is] += ggml_nbytes(split_v_l.tensor_splits[is]);
-                }
-                split_v_l.ggml.n_device  = extra_V->n_device;
-                split_v_l.ggml.split_dim = 0;
-                split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
-                k->extra = (void *)&split_k_l.ggml;
-                v->extra = (void *)&split_v_l.ggml;
-            }
         }
         cache.s_l.push_back(s);
     }
@@ -4171,7 +4187,7 @@ struct llama_context_params llama_context_default_params() {
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ true,
-        /*.fused_delta                 =*/ true,
+        /*.fused_delta                 =*/ false,
         /*.mla_attn                    =*/ 3,
         /*.attn_max_batch              =*/ 0,
         /*.fused_moe_up_gate           =*/ true,
@@ -4876,11 +4892,15 @@ struct llama_context * llama_new_context_with_model(
             size_t memory_size_v = 0;
 
             for (auto & k : ctx->kv_self.k_l) {
-                memory_size_k += ggml_nbytes(k);
+                if (k) {
+                    memory_size_k += ggml_nbytes(k);
+                }
             }
 
             for (auto & v : ctx->kv_self.v_l) {
-                memory_size_v += ggml_nbytes(v);
+                if (v) {
+                    memory_size_v += ggml_nbytes(v);
+                }
             }
 
             if (memory_size_k + memory_size_v > 0) {
@@ -5696,14 +5716,23 @@ struct llama_data_write {
             const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
+            const bool has_k_cache = kv_self.k_l[il] != nullptr;
 
             // Write key type
-            const int32_t k_type_i = (int32_t)kv_self.k_l[il]->type;
+            const int32_t k_type_i = has_k_cache ? (int32_t) kv_self.k_l[il]->type : -1;
             write(&k_type_i, sizeof(k_type_i));
 
             // Write row size of key
-            const uint64_t k_size_row = (ctx->cparams.mla_attn == 0) ? ggml_row_size(kv_self.k_l[il]->type, n_embd_k_gqa) : ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope);
+            const uint64_t k_size_row = has_k_cache
+                ? ((ctx->cparams.mla_attn == 0)
+                    ? ggml_row_size(kv_self.k_l[il]->type, n_embd_k_gqa)
+                    : ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope))
+                : 0;
             write(&k_size_row, sizeof(k_size_row));
+
+            if (!has_k_cache) {
+                continue;
+            }
 
             // Read each range of cells of k_size length each into tmp_buf and write out
             for (const auto & range : cell_ranges) {
@@ -5716,14 +5745,19 @@ struct llama_data_write {
         if (v_state == 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
+                const bool has_v_cache = kv_self.v_l[il] != nullptr;
 
                 // Write value type
-                const int32_t v_type_i = (int32_t)kv_self.v_l[il]->type;
+                const int32_t v_type_i = has_v_cache ? (int32_t) kv_self.v_l[il]->type : -1;
                 write(&v_type_i, sizeof(v_type_i));
 
                 // Write row size of value
-                const uint64_t v_size_row = ggml_row_size(kv_self.v_l[il]->type, n_embd_v_gqa);
+                const uint64_t v_size_row = has_v_cache ? ggml_row_size(kv_self.v_l[il]->type, n_embd_v_gqa) : 0;
                 write(&v_size_row, sizeof(v_size_row));
+
+                if (!has_v_cache) {
+                    continue;
+                }
 
                 // Read each range of cells of v_size length each into tmp_buf and write out
                 for (const auto & range : cell_ranges) {
@@ -5738,17 +5772,23 @@ struct llama_data_write {
             const uint32_t kv_size = kv_self.size;
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
+                const bool has_v_cache = kv_self.v_l[il] != nullptr;
 
                 // Write value type
-                const int32_t v_type_i = (int32_t)kv_self.v_l[il]->type;
+                const int32_t v_type_i = has_v_cache ? (int32_t) kv_self.v_l[il]->type : -1;
                 write(&v_type_i, sizeof(v_type_i));
 
                 // Write element size
-                const uint32_t v_size_el = ggml_type_size(kv_self.v_l[il]->type);
+                const uint32_t v_size_el = has_v_cache ? ggml_type_size(kv_self.v_l[il]->type) : 0;
                 write(&v_size_el, sizeof(v_size_el));
 
                 // Write GQA embedding size
-                write(&n_embd_v_gqa, sizeof(n_embd_v_gqa));
+                const uint32_t n_embd_v_gqa_write = has_v_cache ? n_embd_v_gqa : 0;
+                write(&n_embd_v_gqa_write, sizeof(n_embd_v_gqa_write));
+
+                if (!has_v_cache) {
+                    continue;
+                }
 
                 // For each row, we get the element values of each cell
                 for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
@@ -6043,20 +6083,35 @@ struct llama_data_read {
             const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
             const uint32_t n_embd_head_qk_rope = hparams.n_rot;
             const uint32_t kv_lora_rank = hparams.n_lora_kv;
+            const bool has_k_cache = kv_self.k_l[il] != nullptr;
 
 
             // Read type of key
             int32_t k_type_i_ref;
             read_to(&k_type_i_ref, sizeof(k_type_i_ref));
-            const int32_t k_type_i = (int32_t)kv_self.k_l[il]->type;
-            if (k_type_i != k_type_i_ref) {
-                LLAMA_LOG_ERROR("%s: mismatched key type (%d != %d, layer %d)\n", __func__, k_type_i, k_type_i_ref, il);
-                return false;
+            if (!has_k_cache) {
+                if (k_type_i_ref != -1) {
+                    LLAMA_LOG_ERROR("%s: missing key cache for layer %d\n", __func__, il);
+                    return false;
+                }
+            } else {
+                const int32_t k_type_i = (int32_t) kv_self.k_l[il]->type;
+                if (k_type_i != k_type_i_ref) {
+                    LLAMA_LOG_ERROR("%s: mismatched key type (%d != %d, layer %d)\n", __func__, k_type_i, k_type_i_ref, il);
+                    return false;
+                }
             }
 
             // Read row size of key
             uint64_t k_size_row_ref;
             read_to(&k_size_row_ref, sizeof(k_size_row_ref));
+            if (!has_k_cache) {
+                if (k_size_row_ref != 0) {
+                    LLAMA_LOG_ERROR("%s: expected empty key row size for layer %d\n", __func__, il);
+                    return false;
+                }
+                continue;
+            }
             const uint64_t k_size_row = (ctx->cparams.mla_attn == 0) ? ggml_row_size(kv_self.k_l[il]->type, n_embd_k_gqa) : ggml_row_size(kv_self.k_l[il]->type, kv_lora_rank + n_embd_head_qk_rope);
             if (k_size_row != k_size_row_ref) {
                 LLAMA_LOG_ERROR("%s: mismatched key row size (%zu != %zu, layer %d)\n", __func__, k_size_row, (size_t) k_size_row_ref, il);
@@ -6076,19 +6131,34 @@ struct llama_data_read {
         if (v_state == 0) {
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
+                const bool has_v_cache = kv_self.v_l[il] != nullptr;
 
                 // Read type of value
                 int32_t v_type_i_ref;
                 read_to(&v_type_i_ref, sizeof(v_type_i_ref));
-                const int32_t v_type_i = (int32_t)kv_self.v_l[il]->type;
-                if (v_type_i != v_type_i_ref) {
-                    LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
-                    return false;
+                if (!has_v_cache) {
+                    if (v_type_i_ref != -1) {
+                        LLAMA_LOG_ERROR("%s: missing value cache for layer %d\n", __func__, il);
+                        return false;
+                    }
+                } else {
+                    const int32_t v_type_i = (int32_t) kv_self.v_l[il]->type;
+                    if (v_type_i != v_type_i_ref) {
+                        LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
+                        return false;
+                    }
                 }
 
                 // Read row size of value
                 uint64_t v_size_row_ref;
                 read_to(&v_size_row_ref, sizeof(v_size_row_ref));
+                if (!has_v_cache) {
+                    if (v_size_row_ref != 0) {
+                        LLAMA_LOG_ERROR("%s: expected empty value row size for layer %d\n", __func__, il);
+                        return false;
+                    }
+                    continue;
+                }
                 const size_t v_size_row = ggml_row_size(kv_self.v_l[il]->type, n_embd_v_gqa);
                 if (v_size_row != v_size_row_ref) {
                     LLAMA_LOG_ERROR("%s: mismatched value row size (%zu != %zu, layer %d)\n", __func__, v_size_row, (size_t) v_size_row_ref, il);
@@ -6109,34 +6179,57 @@ struct llama_data_read {
             // For each layer, read the values for each cell (transposed)
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const uint32_t n_embd_v_gqa = llama_kv_v_row_embd(ctx->model, hparams, il);
+                const bool has_v_cache = kv_self.v_l[il] != nullptr;
 
                 // Read type of value
                 int32_t v_type_i_ref;
                 read_to(&v_type_i_ref, sizeof(v_type_i_ref));
-                const int32_t v_type_i = (int32_t)kv_self.v_l[il]->type;
-                if (v_type_i != v_type_i_ref) {
-                    LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
-                    return false;
+                if (!has_v_cache) {
+                    if (v_type_i_ref != -1) {
+                        LLAMA_LOG_ERROR("%s: missing transposed value cache for layer %d\n", __func__, il);
+                        return false;
+                    }
+                } else {
+                    const int32_t v_type_i = (int32_t) kv_self.v_l[il]->type;
+                    if (v_type_i != v_type_i_ref) {
+                        LLAMA_LOG_ERROR("%s: mismatched value type (%d != %d, layer %d)\n", __func__, v_type_i, v_type_i_ref, il);
+                        return false;
+                    }
                 }
 
                 // Read element size of value
                 uint32_t v_size_el_ref;
                 read_to(&v_size_el_ref, sizeof(v_size_el_ref));
-                const size_t v_size_el = ggml_type_size(kv_self.v_l[il]->type);
-                if (v_size_el != v_size_el_ref) {
-                    LLAMA_LOG_ERROR("%s: mismatched value element size (%zu != %zu, layer %d)\n", __func__, v_size_el, (size_t) v_size_el_ref, il);
-                    return false;
+                if (!has_v_cache) {
+                    if (v_size_el_ref != 0) {
+                        LLAMA_LOG_ERROR("%s: expected empty transposed value element size for layer %d\n", __func__, il);
+                        return false;
+                    }
+                } else {
+                    const size_t v_size_el = ggml_type_size(kv_self.v_l[il]->type);
+                    if (v_size_el != v_size_el_ref) {
+                        LLAMA_LOG_ERROR("%s: mismatched value element size (%zu != %zu, layer %d)\n", __func__, v_size_el, (size_t) v_size_el_ref, il);
+                        return false;
+                    }
                 }
 
                 // Read GQA embedding size
                 uint32_t n_embd_v_gqa_ref;
                 read_to(&n_embd_v_gqa_ref, sizeof(n_embd_v_gqa_ref));
+                if (!has_v_cache) {
+                    if (n_embd_v_gqa_ref != 0) {
+                        LLAMA_LOG_ERROR("%s: expected empty transposed value rows for layer %d\n", __func__, il);
+                        return false;
+                    }
+                    continue;
+                }
                 if (n_embd_v_gqa != n_embd_v_gqa_ref) {
                     LLAMA_LOG_ERROR("%s: mismatched GQA embedding size (%u != %u, layer %d)\n", __func__, n_embd_v_gqa, n_embd_v_gqa_ref, il);
                     return false;
                 }
 
                 if (cell_count) {
+                    const size_t v_size_el = ggml_type_size(kv_self.v_l[il]->type);
                     if (kv_self.v_l[il]->extra) {
                         throw std::runtime_error("Transposed V cache is not sypported with split mode 'graph'");
                     }

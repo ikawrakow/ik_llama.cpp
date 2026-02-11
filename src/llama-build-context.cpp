@@ -122,6 +122,12 @@ ggml_cgraph * llm_build_context::build_k_shift() {
     ggml_set_input(lctx.inp_K_shift);
 
     for (int il = 0; il < n_layer; ++il) {
+        if (model.arch == LLM_ARCH_QWEN3NEXT && hparams.is_recurrent(il)) {
+            continue;
+        }
+        if (kv_self.k_l[il] == nullptr) {
+            continue;
+        }
         const int64_t n_head_kv = hparams.n_head_kv(il);
         const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
         struct ggml_tensor * rope_factors = build_rope_factors(il);
@@ -215,6 +221,12 @@ ggml_cgraph * llm_build_context::build_defrag(const std::vector<uint32_t> & ids)
         }
 
         for (int il = 0; il < n_layer; ++il) {
+            if (model.arch == LLM_ARCH_QWEN3NEXT && hparams.is_recurrent(il)) {
+                continue;
+            }
+            if (kv_self.k_l[il] == nullptr) {
+                continue;
+            }
             const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
             const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
@@ -231,7 +243,7 @@ ggml_cgraph * llm_build_context::build_defrag(const std::vector<uint32_t> & ids)
             ggml_tensor * view_v_src = nullptr;
             ggml_tensor * view_v_dst = nullptr;
 
-            if (kv_self.v_l.size() > il) {
+            if (kv_self.v_l.size() > il && kv_self.v_l[il] != nullptr) {
                 // Note: with MLA the V cache may not be present.
                 if (flash_attn) {
                     // NOTE: the V cache is not transposed when using flash attention
@@ -4902,18 +4914,13 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
         size_t state_row_size = 0;
         ggml_tensor * state_all = nullptr;
-        if ((size_t) il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr) {
-            ggml_tensor * state_storage = kv_self.s_l[il];
-            GGML_ASSERT(state_storage->type == GGML_TYPE_F32);
-            GGML_ASSERT(state_storage->ne[0] >= state_dim);
-            state_row_size = state_storage->ne[1] >= qnext_state_slots ? state_storage->nb[1] : ggml_row_size(state_storage->type, state_dim);
-            GGML_ASSERT(ggml_nbytes(state_storage) >= state_row_size * qnext_state_slots);
-            state_all = ggml_view_2d(ctx0, state_storage, state_dim, qnext_state_slots, state_row_size, 0);
-        } else {
-            const size_t state_offs = (size_t) ggml_element_size(kv_self.v_l[il]) * hparams.n_embd_v_gqa(il) * kv_self.size;
-            state_row_size = ggml_row_size(kv_self.v_l[il]->type, state_dim);
-            state_all = ggml_view_2d(ctx0, kv_self.v_l[il], state_dim, qnext_state_slots, state_row_size, state_offs);
-        }
+        GGML_ASSERT((size_t) il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr);
+        ggml_tensor * state_storage = kv_self.s_l[il];
+        GGML_ASSERT(state_storage->type == GGML_TYPE_F32);
+        GGML_ASSERT(state_storage->ne[0] >= state_dim);
+        state_row_size = state_storage->ne[1] >= qnext_state_slots ? state_storage->nb[1] : ggml_row_size(state_storage->type, state_dim);
+        GGML_ASSERT(ggml_nbytes(state_storage) >= state_row_size * qnext_state_slots);
+        state_all = ggml_view_2d(ctx0, state_storage, state_dim, qnext_state_slots, state_row_size, 0);
 
         ggml_tensor * state_dst = ggml_view_2d(ctx0, state_all, state_dim, 1, state_row_size, state_seq_id_local * state_row_size);
         ggml_tensor * state_f32 = state_dst;
