@@ -322,4 +322,25 @@ Example:
 llama-quantize --imatrix some_imatrix --custom-q "regex1=typ1,regex2=type2..." some_model some_output_file some_base_quant
 
 # Build arguments
-cmake -DGGML_ARCH_FLAGS="-march=armv8.2-a+dotprod+fp16" (plus other things you want to add)
+-DGGML_ARCH_FLAGS="-march=armv8.2-a+dotprod+fp16"
+Direct access to ARCH options.
+
+-DGGML_CUDA=ON
+Build with CUDA support.
+
+-DCMAKE_CUDA_ARCHITECTURES=86
+Build for specific CUDA GPU Compute Capability, e.g. 8.6 for RTX30*0
+
+-DGGML_RPC=ON
+Build the RPC backend.
+
+-DGGML_IQK_FA_ALL_QUANTS=1
+More KV quantization types
+
+-DLLAMA_SERVER_SQLITE3=ON
+Sqlite3 for mikupad
+
+-DCMAKE_TOOLCHAIN_FILE=[...]
+
+-DGGML_NATIVE=ON
+Turn off when cross-compiling.
