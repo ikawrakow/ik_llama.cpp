@@ -75,7 +75,6 @@ struct llm_build_context {
     const int32_t n_ctx_orig;
 
     const bool flash_attn;
-    const bool fused_delta;
     const int  mla_attn;
     const int  attn_max_batch;
     const bool fused_moe_up_gate;
