@@ -50,7 +50,6 @@
 #include "ggml-cuda/set-rows.cuh"
 #include "ggml-cuda/solve_tri.cuh"
 #include "ggml-cuda/ssm-conv.cuh"
-#include "ggml-cuda/delta-net.cuh"
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/multiadd.cuh"
 #include "ggml-cuda/hadamard.cuh"
@@ -3601,9 +3600,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SOLVE_TRI:
             ggml_cuda_op_solve_tri(ctx, dst);
             break;
-        case GGML_OP_DELTA_NET:
-            ggml_cuda_op_delta_net(ctx, dst);
-            break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cuda_flash_attn_ext(ctx, dst);
             break;
@@ -3837,12 +3833,6 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_cuda_graph 
 #ifndef NDEBUG
             GGML_CUDA_LOG_DEBUG("%s(%s): disabling CUDA graphs due to unsupported node type %ld %ld\n",
                     __func__, node->src[0]->name, node->ne[2], node->src[2]->ne[0]);
-#endif
-        }
-        if (node->op == GGML_OP_DELTA_NET) {
-            use_cuda_graph = false;
-#ifndef NDEBUG
-            GGML_CUDA_LOG_DEBUG("%s: disabling CUDA graphs due to DELTA_NET recurrent state\n", __func__);
 #endif
         }
         if (node->op == GGML_OP_MOE_FUSED_UP_GATE) {
@@ -4462,22 +4452,6 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
                    op->src[2]->ne[1] == op->src[0]->ne[1] &&
                    op->src[1]->ne[0] == op->src[0]->ne[1] &&
                    op->src[3]->ne[0] == op->src[0]->ne[2];
-        case GGML_OP_DELTA_NET:
-            return op->src[0]->type == GGML_TYPE_F32 &&
-                   op->src[1]->type == GGML_TYPE_F32 &&
-                   op->src[2]->type == GGML_TYPE_F32 &&
-                   op->src[3]->type == GGML_TYPE_F32 &&
-                   op->src[4]->type == GGML_TYPE_F32 &&
-                   op->src[5]->type == GGML_TYPE_F32 &&
-                   op->type == GGML_TYPE_F32 &&
-                   ggml_is_contiguous(op->src[0]) &&
-                   ggml_is_contiguous(op->src[1]) &&
-                   ggml_is_contiguous(op->src[2]) &&
-                   ggml_is_contiguous(op->src[3]) &&
-                   ggml_is_contiguous(op->src[4]) &&
-                   ggml_is_contiguous(op->src[5]) &&
-                   op->src[0]->ne[0] <= 256 &&
-                   op->src[2]->ne[0] <= 256;
         case GGML_OP_FLASH_ATTN_EXT:
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
             return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;
