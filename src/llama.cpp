@@ -4260,7 +4260,6 @@ struct llama_context_params llama_context_default_params() {
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ true,
-        /*.fused_delta                 =*/ false,
         /*.mla_attn                    =*/ 3,
         /*.attn_max_batch              =*/ 0,
         /*.fused_moe_up_gate           =*/ true,
@@ -4631,7 +4630,6 @@ struct llama_context * llama_new_context_with_model(
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
-    cparams.fused_delta      = params.fused_delta;
     cparams.mla_attn         = params.mla_attn;
     cparams.attn_max_batch   = params.attn_max_batch;
     cparams.fused_moe_up_gate= params.fused_moe_up_gate;
@@ -4738,7 +4736,6 @@ struct llama_context * llama_new_context_with_model(
     LLAMA_LOG_INFO("%s: n_batch       = %u\n",     __func__, cparams.n_batch);
     LLAMA_LOG_INFO("%s: n_ubatch      = %u\n",     __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: flash_attn    = %d\n",     __func__, cparams.flash_attn);
-    LLAMA_LOG_INFO("%s: fused_delta  = %d\n",      __func__, cparams.fused_delta);
     if (model->arch == LLM_ARCH_DEEPSEEK2) {
     LLAMA_LOG_INFO("%s: mla_attn      = %d\n",     __func__, cparams.mla_attn);
     }

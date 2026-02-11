@@ -31,7 +31,6 @@ struct llama_cparams {
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;
-    bool fused_delta;
     int  mla_attn;
     int  attn_max_batch;
     bool fused_moe_up_gate;
