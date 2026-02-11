@@ -672,8 +672,8 @@ static inline uint32_t llama_kv_v_row_embd(
     return hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
 }
 
-static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams) {
-    return std::max<uint32_t>(1, cparams.n_seq_max);
+static inline uint32_t llama_qwen3next_state_slots(const llama_cparams & cparams, uint32_t kv_size) {
+    return std::min<uint32_t>(std::max<uint32_t>(1, cparams.n_seq_max), kv_size);
 }
 
 static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & cache) {
@@ -818,7 +818,11 @@ static bool llama_kv_cache_init(
 
     std::vector<size_t> mem_split(model.splits.size(), 0);
 
-    const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams);
+    const uint32_t qnext_state_slots = llama_qwen3next_state_slots(cparams, kv_size);
+    if (model.arch == LLM_ARCH_QWEN3NEXT && qnext_state_slots < std::max<uint32_t>(1, cparams.n_seq_max)) {
+        LLAMA_LOG_WARN("%s: reducing qwen3next state slots from %u to %u to fit KV cache size\n",
+                __func__, std::max<uint32_t>(1, cparams.n_seq_max), qnext_state_slots);
+    }
 
     int n_mla = 0;
     for (int i = 0; i < (int) n_layer; i++) {
@@ -1204,7 +1208,9 @@ static void llama_kv_cache_seq_cp(
     const bool has_qnext_state = llama_kv_has_qnext_state_storage(cache);
     if (has_qnext_state &&
             llama_kv_qnext_seq_id_in_range(cache, seq_id_dst) &&
-            llama_kv_qnext_seq_id_in_range(cache, seq_id_src)) {
+            llama_kv_qnext_seq_id_in_range(cache, seq_id_src) &&
+            (uint32_t) seq_id_dst < cache.size &&
+            (uint32_t) seq_id_src < cache.size) {
         seq_id_src = cache.cells[seq_id_src].src;
         GGML_ASSERT((uint32_t) seq_id_src < cache.size);
 

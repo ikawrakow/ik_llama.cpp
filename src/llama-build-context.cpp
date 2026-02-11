@@ -4358,7 +4358,8 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
     const int64_t conv_state_dim = (hparams.ssm_d_conv - 1) * conv_dim;
     const int64_t ssm_state_dim  = head_v_dim * head_v_dim * num_v_heads;
     const int64_t state_dim      = conv_state_dim + ssm_state_dim;
-    const uint32_t qnext_state_slots = std::max<uint32_t>(1, cparams.n_seq_max);
+    const uint32_t qnext_state_slots = llama_kv_qnext_state_slots(kv_self);
+    GGML_ASSERT(qnext_state_slots > 0);
 
     GGML_ASSERT(hparams.n_embd_v_s() == (uint32_t) state_dim);
 
