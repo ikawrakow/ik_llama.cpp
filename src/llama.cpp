@@ -3136,11 +3136,51 @@ static int llama_decode_internal(
         }
     }
 
-    for (uint32_t cur_token = 0; cur_token < n_tokens_all; cur_token += n_ubatch) {
+    bool warned_qnext_mixed_repeat = false;
+    for (uint32_t cur_token = 0; cur_token < n_tokens_all; ) {
 #if IK_PRINT_TIMING
         auto tim1 = ggml_time_us();
 #endif
-        const uint32_t n_tokens = std::min(n_ubatch, n_tokens_all - cur_token);
+        uint32_t n_tokens = std::min(n_ubatch, n_tokens_all - cur_token);
+        if (model.arch == LLM_ARCH_QWEN3NEXT &&
+                n_tokens > 1 &&
+                batch_all.n_seq_id != nullptr &&
+                batch_all.seq_id != nullptr) {
+            bool can_check = true;
+            bool any_diff = false;
+            bool has_dup = false;
+            llama_seq_id first_seq_id = 0;
+            std::unordered_set<llama_seq_id> seen_seq_ids;
+            seen_seq_ids.reserve(n_tokens);
+
+            for (uint32_t i = 0; i < n_tokens; ++i) {
+                const uint32_t idx = cur_token + i;
+                if (batch_all.n_seq_id[idx] <= 0 || batch_all.seq_id[idx] == nullptr) {
+                    can_check = false;
+                    break;
+                }
+
+                const llama_seq_id seq_id_i = batch_all.seq_id[idx][0];
+                if (i == 0) {
+                    first_seq_id = seq_id_i;
+                } else if (seq_id_i != first_seq_id) {
+                    any_diff = true;
+                }
+
+                if (!seen_seq_ids.insert(seq_id_i).second) {
+                    has_dup = true;
+                }
+            }
+
+            if (can_check && any_diff && has_dup) {
+                n_tokens = 1;
+                if (!warned_qnext_mixed_repeat) {
+                    LLAMA_LOG_WARN("%s: qwen3next mixed-sequence batch contains repeated seq_id values; falling back to single-token chunking\n", __func__);
+                    warned_qnext_mixed_repeat = true;
+                }
+            }
+        }
+
         llama_batch u_batch = {
             /* .n_tokens   = */ (int32_t) n_tokens,
             /* .token      = */ batch_all.token     ? batch_all.token    + cur_token        : nullptr,
@@ -3417,6 +3457,7 @@ static int llama_decode_internal(
 #endif
         }
         n_outputs_prev += lctx.n_outputs;
+        cur_token += n_tokens;
     }
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
@@ -5727,7 +5768,7 @@ struct llama_data_write {
         }
     }
 
-    void write_kv_cache_data(const struct llama_context * ctx, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) {
+    void write_kv_cache_data(const struct llama_context * ctx, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) {
         const struct llama_kv_cache & kv_self = ctx->kv_self;
         const struct llama_hparams & hparams = ctx->model.hparams;
 
@@ -5739,8 +5780,6 @@ struct llama_data_write {
 
         write(&v_state, sizeof(v_state));
         write(&n_layer, sizeof(n_layer));
-
-        std::vector<uint8_t> tmp_buf;
 
         // Iterate and write all the keys first, each row is a cell
         // Get whole range at a time
@@ -5834,6 +5873,42 @@ struct llama_data_write {
                 }
             }
         }
+
+        const uint32_t qnext_state = llama_kv_has_qnext_state_storage(kv_self) ? 1 : 0;
+        write(&qnext_state, sizeof(qnext_state));
+
+        if (qnext_state != 0) {
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                const bool has_s_cache = il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr;
+
+                const int32_t s_type_i = has_s_cache ? (int32_t) kv_self.s_l[il]->type : -1;
+                write(&s_type_i, sizeof(s_type_i));
+
+                const uint64_t s_size_row = has_s_cache ? ggml_row_size(kv_self.s_l[il]->type, kv_self.s_l[il]->ne[0]) : 0;
+                write(&s_size_row, sizeof(s_size_row));
+
+                uint32_t s_rows = 0;
+                size_t s_offset = 0;
+                if (has_s_cache) {
+                    const uint32_t n_slots = (uint32_t) kv_self.s_l[il]->ne[1];
+                    if (seq_id == -1) {
+                        s_rows = n_slots;
+                    } else if (llama_kv_qnext_seq_id_in_range(kv_self, seq_id) && (uint32_t) seq_id < kv_self.size) {
+                        llama_seq_id src_seq_id = kv_self.cells[seq_id].src;
+                        if (llama_kv_qnext_seq_id_in_range(kv_self, src_seq_id)) {
+                            s_rows = 1;
+                            s_offset = (size_t) src_seq_id * s_size_row;
+                        }
+                    }
+                }
+
+                write(&s_rows, sizeof(s_rows));
+
+                if (has_s_cache && s_rows > 0) {
+                    write_tensor_data(kv_self.s_l[il], s_offset, s_rows * s_size_row, il);
+                }
+            }
+        }
     }
 
     void write_kv_cache(const struct llama_context * ctx, llama_seq_id seq_id = -1) {
@@ -5872,7 +5947,7 @@ struct llama_data_write {
         write(&cell_count, sizeof(cell_count));
 
         write_kv_cache_meta(kv_self, cell_ranges, seq_id);
-        write_kv_cache_data(ctx, cell_ranges);
+        write_kv_cache_data(ctx, cell_ranges, seq_id);
     }
 };
 
@@ -6083,7 +6158,7 @@ struct llama_data_read {
         GGML_ASSERT(sum_split_row_size == row_size);
     }
 
-    bool read_kv_cache_data(struct llama_context * ctx, uint32_t cell_count) {
+    bool read_kv_cache_data(struct llama_context * ctx, uint32_t cell_count, llama_seq_id seq_id = -1) {
         const struct llama_hparams & hparams = ctx->model.hparams;
         struct llama_kv_cache & kv_self = ctx->kv_self;
 
@@ -6273,6 +6348,76 @@ struct llama_data_read {
                 }
             }
         }
+
+        uint32_t qnext_state_ref = 0;
+        read_to(&qnext_state_ref, sizeof(qnext_state_ref));
+
+        const bool has_qnext_state = llama_kv_has_qnext_state_storage(kv_self);
+        if ((qnext_state_ref != 0) != has_qnext_state) {
+            LLAMA_LOG_ERROR("%s: incompatible qwen3next state cache presence\n", __func__);
+            return false;
+        }
+
+        if (qnext_state_ref != 0) {
+            for (uint32_t il = 0; il < n_layer; ++il) {
+                const bool has_s_cache = il < kv_self.s_l.size() && kv_self.s_l[il] != nullptr;
+
+                int32_t s_type_i_ref;
+                read_to(&s_type_i_ref, sizeof(s_type_i_ref));
+                if (!has_s_cache) {
+                    if (s_type_i_ref != -1) {
+                        LLAMA_LOG_ERROR("%s: missing qwen3next state cache for layer %d\n", __func__, il);
+                        return false;
+                    }
+                } else {
+                    const int32_t s_type_i = (int32_t) kv_self.s_l[il]->type;
+                    if (s_type_i != s_type_i_ref) {
+                        LLAMA_LOG_ERROR("%s: mismatched qwen3next state type (%d != %d, layer %d)\n", __func__, s_type_i, s_type_i_ref, il);
+                        return false;
+                    }
+                }
+
+                uint64_t s_size_row_ref;
+                read_to(&s_size_row_ref, sizeof(s_size_row_ref));
+
+                const uint64_t s_size_row = has_s_cache ? ggml_row_size(kv_self.s_l[il]->type, kv_self.s_l[il]->ne[0]) : 0;
+                if (s_size_row != s_size_row_ref) {
+                    LLAMA_LOG_ERROR("%s: mismatched qwen3next state row size (%zu != %zu, layer %d)\n",
+                            __func__, (size_t) s_size_row, (size_t) s_size_row_ref, il);
+                    return false;
+                }
+
+                uint32_t s_rows_ref;
+                read_to(&s_rows_ref, sizeof(s_rows_ref));
+
+                uint32_t s_rows = 0;
+                uint32_t s_dst_row = 0;
+                if (has_s_cache) {
+                    const uint32_t n_slots = (uint32_t) kv_self.s_l[il]->ne[1];
+                    if (seq_id == -1) {
+                        s_rows = n_slots;
+                    } else if (llama_kv_qnext_seq_id_in_range(kv_self, seq_id)) {
+                        s_rows = 1;
+                        s_dst_row = (uint32_t) seq_id;
+                    }
+                }
+
+                if (s_rows_ref != s_rows) {
+                    LLAMA_LOG_ERROR("%s: mismatched qwen3next state row count (%u != %u, layer %d)\n", __func__, s_rows, s_rows_ref, il);
+                    return false;
+                }
+
+                if (s_rows > 0) {
+                    const size_t s_data_size = s_rows * s_size_row;
+                    const size_t s_dst_offset = (size_t) s_dst_row * s_size_row;
+                    if (kv_self.s_l[il]->extra) {
+                        read_kv_cache_data_split(ctx, kv_self.s_l[il], read(s_data_size), s_dst_row, s_size_row, s_rows, il);
+                    } else {
+                        ggml_backend_tensor_set(kv_self.s_l[il], read(s_data_size), s_dst_offset, s_data_size);
+                    }
+                }
+            }
+        }
         return true;
     }
 
@@ -6280,7 +6425,7 @@ struct llama_data_read {
         uint32_t cell_count;
         read_to(&cell_count, sizeof(cell_count));
 
-        bool res = read_kv_cache_meta(ctx, cell_count, seq_id) && read_kv_cache_data(ctx, cell_count);
+        bool res = read_kv_cache_meta(ctx, cell_count, seq_id) && read_kv_cache_data(ctx, cell_count, seq_id);
 
         if (!res) {
             if (seq_id == -1) {
