@@ -4332,9 +4332,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
     const bool reset_state = batch.pos != nullptr && batch.pos[0] == 0;
 
-    // Fused DeltaNet path for Qwen3Next (prompt + decode) when enabled.
-    const bool use_fused_delta_mode = cparams.fused_delta;
-
     auto get_slice_2d = [&](ggml_tensor * t, int64_t c) -> ggml_tensor * {
         return ggml_view_4d(ctx0, t, t->ne[0], t->ne[1], 1, t->ne[3],
                 t->nb[1], t->nb[2], t->nb[3], t->nb[2] * c);
@@ -4613,9 +4610,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
     //   g:     [T, 1, H, B]
     //   beta:  [1, T, H, B]
     //   state: [S, S*H, 1, B]
-    auto build_delta_net_fused = [&](ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
-                                     ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
-                                     int il) -> std::pair<ggml_tensor *, ggml_tensor *> {
+    [[maybe_unused]] auto build_delta_net_fused = [&](ggml_tensor * q, ggml_tensor * k, ggml_tensor * v,
+                                                      ggml_tensor * g, ggml_tensor * beta, ggml_tensor * state,
+                                                      int il) -> std::pair<ggml_tensor *, ggml_tensor *> {
         const int64_t S_k      = q->ne[0];
         const int64_t H_k      = q->ne[1];
         const int64_t n_tokens = q->ne[2];
@@ -4954,6 +4951,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
         q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_tok, 1);
         k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_tok, 1);
+        v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_tok, 1);
 
         if (num_k_heads != num_v_heads) {
             GGML_ASSERT(num_v_heads % num_k_heads == 0);
@@ -4974,19 +4972,14 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(v_conv, "v_conv_predelta", il);
 
         std::pair<ggml_tensor *, ggml_tensor *> attn_out;
-        const bool use_fused_delta_net = use_fused_delta_mode;
 
-        if (use_fused_delta_net) {
-            attn_out = build_delta_net_fused(q_conv, k_conv, v_conv, gate, beta, state, il);
-        } else {
-            GGML_ASSERT(causal_mask != nullptr);
-            GGML_ASSERT(identity    != nullptr);
-            GGML_ASSERT(diag_mask   != nullptr);
+        GGML_ASSERT(causal_mask != nullptr);
+        GGML_ASSERT(identity    != nullptr);
+        GGML_ASSERT(diag_mask   != nullptr);
 
-            attn_out = n_tok == 1
-                ? build_delta_net_autoregressive(q_conv, k_conv, v_conv, gate, beta, state, il)
-                : build_delta_net_chunking(q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, diag_mask, il);
-        }
+        attn_out = n_tok == 1
+            ? build_delta_net_autoregressive(q_conv, k_conv, v_conv, gate, beta, state, il)
+            : build_delta_net_chunking(q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, diag_mask, il);
         ggml_tensor * output    = attn_out.first;
         ggml_tensor * new_state = attn_out.second;
         cb(output, "attn_output", il);
