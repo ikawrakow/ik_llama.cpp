@@ -2619,6 +2619,8 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     }
 
                     slot.n_past = 0;
+                    slot.n_buffer = 0;
+                    slot.token_buffer.clear();
                     slot.n_prompt_tokens = prompt_tokens.size();
 
                     LOG_VERBOSE("prompt tokenized", {
@@ -2952,27 +2954,19 @@ void server_context::speculative_decoding_accept() {
         const auto ids = common_sampler_sample_and_accept_n(slot.ctx_sampling, ctx, slot.i_batch_dft, slot.drafted);
         
         if (slot.has_mtp) {
-            const float* emb = llama_get_embeddings_ith(ctx, -1);
-            if (emb) {
-                float sum = 0.0f;
-                for (int k = 0; k < 10; k++) sum += std::abs(emb[k]);
-                if (sum < 0.0001f) {
-                    SLT_DBG(slot, "Main Model Embeddings appear to be empty/zero! Sync failed or Embeddings not extracted.\n", 0);
-                }
-            } else {
-                SLT_DBG(slot, "Main Model Embeddings are NULL.\n", 0);
-            }         
+            const int n_embd = llama_model_n_embd(llama_get_model(ctx)); 
             if (!ids.empty()) {
-                const int n_embd = llama_model_n_embd(llama_get_model(ctx));
-
                 const float* emb = llama_get_embeddings_ith(ctx, ids.size() - 1);
                 if (emb) {
-                        slot.mtp_hidden_state.resize(n_embd);
-                        memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                    slot.mtp_hidden_state.resize(n_embd);
+                    memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
                 }
-                mtp_accept_tokens(ctx, ids, slot.n_past, slot.id);
-
+                }
+            else {
+                llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, 0));
             }
+            llama_set_draft_input_hidden_state(ctx, slot.mtp_hidden_state.data());
+            mtp_accept_tokens(ctx, ids, slot.n_past, slot.id);
         }
 
         slot.i_batch_dft.clear();
@@ -3203,27 +3197,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             continue; // continue loop of n_batch
         }
-        if (params_base.has_mtp) {
-            bool is_prompt_phase = false;
-            for (auto& slot : slots) {
-                if (slot.state == SLOT_STATE_PROCESSING && 
-                    slot.i_batch >= i && 
-                    slot.i_batch < (i + n_tokens)) {
-
-                    if (slot.n_decoded == 0) {
-                        is_prompt_phase = true;
-                        const float* emb = llama_get_embeddings_ith(ctx, -1);
-                        if (emb) {
-                            const int n_embd = llama_model_n_embd(llama_get_model(ctx));
-                            slot.mtp_hidden_state.resize(n_embd);
-                            memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
-                        }
-                        mtp_update_kv_cache(ctx, batch_view, is_prompt_phase);
-                        break;
-                    }
-                }
-            }
-        }
 
         for (auto& slot : slots) {
             if (slot.state != SLOT_STATE_PROCESSING || slot.i_batch < (int)i || slot.i_batch >= (int)(i + n_tokens)) {
@@ -3248,6 +3221,17 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             common_sampler_accept(slot.ctx_sampling, ctx, id, true);
 
+            if (params_base.has_mtp && slot.n_decoded == 0) {
+                if (batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id) {
+                    mtp_update_kv_cache(ctx, batch_view, true);
+                    const float* emb = llama_get_embeddings_ith(ctx, -1);
+                    if (emb) {
+                        const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                        slot.mtp_hidden_state.resize(n_embd);
+                        memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                    }
+                }
+            }
             slot.n_decoded += 1;
             const int64_t t_current = ggml_time_us();
 
@@ -3277,7 +3261,22 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
 
             slot.i_batch = -1;
         }
-
+        if (params_base.has_mtp) {
+            for (auto& slot : slots) {
+                if (slot.n_decoded == 0) { 
+                    if (batch_view.n_seq_id[0] > 0 && batch_view.seq_id[0][0] == slot.id) {
+                        mtp_update_kv_cache(ctx, batch_view, true);
+                        const float* emb = llama_get_embeddings_ith(ctx, -1);
+                        if (emb) {
+                            const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+                            slot.mtp_hidden_state.resize(n_embd);
+                            memcpy(slot.mtp_hidden_state.data(), emb, n_embd * sizeof(float));
+                        }
+                        break;
+                    }
+                }
+            }
+        }
         // speculative decoding - main model sample and accept
         speculative_decoding_accept();
     }

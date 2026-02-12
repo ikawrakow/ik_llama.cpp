@@ -3145,7 +3145,7 @@ static int llama_decode_internal(
             if (ret != 0) {
                 return ret;
             }
-// here?
+
             // if we have enough unused cells before the current head ->
             //   better to start searching from the beginning of the cache, hoping to fill it
             if (kv_self.head > kv_self.used + 2*n_tokens) {
