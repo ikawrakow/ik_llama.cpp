@@ -173,17 +173,37 @@ Overview of the most common command-line parameters in `ik_llama.cpp`.
 
 ### sweep_bench
 
+Benchmark utility that performs a series of prompt processing batches followed by TG.
+The KV cache is not cleared, so the N_KV columns tells you how many tokens were in the KV cache when the PP/TG was processed.
+
+```
+llama-sweep-bench -m /models/model.gguf -c 12288 -ub 512 -rtr -fa -ctk q8_0 -ctv q8_0
+```
+
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `-nrep N | --n-repetitions N` | Define the number of repetitions used at zero context | - |  |
+| `-nrep N, --n-repetitions N` | Define the number of repetitions used at zero context | - |  |
+| `-n` | Specifies he number of TG tokens  | - | If not specified, it is set to u-batch/4  | 
 
 ### llama-bench
+
+Benchmark utility.
+
+```
+llama-bench -tgb 4,16 -p 512 -n 128 other_arguments
+```
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
 | `-tgb (or --threads-gen-batch)` | Enable having different number of threads for generation and batch processing | - |  |
 
 ### Imatrix
+
+Create imatrix from calibration dataset.
+
+```
+llama-imatrix -m /models/model-bf16.gguf -f /models/calibration_data_v5_rc.txt -o /models/model.imatrix
+```
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
@@ -192,25 +212,44 @@ Overview of the most common command-line parameters in `ik_llama.cpp`.
 
 ### Quantization
 
+Quantize models to reduce size and improve speed.
+
+```
+llama-quantize --imatrix /models/model.imatrix /models/model-bf16.gguf /models/model-IQ4_NL.gguf IQ4_NL
+```
+
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
 | `--custom-q` | Custom quantization rules with regular expressions | - | Example: `llama-quantize --imatrix some_imatrix --custom-q "regex1=typ1,regex2=type2..." some_model some_output_file some_base_quant` |
 
 ### Build Arguments
 
+Build with `cmake`.
+
+```
+cmake -B build -DGGML_NATIVE=ON
+
+cmake --build build --config Release -j$(nproc)
+```
+
 | Argument | Notes/Examples |
 | - | - |
 | `-DGGML_ARCH_FLAGS="-march=armv8.2-a+dotprod+fp16"` | Direct access to ARCH options. |
-| `-DGGML_CUDA=ON` | Build with CUDA support. |
+| `-DGGML_CUDA=ON` | Build with CUDA support. By default it builds to native CUDA. |
 | `-DCMAKE_CUDA_ARCHITECTURES=86` | Build for specific CUDA GPU Compute Capability, e.g. 8.6 for RTX30*0 |
 | `-DGGML_RPC=ON` | Build the RPC backend. |
 | `-DGGML_IQK_FA_ALL_QUANTS=ON` | More KV quantization types |
 | `-DLLAMA_SERVER_SQLITE3=ON` | Sqlite3 for mikupad |
-| `-DCMAKE_TOOLCHAIN_FILE=[...]` |  |
+| `-DCMAKE_TOOLCHAIN_FILE=[...]` | Example: on Windows tells `cmake` where is `sqlite3`. |
 | `-DGGML_NATIVE=ON` | Turn off when cross-compiling. |
 
-
 ### Environment variables
+
+Use them on the command line.
+
+```
+CUDA_VISIBLE_DEVICES=0,2 llama-server -m /models/model-bf16.gguf
+```
 
 | Name | Notes/Examples |
 | - | - |
