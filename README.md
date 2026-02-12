@@ -6,9 +6,59 @@
 
 This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp) with better CPU and hybrid GPU/CPU performance, new SOTA quantization types, first-class Bitnet support, better DeepSeek performance via MLA, FlashMLA, fused MoE operations and tensor overrides for hybrid GPU/CPU inference, row-interleaved quant packing, etc.
 
-## Latest News
+## Quickstart
+
+### Prerequisites
+
+```
+apt-get update && apt-get install build-essential git libcurl4-openssl-dev curl libgomp1 cmake
+
+git clone https://github.com/ikawrakow/ik_llama.cpp
+
+cd ik_llama.cpp
+```
+
+### Build for CPU
+
+```
+cmake -B build -DGGML_NATIVE=ON
+
+cmake --build build --config Release -j$(nproc)
+```
+
+### Build for GPU
+
+Install Nvidia Drivers and [CUDA Toolkit](https://developer.nvidia.com/cuda/toolkit).
+
+```
+cmake -B build -DGGML_NATIVE=ON -DGGML_CUDA=ON
+
+cmake --build build --config Release -j$(nproc)
+```
+
+### Run
+
+Download `.gguf` model files (e.g. [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf)) to your favorite directory (e.g. `/my_local_files/gguf`).
+
+Start the server with one of the commands (CPU or GPU):
+
+```
+./build/bin/llama-server --model /my_local_files/gguf/Qwen_Qwen3-0.6B-IQ4_NL.gguf --ctx-size 4096
+```
+
+```
+./build/bin/llama-server --model /my_local_files/gguf/Qwen_Qwen3-0.6B-IQ4_NL.gguf --ctx-size 4096 -ngl 999
+```
+
+That's all! Open [http://127.0.0.1:8080](http://127.0.0.1:8080) in Browser start chatting.
+
 
 ### [Step by step guide](./docker/README.md) for ik_llama.cpp in podman/docker container including llama-swap
+
+### [Common parameters and options](./docs/parameters.md)
+
+## Latest News
+
 
 ### Model Support
 
