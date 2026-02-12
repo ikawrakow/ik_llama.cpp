@@ -233,7 +233,7 @@ void common_ngram_map_draft(common_ngram_map & map,
 
     if (map.idx_last_check  > cur_len) {
         // Should not happen because of common_ngram_map_begin().
-        GGML_ABORT("%s: map.idx_last_check > cur_len: %zu > %zu", __func__, map.idx_last_check, cur_len);
+        LLAMA_LOG_WARN("%s: map.idx_last_check > cur_len: %zu > %zu", __func__, map.idx_last_check, cur_len);
     }
     map.idx_last_check = cur_len;
 
@@ -248,7 +248,7 @@ void common_ngram_map_draft(common_ngram_map & map,
     // search for the key in the map
     size_t match_pos = 0;
     if (map.size_last_begin > cur_len) {
-        GGML_ABORT("%s: map.size_last_begin > cur_len: %zu > %zu", __func__, map.size_last_begin, cur_len);
+        LLAMA_LOG_WARN("%s: map.size_last_begin > cur_len: %zu > %zu", __func__, map.size_last_begin, cur_len);
     }
     if (!map.key_map.empty()) {
         // Search for the key in the map key_map from hash of ngrams to index of ngram.
