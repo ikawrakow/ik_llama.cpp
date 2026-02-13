@@ -2917,10 +2917,7 @@ static int ggml_cuda_moe_up_gate_unary(ggml_backend_cuda_context & ctx, ggml_ten
     for (int64_t i02 = 0; i02 < n_as; i02++) {
         int64_t num_src1_rows = moe_counts[i02];
 
-        if (num_src1_rows == 0) {
-            continue;
-        }
-
+        if (num_src1_rows == 0) continue;
         size_t mapping_offset = cum_moe_counts[i02];
 
         if (use_quantized_src1) {
