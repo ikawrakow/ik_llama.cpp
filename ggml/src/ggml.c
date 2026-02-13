@@ -17722,36 +17722,27 @@ static void ggml_compute_forward_scale_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int nc = src0->ne[0];
-    const int nr = ggml_nrows(src0);
+    //if (ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld with %g, %g\n", __func__, dst->name, dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], (double)s, (double)b);
 
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+    const int64_t block_size = 1024;
+    int64_t nelements = ggml_nelements(dst);
+    int64_t nblocks = (nelements + block_size - 1)/block_size;
 
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
-
-    const size_t nb01 = src0->nb[1];
-
-    const size_t nb1 = dst->nb[1];
-
-    if (b == 0.0f) {
-        for (int i1 = ir0; i1 < ir1; i1++) {
+    for (int ib = ith; ib < nblocks; ib += nth) {
+        const float * src_data = (const float *)src0->data + block_size*ib;
+              float * dst_data = (      float *)dst->data  + block_size*ib;
+        int n = MIN(block_size, nelements - block_size*ib);
+        if (b == 0.0f) {
             if (dst->data != src0->data) {
                 // src0 is same shape as dst => same indices
-                memcpy((char *)dst->data + i1*nb1, (char *)src0->data + i1*nb01, nc * sizeof(float));
+                memcpy(dst_data, src_data, n * sizeof(float));
             }
-            ggml_vec_scale_f32(nc, (float *) ((char *) dst->data + i1*nb1), s);
-        }
-    } else {
-        for (int i1 = ir0; i1 < ir1; i1++) {
-            ggml_vec_mad1_f32(nc,
-                (float *) ((char *) dst->data  + i1*nb1),
-                (float *) ((char *) src0->data + i1*nb1),
-                s, b);
+            ggml_vec_scale_f32(n, dst_data, s);
+        } else {
+            ggml_vec_mad1_f32(n, dst_data, src_data, s, b);
         }
     }
+
 }
 
 static void ggml_compute_forward_scale(
@@ -25744,7 +25735,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 n_tasks = 1; //TODO
             } break;
-        case GGML_OP_SCALE:
         case GGML_OP_SOFTCAP:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_CAP_MAX:
@@ -25752,6 +25742,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 n_tasks = MIN(n_threads, ggml_nrows(node->src[0]));
             } break;
+        case GGML_OP_SCALE:
         case GGML_OP_IM2COL:
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_2D_DW:
