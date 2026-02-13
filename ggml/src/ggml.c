@@ -14329,6 +14329,58 @@ static void ggml_compute_forward_repeat_f32(
         return;
     }
 
+    int n_repeated_dims = 0;
+    int repeated_dim = -1;
+    for (int idim = 0; idim < GGML_MAX_DIMS; ++idim) {
+        if (src0->ne[idim] != dst->ne[idim]) {
+            ++n_repeated_dims;
+            repeated_dim = idim;
+        }
+    }
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    if (n_repeated_dims == 1) {
+        GGML_ASSERT(repeated_dim >= 0 && repeated_dim < GGML_MAX_DIMS);
+        int nrows = 1;
+        for (int idim = 0; idim < GGML_MAX_DIMS; ++idim) {
+            if (src0->ne[idim] == dst->ne[idim]) nrows *= dst->ne[idim];
+        }
+        int nrows_per_thread = (nrows + nth - 1)/nth;
+        int first_row = ith*nrows_per_thread;
+        int last_row = MIN(first_row + nrows_per_thread, nrows);
+        for (int ir = first_row; ir < last_row; ++ir) {
+            int ii = ir;
+            int denom = nrows;
+            size_t offset_src = 0;
+            size_t offset_dst = 0;
+            for (int idim = GGML_MAX_DIMS-1; idim >= 0; --idim) {
+                if (idim == repeated_dim) continue;
+                denom /= dst->ne[idim];
+                int idx = ii / denom;
+                ii -= idx * denom;
+                offset_src += idx*src0->nb[idim];
+                offset_dst += idx*dst->nb[idim];
+            }
+            char * dst_ptr = (char *)dst->data + offset_dst;
+            const char * src_ptr = (const char *)src0->data + offset_src;
+            if (src0->ne[repeated_dim] == 1) {
+                float value = *(const float *)src_ptr;
+                for (int i = 0; i < (int)dst->ne[repeated_dim]; ++i) {
+                    *(float *)(dst_ptr + i*dst->nb[repeated_dim]) = value;
+                }
+            } else {
+                for (int i = 0; i < (int)dst->ne[repeated_dim]; ++i) {
+                    int i0 = i % src0->ne[repeated_dim];
+                    float value = *(const float *)(src_ptr + i0*src0->nb[repeated_dim]);
+                    *(float *)(dst_ptr + i*dst->nb[repeated_dim]) = value;
+                }
+            }
+        }
+        return;
+    }
+
     if (params->ith != 0) {
         return;
     }
@@ -14456,6 +14508,9 @@ static void ggml_compute_forward_repeat(
         struct ggml_tensor * dst) {
 
     const struct ggml_tensor * src0 = dst->src[0];
+
+    //if (params->ith == 0) printf("%s(%s,%s,%s): %ld x %ld x %ld x %ld -> %ld x %ld x %ld x %ld\n", __func__, dst->name, ggml_type_name(src0->type), ggml_type_name(dst->type),
+    //        src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
 
     switch (src0->type) {
         case GGML_TYPE_F16:
@@ -25671,6 +25726,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MULTI_ADD:
         case GGML_OP_MUL_MULTI_ADD:
         case GGML_OP_HADAMARD:
+        case GGML_OP_REPEAT:
             {
                 n_tasks = n_threads;
             } break;
@@ -25681,7 +25737,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SUM:
         case GGML_OP_MEAN:
         case GGML_OP_ARGMAX:
-        case GGML_OP_REPEAT:
         case GGML_OP_REPEAT_BACK:
         case GGML_OP_LEAKY_RELU:
             {
