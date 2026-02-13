@@ -275,11 +275,7 @@ struct llama_hparams {
     }
 
     bool is_recurrent(uint32_t il) const {
-        if (il < n_layer) {
-            return recurrent_layer_arr[il];
-        }
-
-        GGML_ABORT("fatal error");
+        return il < n_layer ? recurrent_layer_arr[il] : false;
     }
 
     static bool is_float_close(float a, float b, float abs_tol) {
