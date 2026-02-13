@@ -3579,6 +3579,10 @@ int32_t llama_vocab_n_tokens(const struct llama_vocab * vocab) {
     return vocab->n_tokens();
 }
 
+const char * llama_vocab_get_text(const struct llama_vocab * vocab, llama_token token) {
+    return vocab->token_get_text(token);
+}
+
 bool llama_vocab_is_eog(const struct llama_vocab * vocab, llama_token token) {
     return vocab->is_eog(token);
 }
@@ -3629,7 +3633,7 @@ int32_t llama_vocab_tokenize(
     return vocab->tokenize(text, text_len, tokens, n_tokens_max, add_special, parse_special);
 }
 
-int32_t llama_vocab_token_to_piece(
+int32_t llama_token_to_piece_vocab(
     const struct llama_vocab * vocab,
                  llama_token   token,
                         char * buf,
