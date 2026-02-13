@@ -4199,7 +4199,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "LOG",
     "SUM",
     "SUM_ROWS",
-    "CUMSUM",
     "MEAN",
     "ARGMAX",
     "REPEAT",
@@ -4210,7 +4209,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "RMS_NORM",
     "RMS_NORM_BACK",
     "GROUP_NORM",
-    "L2_NORM",
     "FUSED_RMS_NORM",
     "FUSED_MUL_UNARY",
     "MULTI_ADD",
@@ -4253,8 +4251,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "PAD",
     "ARANGE",
     "TIMESTEP_EMBEDDING",
-    "TRI",
-    "FILL",
     "ARGSORT",
     "ARGSORT_THRESH",
     "GROUPED_TOPK",
@@ -4273,9 +4269,14 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "WIN_UNPART",
     "GET_REL_POS",
     "ADD_REL_POS",
-    "SOLVE_TRI",
 
     "UNARY",
+
+    "CUMSUM",
+    "L2_NORM",
+    "TRI",
+    "FILL",
+    "SOLVE_TRI",
 
     "MAP_UNARY",
     "MAP_BINARY",
@@ -4316,7 +4317,6 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "log(x)",
     "Σx",
     "Σx_k",
-    "cumsum(x)",
     "Σx/n",
     "argmax(x)",
     "repeat(x)",
@@ -4327,7 +4327,6 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "rms_norm(x)",
     "rms_norm_back(x)",
     "group_norm(x)",
-    "l2_norm(x)",
     "fused_rms_norm(x)",
     "fused_mul_unary(x)",
     "x1+x2+x3+...",
@@ -4370,8 +4369,6 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "pad(x)",
     "arange(start, stop, step)",
     "timestep_embedding(timesteps, dim, max_period)",
-    "tri(x)",
-    "fill(x)",
     "argsort(x)",
     "argsort_thresh(x)",
     "grouped_topk(x)",
@@ -4390,9 +4387,14 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "win_unpart(x)",
     "get_rel_pos(x)",
     "add_rel_pos(x)",
-    "solve_tri(x)",
 
     "unary(x)",
+
+    "cumsum(x)",
+    "l2_norm(x)",
+    "tri(x)",
+    "fill(x)",
+    "solve_tri(x)",
 
     "f(x)",
     "f(x,y)",
@@ -4429,16 +4431,16 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "ELU",
     "RELU",
     "SIGMOID",
-    "GELU_ERF",
+    "GELU",
     "GELU_QUICK",
     "SILU",
     "HARDSWISH",
     "HARDSIGMOID",
-    "EXP",
-    "SOFTPLUS",
     "SWIGLU",
     "SWIGLU_OAI",
-    "GELU",
+    "GELU_ERF",
+    "EXP",
+    "SOFTPLUS",
 };
 
 static_assert(GGML_UNARY_OP_COUNT == 18, "GGML_UNARY_OP_COUNT != 18");
@@ -15166,19 +15168,19 @@ static void ggml_compute_forward_fill(const struct ggml_compute_params * params,
 
 // ggml_compute_forward_tri
 
-static bool ggml_tri_lower_pred(int i, int r) {
+static inline bool ggml_tri_lower_pred(int i, int r) {
     return i < r;
 }
 
-static bool ggml_tri_lower_diag_pred(int i, int r) {
+static inline bool ggml_tri_lower_diag_pred(int i, int r) {
     return i <= r;
 }
 
-static bool ggml_tri_upper_pred(int i, int r) {
+static inline bool ggml_tri_upper_pred(int i, int r) {
     return i > r;
 }
 
-static bool ggml_tri_upper_diag_pred(int i, int r) {
+static inline bool ggml_tri_upper_diag_pred(int i, int r) {
     return i >= r;
 }
 
