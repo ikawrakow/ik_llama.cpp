@@ -557,12 +557,12 @@ void llm_build_context::llm_build_kv_store(
 
     struct ggml_tensor * v_cache_view = nullptr;
 
-    if (cparams.flash_attn) {
+    if (!kv.v_trans) {
         v_cache_view = ggml_view_1d(ctx, kv.v_l[il], n_tokens*n_embd_v_gqa,
                 (kv_head)*ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa));
         lctx.cache_copies[2*il+1].step = ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa);
     } else {
-        // note: the V cache is transposed when not using flash attention
+        // note: the V cache is transposed for legacy non-FA layouts
         v_cache_view = ggml_view_2d(ctx, kv.v_l[il], n_tokens, n_embd_v_gqa,
                 (  n_ctx)*ggml_element_size(kv.v_l[il]),
                 (kv_head)*ggml_element_size(kv.v_l[il]));
@@ -1502,12 +1502,21 @@ static ggml_tensor * llm_build_kqv(
     } else {
 
             // split cached v into n_head heads
-        struct ggml_tensor * v =
-            ggml_view_3d(ctx, kv.v_l[il],
+        struct ggml_tensor * v;
+        if (kv.v_trans) {
+            v = ggml_view_3d(ctx, kv.v_l[il],
                     n_kv, n_embd_head_v, n_head_kv,
                     ggml_element_size(kv.v_l[il])*n_ctx,
                     ggml_element_size(kv.v_l[il])*n_ctx*n_embd_head_v,
                     0);
+        } else {
+            v = ggml_view_3d(ctx, kv.v_l[il],
+                    n_embd_head_v, n_kv, n_head_kv,
+                    ggml_row_size(kv.v_l[il]->type, n_embd_v_gqa),
+                    ggml_row_size(kv.v_l[il]->type, n_embd_head_v),
+                    0);
+            v = ggml_cont(ctx, ggml_transpose(ctx, v));
+        }
         cb(v, "v", il);
 
         auto kq_size = k->ne[1]*q->ne[1]*q->ne[2]*sizeof(float)/(1024*1024);
