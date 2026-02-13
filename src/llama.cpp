@@ -546,7 +546,7 @@ struct llama_context::Prev {
     int all_seq_id;
     int n_outputs;
     int n_kv;
-    llama_mtp_params mtp_params;
+    llama_mtp_op_type mtp_op_type;
     ggml_cgraph * graph;
 };
 
@@ -564,7 +564,7 @@ bool llama_context::can_reuse_graph(const llama_batch & u_batch) {
            kv_self.head > 0 &&
            kv_self.n == prev->n_kv &&
            n_outputs == prev->n_outputs &&
-           u_batch.mtp_params.op_type == prev->mtp_params.op_type &&
+           cparams.mtp_op_type == prev->mtp_op_type &&
            update_cache_copies();
 }
 
@@ -625,6 +625,12 @@ llama_context::llama_context(const llama_model & model)
     } else {
         cache_copies.resize(2*hparams.n_layer);
     }
+}
+
+void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    cparams.mtp_op_type = value;
 }
 
 llama_context::~llama_context() {
@@ -903,7 +909,8 @@ static bool llama_kv_cache_init(
 // to the first cell of the slot.
 static bool llama_kv_cache_find_slot(
            struct llama_kv_cache & cache,
-        const struct llama_batch & batch) {
+        const struct llama_batch & batch,
+        enum llama_mtp_op_type  op_type) {
     const uint32_t n_tokens = batch.n_tokens;
 
     if (cache.recurrent) {
@@ -954,23 +961,24 @@ static bool llama_kv_cache_find_slot(
     }
     // otherwise, one cell per token.
 
-    if (batch.mtp_params.op_type == MTP_OP_WARMUP || 
-        batch.mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
+    bool is_mtp_special_op = (op_type == MTP_OP_WARMUP || 
+                              op_type == MTP_OP_UPDATE_ACCEPTED);
+    if (is_mtp_special_op) {
         const llama_pos target_pos = batch.pos[0];
-        const llama_seq_id target_seq = batch.seq_id[0][0]; 
+        const llama_seq_id target_seq = batch.seq_id[0][0];
 
         bool found = false;
 
-        if (cache.head < cache.size && 
-            cache.cells[cache.head].pos == target_pos && 
+        if (cache.head < cache.size &&
+            cache.cells[cache.head].pos == target_pos &&
             cache.cells[cache.head].has_seq_id(target_seq)) {
             found = true;
         }
         else {
             for (uint32_t i = 0; i < cache.size; ++i) {
-                if (cache.cells[i].pos == target_pos && 
+                if (cache.cells[i].pos == target_pos &&
                     cache.cells[i].has_seq_id(target_seq)) {
-                    
+
                     cache.head = i;
                     found = true;
                     break;
@@ -979,7 +987,7 @@ static bool llama_kv_cache_find_slot(
         }
 
         if (!found) {
-            LLAMA_LOG_ERROR("%s: MTP Update failed - slot for seq %d pos %d not found\n", 
+            LLAMA_LOG_ERROR("%s: MTP Update failed - slot for seq %d pos %d not found\n",
                 __func__, target_seq, target_pos);
             return false;
         }
@@ -2962,10 +2970,10 @@ static void llama_graph_compute(
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(lctx.sched));
 }
 
-static bool prepare_mtp_graph_inputs(struct llama_context & lctx, const llama_mtp_params & mtp_params) {
+static bool prepare_mtp_graph_inputs(struct llama_context & lctx) {
     ggml_tensor * dst = lctx.inp_mtp_states;
     const float * src = nullptr;
-    if (mtp_params.op_type == MTP_OP_WARMUP || mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
+    if (lctx.cparams.mtp_op_type == MTP_OP_WARMUP || lctx.cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
         src = lctx.embd;
     } else { 
         src = lctx.draft_input_hidden_state;
@@ -3083,7 +3091,6 @@ static int llama_decode_internal(
             /* .n_seq_id   = */ batch_all.n_seq_id  ? batch_all.n_seq_id + cur_token        : nullptr,
             /* .seq_id     = */ batch_all.seq_id    ? batch_all.seq_id   + cur_token        : nullptr,
             /* .logits     = */ batch_all.logits    ? batch_all.logits   + cur_token        : nullptr,
-            /*.mtp_params  = */ batch_all.mtp_params,
             /* .all_pos_0  = */ batch_all.all_pos_0 + (llama_pos) cur_token*batch_all.all_pos_1,
             /* .all_pos_1  = */ batch_all.all_pos_1,
             /* .all_seq_id = */ batch_all.all_seq_id,
@@ -3152,7 +3159,7 @@ static int llama_decode_internal(
                 kv_self.head = 0;
             }
 
-            if (!llama_kv_cache_find_slot(kv_self, u_batch)) {
+            if (!llama_kv_cache_find_slot(kv_self, u_batch, cparams.mtp_op_type)) {
                 return 1;
             }
 
@@ -3215,15 +3222,15 @@ static int llama_decode_internal(
             if (u_batch.n_tokens == 1 && u_batch.embd == nullptr && lctx.cparams.graph_reuse) {
                 lctx.prev = std::make_unique<llama_context::Prev>(llama_context::Prev{
                         (int)u_batch.all_seq_id, (int)lctx.n_outputs, (int)lctx.kv_self.n, 
-                        u_batch.mtp_params.op_type, gf});
+                        cparams.mtp_op_type, gf});
             }
         } else {
             //printf("Reusing graph\n");
             gf = lctx.prev->graph;
         }
 
-        if (u_batch.mtp_params.op_type != MTP_OP_NONE) { 
-            if (!prepare_mtp_graph_inputs(lctx, u_batch.mtp_params)) {
+        if (cparams.mtp_op_type != MTP_OP_NONE) { 
+            if (!prepare_mtp_graph_inputs(lctx)) {
                 return GGML_STATUS_FAILED;
             }
         }
@@ -3296,8 +3303,8 @@ static int llama_decode_internal(
             tim1 = ggml_time_us();
 #endif
             // Do not process logits if MTP is only updating the KV cache.
-            if (u_batch.mtp_params.op_type != MTP_OP_WARMUP &&
-                u_batch.mtp_params.op_type != MTP_OP_UPDATE_ACCEPTED) {    
+            if (cparams.mtp_op_type != MTP_OP_WARMUP &&
+                cparams.mtp_op_type != MTP_OP_UPDATE_ACCEPTED) {    
                 ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(lctx.sched, res);
                 GGML_ASSERT(backend_res != nullptr);
                 GGML_ASSERT(lctx.logits != nullptr);
@@ -3318,7 +3325,7 @@ static int llama_decode_internal(
         }
 
         // extract embeddings
-        if (embd && u_batch.mtp_params.op_type == MTP_OP_NONE) {
+        if (embd && cparams.mtp_op_type == MTP_OP_NONE) {
 #if IK_PRINT_TIMING
             tim1 = ggml_time_us();
 #endif
@@ -3523,7 +3530,7 @@ static int llama_encode_internal(
 
     // extract embeddings
     if (embd) {
-        if (batch.mtp_params.op_type == MTP_OP_NONE) {
+        if (cparams.mtp_op_type == MTP_OP_NONE) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(lctx.sched, embd);
             GGML_ASSERT(backend_embd != nullptr);
 
@@ -4188,6 +4195,7 @@ struct llama_context_params llama_context_default_params() {
         // /*.split_mode_f16              =*/ true,
         /*.scheduler_async             =*/ false,
         /*.mtp                         =*/ false,
+        /*.mtp_op_type                 =*/ MTP_OP_NONE,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.offload_policy              =*/ nullptr,
@@ -4649,6 +4657,8 @@ struct llama_context * llama_new_context_with_model(
     if (model->arch != LLM_ARCH_GLM4_MOE && cparams.mtp != 0) {
         cparams.mtp = 0;
     }
+
+    cparams.mtp_op_type = params.mtp_op_type;    
 
     LLAMA_LOG_INFO("%s: n_ctx         = %u\n",     __func__, cparams.n_ctx);
     LLAMA_LOG_INFO("%s: n_batch       = %u\n",     __func__, cparams.n_batch);
@@ -5922,7 +5932,7 @@ struct llama_data_read {
                 batch.n_seq_id[i] = 1;
                 batch.seq_id[i][0] = dest_seq_id;
             }
-            if (!llama_kv_cache_find_slot(kv_self, batch)) {
+            if (!llama_kv_cache_find_slot(kv_self, batch, ctx->cparams.mtp_op_type)) {
                 llama_batch_free(batch);
                 LLAMA_LOG_ERROR("%s: failed to find available cells in kv cache\n", __func__);
                 return false;
@@ -6680,7 +6690,6 @@ struct llama_batch llama_batch_get_one(
         /*n_seq_id       =*/ nullptr,
         /*seq_id         =*/ nullptr,
         /*logits         =*/ nullptr,
-        /*.mtp_params    =*/ { MTP_OP_NONE },
         /*all_pos_0      =*/ pos_0,
         /*all_pos_1      =*/ 1,
         /*all_seq_id     =*/ seq_id,
@@ -6688,7 +6697,7 @@ struct llama_batch llama_batch_get_one(
 }
 
 struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_t n_seq_max) {
-    llama_batch batch = { 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, { MTP_OP_NONE }, 0, 0, 0, };
+    llama_batch batch = { 0, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, 0, 0, };
 
     if (embd) {
         batch.embd = (float *) malloc(sizeof(float) * n_tokens_alloc * embd);
@@ -6743,6 +6752,10 @@ int32_t llama_decode(
     }
 
     return ret;
+}
+
+void llama_set_mtp_op_type(llama_context * ctx, llama_mtp_op_type mtp_op_type) {
+    ctx->set_mtp_op_type(mtp_op_type);
 }
 
 void llama_synchronize(struct llama_context * ctx) {

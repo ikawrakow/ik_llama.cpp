@@ -230,5 +230,6 @@ struct llama_context {
 
     bool update_cache_copies();
     bool prepare_mtp_graph_inputs(
-        struct llama_context & lctx, const llama_mtp_params & mtp_params);
+        struct llama_context & lctx);
+    void set_mtp_op_type(llama_mtp_op_type value);
 };

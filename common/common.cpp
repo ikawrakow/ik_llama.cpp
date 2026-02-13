@@ -1411,6 +1411,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.has_mtp = true;
         return true;
     }
+    if (arg == "-no-mtp" || arg == "--no-multi-token-prediction") {
+        params.has_mtp = false;
+        return true;
+    }
     if (arg == "-draft" || arg == "--draft-params") {
         CHECK_ARG
         params.draft_params = argv[i];
@@ -2423,6 +2427,8 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-hfr,  --hf-repo REPO",         "Hugging Face model repository (default: unused)" });
     options.push_back({ "*",           "-hff,  --hf-file FILE",         "Hugging Face model file (default: unused)" });
     options.push_back({ "*",           "-hft,  --hf-token TOKEN",       "Hugging Face access token (default: value from HF_TOKEN environment variable)" });
+    options.push_back({ "*", "-mtp, --multi-token-prediction",          "whether to use multi-token-prediction (if supported) (default: %s)", params.has_mtp });
+    options.push_back({ "*", "-no-mtp, --no-multi-token-prediction",    "whether to use multi-token-prediction (if supported) (default: %s)", !params.has_mtp });
     options.push_back({ "*", "--draft-max, --draft, --draft-n N",
                                                                         "number of tokens to draft for speculative decoding (default: %d)", params.n_draft });
     options.push_back({ "*", "--draft-min, --draft-n-min N",   "minimum number of draft tokens to use for speculative decoding" });
@@ -3273,6 +3279,7 @@ struct llama_context_params llama_context_params_from_gpt_params(const gpt_param
     cparams.only_active_experts = params.only_active_exps;
     cparams.max_extra_alloc   = params.max_extra_alloc_MiB;
     cparams.mtp               = params.has_mtp;
+    cparams.mtp_op_type      = MTP_OP_NONE;
 
     cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
     cparams.type_v = kv_cache_type_from_str(params.cache_type_v);

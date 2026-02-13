@@ -279,16 +279,12 @@ extern "C" {
         LLAMA_SPLIT_MODE_GRAPH   = 3, // splits computations across GPUs
     };
 
-    typedef enum {
+    enum llama_mtp_op_type {
         MTP_OP_NONE,
         MTP_OP_WARMUP,
         MTP_OP_UPDATE_ACCEPTED,
         MTP_OP_DRAFT_GEN,
-    } llama_mtp_op_type;
-
-    typedef struct llama_mtp_params {
-        llama_mtp_op_type op_type;
-    } llama_mtp_params;
+    };
 
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -323,7 +319,6 @@ extern "C" {
         int32_t      *  n_seq_id;
         llama_seq_id ** seq_id;
         int8_t       *  logits; // TODO: rename this to "output"
-        llama_mtp_params mtp_params;
 
         // NOTE: helpers for smooth API transition - can be deprecated in the future
         //       for future-proof code, use the above fields instead and ignore everything below
@@ -461,6 +456,7 @@ extern "C" {
         //bool split_mode_f16;    // if true, cast intermediate results to f16 before copying to other GPUs
         bool scheduler_async;   // if true, with split mode "graph" graph evaluation will be done using multiple threads
         bool mtp;   // Activate MTP if supported
+        enum llama_mtp_op_type mtp_op_type;
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -981,6 +977,9 @@ extern "C" {
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
+
+    // Set which, if any, MTP operation the context will use
+    LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);

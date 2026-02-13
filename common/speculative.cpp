@@ -368,7 +368,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
     if (!smpl) return drafts;
 
     llama_batch mtp_batch = llama_batch_init(1, 0, 1);
-    mtp_batch.mtp_params.op_type = MTP_OP_DRAFT_GEN;
+    llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
 
     llama_token current_input_id = id_last;
     int32_t current_n_past = n_past;
@@ -412,6 +412,7 @@ std::vector<llama_token> mtp_speculative_gen_draft(
         current_n_past++;
     }
     llama_batch_free(mtp_batch);
+    llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
     // Purge the metadata for the draft tokens.
     // This prevents cache state corruption where two cells map to the same logical position.
@@ -431,12 +432,17 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
     LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);
 
     llama_batch mtp_batch = batch;
-    mtp_batch.mtp_params.op_type = is_prompt_warmup ? MTP_OP_WARMUP : MTP_OP_UPDATE_ACCEPTED;
+    if (is_prompt_warmup) {
+        llama_set_mtp_op_type(ctx, MTP_OP_WARMUP);
+    } else {
+        llama_set_mtp_op_type(ctx, MTP_OP_UPDATE_ACCEPTED);
+    }
 
     for (int i = 0; i < mtp_batch.n_tokens; ++i) {
         mtp_batch.logits[i] = true;
     }
     llama_decode(ctx, mtp_batch);
+    llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 }
 
 void mtp_accept_tokens(

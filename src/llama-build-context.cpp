@@ -7097,10 +7097,10 @@ ggml_cgraph * llm_build_context::build_glm4_moe() {
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_embd_head, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
-    if (batch.mtp_params.op_type != MTP_OP_NONE) {
+    if (cparams.mtp_op_type != MTP_OP_NONE) {
         ggml_tensor* hidden_states_from_main_model;
 
-        if (batch.mtp_params.op_type == MTP_OP_WARMUP || batch.mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
+        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
             hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
         } else {
             hidden_states_from_main_model = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_embd);
@@ -9699,7 +9699,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
     }
 
     // add on pooling layer
-    if (batch.mtp_params.op_type == MTP_OP_NONE && (lctx.cparams.embeddings || 
+    if (lctx.cparams.mtp_op_type == MTP_OP_NONE && (lctx.cparams.embeddings || 
         (lctx.model.hparams.nextn_predict_layers > 0 || lctx.model.mtp))) {
         result = llm.append_pooling(result);
     }

@@ -80,7 +80,6 @@ int main(int argc, char ** argv) {
                 batch.n_seq_id + i,
                 batch.seq_id   + i,
                 batch.logits   + i,
-                { MTP_OP_NONE },
             };
 
             const int ret = llama_decode(ctx, batch_view);

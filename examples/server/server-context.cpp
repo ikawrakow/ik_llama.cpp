@@ -3154,7 +3154,6 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
             batch.n_seq_id + i,
             batch.seq_id + i,
             batch.logits + i,
-            { MTP_OP_NONE },
             0, 0, 0, // unused
         };
 
