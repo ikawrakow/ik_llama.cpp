@@ -43,21 +43,21 @@ Overview of the most common command-line parameters in `ik_llama.cpp`.
 | `--chunks N` | Max number of chunks to process | -1 (all) |  |
 | `-fa, --flash-attn` | Enables Flash Attention | on | auto / on / off Improves t/s and reduces memory usage. |
 | `--no-fa, --no-flash-attn` | Disable Flash Attention |  | Alternative parameter to turn of FA. See `--flash-attn` |
-| `-mla, --mla-use` | Enable MLA | 3 | 0 / 1 / 2 / 3 For DeepSeek models, and other recent models that are using MLA. |
-| `-amb, --attention-max-batch` | Max batch size for attention computations | 0 | Specifies the maximum K*Q size in MB we want to tolerate. |
-| `-fmoe or --fused-moe` | Fused MoE ffn_up and ffn_gate | - | Speedup for MoE models. |
+| `-mla, --mla-use` | Enable MLA | 3 | 0 / 1 / 2 / 3 For DeepSeek models, and other recent models that are using MLA. [PR 188](https://github.com/ikawrakow/ik_llama.cpp/pull/188) [PR 205](https://github.com/ikawrakow/ik_llama.cpp/pull/205) [PR 235](https://github.com/ikawrakow/ik_llama.cpp/pull/235) [PR 243](https://github.com/ikawrakow/ik_llama.cpp/pull/243) [PR 252](https://github.com/ikawrakow/ik_llama.cpp/pull/252) [PR 253](https://github.com/ikawrakow/ik_llama.cpp/pull/253) [PR 273](https://github.com/ikawrakow/ik_llama.cpp/pull/273) [PR 386](https://github.com/ikawrakow/ik_llama.cpp/pull/386) [PR 497](https://github.com/ikawrakow/ik_llama.cpp/pull/497) [PR 943](https://github.com/ikawrakow/ik_llama.cpp/pull/943)|
+| `-amb, --attention-max-batch` | Max batch size for attention computations | 0 | Specifies the maximum K*Q size in MB we want to tolerate. [PR 237](https://github.com/ikawrakow/ik_llama.cpp/pull/237) |
+| `-fmoe or --fused-moe` | Fused MoE ffn_up and ffn_gate | - | Speedup for MoE models. [PR 229](https://github.com/ikawrakow/ik_llama.cpp/pull/229) |
 | `--no-fmoe, --no-fused-moe` | Disable fused MoE | Enabled | See `--fused-moe` |
-| `-ger, --grouped-expert-routing` | Enable grouped expert routing | Disabled | For BailingMoeV2 architecture (Ling/Ring models). |
-| `--no-fug, --no-fused-up-gate` | Disable fused up-gate | Enabled | Turn off the speedup for dense models. |
-| `--no-mmad, --no-fused-mul-multiadd` | Disable fused mul-multi_add | Enabled |  |
-| `-gr, --graph-reuse` | Enable graph reuse | Enabled | For models with fast TG inference (100+ t/s). |
-| `--no-gr, --no-graph-reuse` | Disable graph reuse | Disabled | Option to turn off graph reuse. |
-| `-ser, --smart-expert-reduction` | Experts reduction Kmin,t | -1, 0 | Use a custom number of active experts. Powerful, basically REAP from just command line. If we set t = 1, we use a fixed number of experts  K_min (`-ser 1,6` will use 6 experts instead of the model default). |
-| `-mqkv, --merge-qkv` | Merge Q,K,V | 0 | Downside: mmap cannot be used. |
-| `-muge, --merge-up-gate-experts` | Merge ffn_up/gate_exps | 0 | Speed up on some models. |
-| `-khad, --k-cache-hadamard` | Use Hadamard transform for K-cache | 0 | May improve KV quality when heavily quantized. |
-| `-sas, --scheduler_async` | Async evaluation of compute graphs | 0 |  |
-| `-vq, --validate-quants` | Validate quantized data while loading the model | 0 | If there are NaNs in the model, you will get info about the tensors containing NaNs. |
+| `-ger, --grouped-expert-routing` | Enable grouped expert routing | Disabled | For BailingMoeV2 architecture (Ling/Ring models). [PR 836](https://github.com/ikawrakow/ik_llama.cpp/pull/836) [PR 838](https://github.com/ikawrakow/ik_llama.cpp/pull/838) |
+| `--no-fug, --no-fused-up-gate` | Disable fused up-gate | Enabled | Turn off the speedup for dense models. [PR 741](https://github.com/ikawrakow/ik_llama.cpp/pull/741) |
+| `--no-mmad, --no-fused-mul-multiadd` | Disable fused mul-multi_add | Enabled | [PR 858](https://github.com/ikawrakow/ik_llama.cpp/pull/858) |
+| `-gr, --graph-reuse` | Enable graph reuse | Enabled | For models with fast TG inference (100+ t/s). [PR 947](https://github.com/ikawrakow/ik_llama.cpp/pull/947) |
+| `--no-gr, --no-graph-reuse` | Disable graph reuse | Disabled | Option to turn off graph reuse. [PR 1094](https://github.com/ikawrakow/ik_llama.cpp/pull/1094) |
+| `-ser, --smart-expert-reduction` | Experts reduction Kmin,t | -1, 0 | Use a custom number of active experts. Powerful, basically REAP from just command line. If we set t = 1, we use a fixed number of experts  K_min (`-ser 1,6` will use 6 experts instead of the model default). [PR 239](https://github.com/ikawrakow/ik_llama.cpp/pull/239) |
+| `-mqkv, --merge-qkv` | Merge Q,K,V | 0 | Downside: mmap cannot be used. [PR 878](https://github.com/ikawrakow/ik_llama.cpp/pull/878) [PR 892](https://github.com/ikawrakow/ik_llama.cpp/pull/892) |
+| `-muge, --merge-up-gate-experts` | Merge ffn_up/gate_exps | 0 | Speed up on some models. [PR 1137](https://github.com/ikawrakow/ik_llama.cpp/pull/1137) [PR 1139](https://github.com/ikawrakow/ik_llama.cpp/pull/1139) |
+| `-khad, --k-cache-hadamard` | Use Hadamard transform for K-cache | 0 | May improve KV quality when heavily quantized. [PR 1033](https://github.com/ikawrakow/ik_llama.cpp/pull/1033) [PR 1034](https://github.com/ikawrakow/ik_llama.cpp/pull/1034) |
+| `-sas, --scheduler_async` | Async evaluation of compute graphs | 0 | [PR 1089](https://github.com/ikawrakow/ik_llama.cpp/pull/1089) |
+| `-vq, --validate-quants` | Validate quantized data while loading the model | 0 | If there are NaNs in the model, you will get info about the tensors containing NaNs. [PR 977](https://github.com/ikawrakow/ik_llama.cpp/pull/977) |
 | `-sp, --special` | Special tokens output enabled | false |  |
 | `--no-warmup` | Skip warming up the model with an empty run | - |  |
 
@@ -77,7 +77,7 @@ Overview of the most common command-line parameters in `ik_llama.cpp`.
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `-cram, --cache-ram N` | Set the maximum cache size in MiB | 8192 (-1 = no limit, 0 = disable) | Very useful when the variations of the same prompt are re-sent to the model (coding agents, etc.). |
+| `-cram, --cache-ram N` | Set the maximum cache size in MiB | 8192 (-1 = no limit, 0 = disable) | Very useful when the variations of the same prompt are re-sent to the model (coding agents, etc.). [PR 954](https://github.com/ikawrakow/ik_llama.cpp/pull/954) |
 | `-crs, --cache-ram-similarity N` | Max similarity of prompt tokens to cache tokens that triggers prompt cache | 0.50 |  |
 | `-cram-n-min, --cache-ram-n-min N` | Minimum number of cached tokens that triggers prompt cache | 0 |  |
 
@@ -123,7 +123,7 @@ Overview of the most common command-line parameters in `ik_llama.cpp`.
 | - | - | - | - |
 | `--mlock` | Force system to keep model in RAM rather than swapping or compressing | - |  |
 | `--no-mmap` | Do not memory-map model (slower load but may reduce pageouts) | - |  |
-| `-rtr, --run-time-repack` | Repack tensors if interleaved variant is available | - | May improve performance on some systems. |
+| `-rtr, --run-time-repack` | Repack tensors if interleaved variant is available | - | May improve performance on some systems. [PR 147](https://github.com/ikawrakow/ik_llama.cpp/pull/147) |
 
 ## GPU Offload
 
@@ -131,22 +131,23 @@ Overview of the most common command-line parameters in `ik_llama.cpp`.
 | - | - | - | - |
 | `-ngl, --gpu-layers N` | Number of layers to store in VRAM | - | For better speed you aim to offload the entire model in GPU memory. To identify how many layers (also shape and more metadata) open the GGUF model file on browser [bartowski/Qwen_Qwen3-0.6B-IQ4_NL.gguf](https://huggingface.co/bartowski/Qwen_Qwen3-0.6B-GGUF/blob/main/Qwen_Qwen3-0.6B-IQ4_NL.gguf) then scroll down to the Tensors table. Use a number higher than the numbers of model layers to full offload (`--gpu-layers` 99, for a model with less than 99 layers). See `--ctx-size` and reduce it to the minimum needed. If model fails to load due to the insufficient GPU memory, reduce the number of layers (`--gpu-layers 20`, for a model with 40 layers will offload only the first 20 layers). |
 | `-ngld, --gpu-layers-draft N` | Number of layers to store in VRAM for the draft model | - | For draft model, see `--gpu-layers` |
-| `--cpu-moe` | Keep all MoE weights in CPU memory | - | Simple offload mode for MoE. |
+| `--cpu-moe` | Keep all MoE weights in CPU memory | - | Simple offload mode for MoE. [PR 841](https://github.com/ikawrakow/ik_llama.cpp/pull/841) |
 | `--n-cpu-moe N` | Keep MoE weights of the first N layers in CPU memory | - | Similar to `--cpu-moe` but when some GPU memory is available to store some layers. |
-| `-sm, --split-mode SPLIT_MODE` | How to split the model across multiple GPUs | none | When you have more than one GPU, how to split the model across multiple GPUs, one of: - none: use one GPU only. - graph: split model tensors and computation graph across GPUs. `graph` is exclusive here and extremely effective. - layer: split layers and KV across GPUs Example: `-sm graph ` |
+| `-sm, --split-mode SPLIT_MODE` | How to split the model across multiple GPUs | none | When you have more than one GPU, how to split the model across multiple GPUs, one of: - none: use one GPU only. - graph: split model tensors and computation graph across GPUs. `graph` is exclusive here and extremely effective for dense and MoE [PR 1080](https://github.com/ikawrakow/ik_llama.cpp/pull/1080). - layer: split layers and KV across GPUs Example: `-sm graph ` |
 | `-ts, --tensor-split SPLIT` | Fraction of the model to offload to each GPU (comma-separated) | - | Powerful for tweaking. Example: `-ts 3,1` |
 | `-dev, --device dev1,dev2` | Comma-separated list of devices to use for offloading | none | If there are many GPUs available on the system and only selected ones need to be used. Example: `-dev  CUDA0,CUDA1` |
 | `-devd, --device-draft dev1,dev2` | Comma-separated list of devices for draft model | none | For draft model, see `--device` |
 | `-mg, --main-gpu i` | The GPU to use for the model (with split-mode = none) | - |  |
-| `-cuda fa-offset=value` | FP16 precision offset for FA calculation | 0 | Rarely, fp16 precision is inadequate, at least for some models, when computing FA for very long contexts. Value must be a valid floating point number in the interval [0...3] (this is checked and if the supplied value is outside this interval it is ignored). By the default the offset is zero. If you find that a model works up to a given context length but then starts producing gibberish/incoherent output/endless repetitions, it is very likely it is due to f16 overflow in the FA calculation, and using this command line option is likely to solve it. |
-| `-ot or --override-tensor` | Override where model weights are stored | - | Override where model weights are stored using regular expressions. This allows for example to keep the MoE experts on the CPU and to offload only the attention and not repeating layers to the GPU. Example: `\.ffn_.*_exps\.=CPU` |
-| `-op or --offload-policy a,b` | Manually define the offload policy | - | a and b are integers. One can have multiple pairs following the -op or --offload-policy argument (i.e., -op a1,b1,a2,b2,a3,b3...). The first integer defines the op (see below). The second integer is 0 or 1 and defines if the op should be offloaded (1) or not offloaded (0) to the GPU. The first integer is simply the `enum` value in the `ggml_op enum`. If the op is set to -1, then all op offloads are set to enabled or disabled.  Examples: `-op -1,0`: disable all offload to the GPU `-op 26,0`: disable offload of matrix multiplications to the GPU `-op 27,0`: disable offload of indirect matrix multiplications to the GPU (used for the experts in a MoE model) `-op 29,0`: disable fused up-gate-unary op offload to the GPU (applied to MoE models with `-fmoe`) |
-| `--offload-only-active-experts or -ooae` | On MOE offload only active experts | - |  |
-| `-smf16, --split-mode-f16` | Use f16 for data exchange between GPUs | 1 |  |
-| `-smf32, --split-mode-f32` | Use f32 for data exchange between GPUs | 0 |  |
-| `-grt, --graph-reduce-type` | Type for data exchange between GPUs | f32 | q8_0 / bf16 / f16 / f32 Reduce the data transferred between GPUs |
-| `-smgs, --split-mode-graph-scheduling` | Force Split Mode Graph Scheduling | 0 |  |
-| `-cuda, --cuda-params` | Comma-separated list of cuda parameters | - |  |
+| `-cuda fa-offset=value` | FP16 precision offset for FA calculation | 0 | Rarely, fp16 precision is inadequate, at least for some models, when computing FA for very long contexts. Value must be a valid floating point number in the interval [0...3] (this is checked and if the supplied value is outside this interval it is ignored). By the default the offset is zero. If you find that a model works up to a given context length but then starts producing gibberish/incoherent output/endless repetitions, it is very likely it is due to f16 overflow in the FA calculation, and using this command line option is likely to solve it. [PR 1198](https://github.com/ikawrakow/ik_llama.cpp/pull/1198) |
+| `-ot or --override-tensor` | Override where model weights are stored | - | Override where model weights are stored using regular expressions. This allows for example to keep the MoE experts on the CPU and to offload only the attention and not repeating layers to the GPU. Example: `\.ffn_.*_exps\.=CPU` [PR 232](https://github.com/ikawrakow/ik_llama.cpp/pull/232) |
+| `-op or --offload-policy a,b` | Manually define the offload policy | - | a and b are integers. One can have multiple pairs following the -op or --offload-policy argument (i.e., -op a1,b1,a2,b2,a3,b3...). The first integer defines the op (see below). The second integer is 0 or 1 and defines if the op should be offloaded (1) or not offloaded (0) to the GPU. The first integer is simply the `enum` value in the `ggml_op enum`. If the op is set to -1, then all op offloads are set to enabled or disabled.  Examples: `-op -1,0`: disable all offload to the GPU `-op 26,0`: disable offload of matrix multiplications to the GPU `-op 27,0`: disable offload of indirect matrix multiplications to the GPU (used for the experts in a MoE model) `-op 29,0`: disable fused up-gate-unary op offload to the GPU (applied to MoE models with `-fmoe`) [PR 405](https://github.com/ikawrakow/ik_llama.cpp/pull/405) |
+| `--offload-only-active-experts or -ooae` | On MOE offload only active experts | - | [PR 698](https://github.com/ikawrakow/ik_llama.cpp/pull/698) |
+| `-smf16, --split-mode-f16` | Use f16 for data exchange between GPUs | 1 | [PR 1087](https://github.com/ikawrakow/ik_llama.cpp/pull/1087) |
+| `-smf32, --split-mode-f32` | Use f32 for data exchange between GPUs | 0 | [PR 1087](https://github.com/ikawrakow/ik_llama.cpp/pull/1087) |
+| `-grt, --graph-reduce-type` | Type for data exchange between GPUs | f32 | q8_0 / bf16 / f16 / f32 Reduce the data transferred between GPUs [PR 1154](https://github.com/ikawrakow/ik_llama.cpp/pull/1154) |
+| `-smgs, --split-mode-graph-scheduling` | Force Split Mode Graph Scheduling | 0 | [PR 1068](https://github.com/ikawrakow/ik_llama.cpp/pull/1068) |
+| `--max-gpu N` | Define (and use) a maximum number of GPUs per layer with split mode "graph" |  | This is of interest when there are more than 2 GPUs available, but using all of them leads to a lower performance than using just 2 (or using the default split mode "layer") [PR 1051](https://github.com/ikawrakow/ik_llama.cpp/pull/1051) |
+| `-cuda, --cuda-params` | Comma-separated list of cuda parameters | - | Powerful way to tweak Fusion, GPU offload threshold, and MMQ-ID threshold. [PR 910](https://github.com/ikawrakow/ik_llama.cpp/pull/910) |
 
 ## Model Options
 
@@ -182,8 +183,8 @@ llama-sweep-bench -m /models/model.gguf -c 12288 -ub 512 -rtr -fa -ctk q8_0 -ctv
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `-nrep N, --n-repetitions N` | Define the number of repetitions used at zero context | - |  |
-| `-n` | Specifies he number of TG tokens  | - | If not specified, it is set to u-batch/4  | 
+| `-nrep N, --n-repetitions N` | Define the number of repetitions used at zero context | - | [PR 1176](https://github.com/ikawrakow/ik_llama.cpp/pull/1176) |
+| `-n` | Specifies he number of TG tokens  | - | If not specified, it is set to u-batch/4 [PR 897](https://github.com/ikawrakow/ik_llama.cpp/pull/897) | 
 
 ### llama-bench
 
@@ -195,7 +196,7 @@ llama-bench -tgb 4,16 -p 512 -n 128 other_arguments
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `-tgb (or --threads-gen-batch)` | Enable having different number of threads for generation and batch processing | - |  |
+| `-tgb (or --threads-gen-batch)` | Enable having different number of threads for generation and batch processing | - | [PR 284](https://github.com/ikawrakow/ik_llama.cpp/pull/284) |
 
 ### Imatrix
 
@@ -207,8 +208,8 @@ llama-imatrix -m /models/model-bf16.gguf -f /models/calibration_data_v5_rc.txt -
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `--layer-similarity or -lsim` | Collect statistics about activations change caused by a layer using cosine similarity | - |  |
-| `--hide-imatrix` | Store "top_secret" in the imatrix data file name | - | And in calibration dataset fields, and zeros in the batch size and number of chunks used to compute the imatrix. |
+| `--layer-similarity or -lsim` | Collect statistics about activations change caused by a layer using cosine similarity | - | [PR 328](https://github.com/ikawrakow/ik_llama.cpp/pull/328) |
+| `--hide-imatrix` | Store "top_secret" in the imatrix data file name | - | And in calibration dataset fields, and zeros in the batch size and number of chunks used to compute the imatrix. [PR 329](https://github.com/ikawrakow/ik_llama.cpp/pull/329) |
 
 ### Quantization
 
@@ -220,7 +221,7 @@ llama-quantize --imatrix /models/model.imatrix /models/model-bf16.gguf /models/m
 
 | Parameter | Description | Default | Notes/Examples |
 | - | - | - | - |
-| `--custom-q` | Custom quantization rules with regular expressions | - | Example: `llama-quantize --imatrix some_imatrix --custom-q "regex1=typ1,regex2=type2..." some_model some_output_file some_base_quant` |
+| `--custom-q` | Custom quantization rules with regular expressions | - | Example: `llama-quantize --imatrix some_imatrix --custom-q "regex1=typ1,regex2=type2..." some_model some_output_file some_base_quant` [PR 244](https://github.com/ikawrakow/ik_llama.cpp/pull/244) |
 
 ### Build Arguments
 
@@ -242,6 +243,7 @@ cmake --build build --config Release -j$(nproc)
 | `-DLLAMA_SERVER_SQLITE3=ON` | Sqlite3 for mikupad |
 | `-DCMAKE_TOOLCHAIN_FILE=[...]` | Example: on Windows tells `cmake` where is `sqlite3`. |
 | `-DGGML_NATIVE=ON` | Turn off when cross-compiling. |
+| `-DGGML_NCCL=OFF` | To disable usage of NCCL. |
 
 ### Environment variables
 
