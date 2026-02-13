@@ -14533,8 +14533,11 @@ static void ggml_compute_forward_concat_f32(
 
     GGML_ASSERT(dim >= 0 && dim < 4);
 
+    //if (ith == 0) printf("%s(%s, dim = %d): %ld x %ld x %ld x %ld + %ld x %ld x %ld x %ld -> %ld x %ld x %ld x %ld\n", __func__, dst->name, dim,
+    //        src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
-       (dim == 3 || (dim == 2 && dst->ne[3] == 1) || (dim == 1 && dst->ne[2]*dst->ne[3] == 1))) {
+       (dim == 3 || (dim == 2 && dst->ne[3] == 1) || (dim == 1 && dst->ne[2]*dst->ne[3] == 1) || (dim == 0 && dst->ne[1]*dst->ne[2]*dst->ne[3] == 1))) {
         // simply copy the data
         const int64_t size_src_0 = ggml_nbytes(src0);
         const int64_t size_src_1 = ggml_nbytes(src1);
@@ -14543,8 +14546,13 @@ static void ggml_compute_forward_concat_f32(
         for (int64_t i_block = ith; i_block < num_blocks; i_block += nth) {
             const int64_t start = i_block*block_size;
             if (start < size_src_0) {
-                int64_t copy_size = MIN(block_size, size_src_0 - start);
-                memcpy((char *)dst->data + start, (char *)src0->data + start, copy_size);
+                if (start + block_size <= size_src_0) {
+                    memcpy((char *)dst->data + start, (char *)src0->data + start, block_size);
+                } else {
+                    memcpy((char *)dst->data + start, (char *)src0->data + start, size_src_0 - start);
+                    size_t copy_size = MIN(size_src_1, block_size - (size_src_0 - start));
+                    memcpy((char *)dst->data + size_src_0, (char *)src1->data, copy_size);
+                }
             } else {
                 int64_t copy_size = MIN(block_size, size_src_0 + size_src_1 - start);
                 memcpy((char *)dst->data + start, (char *)src1->data + start - size_src_0, copy_size);
