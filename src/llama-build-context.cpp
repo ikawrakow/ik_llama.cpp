@@ -4492,7 +4492,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         v = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v_beta)), attn);
 
         ggml_tensor * g_cumsum_t = ggml_cont(ctx0, ggml_transpose(ctx0, g_cumsum));
+        cb(g_cumsum_t, "g_cumsum_t", il);
         ggml_tensor * gexp       = ggml_exp(ctx0, g_cumsum_t);
+        cb(gexp, "gexp", il);
 
         ggml_tensor * kbeta_gexp = ggml_mul(ctx0, k_beta, gexp);
         cb(kbeta_gexp, "kbeta_gexp", il);
@@ -4624,10 +4626,13 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
         ggml_tensor * k_t_unsqueezed = ggml_reshape_4d(ctx0, k, 1, S_v, H_v, n_seqs);
         ggml_tensor * kv_mem         = ggml_mul(ctx0, state, k_t_unsqueezed);
-        kv_mem = ggml_transpose(ctx0, ggml_sum_rows(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, kv_mem))));
+        kv_mem = ggml_cont(ctx0, ggml_transpose(ctx0, kv_mem));
+        cb(kv_mem, "kv_mem_t_cont", il);
+        kv_mem = ggml_transpose(ctx0, ggml_sum_rows(ctx0, kv_mem));
 
         ggml_tensor * v_t    = ggml_reshape_4d(ctx0, v, S_v, 1, H_v, n_seqs);
         ggml_tensor * v_diff = ggml_sub(ctx0, v_t, kv_mem);
+        cb(v_diff, "v_diff", il);
         ggml_tensor * delta  = ggml_mul(ctx0, v_diff, beta_t);
 
         ggml_tensor * k_t_delta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, k_t_unsqueezed, S_v, S_v, H_v, n_seqs), delta);
@@ -4635,8 +4640,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
         ggml_tensor * q_t_unsqueezed = ggml_reshape_4d(ctx0, q, 1, S_v, H_v, n_seqs);
         ggml_tensor * state_q        = ggml_mul(ctx0, state, q_t_unsqueezed);
-        ggml_tensor * core_attn_out =
-            ggml_transpose(ctx0, ggml_sum_rows(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, state_q))));
+        state_q = ggml_cont(ctx0, ggml_transpose(ctx0, state_q));
+        cb(state_q, "state_q_t_cont", il);
+        ggml_tensor * core_attn_out = ggml_transpose(ctx0, ggml_sum_rows(ctx0, state_q));
 
         cb(core_attn_out, "output_tokens", il);
         cb(state,         "new_state", il);

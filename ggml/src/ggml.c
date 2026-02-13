@@ -14170,6 +14170,36 @@ static void ggml_compute_forward_sum_rows(
     }
 }
 
+static void ggml_compute_forward_sum_rows_f32_nc(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    struct ggml_tensor * src = dst->src[0]->src[0];
+    GGML_ASSERT(src->op == GGML_OP_TRANSPOSE);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 && src->type == GGML_TYPE_F32);
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int nrows = ggml_nrows(src);
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first_row = nrows_per_thread*ith;
+    int last_row  = MIN(first_row + nrows_per_thread, nrows);
+
+    for (int ir = first_row; ir < last_row; ++ir) {
+        int i3 = ir / (src->ne[1]*src->ne[2]);
+        int i2 = (ir - i3*src->ne[1]*src->ne[2])/src->ne[1];
+        int i1 = ir - i3*src->ne[1]*src->ne[2] - i2*src->ne[1];
+        const float * src_row = (const float *)((const char *)src->data + i1*src->nb[1] + i2*src->nb[2] + i3*src->nb[3]);
+              float * dst_row = (      float *)((      char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
+        float row_sum = 0;
+        for (int i0 = 0; i0 < (int)src->ne[0]; ++i0) {
+            row_sum += *(const float *)((const char *)src_row + i0*src->nb[0]);
+        }
+        dst_row[0] = row_sum;
+    }
+}
+
 // ggml_compute_forward_mean
 
 static void ggml_compute_forward_mean_f32(
@@ -23740,6 +23770,15 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_CONT:
             {
+                if (i + 2 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_SUM_ROWS &&
+                    cgraph->nodes[i+2]->op == GGML_OP_TRANSPOSE) {
+                    if (tensor->src[0]->op == GGML_OP_TRANSPOSE) {
+                        ggml_compute_forward_sum_rows_f32_nc(params, cgraph->nodes[i+1]);
+                        i += 2;
+                        break;
+                    }
+                }
                 ggml_compute_forward_cont(params, tensor);
             } break;
         case GGML_OP_RESHAPE:
