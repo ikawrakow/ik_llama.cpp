@@ -41,7 +41,7 @@
 #include <syscall.h>
 #endif
 
-#define IK_PRINT_TIMING 1
+#define IK_PRINT_TIMING 0
 
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
