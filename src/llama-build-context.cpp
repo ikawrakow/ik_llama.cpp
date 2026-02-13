@@ -7,6 +7,7 @@
 #include "ggml.h"
 
 #include <unordered_set>
+#include <algorithm>
 
 static inline uint32_t llama_kv_qnext_state_slots(const llama_kv_cache & kv_self) {
     uint32_t n_slots = 0;
