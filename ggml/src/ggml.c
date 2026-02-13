@@ -14840,18 +14840,21 @@ static void ggml_compute_forward_neg_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    if (params->ith != 0) {
-        return;
-    }
-
     assert(ggml_is_contiguous_1(src0));
     assert(ggml_is_contiguous_1(dst));
     assert(ggml_are_same_shape(src0, dst));
 
+    int ith = params->ith;
+    int nth = params->nth;
+
     const int n  = ggml_nrows(src0);
     const int nc = src0->ne[0];
 
-    for (int i = 0; i < n; i++) {
+    int npt = (n + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = MIN(first + npt, n);
+
+    for (int i = first; i < last; i++) {
         ggml_vec_neg_f32(nc,
                 (float *) ((char *) dst->data  + i*( dst->nb[1])),
                 (float *) ((char *) src0->data + i*(src0->nb[1])));
@@ -15059,10 +15062,6 @@ static void ggml_compute_forward_sigmoid_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    if (params->ith != 0) {
-        return;
-    }
-
     assert(ggml_is_contiguous_1(src0));
     assert(ggml_is_contiguous_1(dst));
     assert(ggml_are_same_shape(src0, dst));
@@ -15070,7 +15069,13 @@ static void ggml_compute_forward_sigmoid_f32(
     const int n  = ggml_nrows(src0);
     const int nc = src0->ne[0];
 
-    for (int i = 0; i < n; i++) {
+    int ith = params->ith;
+    int nth = params->nth;
+    int npt = (n + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = MIN(first + npt, n);
+
+    for (int i = first; i < last; i++) {
         ggml_vec_sigmoid_f32(nc,
                 (float *) ((char *) dst->data  + i*( dst->nb[1])),
                 (float *) ((char *) src0->data + i*(src0->nb[1])));
@@ -25744,17 +25749,17 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             switch (ggml_get_unary_op(node)) {
                 case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_SGN:
-                case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_STEP:
                 case GGML_UNARY_OP_ELU:
                 case GGML_UNARY_OP_RELU:
-                case GGML_UNARY_OP_SIGMOID:
                 case GGML_UNARY_OP_HARDSWISH:
                 case GGML_UNARY_OP_HARDSIGMOID:
                     {
                         n_tasks = 1;
                     } break;
 
+                case GGML_UNARY_OP_SIGMOID:
+                case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_GELU:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_SILU:
