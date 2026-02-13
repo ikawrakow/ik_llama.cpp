@@ -13604,6 +13604,9 @@ static void ggml_compute_forward_mul_f32(
         return;
     }
 
+    //if (ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld * %ld x %ld x %ld x %ld -> %ld x %ld x %ld x %ld\n", __func__, dst->name,
+    //        src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[1], src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+
     const int64_t nr = ggml_nrows(src0);
 
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -13627,6 +13630,13 @@ static void ggml_compute_forward_mul_f32(
             float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
             float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
 
+            if (ne10 == 1) {
+                if (dst_ptr != src0_ptr) {
+                    memcpy(dst_ptr, src0_ptr, ne00*sizeof(float));
+                }
+                ggml_vec_scale_f32(ne00, dst_ptr, src1_ptr[0]);
+            } else {
+
             for (int64_t r = 0 ; r < nr0; ++r) {
 #ifdef GGML_USE_ACCELERATE
                 UNUSED(ggml_vec_mul_f32);
@@ -13635,6 +13645,7 @@ static void ggml_compute_forward_mul_f32(
 #else
                 ggml_vec_mul_f32(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
 #endif
+            }
             }
         }
     } else {
@@ -18123,6 +18134,10 @@ static void ggml_compute_forward_cpy(
 static void ggml_compute_forward_cont(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
+    //const struct ggml_tensor * src = dst->src[0];
+    //if (params->ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu (%s) -> %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu (%s)\n", __func__, dst->name,
+    //        src->ne[0], src->ne[1], src->ne[2], src->ne[3], src->nb[0], src->nb[1], src->nb[2], src->nb[3], ggml_type_name(src->type),
+    //        dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], ggml_type_name(dst->type));
     ggml_compute_forward_dup(params, dst);
 }
 

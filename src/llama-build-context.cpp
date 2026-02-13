@@ -4913,6 +4913,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_tok, 1);
         k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_tok, 1);
         v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_tok, 1);
+        cb(q_conv, "q_conv_cont", il);
+        cb(k_conv, "k_conv_cont", il);
+        cb(v_conv, "v_conv_cont", il);
 
         if (num_k_heads != num_v_heads) {
             GGML_ASSERT(num_v_heads % num_k_heads == 0);
