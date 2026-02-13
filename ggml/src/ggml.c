@@ -23645,6 +23645,8 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
     int64_t t1 = ggml_time_us();
 #endif
 
+    const bool fusion = true;
+
     switch (tensor->op) {
         case GGML_OP_REDUCE:
             {
@@ -23720,7 +23722,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_SUM_ROWS:
             {
-                if (i + 1 < cgraph->n_nodes &&
+                if (fusion && i + 1 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_DIV &&
                     cgraph->nodes[i+1]->src[1] == tensor &&
                     cgraph->nodes[i+1]->src[0] == tensor->src[0]) {
@@ -23882,7 +23884,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_SOFT_MAX:
             {
-                if (i + 4 < cgraph->n_nodes &&
+                if (fusion && i + 4 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_RESHAPE  &&
                     cgraph->nodes[i+2]->op == GGML_OP_ARGSORT  &&
                     cgraph->nodes[i+3]->op == GGML_OP_VIEW     &&
@@ -24034,7 +24036,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
         case GGML_OP_UNARY:
             {
                 const enum ggml_unary_op unary_op = ggml_get_unary_op(tensor);
-                if (unary_op == GGML_UNARY_OP_SIGMOID && i + 5 < cgraph->n_nodes &&
+                if (fusion && unary_op == GGML_UNARY_OP_SIGMOID && i + 5 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                     cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                     cgraph->nodes[i+3]->op == GGML_OP_ARGSORT &&
@@ -24043,7 +24045,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                     iqk_glm45moe_experts(cgraph->nodes[i+5], cgraph->nodes[i+4], params->ith, params->nth);
                     i += 5;
                 }
-                else if (unary_op == GGML_UNARY_OP_SIGMOID && i + 4 < cgraph->n_nodes &&
+                else if (fusion && unary_op == GGML_UNARY_OP_SIGMOID && i + 4 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                     cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                     cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&
