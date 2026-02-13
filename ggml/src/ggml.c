@@ -14103,10 +14103,6 @@ static void ggml_compute_forward_sum_rows_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    if (params->ith != 0) {
-        return;
-    }
-
     GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(dst->nb[0] == sizeof(float));
 
@@ -14117,22 +14113,32 @@ static void ggml_compute_forward_sum_rows_f32(
     GGML_ASSERT(ne2 == ne02);
     GGML_ASSERT(ne3 == ne03);
 
-    for (int64_t i3 = 0; i3 < ne03; i3++) {
-        for (int64_t i2 = 0; i2 < ne02; i2++) {
-            for (int64_t i1 = 0; i1 < ne01; i1++) {
-                float * src_row = (float *) ((char *) src0->data + i1*nb01 + i2*nb02 + i3*nb03);
-                float * dst_row = (float *) ((char *) dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
-                float row_sum = 0;
-                ggml_vec_sum_f32(ne00, &row_sum, src_row);
-                if (!isfinite(row_sum)) {
-                    fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
-                            (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
-                    exit(1);
-                }
-                dst_row[0] = row_sum;
-            }
+    int ith = params->ith;
+    int nth = params->nth;
+
+    //if (params->ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld\n", __func__, dst->name, ne00, ne1, ne2, ne3);
+
+    int nrows = ggml_nrows(src0);
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first_row = nrows_per_thread*ith;
+    int last_row  = MIN(first_row + nrows_per_thread, nrows);
+
+    for (int ir = first_row; ir < last_row; ++ir) {
+        int i3 = ir / (ne01*ne02);
+        int i2 = (ir - i3*ne01*ne02)/ne01;
+        int i1 = ir - i3*ne01*ne0 - i2*ne01;
+        const float * src_row = (const float *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
+              float * dst_row = (      float *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
+        float row_sum = 0;
+        ggml_vec_sum_f32(ne00, &row_sum, src_row);
+        if (!isfinite(row_sum)) {
+            fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
+                    (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
+            GGML_ABORT("Fatal error");
         }
+        dst_row[0] = row_sum;
     }
+
 }
 
 static void ggml_compute_forward_sum_rows(
@@ -25628,7 +25634,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SQRT:
         case GGML_OP_LOG:
         case GGML_OP_SUM:
-        case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
         case GGML_OP_ARGMAX:
         case GGML_OP_REPEAT:
@@ -25743,6 +25748,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_SOFTCAP:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_CAP_MAX:
+        case GGML_OP_SUM_ROWS:
             {
                 n_tasks = MIN(n_threads, ggml_nrows(node->src[0]));
             } break;
