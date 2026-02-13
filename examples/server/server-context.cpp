@@ -408,7 +408,6 @@ int server_slot::get_n_draft_max() const {
     //       also, need to leave space for 1 extra token to allow context shifts
     n_draft_max = std::min(n_draft_max, n_ctx - n_past - 2);
 
-    // int n_remaining = n_predict - n_decoded;
     if (n_remaining > 0) {
         n_draft_max = std::min(n_draft_max, n_remaining - 1);
     }
@@ -1276,10 +1275,6 @@ void server_context::system_prompt_update() {
                 LOG_ERROR("llama_decode() failed", {});
                 return;
             }
-            // Its necessary here?
-            // if (params_base.has_mtp) {
-            //      mtp_update_kv_cache(ctx, batch, true);
-            // }
         }
 
         // assign the system KV cache to all parallel sequences

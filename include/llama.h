@@ -592,8 +592,6 @@ extern "C" {
     LLAMA_API llama_token llama_vocab_bos(const struct llama_vocab * vocab);
     LLAMA_API llama_token llama_vocab_eos(const struct llama_vocab * vocab);
 
-    LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
-
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_rope_freq_scale_train(const struct llama_model * model);
 
@@ -977,9 +975,6 @@ extern "C" {
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
-
-    // Set which, if any, MTP operation the context will use
-    LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
@@ -1457,6 +1452,11 @@ LLAMA_API struct llama_grammar* llama_sampler_init_grammar_lazy_patterns(
     //
     // MTP
     //
+
+    LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
+
+    // Set which, if any, MTP operation the context will use
+    LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
 
     LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
 
