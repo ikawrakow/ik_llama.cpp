@@ -41,7 +41,7 @@
 #include <syscall.h>
 #endif
 
-#define IK_PRINT_TIMING 0
+#define IK_PRINT_TIMING 1
 
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
@@ -11941,46 +11941,40 @@ static void ggml_compute_forward_dup_f32(
     }
 }
 
-// A simplified version of ggml_compute_forward_dup that doesn't do float upcasting, and just plain old memcpy.
 static void ggml_compute_forward_dup_bytes(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
-
     const struct ggml_tensor * src0 = dst->src[0];
 
     GGML_ASSERT(ggml_nelements(dst) == ggml_nelements(src0));
     GGML_ASSERT(src0->type == dst->type);
+
+    GGML_TENSOR_UNARY_OP_LOCALS;
 
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
         ggml_compute_forward_dup_same_cont(params, dst);
         return;
     }
 
-    GGML_TENSOR_UNARY_OP_LOCALS;
-
     const size_t type_size = ggml_type_size(src0->type);
+
     const int ith = params->ith; // thread index
     const int nth = params->nth; // number of threads
 
-
     // parallelize by rows
     const int nr = ne01;
-    const int n_packed = ggml_packed_rows(dst->type);
-    GGML_ASSERT(nr%n_packed == 0);
-    const int nrp = nr/n_packed;
     // number of rows per thread
-    const int drp = (nrp + nth - 1) / nth;
-    const int dr  = drp*n_packed;
+    const int dr = (nr + nth - 1) / nth;
     // row range for this thread
     const int ir0 = dr * ith;
-    if (ir0 >= nr) return;
     const int ir1 = MIN(ir0 + dr, nr);
 
     if (src0->type == dst->type &&
-        ne00 == ne0 &&
+        ggml_are_same_shape(src0, dst) &&
         nb00 == type_size && nb0 == type_size) {
+        //if (ith == 0) printf("%s(1): %ld x %ld x %ld x %ld\n", __func__, ne00, ne01, ne02, ne03);
         // copy by rows
-        const size_t rs = ggml_row_size(src0->type, ne00); //ne00 * type_size;
+        const size_t rs = ggml_row_size(src0->type, ne00);
         for (int64_t i03 = 0; i03 < ne03; i03++) {
             for (int64_t i02 = 0; i02 < ne02; i02++) {
                 for (int64_t i01 = ir0; i01 < ir1; i01++) {
@@ -11997,9 +11991,10 @@ static void ggml_compute_forward_dup_bytes(
     if (ggml_is_contiguous(dst)) {
         size_t id = 0;
         char * dst_ptr = (char *) dst->data;
-        const size_t rs = ggml_row_size(src0->type, ne00); //ne00 * type_size;
+        const size_t rs = ne00 * type_size;
 
         if (nb00 == type_size) {
+            //if (ith == 0) printf("%s(2): %ld x %ld x %ld x %ld\n", __func__, ne00, ne01, ne02, ne03);
             // src0 is contigous on first dimension, copy by rows
             for (int64_t i03 = 0; i03 < ne03; i03++) {
                 for (int64_t i02 = 0; i02 < ne02; i02++) {
@@ -12013,7 +12008,6 @@ static void ggml_compute_forward_dup_bytes(
                 }
             }
         } else {
-            //printf("%s: this is not optimal - fix me\n", __func__);
 
             for (int64_t i03 = 0; i03 < ne03; i03++) {
                 for (int64_t i02 = 0; i02 < ne02; i02++) {
@@ -12035,17 +12029,20 @@ static void ggml_compute_forward_dup_bytes(
     }
 
     // dst counters
-
-    int64_t i10 = 0;
+    int64_t k10 = 0;
     int64_t i11 = 0;
     int64_t i12 = 0;
     int64_t i13 = 0;
 
+    // number of blocks in a row
+    const int64_t nk00 = ne00 / ggml_blck_size(src0->type);
+    const int64_t nk0  = ne0  / ggml_blck_size(dst->type);
+
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
-            i10 += ne00 * ir0;
-            while (i10 >= ne0) {
-                i10 -= ne0;
+            k10 += nk00 * ir0;
+            while (k10 >= nk0) {
+                k10 -= nk0;
                 if (++i11 == ne1) {
                     i11 = 0;
                     if (++i12 == ne2) {
@@ -12057,14 +12054,14 @@ static void ggml_compute_forward_dup_bytes(
                 }
             }
             for (int64_t i01 = ir0; i01 < ir1; i01++) {
-                for (int64_t i00 = 0; i00 < ne00; i00++) {
-                    const char * src0_ptr = ((char *) src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
-                          char * dst_ptr  = ((char *)  dst->data + i10*nb0  + i11*nb1  + i12*nb2  + i13*nb3);
+                for (int64_t k00 = 0; k00 < nk00; k00++) {
+                    const char * src0_ptr = ((char *) src0->data + k00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
+                          char * dst_ptr  = ((char *)  dst->data + k10*nb0  + i11*nb1  + i12*nb2  + i13*nb3);
 
                     memcpy(dst_ptr, src0_ptr, type_size);
 
-                    if (++i10 == ne0) {
-                        i10 = 0;
+                    if (++k10 == nk0) {
+                        k10 = 0;
                         if (++i11 == ne1) {
                             i11 = 0;
                             if (++i12 == ne2) {
@@ -12077,9 +12074,9 @@ static void ggml_compute_forward_dup_bytes(
                     }
                 }
             }
-            i10 += ne00 * (ne01 - ir1);
-            while (i10 >= ne0) {
-                i10 -= ne0;
+            k10 += nk00 * (ne01 - ir1);
+            while (k10 >= nk0) {
+                k10 -= nk0;
                 if (++i11 == ne1) {
                     i11 = 0;
                     if (++i12 == ne2) {
@@ -13501,13 +13498,15 @@ static void ggml_compute_forward_sub_f32(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
-    if (params->ith != 0) {
-        return;
-    }
-
     assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
 
-    const int nr  = ggml_nrows(src0);
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int nr  = ggml_nrows(src0);
+    int nr_per_thread = (nr + nth - 1)/nth;
+    int first = ith*nr_per_thread;
+    int last  = MIN(first + nr_per_thread, nr);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -13515,7 +13514,7 @@ static void ggml_compute_forward_sub_f32(
     GGML_ASSERT(nb00 == sizeof(float));
 
     if (nb10 == sizeof(float)) {
-        for (int ir = 0; ir < nr; ++ir) {
+        for (int ir = first; ir < last; ++ir) {
             // src0, src1 and dst are same shape => same indices
             const int i3 = ir/(ne2*ne1);
             const int i2 = (ir - i3*ne2*ne1)/ne1;
@@ -13546,10 +13545,9 @@ static void ggml_compute_forward_sub_f32(
 
             float * dst_ptr  = (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 );
             float * src0_ptr = (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
+            char  * src1_ptr = (char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11;
             for (int i0 = 0; i0 < ne0; i0++) {
-                float * src1_ptr = (float *) ((char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11 + i0*nb10);
-
-                dst_ptr[i0] = src0_ptr[i0] - *src1_ptr;
+                dst_ptr[i0] = src0_ptr[i0] - *(float *)(src1_ptr + i0*nb10);
             }
         }
     }
@@ -25727,10 +25725,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MUL_MULTI_ADD:
         case GGML_OP_HADAMARD:
         case GGML_OP_REPEAT:
+        case GGML_OP_SUB:
             {
                 n_tasks = n_threads;
             } break;
-        case GGML_OP_SUB:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_LOG:
