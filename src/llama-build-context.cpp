@@ -4474,6 +4474,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         decay_mask = ggml_mul(ctx0, decay_mask, diag_mask);
 
         ggml_tensor * kmulkbeta = ggml_mul_mat(ctx0, k, k_beta);
+        cb(kmulkbeta, "kk_beta", il);
 
         ggml_tensor * k_decay = ggml_mul(ctx0, kmulkbeta, decay_mask);
         ggml_tensor * attn    = ggml_neg(ctx0, ggml_mul(ctx0, k_decay, causal_mask));
@@ -4490,6 +4491,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(attn, "attn_solved", il);
 
         v = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v_beta)), attn);
+        cb(v, "v_beta", il);
 
         ggml_tensor * g_cumsum_t = ggml_cont(ctx0, ggml_transpose(ctx0, g_cumsum));
         cb(g_cumsum_t, "g_cumsum_t", il);
@@ -4499,11 +4501,13 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * kbeta_gexp = ggml_mul(ctx0, k_beta, gexp);
         cb(kbeta_gexp, "kbeta_gexp", il);
 
-        ggml_tensor * k_cumdecay =
-            ggml_cont(ctx0, ggml_transpose(ctx0, ggml_mul_mat(ctx0, attn, ggml_cont(ctx0, ggml_transpose(ctx0, kbeta_gexp)))));
+        auto attn_kbeta = ggml_mul_mat(ctx0, attn, ggml_cont(ctx0, ggml_transpose(ctx0, kbeta_gexp)));
+        cb(attn_kbeta, "attn_kbeta", il);
+        ggml_tensor * k_cumdecay = ggml_cont(ctx0, ggml_transpose(ctx0, attn_kbeta));
         cb(k_cumdecay, "k_cumdecay", il);
 
         ggml_tensor * attn_kq = ggml_mul_mat(ctx0, k, q);
+        cb(attn_kq, "attn_kq_pre", il);
         attn_kq = ggml_mul(ctx0, decay_mask, attn_kq);
         attn_kq = ggml_mul(ctx0, attn_kq,    diag_mask);
         cb(attn_kq, "attn_kq", il);
@@ -4568,6 +4572,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
             ggml_tensor * k_gdiff_t = get_slice_2d(key_gdiff_t, chunk);
             ggml_tensor * kgdmulvnew = ggml_mul_mat(ctx0, v_new_t, k_gdiff_t);
+            cb(kgdmulvnew, "kgdmulvnew", il);
 
             ggml_tensor * gexp_last_chunk = ggml_cont(ctx0, get_slice_2d(g_last_exp, chunk));
             state = ggml_add(ctx0,
@@ -4654,6 +4659,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         const int64_t n_tok = input->ne[1];
         if (model.layers[il].wqkv) {
             ggml_tensor * qkv_mixed = llm_build_lora_mm(lctx, ctx0, model.layers[il].wqkv, input);
+            cb(qkv_mixed, "qkv_mixed", il);
             qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_tok, 1);
             cb(qkv_mixed, "linear_attn_qkv_mixed", il);
 
