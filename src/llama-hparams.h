@@ -115,6 +115,11 @@ struct llama_hparams {
     uint32_t n_attn_temp_floor_scale = 8192;
     float    f_attn_temp_scale       = 0.1;
 
+    // DSA (deepseek sparse attention)
+    uint32_t indexer_n_head    = 0;
+    uint32_t indexer_head_size = 0;
+    uint32_t indexer_top_k     = 0;
+
 	// qwen3vl deepstack
     uint32_t n_deepstack_layers = 0;
 
