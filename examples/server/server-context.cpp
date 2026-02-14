@@ -42,9 +42,7 @@ server_context::~server_context() {
         if (slot.ctx_dft) {
             llama_free(slot.ctx_dft);
         }
-        if (slot.spec) {
-            llama_speculative_free(slot.spec);
-        }
+        common_speculative_free(slot.spec);
         llama_batch_free(slot.batch_spec);
     }
 
@@ -79,7 +77,7 @@ bool server_context::load_model(const gpt_params& params_) {
         chat_templates = common_chat_templates_init(model, "chatml");
     }
 
-    bool has_draft_model = !params_base.model_draft.empty() || !params_base.draft_params.empty();
+    bool has_draft_model = !params_base.speculative.model.empty() || !params_base.speculative.params.empty();
     std::string& mmproj_path = params_base.mmproj.path;
     if (!mmproj_path.empty()) {
         mtmd_context_params mparams = mtmd_context_params_default();
@@ -111,21 +109,25 @@ bool server_context::load_model(const gpt_params& params_) {
             LOG_ERROR("%s\n", "err: speculative decode is not supported by multimodal");
             return false;
         }
+        if (params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
+            params_base.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
+            SRV_WRN("%s\n", "speculative decoding is not supported by multimodal, it will be disabled");
+        }
     }
     // Load draft model for speculative decoding if specified
     if (has_draft_model) {
         LLAMA_LOG_INFO("\n\n==================================loading DRAFT model==================================\n\n");
 
         gpt_params params_dft;
-        params_dft.devices      = params_base.devices_draft;
-        params_dft.model        = params_base.model_draft;
-        params_dft.n_gpu_layers = params_base.n_gpu_layers_draft;
+        params_dft.devices      = params_base.speculative.devices;
+        params_dft.model        = params_base.speculative.model;
+        params_dft.n_gpu_layers = params_base.speculative.n_gpu_layers;
         params_dft.rpc_servers  = params_base.rpc_servers;
-        params_dft.cache_type_k = params_base.cache_type_k_draft.empty() ? params_base.cache_type_k : params_base.cache_type_k_draft;
-        params_dft.cache_type_v = params_base.cache_type_v_draft.empty() ? params_base.cache_type_v : params_base.cache_type_v_draft;
+        params_dft.cache_type_k = params_base.speculative.cache_type_k.empty() ? params_base.cache_type_k : params_base.speculative.cache_type_k;
+        params_dft.cache_type_v = params_base.speculative.cache_type_v.empty() ? params_base.cache_type_v : params_base.speculative.cache_type_v;
         params_dft.flash_attn   = params_base.flash_attn;
-        if (!params_base.draft_params.empty()) {
-            auto [argc, argv] = parse_command_line("llama-server " + params_base.draft_params);
+        if (!params_base.speculative.params.empty()) {
+            auto [argc, argv] = parse_command_line("llama-server " + params_base.speculative.params);
             if (!gpt_params_parse(argc, argv, params_dft)) {
                 gpt_params_print_usage(argc, argv, params_dft);
                 free_command_line(argc, argv);
@@ -135,29 +137,26 @@ bool server_context::load_model(const gpt_params& params_) {
         }
         LOG_INFO("", { {"model", params_dft.model} });
         if (params_dft.n_ctx == 0) {
-            params_dft.n_ctx = params_base.n_ctx_draft;
+            params_dft.n_ctx = params_base.speculative.n_ctx;
         }
         params_dft.n_ctx = params_dft.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_dft.n_ctx;
         params_dft.n_parallel = 1;
         params_dft.n_batch = params_dft.n_ctx;
-        llama_init_result llama_init_dft = llama_init_from_gpt_params(params_dft);
 
-        llama_model* model_dft = llama_init_dft.model;
+        params_base.speculative.mparams_dft.path = params_dft.model; //
+
+        llama_model_params mparams_dft = common_model_params_to_llama(params_dft);
+
+        llama_model * model_dft = llama_model_load_from_file(params_dft.model.c_str(), mparams_dft);
         if (model_dft == nullptr) {
-            LOG_ERROR("failed to load draft model", { {"model", params_base.model_draft} });
+            LOG_ERROR("failed to load draft model", { {"model", params_base.speculative.model} });
             return false;
         }
+        cparams_dft = common_context_params_to_llama(params_dft);
 
-        if (!llama_speculative_are_compatible(ctx, llama_init_dft.context)) {
-            LOG_INFO("the draft model is not compatible with the target model. tokens will be translated between the draft and target models.", { {} });
-        }
+        params_base.speculative.model_dft = model_dft;
+        params_base.speculative.cparams_dft = cparams_dft;
 
-        const int n_ctx_dft = llama_n_ctx(llama_init_dft.context);
-
-        cparams_dft = llama_context_params_from_gpt_params(params_dft);
-
-        model_draft = llama_init_dft.model;
-        ctx_draft = llama_init_dft.context;
     }
     return true;
 }
@@ -210,27 +209,23 @@ void server_context::init() {
 
         slot.sparams = params_base.sparams;
 
-        // Initialize speculative decoding if a draft model is loaded
-        if (ctx_draft) {
-            slot.batch_spec = llama_batch_init(slot.params.speculative.n_max + 1, 0, 1);
-            // slot.ctx_dft = llama_new_context_with_model(model_draft, cparams_dft); // initialized twice
-            slot.ctx_dft = ctx_draft;
-            if (slot.ctx_dft == nullptr) {
-                LOG_ERROR("failed to create draft context", {});
-                return;
-            }
-
-            slot.spec = llama_speculative_init(ctx, slot.ctx_dft);
-            if (slot.spec == nullptr) {
-                LOG_ERROR("failed to create speculator", {});
-                return;
-            }
-            for (auto& pair : params_base.replacements_draft) {
-                llama_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
-            }
-
+        const bool can_spec = common_speculative_is_compat(ctx);
+        if (!can_spec) {
+            SRV_WRN("%s", "speculative decoding not supported by this context\n");
         }
-
+        // try speculative decoding
+        if (can_spec){
+            slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
+            if (slot.spec) {
+                if (mctx) {
+                    SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
+                    return;
+                }
+                SLT_INF(slot, "%s", "speculative decoding context initialized\n");
+            } else {
+                SLT_INF(slot, "%s", "speculative decoding context not initialized\n");
+            }
+        }
         slot.reset();
 
         slots.push_back(std::move(slot));
@@ -342,6 +337,13 @@ void server_slot::reset() {
     json_schema = json();
     generated_tool_call_ids.clear();
 
+    oai_resp_thinking_block_started = false;
+    oai_resp_text_block_started = false;
+    oai_resp_id.clear();
+    oai_resp_reasoning_id.clear();
+    oai_resp_message_id.clear();
+    oai_resp_fc_id.clear();
+
     task.reset();
 }
 
@@ -377,8 +379,12 @@ void server_slot::add_token_string(const completion_token_output& token) {
     generated_token_probs.push_back(token);
 }
 
+bool server_slot::can_speculate() const {
+    return !!spec;
+}
+
 int server_slot::get_n_draft_max() const {
-    if (!ctx_dft) {
+    if (!can_speculate()) {
         return 0;
     }
 
@@ -451,7 +457,7 @@ result_timings server_slot::get_timings() const {
         timings.draft_n = n_draft_total;
         timings.draft_n_accepted = n_draft_accepted;
     }
-
+ 
     return timings;
 }
 
@@ -526,6 +532,7 @@ void server_slot::print_timings() const {
             draft_ratio, n_draft_accepted, n_draft_total
         );
     }
+    common_speculative_print_stats(spec);
 }
 
 void server_metrics::init() {
@@ -571,11 +578,11 @@ std::vector<llama_token> server_context::tokenize(const json& json_prompt, bool 
 
                 std::vector<llama_token> p;
                 if (first) {
-                    p = ::llama_tokenize(ctx, s, add_special, TMP_FORCE_SPECIAL);
+                    p = ::common_tokenize(ctx, s, add_special, TMP_FORCE_SPECIAL);
                     first = false;
                 }
                 else {
-                    p = ::llama_tokenize(ctx, s, false, TMP_FORCE_SPECIAL);
+                    p = ::common_tokenize(ctx, s, false, TMP_FORCE_SPECIAL);
                 }
 
                 prompt_tokens.insert(prompt_tokens.end(), p.begin(), p.end());
@@ -591,7 +598,7 @@ std::vector<llama_token> server_context::tokenize(const json& json_prompt, bool 
     }
     else {
         auto s = json_prompt.template get<std::string>();
-        prompt_tokens = ::llama_tokenize(ctx, s, add_special, TMP_FORCE_SPECIAL);
+        prompt_tokens = ::common_tokenize(ctx, s, add_special, TMP_FORCE_SPECIAL);
     }
 
     return prompt_tokens;
@@ -782,14 +789,16 @@ server_slot* server_context::get_available_slot(const server_task& task) {
 }
 
 bool server_context::launch_slot_with_task(server_slot& slot, server_task& task) {
-    slot_params default_params;
+    slot_params defaults;
+    defaults.speculative = params_base.speculative;
+
     // Sampling parameter defaults are loaded from the global server context (but individual requests can still override them)
-    llama_sampling_params default_sparams = params_base.sparams;
+    common_params_sampling default_sparams = params_base.sparams;
     auto& data = task.data;
     const llama_vocab* vocab = llama_model_get_vocab(model);
     if (data.count("__oaicompat") != 0) {
         slot.oaicompat = true;
-        slot.oaicompat_model = json_value(data, "model", std::string(DEFAULT_OAICOMPAT_MODEL));
+        slot.oaicompat_model = task.params.oaicompat_model;
     }
     else {
         slot.oaicompat = false;
@@ -797,12 +806,19 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     }
     slot.params.oaicompat = task.params.oaicompat;
     slot.params.oaicompat_cmpl_id =task.params.oaicompat_cmpl_id;
+
+    slot.oai_resp_thinking_block_started = false;
+    slot.oai_resp_text_block_started = false;
+    slot.oai_resp_id = "resp_" + random_string();
+    slot.oai_resp_reasoning_id = "rs_" + random_string();
+    slot.oai_resp_message_id = "msg_" + random_string();
+    slot.oai_resp_fc_id.clear();
     slot.params.timings_per_token = json_value(data, "timings_per_token", false);
     slot.params.stream = json_value(data, "stream", false);
     auto stream_opt = json_value(data, "stream_options", json::object());
     slot.params.include_usage = json_value(stream_opt, "include_usage", false);
     slot.params.cache_prompt = json_value(data, "cache_prompt", true);
-    slot.params.n_predict = json_value(data, "n_predict", json_value(data, "max_tokens", default_params.n_predict));
+    slot.params.n_predict = json_value(data, "n_predict", json_value(data, "max_tokens", defaults.n_predict));
     slot.sparams.top_k = json_value(data, "top_k", default_sparams.top_k);
     slot.sparams.top_p = json_value(data, "top_p", default_sparams.top_p);
     slot.sparams.min_p = json_value(data, "min_p", default_sparams.min_p);
@@ -829,22 +845,37 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     slot.sparams.adaptive_decay = json_value(data, "adaptive_decay", default_sparams.adaptive_decay);
     slot.sparams.penalize_nl = json_value(data, "penalize_nl", default_sparams.penalize_nl);
     slot.params.n_keep = json_value(data, "n_keep", slot.params.n_keep);
-    slot.params.n_discard = json_value(data, "n_discard", default_params.n_discard);
+    slot.params.n_discard = json_value(data, "n_discard", defaults.n_discard);
     slot.sparams.seed = json_value(data, "seed", default_sparams.seed);
     slot.sparams.n_probs = json_value(data, "n_probs", default_sparams.n_probs);
     slot.sparams.min_keep = json_value(data, "min_keep", default_sparams.min_keep);
 
-    slot.params.post_sampling_probs = json_value(data, "post_sampling_probs", default_params.post_sampling_probs);
+    slot.params.post_sampling_probs = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
 
     // speculative decoding parameters
-    slot.params.speculative.n_max = json_value(data, "speculative.n_max", params_base.n_draft);
-    slot.params.speculative.n_min = json_value(data, "speculative.n_min", params_base.n_draft_min);
-    slot.params.speculative.p_min = json_value(data, "speculative.p_min", params_base.p_draft_min);
+    slot.params.speculative.n_max = json_value(data, "speculative.n_max", params_base.speculative.n_max);
+    slot.params.speculative.n_min = json_value(data, "speculative.n_min", params_base.speculative.n_min);
+    slot.params.speculative.p_min = json_value(data, "speculative.p_min", params_base.speculative.p_min);
+
+    slot.params.speculative.n_min = std::min(slot.params.speculative.n_max, slot.params.speculative.n_min);
+    slot.params.speculative.n_min = std::max(slot.params.speculative.n_min, 0);
+    slot.params.speculative.n_max = std::max(slot.params.speculative.n_max, 0);
+
+    slot.params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
 
     // Clamp speculative parameters
     slot.params.speculative.n_min = std::min(slot.params.speculative.n_max, slot.params.speculative.n_min);
     slot.params.speculative.n_min = std::max(slot.params.speculative.n_min, 0);
     slot.params.speculative.n_max = std::max(slot.params.speculative.n_max, 0);
+
+    slot.params.speculative.ngram_size_n = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
+    slot.params.speculative.ngram_size_m = json_value(data, "speculative.ngram_size_m", defaults.speculative.ngram_size_m);
+    slot.params.speculative.ngram_min_hits = json_value(data, "speculative.ngram_m_hits", defaults.speculative.ngram_min_hits);
+
+    slot.params.speculative.ngram_size_n = std::max(std::min(1, (int)slot.params.speculative.ngram_size_n), 1024);
+    slot.params.speculative.ngram_size_m = std::max(std::min(1, (int)slot.params.speculative.ngram_size_m), 1024);
+    slot.params.speculative.ngram_min_hits = std::max(std::min(1, (int)slot.params.speculative.ngram_min_hits), 1024);
+
 
     if (slot.sparams.penalty_last_n < -1) {
         throw std::runtime_error("Error: repeat_last_n must be >= -1");
@@ -916,8 +947,8 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
     }
 
     // infill
-    slot.params.input_prefix = json_value(data, "input_prefix", default_params.input_prefix);
-    slot.params.input_suffix = json_value(data, "input_suffix", default_params.input_suffix);
+    slot.params.input_prefix = json_value(data, "input_prefix", defaults.input_prefix);
+    slot.params.input_suffix = json_value(data, "input_suffix", defaults.input_suffix);
 
     // get prompt
     if (!task.infill) {
@@ -975,7 +1006,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
             LLAMA_LOG_DEBUG("Chat format: %s\n", common_chat_format_name(slot.params.oaicompat_chat_syntax.format));
         }
         else {
-            slot.params.oaicompat_chat_syntax.format = default_params.oaicompat_chat_syntax.format;
+            slot.params.oaicompat_chat_syntax.format = defaults.oaicompat_chat_syntax.format;
         }
         common_reasoning_format reasoning_format = params_base.reasoning_format;
         if (data.contains("reasoning_format")) {
@@ -1202,7 +1233,7 @@ bool server_context::launch_slot_with_task(server_slot& slot, server_task& task)
         if (slot.ctx_sampling != nullptr) {
             common_sampler_free(slot.ctx_sampling);
         }
-        slot.ctx_sampling = common_sampler_init(llama_get_model_vocab(model), slot.sparams);
+        slot.ctx_sampling = common_sampler_init(model, slot.sparams);
         if (slot.ctx_sampling == nullptr) {
             // for now, the only error that may happen here is invalid grammar
             send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
@@ -1238,7 +1269,7 @@ void server_context::system_prompt_update() {
     system_tokens.clear();
 
     if (!system_prompt.empty()) {
-        system_tokens = ::llama_tokenize(ctx, system_prompt, true);
+        system_tokens = ::common_tokenize(ctx, system_prompt, true);
 
         const int32_t n_batch = llama_n_batch(ctx);
         const int32_t n_tokens_prompt = system_tokens.size();
@@ -1576,6 +1607,10 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
     res->oaicompat = slot.params.oaicompat;
     res->oaicompat_model = slot.task->params.oaicompat_model;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
+    res->oai_resp_id = slot.oai_resp_id;
+    res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
+    res->oai_resp_message_id = slot.oai_resp_message_id;
+    res->oai_resp_fc_id = slot.oai_resp_fc_id;
     res->n_decoded = slot.n_decoded;
     res->n_prompt_tokens = slot.n_prompt_tokens;
     res->data = json{
@@ -1591,12 +1626,24 @@ void server_context::send_partial_response(server_slot& slot, completion_token_o
     res->anthropic_thinking_block_started = slot.anthropic_thinking_block_started;
     res->anthropic_text_block_started = slot.anthropic_text_block_started;
 
+    res->oai_resp_thinking_block_started = slot.oai_resp_thinking_block_started;
+    res->oai_resp_text_block_started = slot.oai_resp_text_block_started;
+
     for (const auto& diff : res->oaicompat_msg_diffs) {
         if (!diff.reasoning_content_delta.empty() && !slot.anthropic_thinking_block_started) {
             slot.anthropic_thinking_block_started = true;
         }
         if (!diff.content_delta.empty() && !slot.anthropic_text_block_started) {
             slot.anthropic_text_block_started = true;
+        }
+        if (!diff.reasoning_content_delta.empty() && !slot.oai_resp_thinking_block_started) {
+            slot.oai_resp_thinking_block_started = true;
+        }
+        if (!diff.content_delta.empty() && !slot.oai_resp_text_block_started) {
+            slot.oai_resp_text_block_started = true;
+        }
+        if (!diff.tool_call_delta.name.empty()) {
+            slot.oai_resp_fc_id = diff.tool_call_delta.id;
         }
     }
 
@@ -1633,6 +1680,9 @@ void server_context::send_final_response(server_slot& slot) {
     res->oaicompat = slot.params.oaicompat;
     res->oaicompat_cmpl_id = slot.params.oaicompat_cmpl_id;
     res->oaicompat_msg = slot.update_chat_msg(res->oaicompat_msg_diffs);
+    res->oai_resp_id = slot.oai_resp_id;
+    res->oai_resp_reasoning_id = slot.oai_resp_reasoning_id;
+    res->oai_resp_message_id = slot.oai_resp_message_id;
     res->n_decoded = slot.n_decoded;
     res->n_prompt_tokens = slot.n_prompt_tokens;
     res->oaicompat_model = slot.task->params.oaicompat_model;
@@ -2460,19 +2510,30 @@ void server_context::add_sampled_tokens() {
         // generate draft tokens in speculative decoding mode
         // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
         //       perform the speculative drafting for all sequences at the same time in a single batch
-        int n_draft_max = slot.get_n_draft_max();
+        const int n_draft_max = slot.get_n_draft_max();
         if (n_draft_max > 0) {
             if (mctx) {
                 // we should never reach this, as speculative is automatically disabled if mmproj is loaded
                 GGML_ABORT("not supported by multimodal");
             }
 
-            struct llama_speculative_params params_spec;
+            const llama_tokens & cached_text_tokens = slot.cache_tokens.get_text_tokens();
+
+            const auto & params_spec = slot.params.speculative;
+
+            llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+
+            if (draft.size() > (size_t)n_draft_max) {
+                SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int)draft.size(), n_draft_max);
+                draft.resize(n_draft_max);
+            }
+
+            /*struct llama_speculative_params params_spec;
             params_spec.n_draft = n_draft_max;
             params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.params.speculative.n_max;
             params_spec.p_min = slot.params.speculative.p_min;
             const llama_tokens& cached_text_tokens = slot.cache_tokens.get_text_tokens();
-            llama_tokens draft = llama_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+            llama_tokens draft = llama_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);*/
 
             // add the sampled token to the batch
             slot.i_batch_dft.push_back(batch.n_tokens);
@@ -2648,7 +2709,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                         else {
                             slot.n_discarded_prompt = 0;
                         }
-                        common_sampler_reset(llama_get_model_vocab(model), slot.ctx_sampling);
+                        common_sampler_reset(slot.ctx_sampling);
 
                         if (!slot.params.cache_prompt) {
                             slot.n_past_se = 0;
@@ -2745,7 +2806,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     slot.n_past_se = 0;
                     slot.ga_i = 0;
                     // TODO: is the system prompt ever in the sampling context?
-                    common_sampler_reset(llama_get_model_vocab(model), slot.ctx_sampling);
+                    common_sampler_reset(slot.ctx_sampling);
                 }
 
                 LOG_INFO("kv cache rm [p0, end)", {
@@ -2829,7 +2890,7 @@ void server_context::batch_pending_prompt(const int32_t n_ubatch, const int32_t 
                     slot.command = SLOT_COMMAND_NONE;
                     GGML_ASSERT(batch.n_tokens > 0);
                     GGML_ASSERT((size_t)slot.n_prompt_tokens == slot.prompt_tokens.size());
-                    common_sampler_reset(llama_get_model_vocab(model), slot.ctx_sampling);
+                    common_sampler_reset(slot.ctx_sampling);
                     for (int i = 0; i < slot.n_prompt_tokens; ++i) {
                         llama_token id = slot.prompt_tokens[i];
                         if (id != LLAMA_TOKEN_NULL) {
@@ -2911,12 +2972,17 @@ void server_context::speculative_decoding_accept() {
         // update how many tokens out of those tested were accepted
         slot.n_draft_accepted += ids.size() - 1;
 
+        // inform the speculative decoding about the number of accepted tokens
+        common_speculative_accept(slot.spec, ids.size() - 1);
+
         // rollback to the state before sampling the draft tokens
         slot.cache_tokens.keep_first(slot.cache_tokens.n_tokens() - n_draft);
+
         // add accepted tokens to the prompt
         slot.cache_tokens.insert({ ids.begin(), ids.end() - 1 });
         slot.sampled = ids.back(); // last accepted token
         slot.n_past = slot.cache_tokens.n_tokens();
+
         llama_kv_cache_seq_rm(ctx, slot.id, slot.n_past, -1);
 
         for (size_t i = 0; i < ids.size(); ++i) {
@@ -3141,13 +3207,17 @@ void server_context::process_batch_tokens(int32_t & n_batch) {
                 continue; // continue loop of slots
             }
 
+            if (slot.n_decoded == 0 && slot.can_speculate()) {
+                common_speculative_begin(slot.spec, slot.cache_tokens.get_text_tokens());
+            }
+
             if (slot.i_batch_dft.size() > 0) {
                 continue; // sample using speculative decoding
             }
 
             completion_token_output result;
             const int tok_idx = slot.i_batch - i;
-            const llama_token id = common_sampler_sample(slot.ctx_sampling, ctx, NULL, tok_idx);
+            const llama_token id = common_sampler_sample(slot.ctx_sampling, ctx, tok_idx);
 
             common_sampler_accept(slot.ctx_sampling, ctx, id, true);
 
@@ -3249,7 +3319,7 @@ void server_context::update_slots() {
 
 json server_context::model_meta() const {
     return json{
-        {"vocab_type",  llama_vocab_type(model)},
+        {"vocab_type",  llama_vocab_type(llama_model_get_vocab(model))},
         {"n_vocab",     llama_n_vocab(model)},
         {"n_ctx_train", llama_n_ctx_train(model)},
         {"n_embd",      llama_model_n_embd(model)},

@@ -103,7 +103,7 @@ static void sigint_handler(int signo) {
 
 int main(int argc, char ** argv) {
     gpt_params params;
-    llama_sampling_params & sparams = params.sparams;
+    common_params_sampling & sparams = params.sparams;
     g_params = &params;
 
     if (!gpt_params_parse(argc, argv, params)) {
@@ -209,8 +209,8 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> embd_inp;
     std::vector<llama_token> embd_end;
-    std::vector<llama_token> inp_pfx = ::llama_tokenize(ctx, params.input_prefix, false);
-    std::vector<llama_token> inp_sfx = ::llama_tokenize(ctx, params.input_suffix, false);
+    std::vector<llama_token> inp_pfx = ::common_tokenize(ctx, params.input_prefix, false);
+    std::vector<llama_token> inp_sfx = ::common_tokenize(ctx, params.input_suffix, false);
 
     GGML_ASSERT(llama_token_prefix(model) >= 0);
     GGML_ASSERT(llama_token_suffix(model) >= 0);
@@ -349,7 +349,7 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> embd;
 
-    struct llama_sampling_context * ctx_sampling = common_sampler_init(llama_get_model_vocab(model), sparams);
+    struct common_sampler * ctx_sampling = common_sampler_init(model, sparams);
 
     while (n_remain != 0 || params.interactive) {
         // predict
@@ -421,7 +421,7 @@ int main(int argc, char ** argv) {
         embd.clear();
 
         if ((int) embd_inp.size() <= n_consumed && !is_interacting) {
-            const llama_token id = common_sampler_sample(ctx_sampling, ctx, nullptr);
+            const llama_token id = common_sampler_sample(ctx_sampling, ctx);
 
             common_sampler_accept(ctx_sampling, ctx, id, true);
 
@@ -517,8 +517,8 @@ int main(int argc, char ** argv) {
                 }
 
                 // tokenize new prefix and suffix
-                std::vector<llama_token> inp_pfx = ::llama_tokenize(ctx, params.input_prefix, false);
-                std::vector<llama_token> inp_sfx = ::llama_tokenize(ctx, params.input_suffix, false);
+                std::vector<llama_token> inp_pfx = ::common_tokenize(ctx, params.input_prefix, false);
+                std::vector<llama_token> inp_sfx = ::common_tokenize(ctx, params.input_suffix, false);
 
                 inp_pfx.insert(inp_pfx.begin(), llama_token_prefix(model));
                 inp_sfx.insert(inp_sfx.begin(), llama_token_suffix(model));
@@ -593,7 +593,7 @@ int main(int argc, char ** argv) {
 
                     const size_t original_size = embd_inp.size();
 
-                    const auto line_inp = ::llama_tokenize(ctx, buffer, false);
+                    const auto line_inp = ::common_tokenize(ctx, buffer, false);
                     LOG("input tokens: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, line_inp).c_str());
 
                     embd_inp.insert(embd_inp.end(), line_inp.begin(), line_inp.end());
@@ -615,7 +615,7 @@ int main(int argc, char ** argv) {
 
             if (n_past > 0) {
                 if (is_interacting) {
-                    common_sampler_reset(llama_get_model_vocab(model), ctx_sampling);
+                    common_sampler_reset(ctx_sampling);
                 }
                 is_interacting = false;
             }

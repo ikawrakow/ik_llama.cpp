@@ -65,7 +65,7 @@ static void sigint_handler(int signo) {
 
 // ======================= compat ================================
 using common_init_result = llama_init_result;
-using common_sampler = llama_sampling_context;
+using common_sampler = common_sampler;
 using llama_tokens = std::vector<llama_token>;
 using common_params = gpt_params;
 
@@ -73,9 +73,9 @@ inline common_init_result common_init_from_params(gpt_params & params) {
     return llama_init_from_gpt_params(params);
 }
 
-inline std::vector<llama_token> common_tokenize(const llama_context * ctx, const std::string & text, bool add_special, bool parse_special = false) {
-    return llama_tokenize(ctx, text, add_special, parse_special);
-}
+//inline std::vector<llama_token> common_tokenize(const llama_context * ctx, const std::string & text, bool add_special, bool parse_special = false) {
+//    return common_tokenize(ctx, text, add_special, parse_special);
+//}
 
 
 void common_init() {
@@ -125,7 +125,8 @@ struct mtmd_cli_context {
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
         model = llama_init.model; //.get();
         lctx = llama_init.context; //.get();
-        smpl = common_sampler_init(vocab, params.sparams); //sampling);
+        vocab = llama_model_get_vocab(model);
+        smpl = common_sampler_init(model, params.sparams); //sampling);
         n_threads = params.n_threads;
         batch = llama_batch_init(1, 0, 1); // batch for next token generation
         n_batch = params.n_batch;
@@ -206,7 +207,7 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
             break;
         }
 
-        llama_token token_id = common_sampler_sample(ctx.smpl, ctx.lctx, nullptr, -1);
+        llama_token token_id = common_sampler_sample(ctx.smpl, ctx.lctx, -1);
         generated_tokens.push_back(token_id);
         common_sampler_accept(ctx.smpl, ctx.lctx, token_id, true);
 

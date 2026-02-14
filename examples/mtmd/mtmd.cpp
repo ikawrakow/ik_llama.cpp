@@ -363,10 +363,10 @@ private:
     std::string token_to_piece(const llama_vocab * vocab, llama_token token, bool special) {
         std::string piece;
         piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
-        const int n_chars = llama_vocab_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+        const int n_chars = llama_token_to_piece_vocab(vocab, token, &piece[0], piece.size(), 0, special);
         if (n_chars < 0) {
             piece.resize(-n_chars);
-            int check = llama_vocab_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+            int check = llama_token_to_piece_vocab(vocab, token, &piece[0], piece.size(), 0, special);
             GGML_ASSERT(check == -n_chars);
         } else {
             piece.resize(n_chars);
