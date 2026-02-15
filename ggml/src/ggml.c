@@ -11951,7 +11951,7 @@ static void ggml_compute_forward_dup_bytes(
 
     GGML_TENSOR_UNARY_OP_LOCALS;
 
-    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst) && src0->nb[0] == ggml_type_size(src0->type)) {
         ggml_compute_forward_dup_same_cont(params, dst);
         return;
     }
@@ -14840,9 +14840,9 @@ static void ggml_compute_forward_neg_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    assert(ggml_is_contiguous_1(src0));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
     int ith = params->ith;
     int nth = params->nth;
@@ -15022,9 +15022,9 @@ static void ggml_compute_forward_relu_f32(
         return;
     }
 
-    assert(ggml_is_contiguous_1(src0));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
     const int n  = ggml_nrows(src0);
     const int nc = src0->ne[0];
@@ -15108,9 +15108,9 @@ static void ggml_compute_forward_exp_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    assert(ggml_is_contiguous_1(src0));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
     const int ith = params->ith;
     const int nth = params->nth;
