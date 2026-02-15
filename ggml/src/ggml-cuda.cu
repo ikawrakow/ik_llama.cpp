@@ -3211,7 +3211,15 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             }
             break;
         case GGML_OP_CONT:
-            ggml_cuda_dup(ctx, dst);
+            if (fusion && i + 2 < cgraph->n_nodes &&
+                cgraph->nodes[i+1]->op == GGML_OP_SUM_ROWS &&
+                cgraph->nodes[i+2]->op == GGML_OP_TRANSPOSE &&
+                dst->src[0]->op == GGML_OP_TRANSPOSE) {
+                ggml_cuda_op_sum_rows_nc(ctx, cgraph->nodes[i+1]);
+                i += 2;
+            } else {
+                ggml_cuda_dup(ctx, dst);
+            }
             break;
         case GGML_OP_ADD:
             if (fusion && i + 2 < cgraph->n_nodes &&
