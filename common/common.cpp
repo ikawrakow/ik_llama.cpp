@@ -3639,7 +3639,7 @@ struct llama_model * llama_load_model_from_url(
         }
     }
 
-    return llama_load_model_from_file(path_model, params);
+    return llama_model_load_from_file(path_model, params);
 }
 
 struct llama_model * llama_load_model_from_hf(
