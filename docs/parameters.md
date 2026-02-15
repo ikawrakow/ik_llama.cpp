@@ -1,6 +1,6 @@
 # Parameters Documentation
 
-Overview of the most common command-line parameters in `ik_llama.cpp` and some info how to use them to get more performance than default.
+Overview of the most common command-line parameters in `ik_llama.cpp` and some info how to use them.
 
 ## Table of Contents
 
@@ -307,6 +307,7 @@ python3 gguf-py/scripts/gguf_dump.py /models/Qwen_Qwen3-0.6B-IQ4_NL.gguf
 | `--port PORT` | Port to listen | 8080 |   |
 | `--webui NAME` | Controls which webui to server | auto | Flexibility in choosing the integrated powerful WebUIs:  - `none`: disable webui  - `auto`: default webui   - `llamacpp`: llamacpp webui |
 | `--api-key KEY` | API key to use for authentication | none | Add a custom API KEY. Clients will need to specify it when connecting. |
+| `-a, --alias` | set alias for model name (to be used by REST API) | none | Configure the server to serve and reply with specific model name. |
 
 ## Other Tools
 
