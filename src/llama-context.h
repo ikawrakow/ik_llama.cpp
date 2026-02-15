@@ -56,6 +56,7 @@ struct llama_kv_cache {
 
     std::vector<struct ggml_tensor *> k_l; // per layer
     std::vector<struct ggml_tensor *> v_l;
+    std::vector<struct ggml_tensor *> s_l; // per layer recurrent state storage (Qwen3Next)
 
     std::vector<llama_split_tensor> split_k_l;
     std::vector<llama_split_tensor> split_v_l;
@@ -202,6 +203,7 @@ struct llama_context {
     struct ggml_tensor * inp_s_copy;      // I32 [kv_size]
     struct ggml_tensor * inp_s_mask;      // F32 [1, n_kv]
     struct ggml_tensor * inp_s_seq;       // I32 [n_kv, n_batch]
+    struct ggml_tensor * inp_s_seq_qnext; // I32 [1, n_batch]
     struct ggml_tensor * inp_pos_bucket;    // I32 [n_batch|n_kv, n_batch]
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
