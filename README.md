@@ -11,11 +11,15 @@ This repository is a fork of [llama.cpp](https://github.com/ggerganov/llama.cpp)
 ### Prerequisites
 
 ```
-apt-get update && apt-get install build-essential git libcurl4-openssl-dev curl libgomp1 cmake
-
 git clone https://github.com/ikawrakow/ik_llama.cpp
 
 cd ik_llama.cpp
+```
+
+On Linux, install the required packages:
+
+```
+apt-get update && apt-get install build-essential git libcurl4-openssl-dev curl libgomp1 cmake
 ```
 
 ### Build for CPU
