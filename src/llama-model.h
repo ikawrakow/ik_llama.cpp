@@ -115,6 +115,7 @@ enum e_model {
     MODEL_310B_A15B,
     MODEL_300B_A47B, // Ernie MoE big
     MODEL_355B_A32B,
+    MODEL_744B_A40B,
     MODEL_E2B,
     MODEL_E4B,
 };
@@ -297,6 +298,13 @@ struct llama_layer {
     // mamba bias
     struct ggml_tensor * ssm_conv1d_b = nullptr;
     struct ggml_tensor * ssm_dt_b = nullptr;
+
+    // DSA (deepseek sparse attention)
+    struct ggml_tensor * indexer_k_norm   = nullptr;
+    struct ggml_tensor * indexer_k_norm_b = nullptr;
+    struct ggml_tensor * indexer_proj     = nullptr;
+    struct ggml_tensor * indexer_attn_k   = nullptr;
+    struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
 
     // long rope factors
     struct ggml_tensor * rope_long  = nullptr;
