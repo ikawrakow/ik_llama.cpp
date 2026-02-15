@@ -4820,10 +4820,14 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
 
                 ggml_tensor * shared_gate = llm_build_lora_mm(lctx, ctx0, model.layers[il].ffn_gate_inp_shexp, cur);
                 cb(shared_gate, "shared_expert_gate", il);
-                shared_gate = ggml_sigmoid(ctx0, shared_gate);
-                cb(shared_gate, "shared_expert_gate_sigmoid", il);
 
-                ffn_shexp = ggml_mul(ctx0, ffn_shexp, shared_gate);
+                if (shared_gate->ne[1] == 1) {
+                    ffn_shexp = ggml_fused_mul_unary(ctx0, shared_gate, ffn_shexp, GGML_UNARY_OP_SIGMOID);
+                } else {
+                    shared_gate = ggml_sigmoid(ctx0, shared_gate);
+                    cb(shared_gate, "shared_expert_gate_sigmoid", il);
+                    ffn_shexp = ggml_mul(ctx0, ffn_shexp, shared_gate);
+                }
                 cb(ffn_shexp, "ffn_shexp_gated", il);
 
                 cur = ggml_add(ctx0, moe_out, ffn_shexp);
