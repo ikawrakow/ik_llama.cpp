@@ -218,6 +218,133 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat_partial() {
     return deltas;
 }
 
+json server_task_result_cmpl_partial::to_json_oaicompat_resp_partial() {
+    std::vector<json> events;
+
+    if (n_decoded == 1) {
+        events.push_back(json{
+            {"event", "response.created"},
+            {"data", json{
+                {"type", "response.created"},
+                {"response", json{
+                    {"id",     oai_resp_id},
+                    {"object", "response"},
+                    {"status", "in_progress"},
+                }},
+            }},
+        });
+        events.push_back(json{
+            {"event", "response.in_progress"},
+            {"data", json{
+                {"type", "response.in_progress"},
+                {"response", json{
+                    {"id",     oai_resp_id},
+                    {"object", "response"},
+                    {"status", "in_progress"},
+                }},
+            }},
+        });
+    }
+
+    for (const auto& diff : oaicompat_msg_diffs) {
+        if (!diff.reasoning_content_delta.empty()) {
+            if (!oai_resp_thinking_block_started) {
+                events.push_back(json{
+                    {"event", "response.output_item.added"},
+                    {"data", json{
+                        {"type", "response.output_item.added"},
+                        {"item", json{
+                            {"id",                oai_resp_reasoning_id},
+                            {"summary",           json::array()},
+                            {"type",              "reasoning"},
+                            {"content",           json::array()},
+                            {"encrypted_content", ""},
+                            {"status",            "in_progress"},
+                        }},
+                    }},
+                });
+                oai_resp_thinking_block_started = true;
+            }
+            events.push_back(json{
+                {"event", "response.reasoning_text.delta"},
+                {"data", json{
+                    {"type",    "response.reasoning_text.delta"},
+                    {"delta",   diff.reasoning_content_delta},
+                    {"item_id", oai_resp_reasoning_id},
+                }},
+            });
+        }
+
+        if (!diff.content_delta.empty()) {
+            if (!oai_resp_text_block_started) {
+                events.push_back(json{
+                    {"event", "response.output_item.added"},
+                    {"data", json{
+                        {"type", "response.output_item.added"},
+                        {"item", json{
+                            {"content", json::array()},
+                            {"id",      oai_resp_message_id},
+                            {"role",    "assistant"},
+                            {"status",  "in_progress"},
+                            {"type",    "message"},
+                        }},
+                    }},
+                });
+                events.push_back(json{
+                    {"event", "response.content_part.added"},
+                    {"data", json{
+                        {"type",    "response.content_part.added"},
+                        {"item_id", oai_resp_message_id},
+                        {"part", json{
+                            {"type", "output_text"},
+                            {"text", ""},
+                        }},
+                    }},
+                });
+                oai_resp_text_block_started = true;
+            }
+            events.push_back(json{
+                {"event", "response.output_text.delta"},
+                {"data", json{
+                    {"type",    "response.output_text.delta"},
+                    {"item_id", oai_resp_message_id},
+                    {"delta",   diff.content_delta},
+                }},
+            });
+        }
+
+        if (!diff.tool_call_delta.name.empty()) {
+            events.push_back(json{
+                {"event", "response.output_item.added"},
+                {"data", json{
+                    {"type",  "response.output_item.added"},
+                    {"item", json{
+                        {"arguments", ""},
+                        {"call_id",   "fc_" + diff.tool_call_delta.id},
+                        {"name",      diff.tool_call_delta.name},
+                        {"type",      "function_call"},
+                        {"status",    "in_progress"},
+                    }},
+                }},
+            });
+            oai_resp_fc_id = diff.tool_call_delta.id;
+        }
+
+        if (!diff.tool_call_delta.arguments.empty()) {
+            events.push_back(json{
+                {"event", "response.function_call_arguments.delta"},
+                {"data", json{
+                    {"type",    "response.function_call_arguments.delta"},
+                    {"delta",   diff.tool_call_delta.arguments},
+                    {"item_id", "fc_" + oai_resp_fc_id},
+                }},
+            });
+        }
+    }
+
+    return events;
+}
+
 json server_task_result_cmpl_final::to_json_oaicompat_chat_final() {
     std::string finish_reason = "length";
     common_chat_msg msg;
@@ -334,6 +461,188 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     }
 
     return deltas;
+}
+
+json server_task_result_cmpl_final::to_json_oaicompat_resp_final() {
+    common_chat_msg msg;
+    if (!oaicompat_msg.empty()) {
+        msg = oaicompat_msg;
+    }
+    else {
+        msg.role = "assistant";
+        msg.content = content;
+    }
+
+    std::vector<json> output;
+
+    if (!msg.reasoning_content.empty()) {
+        output.push_back(json{
+            {"id",      oai_resp_reasoning_id},
+            {"summary", json::array()},
+            {"type",    "reasoning"},
+            {"content", json::array({json{
+                {"text", msg.reasoning_content},
+                {"type", "reasoning_text"},
+            }})},
+            {"encrypted_content", ""},
+            {"status",            "completed"},
+        });
+    }
+
+    if (!msg.content.empty()) {
+        output.push_back(json{
+            {"content", json::array({json{
+                {"type",        "output_text"},
+                {"annotations", json::array()},
+                {"logprobs",    json::array()},
+                {"text",        msg.content},
+            }})},
+            {"id",     oai_resp_message_id},
+            {"role",   msg.role},
+            {"status", "completed"},
+            {"type",   "message"},
+        });
+    }
+
+    for (const auto& tool_call : oaicompat_msg.tool_calls) {
+        output.push_back(json{
+            {"type",      "function_call"},
+            {"status",    "completed"},
+            {"arguments", tool_call.arguments},
+            {"call_id",   "fc_" + tool_call.id},
+            {"name",      tool_call.name},
+        });
+    }
+
+    std::time_t t = std::time(0);
+    json res = {
+        {"completed_at", t},
+        {"created_at",   t},
+        {"id",           oai_resp_id},
+        {"model",        oaicompat_model},
+        {"object",       "response"},
+        {"output",       output},
+        {"status",       "completed"},
+        {"usage",        json{
+            {"input_tokens",  n_prompt_tokens},
+            {"output_tokens", n_decoded},
+            {"total_tokens",  n_decoded + n_prompt_tokens},
+        }},
+    };
+
+    return res;
+}
+
+json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
+    std::vector<json> events;
+    std::vector<json> output;
+
+    if (!oaicompat_msg.reasoning_content.empty()) {
+        const json output_item = json{
+            {"id",      oai_resp_reasoning_id},
+            {"summary", json::array()},
+            {"type",    "reasoning"},
+            {"content", json::array({json{
+                {"text", oaicompat_msg.reasoning_content},
+                {"type", "reasoning_text"},
+            }})},
+            {"encrypted_content", ""},
+        };
+
+        events.push_back(json{
+            {"event", "response.output_item.done"},
+            {"data", json{
+                {"type", "response.output_item.done"},
+                {"item", output_item},
+            }},
+        });
+        output.push_back(output_item);
+    }
+
+    if (!oaicompat_msg.content.empty()) {
+        events.push_back(json{
+            {"event", "response.output_text.done"},
+            {"data", json{
+                {"type",    "response.output_text.done"},
+                {"item_id", oai_resp_message_id},
+                {"text",    oaicompat_msg.content},
+            }},
+        });
+
+        const json content_part = {
+            {"type",        "output_text"},
+            {"annotations", json::array()},
+            {"logprobs",    json::array()},
+            {"text",        oaicompat_msg.content},
+        };
+
+        events.push_back(json{
+            {"event", "response.content_part.done"},
+            {"data", json{
+                {"type",    "response.content_part.done"},
+                {"item_id", oai_resp_message_id},
+                {"part",    content_part},
+            }},
+        });
+
+        const json output_item = {
+            {"type",    "message"},
+            {"status",  "completed"},
+            {"id",      oai_resp_message_id},
+            {"content", json::array({content_part})},
+            {"role",    "assistant"},
+        };
+
+        events.push_back(json{
+            {"event", "response.output_item.done"},
+            {"data", json{
+                {"type", "response.output_item.done"},
+                {"item", output_item},
+            }},
+        });
+        output.push_back(output_item);
+    }
+
+    for (const auto& tool_call : oaicompat_msg.tool_calls) {
+        const json output_item = {
+            {"type",      "function_call"},
+            {"status",    "completed"},
+            {"arguments", tool_call.arguments},
+            {"call_id",   "fc_" + tool_call.id},
+            {"name",      tool_call.name},
+        };
+        events.push_back(json{
+            {"event", "response.output_item.done"},
+            {"data", json{
+                {"type", "response.output_item.done"},
+                {"item", output_item},
+            }},
+        });
+        output.push_back(output_item);
+    }
+
+    std::time_t t = std::time(0);
+    events.push_back(json{
+        {"event", "response.completed"},
+        {"data", json{
+            {"type", "response.completed"},
+            {"response", json{
+                {"id",         oai_resp_id},
+                {"object",     "response"},
+                {"created_at", t},
+                {"status",     "completed"},
+                {"model",      oaicompat_model},
+                {"output",     output},
+                {"usage",      json{
+                    {"input_tokens",  n_prompt_tokens},
+                    {"output_tokens", n_decoded},
+                    {"total_tokens",  n_decoded + n_prompt_tokens},
+                }},
+            }},
+        }},
+    });
+
+    return events;
 }
 
 json server_task_result_cmpl_final::to_json_anthropic_final() {

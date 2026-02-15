@@ -7369,7 +7369,8 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
         ggml_rope_cache(ctx0, inp_pos, nullptr, n_rot, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow) : nullptr;
 
-    for (int il = 0; il < n_layer; ++il) {
+    int n_active_layers = hparams.n_layer - hparams.nextn_predict_layers;
+    for (int il = 0; il < n_active_layers; ++il) {
         struct ggml_tensor * inpSA = inpL;
 
         // norm
@@ -7792,7 +7793,7 @@ ggml_cgraph * llm_build_context::build_deepseek2() {
             }
         }
 
-        if (il == n_layer - 1) {
+        if (il == n_active_layers - 1) {
             // skip computing output for unused tokens
             struct ggml_tensor * inp_out_ids = build_inp_out_ids();
             n_tokens = n_outputs;
@@ -10238,6 +10239,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
                 result = llm.build_arctic();
             } break;
         case LLM_ARCH_DEEPSEEK2:
+        case LLM_ARCH_GLM_DSA:
             {
                 result = llm.build_deepseek2();
             } break;

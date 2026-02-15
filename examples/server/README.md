@@ -6,7 +6,7 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
 
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
- * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions and embeddings routes
+* [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions, responses, and embeddings routes
  * Parallel decoding with multi-user support
  * Continuous batching
  * Multimodal (wip)
@@ -705,6 +705,48 @@ curl http://localhost:8080/v1/chat/completions \
 [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) is supported with the `--jinja` flag (and may require a `--chat-template-file` override to get the right tool-use compatible Jinja template; worst case, `--chat-template chatml` may also work).
 
 **See our [Function calling](../../docs/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
+
+### POST `/v1/responses`: OpenAI-compatible Responses API
+
+*Options:*
+
+See [OpenAI Responses API documentation](https://platform.openai.com/docs/api-reference/responses).
+
+*Examples:*
+
+You can use either Python `openai` library with appropriate checkpoints:
+
+```python
+import openai
+
+client = openai.OpenAI(
+  base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+  api_key = "sk-no-key-required"
+)
+
+response = client.responses.create(
+  model="gpt-4.1",
+  instructions="You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests.",
+  input="Write a limerick about python exceptions"
+)
+
+print(response.output_text)
+```
+
+... or raw HTTP requests:
+
+```shell
+curl http://localhost:8080/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+    "model": "gpt-4.1",
+    "instructions": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests.",
+    "input": "Write a limerick about python exceptions"
+  }'
+```
+
+This endpoint works by converting Responses requests into Chat Completions requests.
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 

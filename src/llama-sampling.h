@@ -24,7 +24,7 @@ struct llama_sampling {
 
 void llama_set_rng_seed_impl(struct llama_sampling * smpl, uint32_t seed);
 
-void llama_sample_softmax_impl  (struct llama_sampling * smpl, llama_token_data_array * candidates);
+void llama_sample_softmax_impl  (struct llama_sampling * smpl, llama_token_data_array * candidates, bool normalize = true);
 void llama_sample_top_k_impl    (struct llama_sampling * smpl, llama_token_data_array * candidates, int32_t k, size_t min_keep);
 void llama_sample_top_p_impl    (struct llama_sampling * smpl, llama_token_data_array * candidates, float p, size_t min_keep);
 void llama_sample_min_p_impl    (struct llama_sampling * smpl, llama_token_data_array * candidates, float p, size_t min_keep);

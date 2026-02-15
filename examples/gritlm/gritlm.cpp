@@ -162,15 +162,15 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    llama_model_params mparams = llama_model_params_from_gpt_params(params);
-    llama_context_params cparams = llama_context_params_from_gpt_params(params);
+    llama_model_params mparams = common_model_params_to_llama(params);
+    llama_context_params cparams = common_context_params_to_llama(params);
 
     llama_backend_init();
 
-    llama_model * mdl = llama_load_model_from_file(params.model.c_str(), mparams);
+    llama_model * mdl = llama_model_load_from_file(params.model.c_str(), mparams);
 
     // create generation context
-    llama_context * ctx = llama_new_context_with_model(mdl, cparams);
+    llama_context * ctx = llama_init_from_model(mdl, cparams);
 
     // ### Embedding/Representation ###
     // samples taken from: https://github.com/ContextualAI/gritlm#basic

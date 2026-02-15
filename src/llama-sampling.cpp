@@ -102,7 +102,7 @@ static void llama_sort(llama_token_data_array * candidates, int32_t k) {
     candidates->sorted = true;
 }
 
-void llama_sample_softmax_impl(struct llama_sampling * smpl, llama_token_data_array * candidates) {
+void llama_sample_softmax_impl(struct llama_sampling * smpl, llama_token_data_array * candidates, bool normalize) {
     GGML_ASSERT(candidates->size > 0);
 
     const int64_t t_start_sample_us = ggml_time_us();
@@ -117,9 +117,12 @@ void llama_sample_softmax_impl(struct llama_sampling * smpl, llama_token_data_ar
         candidates->data[i].p = p;
         cum_sum += p;
     }
-    for (size_t i = 0; i < candidates->size; ++i) {
-        candidates->data[i].p /= cum_sum;
+    if (normalize) {
+        for (size_t i = 0; i < candidates->size; ++i) {
+            candidates->data[i].p /= cum_sum;
+        }
     }
+
 
     if (smpl) {
         smpl->t_sample_us += ggml_time_us() - t_start_sample_us;

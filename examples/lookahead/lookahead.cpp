@@ -68,7 +68,7 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> inp;
     std::vector<llama_token> all;
 
-    inp = ::llama_tokenize(ctx, params.prompt, true, true);
+    inp = ::common_tokenize(ctx, params.prompt, true, true);
     all = inp;
 
     const int max_context_size     = llama_n_ctx(ctx);
@@ -118,7 +118,7 @@ int main(int argc, char ** argv) {
     llama_batch batch = llama_batch_init(params.n_ctx, 0, W + G + 1);
 
     // target model sampling context
-    struct llama_sampling_context * ctx_sampling = common_sampler_init(llama_get_model_vocab(model), params.sparams);
+    struct common_sampler * ctx_sampling = common_sampler_init(model, params.sparams);
 
     // verification n-grams
     std::vector<ngram_data> ngrams_cur(G);
@@ -159,7 +159,7 @@ int main(int argc, char ** argv) {
 
     // sample first token
     {
-        id = common_sampler_sample(ctx_sampling, ctx, NULL, 0);
+        id = common_sampler_sample(ctx_sampling, ctx, 0);
 
         common_sampler_accept(ctx_sampling, ctx, id, true);
 
@@ -284,7 +284,7 @@ int main(int argc, char ** argv) {
             }
 
             // sample the next token
-            id = common_sampler_sample(ctx_sampling, ctx, NULL, i_batch);
+            id = common_sampler_sample(ctx_sampling, ctx, i_batch);
 
             common_sampler_accept(ctx_sampling, ctx, id, true);
 
@@ -361,7 +361,7 @@ int main(int argc, char ** argv) {
                 if (v == 0) {
                     // sample from the last level
                     for (int i = 0; i < W; i++) {
-                        tokens_j[N - 2][i] = common_sampler_sample(ctx_sampling, ctx, NULL, ngrams_cur.size()*(N-1) + W*(N - 2) + i);
+                        tokens_j[N - 2][i] = common_sampler_sample(ctx_sampling, ctx, ngrams_cur.size()*(N-1) + W*(N - 2) + i);
                     }
                 } else {
                     for (int i = 0; i < W; i++) {
