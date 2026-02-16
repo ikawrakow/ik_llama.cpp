@@ -21,6 +21,7 @@
 #include <climits>
 #include <cmath>
 #include <codecvt>
+#include <cstdlib>
 #include <cstdarg>
 #include <cstring>
 #include <ctime>
@@ -494,6 +495,7 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_CONT_BATCHING",    params.cont_batching);
     get_env("LLAMA_ARG_HOST",             params.hostname);
     get_env("LLAMA_ARG_PORT",             params.port);
+
 }
 
 bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {

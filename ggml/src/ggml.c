@@ -3288,6 +3288,9 @@ inline static void ggml_vec_elu_f32  (const int n, float * y, const float * x) {
 inline static void ggml_vec_relu_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = (x[i] > 0.f) ? x[i] : 0.f; }
 inline static void ggml_vec_leaky_relu_f32 (const int n, float * y, const float * x, const float ns) { for (int i = 0; i < n; ++i) y[i] = ((x[i] > 0.f) ? x[i] : 0.f) + ns * ((x[i] < 0.0f) ? x[i] : 0.f); }
 inline static void ggml_vec_sigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = 1.f / (1.f + expf(-x[i])); }
+inline static float ggml_compute_softplus_f32(const float x) { return x > 20.0f ? x : logf(1.0f + expf(x)); }
+inline static void ggml_vec_exp_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = expf(x[i]); }
+inline static void ggml_vec_softplus_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = ggml_compute_softplus_f32(x[i]); }
 // TODO: optimize performance
 inline static void ggml_vec_hardswish_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = x[i] * fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
 inline static void ggml_vec_hardsigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = fminf(1.0f, fmaxf(0.0f, (x[i] + 3.0f) / 6.0f)); }
@@ -4269,6 +4272,12 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 
     "UNARY",
 
+    "CUMSUM",
+    "L2_NORM",
+    "TRI",
+    "FILL",
+    "SOLVE_TRI",
+
     "MAP_UNARY",
     "MAP_BINARY",
 
@@ -4290,7 +4299,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FUSED_NORM",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -4381,6 +4390,12 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
     "unary(x)",
 
+    "cumsum(x)",
+    "l2_norm(x)",
+    "tri(x)",
+    "fill(x)",
+    "solve_tri(x)",
+
     "f(x)",
     "f(x,y)",
 
@@ -4402,7 +4417,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "norm(x,y)",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4424,9 +4439,11 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "SWIGLU",
     "SWIGLU_OAI",
     "GELU_ERF",
+    "EXP",
+    "SOFTPLUS",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 16, "GGML_UNARY_OP_COUNT != 16");
+static_assert(GGML_UNARY_OP_COUNT == 18, "GGML_UNARY_OP_COUNT != 18");
 
 
 static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
@@ -6712,6 +6729,28 @@ struct ggml_tensor * ggml_sum_rows(
     return result;
 }
 
+// ggml_cumsum
+
+struct ggml_tensor * ggml_cumsum(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a) {
+    bool is_node = false;
+
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+
+    if (a->grad) {
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    result->op   = GGML_OP_CUMSUM;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
 // ggml_mean
 
 struct ggml_tensor * ggml_mean(
@@ -6772,6 +6811,33 @@ struct ggml_tensor * ggml_repeat(
     }
 
     struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, b->ne);
+
+    result->op   = GGML_OP_REPEAT;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_repeat_4d(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
+    const bool can_repeat = ggml_is_empty(a) || (
+        (ne0 % a->ne[0] == 0) &&
+        (ne1 % a->ne[1] == 0) &&
+        (ne2 % a->ne[2] == 0) &&
+        (ne3 % a->ne[3] == 0)
+    );
+    GGML_ASSERT(can_repeat);
+
+    bool is_node = false;
+
+    if (a->grad) {
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ne0, ne1, ne2, ne3);
 
     result->op   = GGML_OP_REPEAT;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
@@ -6978,6 +7044,20 @@ struct ggml_tensor * ggml_sigmoid_inplace(
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SIGMOID);
 }
 
+// ggml_softplus
+
+struct ggml_tensor * ggml_softplus(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_SOFTPLUS);
+}
+
+struct ggml_tensor * ggml_softplus_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_SOFTPLUS);
+}
+
 // ggml_gelu
 
 struct ggml_tensor * ggml_gelu(
@@ -7119,6 +7199,20 @@ struct ggml_tensor * ggml_hardsigmoid(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary(ctx, a, GGML_UNARY_OP_HARDSIGMOID);
+}
+
+// ggml exp
+
+struct ggml_tensor * ggml_exp(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_EXP);
+}
+
+struct ggml_tensor * ggml_exp_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_EXP);
 }
 
 // =============== from mainline begin =====================================
@@ -7540,6 +7634,45 @@ struct ggml_tensor * ggml_group_norm_inplace(
     int n_groups,
     float eps) {
     return ggml_group_norm_impl(ctx, a, n_groups, eps, true);
+}
+
+// ggml_l2_norm
+
+static struct ggml_tensor * ggml_l2_norm_impl(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float eps,
+        bool inplace) {
+    bool is_node = false;
+
+    if (!inplace && a->grad) {
+        GGML_ABORT("fatal error"); // TODO: implement backward
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_f32(result, 0, eps);
+
+    result->op   = GGML_OP_L2_NORM;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_l2_norm(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float eps) {
+    return ggml_l2_norm_impl(ctx, a, eps, false);
+}
+
+struct ggml_tensor * ggml_l2_norm_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float eps) {
+    return ggml_l2_norm_impl(ctx, a, eps, true);
 }
 
 // ggml_mul_mat
@@ -9709,6 +9842,74 @@ struct ggml_tensor * ggml_timestep_embedding(
     return result;
 }
 
+// ggml_tri
+
+struct ggml_tensor * ggml_tri(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    enum ggml_tri_type    type) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(a->ne[0] == a->ne[1]);
+
+    bool is_node = false;
+    if (a->grad) {
+        GGML_ABORT("fatal error"); // TODO: implement backward
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, (int32_t) type);
+
+    result->op   = GGML_OP_TRI;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_fill
+
+static struct ggml_tensor * ggml_fill_impl(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    float                 c,
+    bool                  inplace) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(a));
+
+    bool is_node = false;
+    if (!inplace && a->grad) {
+        GGML_ABORT("fatal error"); // TODO: implement backward
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_f32(result, 0, c);
+
+    result->op   = GGML_OP_FILL;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_fill(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    float                 c) {
+    return ggml_fill_impl(ctx, a, c, false);
+}
+
+struct ggml_tensor * ggml_fill_inplace(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    float                 c) {
+    return ggml_fill_impl(ctx, a, c, true);
+}
+
 // ggml_argsort
 
 struct ggml_tensor * ggml_argsort(
@@ -9987,6 +10188,44 @@ struct ggml_tensor * ggml_flash_attn_back(
     result->src[1] = k;
     result->src[2] = v;
     result->src[3] = d;
+
+    return result;
+}
+
+// ggml_solve_tri
+
+struct ggml_tensor * ggml_solve_tri(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        bool                  left,
+        bool                  lower,
+        bool                  uni) {
+    GGML_ASSERT(a->type == GGML_TYPE_F32);
+    GGML_ASSERT(b->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(a->ne[0] == a->ne[1]);
+    GGML_ASSERT(a->ne[1] == b->ne[1]);
+    GGML_ASSERT(a->ne[2] == b->ne[2]);
+    GGML_ASSERT(a->ne[3] == b->ne[3]);
+
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(ggml_is_contiguous(b));
+
+    GGML_ASSERT(lower && left && !uni); // TODO: support other variants
+
+    bool is_node = false;
+    if (a->grad || b->grad) {
+        GGML_ABORT("fatal error"); // TODO: implement backward
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, b->ne[0], b->ne[1], b->ne[2], b->ne[3]);
+
+    result->op   = GGML_OP_SOLVE_TRI;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = b;
 
     return result;
 }
@@ -11702,46 +11941,40 @@ static void ggml_compute_forward_dup_f32(
     }
 }
 
-// A simplified version of ggml_compute_forward_dup that doesn't do float upcasting, and just plain old memcpy.
 static void ggml_compute_forward_dup_bytes(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
-
     const struct ggml_tensor * src0 = dst->src[0];
 
     GGML_ASSERT(ggml_nelements(dst) == ggml_nelements(src0));
     GGML_ASSERT(src0->type == dst->type);
 
-    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
+    GGML_TENSOR_UNARY_OP_LOCALS;
+
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst) && src0->nb[0] == ggml_type_size(src0->type)) {
         ggml_compute_forward_dup_same_cont(params, dst);
         return;
     }
 
-    GGML_TENSOR_UNARY_OP_LOCALS;
-
     const size_t type_size = ggml_type_size(src0->type);
+
     const int ith = params->ith; // thread index
     const int nth = params->nth; // number of threads
 
-
     // parallelize by rows
     const int nr = ne01;
-    const int n_packed = ggml_packed_rows(dst->type);
-    GGML_ASSERT(nr%n_packed == 0);
-    const int nrp = nr/n_packed;
     // number of rows per thread
-    const int drp = (nrp + nth - 1) / nth;
-    const int dr  = drp*n_packed;
+    const int dr = (nr + nth - 1) / nth;
     // row range for this thread
     const int ir0 = dr * ith;
-    if (ir0 >= nr) return;
     const int ir1 = MIN(ir0 + dr, nr);
 
     if (src0->type == dst->type &&
-        ne00 == ne0 &&
+        ggml_are_same_shape(src0, dst) &&
         nb00 == type_size && nb0 == type_size) {
+        //if (ith == 0) printf("%s(1): %ld x %ld x %ld x %ld\n", __func__, ne00, ne01, ne02, ne03);
         // copy by rows
-        const size_t rs = ggml_row_size(src0->type, ne00); //ne00 * type_size;
+        const size_t rs = ggml_row_size(src0->type, ne00);
         for (int64_t i03 = 0; i03 < ne03; i03++) {
             for (int64_t i02 = 0; i02 < ne02; i02++) {
                 for (int64_t i01 = ir0; i01 < ir1; i01++) {
@@ -11758,9 +11991,10 @@ static void ggml_compute_forward_dup_bytes(
     if (ggml_is_contiguous(dst)) {
         size_t id = 0;
         char * dst_ptr = (char *) dst->data;
-        const size_t rs = ggml_row_size(src0->type, ne00); //ne00 * type_size;
+        const size_t rs = ne00 * type_size;
 
         if (nb00 == type_size) {
+            //if (ith == 0) printf("%s(2): %ld x %ld x %ld x %ld\n", __func__, ne00, ne01, ne02, ne03);
             // src0 is contigous on first dimension, copy by rows
             for (int64_t i03 = 0; i03 < ne03; i03++) {
                 for (int64_t i02 = 0; i02 < ne02; i02++) {
@@ -11774,7 +12008,6 @@ static void ggml_compute_forward_dup_bytes(
                 }
             }
         } else {
-            //printf("%s: this is not optimal - fix me\n", __func__);
 
             for (int64_t i03 = 0; i03 < ne03; i03++) {
                 for (int64_t i02 = 0; i02 < ne02; i02++) {
@@ -11796,17 +12029,20 @@ static void ggml_compute_forward_dup_bytes(
     }
 
     // dst counters
-
-    int64_t i10 = 0;
+    int64_t k10 = 0;
     int64_t i11 = 0;
     int64_t i12 = 0;
     int64_t i13 = 0;
 
+    // number of blocks in a row
+    const int64_t nk00 = ne00 / ggml_blck_size(src0->type);
+    const int64_t nk0  = ne0  / ggml_blck_size(dst->type);
+
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
-            i10 += ne00 * ir0;
-            while (i10 >= ne0) {
-                i10 -= ne0;
+            k10 += nk00 * ir0;
+            while (k10 >= nk0) {
+                k10 -= nk0;
                 if (++i11 == ne1) {
                     i11 = 0;
                     if (++i12 == ne2) {
@@ -11818,14 +12054,14 @@ static void ggml_compute_forward_dup_bytes(
                 }
             }
             for (int64_t i01 = ir0; i01 < ir1; i01++) {
-                for (int64_t i00 = 0; i00 < ne00; i00++) {
-                    const char * src0_ptr = ((char *) src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
-                          char * dst_ptr  = ((char *)  dst->data + i10*nb0  + i11*nb1  + i12*nb2  + i13*nb3);
+                for (int64_t k00 = 0; k00 < nk00; k00++) {
+                    const char * src0_ptr = ((char *) src0->data + k00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
+                          char * dst_ptr  = ((char *)  dst->data + k10*nb0  + i11*nb1  + i12*nb2  + i13*nb3);
 
                     memcpy(dst_ptr, src0_ptr, type_size);
 
-                    if (++i10 == ne0) {
-                        i10 = 0;
+                    if (++k10 == nk0) {
+                        k10 = 0;
                         if (++i11 == ne1) {
                             i11 = 0;
                             if (++i12 == ne2) {
@@ -11838,9 +12074,9 @@ static void ggml_compute_forward_dup_bytes(
                     }
                 }
             }
-            i10 += ne00 * (ne01 - ir1);
-            while (i10 >= ne0) {
-                i10 -= ne0;
+            k10 += nk00 * (ne01 - ir1);
+            while (k10 >= nk0) {
+                k10 -= nk0;
                 if (++i11 == ne1) {
                     i11 = 0;
                     if (++i12 == ne2) {
@@ -13262,13 +13498,15 @@ static void ggml_compute_forward_sub_f32(
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
-    if (params->ith != 0) {
-        return;
-    }
-
     assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
 
-    const int nr  = ggml_nrows(src0);
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int nr  = ggml_nrows(src0);
+    int nr_per_thread = (nr + nth - 1)/nth;
+    int first = ith*nr_per_thread;
+    int last  = MIN(first + nr_per_thread, nr);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -13276,7 +13514,7 @@ static void ggml_compute_forward_sub_f32(
     GGML_ASSERT(nb00 == sizeof(float));
 
     if (nb10 == sizeof(float)) {
-        for (int ir = 0; ir < nr; ++ir) {
+        for (int ir = first; ir < last; ++ir) {
             // src0, src1 and dst are same shape => same indices
             const int i3 = ir/(ne2*ne1);
             const int i2 = (ir - i3*ne2*ne1)/ne1;
@@ -13307,10 +13545,9 @@ static void ggml_compute_forward_sub_f32(
 
             float * dst_ptr  = (float *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1 );
             float * src0_ptr = (float *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
+            char  * src1_ptr = (char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11;
             for (int i0 = 0; i0 < ne0; i0++) {
-                float * src1_ptr = (float *) ((char *) src1->data + i3*nb13 + i2*nb12 + i1*nb11 + i0*nb10);
-
-                dst_ptr[i0] = src0_ptr[i0] - *src1_ptr;
+                dst_ptr[i0] = src0_ptr[i0] - *(float *)(src1_ptr + i0*nb10);
             }
         }
     }
@@ -13365,6 +13602,9 @@ static void ggml_compute_forward_mul_f32(
         return;
     }
 
+    //if (ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld * %ld x %ld x %ld x %ld -> %ld x %ld x %ld x %ld\n", __func__, dst->name,
+    //        src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[1], src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+
     const int64_t nr = ggml_nrows(src0);
 
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -13388,6 +13628,13 @@ static void ggml_compute_forward_mul_f32(
             float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
             float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
 
+            if (ne10 == 1) {
+                if (dst_ptr != src0_ptr) {
+                    memcpy(dst_ptr, src0_ptr, ne00*sizeof(float));
+                }
+                ggml_vec_scale_f32(ne00, dst_ptr, src1_ptr[0]);
+            } else {
+
             for (int64_t r = 0 ; r < nr0; ++r) {
 #ifdef GGML_USE_ACCELERATE
                 UNUSED(ggml_vec_mul_f32);
@@ -13396,6 +13643,7 @@ static void ggml_compute_forward_mul_f32(
 #else
                 ggml_vec_mul_f32(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
 #endif
+            }
             }
         }
     } else {
@@ -13800,6 +14048,62 @@ static void ggml_compute_forward_sum(
     }
 }
 
+// ggml_compute_forward_cumsum
+
+static void ggml_compute_forward_cumsum_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(dst->nb[0] == sizeof(float));
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    GGML_ASSERT(ne0 == ne00);
+    GGML_ASSERT(ne1 == ne01);
+    GGML_ASSERT(ne2 == ne02);
+    GGML_ASSERT(ne3 == ne03);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+    const int64_t nr = ne01*ne02*ne03;
+
+    for (int64_t ir = ith; ir < nr; ir += nth) {
+        const int64_t i03 = ir/(ne02*ne01);
+        const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+        const int64_t i01 = ir - i03*ne02*ne01 - i02*ne01;
+
+        const float * src_row = (const float *) ((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+              float * dst_row = (      float *) ((      char *) dst->data  + i01*nb1  + i02*nb2  + i03*nb3);
+
+        float acc = 0.0f;
+        for (int64_t i00 = 0; i00 < ne00; ++i00) {
+            acc += src_row[i00];
+            dst_row[i00] = acc;
+        }
+    }
+}
+
+static void ggml_compute_forward_cumsum(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_cumsum_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_sum_rows
 
 static void ggml_compute_forward_sum_rows_f32(
@@ -13807,10 +14111,6 @@ static void ggml_compute_forward_sum_rows_f32(
         struct ggml_tensor * dst) {
 
     const struct ggml_tensor * src0 = dst->src[0];
-
-    if (params->ith != 0) {
-        return;
-    }
 
     GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(dst->nb[0] == sizeof(float));
@@ -13822,22 +14122,32 @@ static void ggml_compute_forward_sum_rows_f32(
     GGML_ASSERT(ne2 == ne02);
     GGML_ASSERT(ne3 == ne03);
 
-    for (int64_t i3 = 0; i3 < ne03; i3++) {
-        for (int64_t i2 = 0; i2 < ne02; i2++) {
-            for (int64_t i1 = 0; i1 < ne01; i1++) {
-                float * src_row = (float *) ((char *) src0->data + i1*nb01 + i2*nb02 + i3*nb03);
-                float * dst_row = (float *) ((char *) dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
-                float row_sum = 0;
-                ggml_vec_sum_f32(ne00, &row_sum, src_row);
-                if (!isfinite(row_sum)) {
-                    fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
-                            (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
-                    exit(1);
-                }
-                dst_row[0] = row_sum;
-            }
+    int ith = params->ith;
+    int nth = params->nth;
+
+    //if (params->ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld\n", __func__, dst->name, ne00, ne1, ne2, ne3);
+
+    int nrows = ggml_nrows(src0);
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first_row = nrows_per_thread*ith;
+    int last_row  = MIN(first_row + nrows_per_thread, nrows);
+
+    for (int ir = first_row; ir < last_row; ++ir) {
+        int i3 = ir / (ne01*ne02);
+        int i2 = (ir - i3*ne01*ne02)/ne01;
+        int i1 = ir - i3*ne01*ne0 - i2*ne01;
+        const float * src_row = (const float *)((const char *)src0->data + i1*nb01 + i2*nb02 + i3*nb03);
+              float * dst_row = (      float *)((      char *)dst->data  + i1*nb1  + i2*nb2  + i3*nb3);
+        float row_sum = 0;
+        ggml_vec_sum_f32(ne00, &row_sum, src_row);
+        if (!isfinite(row_sum)) {
+            fprintf(stderr, "Oops(%s, %s): found %g for i1 = %d, i2 = %d, i3 = %d. ne00 = %d\n", __func__, dst->name,
+                    (double)row_sum, (int)i1, (int)i2, (int)i3, (int)ne00);
+            GGML_ABORT("Fatal error");
         }
+        dst_row[0] = row_sum;
     }
+
 }
 
 static void ggml_compute_forward_sum_rows(
@@ -13855,6 +14165,36 @@ static void ggml_compute_forward_sum_rows(
             {
                 GGML_ABORT("fatal error");
             }
+    }
+}
+
+static void ggml_compute_forward_sum_rows_f32_nc(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    struct ggml_tensor * src = dst->src[0]->src[0];
+    GGML_ASSERT(src->op == GGML_OP_TRANSPOSE);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 && src->type == GGML_TYPE_F32);
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    int nrows = ggml_nrows(src);
+    int nrows_per_thread = (nrows + nth - 1)/nth;
+    int first_row = nrows_per_thread*ith;
+    int last_row  = MIN(first_row + nrows_per_thread, nrows);
+
+    for (int ir = first_row; ir < last_row; ++ir) {
+        int i3 = ir / (src->ne[1]*src->ne[2]);
+        int i2 = (ir - i3*src->ne[1]*src->ne[2])/src->ne[1];
+        int i1 = ir - i3*src->ne[1]*src->ne[2] - i2*src->ne[1];
+        const float * src_row = (const float *)((const char *)src->data + i1*src->nb[1] + i2*src->nb[2] + i3*src->nb[3]);
+              float * dst_row = (      float *)((      char *)dst->data + i1*dst->nb[1] + i2*dst->nb[2] + i3*dst->nb[3]);
+        float row_sum = 0;
+        for (int i0 = 0; i0 < (int)src->ne[0]; ++i0) {
+            row_sum += *(const float *)((const char *)src_row + i0*src->nb[0]);
+        }
+        dst_row[0] = row_sum;
     }
 }
 
@@ -13987,6 +14327,58 @@ static void ggml_compute_forward_repeat_f32(
         return;
     }
 
+    int n_repeated_dims = 0;
+    int repeated_dim = -1;
+    for (int idim = 0; idim < GGML_MAX_DIMS; ++idim) {
+        if (src0->ne[idim] != dst->ne[idim]) {
+            ++n_repeated_dims;
+            repeated_dim = idim;
+        }
+    }
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    if (n_repeated_dims == 1) {
+        GGML_ASSERT(repeated_dim >= 0 && repeated_dim < GGML_MAX_DIMS);
+        int nrows = 1;
+        for (int idim = 0; idim < GGML_MAX_DIMS; ++idim) {
+            if (src0->ne[idim] == dst->ne[idim]) nrows *= dst->ne[idim];
+        }
+        int nrows_per_thread = (nrows + nth - 1)/nth;
+        int first_row = ith*nrows_per_thread;
+        int last_row = MIN(first_row + nrows_per_thread, nrows);
+        for (int ir = first_row; ir < last_row; ++ir) {
+            int ii = ir;
+            int denom = nrows;
+            size_t offset_src = 0;
+            size_t offset_dst = 0;
+            for (int idim = GGML_MAX_DIMS-1; idim >= 0; --idim) {
+                if (idim == repeated_dim) continue;
+                denom /= dst->ne[idim];
+                int idx = ii / denom;
+                ii -= idx * denom;
+                offset_src += idx*src0->nb[idim];
+                offset_dst += idx*dst->nb[idim];
+            }
+            char * dst_ptr = (char *)dst->data + offset_dst;
+            const char * src_ptr = (const char *)src0->data + offset_src;
+            if (src0->ne[repeated_dim] == 1) {
+                float value = *(const float *)src_ptr;
+                for (int i = 0; i < (int)dst->ne[repeated_dim]; ++i) {
+                    *(float *)(dst_ptr + i*dst->nb[repeated_dim]) = value;
+                }
+            } else {
+                for (int i = 0; i < (int)dst->ne[repeated_dim]; ++i) {
+                    int i0 = i % src0->ne[repeated_dim];
+                    float value = *(const float *)(src_ptr + i0*src0->nb[repeated_dim]);
+                    *(float *)(dst_ptr + i*dst->nb[repeated_dim]) = value;
+                }
+            }
+        }
+        return;
+    }
+
     if (params->ith != 0) {
         return;
     }
@@ -14115,6 +14507,9 @@ static void ggml_compute_forward_repeat(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
+    //if (params->ith == 0) printf("%s(%s,%s,%s): %ld x %ld x %ld x %ld -> %ld x %ld x %ld x %ld\n", __func__, dst->name, ggml_type_name(src0->type), ggml_type_name(dst->type),
+    //        src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+
     switch (src0->type) {
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
@@ -14238,8 +14633,11 @@ static void ggml_compute_forward_concat_f32(
 
     GGML_ASSERT(dim >= 0 && dim < 4);
 
+    //if (ith == 0) printf("%s(%s, dim = %d): %ld x %ld x %ld x %ld + %ld x %ld x %ld x %ld -> %ld x %ld x %ld x %ld\n", __func__, dst->name, dim,
+    //        src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
-       (dim == 3 || (dim == 2 && dst->ne[3] == 1) || (dim == 1 && dst->ne[2]*dst->ne[3] == 1))) {
+       (dim == 3 || (dim == 2 && dst->ne[3] == 1) || (dim == 1 && dst->ne[2]*dst->ne[3] == 1) || (dim == 0 && dst->ne[1]*dst->ne[2]*dst->ne[3] == 1))) {
         // simply copy the data
         const int64_t size_src_0 = ggml_nbytes(src0);
         const int64_t size_src_1 = ggml_nbytes(src1);
@@ -14248,8 +14646,13 @@ static void ggml_compute_forward_concat_f32(
         for (int64_t i_block = ith; i_block < num_blocks; i_block += nth) {
             const int64_t start = i_block*block_size;
             if (start < size_src_0) {
-                int64_t copy_size = MIN(block_size, size_src_0 - start);
-                memcpy((char *)dst->data + start, (char *)src0->data + start, copy_size);
+                if (start + block_size <= size_src_0) {
+                    memcpy((char *)dst->data + start, (char *)src0->data + start, block_size);
+                } else {
+                    memcpy((char *)dst->data + start, (char *)src0->data + start, size_src_0 - start);
+                    size_t copy_size = MIN(size_src_1, block_size - (size_src_0 - start));
+                    memcpy((char *)dst->data + size_src_0, (char *)src1->data, copy_size);
+                }
             } else {
                 int64_t copy_size = MIN(block_size, size_src_0 + size_src_1 - start);
                 memcpy((char *)dst->data + start, (char *)src1->data + start - size_src_0, copy_size);
@@ -14437,18 +14840,21 @@ static void ggml_compute_forward_neg_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    if (params->ith != 0) {
-        return;
-    }
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
-    assert(ggml_is_contiguous_1(src0));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src0, dst));
+    int ith = params->ith;
+    int nth = params->nth;
 
     const int n  = ggml_nrows(src0);
     const int nc = src0->ne[0];
 
-    for (int i = 0; i < n; i++) {
+    int npt = (n + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = MIN(first + npt, n);
+
+    for (int i = first; i < last; i++) {
         ggml_vec_neg_f32(nc,
                 (float *) ((char *) dst->data  + i*( dst->nb[1])),
                 (float *) ((char *) src0->data + i*(src0->nb[1])));
@@ -14616,9 +15022,9 @@ static void ggml_compute_forward_relu_f32(
         return;
     }
 
-    assert(ggml_is_contiguous_1(src0));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
     const int n  = ggml_nrows(src0);
     const int nc = src0->ne[0];
@@ -14656,10 +15062,6 @@ static void ggml_compute_forward_sigmoid_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    if (params->ith != 0) {
-        return;
-    }
-
     assert(ggml_is_contiguous_1(src0));
     assert(ggml_is_contiguous_1(dst));
     assert(ggml_are_same_shape(src0, dst));
@@ -14667,7 +15069,13 @@ static void ggml_compute_forward_sigmoid_f32(
     const int n  = ggml_nrows(src0);
     const int nc = src0->ne[0];
 
-    for (int i = 0; i < n; i++) {
+    int ith = params->ith;
+    int nth = params->nth;
+    int npt = (n + nth - 1)/nth;
+    int first = ith*npt;
+    int last  = MIN(first + npt, n);
+
+    for (int i = first; i < last; i++) {
         ggml_vec_sigmoid_f32(nc,
                 (float *) ((char *) dst->data  + i*( dst->nb[1])),
                 (float *) ((char *) src0->data + i*(src0->nb[1])));
@@ -14684,6 +15092,100 @@ static void ggml_compute_forward_sigmoid(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_sigmoid_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_forward_exp
+
+static void ggml_compute_forward_exp_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src0->ne[0];
+    const int nr = ggml_nrows(src0);
+
+    const int dr = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int i1 = ir0; i1 < ir1; i1++) {
+        ggml_vec_exp_f32(nc,
+                (float *) ((char *) dst->data  + i1*( dst->nb[1])),
+                (float *) ((char *) src0->data + i1*(src0->nb[1])));
+    }
+}
+
+static void ggml_compute_forward_exp(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_exp_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_forward_softplus
+
+static void ggml_compute_forward_softplus_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    assert(ggml_is_contiguous_1(src0));
+    assert(ggml_is_contiguous_1(dst));
+    assert(ggml_are_same_shape(src0, dst));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src0->ne[0];
+    const int nr = ggml_nrows(src0);
+
+    const int dr = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int i1 = ir0; i1 < ir1; i1++) {
+        ggml_vec_softplus_f32(nc,
+                (float *) ((char *) dst->data  + i1*( dst->nb[1])),
+                (float *) ((char *) src0->data + i1*(src0->nb[1])));
+    }
+}
+
+static void ggml_compute_forward_softplus(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_softplus_f32(params, dst);
             } break;
         default:
             {
@@ -14743,6 +15245,102 @@ static void ggml_compute_forward_gelu(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_gelu_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_forward_fill
+
+static void ggml_compute_forward_fill_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const float c = ggml_get_op_params_f32(dst, 0);
+
+    GGML_TENSOR_LOCALS(int64_t, ne, dst, ne);
+    GGML_TENSOR_LOCALS(size_t,  nb, dst, nb);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+    const int64_t nr = ne1*ne2*ne3;
+
+    for (int64_t ir = ith; ir < nr; ir += nth) {
+        const int64_t i03 = ir/(ne2*ne1);
+        const int64_t i02 = (ir - i03*ne2*ne1)/ne1;
+        const int64_t i01 = ir - i03*ne2*ne1 - i02*ne1;
+
+        float * dst_ptr = (float *) ((char *) dst->data + i03*nb3 + i02*nb2 + i01*nb1);
+        ggml_vec_set_f32(ne0, dst_ptr, c);
+    }
+}
+
+static void ggml_compute_forward_fill(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    ggml_compute_forward_fill_f32(params, dst);
+}
+
+// ggml_compute_forward_tri
+
+static inline bool ggml_tri_lower_pred(int i, int r) {
+    return i < r;
+}
+
+static inline bool ggml_tri_lower_diag_pred(int i, int r) {
+    return i <= r;
+}
+
+static inline bool ggml_tri_upper_pred(int i, int r) {
+    return i > r;
+}
+
+static inline bool ggml_tri_upper_diag_pred(int i, int r) {
+    return i >= r;
+}
+
+static void ggml_compute_forward_tri_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    const enum ggml_tri_type ttype = (enum ggml_tri_type) ggml_get_op_params_i32(dst, 0);
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+    const int64_t nr = ne01*ne02*ne03;
+
+    bool (*bipred)(int, int);
+
+    switch (ttype) {
+        case GGML_TRI_TYPE_LOWER:      bipred = ggml_tri_lower_pred;      break;
+        case GGML_TRI_TYPE_LOWER_DIAG: bipred = ggml_tri_lower_diag_pred; break;
+        case GGML_TRI_TYPE_UPPER:      bipred = ggml_tri_upper_pred;      break;
+        case GGML_TRI_TYPE_UPPER_DIAG: bipred = ggml_tri_upper_diag_pred; break;
+        default: GGML_ABORT("invalid tri type");
+    }
+
+    for (int64_t ir = ith; ir < nr; ir += nth) {
+        const int64_t i03 = ir/(ne02*ne01);
+        const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+        const int64_t i01 = ir - i03*ne02*ne01 - i02*ne01;
+
+        const float * src_ptr = (const float *) ((const char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
+              float * dst_ptr = (float *) ((char *) dst->data + i03*nb3 + i02*nb2 + i01*nb1);
+
+        for (int i0 = 0; i0 < ne0; ++i0) {
+            dst_ptr[i0] = bipred(i0, i01) ? src_ptr[i0] : 0.0f;
+        }
+    }
+}
+
+static void ggml_compute_forward_tri(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_tri_f32(params, dst);
             } break;
         default:
             {
@@ -16844,6 +17442,65 @@ static void ggml_compute_forward_mul_mat_up_gate(
 }
 #endif
 
+// ggml_compute_forward_l2_norm
+
+static void ggml_compute_forward_l2_norm_f32(
+    const struct ggml_compute_params * params,
+    struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    const float eps = ggml_get_op_params_f32(dst, 0);
+
+    GGML_ASSERT(eps >= 0.0f);
+
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const float * x = (const float *) ((const char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+
+                ggml_float sum = 0.0;
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    sum += (ggml_float) (x[i00] * x[i00]);
+                }
+
+                float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
+
+                memcpy(y, x, ne00 * sizeof(float));
+
+                const float scale = 1.0f/fmaxf(sqrtf(sum), eps);
+                ggml_vec_scale_f32(ne00, y, scale);
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_l2_norm(
+    const struct ggml_compute_params * params,
+    struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_l2_norm_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_out_prod
 
 static void ggml_compute_forward_out_prod_f32(
@@ -17164,36 +17821,27 @@ static void ggml_compute_forward_scale_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int nc = src0->ne[0];
-    const int nr = ggml_nrows(src0);
+    //if (ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld with %g, %g\n", __func__, dst->name, dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], (double)s, (double)b);
 
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+    const int64_t block_size = 1024;
+    int64_t nelements = ggml_nelements(dst);
+    int64_t nblocks = (nelements + block_size - 1)/block_size;
 
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
-
-    const size_t nb01 = src0->nb[1];
-
-    const size_t nb1 = dst->nb[1];
-
-    if (b == 0.0f) {
-        for (int i1 = ir0; i1 < ir1; i1++) {
+    for (int ib = ith; ib < nblocks; ib += nth) {
+        const float * src_data = (const float *)src0->data + block_size*ib;
+              float * dst_data = (      float *)dst->data  + block_size*ib;
+        int n = MIN(block_size, nelements - block_size*ib);
+        if (b == 0.0f) {
             if (dst->data != src0->data) {
                 // src0 is same shape as dst => same indices
-                memcpy((char *)dst->data + i1*nb1, (char *)src0->data + i1*nb01, nc * sizeof(float));
+                memcpy(dst_data, src_data, n * sizeof(float));
             }
-            ggml_vec_scale_f32(nc, (float *) ((char *) dst->data + i1*nb1), s);
-        }
-    } else {
-        for (int i1 = ir0; i1 < ir1; i1++) {
-            ggml_vec_mad1_f32(nc,
-                (float *) ((char *) dst->data  + i1*nb1),
-                (float *) ((char *) src0->data + i1*nb1),
-                s, b);
+            ggml_vec_scale_f32(n, dst_data, s);
+        } else {
+            ggml_vec_mad1_f32(n, dst_data, src_data, s, b);
         }
     }
+
 }
 
 static void ggml_compute_forward_scale(
@@ -17574,6 +18222,10 @@ static void ggml_compute_forward_cpy(
 static void ggml_compute_forward_cont(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
+    //const struct ggml_tensor * src = dst->src[0];
+    //if (params->ith == 0) printf("%s(%s): %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu (%s) -> %ld x %ld x %ld x %ld; %zu x %zu x %zu x %zu (%s)\n", __func__, dst->name,
+    //        src->ne[0], src->ne[1], src->ne[2], src->ne[3], src->nb[0], src->nb[1], src->nb[2], src->nb[3], ggml_type_name(src->type),
+    //        dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], ggml_type_name(dst->type));
     ggml_compute_forward_dup(params, dst);
 }
 
@@ -21578,6 +22230,75 @@ static void ggml_compute_forward_ssm_scan(
     }
 }
 
+// ggml_compute_forward_solve_tri
+
+static void ggml_compute_forward_solve_tri_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+
+    GGML_ASSERT(ne00 == ne01);
+    GGML_ASSERT(ne0  == ne10);
+    GGML_ASSERT(ne1  == ne11);
+
+    GGML_ASSERT(ne02 == ne12 && ne12 == ne2);
+    GGML_ASSERT(ne03 == ne13 && ne13 == ne3);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t k = ne10;
+    const int64_t n = ne11;
+    const int64_t nr = ne02*ne03*k;
+
+    const int64_t dr = (nr + nth - 1)/nth;
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
+
+    const float * A = (const float *) src0->data;
+    const float * B = (const float *) src1->data;
+          float * X = (      float *) dst->data;
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i03 = ir/(ne02*k);
+        const int64_t i02 = (ir - i03*ne02*k)/k;
+        const int64_t i01 = ir - i03*ne02*k - i02*k;
+
+        const float * A_batch = A + i02 * nb02 / sizeof(float) + i03 * nb03 / sizeof(float);
+        const float * B_batch = B + i02 * nb12 / sizeof(float) + i03 * nb13 / sizeof(float);
+
+        float * X_batch = X + i02 * nb2 / sizeof(float) + i03 * nb3 / sizeof(float);
+
+        for (int64_t i00 = 0; i00 < n; ++i00) {
+            float sum = 0.0f;
+            for (int64_t t = 0; t < i00; ++t) {
+                sum += A_batch[i00*n + t] * X_batch[t*k + i01];
+            }
+
+            const float diag = A_batch[i00*n + i00];
+            GGML_ASSERT(diag != 0.0f);
+
+            X_batch[i00*k + i01] = (B_batch[i00*k + i01] - sum) / diag;
+        }
+    }
+}
+
+static void ggml_compute_forward_solve_tri(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
+        ggml_compute_forward_solve_tri_f32(params, dst);
+    } else {
+        GGML_ABORT("fatal error");
+    }
+}
+
 // ggml_compute_forward_win_part
 
 static void ggml_compute_forward_win_part_f32(
@@ -21770,6 +22491,14 @@ static void ggml_compute_forward_unary(
         case GGML_UNARY_OP_HARDSIGMOID:
             {
                 ggml_compute_forward_hardsigmoid(params, dst);
+            } break;
+        case GGML_UNARY_OP_EXP:
+            {
+                ggml_compute_forward_exp(params, dst);
+            } break;
+        case GGML_UNARY_OP_SOFTPLUS:
+            {
+                ggml_compute_forward_softplus(params, dst);
             } break;
         default:
             {
@@ -22916,6 +23645,8 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
     int64_t t1 = ggml_time_us();
 #endif
 
+    const bool fusion = true;
+
     switch (tensor->op) {
         case GGML_OP_REDUCE:
             {
@@ -22991,7 +23722,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_SUM_ROWS:
             {
-                if (i + 1 < cgraph->n_nodes &&
+                if (fusion && i + 1 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_DIV &&
                     cgraph->nodes[i+1]->src[1] == tensor &&
                     cgraph->nodes[i+1]->src[0] == tensor->src[0]) {
@@ -23000,6 +23731,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                 } else {
                     ggml_compute_forward_sum_rows(params, tensor);
                 }
+            } break;
+        case GGML_OP_CUMSUM:
+            {
+                ggml_compute_forward_cumsum(params, tensor);
             } break;
         case GGML_OP_MEAN:
             {
@@ -23049,6 +23784,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_group_norm(params, tensor);
             } break;
+        case GGML_OP_L2_NORM:
+            {
+                ggml_compute_forward_l2_norm(params, tensor);
+            } break;
         case GGML_OP_MUL_MAT:
             {
                 i = ggml_compute_forward_mul_mat(params, tensor, cgraph, i);
@@ -23091,6 +23830,15 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_CONT:
             {
+                if (i + 2 < cgraph->n_nodes &&
+                    cgraph->nodes[i+1]->op == GGML_OP_SUM_ROWS &&
+                    cgraph->nodes[i+2]->op == GGML_OP_TRANSPOSE) {
+                    if (tensor->src[0]->op == GGML_OP_TRANSPOSE) {
+                        ggml_compute_forward_sum_rows_f32_nc(params, cgraph->nodes[i+1]);
+                        i += 2;
+                        break;
+                    }
+                }
                 ggml_compute_forward_cont(params, tensor);
             } break;
         case GGML_OP_RESHAPE:
@@ -23136,7 +23884,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             } break;
         case GGML_OP_SOFT_MAX:
             {
-                if (i + 4 < cgraph->n_nodes &&
+                if (fusion && i + 4 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_RESHAPE  &&
                     cgraph->nodes[i+2]->op == GGML_OP_ARGSORT  &&
                     cgraph->nodes[i+3]->op == GGML_OP_VIEW     &&
@@ -23220,6 +23968,14 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_timestep_embedding(params, tensor);
             } break;
+        case GGML_OP_TRI:
+            {
+                ggml_compute_forward_tri(params, tensor);
+            } break;
+        case GGML_OP_FILL:
+            {
+                ggml_compute_forward_fill(params, tensor);
+            } break;
         case GGML_OP_ARGSORT:
             {
                 if (false && i + 5 < cgraph->n_nodes &&
@@ -23265,6 +24021,10 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
             {
                 ggml_compute_forward_ssm_scan(params, tensor);
             } break;
+        case GGML_OP_SOLVE_TRI:
+            {
+                ggml_compute_forward_solve_tri(params, tensor);
+            } break;
         case GGML_OP_WIN_PART:
             {
                 ggml_compute_forward_win_part(params, tensor);
@@ -23276,7 +24036,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
         case GGML_OP_UNARY:
             {
                 const enum ggml_unary_op unary_op = ggml_get_unary_op(tensor);
-                if (unary_op == GGML_UNARY_OP_SIGMOID && i + 5 < cgraph->n_nodes &&
+                if (fusion && unary_op == GGML_UNARY_OP_SIGMOID && i + 5 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                     cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                     cgraph->nodes[i+3]->op == GGML_OP_ARGSORT &&
@@ -23285,7 +24045,7 @@ static int ggml_compute_forward(struct ggml_compute_params * params, struct ggml
                     iqk_glm45moe_experts(cgraph->nodes[i+5], cgraph->nodes[i+4], params->ith, params->nth);
                     i += 5;
                 }
-                else if (unary_op == GGML_UNARY_OP_SIGMOID && i + 4 < cgraph->n_nodes &&
+                else if (fusion && unary_op == GGML_UNARY_OP_SIGMOID && i + 4 < cgraph->n_nodes &&
                     cgraph->nodes[i+1]->op == GGML_OP_RESHAPE &&
                     cgraph->nodes[i+2]->op == GGML_OP_ADD &&
                     cgraph->nodes[i+3]->op == GGML_OP_GROUPED_TOPK &&
@@ -24292,6 +25052,14 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
+        case GGML_OP_CUMSUM:
+            {
+                GGML_ABORT("fatal error"); // TODO: not implemented
+            }
+        case GGML_OP_L2_NORM:
+            {
+                GGML_ABORT("fatal error"); // TODO: not implemented
+            }
         case GGML_OP_TIMESTEP_EMBEDDING:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
@@ -24309,6 +25077,12 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
         case GGML_OP_LEAKY_RELU:
+            {
+                GGML_ABORT("fatal error"); // TODO: not implemented
+            }
+        case GGML_OP_TRI:
+        case GGML_OP_FILL:
+        case GGML_OP_SOLVE_TRI:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
@@ -24451,6 +25225,24 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                                 src0->grad = ggml_add_or_set(ctx,
                                         src0->grad,
                                         ggml_silu_back(ctx, src0, tensor->grad),
+                                        zero_table);
+                            }
+                        } break;
+                    case GGML_UNARY_OP_EXP:
+                        {
+                            if (src0->grad) {
+                                src0->grad = ggml_add_or_set(ctx,
+                                        src0->grad,
+                                        ggml_mul(ctx, tensor, tensor->grad),
+                                        zero_table);
+                            }
+                        } break;
+                    case GGML_UNARY_OP_SOFTPLUS:
+                        {
+                            if (src0->grad) {
+                                src0->grad = ggml_add_or_set(ctx,
+                                        src0->grad,
+                                        ggml_mul(ctx, tensor->grad, ggml_sigmoid(ctx, src0)),
                                         zero_table);
                             }
                         } break;
@@ -24933,21 +25725,23 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ADD_ID:
         case GGML_OP_ADD1:
         case GGML_OP_ACC:
+        case GGML_OP_CUMSUM:
+        case GGML_OP_TRI:
+        case GGML_OP_FILL:
         case GGML_OP_MULTI_ADD:
         case GGML_OP_MUL_MULTI_ADD:
         case GGML_OP_HADAMARD:
+        case GGML_OP_REPEAT:
+        case GGML_OP_SUB:
             {
                 n_tasks = n_threads;
             } break;
-        case GGML_OP_SUB:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_LOG:
         case GGML_OP_SUM:
-        case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
         case GGML_OP_ARGMAX:
-        case GGML_OP_REPEAT:
         case GGML_OP_REPEAT_BACK:
         case GGML_OP_LEAKY_RELU:
             {
@@ -24957,20 +25751,22 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             switch (ggml_get_unary_op(node)) {
                 case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_SGN:
-                case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_STEP:
                 case GGML_UNARY_OP_ELU:
                 case GGML_UNARY_OP_RELU:
-                case GGML_UNARY_OP_SIGMOID:
                 case GGML_UNARY_OP_HARDSWISH:
                 case GGML_UNARY_OP_HARDSIGMOID:
                     {
                         n_tasks = 1;
                     } break;
 
+                case GGML_UNARY_OP_SIGMOID:
+                case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_GELU:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_SILU:
+                case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_SWIGLU:
                 case GGML_UNARY_OP_SWIGLU_OAI:
                     {
@@ -25009,12 +25805,14 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_FUSED_NORM:
         case GGML_OP_RMS_NORM_BACK:
         case GGML_OP_GROUP_NORM:
+        case GGML_OP_L2_NORM:
         case GGML_OP_CONCAT:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_MOE_FUSED_UP_GATE:
         case GGML_OP_FUSED_UP_GATE:
         case GGML_OP_OUT_PROD:
+        case GGML_OP_SOLVE_TRI:
             {
                 n_tasks = n_threads;
             } break;
@@ -25051,13 +25849,14 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 n_tasks = 1; //TODO
             } break;
-        case GGML_OP_SCALE:
         case GGML_OP_SOFTCAP:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_CAP_MAX:
+        case GGML_OP_SUM_ROWS:
             {
                 n_tasks = MIN(n_threads, ggml_nrows(node->src[0]));
             } break;
+        case GGML_OP_SCALE:
         case GGML_OP_IM2COL:
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_2D_DW:
