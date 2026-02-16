@@ -2996,13 +2996,17 @@ void server_context::speculative_decoding_accept() {
                 populate_token_probs(slot, result, slot.params.post_sampling_probs, params_base.special, i);
             }
 
-            if (!process_token(result, slot)) {
-                // release slot because of stop condition
-                send_final_response(slot);
-                slot.release();
-                slot.print_timings();
-                metrics.on_prediction(slot);
-                break;
+            if (slot.n_buffer == 0) {
+                if (!process_token(result, slot)) {
+                    // release slot because of stop condition
+                    send_final_response(slot);
+                    slot.release();
+                    slot.print_timings();
+                    metrics.on_prediction(slot);
+                    break;
+                }
+            } else {
+                buffer_and_check_string_ban(slot, result);
             }
         }
         SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int)ids.size() - 1, (int)slot.drafted.size(), slot.n_past);
