@@ -4398,10 +4398,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v && state->ne[2] == H_v && state->ne[3] == n_seqs);
         GGML_ASSERT(H_k == H_v);
 
-        const float eps_norm = hparams.f_norm_rms_eps;
-        q = ggml_l2_norm(ctx0, q, eps_norm);
-        k = ggml_l2_norm(ctx0, k, eps_norm);
-
         const float scale = 1.0f / sqrtf(S_v);
         q = ggml_scale(ctx0, q, scale);
 
@@ -4614,9 +4610,9 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         GGML_ASSERT(H_k == H_v);
         GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v && state->ne[2] == H_v && state->ne[3] == n_seqs);
 
-        const float eps_norm = hparams.f_norm_rms_eps;
-        q = ggml_l2_norm(ctx0, q, eps_norm);
-        k = ggml_l2_norm(ctx0, k, eps_norm);
+        //const float eps_norm = hparams.f_norm_rms_eps;
+        //q = ggml_l2_norm(ctx0, q, eps_norm);
+        //k = ggml_l2_norm(ctx0, k, eps_norm);
 
         const float scale = 1.0f / sqrtf(S_v);
 
@@ -4919,25 +4915,38 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         ggml_tensor * conv_output_raw = ggml_ssm_conv(ctx0, conv_states, qkv_mixed, model.layers[il].ssm_conv1d, inp_s_seq_qnext);
         cb(conv_output_raw, "conv_output_raw", il);
 
-        ggml_tensor * conv_output = ggml_view_2d(ctx0, conv_output_raw, conv_dim, n_tok, conv_dim * ggml_element_size(conv_output_raw), 0);
-        ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output);
+        //ggml_tensor * conv_output = ggml_view_2d(ctx0, conv_output_raw, conv_dim, n_tok, conv_dim * ggml_element_size(conv_output_raw), 0);
+        //ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output);
+        ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output_raw);
         cb(conv_output_silu, "conv_output_silu", il);
 
-        ggml_tensor * q_conv = ggml_view_2d(ctx0, conv_output_silu, key_dim, n_tok, conv_output_silu->nb[1], 0);
-        ggml_tensor * k_conv = ggml_view_2d(ctx0, conv_output_silu, key_dim, n_tok, conv_output_silu->nb[1],
-                key_dim * ggml_element_size(conv_output_silu));
+        // Calculate the total conv dimension
+        int64_t qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
+        int64_t nb1_qkv = ggml_row_size(conv_output_silu->type, qkv_dim);
+
+        // Extract the convolved Q, K, V from conv_output
+        ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
+                ggml_row_size(conv_output_silu->type, head_k_dim),
+                nb1_qkv, nb1_qkv * n_tok, 0);
+
+        ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_output_silu, head_k_dim, num_k_heads, n_tok, 1,
+                ggml_row_size(conv_output_silu->type, head_k_dim),
+                nb1_qkv, nb1_qkv * n_tok,
+                head_k_dim * num_k_heads * ggml_element_size(conv_output_silu));
+
         ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_output_silu, head_v_dim, num_v_heads, n_tok, 1,
                 ggml_row_size(conv_output_silu->type, head_v_dim),
-                conv_output_silu->nb[1],
-                conv_output_silu->nb[1] * n_tok,
-                2 * key_dim * ggml_element_size(conv_output_silu));
+                nb1_qkv, nb1_qkv * n_tok,
+                ggml_row_size(conv_output_silu->type, 2 * head_k_dim * num_k_heads));
 
-        q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_tok, 1);
-        k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_tok, 1);
-        v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_tok, 1);
-        cb(q_conv, "q_conv_cont", il);
-        cb(k_conv, "k_conv_cont", il);
-        cb(v_conv, "v_conv_cont", il);
+        cb(q_conv, "q_conv", il);
+        cb(k_conv, "k_conv", il);
+        cb(v_conv, "v_conv", il);
+
+        const float eps_norm = hparams.f_norm_rms_eps;
+
+        q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
+        k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
 
         if (num_k_heads != num_v_heads) {
             GGML_ASSERT(num_v_heads % num_k_heads == 0);
