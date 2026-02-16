@@ -266,6 +266,14 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
 
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) && dim == 2 && dst->ne[3] > 1 && src1->ne[2] == 1) {
+        float * dst_d  = (float *)dst->data;
+        float * src0_d = (float *)src0->data;
+        float * src1_d = (float *)src1->data;
+        concat_f32_cuda(src0_d, src1_d, dst_d, src0->ne[0]*src0->ne[1]*src0->ne[2], src0->ne[3], 1, dst->ne[0]*dst->ne[1]*dst->ne[2], dst->ne[3], 1, 0, stream);
+        return;
+    }
+
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
         //if (dst->ne[1] >= 65536 || dst->ne[2] >= 65536) {
         //    fprintf(stderr, "%s: ne1 = %ld, ne2 = %ld exceed max. blocks when computing %s\n", __func__, dst->ne[1], dst->ne[2], dst->name);
