@@ -4555,12 +4555,10 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             ggml_tensor * state_t = ggml_cont_4d(ctx0, ggml_permute(ctx0, state, 1, 0, 2, 3), S_v, S_v, 1, H_v * n_seqs);
             cb(state_t, "state_t", il);
 
-            //printf("v_prime_chunk: %ld x %ld x %ld x %ld, %s x %ld x %ld x %ld x %ld, %s\n", state_t->ne[0], state_t->ne[1], state_t->ne[2], state_t->ne[3], ggml_type_name(state_t->type),
-            //        k_cumdecay_chunk->ne[0], k_cumdecay_chunk->ne[1], k_cumdecay_chunk->ne[2], k_cumdecay_chunk->ne[3], ggml_type_name(k_cumdecay_chunk->type));
             ggml_tensor * v_prime = ggml_mul_mat(ctx0, state_t, k_cumdecay_chunk);
             cb(v_prime, "v_prime_chunk", il);
 
-            ggml_tensor * v_new   = ggml_sub(ctx0, ggml_repeat(ctx0, v_chunk, v_prime), v_prime);
+            ggml_tensor * v_new   = ggml_sub(ctx0, v_prime, v_chunk);
             ggml_tensor * v_new_t = ggml_cont(ctx0, ggml_transpose(ctx0, v_new));
             cb(v_new, "v_new_chunk", il);
 
@@ -4569,12 +4567,10 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             ggml_tensor * attn_inter = ggml_mul_mat(ctx0, state_t, q_g_exp);
             cb(attn_inter, "attn_inter_chunk", il);
 
-            //printf("v_attn_chunk: %ld x %ld x %ld x %ld, %s x %ld x %ld x %ld x %ld, %s\n", v_new_t->ne[0], v_new_t->ne[1], v_new_t->ne[2], v_new_t->ne[3], ggml_type_name(v_new_t->type),
-            //        attn_chunk->ne[0], attn_chunk->ne[1], attn_chunk->ne[2], attn_chunk->ne[3], ggml_type_name(attn_chunk->type));
             ggml_tensor * v_attn = ggml_mul_mat(ctx0, v_new_t, attn_chunk);
             cb(v_attn, "v_attn_chunk", il);
 
-            ggml_tensor * core_attn_out_chunk = ggml_add(ctx0, attn_inter, v_attn);
+            ggml_tensor * core_attn_out_chunk = ggml_sub(ctx0, attn_inter, v_attn);
             cb(core_attn_out_chunk, "core_attn_out_chunk", il);
 
             core_attn_out = core_attn_out == nullptr
@@ -4582,8 +4578,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
                 : ggml_concat(ctx0, core_attn_out, core_attn_out_chunk, 2);
 
             ggml_tensor * k_gdiff_t = get_slice_2d(key_gdiff_t, chunk);
-            //printf("kgdmulvnew: %ld x %ld x %ld x %ld, %s x %ld x %ld x %ld x %ld, %s\n", v_new_t->ne[0], v_new_t->ne[1], v_new_t->ne[2], v_new_t->ne[3], ggml_type_name(v_new_t->type),
-            //        k_gdiff_t->ne[0], k_gdiff_t->ne[1], k_gdiff_t->ne[2], k_gdiff_t->ne[3], ggml_type_name(k_gdiff_t->type));
             ggml_tensor * kgdmulvnew = ggml_mul_mat(ctx0, v_new_t, k_gdiff_t);
             cb(kgdmulvnew, "kgdmulvnew", il);
 
@@ -4591,7 +4585,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             cb(gexp_last_chunk, "gexp_last_chunk", il);
             auto s_mul = ggml_mul(ctx0, state, ggml_reshape_4d(ctx0, gexp_last_chunk, gexp_last_chunk->ne[0], gexp_last_chunk->ne[1], H_v, n_seqs));
             cb(s_mul, "s_mul", il);
-            state = ggml_add(ctx0, s_mul, ggml_reshape_4d(ctx0, kgdmulvnew, kgdmulvnew->ne[0], kgdmulvnew->ne[1], H_v, n_seqs));
+            state = ggml_sub(ctx0, s_mul, ggml_reshape_4d(ctx0, kgdmulvnew, kgdmulvnew->ne[0], kgdmulvnew->ne[1], H_v, n_seqs));
         }
 
         ggml_tensor * output_tokens = ggml_view_4d(ctx0, core_attn_out,
