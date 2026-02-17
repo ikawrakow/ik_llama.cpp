@@ -3292,7 +3292,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 cgraph->nodes[i+1]->src[0] == cgraph->nodes[i] &&
                 ggml_nrows(cgraph->nodes[i+0]->src[1]) == 1 &&
                 ggml_nrows(cgraph->nodes[i+2]->src[1]) == 1) {
-                printf("Using ggml_cuda_fused_softplus\n");
                 ggml_cuda_fused_softplus(ctx, cgraph->nodes[i+2]);
                 i += 2;
             }
