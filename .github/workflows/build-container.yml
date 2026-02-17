@@ -12,6 +12,9 @@ permissions:
   contents: read
   packages: write
 
+env:
+  TARGET_CUDA_DOCKER_ARCH: "86;90"
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -89,6 +92,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CUDA_VERSION=${{ matrix.cuda_version }}
-            CUDA_DOCKER_ARCH=${{ matrix.containerfile == 'ik_llama-cuda.Containerfile' && '80;86' || '' }}
+            CUDA_DOCKER_ARCH=${{ matrix.containerfile == 'ik_llama-cuda.Containerfile' && env.TARGET_CUDA_DOCKER_ARCH || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
