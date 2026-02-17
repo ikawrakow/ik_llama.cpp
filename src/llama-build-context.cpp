@@ -4433,7 +4433,6 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(g,    "g_pad", il);
 
         ggml_tensor * v_beta = ggml_mul(ctx0, v, beta);
-        //ggml_tensor * k_beta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, beta, k->ne[0], beta->ne[1], beta->ne[2], beta->ne[3]), k);
         ggml_tensor * k_beta = ggml_mul(ctx0, k, beta);
 
         cb(v_beta, "v_beta", il);
@@ -4534,7 +4533,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(g_diff_exp, "g_diff_exp", il);
         ggml_tensor * g_diff_exp_t = ggml_reshape_4d(ctx0, g_diff_exp, 1, chunk_size, n_chunks, g_diff_exp->ne[3]);
 
-        ggml_tensor * key_gdiff = ggml_mul(ctx0, ggml_repeat_4d(ctx0, g_diff_exp_t, k->ne[0], g_diff_exp_t->ne[1], g_diff_exp_t->ne[2], g_diff_exp_t->ne[3]), k);
+        ggml_tensor * key_gdiff = ggml_mul(ctx0, k, g_diff_exp_t);
         cb(key_gdiff, "key_gdiff", il);
 
         ggml_tensor * key_gdiff_t = ggml_cont(ctx0, ggml_transpose(ctx0, key_gdiff));
@@ -4562,7 +4561,7 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
             ggml_tensor * v_new_t = ggml_cont(ctx0, ggml_transpose(ctx0, v_new));
             cb(v_new, "v_new_chunk", il);
 
-            ggml_tensor * q_g_exp    = ggml_mul(ctx0, ggml_repeat_4d(ctx0, gexp_chunk, q_chunk->ne[0], gexp_chunk->ne[1], gexp_chunk->ne[2], gexp_chunk->ne[3]), q_chunk);
+            ggml_tensor * q_g_exp    = ggml_mul(ctx0, q_chunk, gexp_chunk);
             cb(q_g_exp, "q_g_exp", il);
             ggml_tensor * attn_inter = ggml_mul_mat(ctx0, state_t, q_g_exp);
             cb(attn_inter, "attn_inter_chunk", il);
