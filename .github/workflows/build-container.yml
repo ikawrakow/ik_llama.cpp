@@ -78,7 +78,7 @@ jobs:
             type=raw,value=${{ env.VARIANT }}-${{ matrix.build_target }}-${{ env.SHA_SHORT }}
             type=raw,value=${{ env.VARIANT }}-${{ matrix.build_target }}
 
-      - name: Build - (${{ matrix.containerfile == 'ik_llama-cuda.Containerfile' && 'ik_llama-cuda' || 'ik_llama-cpu' }}:${{ matrix.build_target }})
+      - name: Build - ${{ env.VARIANT }}-${{ matrix.build_target }}
         uses: docker/build-push-action@v5
         with:
           context: .
