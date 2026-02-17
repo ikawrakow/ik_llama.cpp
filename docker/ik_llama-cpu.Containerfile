@@ -5,7 +5,7 @@ FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 ENV LLAMA_CURL=1
 ENV LC_ALL=C.utf8
 
-RUN apt-get update && apt-get install -yq build-essential git libcurl4-openssl-dev curl libgomp1 cmake
+RUN apt-get update && apt-get install -yq build-essential libcurl4-openssl-dev curl libgomp1 cmake
 COPY . /app
 WORKDIR /app
 RUN cmake -B build -DGGML_NATIVE=OFF -DLLAMA_CURL=ON -DGGML_IQK_FA_ALL_QUANTS=ON && \

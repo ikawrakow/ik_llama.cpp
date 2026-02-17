@@ -14,51 +14,46 @@ CPU or CUDA sections under [Build](#Build) and [Run]($Run) are enough to get up 
 - [Extra Features](#Extra)
 - [Credits](#Credits)
 
-# Build
+## Build
 
 Builds two image tags:
 
 - `swap`: Includes only `llama-swap` and `llama-server`.
 - `full`: Includes `llama-server`, `llama-quantize`, and other utilities.
 
-Start: download the 4 files to a new directory (e.g. `~/ik_llama/`) then follow the next steps.
+### Start:
+
+1. Clone the repository as `git clone https://github.com/ikawrakow/ik_llama.cpp`
+2. Enter the repo: `cd ik_llama.cpp`, then follow the next steps.
+
+### CPU
 
 ```
-└── ik_llama
-    ├── ik_llama-cpu.Containerfile
-    ├── ik_llama-cpu-swap.config.yaml
-    ├── ik_llama-cuda.Containerfile
-    └── ik_llama-cuda-swap.config.yaml
-```
-
-## CPU
-
-```
-podman image build --format Dockerfile --file ik_llama-cpu.Containerfile --target full --tag ik_llama-cpu:full && podman image build --format Dockerfile --file ik_llama-cpu.Containerfile --target swap --tag ik_llama-cpu:swap
+podman image build --format Dockerfile --file ./docker/ik_llama-cpu.Containerfile --target full --tag ik_llama-cpu:full . && podman image build --format Dockerfile --file ./docker/ik_llama-cpu.Containerfile --target swap --tag ik_llama-cpu:swap .
 ```
 
 ```
-docker image build --file ik_llama-cpu.Containerfile --target full --tag ik_llama-cpu:full . && docker image build --file ik_llama-cpu.Containerfile --target swap --tag ik_llama-cpu:swap .
+docker image build --file ./docker/ik_llama-cpu.Containerfile --target full --tag ik_llama-cpu:full . && docker image build --file ./docker/ik_llama-cpu.Containerfile --target swap --tag ik_llama-cpu:swap .
 ```
 
-## CUDA
+### CUDA
 
 ```
-podman image build --format Dockerfile --file ik_llama-cuda.Containerfile --target full --tag ik_llama-cuda:full && podman image build --format Dockerfile --file ik_llama-cuda.Containerfile --target swap --tag ik_llama-cuda:swap
+podman image build --format Dockerfile --file ./docker/ik_llama-cuda.Containerfile --target full --tag ik_llama-cuda:full . && podman image build --format Dockerfile --file ./docker/ik_llama-cuda.Containerfile --target swap --tag ik_llama-cuda:swap .
 ```
 
 ```
-docker image build --file ik_llama-cuda.Containerfile --target full --tag ik_llama-cuda:full . && docker image build --file ik_llama-cuda.Containerfile --target swap --tag ik_llama-cuda:swap .
+docker image build --file ./docker/ik_llama-cuda.Containerfile --target full --tag ik_llama-cuda:full . && docker image build --file ./docker/ik_llama-cuda.Containerfile --target swap --tag ik_llama-cuda:swap .
 ```
 
-# Run
+## Run
 
 - Download `.gguf` model files to your favorite directory (e.g. `/my_local_files/gguf`).
 - Map it to `/models` inside the container.
 - Open browser `http://localhost:9292` and enjoy the features.
 - API endpoints are available at `http://localhost:9292/v1` for use in other applications.
 
-## CPU
+### CPU
 
 ```
 podman run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro localhost/ik_llama-cpu:swap
@@ -68,7 +63,7 @@ podman run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models
 docker run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro ik_llama-cpu:swap
 ```
 
-## CUDA
+### CUDA
 
 - Install Nvidia Drivers and CUDA on the host.
 - For Docker, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
@@ -82,13 +77,13 @@ podman run -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models
 docker run  -it --name ik_llama --rm -p 9292:8080 -v /my_local_files/gguf:/models:ro --runtime nvidia ik_llama-cuda:swap
 ```
 
-# Troubleshooting
+## Troubleshooting
 
 - If CUDA is not available, use `ik_llama-cpu` instead.
 - If models are not found, ensure you mount the correct directory: `-v /my_local_files/gguf:/models:ro`
 - If you need to install `podman` or `docker` follow the [Podman Installation](https://podman.io/docs/installation) or [Install Docker Engine](https://docs.docker.com/engine/install) for your OS.
 
-# Extra
+## Extra
 
 - `CUSTOM_COMMIT` can be used to build a specific `ik_llama.cpp` commit (e.g. `1ec12b8`).
 
@@ -118,7 +113,7 @@ docker run  -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --r
 # ./llama-sweep-bench ...
 ```
 
-- Customize `llama-swap` config: save the `ik_llama-cpu-swap.config.yaml` or `ik_llama-cuda-swap.config.yaml` localy  (e.g. under `/my_local_files/`) then map it to `/app/config.yaml` inside the container appending `-v /my_local_files/ik_llama-cpu-swap.config.yaml:/app/config.yaml:ro` to your`podman run ...` or `docker run ...`.
+- Customize `llama-swap` config: save the `./docker/ik_llama-cpu-swap.config.yaml` or `./docker/ik_llama-cuda-swap.config.yaml` localy  (e.g. under `/my_local_files/`) then map it to `/app/config.yaml` inside the container appending `-v /my_local_files/ik_llama-cpu-swap.config.yaml:/app/config.yaml:ro` to your`podman run ...` or `docker run ...`.
 - To run the container in background, replace `-it` with `-d`: `podman run -d ...` or `docker run -d ...`. To stop it: `podman stop ik_llama` or `docker stop ik_llama`.
 - If you build the image on the same machine where will be used, change `-DGGML_NATIVE=OFF` to `-DGGML_NATIVE=ON` in the `.Containerfile`.
 - For a smaller CUDA build, identify your GPU [CUDA GPU Compute Capability](https://developer.nvidia.com/cuda/gpus) (e.g. `8.6` for RTX30*0) then change `CUDA_DOCKER_ARCH` in `ik_llama-cuda.Containerfile` from `default` to your GPU architecture (e.g. `CUDA_DOCKER_ARCH=86`).
@@ -129,7 +124,7 @@ docker run  -it --name ik_llama_full --rm -v /my_local_files/gguf:/models:ro --r
 - Download from [ik_llama.cpp's Thireus fork with release builds for macOS/Windows/Ubuntu CPU and Windows CUDA](https://github.com/Thireus/ik_llama.cpp) if you cannot build.
 - For a KoboldCPP experience [Croco.Cpp is fork of KoboldCPP infering GGML/GGUF models on CPU/Cuda with KoboldAI's UI. It's powered partly by IK_LLama.cpp, and compatible with most of Ikawrakow's quants except Bitnet. ](https://github.com/Nexesenex/croco.cpp)
 
-# Credits
+## Credits
 
 All credits to the awesome community:  
 
