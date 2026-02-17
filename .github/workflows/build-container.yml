@@ -81,7 +81,7 @@ jobs:
       - name: Build - (${{ matrix.containerfile == 'ik_llama-cuda.Containerfile' && 'ik_llama-cuda' || 'ik_llama-cpu' }}:${{ matrix.build_target }})
         uses: docker/build-push-action@v5
         with:
-          context: ./docker/
+          context: .
           file: ./docker/${{ matrix.containerfile }}
           target: ${{ matrix.build_target }}
           push: true

@@ -4,12 +4,10 @@ ARG UBUNTU_VERSION=22.04
 FROM docker.io/ubuntu:$UBUNTU_VERSION AS build
 ENV LLAMA_CURL=1
 ENV LC_ALL=C.utf8
-ARG CUSTOM_COMMIT
 
 RUN apt-get update && apt-get install -yq build-essential git libcurl4-openssl-dev curl libgomp1 cmake
-RUN git clone https://github.com/ikawrakow/ik_llama.cpp.git /app
+COPY . /app
 WORKDIR /app
-RUN if [ -n "$CUSTOM_COMMIT" ]; then git switch --detach "$CUSTOM_COMMIT"; fi
 RUN cmake -B build -DGGML_NATIVE=OFF -DLLAMA_CURL=ON -DGGML_IQK_FA_ALL_QUANTS=ON && \
     cmake --build build --config Release -j$(nproc)
 RUN mkdir -p /app/lib && \
@@ -68,6 +66,6 @@ ARG LS_VER=189
 RUN curl -LO "https://github.com/${LS_REPO}/releases/download/v${LS_VER}/llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && tar -zxf "llama-swap_${LS_VER}_linux_amd64.tar.gz" \
     && rm "llama-swap_${LS_VER}_linux_amd64.tar.gz"
-COPY ./ik_llama-cpu-swap.config.yaml /app/config.yaml
+COPY --from=build /app/docker/ik_llama-cpu-swap.config.yaml /app/config.yaml
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080"]
 ENTRYPOINT [ "/app/llama-swap", "-config", "/app/config.yaml" ]
