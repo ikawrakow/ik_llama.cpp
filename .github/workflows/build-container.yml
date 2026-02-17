@@ -49,15 +49,16 @@ jobs:
 
       - name: Build and Push
         uses: docker/bake-action@v5
+        env:
+          # This maps the shell/github variables to the HCL variables
+          REPO_OWNER: ${{ env.REPO_LOWER }}
+          VARIANT: ${{ matrix.variant }}
+          SHA_SHORT: ${{ env.SHA_SHORT }}
+          CUDA_VERSION: ${{ matrix.cuda_version }}
         with:
           push: true
           files: ./docker-bake.hcl
-          # Using env variables here is much more reliable
           set: |
-            *.args.REPO_OWNER=${{ env.REPO_LOWER }}
-            *.args.VARIANT=${{ matrix.variant }}
-            *.args.SHA_SHORT=${{ env.SHA_SHORT }}
-            *.args.CUDA_VERSION=${{ matrix.cuda_version }}
             *.dockerfile=./docker/${{ matrix.containerfile }}
 
   cleanup:
