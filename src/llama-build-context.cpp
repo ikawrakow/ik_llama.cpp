@@ -4408,29 +4408,23 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(v,    "v_in", il);
         cb(beta, "beta_in", il);
         cb(g,    "g_in", il);
-
-        q = ggml_cont_4d(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3), S_k, n_tokens, H_k, n_seqs);
-        k = ggml_cont_4d(ctx0, ggml_permute(ctx0, k, 0, 2, 1, 3), S_k, n_tokens, H_k, n_seqs);
-        v = ggml_cont_4d(ctx0, ggml_permute(ctx0, v, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
-        g = ggml_cont_4d(ctx0, ggml_permute(ctx0, g, 2, 0, 3, 1), n_tokens, 1, H_v, n_seqs);
-
-        beta  = ggml_cont(ctx0, ggml_permute(ctx0, beta, 2, 0, 1, 3));
-        cb(q,    "q_perm", il);
-        cb(k,    "k_perm", il);
-        cb(v,    "v_perm", il);
-        cb(beta, "beta_perm", il);
-        cb(g,    "g_perm", il);
         cb(state,"state_in", il);
 
         const int64_t chunk_size = QWEN3NEXT_CHUNK_SIZE;
         const int64_t pad = (chunk_size - n_tokens % chunk_size) % chunk_size;
         const int64_t n_chunks = (n_tokens + pad) / chunk_size;
 
+        q    = ggml_permute(ctx0, q, 0, 2, 1, 3);
+        k    = ggml_permute(ctx0, k, 0, 2, 1, 3);
+        v    = ggml_permute(ctx0, v, 0, 2, 1, 3);
+        g    = ggml_permute(ctx0, g, 2, 0, 3, 1);
+        beta = ggml_permute(ctx0, beta, 2, 0, 1, 3);
+
         q    = ggml_pad(ctx0, q, 0, pad, 0, 0);
         k    = ggml_pad(ctx0, k, 0, pad, 0, 0);
         v    = ggml_pad(ctx0, v, 0, pad, 0, 0);
-        g    = ggml_pad(ctx0, g, pad, 0, 0, 0);
         beta = ggml_pad(ctx0, beta, 0, pad, 0, 0);
+        g    = ggml_pad(ctx0, g, pad, 0, 0, 0);
 
         cb(q,    "q_pad", il);
         cb(k,    "k_pad", il);
@@ -4439,7 +4433,8 @@ ggml_cgraph * llm_build_context::build_qwen3next() {
         cb(g,    "g_pad", il);
 
         ggml_tensor * v_beta = ggml_mul(ctx0, v, beta);
-        ggml_tensor * k_beta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, beta, k->ne[0], beta->ne[1], beta->ne[2], beta->ne[3]), k);
+        //ggml_tensor * k_beta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, beta, k->ne[0], beta->ne[1], beta->ne[2], beta->ne[3]), k);
+        ggml_tensor * k_beta = ggml_mul(ctx0, k, beta);
 
         cb(v_beta, "v_beta", il);
         cb(k_beta, "k_beta", il);

@@ -76,7 +76,7 @@
 #include <vector>
 #include <sstream>
 
-#define IK_PRINT_TIMING 1
+#define IK_PRINT_TIMING 0
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 

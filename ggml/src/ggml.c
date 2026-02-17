@@ -21071,7 +21071,6 @@ static void ggml_compute_forward_pad_f32(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
-    GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT( dst->nb[0] == sizeof(float));
 
     const int ith = params->ith;
@@ -21083,20 +21082,80 @@ static void ggml_compute_forward_pad_f32(
 
     // TODO: optimize
 
-    for (int64_t i2 = 0; i2 < ne2; ++i2) {
-        for (int64_t i1 = ith; i1 < ne1; i1 += nth) {
-            for (int64_t i0 = 0; i0 < ne0; ++i0) {
-                for (int64_t i3 = 0; i3 < ne3; ++i3) {
-                    const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
+    if (src0->nb[0] == sizeof(float)) {
+        for (int64_t i3 = 0; i3 < ne3; ++i3) {
+            for (int64_t i2 = 0; i2 < ne2; ++i2) {
+                for (int64_t i1 = ith; i1 < ne1; i1 += nth) {
+                    for (int64_t i0 = 0; i0 < ne0; ++i0) {
+                        const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
 
-                    const float * src_ptr = (const float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                        const float * src_ptr = (const float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
 
-                    if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
-                        dst_ptr[dst_idx] = *src_ptr;
-                    } else {
-                        dst_ptr[dst_idx] = 0;
+                        if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
+                            dst_ptr[dst_idx] = *src_ptr;
+                        } else {
+                            dst_ptr[dst_idx] = 0;
+                        }
                     }
                 }
+            }
+        }
+    } else {
+        const int k_block_size = 1024;
+        int nelem = ggml_nelements(dst);
+        int nblocks = (nelem + k_block_size - 1)/k_block_size;
+        for (int ib = ith; ib < nblocks; ib += nth) {
+            int first = ib*k_block_size;
+            int last  = MIN(first + k_block_size, nelem);
+            // 
+            //int ii = first;
+            //int i3 = ii/(ne0*ne1*ne2); ii -= i3*ne0*ne1*ne2;
+            //int i2 = ii/(ne0*ne1    ); ii -= i2*ne0*ne1;
+            //int i1 = ii/(ne0        ); ii -= i1*ne0;
+            //int i0 = ii;
+            //int i = first;
+            //bool in_src = i1 < ne01 && i2 < ne02 && i3 < ne03;
+            //const char * c_src = (const char *)src0->data + i0*nb00 + i1*nb01 + i2*nb02 + i3*nb03;
+            //while (i < last) {
+            //    if (i0 + last - i <= ne0) {
+            //        for (; i < last; ++i, ++i0) {
+            //            dst_ptr[i] = in_src && i0 < ne00 ? *(const float *)(c_src + i0*nb00) : 0.0f;
+            //        }
+            //        break;
+            //    }
+            //    for (; i0 < ne0; ++i0) {
+            //        dst_ptr[i++] = in_src && i0 < ne00 ? *(const float *)(c_src + i0*nb00) : 0.0f;
+            //    }
+            //    i0 = 0;
+            //    if (++i1 == (int)ne1) {
+            //        i1 = 0;
+            //        if (++i2 == (int)ne2) {
+            //            i2 = 0; ++i3;
+            //        }
+            //    }
+            //    in_src = i1 < ne01 && i2 < ne02 && i3 < ne03;
+            //    c_src = (const char *)src0->data + i0*nb00 + i1*nb01 + i2*nb02 + i3*nb03;
+            //}
+            //for (int i = first; i < last; ++i) {
+            //    dst_ptr[i] = i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03 ? *(const float *)((const char *)src0->data + i0*nb00 + i1*nb01 + i2*nb02 + i3*nb03) : 0.0f;
+            //    if (++i0 == (int)ne0) {
+            //        i0 = 0;
+            //        if (++i1 == (int)ne1) {
+            //            i1 = 0;
+            //            if (++i2 == (int)ne2) {
+            //                i2 = 0; ++i3;
+            //            }
+            //        }
+            //    }
+            //}
+            //
+            for (int i = first; i < last; ++i) {
+                int ii = i;
+                int i3 = ii/(ne0*ne1*ne2); ii -= i3*ne0*ne1*ne2;
+                int i2 = ii/(ne0*ne1    ); ii -= i2*ne0*ne1;
+                int i1 = ii/(ne0        ); ii -= i1*ne0;
+                int i0 = ii;
+                dst_ptr[i] = i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03 ? *(const float *)((const char *)src0->data + i0*nb00 + i1*nb01 + i2*nb02 + i3*nb03) : 0.0f;
             }
         }
     }
